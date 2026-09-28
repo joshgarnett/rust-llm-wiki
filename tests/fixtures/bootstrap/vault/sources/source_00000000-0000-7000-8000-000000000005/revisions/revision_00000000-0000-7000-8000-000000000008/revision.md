@@ -1,0 +1,17 @@
+---
+wiki_schema: "1"
+wiki_id: "revision_00000000-0000-7000-8000-000000000008"
+wiki_kind: "revision"
+title: "architecture_v2"
+wiki_source_id: "source_00000000-0000-7000-8000-000000000005"
+wiki_captured_at: "2025-01-02T00:00:00Z"
+wiki_original_path: "original.md"
+wiki_original_hash: "blake3:c35d665a873789989333b21313e71940a044311bc72adabfbe06ea953d193a20"
+wiki_extractor: "utf8-preserve-v1"
+wiki_extractor_fingerprint: "blake3:166e2b1e4656e1485ed11b43e977917f638df6ec156ed7ca22a44da434a20362"
+wiki_extraction_status: "complete"
+wiki_content_path: "content.md"
+wiki_content_hash: "blake3:c35d665a873789989333b21313e71940a044311bc72adabfbe06ea953d193a20"
+wiki_media_type: "text/markdown"
+---
+Immutable synthetic capture.

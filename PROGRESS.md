@@ -1,6 +1,6 @@
 # Research and planning progress
 
-Started: 2026-09-28. Status: initial research committed; technical design and autonomous implementation plan completed. Implementation awaits the user's new `gpt-6-sol` session.
+Started: 2026-09-28. Status: autonomous M0–M4 implementation started; P00 accepted; P01/P02 next.
 
 ## Scope
 
@@ -106,3 +106,13 @@ Research uses current project documentation and papers. No project has been benc
 ## Next step
 
 Start a new `gpt-6-sol` session with the [implementation goal](docs/execution/START.md). It begins at P00 in the [work packages](docs/execution/WORK-PACKAGES.md), preserves the existing planning baseline, and proceeds through M4 using [STATE.md](docs/execution/STATE.md) and the validation/decision records. The [format](docs/wiki-format.md), [graph design](docs/knowledge-graph.md), [milestones](docs/implementation-plan.md), and [embedding contract](docs/embeddings.md) remain the product requirements baseline; the technical documents resolve implementation details.
+
+## Authorized implementation run
+
+- Planning edits preserved in local commit `a97679c`; branch `impl/autonomous-v1`.
+- Rust/Cargo 1.98.0 verified and pinned, Rust 2024 edition, lockfile generated.
+- P00 shared types and 13 canonical record schemas implemented; thin CLI currently supports `capabilities` and `schema`.
+- Disposable deterministic bootstrap vault generated with homonyms, Unicode, immutable revisions and exact evidence.
+- Root bootstrap checks: ten all-targets tests, lint, format, build and fixture reproducibility passed; three independent Astra findings corrected and re-reviewed. P00 accepted.
+- All later packages and V01–V17 integrated completion remain pending; see [checkpoint](docs/execution/STATE.md) and [coverage](docs/execution/reports/coverage.md).
+- External provider/host/platform/release qualification E01–E05 remains unrun; no live spending, real-vault edits or publishing.

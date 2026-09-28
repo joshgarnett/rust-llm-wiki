@@ -1,0 +1,1529 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:lwiki:record:1",
+  "title": "Canonical flat frontmatter record v1",
+  "description": "Byte spans, date ordering, packet fingerprint identity, portable path rules and cross-record ownership also require production semantic validation. Unknown wiki fields receive diagnostics and disable typed mutation.",
+  "oneOf": [
+    {
+      "type": "object",
+      "properties": {
+        "wiki_schema": {
+          "const": "1"
+        },
+        "wiki_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+        },
+        "wiki_kind": {
+          "const": "vault"
+        },
+        "title": {
+          "type": "string"
+        },
+        "aliases": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "tags": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "wiki_depends_on_ids": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+          }
+        },
+        "description": {
+          "type": "string"
+        },
+        "wiki_profile": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "wiki_schema",
+        "wiki_id",
+        "wiki_kind",
+        "title"
+      ],
+      "patternProperties": {
+        "^(?!wiki_).*": {}
+      },
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "wiki_schema": {
+          "const": "1"
+        },
+        "wiki_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+        },
+        "wiki_kind": {
+          "const": "page"
+        },
+        "title": {
+          "type": "string"
+        },
+        "aliases": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "tags": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "wiki_depends_on_ids": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+          }
+        },
+        "description": {
+          "type": "string"
+        },
+        "wiki_status": {
+          "type": "string",
+          "enum": [
+            "draft",
+            "reviewed",
+            "deprecated"
+          ]
+        }
+      },
+      "required": [
+        "wiki_schema",
+        "wiki_id",
+        "wiki_kind",
+        "title",
+        "wiki_status"
+      ],
+      "patternProperties": {
+        "^(?!wiki_).*": {}
+      },
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "wiki_schema": {
+          "const": "1"
+        },
+        "wiki_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+        },
+        "wiki_kind": {
+          "const": "entity"
+        },
+        "title": {
+          "type": "string"
+        },
+        "aliases": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "tags": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "wiki_depends_on_ids": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+          }
+        },
+        "description": {
+          "type": "string"
+        },
+        "wiki_status": {
+          "type": "string",
+          "enum": [
+            "active",
+            "superseded"
+          ]
+        },
+        "wiki_entity_type": {
+          "type": "string",
+          "enum": [
+            "person",
+            "organization",
+            "project",
+            "component",
+            "concept",
+            "place",
+            "event",
+            "other"
+          ]
+        },
+        "wiki_superseded_by_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+        },
+        "wiki_superseded_by": {
+          "type": "string",
+          "pattern": "^\\[\\[[^\\[\\]\\r\\n]+\\]\\]$"
+        }
+      },
+      "required": [
+        "wiki_schema",
+        "wiki_id",
+        "wiki_kind",
+        "title",
+        "wiki_status",
+        "wiki_entity_type"
+      ],
+      "patternProperties": {
+        "^(?!wiki_).*": {}
+      },
+      "additionalProperties": false,
+      "dependentRequired": {
+        "wiki_superseded_by": [
+          "wiki_superseded_by_id"
+        ]
+      }
+    },
+    {
+      "type": "object",
+      "properties": {
+        "wiki_schema": {
+          "const": "1"
+        },
+        "wiki_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+        },
+        "wiki_kind": {
+          "const": "assertion"
+        },
+        "title": {
+          "type": "string"
+        },
+        "aliases": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "tags": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "wiki_depends_on_ids": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+          }
+        },
+        "description": {
+          "type": "string"
+        },
+        "wiki_status": {
+          "type": "string",
+          "enum": [
+            "proposed",
+            "accepted",
+            "rejected",
+            "superseded"
+          ]
+        },
+        "wiki_subject_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+        },
+        "wiki_predicate": {
+          "type": "string",
+          "enum": [
+            "is_a",
+            "part_of",
+            "depends_on",
+            "maintains",
+            "works_for",
+            "uses",
+            "plans_to_use",
+            "located_in",
+            "has_property"
+          ]
+        },
+        "wiki_object_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+        },
+        "wiki_literal_type": {
+          "type": "string",
+          "enum": [
+            "string",
+            "decimal",
+            "boolean",
+            "date"
+          ]
+        },
+        "wiki_literal_value": {
+          "type": "string"
+        },
+        "wiki_property": {
+          "type": "string"
+        },
+        "wiki_negated": {
+          "type": "boolean"
+        },
+        "wiki_modality": {
+          "type": "string",
+          "enum": [
+            "asserted",
+            "possible",
+            "planned"
+          ]
+        },
+        "wiki_valid_from": {
+          "type": "string",
+          "format": "date"
+        },
+        "wiki_valid_until": {
+          "type": "string",
+          "format": "date"
+        },
+        "wiki_unit": {
+          "type": "string"
+        },
+        "wiki_evidence": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^\\[\\[[^\\[\\]\\r\\n]+\\]\\]$"
+          }
+        },
+        "wiki_subject": {
+          "type": "string",
+          "pattern": "^\\[\\[[^\\[\\]\\r\\n]+\\]\\]$"
+        },
+        "wiki_object": {
+          "type": "string",
+          "pattern": "^\\[\\[[^\\[\\]\\r\\n]+\\]\\]$"
+        }
+      },
+      "required": [
+        "wiki_schema",
+        "wiki_id",
+        "wiki_kind",
+        "title",
+        "wiki_status",
+        "wiki_subject_id",
+        "wiki_predicate"
+      ],
+      "patternProperties": {
+        "^(?!wiki_).*": {}
+      },
+      "additionalProperties": false,
+      "oneOf": [
+        {
+          "required": [
+            "wiki_object_id"
+          ],
+          "not": {
+            "anyOf": [
+              {
+                "required": [
+                  "wiki_literal_type"
+                ]
+              },
+              {
+                "required": [
+                  "wiki_literal_value"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "required": [
+            "wiki_literal_type",
+            "wiki_literal_value"
+          ],
+          "not": {
+            "required": [
+              "wiki_object_id"
+            ]
+          }
+        }
+      ],
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "wiki_predicate": {
+                "const": "has_property"
+              }
+            },
+            "required": [
+              "wiki_predicate"
+            ]
+          },
+          "then": {
+            "required": [
+              "wiki_property",
+              "wiki_literal_type",
+              "wiki_literal_value"
+            ],
+            "not": {
+              "required": [
+                "wiki_object_id"
+              ]
+            }
+          },
+          "else": {
+            "required": [
+              "wiki_object_id"
+            ],
+            "not": {
+              "anyOf": [
+                {
+                  "required": [
+                    "wiki_property"
+                  ]
+                },
+                {
+                  "required": [
+                    "wiki_unit"
+                  ]
+                }
+              ]
+            }
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "wiki_unit"
+            ]
+          },
+          "then": {
+            "properties": {
+              "wiki_literal_type": {
+                "const": "decimal"
+              }
+            },
+            "required": [
+              "wiki_literal_type"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "wiki_literal_type": {
+                "const": "decimal"
+              }
+            },
+            "required": [
+              "wiki_literal_type"
+            ]
+          },
+          "then": {
+            "properties": {
+              "wiki_literal_value": {
+                "type": "string",
+                "pattern": "^-?(0|[1-9][0-9]*)(\\.[0-9]+)?$"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "wiki_literal_type": {
+                "const": "boolean"
+              }
+            },
+            "required": [
+              "wiki_literal_type"
+            ]
+          },
+          "then": {
+            "properties": {
+              "wiki_literal_value": {
+                "type": "string",
+                "enum": [
+                  "true",
+                  "false"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "wiki_literal_type": {
+                "const": "date"
+              }
+            },
+            "required": [
+              "wiki_literal_type"
+            ]
+          },
+          "then": {
+            "properties": {
+              "wiki_literal_value": {
+                "type": "string",
+                "format": "date"
+              }
+            }
+          }
+        }
+      ],
+      "dependentRequired": {
+        "wiki_subject": [
+          "wiki_subject_id"
+        ],
+        "wiki_object": [
+          "wiki_object_id"
+        ]
+      }
+    },
+    {
+      "type": "object",
+      "properties": {
+        "wiki_schema": {
+          "const": "1"
+        },
+        "wiki_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+        },
+        "wiki_kind": {
+          "const": "evidence"
+        },
+        "title": {
+          "type": "string"
+        },
+        "aliases": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "tags": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "wiki_depends_on_ids": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+          }
+        },
+        "description": {
+          "type": "string"
+        },
+        "wiki_status": {
+          "type": "string",
+          "enum": [
+            "active",
+            "retracted"
+          ]
+        },
+        "wiki_assertion_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+        },
+        "wiki_source_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+        },
+        "wiki_source_revision": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+        },
+        "wiki_stance": {
+          "type": "string",
+          "enum": [
+            "supports",
+            "contradicts"
+          ]
+        },
+        "wiki_locator_kind": {
+          "const": "utf8-bytes"
+        },
+        "wiki_span_start": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "wiki_span_end": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "wiki_quote_hash": {
+          "type": "string",
+          "pattern": "^blake3:[0-9a-f]{64}$"
+        },
+        "wiki_supersedes_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+        },
+        "wiki_extraction_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+        },
+        "wiki_assertion": {
+          "type": "string",
+          "pattern": "^\\[\\[[^\\[\\]\\r\\n]+\\]\\]$"
+        },
+        "wiki_source": {
+          "type": "string",
+          "pattern": "^\\[\\[[^\\[\\]\\r\\n]+\\]\\]$"
+        },
+        "wiki_revision": {
+          "type": "string",
+          "pattern": "^\\[\\[[^\\[\\]\\r\\n]+\\]\\]$"
+        },
+        "wiki_supersedes": {
+          "type": "string",
+          "pattern": "^\\[\\[[^\\[\\]\\r\\n]+\\]\\]$"
+        },
+        "wiki_extraction": {
+          "type": "string",
+          "pattern": "^\\[\\[[^\\[\\]\\r\\n]+\\]\\]$"
+        }
+      },
+      "required": [
+        "wiki_schema",
+        "wiki_id",
+        "wiki_kind",
+        "title",
+        "wiki_status",
+        "wiki_assertion_id",
+        "wiki_source_id",
+        "wiki_source_revision",
+        "wiki_stance",
+        "wiki_locator_kind",
+        "wiki_span_start",
+        "wiki_span_end",
+        "wiki_quote_hash"
+      ],
+      "patternProperties": {
+        "^(?!wiki_).*": {}
+      },
+      "additionalProperties": false,
+      "dependentRequired": {
+        "wiki_assertion": [
+          "wiki_assertion_id"
+        ],
+        "wiki_source": [
+          "wiki_source_id"
+        ],
+        "wiki_revision": [
+          "wiki_source_revision"
+        ],
+        "wiki_supersedes": [
+          "wiki_supersedes_id"
+        ],
+        "wiki_extraction": [
+          "wiki_extraction_id"
+        ]
+      }
+    },
+    {
+      "type": "object",
+      "properties": {
+        "wiki_schema": {
+          "const": "1"
+        },
+        "wiki_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+        },
+        "wiki_kind": {
+          "const": "source"
+        },
+        "title": {
+          "type": "string"
+        },
+        "aliases": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "tags": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "wiki_depends_on_ids": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+          }
+        },
+        "description": {
+          "type": "string"
+        },
+        "wiki_status": {
+          "type": "string",
+          "enum": [
+            "active",
+            "withdrawn"
+          ]
+        },
+        "wiki_origin_kind": {
+          "type": "string",
+          "enum": [
+            "local-file",
+            "url",
+            "agent-report"
+          ]
+        },
+        "wiki_origin": {
+          "type": "string"
+        },
+        "wiki_current_revision": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+        },
+        "wiki_revisions": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+          }
+        },
+        "wiki_withdrawn_at": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "([Zz]|\\+00:00)$"
+        },
+        "wiki_withdrawal_reason": {
+          "type": "string"
+        },
+        "wiki_revision": {
+          "type": "string",
+          "pattern": "^\\[\\[[^\\[\\]\\r\\n]+\\]\\]$"
+        }
+      },
+      "required": [
+        "wiki_schema",
+        "wiki_id",
+        "wiki_kind",
+        "title",
+        "wiki_status",
+        "wiki_origin_kind",
+        "wiki_origin",
+        "wiki_current_revision",
+        "wiki_revisions"
+      ],
+      "patternProperties": {
+        "^(?!wiki_).*": {}
+      },
+      "additionalProperties": false,
+      "dependentRequired": {
+        "wiki_revision": [
+          "wiki_current_revision"
+        ]
+      }
+    },
+    {
+      "type": "object",
+      "properties": {
+        "wiki_schema": {
+          "const": "1"
+        },
+        "wiki_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+        },
+        "wiki_kind": {
+          "const": "revision"
+        },
+        "title": {
+          "type": "string"
+        },
+        "aliases": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "tags": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "wiki_depends_on_ids": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+          }
+        },
+        "description": {
+          "type": "string"
+        },
+        "wiki_source_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+        },
+        "wiki_captured_at": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "([Zz]|\\+00:00)$"
+        },
+        "wiki_original_path": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))(?!.*[\\\\\\u0000]).+$"
+        },
+        "wiki_original_hash": {
+          "type": "string",
+          "pattern": "^blake3:[0-9a-f]{64}$"
+        },
+        "wiki_extractor": {
+          "type": "string"
+        },
+        "wiki_extractor_fingerprint": {
+          "type": "string",
+          "pattern": "^blake3:[0-9a-f]{64}$"
+        },
+        "wiki_extraction_status": {
+          "type": "string",
+          "enum": [
+            "complete",
+            "unsupported",
+            "failed"
+          ]
+        },
+        "wiki_content_path": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))(?!.*[\\\\\\u0000]).+$"
+        },
+        "wiki_content_hash": {
+          "type": "string",
+          "pattern": "^blake3:[0-9a-f]{64}$"
+        },
+        "wiki_media_type": {
+          "type": "string"
+        },
+        "wiki_published_at": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "([Zz]|\\+00:00)$"
+        },
+        "wiki_source": {
+          "type": "string",
+          "pattern": "^\\[\\[[^\\[\\]\\r\\n]+\\]\\]$"
+        }
+      },
+      "required": [
+        "wiki_schema",
+        "wiki_id",
+        "wiki_kind",
+        "title",
+        "wiki_source_id",
+        "wiki_captured_at",
+        "wiki_original_path",
+        "wiki_original_hash",
+        "wiki_extractor",
+        "wiki_extractor_fingerprint",
+        "wiki_extraction_status"
+      ],
+      "patternProperties": {
+        "^(?!wiki_).*": {}
+      },
+      "additionalProperties": false,
+      "if": {
+        "properties": {
+          "wiki_extraction_status": {
+            "const": "complete"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "wiki_content_path",
+          "wiki_content_hash"
+        ]
+      },
+      "else": {
+        "not": {
+          "anyOf": [
+            {
+              "required": [
+                "wiki_content_path"
+              ]
+            },
+            {
+              "required": [
+                "wiki_content_hash"
+              ]
+            }
+          ]
+        }
+      },
+      "dependentRequired": {
+        "wiki_source": [
+          "wiki_source_id"
+        ]
+      }
+    },
+    {
+      "type": "object",
+      "properties": {
+        "wiki_schema": {
+          "const": "1"
+        },
+        "wiki_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+        },
+        "wiki_kind": {
+          "const": "extraction_packet"
+        },
+        "title": {
+          "type": "string"
+        },
+        "aliases": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "tags": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "wiki_depends_on_ids": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+          }
+        },
+        "description": {
+          "type": "string"
+        },
+        "wiki_source_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+        },
+        "wiki_source_revision": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+        },
+        "wiki_packet_fingerprint": {
+          "type": "string",
+          "pattern": "^blake3:[0-9a-f]{64}$"
+        },
+        "wiki_output_schema": {
+          "type": "string"
+        },
+        "wiki_created_at": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "([Zz]|\\+00:00)$"
+        },
+        "wiki_source": {
+          "type": "string",
+          "pattern": "^\\[\\[[^\\[\\]\\r\\n]+\\]\\]$"
+        },
+        "wiki_revision": {
+          "type": "string",
+          "pattern": "^\\[\\[[^\\[\\]\\r\\n]+\\]\\]$"
+        }
+      },
+      "required": [
+        "wiki_schema",
+        "wiki_id",
+        "wiki_kind",
+        "title",
+        "wiki_source_id",
+        "wiki_source_revision",
+        "wiki_packet_fingerprint",
+        "wiki_output_schema",
+        "wiki_created_at"
+      ],
+      "patternProperties": {
+        "^(?!wiki_).*": {}
+      },
+      "additionalProperties": false,
+      "dependentRequired": {
+        "wiki_source": [
+          "wiki_source_id"
+        ],
+        "wiki_revision": [
+          "wiki_source_revision"
+        ]
+      }
+    },
+    {
+      "type": "object",
+      "properties": {
+        "wiki_schema": {
+          "const": "1"
+        },
+        "wiki_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+        },
+        "wiki_kind": {
+          "const": "extraction"
+        },
+        "title": {
+          "type": "string"
+        },
+        "aliases": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "tags": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "wiki_depends_on_ids": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+          }
+        },
+        "description": {
+          "type": "string"
+        },
+        "wiki_status": {
+          "type": "string",
+          "enum": [
+            "completed",
+            "partial",
+            "failed"
+          ]
+        },
+        "wiki_packet_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+        },
+        "wiki_input_hash": {
+          "type": "string",
+          "pattern": "^blake3:[0-9a-f]{64}$"
+        },
+        "wiki_extractor_fingerprint": {
+          "type": "string",
+          "pattern": "^blake3:[0-9a-f]{64}$"
+        },
+        "wiki_executor": {
+          "type": "string",
+          "enum": [
+            "agent",
+            "api"
+          ]
+        },
+        "wiki_source_ids": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+          },
+          "uniqueItems": true
+        },
+        "wiki_source_revision_ids": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+          },
+          "uniqueItems": true
+        },
+        "wiki_completed_at": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "([Zz]|\\+00:00)$"
+        },
+        "wiki_model": {
+          "type": "string"
+        },
+        "wiki_model_revision": {
+          "type": "string"
+        },
+        "wiki_packet": {
+          "type": "string",
+          "pattern": "^\\[\\[[^\\[\\]\\r\\n]+\\]\\]$"
+        }
+      },
+      "required": [
+        "wiki_schema",
+        "wiki_id",
+        "wiki_kind",
+        "title",
+        "wiki_status",
+        "wiki_packet_id",
+        "wiki_input_hash",
+        "wiki_extractor_fingerprint",
+        "wiki_executor",
+        "wiki_source_ids",
+        "wiki_source_revision_ids",
+        "wiki_completed_at"
+      ],
+      "patternProperties": {
+        "^(?!wiki_).*": {}
+      },
+      "additionalProperties": false,
+      "dependentRequired": {
+        "wiki_packet": [
+          "wiki_packet_id"
+        ]
+      }
+    },
+    {
+      "type": "object",
+      "properties": {
+        "wiki_schema": {
+          "const": "1"
+        },
+        "wiki_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+        },
+        "wiki_kind": {
+          "const": "decision"
+        },
+        "title": {
+          "type": "string"
+        },
+        "aliases": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "tags": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "wiki_depends_on_ids": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+          }
+        },
+        "description": {
+          "type": "string"
+        },
+        "wiki_status": {
+          "type": "string",
+          "enum": [
+            "active",
+            "superseded"
+          ]
+        },
+        "wiki_action": {
+          "type": "string",
+          "enum": [
+            "merge",
+            "split",
+            "reject",
+            "accept",
+            "correct",
+            "bind_mention",
+            "create_entity",
+            "reject_mention",
+            "add_alias"
+          ]
+        },
+        "wiki_input_ids": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+          }
+        },
+        "wiki_output_ids": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+          }
+        },
+        "wiki_created_at": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "([Zz]|\\+00:00)$"
+        },
+        "wiki_supersedes_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+        },
+        "wiki_extraction_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+        },
+        "wiki_mention_ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "wiki_supersedes": {
+          "type": "string",
+          "pattern": "^\\[\\[[^\\[\\]\\r\\n]+\\]\\]$"
+        },
+        "wiki_extraction": {
+          "type": "string",
+          "pattern": "^\\[\\[[^\\[\\]\\r\\n]+\\]\\]$"
+        }
+      },
+      "required": [
+        "wiki_schema",
+        "wiki_id",
+        "wiki_kind",
+        "title",
+        "wiki_status",
+        "wiki_action",
+        "wiki_input_ids",
+        "wiki_output_ids",
+        "wiki_created_at"
+      ],
+      "patternProperties": {
+        "^(?!wiki_).*": {}
+      },
+      "additionalProperties": false,
+      "dependentRequired": {
+        "wiki_supersedes": [
+          "wiki_supersedes_id"
+        ],
+        "wiki_extraction": [
+          "wiki_extraction_id"
+        ]
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "wiki_action": {
+                "enum": [
+                  "bind_mention",
+                  "create_entity",
+                  "reject_mention"
+                ]
+              }
+            },
+            "required": [
+              "wiki_action"
+            ]
+          },
+          "then": {
+            "required": [
+              "wiki_extraction_id",
+              "wiki_mention_ids"
+            ],
+            "properties": {
+              "wiki_mention_ids": {
+                "minItems": 1
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "wiki_action": {
+                "const": "add_alias"
+              }
+            },
+            "required": [
+              "wiki_action",
+              "wiki_mention_ids"
+            ]
+          },
+          "then": {
+            "required": [
+              "wiki_extraction_id"
+            ],
+            "properties": {
+              "wiki_mention_ids": {
+                "minItems": 1
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "type": "object",
+      "properties": {
+        "wiki_schema": {
+          "const": "1"
+        },
+        "wiki_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+        },
+        "wiki_kind": {
+          "const": "change"
+        },
+        "title": {
+          "type": "string"
+        },
+        "aliases": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "tags": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "wiki_depends_on_ids": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+          }
+        },
+        "description": {
+          "type": "string"
+        },
+        "wiki_status": {
+          "type": "string",
+          "enum": [
+            "prepared",
+            "applying",
+            "conflict",
+            "committed",
+            "aborted"
+          ]
+        },
+        "wiki_created_at": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "([Zz]|\\+00:00)$"
+        },
+        "wiki_manifest_hash": {
+          "type": "string",
+          "pattern": "^blake3:[0-9a-f]{64}$"
+        }
+      },
+      "required": [
+        "wiki_schema",
+        "wiki_id",
+        "wiki_kind",
+        "title",
+        "wiki_status",
+        "wiki_created_at",
+        "wiki_manifest_hash"
+      ],
+      "patternProperties": {
+        "^(?!wiki_).*": {}
+      },
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "wiki_schema": {
+          "const": "1"
+        },
+        "wiki_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+        },
+        "wiki_kind": {
+          "const": "run"
+        },
+        "title": {
+          "type": "string"
+        },
+        "aliases": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "tags": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "wiki_depends_on_ids": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+          }
+        },
+        "description": {
+          "type": "string"
+        },
+        "wiki_status": {
+          "type": "string",
+          "enum": [
+            "planned",
+            "running",
+            "paused",
+            "completed",
+            "failed",
+            "stopped"
+          ]
+        },
+        "wiki_created_at": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "([Zz]|\\+00:00)$"
+        },
+        "wiki_checkpoint_event_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+        },
+        "wiki_checkpoint_event": {
+          "type": "string",
+          "pattern": "^\\[\\[[^\\[\\]\\r\\n]+\\]\\]$"
+        }
+      },
+      "required": [
+        "wiki_schema",
+        "wiki_id",
+        "wiki_kind",
+        "title",
+        "wiki_status",
+        "wiki_created_at"
+      ],
+      "patternProperties": {
+        "^(?!wiki_).*": {}
+      },
+      "additionalProperties": false,
+      "dependentRequired": {
+        "wiki_checkpoint_event": [
+          "wiki_checkpoint_event_id"
+        ]
+      }
+    },
+    {
+      "type": "object",
+      "properties": {
+        "wiki_schema": {
+          "const": "1"
+        },
+        "wiki_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+        },
+        "wiki_kind": {
+          "const": "run_event"
+        },
+        "title": {
+          "type": "string"
+        },
+        "aliases": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "tags": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "wiki_depends_on_ids": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+          }
+        },
+        "description": {
+          "type": "string"
+        },
+        "wiki_run_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+        },
+        "wiki_sequence": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "wiki_event_type": {
+          "type": "string"
+        },
+        "wiki_occurred_at": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "([Zz]|\\+00:00)$"
+        },
+        "wiki_request_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+        },
+        "wiki_run": {
+          "type": "string",
+          "pattern": "^\\[\\[[^\\[\\]\\r\\n]+\\]\\]$"
+        },
+        "wiki_request": {
+          "type": "string",
+          "pattern": "^\\[\\[[^\\[\\]\\r\\n]+\\]\\]$"
+        }
+      },
+      "required": [
+        "wiki_schema",
+        "wiki_id",
+        "wiki_kind",
+        "title",
+        "wiki_run_id",
+        "wiki_sequence",
+        "wiki_event_type",
+        "wiki_occurred_at"
+      ],
+      "patternProperties": {
+        "^(?!wiki_).*": {}
+      },
+      "additionalProperties": false,
+      "dependentRequired": {
+        "wiki_run": [
+          "wiki_run_id"
+        ],
+        "wiki_request": [
+          "wiki_request_id"
+        ]
+      }
+    }
+  ]
+}

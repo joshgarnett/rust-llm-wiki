@@ -1,0 +1,88 @@
+# Implementation coverage ledger
+
+This ledger retains the complete M0–M4 scope. Planned test names below are obligations, not evidence. Update actual tests, revision fingerprints, commands and results after integration. External E01–E05 are unqualified.
+
+| Gate | Required behavior | Packages | Tests / evidence | Status |
+|---|---|---|---|---|
+| V01 Build and contracts | Real library/binary build; pinned usable toolchain/lockfile; exact JSON envelope/errors/schema versions; unknown commands/capabilities not advertised | P00,P06,P21 | P00-checks.json: 10 tests, pinned build, schemas, machine errors; P00-review.md resolved | bootstrap passed; P06/P21 pending |
+| V02 Lossless records | Comments/unknown fields/body/BOM/CRLF survive authorized edits; invalid/duplicate YAML keys, aliases, unsupported versions, duplicate IDs and ambiguous links diagnosed | P01,P05 | No passing evidence yet | pending |
+| V03 Recoverable writes | Faults at actual stage/fsync/journal/replace/publish boundaries; recover old/new states, preserve third-hash edits; lock serialization; abort/rollback checks; no false multi-file atomicity | P02,P03,P06 | No passing evidence yet | pending |
+| V04 Capture and citations | Immutable originals/revisions; multibyte UTF-8 spans and hashes; ambiguous quotation rejection; direct source citation without fabricated assertion; exact successor revalidation | P04,P09,P13,P19 | No passing evidence yet | pending |
+| V05 Catalog and freshness | FTS5 built in; transactionally published generation/FTS view; active reader consistency; new duplicate ID/decision detection; same-size/same-timestamp edits; cache deletion/rebuild without model calls | P05,P09 | No passing evidence yet | pending |
+| V06 Offline retrieval | Literal identifiers and FTS-safe query escaping; deterministic pagination/ties; bounded graph traversal; direction/qualifier preservation; byte/token context caps; no invented transitive assertion | P07,P08,P09 | No passing evidence yet | pending |
+| V07 Evidence lifecycle | Loss of one/all supports; stale source head; withdrawal/tampering; full-note dependency invalidation; entity identity versus description; honest historical/snapshot/current scopes | P04,P05,P09,P13,P17,P20 | No passing evidence yet | pending |
+| V08 Host graph workflow | Persist packet → import → apply → resolve → apply → review → apply; homonyms separate; malformed/unknown packet fails; repeated pre/post-apply import idempotent; merge/split/alias remaps; complete active-evidence review | P10,P11,P12,P13 | No passing evidence yet | pending |
+| V09 Skill and machine UX | Real skill export, maintained examples execute against binary; capability-aware commands; JSON/JSONL parse cleanly; documented errors/cancellation; no overwrite of existing host instruction files | P06,P14 | No passing evidence yet | pending |
+| V10 Dispatch/auth | Real HTTP encode/decode over test transport; exact URL/path/query/model; static key/env/file and dynamic helper; custom headers/TTL/401; no credential leakage; profile trust; redirects and TLS policy | P16,P19 | No passing evidence yet | pending |
+| V11 Budgets and replay | Separate reservation per attempt; concurrent final-slot race; unknown billing retained; checked monetary bounds; invalid/truncated response receipts; response-spool replay; no hidden retries; cancel/resume/deadline | P15,P16,P18,P19,P20 | No passing evidence yet | pending |
+| V12 Embeddings/hybrid | Validate reordered/missing/nonfinite/wrong-dimension vectors; short notes whole; deterministic long splits; exact cosine order; RRF; cache reuse; no stale/mixed spaces; active-space query reproducibility | P16,P17 | No passing evidence yet | pending |
+| V13 Direct extraction | Production generation adapter uses the same strict packet/import/review pipeline; malformed/refused/truncated output cannot activate knowledge; resume/cache reuse without losing decisions | P18,P20 | No passing evidence yet | pending |
+| V14 Acquisition | Search pagination/dedup; explicit URL path; real bounded HTML/text normalization; immutable original capture; DNS/redirect/IP and expansion-size checks; unsupported sources reported | P19,P20 | No passing evidence yet | pending |
+| V15 Research lifecycle | Plan/run/status/resume/report through real planner/dispatcher/storage using mock endpoints; versioned bounded frontier/gap/synthesis outputs; reject malformed/unknown fields, fabricated citations, over-limit outputs and scope/budget/apply changes; bounded rounds/tasks/deadline; no-progress stop; deterministic partial report when budget exhausted; explicit apply behavior | P20 | No passing evidence yet | pending |
+| V16 Network absence | Counting transport/DNS/helper proves no external work for ordinary local commands, `--offline`, or `--dry-run`; dry-run also leaves filesystem/index/journal unchanged | P06–P09,P16–P18,P20 | No passing evidence yet | pending |
+| V17 Final local qualification | Full supported command workflow, relevant fault suite, format/lint/tests, current-platform release build/artifact smoke test, clean capability/requirement coverage, independent review findings resolved | P21 | No passing evidence yet | pending |
+
+## Package obligations
+
+| Package | Required named tests | State / report |
+|---|---|---|
+| P00 | `contracts_valid_examples`, `contracts_invalid_types_and_references`, `id_hash_and_path_newtypes`, `predicate_literal_and_qualifier_matrix`; gate **schema/type bootstrap and reproducible build**. Schema tests distinguish canonical accepted fixtures from later extraction import proposals. | accepted; P00.md, P00-checks.json, P00-review.md (10 tests) |
+| P01 | `frontmatter_preserves_unknown_nested_comments_quotes_bom_crlf`, `reject_duplicate_keys_anchors_tags_and_wrong_types`, `unsupported_schema_is_structured_read_only`, `links_ignore_code_and_preserve_ambiguity`; gate **lossless editing and strict references**. | pending; reports/P01.md |
+| P02 | `path_escape_symlink_reserved_and_case_collision`, `scan_skips_control_payload_and_symlink_paths`, `same_directory_replace_and_sync_failures`, `cooperating_writers_serialize`; gate **current-platform filesystem and locking**. | pending; reports/P02.md |
+| P03 | `crash_matrix_journal_stage_replace_filesapplied_indexed_commit`, `recovery_old_new_third_hash_and_absence`, `truncated_tail_vs_corrupt_frame`, `rollback_preserves_unfamiliar_edits`, `lost_state_reconstructs_from_payloads`; gate **recoverable canonical changes**. | pending; reports/P03.md |
+| P04 | `capture_preserves_exact_original_and_content`, `unicode_crlf_span_and_separator_newline`, `ambiguous_quote_or_tampered_snapshot_rejected`, `refresh_same_bytes_different_extractor`, `revalidate_successor_never_retargets_old_evidence`; gate **immutable capture and exact evidence**. | pending; reports/P04.md |
+| P05 | `reader_keeps_snapshot_across_generation_switch`, `failed_fts_publication_preserves_previous_view`, `copied_ids_and_companion_conflicts_exclude_all`, `same_timestamp_edit_and_decision_change_detected`, `cache_delete_rebuild_canonical_equivalence_zero_remote`, `dependency_cycle_and_identity_description_split`; gates **atomic projection publication**, **Markdown-only canonical rebuild**, and **eligibility closure**. | pending; reports/P05.md |
+| P06 | `cli_discovery_precedence_and_exact_ids`, `expected_hash_page_put_rename_and_incoming_links`, `machine_envelope_error_exit_and_no_ansi`, `dry_run_zero_writes_refresh_helpers_dns_http`, `capabilities_only_implemented_commands`, `schema_migration_is_explicit_and_guarded`; gate **offline command and output contract**. | pending; reports/P06.md |
+| P07 | `literal_vec_t_e0308_symbols`, `lexical_or_colon_star_quotes_are_data`, `filter_before_limit_and_stable_ties`, `cursor_query_or_generation_change_is_stale`, `invalid_notes_remain_literal_discovery`; gate **safe deterministic lexical discovery**. | pending; reports/P07.md |
+| P08 | `a_b_c_path_does_not_create_a_c_fact`, `opposite_negated_dated_literal_disputed_edges`, `homonym_labels_never_merge`, `hub_cycle_depth_and_incident_caps`, `graph_lexical_zero_model_calls`; gate **bounded directed graph without inferred assertions**. | pending; reports/P08.md |
+| P09 | `new_decision_or_copied_id_before_emit_is_detected`, `one_support_then_all_support_withdrawal_closure`, `freshness_budget_cannot_claim_verified`, `bundle_support_and_contradiction_fit_or_omit`, `direct_source_vs_note_vs_assertion_citations`, `m1_vertical_rename_refresh_revalidate_recover_rebuild`; gates **verified evidence emission**, **bounded context**, and **M1 offline resilience**. | pending; reports/P09.md |
+| P10 | `packet_exact_window_fingerprint_and_markdown_restore`, `wire_duplicate_unknown_reference_qualifier_and_quote_rejections`, `identical_staged_import_reuses_ids_before_apply`, `conflicting_response_requires_new_extraction`, `model_accepted_flag_cannot_activate`; gate **durable packet-bound proposal import**. | pending; reports/P10.md |
+| P11 | `homonym_and_pronoun_require_explicit_binding`, `resolution_expected_hash_and_complete_mapping`, `rejected_mentions_never_activate_endpoints`, `resolve_apply_preserves_raw_source_local_output`; gate **explicit identity binding**. | pending; reports/P11.md |
+| P12 | `merge_requires_complete_hashed_remaps`, `split_exhaustive_partition_or_conflict`, `alias_explicit_no_remap`, `supersession_cycles_and_conflicting_decisions_invalid`, `no_silent_assertion_redirect_retarget`, `entity_decisions_rebuild_exact_ids`; gate **explicit exhaustive entity decisions**. | pending; reports/P12.md |
+| P13 | `review_omitted_or_new_active_evidence_conflicts`, `changed_stance_successor_and_insufficient_retraction_atomic`, `accept_requires_post_review_current_support`, `review_cannot_restore_withdrawn_or_old_revision_support`, `m2_packet_import_apply_resolve_apply_decide_apply_review_apply`; gate **complete authorized M2 graph lifecycle**. | pending; reports/P13.md |
+| P14 | `skill_examples_execute_against_release_binary`, `skill_exports_correct_single_discovery_layout`, `skill_refuses_host_instruction_overwrite`, `skill_capabilities_do_not_advertise_missing_commands`; gate **runnable portable skill packaging**. | pending; reports/P14.md |
+| P15 | `two_processes_final_slot_only_one_admitted`, `checked_money_round_up_and_unknown_cost_ceiling_rejected`, `dispatch_intent_crash_keeps_unknown_charge`, `replay_each_spool_output_receipt_settlement_boundary`, `retry_gets_new_reservation_no_double_settlement`, `markdown_restore_cannot_resume_old_hard_budget_without_accounting`; gate **durable dispatch admission and uncertain spend**. | pending; reports/P15.md |
+| P16 | `cloned_profile_no_auth_or_helper`, `offline_dry_run_before_secret_resolution_zero_dns_http_helpers`, `helper_expiry_size_control_stderr_redaction_and_one_401_refresh`, `full_url_no_appended_path_and_no_auth_redirect`, `reordered_vectors_valid_missing_nan_dimension_batch_rejected`, `refusal_truncation_tools_malformed_generation_receipt_no_repair`, `retry_after_deadline_and_timeout_unknown_charge`; gates **private trust and secret isolation**, **accounted bounded transport**, and **strict provider wire contracts**. | pending; reports/P16.md |
+| P17 | `short_whole_long_unicode_split_header_limit`, `render_qualifiers_rename_and_description_dependency_invalidation`, `exact_cosine_known_order_corrupt_blob_unavailable`, `equal_dimensions_different_model_no_mixed_spaces`, `source_edit_inflight_vector_membership_rejected`, `partial_replacement_queries_old_reproducible_space`, `rrf_owner_collapse_no_duplicate_votes`, `offline_missing_query_vector_no_remote`; gates **deterministic representation and space isolation**, **bounded exact semantics**, and **hybrid evidence preservation**. | pending; reports/P17.md |
+| P18 | `api_and_agent_same_packet_import_semantics`, `cached_resume_preserves_reject_accept_and_resolution`, `malformed_response_charged_no_partial_activation_or_repair`, `changed_source_prompt_model_creates_new_task`, `cancel_after_dispatch_retains_completed_output_unknown_attempt`; gate **resumable API proposals without implicit acceptance**. | pending; reports/P18.md |
+| P19 | `search_limits_pages_dedup_snippets_are_not_evidence`, `explicit_url_without_search_capability`, `dns_rebind_private_redirect_ipv4_mapped_ipv6_rejected`, `ambient_proxy_auth_downgrade_credentials_rejected`, `redirect_and_decompression_caps_accounted`, `capture_raw_before_normalize_and_unsupported_gap`; gate **bounded public acquisition and captured provenance**. | pending; reports/P19.md |
+| P20 | `mock_standalone_research_full_plan_to_evidence_report`, `research_stage_schemas_limits_unknown_refs_and_invented_paths`, `synthesis_citation_bytes_verified_unsupported_claims_not_accepted`, `resume_completed_tasks_changed_source_model_revalidate`, `lifetime_round_request_source_deadline_limits_do_not_reset`, `budget_stop_deterministic_partial_report_no_final_generation`, `cancel_restart_unknown_attempts_and_preserved_report`, `planner_cannot_raise_limits_dispatch_or_apply`, `unverifiable_claims_and_coverage_gaps_remain_explicit`, `dry_run_research_zero_side_effects`; gate **complete bounded resumable M4 research**. | pending; reports/P20.md |
+| P21 | `m0_m4_full_local_acceptance`, `clean_artifact_smoke_no_auxiliary_runtime`, `jsonl_terminal_event_and_interrupted_state`, `heldout_fixed_corpus_equal_budget_baseline`, `all_fault_injection_and_counted_offline_gates`; gate **complete local M0–M4 qualification**. Run formatting, full required tests, linting, and release build once on the final integrated revision; repeat only for changes/failures or unresolved evidence. | pending; reports/P21.md |
+
+## Complete command target
+
+| Command | Current status | Owning integration |
+|---|---|---|
+| `init PATH` | pending, except capabilities/schema scaffold | M1 |
+| `capabilities`, `schema NAME` | pending, except capabilities/schema scaffold | M1 |
+| `read --id ID` or `read --path PATH` | pending, except capabilities/schema scaffold | M1 |
+| `page put --file FILE` | pending, except capabilities/schema scaffold | M1 |
+| `page rename ID --to PATH --if-match HASH` | pending, except capabilities/schema scaffold | M1 |
+| `source add FILE` | pending, except capabilities/schema scaffold | M1 |
+| `source refresh ID --file FILE` | pending, except capabilities/schema scaffold | M1 |
+| `source withdraw ID --reason TEXT` | pending, except capabilities/schema scaffold | M1 |
+| `evidence revalidate ID --to-revision REV --if-match HASH` | pending, except capabilities/schema scaffold | M1 |
+| `index sync`, `index rebuild` | pending, except capabilities/schema scaffold | M1 |
+| `search QUERY` | pending, except capabilities/schema scaffold | M1 |
+| `graph neighbors ID`, `graph query QUERY` | pending, except capabilities/schema scaffold | M1 |
+| `context QUERY` | pending, except capabilities/schema scaffold | M1 |
+| `check`, `doctor` | pending, except capabilities/schema scaffold | M1 |
+| `changes show ID`, `changes apply ID` | pending, except capabilities/schema scaffold | M1–M2 |
+| `changes abort ID`, `changes rollback ID` | pending, except capabilities/schema scaffold | M1 |
+| `recover` | pending, except capabilities/schema scaffold | M1 |
+| `graph extract --executor agent` | pending, except capabilities/schema scaffold | M2 |
+| `graph import --file FILE` | pending, except capabilities/schema scaffold | M2 |
+| `graph resolve --file RESOLUTION.json` | pending, except capabilities/schema scaffold | M2 |
+| `graph review --file REVIEW.json` | pending, except capabilities/schema scaffold | M2 |
+| `graph decide --file DECISION.json` | pending, except capabilities/schema scaffold | M2 |
+| `skill export --target HOST --output DIR` | pending, except capabilities/schema scaffold | M2 |
+| `embeddings check`, `embeddings sync` | pending, except capabilities/schema scaffold | M3 |
+| `graph extract --executor api` | pending, except capabilities/schema scaffold | M3 |
+| `research plan`, `run`, `resume`, `status`, `report` | pending, except capabilities/schema scaffold | M4 |
+
+## Recorded setup results
+
+- Toolchain Rust/Cargo 1.98.0 observed; `cargo generate-lockfile --offline` exit 0 with bootstrap dependencies.
+- `cargo search jsonschema --limit 1` failed in sandbox DNS; authorized escalation succeeded, jsonschema 0.58.2 metadata inspected (MIT, Rust 1.85). Dev-only, default features disabled: no HTTP/file schema resolution or TLS dependency.
+- `cargo generate-lockfile; cargo fetch --locked` under permitted escalation passed.
+- `cargo build --locked --offline --example fixture_hash` exit 0. Initial deprecated time parser warning sent to domain worker for correction. This build alone does not pass P00/V01.

@@ -1,0 +1,930 @@
+{
+  "assertion_outcomes": {
+    "assertion_00000000-0000-7000-8000-00000000000a": {
+      "authored_status": "accepted",
+      "disputed": true,
+      "eligibility": "Current"
+    },
+    "assertion_00000000-0000-7000-8000-00000000000b": {
+      "authored_status": "accepted",
+      "disputed": false,
+      "eligibility": "Current"
+    },
+    "assertion_00000000-0000-7000-8000-00000000000c": {
+      "authored_status": "accepted",
+      "disputed": false,
+      "eligibility": "Current"
+    },
+    "assertion_00000000-0000-7000-8000-00000000000d": {
+      "authored_status": "accepted",
+      "disputed": false,
+      "eligibility": "Current"
+    },
+    "assertion_00000000-0000-7000-8000-00000000000e": {
+      "authored_status": "accepted",
+      "disputed": false,
+      "eligibility": "Current"
+    },
+    "assertion_00000000-0000-7000-8000-00000000000f": {
+      "authored_status": "accepted",
+      "disputed": false,
+      "eligibility": "Stale"
+    },
+    "assertion_00000000-0000-7000-8000-000000000010": {
+      "authored_status": "accepted",
+      "disputed": false,
+      "eligibility": "Current"
+    }
+  },
+  "evidence": [
+    {
+      "assertion_id": "assertion_00000000-0000-7000-8000-00000000000a",
+      "current": true,
+      "id": "evidence_00000000-0000-7000-8000-000000000012",
+      "quote": "North Lab uses South Lab.\n",
+      "quote_hash": "blake3:b6013766798c2bea006c6e653212b9690d276d1df6d3125517937803e265ea49",
+      "revision_id": "revision_00000000-0000-7000-8000-000000000008",
+      "source_id": "source_00000000-0000-7000-8000-000000000005",
+      "span_end": 54,
+      "span_start": 28,
+      "stance": "supports"
+    },
+    {
+      "assertion_id": "assertion_00000000-0000-7000-8000-00000000000a",
+      "current": true,
+      "id": "evidence_00000000-0000-7000-8000-000000000013",
+      "quote": "North Lab uses South Lab.\n",
+      "quote_hash": "blake3:b6013766798c2bea006c6e653212b9690d276d1df6d3125517937803e265ea49",
+      "revision_id": "revision_00000000-0000-7000-8000-000000000009",
+      "source_id": "source_00000000-0000-7000-8000-000000000006",
+      "span_end": 167,
+      "span_start": 141,
+      "stance": "supports"
+    },
+    {
+      "assertion_id": "assertion_00000000-0000-7000-8000-00000000000a",
+      "current": true,
+      "id": "evidence_00000000-0000-7000-8000-000000000014",
+      "quote": "North Lab does not use South Lab.\n",
+      "quote_hash": "blake3:a4ebd07b2ea539c6d54361bbc5d4146c675b96620f190e1c18957f356f8eb886",
+      "revision_id": "revision_00000000-0000-7000-8000-000000000008",
+      "source_id": "source_00000000-0000-7000-8000-000000000005",
+      "span_end": 114,
+      "span_start": 80,
+      "stance": "contradicts"
+    },
+    {
+      "assertion_id": "assertion_00000000-0000-7000-8000-00000000000b",
+      "current": true,
+      "id": "evidence_00000000-0000-7000-8000-000000000015",
+      "quote": "South Lab uses North Lab.\n",
+      "quote_hash": "blake3:4600a71ea9770b73ea666e4504ada7e36a1384684e4a2c6f915e225825eaa33e",
+      "revision_id": "revision_00000000-0000-7000-8000-000000000008",
+      "source_id": "source_00000000-0000-7000-8000-000000000005",
+      "span_end": 80,
+      "span_start": 54,
+      "stance": "supports"
+    },
+    {
+      "assertion_id": "assertion_00000000-0000-7000-8000-00000000000c",
+      "current": true,
+      "id": "evidence_00000000-0000-7000-8000-000000000016",
+      "quote": "North Lab does not use South Lab.\n",
+      "quote_hash": "blake3:a4ebd07b2ea539c6d54361bbc5d4146c675b96620f190e1c18957f356f8eb886",
+      "revision_id": "revision_00000000-0000-7000-8000-000000000008",
+      "source_id": "source_00000000-0000-7000-8000-000000000005",
+      "span_end": 114,
+      "span_start": 80,
+      "stance": "supports"
+    },
+    {
+      "assertion_id": "assertion_00000000-0000-7000-8000-00000000000d",
+      "current": true,
+      "id": "evidence_00000000-0000-7000-8000-000000000017",
+      "quote": "Alex Kim (North) works for North Lab from 2024-01-01 until 2025-01-01.\n",
+      "quote_hash": "blake3:14cdc6eaacc483c1de9f56feef26a4f11370cb81eec9cc3e85181077af6c3e68",
+      "revision_id": "revision_00000000-0000-7000-8000-000000000009",
+      "source_id": "source_00000000-0000-7000-8000-000000000006",
+      "span_end": 95,
+      "span_start": 24,
+      "stance": "supports"
+    },
+    {
+      "assertion_id": "assertion_00000000-0000-7000-8000-00000000000e",
+      "current": true,
+      "id": "evidence_00000000-0000-7000-8000-000000000018",
+      "quote": "Alex Kim (South) does not work for North Lab.\n",
+      "quote_hash": "blake3:481771fc78a17dc335bb809872eec572b84fd710965a570304d2c36ff8c7c929",
+      "revision_id": "revision_00000000-0000-7000-8000-000000000009",
+      "source_id": "source_00000000-0000-7000-8000-000000000006",
+      "span_end": 141,
+      "span_start": 95,
+      "stance": "supports"
+    },
+    {
+      "assertion_id": "assertion_00000000-0000-7000-8000-00000000000f",
+      "current": false,
+      "id": "evidence_00000000-0000-7000-8000-000000000019",
+      "quote": "Alex Kim (North) maintains North Lab.\n",
+      "quote_hash": "blake3:70b8128a6d3f953adf2aa837cbb7e0ae84dc4c98453d59ce7f9d719b6a011f6d",
+      "revision_id": "revision_00000000-0000-7000-8000-000000000007",
+      "source_id": "source_00000000-0000-7000-8000-000000000005",
+      "span_end": 93,
+      "span_start": 55,
+      "stance": "supports"
+    },
+    {
+      "assertion_id": "assertion_00000000-0000-7000-8000-000000000010",
+      "current": true,
+      "id": "evidence_00000000-0000-7000-8000-00000000001a",
+      "quote": "Design note: café, 東京, 🦀; code token ``` stays literal.\n",
+      "quote_hash": "blake3:b10c88dd511f493abb81af980bf7c1750f08666aec2e0b08b48217bbd4a47f04",
+      "revision_id": "revision_00000000-0000-7000-8000-000000000008",
+      "source_id": "source_00000000-0000-7000-8000-000000000005",
+      "span_end": 178,
+      "span_start": 114,
+      "stance": "supports"
+    }
+  ],
+  "expected_decisions": [
+    {
+      "action": "keep_distinct",
+      "input_ids": [
+        "entity_00000000-0000-7000-8000-000000000001",
+        "entity_00000000-0000-7000-8000-000000000002"
+      ],
+      "reason": "Equal names do not merge identities."
+    },
+    {
+      "action": "revalidate",
+      "input_ids": [
+        "assertion_00000000-0000-7000-8000-00000000000f"
+      ],
+      "reason": "Only superseded-revision support exists."
+    }
+  ],
+  "expected_semantics": {
+    "after_withdraw_architecture": {
+      "assertion_00000000-0000-7000-8000-00000000000a": "Current",
+      "assertion_00000000-0000-7000-8000-00000000000b": "Unsupported",
+      "assertion_00000000-0000-7000-8000-00000000000c": "Unsupported",
+      "assertion_00000000-0000-7000-8000-000000000010": "Unsupported"
+    },
+    "after_withdraw_both_sources": {
+      "assertion_00000000-0000-7000-8000-00000000000a": "Unsupported",
+      "assertion_00000000-0000-7000-8000-00000000000b": "Unsupported",
+      "assertion_00000000-0000-7000-8000-00000000000c": "Unsupported",
+      "assertion_00000000-0000-7000-8000-00000000000d": "Unsupported",
+      "assertion_00000000-0000-7000-8000-00000000000e": "Unsupported",
+      "assertion_00000000-0000-7000-8000-00000000000f": "Unsupported",
+      "assertion_00000000-0000-7000-8000-000000000010": "Unsupported"
+    },
+    "dated_interval_half_open": [
+      "2024-01-01",
+      "2025-01-01"
+    ],
+    "dependent_page_after_withdraw_architecture": "Current",
+    "dependent_page_after_withdraw_both_sources": "Unsupported",
+    "forward_reverse_distinct": [
+      "assertion_00000000-0000-7000-8000-00000000000a",
+      "assertion_00000000-0000-7000-8000-00000000000b"
+    ],
+    "import_default_status": "proposed",
+    "positive_negated_distinct": [
+      "assertion_00000000-0000-7000-8000-00000000000a",
+      "assertion_00000000-0000-7000-8000-00000000000c"
+    ],
+    "rebuild_provider_calls": 0
+  },
+  "files": [
+    {
+      "byte_length": 236,
+      "hash": "blake3:1d4f6ea76c8be9080860c5e3a49b5427198772c33cf305d89fee2ab7cb192897",
+      "path": "vault/WIKI.md"
+    },
+    {
+      "byte_length": 410,
+      "hash": "blake3:6de80820d52b8563f3a28292858ce6fc148917c9ccc8659373d06fef38963b43",
+      "path": "vault/knowledge/assertions/dated.md"
+    },
+    {
+      "byte_length": 341,
+      "hash": "blake3:78e951d879c1dc8ce71c0ec968d7b737970e14f34bdaac33c9a967c6eca8f01a",
+      "path": "vault/knowledge/assertions/forward.md"
+    },
+    {
+      "byte_length": 378,
+      "hash": "blake3:502ffe957dd6ef2d20d899f889f5f537a9f4fa28d2e3c99f8f434067d2169746",
+      "path": "vault/knowledge/assertions/homonym_negated.md"
+    },
+    {
+      "byte_length": 360,
+      "hash": "blake3:fc1ec1a6cb939300a036f588d339fd101022e15218b81108d6b2012e5b6e7638",
+      "path": "vault/knowledge/assertions/negated.md"
+    },
+    {
+      "byte_length": 341,
+      "hash": "blake3:d790ad68f9c987849567e9e3078ec892dc17434dfc92ddbd4b5b6e38e950969d",
+      "path": "vault/knowledge/assertions/reverse.md"
+    },
+    {
+      "byte_length": 349,
+      "hash": "blake3:59700a6b8fb3cd1432d8e7c6ea98e02792a51c04c79e7837a2b129391d8ba835",
+      "path": "vault/knowledge/assertions/stale.md"
+    },
+    {
+      "byte_length": 442,
+      "hash": "blake3:caa19d21f588eb0f953863184e9f7ac133d02e20a73caa4dee81b51c186e3f77",
+      "path": "vault/knowledge/assertions/unicode_property.md"
+    },
+    {
+      "byte_length": 203,
+      "hash": "blake3:e675f9a433324eda142d52426fd8a547195a896d6d5833bba512ab104610f612",
+      "path": "vault/knowledge/entities/alex_north.md"
+    },
+    {
+      "byte_length": 223,
+      "hash": "blake3:9f316016dd95bbd6b02e5529981b194df16e98aedc42f986750a9132dbc5e8a1",
+      "path": "vault/knowledge/entities/alex_south.md"
+    },
+    {
+      "byte_length": 220,
+      "hash": "blake3:12480cf76fdf8c9e3d167417490cec96693cd306748a1d21c004ecbd76a2bc27",
+      "path": "vault/knowledge/entities/north_lab.md"
+    },
+    {
+      "byte_length": 220,
+      "hash": "blake3:19a5b48812281204e1cdd46fab0d648cc4d7743e9de1e9f19244fbdde31bf442",
+      "path": "vault/knowledge/entities/south_lab.md"
+    },
+    {
+      "byte_length": 649,
+      "hash": "blake3:e5c40f952d07b06799131ef5b8bcc7a69b0b72232ce2c76d61b40bf696d6da2e",
+      "path": "vault/knowledge/evidence/dated_support.md"
+    },
+    {
+      "byte_length": 624,
+      "hash": "blake3:74f787f2eef6ecbae67811bb1b191b93057acc8d93ff72596988d92c24c1290d",
+      "path": "vault/knowledge/evidence/forward_contradiction.md"
+    },
+    {
+      "byte_length": 605,
+      "hash": "blake3:8be9d3560dbe651acdbf5b1db769edff56eac5fcfc34b14e05e842196b18ab62",
+      "path": "vault/knowledge/evidence/forward_long.md"
+    },
+    {
+      "byte_length": 604,
+      "hash": "blake3:8684006fc8bcbf8b5cee5784ccaadce58cc643a9ca6ac5c471d94d97e440044c",
+      "path": "vault/knowledge/evidence/forward_short.md"
+    },
+    {
+      "byte_length": 627,
+      "hash": "blake3:c9c5adbcf89e481e86bfc3bb54db88e68b31994521adb4f2d66511bd9ba67578",
+      "path": "vault/knowledge/evidence/homonym_support.md"
+    },
+    {
+      "byte_length": 615,
+      "hash": "blake3:23e5ce4012bad1255b219d0c9490b152528eb5ab7e28288467f37041ddf98923",
+      "path": "vault/knowledge/evidence/negated_support.md"
+    },
+    {
+      "byte_length": 606,
+      "hash": "blake3:ee48cf4419c03cea4b807b87f83c3dbeaec8b6bbc4749e67cde8941409b31312",
+      "path": "vault/knowledge/evidence/reverse_support.md"
+    },
+    {
+      "byte_length": 616,
+      "hash": "blake3:4b1f5fcf9affef53a1810d6e688864f2198d73807227522560e839c53d41186b",
+      "path": "vault/knowledge/evidence/stale_support.md"
+    },
+    {
+      "byte_length": 648,
+      "hash": "blake3:c135848b06e7d98f7526ed109ce911cc309fa85140d53aa09111bdf41ba60e6a",
+      "path": "vault/knowledge/evidence/unicode_support.md"
+    },
+    {
+      "byte_length": 312,
+      "hash": "blake3:9ae15b866ce08025e909a50742e82fb36bd5dc32c0b540fd2231c6dae27a1b8d",
+      "path": "vault/knowledge/pages/architecture.md"
+    },
+    {
+      "byte_length": 93,
+      "hash": "blake3:fc6ede8435c4f863bb80e3a519e4404a25c407949f56cc16871cf33d7196a377",
+      "path": "vault/sources/source_00000000-0000-7000-8000-000000000005/revisions/revision_00000000-0000-7000-8000-000000000007/content.md"
+    },
+    {
+      "byte_length": 93,
+      "hash": "blake3:fc6ede8435c4f863bb80e3a519e4404a25c407949f56cc16871cf33d7196a377",
+      "path": "vault/sources/source_00000000-0000-7000-8000-000000000005/revisions/revision_00000000-0000-7000-8000-000000000007/original.md"
+    },
+    {
+      "byte_length": 719,
+      "hash": "blake3:6577f52de73ff1e33bfd7af0956824c149b1644e3a4f0374202ffd2ef79c0f82",
+      "path": "vault/sources/source_00000000-0000-7000-8000-000000000005/revisions/revision_00000000-0000-7000-8000-000000000007/revision.md"
+    },
+    {
+      "byte_length": 178,
+      "hash": "blake3:c35d665a873789989333b21313e71940a044311bc72adabfbe06ea953d193a20",
+      "path": "vault/sources/source_00000000-0000-7000-8000-000000000005/revisions/revision_00000000-0000-7000-8000-000000000008/content.md"
+    },
+    {
+      "byte_length": 178,
+      "hash": "blake3:c35d665a873789989333b21313e71940a044311bc72adabfbe06ea953d193a20",
+      "path": "vault/sources/source_00000000-0000-7000-8000-000000000005/revisions/revision_00000000-0000-7000-8000-000000000008/original.md"
+    },
+    {
+      "byte_length": 719,
+      "hash": "blake3:f67109dde228c31855509d8089cc23f84a49f9a406cbdb205dffe078df36c748",
+      "path": "vault/sources/source_00000000-0000-7000-8000-000000000005/revisions/revision_00000000-0000-7000-8000-000000000008/revision.md"
+    },
+    {
+      "byte_length": 449,
+      "hash": "blake3:fb48f6ad8dcefd474b44ea9a5a6fbdcfc62cf833df593a9ddee40aeb1f671517",
+      "path": "vault/sources/source_00000000-0000-7000-8000-000000000005/source.md"
+    },
+    {
+      "byte_length": 15591,
+      "hash": "blake3:28e1d8935272f707e1be4ce2c58bd142cea69fe4b51bb48de508679119509fb6",
+      "path": "vault/sources/source_00000000-0000-7000-8000-000000000006/revisions/revision_00000000-0000-7000-8000-000000000009/content.md"
+    },
+    {
+      "byte_length": 15591,
+      "hash": "blake3:28e1d8935272f707e1be4ce2c58bd142cea69fe4b51bb48de508679119509fb6",
+      "path": "vault/sources/source_00000000-0000-7000-8000-000000000006/revisions/revision_00000000-0000-7000-8000-000000000009/original.md"
+    },
+    {
+      "byte_length": 713,
+      "hash": "blake3:edd30581bba6217038de57b8d6c6b2082b93cd7eb8f2794a6ae77d557a320aef",
+      "path": "vault/sources/source_00000000-0000-7000-8000-000000000006/revisions/revision_00000000-0000-7000-8000-000000000009/revision.md"
+    },
+    {
+      "byte_length": 388,
+      "hash": "blake3:a28a5ef039faf90eaa09c4bb3970743ea602ba689f07b2723b8dcb13f0c308a6",
+      "path": "vault/sources/source_00000000-0000-7000-8000-000000000006/source.md"
+    }
+  ],
+  "fixture_version": 1,
+  "ids": {
+    "alex_north": "entity_00000000-0000-7000-8000-000000000001",
+    "alex_south": "entity_00000000-0000-7000-8000-000000000002",
+    "architecture": "source_00000000-0000-7000-8000-000000000005",
+    "architecture_page": "page_00000000-0000-7000-8000-000000000011",
+    "architecture_v1": "revision_00000000-0000-7000-8000-000000000007",
+    "architecture_v2": "revision_00000000-0000-7000-8000-000000000008",
+    "dated": "assertion_00000000-0000-7000-8000-00000000000d",
+    "dated_support": "evidence_00000000-0000-7000-8000-000000000017",
+    "forward": "assertion_00000000-0000-7000-8000-00000000000a",
+    "forward_contradiction": "evidence_00000000-0000-7000-8000-000000000014",
+    "forward_long": "evidence_00000000-0000-7000-8000-000000000013",
+    "forward_short": "evidence_00000000-0000-7000-8000-000000000012",
+    "homonym_negated": "assertion_00000000-0000-7000-8000-00000000000e",
+    "homonym_support": "evidence_00000000-0000-7000-8000-000000000018",
+    "negated": "assertion_00000000-0000-7000-8000-00000000000c",
+    "negated_support": "evidence_00000000-0000-7000-8000-000000000016",
+    "north_lab": "entity_00000000-0000-7000-8000-000000000003",
+    "report": "source_00000000-0000-7000-8000-000000000006",
+    "report_v1": "revision_00000000-0000-7000-8000-000000000009",
+    "reverse": "assertion_00000000-0000-7000-8000-00000000000b",
+    "reverse_support": "evidence_00000000-0000-7000-8000-000000000015",
+    "south_lab": "entity_00000000-0000-7000-8000-000000000004",
+    "stale": "assertion_00000000-0000-7000-8000-00000000000f",
+    "stale_support": "evidence_00000000-0000-7000-8000-000000000019",
+    "unicode_property": "assertion_00000000-0000-7000-8000-000000000010",
+    "unicode_support": "evidence_00000000-0000-7000-8000-00000000001a",
+    "vault": "vault_00000000-0000-7000-8000-00000000001b"
+  },
+  "records": [
+    {
+      "fields": {
+        "title": "Alex Kim",
+        "wiki_entity_type": "person",
+        "wiki_id": "entity_00000000-0000-7000-8000-000000000001",
+        "wiki_kind": "entity",
+        "wiki_schema": "1",
+        "wiki_status": "active"
+      },
+      "id": "entity_00000000-0000-7000-8000-000000000001",
+      "kind": "entity",
+      "name": "alex_north",
+      "path": "knowledge/entities/alex_north.md"
+    },
+    {
+      "fields": {
+        "title": "Alex Kim",
+        "wiki_entity_type": "person",
+        "wiki_id": "entity_00000000-0000-7000-8000-000000000002",
+        "wiki_kind": "entity",
+        "wiki_schema": "1",
+        "wiki_status": "active"
+      },
+      "id": "entity_00000000-0000-7000-8000-000000000002",
+      "kind": "entity",
+      "name": "alex_south",
+      "path": "knowledge/entities/alex_south.md"
+    },
+    {
+      "fields": {
+        "title": "North Lab",
+        "wiki_entity_type": "organization",
+        "wiki_id": "entity_00000000-0000-7000-8000-000000000003",
+        "wiki_kind": "entity",
+        "wiki_schema": "1",
+        "wiki_status": "active"
+      },
+      "id": "entity_00000000-0000-7000-8000-000000000003",
+      "kind": "entity",
+      "name": "north_lab",
+      "path": "knowledge/entities/north_lab.md"
+    },
+    {
+      "fields": {
+        "title": "South Lab",
+        "wiki_entity_type": "organization",
+        "wiki_id": "entity_00000000-0000-7000-8000-000000000004",
+        "wiki_kind": "entity",
+        "wiki_schema": "1",
+        "wiki_status": "active"
+      },
+      "id": "entity_00000000-0000-7000-8000-000000000004",
+      "kind": "entity",
+      "name": "south_lab",
+      "path": "knowledge/entities/south_lab.md"
+    },
+    {
+      "fields": {
+        "title": "architecture_v1",
+        "wiki_captured_at": "2025-01-01T00:00:00Z",
+        "wiki_content_hash": "blake3:fc6ede8435c4f863bb80e3a519e4404a25c407949f56cc16871cf33d7196a377",
+        "wiki_content_path": "content.md",
+        "wiki_extraction_status": "complete",
+        "wiki_extractor": "utf8-preserve-v1",
+        "wiki_extractor_fingerprint": "blake3:166e2b1e4656e1485ed11b43e977917f638df6ec156ed7ca22a44da434a20362",
+        "wiki_id": "revision_00000000-0000-7000-8000-000000000007",
+        "wiki_kind": "revision",
+        "wiki_media_type": "text/markdown",
+        "wiki_original_hash": "blake3:fc6ede8435c4f863bb80e3a519e4404a25c407949f56cc16871cf33d7196a377",
+        "wiki_original_path": "original.md",
+        "wiki_schema": "1",
+        "wiki_source_id": "source_00000000-0000-7000-8000-000000000005"
+      },
+      "id": "revision_00000000-0000-7000-8000-000000000007",
+      "kind": "revision",
+      "name": "architecture_v1",
+      "path": "sources/source_00000000-0000-7000-8000-000000000005/revisions/revision_00000000-0000-7000-8000-000000000007/revision.md"
+    },
+    {
+      "fields": {
+        "title": "architecture_v2",
+        "wiki_captured_at": "2025-01-02T00:00:00Z",
+        "wiki_content_hash": "blake3:c35d665a873789989333b21313e71940a044311bc72adabfbe06ea953d193a20",
+        "wiki_content_path": "content.md",
+        "wiki_extraction_status": "complete",
+        "wiki_extractor": "utf8-preserve-v1",
+        "wiki_extractor_fingerprint": "blake3:166e2b1e4656e1485ed11b43e977917f638df6ec156ed7ca22a44da434a20362",
+        "wiki_id": "revision_00000000-0000-7000-8000-000000000008",
+        "wiki_kind": "revision",
+        "wiki_media_type": "text/markdown",
+        "wiki_original_hash": "blake3:c35d665a873789989333b21313e71940a044311bc72adabfbe06ea953d193a20",
+        "wiki_original_path": "original.md",
+        "wiki_schema": "1",
+        "wiki_source_id": "source_00000000-0000-7000-8000-000000000005"
+      },
+      "id": "revision_00000000-0000-7000-8000-000000000008",
+      "kind": "revision",
+      "name": "architecture_v2",
+      "path": "sources/source_00000000-0000-7000-8000-000000000005/revisions/revision_00000000-0000-7000-8000-000000000008/revision.md"
+    },
+    {
+      "fields": {
+        "title": "report_v1",
+        "wiki_captured_at": "2025-01-03T00:00:00Z",
+        "wiki_content_hash": "blake3:28e1d8935272f707e1be4ce2c58bd142cea69fe4b51bb48de508679119509fb6",
+        "wiki_content_path": "content.md",
+        "wiki_extraction_status": "complete",
+        "wiki_extractor": "utf8-preserve-v1",
+        "wiki_extractor_fingerprint": "blake3:166e2b1e4656e1485ed11b43e977917f638df6ec156ed7ca22a44da434a20362",
+        "wiki_id": "revision_00000000-0000-7000-8000-000000000009",
+        "wiki_kind": "revision",
+        "wiki_media_type": "text/markdown",
+        "wiki_original_hash": "blake3:28e1d8935272f707e1be4ce2c58bd142cea69fe4b51bb48de508679119509fb6",
+        "wiki_original_path": "original.md",
+        "wiki_schema": "1",
+        "wiki_source_id": "source_00000000-0000-7000-8000-000000000006"
+      },
+      "id": "revision_00000000-0000-7000-8000-000000000009",
+      "kind": "revision",
+      "name": "report_v1",
+      "path": "sources/source_00000000-0000-7000-8000-000000000006/revisions/revision_00000000-0000-7000-8000-000000000009/revision.md"
+    },
+    {
+      "fields": {
+        "title": "architecture",
+        "wiki_current_revision": "revision_00000000-0000-7000-8000-000000000008",
+        "wiki_id": "source_00000000-0000-7000-8000-000000000005",
+        "wiki_kind": "source",
+        "wiki_origin": "synthetic/architecture.md",
+        "wiki_origin_kind": "local-file",
+        "wiki_revisions": [
+          "revision_00000000-0000-7000-8000-000000000007",
+          "revision_00000000-0000-7000-8000-000000000008"
+        ],
+        "wiki_schema": "1",
+        "wiki_status": "active"
+      },
+      "id": "source_00000000-0000-7000-8000-000000000005",
+      "kind": "source",
+      "name": "architecture",
+      "path": "sources/source_00000000-0000-7000-8000-000000000005/source.md"
+    },
+    {
+      "fields": {
+        "title": "report",
+        "wiki_current_revision": "revision_00000000-0000-7000-8000-000000000009",
+        "wiki_id": "source_00000000-0000-7000-8000-000000000006",
+        "wiki_kind": "source",
+        "wiki_origin": "synthetic/report.md",
+        "wiki_origin_kind": "local-file",
+        "wiki_revisions": [
+          "revision_00000000-0000-7000-8000-000000000009"
+        ],
+        "wiki_schema": "1",
+        "wiki_status": "active"
+      },
+      "id": "source_00000000-0000-7000-8000-000000000006",
+      "kind": "source",
+      "name": "report",
+      "path": "sources/source_00000000-0000-7000-8000-000000000006/source.md"
+    },
+    {
+      "fields": {
+        "title": "forward",
+        "wiki_id": "assertion_00000000-0000-7000-8000-00000000000a",
+        "wiki_kind": "assertion",
+        "wiki_object_id": "entity_00000000-0000-7000-8000-000000000004",
+        "wiki_predicate": "uses",
+        "wiki_schema": "1",
+        "wiki_status": "accepted",
+        "wiki_subject_id": "entity_00000000-0000-7000-8000-000000000003"
+      },
+      "id": "assertion_00000000-0000-7000-8000-00000000000a",
+      "kind": "assertion",
+      "name": "forward",
+      "path": "knowledge/assertions/forward.md"
+    },
+    {
+      "fields": {
+        "title": "reverse",
+        "wiki_id": "assertion_00000000-0000-7000-8000-00000000000b",
+        "wiki_kind": "assertion",
+        "wiki_object_id": "entity_00000000-0000-7000-8000-000000000003",
+        "wiki_predicate": "uses",
+        "wiki_schema": "1",
+        "wiki_status": "accepted",
+        "wiki_subject_id": "entity_00000000-0000-7000-8000-000000000004"
+      },
+      "id": "assertion_00000000-0000-7000-8000-00000000000b",
+      "kind": "assertion",
+      "name": "reverse",
+      "path": "knowledge/assertions/reverse.md"
+    },
+    {
+      "fields": {
+        "title": "negated",
+        "wiki_id": "assertion_00000000-0000-7000-8000-00000000000c",
+        "wiki_kind": "assertion",
+        "wiki_negated": true,
+        "wiki_object_id": "entity_00000000-0000-7000-8000-000000000004",
+        "wiki_predicate": "uses",
+        "wiki_schema": "1",
+        "wiki_status": "accepted",
+        "wiki_subject_id": "entity_00000000-0000-7000-8000-000000000003"
+      },
+      "id": "assertion_00000000-0000-7000-8000-00000000000c",
+      "kind": "assertion",
+      "name": "negated",
+      "path": "knowledge/assertions/negated.md"
+    },
+    {
+      "fields": {
+        "title": "dated",
+        "wiki_id": "assertion_00000000-0000-7000-8000-00000000000d",
+        "wiki_kind": "assertion",
+        "wiki_object_id": "entity_00000000-0000-7000-8000-000000000003",
+        "wiki_predicate": "works_for",
+        "wiki_schema": "1",
+        "wiki_status": "accepted",
+        "wiki_subject_id": "entity_00000000-0000-7000-8000-000000000001",
+        "wiki_valid_from": "2024-01-01",
+        "wiki_valid_until": "2025-01-01"
+      },
+      "id": "assertion_00000000-0000-7000-8000-00000000000d",
+      "kind": "assertion",
+      "name": "dated",
+      "path": "knowledge/assertions/dated.md"
+    },
+    {
+      "fields": {
+        "title": "homonym_negated",
+        "wiki_id": "assertion_00000000-0000-7000-8000-00000000000e",
+        "wiki_kind": "assertion",
+        "wiki_negated": true,
+        "wiki_object_id": "entity_00000000-0000-7000-8000-000000000003",
+        "wiki_predicate": "works_for",
+        "wiki_schema": "1",
+        "wiki_status": "accepted",
+        "wiki_subject_id": "entity_00000000-0000-7000-8000-000000000002"
+      },
+      "id": "assertion_00000000-0000-7000-8000-00000000000e",
+      "kind": "assertion",
+      "name": "homonym_negated",
+      "path": "knowledge/assertions/homonym_negated.md"
+    },
+    {
+      "fields": {
+        "title": "stale",
+        "wiki_id": "assertion_00000000-0000-7000-8000-00000000000f",
+        "wiki_kind": "assertion",
+        "wiki_object_id": "entity_00000000-0000-7000-8000-000000000003",
+        "wiki_predicate": "maintains",
+        "wiki_schema": "1",
+        "wiki_status": "accepted",
+        "wiki_subject_id": "entity_00000000-0000-7000-8000-000000000001"
+      },
+      "id": "assertion_00000000-0000-7000-8000-00000000000f",
+      "kind": "assertion",
+      "name": "stale",
+      "path": "knowledge/assertions/stale.md"
+    },
+    {
+      "fields": {
+        "title": "Unicode design property",
+        "wiki_id": "assertion_00000000-0000-7000-8000-000000000010",
+        "wiki_kind": "assertion",
+        "wiki_literal_type": "string",
+        "wiki_literal_value": "café, 東京, 🦀; code token ``` stays literal.",
+        "wiki_predicate": "has_property",
+        "wiki_property": "design_note",
+        "wiki_schema": "1",
+        "wiki_status": "accepted",
+        "wiki_subject_id": "entity_00000000-0000-7000-8000-000000000003"
+      },
+      "id": "assertion_00000000-0000-7000-8000-000000000010",
+      "kind": "assertion",
+      "name": "unicode_property",
+      "path": "knowledge/assertions/unicode_property.md"
+    },
+    {
+      "fields": {
+        "title": "Architecture summary",
+        "wiki_depends_on_ids": [
+          "assertion_00000000-0000-7000-8000-00000000000a"
+        ],
+        "wiki_id": "page_00000000-0000-7000-8000-000000000011",
+        "wiki_kind": "page",
+        "wiki_schema": "1",
+        "wiki_status": "reviewed"
+      },
+      "id": "page_00000000-0000-7000-8000-000000000011",
+      "kind": "page",
+      "name": "architecture_page",
+      "path": "knowledge/pages/architecture.md"
+    },
+    {
+      "fields": {
+        "title": "forward_short",
+        "wiki_assertion_id": "assertion_00000000-0000-7000-8000-00000000000a",
+        "wiki_id": "evidence_00000000-0000-7000-8000-000000000012",
+        "wiki_kind": "evidence",
+        "wiki_locator_kind": "utf8-bytes",
+        "wiki_quote_hash": "blake3:b6013766798c2bea006c6e653212b9690d276d1df6d3125517937803e265ea49",
+        "wiki_schema": "1",
+        "wiki_source_id": "source_00000000-0000-7000-8000-000000000005",
+        "wiki_source_revision": "revision_00000000-0000-7000-8000-000000000008",
+        "wiki_span_end": 54,
+        "wiki_span_start": 28,
+        "wiki_stance": "supports",
+        "wiki_status": "active"
+      },
+      "id": "evidence_00000000-0000-7000-8000-000000000012",
+      "kind": "evidence",
+      "name": "forward_short",
+      "path": "knowledge/evidence/forward_short.md"
+    },
+    {
+      "fields": {
+        "title": "forward_long",
+        "wiki_assertion_id": "assertion_00000000-0000-7000-8000-00000000000a",
+        "wiki_id": "evidence_00000000-0000-7000-8000-000000000013",
+        "wiki_kind": "evidence",
+        "wiki_locator_kind": "utf8-bytes",
+        "wiki_quote_hash": "blake3:b6013766798c2bea006c6e653212b9690d276d1df6d3125517937803e265ea49",
+        "wiki_schema": "1",
+        "wiki_source_id": "source_00000000-0000-7000-8000-000000000006",
+        "wiki_source_revision": "revision_00000000-0000-7000-8000-000000000009",
+        "wiki_span_end": 167,
+        "wiki_span_start": 141,
+        "wiki_stance": "supports",
+        "wiki_status": "active"
+      },
+      "id": "evidence_00000000-0000-7000-8000-000000000013",
+      "kind": "evidence",
+      "name": "forward_long",
+      "path": "knowledge/evidence/forward_long.md"
+    },
+    {
+      "fields": {
+        "title": "forward_contradiction",
+        "wiki_assertion_id": "assertion_00000000-0000-7000-8000-00000000000a",
+        "wiki_id": "evidence_00000000-0000-7000-8000-000000000014",
+        "wiki_kind": "evidence",
+        "wiki_locator_kind": "utf8-bytes",
+        "wiki_quote_hash": "blake3:a4ebd07b2ea539c6d54361bbc5d4146c675b96620f190e1c18957f356f8eb886",
+        "wiki_schema": "1",
+        "wiki_source_id": "source_00000000-0000-7000-8000-000000000005",
+        "wiki_source_revision": "revision_00000000-0000-7000-8000-000000000008",
+        "wiki_span_end": 114,
+        "wiki_span_start": 80,
+        "wiki_stance": "contradicts",
+        "wiki_status": "active"
+      },
+      "id": "evidence_00000000-0000-7000-8000-000000000014",
+      "kind": "evidence",
+      "name": "forward_contradiction",
+      "path": "knowledge/evidence/forward_contradiction.md"
+    },
+    {
+      "fields": {
+        "title": "reverse_support",
+        "wiki_assertion_id": "assertion_00000000-0000-7000-8000-00000000000b",
+        "wiki_id": "evidence_00000000-0000-7000-8000-000000000015",
+        "wiki_kind": "evidence",
+        "wiki_locator_kind": "utf8-bytes",
+        "wiki_quote_hash": "blake3:4600a71ea9770b73ea666e4504ada7e36a1384684e4a2c6f915e225825eaa33e",
+        "wiki_schema": "1",
+        "wiki_source_id": "source_00000000-0000-7000-8000-000000000005",
+        "wiki_source_revision": "revision_00000000-0000-7000-8000-000000000008",
+        "wiki_span_end": 80,
+        "wiki_span_start": 54,
+        "wiki_stance": "supports",
+        "wiki_status": "active"
+      },
+      "id": "evidence_00000000-0000-7000-8000-000000000015",
+      "kind": "evidence",
+      "name": "reverse_support",
+      "path": "knowledge/evidence/reverse_support.md"
+    },
+    {
+      "fields": {
+        "title": "negated_support",
+        "wiki_assertion_id": "assertion_00000000-0000-7000-8000-00000000000c",
+        "wiki_id": "evidence_00000000-0000-7000-8000-000000000016",
+        "wiki_kind": "evidence",
+        "wiki_locator_kind": "utf8-bytes",
+        "wiki_quote_hash": "blake3:a4ebd07b2ea539c6d54361bbc5d4146c675b96620f190e1c18957f356f8eb886",
+        "wiki_schema": "1",
+        "wiki_source_id": "source_00000000-0000-7000-8000-000000000005",
+        "wiki_source_revision": "revision_00000000-0000-7000-8000-000000000008",
+        "wiki_span_end": 114,
+        "wiki_span_start": 80,
+        "wiki_stance": "supports",
+        "wiki_status": "active"
+      },
+      "id": "evidence_00000000-0000-7000-8000-000000000016",
+      "kind": "evidence",
+      "name": "negated_support",
+      "path": "knowledge/evidence/negated_support.md"
+    },
+    {
+      "fields": {
+        "title": "dated_support",
+        "wiki_assertion_id": "assertion_00000000-0000-7000-8000-00000000000d",
+        "wiki_id": "evidence_00000000-0000-7000-8000-000000000017",
+        "wiki_kind": "evidence",
+        "wiki_locator_kind": "utf8-bytes",
+        "wiki_quote_hash": "blake3:14cdc6eaacc483c1de9f56feef26a4f11370cb81eec9cc3e85181077af6c3e68",
+        "wiki_schema": "1",
+        "wiki_source_id": "source_00000000-0000-7000-8000-000000000006",
+        "wiki_source_revision": "revision_00000000-0000-7000-8000-000000000009",
+        "wiki_span_end": 95,
+        "wiki_span_start": 24,
+        "wiki_stance": "supports",
+        "wiki_status": "active"
+      },
+      "id": "evidence_00000000-0000-7000-8000-000000000017",
+      "kind": "evidence",
+      "name": "dated_support",
+      "path": "knowledge/evidence/dated_support.md"
+    },
+    {
+      "fields": {
+        "title": "homonym_support",
+        "wiki_assertion_id": "assertion_00000000-0000-7000-8000-00000000000e",
+        "wiki_id": "evidence_00000000-0000-7000-8000-000000000018",
+        "wiki_kind": "evidence",
+        "wiki_locator_kind": "utf8-bytes",
+        "wiki_quote_hash": "blake3:481771fc78a17dc335bb809872eec572b84fd710965a570304d2c36ff8c7c929",
+        "wiki_schema": "1",
+        "wiki_source_id": "source_00000000-0000-7000-8000-000000000006",
+        "wiki_source_revision": "revision_00000000-0000-7000-8000-000000000009",
+        "wiki_span_end": 141,
+        "wiki_span_start": 95,
+        "wiki_stance": "supports",
+        "wiki_status": "active"
+      },
+      "id": "evidence_00000000-0000-7000-8000-000000000018",
+      "kind": "evidence",
+      "name": "homonym_support",
+      "path": "knowledge/evidence/homonym_support.md"
+    },
+    {
+      "fields": {
+        "title": "stale_support",
+        "wiki_assertion_id": "assertion_00000000-0000-7000-8000-00000000000f",
+        "wiki_id": "evidence_00000000-0000-7000-8000-000000000019",
+        "wiki_kind": "evidence",
+        "wiki_locator_kind": "utf8-bytes",
+        "wiki_quote_hash": "blake3:70b8128a6d3f953adf2aa837cbb7e0ae84dc4c98453d59ce7f9d719b6a011f6d",
+        "wiki_schema": "1",
+        "wiki_source_id": "source_00000000-0000-7000-8000-000000000005",
+        "wiki_source_revision": "revision_00000000-0000-7000-8000-000000000007",
+        "wiki_span_end": 93,
+        "wiki_span_start": 55,
+        "wiki_stance": "supports",
+        "wiki_status": "active"
+      },
+      "id": "evidence_00000000-0000-7000-8000-000000000019",
+      "kind": "evidence",
+      "name": "stale_support",
+      "path": "knowledge/evidence/stale_support.md"
+    },
+    {
+      "fields": {
+        "title": "unicode_support",
+        "wiki_assertion_id": "assertion_00000000-0000-7000-8000-000000000010",
+        "wiki_id": "evidence_00000000-0000-7000-8000-00000000001a",
+        "wiki_kind": "evidence",
+        "wiki_locator_kind": "utf8-bytes",
+        "wiki_quote_hash": "blake3:b10c88dd511f493abb81af980bf7c1750f08666aec2e0b08b48217bbd4a47f04",
+        "wiki_schema": "1",
+        "wiki_source_id": "source_00000000-0000-7000-8000-000000000005",
+        "wiki_source_revision": "revision_00000000-0000-7000-8000-000000000008",
+        "wiki_span_end": 178,
+        "wiki_span_start": 114,
+        "wiki_stance": "supports",
+        "wiki_status": "active"
+      },
+      "id": "evidence_00000000-0000-7000-8000-00000000001a",
+      "kind": "evidence",
+      "name": "unicode_support",
+      "path": "knowledge/evidence/unicode_support.md"
+    },
+    {
+      "fields": {
+        "title": "Synthetic bootstrap vault",
+        "wiki_id": "vault_00000000-0000-7000-8000-00000000001b",
+        "wiki_kind": "vault",
+        "wiki_schema": "1"
+      },
+      "id": "vault_00000000-0000-7000-8000-00000000001b",
+      "kind": "vault",
+      "name": "vault",
+      "path": "WIKI.md"
+    }
+  ],
+  "revisions": [
+    {
+      "byte_length": 93,
+      "content_hash": "blake3:fc6ede8435c4f863bb80e3a519e4404a25c407949f56cc16871cf33d7196a377",
+      "content_path": "sources/source_00000000-0000-7000-8000-000000000005/revisions/revision_00000000-0000-7000-8000-000000000007/content.md",
+      "current": false,
+      "id": "revision_00000000-0000-7000-8000-000000000007",
+      "name": "architecture_v1",
+      "original_hash": "blake3:fc6ede8435c4f863bb80e3a519e4404a25c407949f56cc16871cf33d7196a377",
+      "original_path": "sources/source_00000000-0000-7000-8000-000000000005/revisions/revision_00000000-0000-7000-8000-000000000007/original.md",
+      "source_id": "source_00000000-0000-7000-8000-000000000005"
+    },
+    {
+      "byte_length": 178,
+      "content_hash": "blake3:c35d665a873789989333b21313e71940a044311bc72adabfbe06ea953d193a20",
+      "content_path": "sources/source_00000000-0000-7000-8000-000000000005/revisions/revision_00000000-0000-7000-8000-000000000008/content.md",
+      "current": true,
+      "id": "revision_00000000-0000-7000-8000-000000000008",
+      "name": "architecture_v2",
+      "original_hash": "blake3:c35d665a873789989333b21313e71940a044311bc72adabfbe06ea953d193a20",
+      "original_path": "sources/source_00000000-0000-7000-8000-000000000005/revisions/revision_00000000-0000-7000-8000-000000000008/original.md",
+      "source_id": "source_00000000-0000-7000-8000-000000000005"
+    },
+    {
+      "byte_length": 15591,
+      "content_hash": "blake3:28e1d8935272f707e1be4ce2c58bd142cea69fe4b51bb48de508679119509fb6",
+      "content_path": "sources/source_00000000-0000-7000-8000-000000000006/revisions/revision_00000000-0000-7000-8000-000000000009/content.md",
+      "current": true,
+      "id": "revision_00000000-0000-7000-8000-000000000009",
+      "name": "report_v1",
+      "original_hash": "blake3:28e1d8935272f707e1be4ce2c58bd142cea69fe4b51bb48de508679119509fb6",
+      "original_path": "sources/source_00000000-0000-7000-8000-000000000006/revisions/revision_00000000-0000-7000-8000-000000000009/original.md",
+      "source_id": "source_00000000-0000-7000-8000-000000000006"
+    }
+  ],
+  "synthetic": true
+}
