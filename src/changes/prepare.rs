@@ -69,7 +69,10 @@ impl ChangeEngine {
     /// Read-only expected-state validation; does not create a lock or directories.
     pub fn plan(&self, draft: &ChangeDraft) -> Result<ChangePlan> {
         self.require_binding()?;
-        if draft.operations.len() > MAX_OPS || draft.title.len() > 16_384 {
+        if draft.operations.len() > MAX_OPS
+            || draft.read_preconditions.len() > MAX_OPS
+            || draft.title.len() > 16_384
+        {
             return Err(WikiError::invalid("draft exceeds limits"));
         }
         let targets: Vec<_> = draft
@@ -78,6 +81,19 @@ impl ChangeEngine {
             .map(|op| op.target.clone())
             .collect();
         validate_targets(&self.fs, &targets)?;
+        let mut read_preconditions = draft.read_preconditions.clone();
+        read_preconditions.sort_by(|a, b| a.path.cmp(&b.path));
+        let read_paths: Vec<_> = read_preconditions.iter().map(|r| r.path.clone()).collect();
+        validate_targets(&self.fs, &read_paths)?;
+        for condition in &read_preconditions {
+            let bytes = read_bounded(&self.fs, &condition.path, MAX_PAYLOAD_BYTES)?;
+            if state(bytes.as_deref()) != condition.expected {
+                return Err(WikiError::new(
+                    ErrorCode::ContentConflict,
+                    format!("read precondition mismatch: {}", condition.path),
+                ));
+            }
+        }
         let mut operations = draft.operations.clone();
         operations.sort_by(|a, b| a.target.cmp(&b.target));
         topological_order(&resolve_dependencies(&operations)?)?;
@@ -129,7 +145,27 @@ impl ChangeEngine {
         }
         let deps = resolve_dependencies(&retained)?;
         topological_order(&deps)?;
+        let write_expectations: BTreeMap<_, _> =
+            retained.iter().map(|o| (&o.target, &o.expected)).collect();
+        for condition in &read_preconditions {
+            if let Some(expected) = write_expectations.get(&condition.path)
+                && **expected != condition.expected
+            {
+                return Err(WikiError::invalid(
+                    "read condition disagrees with write expectation",
+                ));
+            }
+        }
+        // Guarded writes already retain the same before-state. Dropped no-ops do not.
+        read_preconditions.retain(|r| !write_expectations.contains_key(&r.path));
+        let combined_paths: Vec<_> = retained
+            .iter()
+            .map(|o| o.target.clone())
+            .chain(read_preconditions.iter().map(|r| r.path.clone()))
+            .collect();
+        validate_targets(&self.fs, &combined_paths)?;
         Ok(ChangePlan {
+            read_preconditions,
             operations: retained,
             roles,
             before: images,
@@ -160,6 +196,7 @@ impl ChangeEngine {
             origin: draft.origin,
             inverse_of: draft.inverse_of,
             allocated_ids: draft.allocated_ids,
+            read_preconditions: plan.read_preconditions.clone(),
             operations: Vec::new(),
         };
         for (index, operation) in plan.operations.iter().enumerate() {
@@ -415,6 +452,7 @@ impl ChangeEngine {
             || &manifest.change_id != id
             || manifest.vault_id != self.vault_id
             || manifest.operations.len() > MAX_OPS
+            || manifest.read_preconditions.len() > MAX_OPS
             || manifest.title.len() > 16_384
         {
             return Err(WikiError::invalid(
@@ -427,6 +465,22 @@ impl ChangeEngine {
             .map(|op| op.target.clone())
             .collect();
         validate_retained_targets(&targets)?;
+        let read_paths: Vec<_> = manifest
+            .read_preconditions
+            .iter()
+            .map(|r| r.path.clone())
+            .collect();
+        validate_retained_targets(&read_paths)?;
+        let target_set: BTreeSet<_> = targets.iter().collect();
+        if read_paths.windows(2).any(|pair| pair[0] >= pair[1])
+            || read_paths.iter().any(|path| target_set.contains(path))
+        {
+            return Err(WikiError::invalid(
+                "read conditions must be sorted, unique and unmodified",
+            ));
+        }
+        let combined_paths: Vec<_> = targets.iter().chain(&read_paths).cloned().collect();
+        validate_retained_targets(&combined_paths)?;
         if targets.windows(2).any(|pair| pair[0] >= pair[1]) {
             return Err(WikiError::invalid("manifest targets must be sorted"));
         }

@@ -50,6 +50,7 @@ fn write(s: &str, old: Option<&[u8]>, new: Option<&[u8]>) -> ExpectedWrite {
 }
 fn draft(operations: Vec<ExpectedWrite>) -> ChangeDraft {
     ChangeDraft {
+        read_preconditions: Vec::new(),
         title: "Test \"exact\"\nbytes".into(),
         origin: None,
         inverse_of: None,

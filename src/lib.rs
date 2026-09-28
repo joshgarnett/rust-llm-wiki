@@ -3,4 +3,5 @@ pub mod changes;
 pub mod domain;
 pub mod output;
 pub mod records;
+pub mod sources;
 pub mod vault;

@@ -64,6 +64,27 @@
       "items": {
         "$ref": "#/$defs/op"
       }
+    },
+    "read_preconditions": {
+      "type": "array",
+      "maxItems": 10000,
+      "description": "Optional original-state expectations for unmodified records/assets; sorted unique paths, disjoint from operation targets. Existing manifests omit empty guards.",
+      "items": {
+        "type": "object",
+        "required": [
+          "path",
+          "expected"
+        ],
+        "properties": {
+          "path": {
+            "$ref": "#/$defs/path"
+          },
+          "expected": {
+            "$ref": "#/$defs/state"
+          }
+        },
+        "additionalProperties": false
+      }
     }
   },
   "additionalProperties": false,

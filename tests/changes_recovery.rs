@@ -38,6 +38,7 @@ fn fixture() -> (tempfile::TempDir, VaultRoot) {
 }
 fn draft() -> ChangeDraft {
     ChangeDraft {
+        read_preconditions: Vec::new(),
         title: "fixture change".into(),
         origin: None,
         inverse_of: None,

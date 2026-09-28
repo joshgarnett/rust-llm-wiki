@@ -89,6 +89,7 @@ impl ChangeEngine {
             origin: None,
             inverse_of: Some(manifest.change_id),
             allocated_ids: BTreeMap::new(),
+            read_preconditions: Vec::new(),
             operations,
         };
         self.plan(&draft)?; // Preserves unfamiliar edits and immutable source rules in read-only planning.

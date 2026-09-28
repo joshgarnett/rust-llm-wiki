@@ -1,6 +1,6 @@
 # Execution checkpoint
 
-Updated: 2026-09-28. Phase: **P03 accepted; P04 dispatch next**. Root owns this file.
+Updated: 2026-09-28. Phase: **P04 accepted; P05 next**. Root owns this file.
 
 ## Objective / authorization
 
@@ -8,7 +8,7 @@ Implement every P00–P21 package and V01–V17 local gate through M4. User auth
 
 ## Accepted baseline and evidence
 
-- Branch `impl/autonomous-v1`, HEAD `f04a9d5a5ddf9749e20aac5d67f5a7fe7f7fa810` (accepted P00/P01/P02).
+- Branch `impl/autonomous-v1`, HEAD `74cfb5838d32f1889bb8a094bc7fe0643390d85e` (accepted P00–P03).
 - Research `4652248`; user/planning edits preserved in baseline `a97679c`; P00 commit `77ef9b7`.
 - Rust/Cargo 1.98.0 pinned, Rust 2024, macOS 26.5.2 arm64. Lockfile126 packages.
 - P00:10 tests, fmt/lint/build/seed check, independent findings resolved. P00-checks.json.
@@ -16,22 +16,21 @@ Implement every P00–P21 package and V01–V17 local gate through M4. User auth
 - CLI advertises only capabilities/schema. Later commands and integrated V01–V17 completion remain pending.
 - Git mutations/dependency downloads require permitted escalation; prior sandbox denials resolved without bypass.
 
-## Exclusive leases / current owners
+## Exclusive leases / owners
 
-P00–P03 accepted; all worker/reviewer leases returned. Root owns shared interfaces, Cargo, CLI/schema registries, commits and state. No active Cargo process or code writer. P04–P21 pending; no nested delegation.
+P00–P04 accepted; all source workers/reviewers and Cargo leases returned. Root owns all source/types/schema/report integration, Cargo, CLI and state. No active Cargo process. P05–P21 pending; no nesteddelegation.
 
-## P03 accepted evidence
+## Latest accepted gate
 
-- P03-checks.json:73 parent tests passed, zero failed; preparation17 (25.35s), recovery25 (347.11s), vault13, lossless8 and contracts10.
-- Required expanded native matrix250 boundaries×before/after =500 faults passed, including immutable binary and ownership-claim durability. Two actual SIGKILL restart wrappers passed; sole ignored child helper is explicitly invoked, not a disabled gate.
-- All-target Clippy -D warnings, fmt, debug build, diff/seed fixture checks passed. Exact source/test/schema/Cargo fingerprints retained.
-- Independent Astra A1 interrupted preparation orphan, B1 independently sealed revision extension and B2 stale Prepared abort resolved. Root direct missing/corrupt/misbound claim cases passed on final tree. P03-review.md/P03.md record dispositions and limits.
-- Root aligned full Unicode namespace folding across inference, tree claims, scan and projected scan; IDs exact case. Changes/source payloads never create adopted envelopes.
-- D20–D25 record manifest/journal encoding, trusted backend boundary, recovery epochs, retained validation, orphan policy and revision-tree claims.
-- Actual complete-graph validation/SQLite publication P05 pending; no permissive production defaults or graph CLI activation. M0 not complete until P05 real spike. Mocks/native I/O tests do not prove SQL isolation, power-loss, native Linux/Windows, host or live-provider compatibility. E01–E05 remain open.
+- P04-checks.json:96 parenttests passed; source15 (8.68s), originalreadguards8 (1.17s), preparation17 (29.00s), recovery25 (340.44s), vault13 andoldcontracts/lossless tests.
+- Actual250NativeIo boundaries×before/after=500 faults passed oncurrentchanges/source tree; two enabledSIGKILLwrappers passed. Soleignoredchildhelper explicitlyinvoked; nocoregate skipped.
+- All-targetClippy-Dwarnings,fmt,debugbuild,diff/seed34files passed. Exactcurrent source/test/schema/Cargo hashes inP04-checks.json.
+- Independent RG1 read/write union collisions andQ1 nested/HTMLcomment quotationdecoy resolved andboundedre-reviewed. Originalreadcondition gapfixedinsideSourcePlan/EvidencePlan drafts; optionalv1manifestemptyomission preserveslegacyencoding. D26 records originalvsprojecteddependency distinction; D20–D25 priorstorage decisionsremain.
+- P04SourceView pureverification+readonlywholeoverlay; original/content/slice anddurablechain verified; current/historical/withdrawnlabels; refreshedbytes/extractorreuse; noold evidence retarget/acceptance promotion.
+- P05 actualglobalregistry/eligibilityclosure/controlfreshness/SQLitepublication stillpending, noCLI source/graphactivation yet. M0notcompleteuntilP05 bundledFTS/publication spike. Mocks/nativeIOfaults do not provepowerloss/nativeLinuxWindows/hosts/liveproviders; E01–E05 open.
 
 ## Exact next action
 
-1. Create local accepted P03 commit from the explicitly owned source/schema/test/report/state paths; update HEAD here.
-2. P04 immutable capture/revision/evidence/lifecycle: read only selected package/linked capture, schema and CLI contracts. Root freezes shared source interfaces/module wiring; bounded Sol implementation, Astra review, root tests.
-3. Then P05 real graph/catalog publication and remaining DAG through M4 without routine confirmation. Full goal not complete at M0/M1.
+1. CreateauthorizedlocalacceptedP04 commit ofroot/source/test/schema/report/statepaths; updateHEAD here.
+2. P05 read selectedpackage/linkedSQLiteprojections,eligibility,capture/retrieval/handoff sections. Rootpinsverifiedbundledrusqlite release,Cargo/wiring/sharedcatalogtypes. `.artifacts/p05/dependency-notes.md` retains primaryupstream/tag observations (rusqlite0.40.1/tag edition2021 vsmaster2024; releaseavailability/localartifactMSRV stillverifybeforepin). NoP05Cargochangesyet.
+3. BoundedSol catalogimplementation (scan/eligibility andSQL/publication maybe disjointworkersafterinterfacefreeze), Astrareview, actualFTS/readers/faultatomicpublication+Markdownrebuildtests. ThenremainingDAGthroughM4; fullgoalnotcompleteatM0/M1.

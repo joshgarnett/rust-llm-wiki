@@ -59,6 +59,9 @@ pub struct ChangeManifest {
     pub origin: Option<ChangeOrigin>,
     pub inverse_of: Option<RecordId>,
     pub allocated_ids: BTreeMap<String, RecordId>,
+    /// Unmodified records/assets whose exact observed state authorized this proposal.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub read_preconditions: Vec<ReadDependency>,
     pub operations: Vec<ChangeOp>,
 }
 
@@ -84,6 +87,8 @@ pub struct ChangeDraft {
     pub origin: Option<ChangeOrigin>,
     pub inverse_of: Option<RecordId>,
     pub allocated_ids: BTreeMap<String, RecordId>,
+    /// Original read states, separate from the validator's projected final dependencies.
+    pub read_preconditions: Vec<ReadDependency>,
     pub operations: Vec<ExpectedWrite>,
 }
 
@@ -120,6 +125,7 @@ pub struct PreparationOutcome {
 
 #[derive(Debug, Clone)]
 pub struct ChangePlan {
+    pub read_preconditions: Vec<ReadDependency>,
     pub operations: Vec<ExpectedWrite>,
     pub roles: Vec<OperationRole>,
     pub(crate) before: Vec<Option<Vec<u8>>>,

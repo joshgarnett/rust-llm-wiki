@@ -55,6 +55,7 @@ impl ChangeEngine {
     ) -> Result<ApplyReport> {
         permit.require_root(self.fs.root())?;
         publisher.check_available()?;
+        self.verify_read_preconditions(permit, manifest, &change.manifest_hash)?;
         self.require_revision_baseline(manifest)?;
         let observations = self.observe(manifest)?;
         if initial.status == Some(ChangeStatus::Prepared)
@@ -82,6 +83,7 @@ impl ChangeEngine {
         let graph = validator.validate(&self.fs, &input)?;
         let expected_scan = projected_scan(&input);
         self.retain_validation(permit, change, manifest, initial, &graph, &expected_scan)?;
+        self.verify_read_preconditions(permit, manifest, &change.manifest_hash)?;
         if let Err(error) =
             self.preflight_revision_trees(permit, manifest, &change.manifest_hash, initial)
         {
@@ -155,6 +157,7 @@ impl ChangeEngine {
                 .map(|o| o.apply_after.clone())
                 .collect();
             for index in topological_order(&dependencies)? {
+                self.verify_read_preconditions(permit, manifest, &change.manifest_hash)?;
                 self.guard_revision_trees(permit, manifest, &change.manifest_hash, false)?;
                 let operation = &manifest.operations[index];
                 let observed = self.target_state(&operation.target)?;
@@ -207,6 +210,7 @@ impl ChangeEngine {
                     )?;
                 }
                 self.guard_revision_trees(permit, manifest, &change.manifest_hash, false)?;
+                self.verify_read_preconditions(permit, manifest, &change.manifest_hash)?;
                 let result = if observed == operation.before {
                     match staged {
                         Some(staged) => self.fs.replace(staged, &operation.before, permit),
@@ -229,6 +233,7 @@ impl ChangeEngine {
                     Err(error) => return Err(error),
                 }
                 self.guard_revision_trees(permit, manifest, &change.manifest_hash, false)?;
+                self.verify_read_preconditions(permit, manifest, &change.manifest_hash)?;
                 if self.target_state(&operation.target)? != operation.after {
                     return self.conflict(
                         permit,
@@ -250,6 +255,7 @@ impl ChangeEngine {
                 }
             }
             self.guard_revision_trees(permit, manifest, &change.manifest_hash, true)?;
+            self.verify_read_preconditions(permit, manifest, &change.manifest_hash)?;
             self.require_all_after(permit, manifest, &change.manifest_hash)?;
             state = journal::append_event(
                 &self.fs,
@@ -300,6 +306,7 @@ impl ChangeEngine {
         }
         self.verify_dependencies(permit, manifest, &change.manifest_hash, &graph)?;
         self.guard_revision_trees(permit, manifest, &change.manifest_hash, true)?;
+        self.verify_read_preconditions(permit, manifest, &change.manifest_hash)?;
         let authority = PublicationPermit {
             writer: permit,
             vault_id: &self.vault_id,
@@ -326,6 +333,7 @@ impl ChangeEngine {
             );
         }
         self.verify_dependencies(permit, manifest, &change.manifest_hash, &graph)?;
+        self.verify_read_preconditions(permit, manifest, &change.manifest_hash)?;
         journal::append_event(
             &self.fs,
             permit,
@@ -333,6 +341,7 @@ impl ChangeEngine {
             &change.manifest_hash,
             ChangeEvent::Indexed { snapshot },
         )?;
+        self.verify_read_preconditions(permit, manifest, &change.manifest_hash)?;
         outcome::finish(
             self,
             permit,
@@ -554,6 +563,28 @@ impl ChangeEngine {
             documents,
             overlay,
         })
+    }
+    fn verify_read_preconditions(
+        &self,
+        permit: &WriterPermit,
+        manifest: &ChangeManifest,
+        hash: &Blake3Hash,
+    ) -> Result<()> {
+        for condition in &manifest.read_preconditions {
+            if self
+                .target_state(&condition.path)
+                .is_ok_and(|actual| actual == condition.expected)
+            {
+                continue;
+            }
+            let phase = format!("read precondition: {}", condition.path);
+            let state = journal::load_journal(&self.fs, manifest, hash)?;
+            if matches!(state.status, None | Some(ChangeStatus::Prepared)) {
+                return Err(WikiError::new(ErrorCode::ContentConflict, phase));
+            }
+            return self.conflict(permit, manifest, hash, &phase, Vec::new());
+        }
+        Ok(())
     }
     fn verify_dependencies(
         &self,
