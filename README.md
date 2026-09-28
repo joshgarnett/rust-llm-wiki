@@ -8,6 +8,8 @@ The recommended foundation is Obsidian-compatible Markdown and captured sources,
 
 ## Start here
 
+- [Autonomous implementation plan](docs/execution/README.md) and [new-session goal](docs/execution/START.md): Sol orchestration, scoped workers, checkpoints, and M0–M4 acceptance gates.
+- [Technical design](docs/technical/README.md): storage, retrieval, providers/jobs, CLI contracts, and an ordered implementation handoff.
 - [Architecture proposal](docs/architecture.md): storage, retrieval, provenance, human and agent workflows.
 - [Markdown format](docs/wiki-format.md): small frontmatter/body contract, editable headings, Obsidian links, and best-effort recovery.
 - [Implementation plan](docs/implementation-plan.md): milestones, acceptance criteria, and open decisions.
@@ -25,4 +27,4 @@ The recommended foundation is Obsidian-compatible Markdown and captured sources,
 - [Cost-controlled automated research](docs/research/research-flows.md)
 - [Prompts for independent external research](docs/external-research-prompts.md)
 
-The research distinguishes documented capabilities, authors' experimental claims, and our proposed design. No local benchmark or paid research run has been performed. The supplied Markdown-versus-RAG report informed the questions; its embedded citation identifiers cannot be resolved here, so the linked primary-source research is the evidence base for this proposal.
+The initial research and architecture are committed as `4652248`. The technical designs refine their implementation details. The research distinguishes documented capabilities, authors' experimental claims, and our proposed design. No local benchmark or paid research run has been performed. The supplied Markdown-versus-RAG report informed the questions; its embedded citation identifiers cannot be resolved here, so the linked primary-source research is the evidence base for this proposal.

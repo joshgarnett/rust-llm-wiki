@@ -1,6 +1,6 @@
 # Architecture proposal
 
-Status: proposed, 2026-09-28. See [confirmed choices and progress](../PROGRESS.md). Examples describe future behavior, not an existing CLI.
+Status: proposed, 2026-09-28. See [confirmed choices and progress](../PROGRESS.md). Examples describe future behavior, not an existing CLI. The [technical design](technical/README.md) supplies the implementation contracts and takes precedence over earlier exploratory implementation options here.
 
 ## Product boundary
 
@@ -116,7 +116,7 @@ Initial logical tables:
 
 Store document text locally so ranking and excerpts can be served consistently; add derived passages when needed. Scan metadata and hash changed files on sync; a filesystem watcher is optional later. A full verification scan must detect same-size/same-timestamp edits that a fast metadata scan could miss. Deletion removes projections without silently erasing editorial history.
 
-Persist source withdrawal and dependency-review status in durable records. Exclude withdrawn sources and derived passages that have lost their support from current-evidence results; retain explicitly labeled historical access. With paragraph-level citations, conservatively invalidate the affected paragraph or section, or the whole page when support is only page-level. A changed source revision triggers review rather than automatically proving the old claim false. Withdrawal is distinct from an explicitly requested content purge.
+Persist source withdrawal and dependency-review status in durable records. Exclude withdrawn sources and derived passages that have lost their support from current-evidence results; retain explicitly labeled historical access. V1 uses explicit assertion dependencies and conservatively invalidates the whole dependent page/description; paragraph-level freshness is a possible later refinement. A changed source revision triggers review rather than automatically proving the old claim false. Withdrawal is distinct from an explicitly requested content purge.
 
 Keep short notes as whole retrieval/embedding inputs. Longer inputs split only for provider limits or a measured/configured retrieval-quality need, using headings and paragraphs as preferred boundaries. Corpus file count alone does not determine this. Bounded extraction windows may also be necessary without embeddings. All such units are derived index records; no user-managed chunk files or permanent heading-based IDs are required. Cache actual formatted input by embedding-space fingerprint and text hash. See [segmentation and heading repair](wiki-format.md).
 
@@ -124,7 +124,7 @@ Keep short notes as whole retrieval/embedding inputs. Longer inputs split only f
 
 | Mode | Behavior | Network |
 |---|---|---|
-| Literal | Exact substring/regex search directly over allowed files | None |
+| Literal | Exact substring search directly over allowed files; regex deferred | None |
 | Lexical | Ranked document retrieval using FTS5, title/alias lookup, and focused excerpts | None |
 | Graph | Page/provenance traversal plus entity- or relationship-focused retrieval | None with lexical seeds; query embedding with semantic seeds |
 | Semantic | Query embedding API call, local vector comparison | On cache miss |
@@ -134,7 +134,7 @@ The default search mode is lexical, even when embeddings are configured. `--mode
 
 Run a bounded incremental sync before indexed search by default; allow `--no-sync` and report freshness. Metadata scanning is an optimization, not proof that every file is unchanged. Read one published SQLite generation, and rehash both final passage files and relevant source-status, evidence, assertion, and decision records. Reconcile or discard candidates whose dependencies changed. Results identify the verified source/graph snapshot and verification time; external edits after that check are outside the snapshot guarantee. Explicit snapshot mode labels unverified index results. Index refresh never calls extraction or embedding models automatically. Changed documents remain lexically searchable while extraction/semantic coverage is incomplete. Report pending extraction and embedded/eligible counts and exclude stale assertions/vectors from current evidence.
 
-Start semantic search with exact cosine retrieval over normalized float vectors stored in SQLite. A feasibility spike chooses between a Rust scan and a pinned stable SQLite vector extension; neither requires a server. Benchmark ANN only if measured latency and corpus size require it. A vector index is separate from the API that generates vectors.
+Start semantic search with a bounded Rust exact cosine scan over normalized float vectors stored in SQLite, as selected by the technical design. A SQLite vector extension or ANN remains a measured alternative if this baseline proves inadequate. A vector index is separate from the API that generates vectors.
 
 Use rank-based fusion, then deduplicate overlapping passages and diversify by document. Graph neighbors have an explicit depth, edge-type filter, and candidate cap; highly connected entities must not swallow the context budget. Do not combine raw BM25 and cosine scores as though their units match. Entity/relationship retrieval is planned functionality; learned reranking and community summaries remain later experiments. [Retrieval evidence and alternatives](research/retrieval.md).
 

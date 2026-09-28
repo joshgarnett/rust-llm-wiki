@@ -1,6 +1,6 @@
 # Remote embedding API contract
 
-Status: proposed, 2026-09-28. This document incorporates the user's requirement for remote semantic embeddings, static or dynamic credentials, a full URL, and a model. **No local models are part of the plan.**
+Status: proposed, 2026-09-28. This document incorporates the user's requirement for remote semantic embeddings, static or dynamic credentials, a full URL, and a model. **No local models are part of the plan.** The [provider technical design](technical/providers-jobs.md) defines the implementation's multi-service profile schema and refines these earlier examples.
 
 ## Compatible HTTP surface
 
@@ -12,7 +12,7 @@ Validate vector count, unique indices, finite values, nonzero norms, consistent 
 
 ## Example configuration
 
-The following is a **user-local trusted profile**, not configuration to accept automatically from a cloned wiki. Bind endpoint, authentication, and secret headers together. Shared `WIKI.md` selects an allowed profile by name; it cannot override that profile's destination and redirect existing credentials elsewhere. A user explicitly configuring a new endpoint establishes that binding once. TOML remains appropriate for private machine configuration; it is outside the portable knowledge format.
+The following is an earlier illustrative **user-local trusted profile**, not configuration to accept automatically from a cloned wiki. The technical design places these service options under `services.<name>` and binds named profiles to a local vault root and ID; that schema is the implementation authority. Bind endpoint, authentication, and secret headers together. Shared `WIKI.md` selects an allowed profile by name; it cannot override that profile's destination and redirect existing credentials elsewhere. A user explicitly configuring a new endpoint establishes that binding once. TOML remains appropriate for private machine configuration; it is outside the portable knowledge format.
 
 Illustrative values are tuning defaults to validate, not provider limits:
 

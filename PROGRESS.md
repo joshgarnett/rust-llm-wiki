@@ -1,6 +1,6 @@
 # Research and planning progress
 
-Started: 2026-09-28. Status: design revised for extracted graphs, Obsidian-compatible Markdown, editable headings, and document-first retrieval. No CLI implementation yet.
+Started: 2026-09-28. Status: initial research committed; technical design and autonomous implementation plan completed. Implementation awaits the user's new `gpt-6-sol` session.
 
 ## Scope
 
@@ -26,6 +26,18 @@ Design a self-contained Rust CLI for a local, human-readable LLM wiki, with usef
 - [x] Define heading/metadata repair and document-first embedding/segmentation behavior.
 - [x] Check the revised architecture, roadmap, research guidance, and skill plan for consistency.
 
+## Technical design work
+
+- [x] Commit the research and initial architecture: `4652248` (`docs: capture wiki research and initial architecture`).
+- [x] Storage, Markdown schema, index generations, and recovery — `storage_design`.
+- [x] Retrieval, extraction packets, entity resolution, and evidence — `retrieval_design`.
+- [x] Provider adapters, dynamic credentials, jobs, and budgets — `wiki_landscape`, acting as provider designer.
+- [x] CLI/skill contracts, module boundaries, and implementation handoff — primary agent.
+- [x] Reconcile shared types, lifecycle states, error contracts, and milestone dependencies.
+- [x] Review designs independently and validate document examples and links.
+
+Seven technical design documents now define schemas, pseudocode, interfaces, state transitions, and acceptance matrices. Start with the [technical overview](docs/technical/README.md) and [implementation handoff](docs/technical/implementation-handoff.md). The design work and associated baseline clarifications remain uncommitted for review; `4652248` preserves the requested pre-design checkpoint. No Rust implementation was created in this step.
+
 ## Confirmed user decisions
 
 - Semantic search uses a configurable `/v1/embeddings`-compatible HTTP API; local embedding models are out of scope.
@@ -34,6 +46,20 @@ Design a self-contained Rust CLI for a local, human-readable LLM wiki, with usef
 - Put as much durable state as practical in Markdown, with Obsidian-compatible links and an Agent Skills-like frontmatter/body contract. Recovery is best effort; not every index/runtime value must live in Markdown.
 - Account for users changing headings or metadata; avoid unnecessary chunking and evaluate where segmentation is useful.
 - Use sub-agents where useful and track progress. Specialists contributed the graph design, Obsidian research, and independent consistency review.
+- Implementation orchestration uses `gpt-6-sol`, delegating to Sol and Astra as needed. Keep contexts focused and progress durable; choose safe defaults and record/defer missing external inputs instead of routine user questions.
+
+## Autonomous execution plan
+
+- [x] Write a short root `AGENTS.md` router and an [execution playbook](docs/execution/README.md).
+- [x] Delegate the 22-package M0–M4 backlog to `gpt-6-sol`; define dependencies, owned paths, focused reads, tests, review models, and completion criteria.
+- [x] Delegate independent autonomy/context/blocker review to `gpt-6-astra`; incorporate dirty-baseline preservation and core-gate versus external-qualification distinctions.
+- [x] Define shared-file ownership, bounded task prompts, checkpoints/resume, model/runtime fallbacks, and local-only commit policy.
+- [x] Define reversible defaults, material decision records, external deferrals, and conditions for stopping incomplete work.
+- [x] Specify validation/evidence gates, including concrete production research output schemas and rejection tests.
+- [x] Save a [ready-to-paste new-session goal](docs/execution/START.md).
+- [x] Validate 29 Markdown documents, 176 local links, all 22 package IDs/required fields, and the dependency closure through P21; document syntax and whitespace checks pass.
+
+No implementation goal was started, no runtime/model configuration changed, and no Rust code was created. All implementation gates remain pending. The execution plan is saved in the workspace alongside the uncommitted technical design.
 
 ## Working assumptions
 
@@ -73,7 +99,10 @@ Research uses current project documentation and papers. No project has been benc
 - Parsed both TOML configuration examples, the JSON credential example, and six YAML/frontmatter examples successfully using installed `tomli` and Ruby Psych.
 - Reviewed the revised format/graph design independently. Added dependency/status verification, actual pending-change payload preservation, and precise UTF-8 span/hash rules. Obsidian behavior is documented from official sources; live compatibility tests remain an implementation gate.
 - All command examples are labeled proposed. No runnable CLI or discoverable usage skill is claimed; the skill ships with tested commands in M2.
+- Three technical designers completed their assigned areas and independently reviewed integration. Resolved direct source citations without graph assertions, intermediate apply steps, exact evidence revalidation, complete evidence review, durable pending packets, entity identity versus description eligibility, and repeated import idempotency.
+- Selected a bounded Rust exact vector scan as the M3 baseline. Added retained active-space configuration checks so new-model queries cannot be compared with old-model vectors.
+- Checked all 21 Markdown documents and their local links; parsed four JSON, four TOML, and six YAML/frontmatter examples. Executed the illustrative SQL schema in a temporary in-memory SQLite database. These checks validate documentation syntax only, not the future implementation.
 
-## Next implementation slice
+## Next step
 
-Discuss [the Markdown format](docs/wiki-format.md), [graph design](docs/knowledge-graph.md), and [milestones](docs/implementation-plan.md), then build the offline capture → linked pages and fixture graph → search → evidence → heading/source edits → refresh/rebuild scenario. Remote embedding requirements are specified in [the API contract](docs/embeddings.md); independent follow-up research can use [these prompts](docs/external-research-prompts.md).
+Start a new `gpt-6-sol` session with the [implementation goal](docs/execution/START.md). It begins at P00 in the [work packages](docs/execution/WORK-PACKAGES.md), preserves the existing planning baseline, and proceeds through M4 using [STATE.md](docs/execution/STATE.md) and the validation/decision records. The [format](docs/wiki-format.md), [graph design](docs/knowledge-graph.md), [milestones](docs/implementation-plan.md), and [embedding contract](docs/embeddings.md) remain the product requirements baseline; the technical documents resolve implementation details.

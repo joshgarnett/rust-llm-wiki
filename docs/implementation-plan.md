@@ -1,6 +1,6 @@
 # Implementation plan
 
-Status: proposed, 2026-09-28. Research is complete enough to begin design discussion and a small implementation slice. This is a dependency-ordered plan, not a promised calendar schedule.
+Status: proposed, 2026-09-28. The [technical design and implementation handoff](technical/implementation-handoff.md) refines this product roadmap into interfaces and ordered work. This is a dependency-ordered plan, not a promised calendar schedule. No CLI is implemented yet.
 
 ## Product choices
 
@@ -15,7 +15,7 @@ Still open: first research-generation/search provider, initial release platforms
 | Milestone | Deliverable | Acceptance gate |
 |---|---|---|
 | **M0 — contracts and risks** | Markdown envelope, page/entity/assertion/evidence/source identity, predicate/qualifier vocabulary, command/error envelopes, cache ownership, release targets | Fixture knowledge survives index deletion without model calls; heading edits preserve IDs; Obsidian compatibility assumptions listed; FTS5 builds bundled; recovery reviewed |
-| **M1 — useful offline core** | `init`, source capture, `read`, `page put`, `index sync`, document-level literal/lexical `search`, links/backlinks, fixture graph import/queries, `context`, `check`, `doctor`, schemas | Human and JSON workflows work offline; graph rebuild preserves identities/evidence; headings/paths change safely or produce actionable errors; conflict/recovery tests pass |
+| **M1 — useful offline core** | `init`, source capture, `read`, `page put`, `index sync`, document-level literal/lexical `search`, links/backlinks, canonical Markdown graph fixtures/queries, `context`, `check`, `doctor`, schemas | Human and JSON workflows work offline; graph rebuild preserves identities/evidence; headings/paths change safely or produce actionable errors; conflict/recovery tests pass |
 | **M2 — agent extraction and research** | Bounded extraction packets, graph import/validation, conservative entity resolution, Markdown extraction/decision/run records, changesets, portable usage skill | Hosts extract and apply supported relationships; homonyms remain separate; source withdrawal propagates; Markdown-only knowledge recovery and Obsidian note navigation verified; external costs labeled accurately |
 | **M3 — API extraction and semantic graph search** | Direct generation adapter for graph extraction; embedding client with static/command auth; resumable sync; whole-note/derived-unit exact vectors; entity/relationship/chunk fusion | Mock API suites pass; unchanged extraction/embedding inputs reused; no mixed spaces; offline graph remains usable; graph-assisted retrieval and whole-note/section choices evaluated |
 | **M4 — standalone bounded research** | Bounded HTTP fetch and HTML/text normalization with original-byte provenance; one search adapter and one generation adapter; run/resume/status/report and budget accounting | Stop/resume reuses completed work; outstanding/retry costs reserved; partial findings saved; citations checked; requested apply works |
@@ -25,7 +25,7 @@ M0–M2 form the first agent-usable release, including the extracted graph popul
 
 ## First coding slice
 
-Create a Cargo package with a reusable library and a thin `clap` binary. Initial modules: `vault`, `documents`, `sources`, `index`, `search`, `graph`, `output`, and `errors`. Add mutation/recovery support with the first write operations; avoid a large crate workspace before module boundaries are proven.
+Create a Cargo package with a reusable library and a thin `clap` binary, following the module ownership in the [implementation handoff](technical/implementation-handoff.md). Add mutation/recovery support with the first write operations; avoid a large crate workspace before module boundaries are proven.
 
 Implement one end-to-end scenario:
 
@@ -33,7 +33,7 @@ Implement one end-to-end scenario:
 initialize a vault
  -> capture two Markdown sources
  -> add two linked, cited pages
- -> import a small entity/assertion/evidence fixture in Markdown
+ -> add a prepared entity/assertion/evidence fixture in Markdown
  -> index
  -> search and assemble evidence
  -> edit a page externally
@@ -49,7 +49,7 @@ Keep a small fixture vault with tricky headings, duplicate titles, a broken link
 
 1. **Storage/distribution:** bundle SQLite/FTS5; inspect the release binary on clean target environments and measure startup/size. Pin dependency versions after this succeeds.
 2. **Recovery:** inject failures before/after each file replacement and database commit; exercise competing CLI writers and external edits. Document races that advisory locks cannot eliminate.
-3. **Exact vectors:** compare a straightforward normalized Rust scan over SQLite-stored vectors with pinned stable `sqlite-vec`, using real expected dimensions. Measure cold/warm p95, RAM, filtering, deletes, and binary impact. Select before M3 storage stabilizes.
+3. **Exact vectors:** implement the selected bounded Rust scan over SQLite-stored vectors, using expected dimensions. Measure cold/warm p95, RAM, filtering, deletes, and binary impact. Compare a pinned SQLite vector extension or ANN only when measurements identify a limitation.
 4. **Embedding gateway:** mock full custom URLs, reordered indices, missing usage, dimensions, malformed vectors, timeouts, throttling, retry costs, and credential expiry. Validate no secrets appear in logs or errors.
 5. **Markdown/graph recovery:** delete indexes, rebuild from notes, and compare supported assertions and decisions. Test heading/filename changes, quote ambiguity, broken IDs, Obsidian edits, and loss of one versus all supporting sources. Missing vectors may require a separate explicit re-embedding operation.
 6. **Extraction and granularity:** test whole short notes and bounded long-document windows with the same extraction schema; compare whole-note versus section-based embeddings under equal context budgets. Measure supported relation precision, entity-resolution errors, retrieval quality, and repeat-work cost.

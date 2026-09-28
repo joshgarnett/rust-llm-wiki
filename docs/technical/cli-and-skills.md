@@ -1,0 +1,137 @@
+# CLI and skill technical contract
+
+Status: proposed, 2026-09-28. Design only; examples are not runnable yet. `lwiki` remains the working binary name. The library owns behavior; terminal formatting and agent protocols adapt the same operations.
+
+## Invocation, scope, and configuration
+
+Global shape:
+
+```text
+lwiki [--wiki PATH] [--format human|json|jsonl] [--offline] COMMAND ...
+```
+
+`--json` aliases `--format json`; `--jsonl` aliases `--format jsonl`. Conflicting format flags are usage errors. Human output is the default on both terminals and redirected output, so scripts never depend on terminal detection for data shape. Color/progress adapt to terminal presence; explicit machine output never contains ANSI codes or progress text.
+
+With `--wiki`, use exactly that vault directory and require `WIKI.md` except for initialization. Otherwise discover the nearest ancestor containing `WIKI.md`, stopping at the filesystem root. Never combine nested vaults silently. Resolve the vault root once, reject path escapes, and apply the storage design's symlink policy. Error if discovery fails; do not silently create a vault.
+
+Precedence is command options, trusted user-local vault overrides, portable `WIKI.md` preferences, then built-in defaults. Portable preferences may name a locally permitted provider profile but cannot override credentials, endpoints, executable commands, TLS trust, or permission boundaries. No general environment-to-configuration mapping: document specific environment variables and explicit `key_env` references. `--offline` is final even if a profile or task requests network access.
+
+IDs are case-sensitive opaque strings validated by storage. Read commands accept either an explicit `--id ID` or `--path PATH`, never a guessed title. Commands whose documented positional argument is an ID interpret it only as an ID. Names/aliases belong in search. Display paths relative to the vault; preserve exact UTF-8 spelling and flag unsupported/non-UTF-8 paths in v1 rather than silently lossily converting them.
+
+## Initial command surface
+
+Commands appear in `capabilities` only when implemented. The following is the implementation target, grouped by milestone rather than a claim of present support.
+
+| Command | Input and outcome | Milestone |
+|---|---|---|
+| `init PATH` | Create `WIKI.md`, managed directories, cache excludes; refuse to overwrite an existing vault | M1 |
+| `capabilities`, `schema NAME` | Versioned capability manifest or named JSON schema; no network | M1 |
+| `read --id ID` or `read --path PATH` | Record metadata and bounded body; optional byte range on verified UTF-8 boundaries | M1 |
+| `page put --file FILE` | Create a page; `--if-match HASH` required to replace an existing page | M1 |
+| `page rename ID --to PATH --if-match HASH` | Changeset updating the path and known incoming links; ID preserved | M1 |
+| `source add FILE` | Capture immutable bytes and normalized text for supported local formats | M1 |
+| `source refresh ID --file FILE` | Add a revision; unchanged capture is idempotent | M1 |
+| `source withdraw ID --reason TEXT` | Persist withdrawal and invalidate dependent current evidence | M1 |
+| `evidence revalidate ID --to-revision REV --if-match HASH` | Stage successor evidence only when the original quote matches uniquely in the target source revision | M1 |
+| `index sync`, `index rebuild` | Refresh/recreate local projections; never embed or extract | M1 |
+| `search QUERY` | Ranked discovery, document-first lexical default | M1 |
+| `graph neighbors ID`, `graph query QUERY` | Page/provenance navigation or typed graph search | M1 |
+| `context QUERY` | Select verified evidence under byte/token budgets | M1 |
+| `check`, `doctor` | Knowledge/format diagnostics; installation/index/profile diagnostics | M1 |
+| `changes show ID`, `changes apply ID` | Inspect exact payloads, then apply with expected hashes and recovery journal | M1–M2 |
+| `changes abort ID`, `changes rollback ID` | Abort an unapplied preparation; or stage a journaled inverse guarded by the original proposed hashes | M1 |
+| `recover` | Reconcile incomplete local operations; preserve unfamiliar edits | M1 |
+| `graph extract --executor agent` | Persist a bounded extraction packet and return it to the caller; does not launch a host | M2 |
+| `graph import --file FILE` | Validate packet-bound extraction output and stage proposed records | M2 |
+| `graph resolve --file RESOLUTION.json` | Stage explicit bindings from source-local mentions to existing or new entities | M2 |
+| `graph review --file REVIEW.json` | Stage recorded acceptance/rejection and evidence assessments by an authorized human or agent | M2 |
+| `graph decide --file DECISION.json` | Stage explicit entity merges, splits, or alias additions with expected hashes and complete reference remaps | M2 |
+| `skill export --target HOST --output DIR` | Export the maintained portable usage skill for explicit installation | M2 |
+| `embeddings check`, `embeddings sync` | Validate/probe the configured profile; explicitly generate missing vectors | M3 |
+| `graph extract --executor api` | Execute the same extraction contract through the generation adapter | M3 |
+| `research plan`, `run`, `resume`, `status`, `report` | Durable bounded research lifecycle | M4 |
+
+`--file -` reads bounded stdin. Body text, bulk payloads, and secrets are not interpolated into shell strings. No command depends on an editor, pager, `jq`, or `rg`. Editor launching can follow after the deterministic file/stdin write path exists. No default destructive purge command or automatic Git commit is needed for v1.
+
+## Search and evidence controls
+
+`search --mode literal|lexical|semantic|hybrid` uses lexical by default. Literal v1 is a case-sensitive exact UTF-8 substring scan; regex is deferred. `graph query --strategy entity|relationship|combined --seed lexical|semantic` defaults to combined plus lexical. `search --mode hybrid --graph entities` enables the included entity/assertion candidate path. Entity extraction and LLM query expansion never run implicitly during these commands.
+
+Common filters include record kind, tag, source ID, and path prefix. Initial defaults are proposed product settings: ten displayed hits, maximum fifty per page; graph depth one, maximum two; context target 3,000 tokens with a 12,000-byte ceiling. Retrieval defines the larger candidate budgets behind these output limits. User limits can lower defaults; higher ceilings require a later explicit contract change. Results show truncation; the system never implies that a bounded graph search exhaustively found all relevant facts.
+
+`--include-proposed` and `--include-historical` broaden discovery, with authored state and derived eligibility on each hit. They do not turn a proposed, stale, withdrawn, or unsupported assertion into current evidence. `context --scope current|historical|snapshot` defaults to current verified evidence. Historical scope still verifies exact recorded bytes and references but permits historical revisions, labeled with their status; snapshot scope permits unverified index data and cannot claim present validity. No implicit model answer generation occurs in `context`.
+
+Read-side verification follows storage's manifest/dependency rules. Default mode synchronizes locally and returns a verified snapshot/time; `--no-sync` requests an index snapshot explicitly labeled `index_snapshot`. A budgeted or stale read cannot claim the current-evidence guarantee. For `context`, unverified snapshots require `--scope snapshot` or return a freshness error. Historical scope still requires verification of the referenced historical bytes. Literal scans bypass ranking indexes but still label whether they are discovery text or verified evidence.
+
+Pagination cursors encode schema version, index generation, query/filter fingerprint, and deterministic continuation position. A changed generation or query invalidates the cursor; return `CURSOR_STALE` instead of mixing snapshots. Deterministic rank ties use stable record IDs and unit IDs. Do not persist an unbounded cursor cache.
+
+## Structured output
+
+One JSON result envelope per nonstreaming invocation:
+
+```json
+{
+  "schema_version": "1",
+  "command": "search",
+  "ok": true,
+  "data": {"hits": [], "next_cursor": null},
+  "meta": {
+    "wiki_id": "vault-example",
+    "index_generation": 7,
+    "freshness": "verified_snapshot",
+    "verified_at": "2026-09-28T16:00:00Z",
+    "partial": false,
+    "network_used": false
+  },
+  "warnings": [],
+  "error": null
+}
+```
+
+Commands without a vault/index use null for those metadata fields. An internal search hit serializes `record_ref`, path, title, kind, authored status, eligibility, excerpt, source/evidence references, and retrieval reasons. Scores are labeled by channel; no unexplained cross-channel numeric score is exposed as confidence. Graph hits add seed, directed path, predicate/qualifiers, support, contradictions, and coverage. Citation references are tagged `source` for a direct `SourceSpanRef`, or `assertion` for an `EvidenceRef`. Both preserve source/revision, byte span, and quote hash; assertion citations additionally carry the evidence/assertion IDs. Ordinary note excerpts remain labeled note text, not fabricated source evidence.
+
+Failures use the same envelope with `ok: false` and `error: {code, message, retryable, hint, details}`. `data` is normally null, but may contain a preserved run/change ID and partial outcome. Details are typed per code and redact secrets, helper output, provider bodies, and sensitive URLs. User paths may be displayed; credential file contents may not.
+
+JSONL supports long-running commands only. Each line has `schema_version`, invocation ID, monotonically increasing sequence, event type, and typed data. Events include `started`, `progress`, `checkpoint`, `warning`, and `completed`; `completed` embeds the normal envelope and is the terminal event when orderly shutdown is possible. SIGKILL or an I/O failure can prevent it, so absence means unknown/incomplete, not success. Streaming events are presentation; durable job events remain the recovery authority.
+
+Stderr is for concise diagnostics/progress. With JSON/JSONL, it never carries a second machine protocol. Human output prioritizes matched paths, readable excerpts, provenance, changes made, unresolved issues, and a useful next command. `read` human mode can emit Markdown; `--json` always wraps the record and requested body.
+
+## Error and exit contract
+
+| Exit | Error family/examples | Caller behavior |
+|---|---|---|
+| `0` | Success, including zero search hits | Consume data; inspect warnings/partial flags |
+| `1` | `INTERNAL`, unexpected I/O failure | Preserve run/change IDs and inspect diagnostics |
+| `2` | `USAGE`, `CONFIG_INVALID` | Correct arguments/local profile |
+| `3` | `VAULT_NOT_FOUND`, `RECORD_NOT_FOUND` | Correct root or reference |
+| `4` | `CONTENT_CONFLICT`, `CURSOR_STALE`, `FRESHNESS_CONFLICT` | Reread/sync and decide using new state |
+| `5` | `RECOVERY_REQUIRED`, `INDEX_CORRUPT`, `SOURCE_INTEGRITY` | Recover/rebuild projections or repair source evidence |
+| `6` | `CAPABILITY_UNAVAILABLE`, `OFFLINE_UNAVAILABLE`, `PROFILE_UNTRUSTED` | Configure explicitly or choose supported offline behavior |
+| `7` | `BUDGET_EXCEEDED` | Read preserved partial result; resume only under a new applicable budget |
+| `8` | `PROVIDER_AUTH`, `PROVIDER_RATE_LIMIT`, `PROVIDER_RESPONSE`, `PROVIDER_UNAVAILABLE` | Follow retryability and provider-specific hint |
+| `9` | `RECORD_INVALID`, `REFERENCE_AMBIGUOUS`, `EXTRACTION_INVALID` | Repair source/record/packet, not blind retry |
+| `130` | `CANCELLED` | Inspect durable job state; in-flight billing may remain unknown |
+
+Limit truncation during ordinary discovery is a successful bounded query, with `partial: true`. A requested complete operation that stops at its budget returns exit 7 with its durable partial result. `check` reports diagnostics as data and returns 9 for error-level invalid records; warnings alone do not fail it. `doctor` does not probe providers unless `--probe` is explicit.
+
+## Mutation and dry-run behavior
+
+All writes route through storage's expected-version changeset API. A caller can stage and later apply, or request a direct authorized single operation whose implementation uses the same journal. Normal complete invocations do not prompt for repeated approval. Conflicts never silently downgrade to unconditional overwrite. Applying model-produced changes is explicit, and import schema validity is distinct from accepting a factual assertion.
+
+M2's complete path is packet export → import → apply → resolve → apply → review → apply. Each apply materializes the IDs/hashes required by the following step. This may run as one authorized agent workflow; it requires no per-step human prompt. V1 has no implicit staged overlay. M1 tests use a prepared canonical Markdown fixture vault, not the later extraction-wire importer.
+
+Repeated identical imports reuse the staged/completed change and allocated IDs. A different response for the same packet returns a conflict unless `graph import --new-extraction` explicitly requests a separate extraction, keyed by packet and response hash. This preserves earlier extraction records and acceptance/rejection decisions.
+
+`evidence revalidate` checks exact quotation bytes against the specified new revision and stages a successor; it never retargets the old evidence or silently changes assertion acceptance. Zero/multiple matches require correction. A rollback stages inverse operations and never replaces unfamiliar bytes; applying it uses the same journal and validation as any other changeset. Immutable captured bytes remain retained for history.
+
+`--dry-run` guarantees no mutation, provider request, credential helper, directory creation, or index refresh. It may read existing files/caches and return an estimate/plan; if fresh information would require prohibited work, mark it unknown. A normal read may update local projections as documented; a dry-run cannot. `--offline` forbids network/helper execution but still permits explicit local writes.
+
+Cancellation stops scheduling new work and asks active workers to stop. It does not promise that a dispatched provider call is cancelled or unbilled. The CLI flushes completed receipts/checkpoints when it can and reports the job's terminal/paused state from the jobs layer.
+
+## Skill packaging and compatibility
+
+Maintain one release-matched skill source, with a concise `SKILL.md` and on-demand command/research references. M2 generates examples from the implemented command/schema registry; no aspirational command goes into the installed skill. Export explicit target layouts described in [agent integration](../agent-integration.md), avoiding duplicate discovery roots. Do not overwrite existing host instruction files.
+
+The skill checks capabilities, locates `WIKI.md`, retrieves bounded evidence, requests extraction packets, imports results, preserves unresolved identities/contradictions, validates expected hashes, and applies authorized changes. It distinguishes local embedding storage from remote embedding generation, and advisory host-agent spend from CLI-enforced budgets. It does not instruct agents to install Python/Node, host a model, or reread the whole vault.
+
+Acceptance cases cover each host's discovery, a negative-control unrelated task, literal and relationship queries, a heading rename, a homonym, source withdrawal, repeated-source deduplication, conflicting edits, unavailable embeddings, and a budget stop. Skill examples must execute against the release binary in implementation CI. The design step only validates document/schema examples; it cannot establish live host compatibility.

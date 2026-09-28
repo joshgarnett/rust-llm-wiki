@@ -1,0 +1,235 @@
+# Provider dispatch and durable jobs
+
+Proposed implementation contract, 2026-09-28. M3 introduces authenticated embeddings, generation for extraction, and shared budget accounting; M4 reuses them for research. No implementation or provider interoperability is claimed. [Retrieval](retrieval.md) owns representations/extraction schemas; [storage](storage.md) owns records and commits; [CLI](cli-and-skills.md) owns public envelopes/errors.
+
+## 1. Interfaces and ownership
+
+All CLI-owned network operations pass through one dispatcher, including retries, probes, search pages, fetch redirects, and token-count requests if later supported. Authenticated transport constructors remain private to this module. Conceptual Rust interfaces:
+
+```rust
+struct DispatchContext {
+    run_id: RecordId, task_key: Blake3Hash,
+    policy: ExecutionPolicy, cancel: CancellationToken,
+}
+enum RemoteRequest {
+    Embed { profile: TrustedProfileId, space_id: SpaceId,
+            inputs: Vec<EmbeddingInput>, expected_dimensions: Option<u32> },
+    Generate { profile: TrustedProfileId, prompt: GenerationInput,
+               output_contract: SchemaRef, max_output_tokens: u32 },
+    Search { profile: TrustedProfileId, query: String, count: u16, page: u16 },
+    Fetch { url: Url, scope: FetchScope },
+}
+struct EmbeddingInput { input_hash: Blake3Hash, utf8: String }
+struct GenerationInput { instructions: String, data: String }
+enum TokenBound { Exact { count: u64, tokenizer: String },
+                  UpperBound { count: u64, method: String },
+                  Estimate(u64), Unknown }
+async fn execute(ctx: &DispatchContext, request: RemoteRequest)
+    -> Result<RemoteOutcome, DispatchFailure>;
+```
+
+`RemoteOutcome` contains typed embeddings, generation text, search results, or captured bytes, plus a `UsageReceipt` and durable output reference. `DispatchFailure` includes a safe cause, receipt when available, and `NotSent | Rejected | OutcomeUnknown` disposition. Central CLI mapping selects existing error codes. Receipts accompany invalid output too: malformed JSON can still cost money.
+
+Adapters implement pure `encode`, `decode`, and `upper_bound` methods; only dispatcher transport sends requests. Jobs supply run identity, limits, reservations, and checkpoints. Retrieval supplies `SpaceId`, actual rendered bytes, and schema validation; generation cannot bypass its importer. Use an injectable transport, clock, jitter source, and credential runner for deterministic tests.
+
+## 2. Private profiles and trust
+
+Load `providers.toml` from the platform's user configuration directory, never by upward traversal from a vault. A profile maps capabilities to endpoint-bound services:
+
+```toml
+version = 1
+[profiles.primary]
+embedding = "embed-main"
+generation = "generate-main"
+search = "brave-main"
+
+[services.embed-main]
+adapter = "embeddings-v1"
+url = "https://gateway.example/v1/embeddings"
+model = "embedding-deployment"
+revision = "deployment-2026-09"
+max_batch_items = 32
+max_batch_bytes = 262144
+# dimensions = 1024
+# max_input_tokens = 8192  # only after verifying this deployment
+# tokenizer = "verified-tokenizer-name"
+
+[services.embed-main.auth]
+kind = "static"
+key_env = "WIKI_EMBEDDING_KEY"
+header = "Authorization"
+prefix = "Bearer "
+
+[services.generate-main]
+adapter = "chat-completions-v1"
+url = "https://gateway.example/v1/chat/completions"
+model = "generation-deployment"
+revision = "deployment-2026-09"
+instruction_role = "system"
+output_limit_field = "max_completion_tokens"
+response_mode = "text-json"
+
+[services.generate-main.auth]
+kind = "static"
+key_file = "/private/path/generation-key"
+header = "Authorization"
+prefix = "Bearer "
+
+[services.brave-main]
+adapter = "brave-web-v1"
+url = "https://api.search.brave.com/res/v1/web/search"
+[services.brave-main.auth]
+kind = "static"
+key_env = "BRAVE_SEARCH_API_KEY"
+header = "X-Subscription-Token"
+prefix = ""
+
+[vault_bindings.example]
+root = "/absolute/path/to/wiki"
+wiki_id = "vault-example"
+allowed_profiles = ["primary"]
+```
+
+Each service uses the exact full URL, including non-secret query parameters; append no inferred path. Reject URL userinfo, fragments, and known credential query fields; configuration forbids secrets in other query values, which cannot be detected perfectly. A trusted local binding includes canonical vault root and vault ID: cloning an ID or adding `wiki_profile` cannot grant access. Shared content cannot override URLs, executables, auth, TLS roots, or bindings. Explicitly creating/editing private configuration establishes those choices; routine use needs no repeated approval. This schema supersedes the earlier illustrative single-role `[embeddings]` example in [embeddings.md](../embeddings.md).
+
+Require HTTPS except an explicit loopback test setting; verify certificates, with optional private CA file. Provider redirects are disabled. Standard headers cannot overwrite managed auth/content headers; additional secret headers use explicit environment/file references. Reject duplicate keys and unknown settings. Diagnostics expose capability/model and endpoint fingerprint, never keys, helper output, or provider error bodies. Changing credentials does not change embedding space; changing endpoint/model/rendering does.
+
+## 3. Credentials
+
+`AuthConfig::Static` requires exactly one `key`, `key_env`, or `key_file`. Literal keys are allowed only in private configuration; initialization favors references. Missing/empty credentials fail before dispatch. Use secret wrappers without `Debug` serialization and bounded file reads.
+
+`AuthConfig::Command` replaces that block:
+
+```toml
+kind = "command"
+command = ["/absolute/path/get-token", "--audience", "embeddings"]
+output = "json"                # or "text"
+timeout_seconds = 10
+ttl_seconds = 300
+refresh_skew_seconds = 60
+header = "Authorization"
+prefix = "Bearer "
+```
+
+JSON stdout is exactly `{"key":"token","expires_at":"2026-09-28T18:00:00Z"}`; expiry is optional only with bounded TTL. Text mode removes one terminal LF/CRLF. Reject empty tokens, control characters, malformed expiry, or expiry inside the refresh skew. Cache in memory by endpoint/auth configuration until the earlier expiry-minus-skew or TTL; never persist tokens. Serialize refreshes within the process; independent processes may each refresh.
+
+Spawn argv directly, with stdin closed, private-config working directory, ten-second deadline, and 16 KiB output ceiling. Discard stderr rather than risk exposing secrets. The helper is trusted user code, not sandboxed code. Initially support native executables and explicitly configured interpreters; reject implicit Windows `.bat`/`.cmd` launching. On 401, command auth refreshes once, then retries only within attempt/request/cost limits. Static auth fails; 403 does not imply expiry.
+
+`--offline` and `--dry-run` prevent helper execution, DNS, probes, and HTTP even if a cache misses. Dry-run also prevents journals, credential caches, index refresh, and file writes. Check those modes before resolving secrets. Ordinary local operations never enter the credential path.
+
+## 4. Embedding wire contract
+
+POST JSON `{model,input:[string,...],encoding_format:"float"}`; add `dimensions` only when configured. Decode response `data[].index`, `data[].embedding`, `model`, and optional usage. These fields follow the official [embedding reference](https://developers.openai.com/api/reference/resources/embeddings/methods/create); compatible endpoints need contract tests rather than inherited OpenAI limits.
+
+Require exactly one vector for every requested index; accept reordered entries, reject missing/duplicate/out-of-range indices. Validate finite float32-representable values, nonzero norms, equal dimensions, configured dimensions, and the space's established dimension/model metadata. If dimensions are configured as `auto`, the first valid corpus batch fixes actual dimensions; query probes do not. Retrieval owns normalization and vector storage. A model alias changing silently cannot be reliably detected; record returned identity and require operator-managed revision changes for known deployment changes.
+
+An active older space retains its non-secret endpoint/model/revision/render specification during replacement. Query dispatch must reproduce that specification and reauthorize its endpoint against current private trust; it must never embed with newly configured settings and compare against old vectors. If no longer permitted or reproducible, require a matching cached query or report semantic unavailable.
+
+Reject an invalid batch as a whole; persist a bounded failure receipt and leave its inputs pending. Successful earlier batches remain checkpointed. Commit validated vectors and their receipt before scheduling another batch. A missing usage field means unknown, not zero. Token estimates never establish model limits: use verified tokenization or a proven bound, otherwise enforce bytes/items and expose uncertainty. Overlong-input failures return to deterministic segmentation; never truncate or automatically spend on a repair call.
+
+## 5. Separate generation adapter
+
+Start with nonstreaming Chat Completions-compatible text generation. This is an interoperability choice; OpenAI recommends Responses for new applications and documents model-dependent parameters. The chosen surface uses `model`, `messages`, `stream:false`, one choice, and a configured output-token limit. Parse `choices[0].message.content`, finish reason, returned model, request ID, and usage. [Official Chat Completions reference](https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create)
+
+```json
+{
+  "model": "generation-deployment",
+  "messages": [
+    {"role":"system","content":"Return JSON matching the supplied schema."},
+    {"role":"user","content":"<bounded extraction packet and schema>"}
+  ],
+  "stream": false,
+  "n": 1,
+  "max_completion_tokens": 4096
+}
+```
+
+Instruction role (`system`/`developer`) and legacy `max_tokens` are explicit tested profile capabilities; no speculative fallback requests. Omit temperature and provider-specific options by default. Never send tool definitions or execute returned tool calls. Source text stays in the data message and cannot configure dispatch.
+
+Baseline `text-json` requires the entire returned text to parse as one JSON value; no regex extraction from prose. A tested `json-schema` mode may send `response_format` with the importer schema, but refusals and truncated responses still need handling. [Structured output guidance](https://developers.openai.com/api/docs/guides/structured-outputs) Require one index-zero choice, assistant text, no refusal/tool calls, and `finish_reason:stop`; preserve other results as unsuccessful outputs. Schema repair is a new explicitly requested budgeted task. `lwiki.extraction.v1` validation and changeset staging remain retrieval's responsibility.
+
+Output-token limits must include invisible billed tokens when the provider uses them; visible text length is insufficient. OpenAI explicitly documents this distinction. [Token accounting](https://developers.openai.com/api/docs/guides/token-counting) Embedding profiles cannot generate text merely because their URL looks API-compatible. No local model runtime is supported.
+
+## 6. Search and fetch
+
+Propose `brave-web-v1` as the first replaceable M4 discovery adapter, subject to the user's provider selection. GET the configured URL with encoded `q,count,offset`, auth header, and no rich callbacks. Validate query length (600 characters/75 words), count (1–20), and page (0–9). Normalize only `web.results` into `{url,title,snippet,rank}`; snippets are leads, not captured evidence. The official API documents these limits and fields. [Brave Web Search reference](https://api-dashboard.search.brave.com/api-reference/web/search/get) Count every page separately; deduplicate overlapping results. Explicit-URL research needs no search subscription.
+
+Fetch accepts bounded public HTTP(S) URLs; no cookies, login, JavaScript, subresource loading, or browser automation. Validate scope and public destination IPs at each redirect and connection, including IPv4-mapped IPv6; pin the validated destination while preserving TLS hostname checks. Reject private/link-local/loopback/reserved targets, URL credentials, non-HTTP schemes, and HTTPS downgrades. Disable ambient proxies; private API endpoints use trusted provider profiles, not the public fetch path. These are local fetch boundaries, not an enterprise authorization system.
+
+Capture observed/final URLs, redirects, timestamp, media type, original bytes/hash, and normalizer version. Decode HTML/text deterministically without executing content; normalization produces a new immutable source revision through storage. Preserve raw evidence before synthesis. Unsupported formats remain unsupported captures, not invented extracted text. Robots/auth walls and unavailable pages become explicit gaps.
+
+## 7. Proposed limits and retry policy
+
+All defaults are product choices, overridable within validated bounds; provider token limits have no universal default.
+
+| Control | Default |
+|---|---:|
+| Connect / embedding / generation / fetch timeout | 10 / 60 / 120 / 30 seconds |
+| Attempts including first / run concurrency | 3 / 2 |
+| Embedding items / serialized request bytes | 32 / 256 KiB |
+| Generation request / response bytes | 256 KiB / 1 MiB |
+| Embedding response bytes | 8 MiB |
+| Fetch redirects / compressed / expanded bytes | 5 / 4 MiB / 8 MiB |
+| Research rounds / fetched sources / total dispatches | 3 / 15 / 60 |
+| Run deadline / search results per page | 15 minutes / 10 |
+
+Persist limits at run creation; lifetime counters never reset on resume. Raising limits is a recorded user-requested amendment. Use monotonic timers during execution and a persisted UTC deadline; expired runs need a new explicit deadline. Rate controls use per-run requests-per-minute and token-per-minute bounds when known; provider-wide coordination is outside v1.
+
+Retry 429/selected 5xx with full-jitter exponential backoff, starting at one second and capped at thirty. Respect valid `Retry-After`; if it exceeds the remaining deadline, pause instead of retrying early. Do not retry 400/403, schema failures, or malformed successful responses automatically. A pre-send connect failure may retry; a timeout/reset after possible send pauses with unknown outcome unless retry-uncertain was explicitly enabled. HTTP retries consume new reservations even when earlier billing is unknown. Cancellation interrupts waiting and stops dispatch; it cannot retract accepted provider work.
+
+## 8. Job states and persistence
+
+Run states match storage: `planned -> running -> completed|paused|failed|stopped`. `paused` records budget, deadline, interruption, or reconciliation reason; `stopped` records user cancellation. Resume revalidates source revisions, configuration fingerprints, and outstanding attempts before returning to `running`. Completed tasks are reused by input/prompt/schema/model/settings hash, not by headings. A changed input creates new work; old outputs survive.
+
+Task attempts advance `pending -> reserved -> dispatch_intent -> received -> output_committed -> settled`. Definite pre-send failure releases its reservation. A crash after dispatch intent is conservatively `outcome_unknown`, even if nothing actually left the machine. No exactly-once claim is possible without provider cooperation; sending a local task key does not establish remote idempotency.
+
+`runs/<id>/run.md` contains scope, limits, frontier, completed task keys, and checkpoint. Immutable event notes carry storage's `run_id,sequence,event_type,occurred_at,request_id?` frontmatter and a bounded `lwiki.run-event.v1` fenced JSON payload:
+
+```rust
+struct UsageReceipt {
+    attempt_id: String, task_key: Blake3Hash, capability: String,
+    profile_id: String, endpoint_fingerprint: Blake3Hash,
+    input_hash: Blake3Hash, requested_model: Option<String>,
+    returned_model: Option<String>, provider_request_id: Option<String>,
+    usage: KnownOrUnknown<TokenUsage>, billing: BillingDisposition,
+    reservation: Option<Money>, computed_cost: Option<Money>,
+    rate_card_id: Option<String>, outputs: Vec<RecordRef>,
+    cache_outputs: Vec<VectorCacheRef>, // space/input/vector hashes; not durable knowledge
+    failure_code: Option<String>,
+}
+```
+
+Events also record attempts, retries, bytes, source/task coverage, and stop reasons. The operational length-framed, checksummed journal under `.wiki/state/` fsyncs reservation and dispatch transitions. Across cooperating processes, a short exclusive run-ledger lock serializes reservation/concurrency decisions; never hold it across HTTP or while acquiring the vault writer lock. Replay uses attempt/event IDs to avoid double settlement. Unfamiliar edits to run records produce conflicts.
+
+Before `received`, fsync the bounded successful response and allowlisted transport metadata to restricted `.wiki/state/requests/<attempt>/`; this sensitive recovery spool is never diagnostic output. Exclude auth headers/helper output; reduce error bodies to safe codes. Validate/materialize it, commit the Markdown receipt/output records, then settle and advance checkpoints. Remove the spool only after verifying committed outputs. Vector bytes may commit to cache first, but membership activation still checks retrieval's snapshot/input fingerprints. These stores are not one atomic transaction: replay reconciles hashes at every boundary. Unspooled responses remain unknown after a crash. Embedding receipts survive cache loss but cannot restore missing vectors.
+
+For M4, the run body contains a versioned `lwiki.run-plan.v1` block with question/exclusions, profile fingerprints, source snapshot references, limits, and tasks `{key,stage,dependencies,input_hash,status,output_refs}`. Stages are `inspect_existing`, `plan_frontier`, `discover`, `capture`, `extract`, `assess_gaps`, `synthesize`, and `stage_changes`. Scope and budgets are immutable inputs except recorded user amendments. Model planning proposes bounded query/URL strings; it cannot dispatch, raise limits, install helpers, or apply changes.
+
+Process ready tasks in stable priority/key order, reserving before parallel execution. Deduplicate URLs without dropping meaningful query parameters and deduplicate captured bytes; retain separate origins. Reuse completed extraction by actual input fingerprint. Assessment may propose another round only within existing limits. Stop on coverage, explicit cancellation, limits, or two consecutive rounds without new supported evidence; record unanswered questions. Synthesis returns a report and proposals, validated against existing evidence. Stage them through storage; applying requires the caller's explicit apply mode. Budget exhaustion saves a deterministic partial report from completed outputs without a final unpaid-for generation call. M3 embedding/extraction jobs reuse task/receipt accounting without requiring this research planner.
+
+## 9. Budget admission and recovery
+
+Every dispatch reserves a request slot, bounded bytes/tokens, concurrency slot, and conservative money allowance when available. Under the ledger lock require `settled + outstanding + proposed <= limit`, append/fsync, then authenticate and send. Retry attempts reserve separately. Request slots remain consumed after dispatch intent; only proven never-dispatched work releases them.
+
+`Money` uses checked integer nanocurrency units and currency; rate cards carry version, validity interval, per-request fees, and conservative rates for all billable token classes. Round allowance upward. A hard dollar ceiling is available only with verified upper billable-unit bounds and complete applicable rates; otherwise reject `--max-cost` as unenforceable and offer request/byte limits with unknown/estimated spend. Never infer zero cost from missing usage or discounted caching.
+
+Keep unknown charges reserved; no timeout refund. Explicit uncertain retry spends a new allowance. Provider-confirmed usage can settle known charges; reconciliation records amendments rather than editing historical receipts. A provider violating the configured bound invalidates that guarantee, records overspend, and stops further dispatch. External-agent usage and network activity inside a trusted credential helper are outside dispatcher billing observation; neither can be capped by it.
+
+On cancellation, persist completed work, mark unresolved dispatches, and stop new requests. Recovery reconciles journal entries with Markdown outputs before scheduling. Markdown-only restore recovers recorded work, not missing charges: without complete operational accounting or provider reconciliation, continuing the old hard-dollar budget is prohibited. A new run must disclose previous unknown spend. No automatic synthesis or embedding follows cache loss.
+
+## 10. Failure tests required before M3/M4 release
+
+| Injection | Required outcome |
+|---|---|
+| Cloned profile override; redirect with auth | No credentials sent; no helper launched |
+| Offline/dry-run cache miss | Zero HTTP/DNS/helpers; dry-run zero writes |
+| Expired/malformed/oversized helper output; 401 storm | Bounded failure/one refresh; no secret leakage |
+| Reordered/missing/NaN/wrong-dimension vectors | Reorder valid data; reject invalid batch atomically |
+| Truncated/refused/tool-call/invalid generation | Receipt retained; no import or hidden repair call |
+| 429, long Retry-After, timeout after send | Bounded attempts/deadline; unknown charge retained |
+| Two processes reserve final slot | At most one admitted; caps include retries |
+| Crash before/after each journal/commit boundary | Replay without lost completed output/double settlement |
+| DNS rebinding/private redirect/decompression bomb | Fetch rejected within deadline and byte limits |
+| Resume after changed source/model; deleted SQLite | Reuse only matching durable work; no implicit paid rebuild |
+
+Run these against mocks and fault-injected storage first; add opt-in live contract tests for the actual selected endpoints before claiming interoperability.

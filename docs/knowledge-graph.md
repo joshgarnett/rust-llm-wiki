@@ -99,7 +99,7 @@ Withdrawal removes that source's active support transitively. Assertions retain 
 ## Delivery and acceptance
 
 * **M0:** settle entity/assertion/evidence schemas, predicate direction and qualifier rules, lifecycle states, extraction envelopes, and durable decisions.
-* **M1:** import a fixture graph, rebuild it from files, seed lexically, traverse, and explain paths with original source spans.
+* **M1:** load a prepared canonical Markdown graph fixture, rebuild it from files, seed lexically, traverse, and explain paths with original source spans. Extraction-wire import arrives in M2.
 * **M2:** ship bounded agent extraction packets, import/validation, conservative resolution, and recoverable changeset apply with the usage skill.
 * **M3:** add API extraction, remote embeddings, semantic graph seeds, and combined graph/chunk retrieval.
 
