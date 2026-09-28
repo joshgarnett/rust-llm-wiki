@@ -230,6 +230,7 @@ pub enum Seed {
 pub enum GraphCommand {
     Extract(super::extraction::ExtractArguments),
     Import(super::extraction::ImportArguments),
+    Resolve(super::resolution::ResolveArguments),
     Query {
         query: String,
         #[command(flatten)]
@@ -413,6 +414,9 @@ impl Command {
             Self::Graph {
                 command: GraphCommand::Import(_),
             } => "graph import",
+            Self::Graph {
+                command: GraphCommand::Resolve(_),
+            } => "graph resolve",
             Self::Graph {
                 command: GraphCommand::Query { .. },
             } => "graph query",

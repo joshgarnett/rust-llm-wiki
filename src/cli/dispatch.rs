@@ -39,6 +39,7 @@ pub const COMMANDS: &[&str] = &[
     "context",
     "graph extract",
     "graph import",
+    "graph resolve",
     "graph query",
     "graph neighbors",
     "check",
@@ -96,7 +97,7 @@ fn execute_inner(args: &Arguments) -> Result<Envelope> {
         Command::Capabilities => {
             return Ok(Envelope::success(
                 command,
-                json!({"version":env!("CARGO_PKG_VERSION"),"commands":COMMANDS,"schemas":["output","record","stream","extraction","extraction-packet","extraction-state"],"network":false,"search_modes":["literal","lexical"],"jsonl_commands":["index sync","index rebuild","recover","changes apply","source add","source refresh"]}),
+                json!({"version":env!("CARGO_PKG_VERSION"),"commands":COMMANDS,"schemas":["output","record","stream","extraction","extraction-packet","extraction-state","graph-resolution","graph-resolution-receipt"],"network":false,"search_modes":["literal","lexical"],"jsonl_commands":["index sync","index rebuild","recover","changes apply","source add","source refresh"]}),
             ));
         }
         Command::Schema { name } => {
@@ -107,6 +108,10 @@ fn execute_inner(args: &Arguments) -> Result<Envelope> {
                 "extraction" => include_str!("../../schemas/extraction-v1.json"),
                 "extraction-packet" => include_str!("../../schemas/extraction-packet-v1.json"),
                 "extraction-state" => include_str!("../../schemas/extraction-state-v1.json"),
+                "graph-resolution" => include_str!("../../schemas/graph-resolution-v1.json"),
+                "graph-resolution-receipt" => {
+                    include_str!("../../schemas/graph-resolution-receipt-v1.json")
+                }
                 _ => {
                     return Err(WikiError::new(
                         ErrorCode::CapabilityUnavailable,
@@ -349,6 +354,14 @@ fn execute_inner(args: &Arguments) -> Result<Envelope> {
                 &super::extraction::response_input(&options.file)?,
                 options.new_extraction,
             )?;
+        }
+        Command::Graph {
+            command: GraphCommand::Resolve(options),
+        } => {
+            envelope.data = app.graph_resolve(&super::extraction::bounded_json_input(
+                &options.file,
+                "mention resolution",
+            )?)?;
         }
         Command::Graph { command } => {
             use crate::graph::query;

@@ -165,7 +165,10 @@
       ],
       "properties": {
         "operation": {
-          "const": "graph_import"
+          "enum": [
+            "graph_import",
+            "graph_resolve"
+          ]
         },
         "packet_id": {
           "$ref": "#/$defs/id"

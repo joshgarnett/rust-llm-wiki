@@ -1,0 +1,133 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:lwiki:resolution:1",
+  "$comment": "UTF-8 byte ceilings, exact hashes, unique mappings/allocated IDs, complete durable map, active explicit decisions, source traces and transition/operation proof require production validation.",
+  "type": "object",
+  "properties": {
+    "schema": {
+      "const": "lwiki.graph-resolution.v1"
+    },
+    "extraction_id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+    },
+    "expected_hash": {
+      "type": "string",
+      "pattern": "^blake3:[0-9a-f]{64}$"
+    },
+    "mappings": {
+      "type": "array",
+      "items": {
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "operation": {
+                "const": "BindMention"
+              },
+              "mention_id": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+              },
+              "reason": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 4096
+              },
+              "entity_id": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+              },
+              "expected_entity_hash": {
+                "type": "string",
+                "pattern": "^blake3:[0-9a-f]{64}$"
+              }
+            },
+            "required": [
+              "operation",
+              "mention_id",
+              "reason",
+              "entity_id",
+              "expected_entity_hash"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "operation": {
+                "const": "CreateEntity"
+              },
+              "mention_id": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+              },
+              "reason": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 4096
+              },
+              "title": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 1024
+              },
+              "entity_type": {
+                "enum": [
+                  "person",
+                  "organization",
+                  "project",
+                  "component",
+                  "concept",
+                  "place",
+                  "event",
+                  "other"
+                ]
+              }
+            },
+            "required": [
+              "operation",
+              "mention_id",
+              "reason",
+              "title",
+              "entity_type"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "operation": {
+                "const": "RejectMention"
+              },
+              "mention_id": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+              },
+              "reason": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 4096
+              }
+            },
+            "required": [
+              "operation",
+              "mention_id",
+              "reason"
+            ],
+            "additionalProperties": false
+          }
+        ]
+      },
+      "minItems": 1,
+      "maxItems": 64
+    }
+  },
+  "required": [
+    "schema",
+    "extraction_id",
+    "expected_hash",
+    "mappings"
+  ],
+  "additionalProperties": false
+}

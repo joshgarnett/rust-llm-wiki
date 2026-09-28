@@ -18,6 +18,7 @@ pub struct PayloadRef {
 #[serde(rename_all = "snake_case")]
 pub enum OriginOperation {
     GraphImport,
+    GraphResolve,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

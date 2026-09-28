@@ -167,7 +167,12 @@ impl<'a> SourceView<'a> {
     }
     pub fn from_input(fs: &'a VaultFs, input: &ValidationInput) -> Result<Self> {
         let mut notes = BTreeMap::new();
+        let mut overlay = BTreeMap::new();
+        let mut seen_documents = BTreeSet::new();
         for document in &input.documents {
+            if !seen_documents.insert(&document.path) {
+                return Err(WikiError::invalid("duplicate scan path"));
+            }
             if Blake3Hash::digest(&document.bytes) != document.hash {
                 return Err(integrity("scan document hash mismatch"));
             }
@@ -178,15 +183,16 @@ impl<'a> SourceView<'a> {
             {
                 return Err(WikiError::invalid("duplicate scan path"));
             }
+            if !canonical_path(&document.path) {
+                overlay.insert(document.path.clone(), Some(document.bytes.clone()));
+            }
         }
-        let mut overlay = BTreeMap::new();
+        let mut seen_overlay = BTreeSet::new();
         for target in &input.overlay {
-            if overlay
-                .insert(target.path.clone(), target.bytes.clone())
-                .is_some()
-            {
+            if !seen_overlay.insert(&target.path) {
                 return Err(WikiError::invalid("duplicate overlay path"));
             }
+            overlay.insert(target.path.clone(), target.bytes.clone());
             if canonical_path(&target.path) {
                 match &target.bytes {
                     Some(bytes) => {

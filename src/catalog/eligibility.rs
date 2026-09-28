@@ -1,6 +1,6 @@
 //! Authored status is preserved; only derived eligibility is computed here.
 use super::{
-    scan::{diagnostic, input_notes, isolated_fields, list, project, readable_id},
+    scan::{diagnostic, input_notes, isolated_fields, list, project, project_closed, readable_id},
     types::*,
 };
 use crate::{
@@ -21,105 +21,121 @@ use std::collections::{BTreeMap, BTreeSet};
 /// are permitted: those are derived states, not structural corruption.
 impl GraphValidator for CatalogGraphValidator {
     fn validate(&self, fs: &VaultFs, input: &ValidationInput) -> Result<ValidatedGraph> {
-        let proposed = project(fs, input)?;
-        let baseline = project(
-            fs,
-            &ValidationInput {
-                vault_id: input.vault_id.clone(),
-                documents: input.documents.clone(),
-                overlay: vec![],
-            },
-        )?;
-        let notes = input_notes(input)?;
-        let before = input_notes(&ValidationInput {
+        validate_projection(fs, input, false)
+    }
+}
+impl CatalogGraphValidator {
+    /// Preparation-only validation of a bounded closed captured overlay.
+    /// Unprovided assets cannot supply current support. Synthetic missing closed
+    /// dependencies are not physical read guards; apply retains full reproof.
+    pub fn validate_closed(&self, fs: &VaultFs, input: &ValidationInput) -> Result<ValidatedGraph> {
+        validate_projection(fs, input, true)
+    }
+}
+fn validate_projection(
+    fs: &VaultFs,
+    input: &ValidationInput,
+    closed: bool,
+) -> Result<ValidatedGraph> {
+    let projector = if closed { project_closed } else { project };
+    let proposed = projector(fs, input)?;
+    let baseline = projector(
+        fs,
+        &ValidationInput {
             vault_id: input.vault_id.clone(),
             documents: input.documents.clone(),
             overlay: vec![],
-        })?;
-        for target in &input.overlay {
-            if !canonical_path(&target.path) {
-                continue;
-            }
-            if let Some(note) = notes.get(&target.path) {
-                let changed = before
-                    .get(&target.path)
-                    .is_none_or(|old| old.raw != note.raw);
-                let adopted = adopted_marker(note)
-                    || note
-                        .fields
-                        .as_ref()
-                        .is_some_and(|fields| fields.keys().any(|key| key.starts_with("wiki_")));
-                if changed && adopted && note.canonical.is_none() {
-                    return Err(WikiError::invalid(format!(
-                        "proposed adopted envelope is invalid: {}",
-                        target.path
-                    )));
-                }
-                if changed
-                    && let Some(id) = readable_id(note)
-                    && proposed
-                        .records
-                        .get(&id)
-                        .is_none_or(|row| row.eligibility == Eligibility::Invalid)
-                {
-                    return Err(WikiError::invalid(format!(
-                        "proposed typed record is invalid: {}",
-                        target.path
-                    )));
-                }
-            }
+        },
+    )?;
+    let notes = input_notes(input)?;
+    let before = input_notes(&ValidationInput {
+        vault_id: input.vault_id.clone(),
+        documents: input.documents.clone(),
+        overlay: vec![],
+    })?;
+    for target in &input.overlay {
+        if !canonical_path(&target.path) {
+            continue;
         }
-        for (id, row) in &proposed.records {
-            if row.record.kind() == RecordKind::Assertion {
-                if let Some(old) = baseline.records.get(id)
-                    && proposition(&old.record) != proposition(&row.record)
-                {
-                    return Err(WikiError::invalid(format!(
-                        "assertion identity cannot be silently retargeted: {id}"
-                    )));
-                }
-                if row.record.string("wiki_status") == Some("accepted")
-                    && baseline
-                        .records
-                        .get(id)
-                        .is_none_or(|old| old.record.string("wiki_status") != Some("accepted"))
-                    && row.eligibility != Eligibility::Current
-                {
-                    return Err(WikiError::invalid(format!(
-                        "acceptance requires intact current supporting evidence: {id}"
-                    )));
-                }
+        if let Some(note) = notes.get(&target.path) {
+            let changed = before
+                .get(&target.path)
+                .is_none_or(|old| old.raw != note.raw);
+            let adopted = adopted_marker(note)
+                || note
+                    .fields
+                    .as_ref()
+                    .is_some_and(|fields| fields.keys().any(|key| key.starts_with("wiki_")));
+            if changed && adopted && note.canonical.is_none() {
+                return Err(WikiError::invalid(format!(
+                    "proposed adopted envelope is invalid: {}",
+                    target.path
+                )));
             }
-            if row.eligibility == Eligibility::Invalid
-                && baseline.records.get(id).is_none_or(|old| {
-                    old.eligibility != Eligibility::Invalid || old.reasons != row.reasons
-                })
+            if changed
+                && let Some(id) = readable_id(note)
+                && proposed
+                    .records
+                    .get(&id)
+                    .is_none_or(|row| row.eligibility == Eligibility::Invalid)
             {
                 return Err(WikiError::invalid(format!(
-                    "proposal invalidates typed record {id}: {}",
-                    row.reasons.join(",")
+                    "proposed typed record is invalid: {}",
+                    target.path
                 )));
             }
         }
-        for diagnostic in &proposed.diagnostics {
-            if diagnostic.code == ErrorCode::ReferenceAmbiguous
-                && !baseline.diagnostics.contains(diagnostic)
+    }
+    for (id, row) in &proposed.records {
+        if row.record.kind() == RecordKind::Assertion {
+            if let Some(old) = baseline.records.get(id)
+                && proposition(&old.record) != proposition(&row.record)
             {
-                return Err(WikiError::new(
-                    ErrorCode::ReferenceAmbiguous,
-                    format!(
-                        "proposal introduces ambiguous identity at {}",
-                        diagnostic.path
-                    ),
-                ));
+                return Err(WikiError::invalid(format!(
+                    "assertion identity cannot be silently retargeted: {id}"
+                )));
+            }
+            if row.record.string("wiki_status") == Some("accepted")
+                && baseline
+                    .records
+                    .get(id)
+                    .is_none_or(|old| old.record.string("wiki_status") != Some("accepted"))
+                && row.eligibility != Eligibility::Current
+            {
+                return Err(WikiError::invalid(format!(
+                    "acceptance requires intact current supporting evidence: {id}"
+                )));
             }
         }
-        Ok(ValidatedGraph {
-            parser_fingerprint: proposed.parser_fingerprint,
-            control_manifest: proposed.control_manifest,
-            dependencies: proposed.dependencies,
-        })
+        if row.eligibility == Eligibility::Invalid
+            && baseline.records.get(id).is_none_or(|old| {
+                old.eligibility != Eligibility::Invalid || old.reasons != row.reasons
+            })
+        {
+            return Err(WikiError::invalid(format!(
+                "proposal invalidates typed record {id}: {}",
+                row.reasons.join(",")
+            )));
+        }
     }
+    for diagnostic in &proposed.diagnostics {
+        if diagnostic.code == ErrorCode::ReferenceAmbiguous
+            && !baseline.diagnostics.contains(diagnostic)
+        {
+            return Err(WikiError::new(
+                ErrorCode::ReferenceAmbiguous,
+                format!(
+                    "proposal introduces ambiguous identity at {}",
+                    diagnostic.path
+                ),
+            ));
+        }
+    }
+    Ok(ValidatedGraph {
+        parser_fingerprint: proposed.parser_fingerprint,
+        control_manifest: proposed.control_manifest,
+        dependencies: proposed.dependencies,
+    })
 }
 
 fn adopted_marker(note: &ParsedNote) -> bool {
@@ -427,7 +443,7 @@ pub(crate) fn compute(
             );
         }
     }
-    apply_decisions(records, diagnostics)?;
+    apply_decisions(notes, records, diagnostics)?;
 
     // Verify all original assets, including unsupported captures; failed checks retain
     // dependencies read before failure so later verification cannot overlook tampering.
@@ -439,18 +455,19 @@ pub(crate) fn compute(
         let record = row.record.clone();
         let source_id = RecordId::new(record.string("wiki_source_id").expect("source"))?;
         let mut deps = BTreeMap::new();
-        if let Some((parent, _)) = row.path.as_str().rsplit_once('/') {
-            for field in ["wiki_original_path", "wiki_content_path"] {
-                if let Some(payload) = record.string(field) {
-                    let path = VaultRelativePath::new(format!("{parent}/{payload}"))?;
-                    // Record absence as well as hashes. A later missing-file repair
-                    // changes the verification closure even without a note edit.
-                    let expected = view.expected_state(&path)?;
-                    deps.insert(path, expected);
+        let integrity = (|| -> Result<()> {
+            if let Some((parent, _)) = row.path.as_str().rsplit_once('/') {
+                for field in ["wiki_original_path", "wiki_content_path"] {
+                    if let Some(payload) = record.string(field) {
+                        let path = VaultRelativePath::new(format!("{parent}/{payload}"))?;
+                        // Unprovided closed assets make this revision unavailable,
+                        // as a failed payload read does. They cannot abort unrelated
+                        // proposal validation or acquire a physical absence guard.
+                        let expected = view.expected_state(&path)?;
+                        deps.insert(path, expected);
+                    }
                 }
             }
-        }
-        let integrity = (|| -> Result<()> {
             if record.string("wiki_extraction_status") == Some("complete") {
                 view.revision_content(&source_id, record.id(), &mut deps)?;
             } else {
@@ -848,7 +865,128 @@ fn cycle_members(edges: &BTreeMap<RecordId, BTreeSet<RecordId>>) -> BTreeSet<Rec
     cycles
 }
 
+fn is_mention_action(record: &CanonicalRecord) -> bool {
+    matches!(
+        record.string("wiki_action"),
+        Some("bind_mention" | "create_entity" | "reject_mention")
+    )
+}
+fn compatible_mention_operations(decisions: &[&RecordRow]) -> bool {
+    let mut scopes = BTreeSet::new();
+    let mut any_mentions = false;
+    for row in decisions {
+        if row.record.string("wiki_action") == Some("add_alias") {
+            continue;
+        }
+        if !is_mention_action(&row.record) {
+            return false;
+        }
+        any_mentions = true;
+        let Some(extraction) = row.record.string("wiki_extraction_id") else {
+            return false;
+        };
+        let mentions = list(&row.record, "wiki_mention_ids");
+        if mentions.is_empty() {
+            return false;
+        }
+        for mention in mentions {
+            if !scopes.insert((extraction.to_owned(), mention)) {
+                return false;
+            }
+        }
+    }
+    any_mentions
+}
+fn mention_authority(
+    decision: &CanonicalRecord,
+    notes: &BTreeMap<VaultRelativePath, ParsedNote>,
+    records: &BTreeMap<RecordId, RecordRow>,
+) -> bool {
+    use crate::graph::{ExtractionArtifactV1, MentionBinding, import::ARTIFACT_FENCE, packet};
+    let Some(extraction) = decision
+        .string("wiki_extraction_id")
+        .and_then(|id| RecordId::new(id).ok())
+    else {
+        return false;
+    };
+    if !list(decision, "wiki_input_ids").contains(&extraction.as_str().to_owned()) {
+        return false;
+    }
+    let Some(row) = records
+        .get(&extraction)
+        .filter(|r| r.record.kind() == RecordKind::Extraction)
+    else {
+        return false;
+    };
+    let Some(note) = notes.get(&row.path) else {
+        return false;
+    };
+    let Ok(json) = packet::fenced_json(note, ARTIFACT_FENCE, crate::graph::MAX_ARTIFACT_BYTES)
+    else {
+        return false;
+    };
+    let Ok(artifact) =
+        packet::decode::<ExtractionArtifactV1>(json, crate::graph::MAX_ARTIFACT_BYTES)
+    else {
+        return false;
+    };
+    if artifact.extraction_id != extraction
+        || artifact.schema != crate::graph::EXTRACTION_STATE_SCHEMA
+    {
+        return false;
+    }
+    let Ok(response) = packet::decode::<crate::graph::ExtractionResponse>(
+        artifact.raw_response.as_bytes(),
+        crate::graph::MAX_RESPONSE_BYTES,
+    ) else {
+        return false;
+    };
+    if crate::graph::wire::artifact_membership(&artifact, &response).is_err()
+        || row.record.string("wiki_packet_id") != Some(artifact.packet_id.as_str())
+        || row.record.string("wiki_input_hash") != Some(artifact.packet_fingerprint.as_str())
+    {
+        return false;
+    }
+    let mentions = list(decision, "wiki_mention_ids");
+    let outputs = list(decision, "wiki_output_ids");
+    if mentions.is_empty() || mentions.iter().collect::<BTreeSet<_>>().len() != mentions.len() {
+        return false;
+    }
+    for mention in mentions {
+        let Ok(local) = crate::graph::PacketLocalId::new(mention) else {
+            return false;
+        };
+        match artifact.bindings.get(&local) {
+            Some(MentionBinding::Resolved {
+                entity_id,
+                decision_id,
+            }) => {
+                if decision_id != decision.id()
+                    || !matches!(
+                        decision.string("wiki_action"),
+                        Some("bind_mention" | "create_entity")
+                    )
+                    || outputs != [entity_id.as_str()]
+                {
+                    return false;
+                }
+            }
+            Some(MentionBinding::Rejected { decision_id }) => {
+                if decision_id != decision.id()
+                    || decision.string("wiki_action") != Some("reject_mention")
+                    || !outputs.is_empty()
+                {
+                    return false;
+                }
+            }
+            _ => return false,
+        }
+    }
+    true
+}
+
 fn apply_decisions(
+    notes: &BTreeMap<VaultRelativePath, ParsedNote>,
     records: &mut BTreeMap<RecordId, RecordRow>,
     diagnostics: &mut Vec<CatalogDiagnostic>,
 ) -> Result<()> {
@@ -878,6 +1016,20 @@ fn apply_decisions(
                 .push(decision);
         }
         let mut disagreements = Vec::new();
+        if is_mention_action(&decision.record)
+            && !mention_authority(&decision.record, notes, records)
+        {
+            disagreements.push((
+                decision.record.id().clone(),
+                "decision_mention_mapping_disagreement",
+            ));
+            if let Some(extraction) = decision.record.string("wiki_extraction_id") {
+                disagreements.push((
+                    RecordId::new(extraction)?,
+                    "decision_mention_mapping_disagreement",
+                ));
+            }
+        }
         let action = decision
             .record
             .string("wiki_action")
@@ -1080,7 +1232,8 @@ fn apply_decisions(
         let compatible_aliases = decisions
             .iter()
             .all(|r| r.record.string("wiki_action") == Some("add_alias"));
-        if actions.len() > 1 && !compatible_aliases {
+        let compatible_mentions = compatible_mention_operations(&decisions);
+        if actions.len() > 1 && !compatible_aliases && !compatible_mentions {
             if let Some(row) = records.get_mut(&id) {
                 mark_invalid(
                     row,

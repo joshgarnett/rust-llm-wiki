@@ -1,0 +1,461 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:lwiki:resolution-receipt:1",
+  "$comment": "UTF-8 byte ceilings, exact hashes, unique mappings/allocated IDs, complete durable map, active explicit decisions, source traces and transition/operation proof require production validation. Canonical-only acknowledgement verifies semantic decisions and immutable trace; historical whole-note hashes are not current raw byte proof after author edits or moves. Original paths bind historical creation byte rendering only.",
+  "type": "object",
+  "properties": {
+    "schema": {
+      "const": "lwiki.graph-resolution-receipt.v1"
+    },
+    "task_id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+    },
+    "request": {
+      "type": "object",
+      "properties": {
+        "schema": {
+          "const": "lwiki.graph-resolution.v1"
+        },
+        "extraction_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+        },
+        "expected_hash": {
+          "type": "string",
+          "pattern": "^blake3:[0-9a-f]{64}$"
+        },
+        "mappings": {
+          "type": "array",
+          "items": {
+            "oneOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "operation": {
+                    "const": "BindMention"
+                  },
+                  "mention_id": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+                  },
+                  "reason": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 4096
+                  },
+                  "entity_id": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+                  },
+                  "expected_entity_hash": {
+                    "type": "string",
+                    "pattern": "^blake3:[0-9a-f]{64}$"
+                  }
+                },
+                "required": [
+                  "operation",
+                  "mention_id",
+                  "reason",
+                  "entity_id",
+                  "expected_entity_hash"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "operation": {
+                    "const": "CreateEntity"
+                  },
+                  "mention_id": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+                  },
+                  "reason": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 4096
+                  },
+                  "title": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 1024
+                  },
+                  "entity_type": {
+                    "enum": [
+                      "person",
+                      "organization",
+                      "project",
+                      "component",
+                      "concept",
+                      "place",
+                      "event",
+                      "other"
+                    ]
+                  }
+                },
+                "required": [
+                  "operation",
+                  "mention_id",
+                  "reason",
+                  "title",
+                  "entity_type"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "operation": {
+                    "const": "RejectMention"
+                  },
+                  "mention_id": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+                  },
+                  "reason": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 4096
+                  }
+                },
+                "required": [
+                  "operation",
+                  "mention_id",
+                  "reason"
+                ],
+                "additionalProperties": false
+              }
+            ]
+          },
+          "minItems": 1,
+          "maxItems": 64
+        }
+      },
+      "required": [
+        "schema",
+        "extraction_id",
+        "expected_hash",
+        "mappings"
+      ],
+      "additionalProperties": false
+    },
+    "request_hash": {
+      "type": "string",
+      "pattern": "^blake3:[0-9a-f]{64}$"
+    },
+    "immutable_extraction_hash": {
+      "type": "string",
+      "pattern": "^blake3:[0-9a-f]{64}$"
+    },
+    "allocations": {
+      "type": "object",
+      "properties": {
+        "decisions": {
+          "type": "object",
+          "propertyNames": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+          },
+          "additionalProperties": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+          },
+          "minProperties": 1,
+          "maxProperties": 64
+        },
+        "entities": {
+          "type": "object",
+          "propertyNames": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+          },
+          "additionalProperties": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+          },
+          "minProperties": 0,
+          "maxProperties": 64
+        }
+      },
+      "required": [
+        "decisions",
+        "entities"
+      ],
+      "additionalProperties": false
+    },
+    "transitions": {
+      "type": "object",
+      "propertyNames": {
+        "type": "string",
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+      },
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "before": {
+            "type": "object",
+            "properties": {
+              "state": {
+                "const": "pending"
+              }
+            },
+            "required": [
+              "state"
+            ],
+            "additionalProperties": false
+          },
+          "after": {
+            "oneOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "state": {
+                    "const": "resolved"
+                  },
+                  "entity_id": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+                  },
+                  "decision_id": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+                  }
+                },
+                "required": [
+                  "state",
+                  "entity_id",
+                  "decision_id"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "state": {
+                    "const": "rejected"
+                  },
+                  "decision_id": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+                  }
+                },
+                "required": [
+                  "state",
+                  "decision_id"
+                ],
+                "additionalProperties": false
+              }
+            ]
+          }
+        },
+        "required": [
+          "before",
+          "after"
+        ],
+        "additionalProperties": false
+      },
+      "minProperties": 1,
+      "maxProperties": 64
+    },
+    "materialized_assertions": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+      },
+      "minItems": 0,
+      "maxItems": 128
+    },
+    "operations": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "target": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4096,
+            "pattern": "^[^\\\\]+$"
+          },
+          "before": {
+            "oneOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "state": {
+                    "const": "absent"
+                  }
+                },
+                "required": [
+                  "state"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "state": {
+                    "const": "hash"
+                  },
+                  "hash": {
+                    "type": "string",
+                    "pattern": "^blake3:[0-9a-f]{64}$"
+                  }
+                },
+                "required": [
+                  "state",
+                  "hash"
+                ],
+                "additionalProperties": false
+              }
+            ]
+          },
+          "after": {
+            "oneOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "state": {
+                    "const": "absent"
+                  }
+                },
+                "required": [
+                  "state"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "state": {
+                    "const": "hash"
+                  },
+                  "hash": {
+                    "type": "string",
+                    "pattern": "^blake3:[0-9a-f]{64}$"
+                  }
+                },
+                "required": [
+                  "state",
+                  "hash"
+                ],
+                "additionalProperties": false
+              }
+            ]
+          }
+        },
+        "required": [
+          "target",
+          "before",
+          "after"
+        ],
+        "additionalProperties": false
+      },
+      "minItems": 1,
+      "maxItems": 705
+    },
+    "prior_bindings": {
+      "type": "object",
+      "propertyNames": {
+        "type": "string",
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+      },
+      "additionalProperties": {
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "state": {
+                "const": "pending"
+              }
+            },
+            "required": [
+              "state"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "state": {
+                "const": "resolved"
+              },
+              "entity_id": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+              },
+              "decision_id": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+              }
+            },
+            "required": [
+              "state",
+              "entity_id",
+              "decision_id"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "state": {
+                "const": "rejected"
+              },
+              "decision_id": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+              }
+            },
+            "required": [
+              "state",
+              "decision_id"
+            ],
+            "additionalProperties": false
+          }
+        ]
+      },
+      "maxProperties": 64
+    },
+    "prior_materialized_assertions": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+      },
+      "maxItems": 128,
+      "uniqueItems": true
+    },
+    "record_paths": {
+      "type": "object",
+      "propertyNames": {
+        "type": "string",
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+      },
+      "additionalProperties": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 4096
+      },
+      "minProperties": 4,
+      "maxProperties": 772
+    }
+  },
+  "required": [
+    "schema",
+    "task_id",
+    "request",
+    "request_hash",
+    "immutable_extraction_hash",
+    "allocations",
+    "transitions",
+    "materialized_assertions",
+    "operations",
+    "prior_bindings",
+    "prior_materialized_assertions",
+    "record_paths"
+  ],
+  "additionalProperties": false
+}

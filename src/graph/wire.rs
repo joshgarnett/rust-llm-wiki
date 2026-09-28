@@ -222,14 +222,35 @@ pub(crate) fn immutable_artifact(
             "extraction artifact raw response/proofs/packet identity mismatch",
         ));
     }
-    let mentions: BTreeSet<_> = validated.response.mentions.iter().map(|m| &m.id).collect();
-    let assertions: BTreeSet<_> = validated
-        .response
-        .assertions
-        .iter()
-        .map(|a| &a.id)
-        .collect();
+    artifact_membership(value, &validated.response)
+}
+
+/// Complete structural membership independent of source availability. Source
+/// quotation/hash proof remains the sealed validated extraction constructor.
+pub(crate) fn artifact_membership(
+    value: &ExtractionArtifactV1,
+    response: &ExtractionResponse,
+) -> Result<()> {
+    let mut locals = BTreeSet::new();
+    if response.schema != EXTRACTION_SCHEMA
+        || response.packet_id != value.packet_id
+        || response.packet_fingerprint != value.packet_fingerprint
+        || response.mentions.len() > MAX_MENTIONS
+        || response.assertions.len() > MAX_ASSERTIONS
+        || response.unresolved.len() > MAX_UNRESOLVED
+        || response.mentions.iter().any(|m| !locals.insert(&m.id))
+        || response.assertions.iter().any(|a| !locals.insert(&a.id))
+        || value.response_hash != Blake3Hash::digest(value.raw_response.as_bytes())
+    {
+        return Err(invalid(
+            "extraction response membership/identity is invalid",
+        ));
+    }
+    let mentions: BTreeSet<_> = response.mentions.iter().map(|m| &m.id).collect();
+    let assertions: BTreeSet<_> = response.assertions.iter().map(|a| &a.id).collect();
     if value.bindings.keys().collect::<BTreeSet<_>>() != mentions
+        || value.mention_spans.keys().collect::<BTreeSet<_>>() != mentions
+        || value.evidence_spans.keys().collect::<BTreeSet<_>>() != assertions
         || value.allocations.assertions.keys().collect::<BTreeSet<_>>() != assertions
         || value.allocations.evidence.keys().collect::<BTreeSet<_>>() != assertions
     {
@@ -238,9 +259,10 @@ pub(crate) fn immutable_artifact(
         ));
     }
     let mut durable = BTreeSet::from([&value.extraction_id]);
-    for assertion in &validated.response.assertions {
+    for assertion in &response.assertions {
         if !durable.insert(&value.allocations.assertions[&assertion.id])
             || value.allocations.evidence[&assertion.id].len() != assertion.evidence.len()
+            || value.evidence_spans[&assertion.id].len() != assertion.evidence.len()
         {
             return Err(invalid("extraction assertion/evidence allocation mismatch"));
         }

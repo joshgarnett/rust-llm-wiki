@@ -44,7 +44,7 @@ impl OfflineApp {
                 .as_ref()
                 .ok_or_else(|| WikiError::invalid("invalid candidate entity"))?;
             let entity_type = record
-                .field("wiki_type")
+                .field("wiki_entity_type")
                 .and_then(Value::as_str)
                 .ok_or_else(|| WikiError::invalid("candidate entity type missing"))?;
             out.push(CandidateIdentity {

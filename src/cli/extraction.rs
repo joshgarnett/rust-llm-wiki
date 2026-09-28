@@ -88,29 +88,32 @@ pub struct ImportArguments {
     pub new_extraction: bool,
 }
 pub fn response_input(path: &Path) -> Result<Vec<u8>> {
+    bounded_json_input(path, "extraction response")
+}
+pub fn bounded_json_input(path: &Path, label: &str) -> Result<Vec<u8>> {
     let mut bytes = Vec::new();
     let result = if path == Path::new("-") {
         io::stdin().lock().take(262145).read_to_end(&mut bytes)
     } else {
         let file = File::open(path)
-            .map_err(|_| WikiError::new(ErrorCode::Usage, "cannot open extraction response"))?;
+            .map_err(|_| WikiError::new(ErrorCode::Usage, format!("cannot open {label}")))?;
         if !file
             .metadata()
-            .map_err(|_| WikiError::new(ErrorCode::Usage, "cannot inspect extraction response"))?
+            .map_err(|_| WikiError::new(ErrorCode::Usage, format!("cannot inspect {label}")))?
             .is_file()
         {
             return Err(WikiError::new(
                 ErrorCode::Usage,
-                "extraction response must be a regular file or stdin",
+                format!("{label} must be a regular file or stdin"),
             ));
         }
         file.take(262145).read_to_end(&mut bytes)
     };
-    result.map_err(|_| WikiError::new(ErrorCode::Usage, "cannot read extraction response"))?;
+    result.map_err(|_| WikiError::new(ErrorCode::Usage, format!("cannot read {label}")))?;
     if bytes.len() > 262144 {
         return Err(WikiError::new(
             ErrorCode::ExtractionInvalid,
-            "extraction response exceeds262144 bytes",
+            format!("{label} exceeds262144 bytes"),
         ));
     }
     Ok(bytes)

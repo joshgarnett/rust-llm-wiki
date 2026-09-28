@@ -21,6 +21,9 @@ pub const MAX_JSON_NODES: usize = 65536;
 pub const MAX_EVIDENCE_PER_ASSERTION: usize = 16;
 pub const MAX_TOTAL_EVIDENCE: usize = 512;
 pub const MAX_UNRESOLVED: usize = 128;
+pub const MAX_MENTIONS: usize = 64;
+pub const MAX_ASSERTIONS: usize = 128;
+pub const MAX_RESPONSE_BYTES: usize = 256 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(transparent)]

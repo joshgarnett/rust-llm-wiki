@@ -319,6 +319,66 @@ pub fn load_extraction(view: &SourceView<'_>, id: &RecordId) -> Result<VerifiedE
     let (path, note) = view.resolve(id, RecordKind::Extraction, None)?;
     load_note(view, path, note)
 }
+/// Verify a proposed parsed note against the complete caller-supplied projection.
+pub(crate) fn verify_extraction_note(
+    view: &SourceView<'_>,
+    path: &VaultRelativePath,
+    note: &ParsedNote,
+) -> Result<VerifiedExtractionArtifact> {
+    load_note(view, path, note)
+}
+/// Resolution may change Pending bindings and extend materialization only.
+pub(crate) fn verify_resolution_transition(
+    before: &ExtractionArtifactV1,
+    after: &ExtractionArtifactV1,
+) -> Result<()> {
+    let mut normalized = after.clone();
+    normalized.bindings = before.bindings.clone();
+    normalized.materialized_assertions = before.materialized_assertions.clone();
+    if &normalized != before || before.bindings.keys().ne(after.bindings.keys()) {
+        return Err(invalid(
+            "resolution changed immutable extraction fields or map keys",
+        ));
+    }
+    for (mention, old) in &before.bindings {
+        let next = &after.bindings[mention];
+        if old != next
+            && (!matches!(old, MentionBinding::Pending) || matches!(next, MentionBinding::Pending))
+        {
+            return Err(invalid("resolution cannot overwrite a decided mention"));
+        }
+    }
+    let old: BTreeSet<_> = before.materialized_assertions.iter().collect();
+    let new: BTreeSet<_> = after.materialized_assertions.iter().collect();
+    if old.len() != before.materialized_assertions.len()
+        || new.len() != after.materialized_assertions.len()
+        || !old.is_subset(&new)
+        || new
+            .iter()
+            .any(|id| !after.allocations.assertions.contains_key(*id))
+    {
+        return Err(invalid("resolution materialization set is invalid"));
+    }
+    Ok(())
+}
+/// Replace only the existing artifact JSON, preserving surrounding author prose.
+pub(crate) fn edit_extraction_artifact(
+    note: &ParsedNote,
+    artifact: &ExtractionArtifactV1,
+) -> Result<Vec<u8>> {
+    let old = fenced_json(note, ARTIFACT_FENCE, MAX_ARTIFACT_BYTES)?;
+    let start = old.as_ptr() as usize - note.body().as_ptr() as usize;
+    let end = start + old.len();
+    let replacement = canonical_json(artifact)?;
+    if replacement.len() > MAX_ARTIFACT_BYTES {
+        return Err(invalid("extraction artifact exceeds byte ceiling"));
+    }
+    let mut body = Vec::with_capacity(note.body().len() - old.len() + replacement.len() + 1);
+    body.extend_from_slice(&note.body()[..start]);
+    body.extend_from_slice(&replacement);
+    body.extend_from_slice(&note.body()[end..]);
+    crate::records::edit_note(note, &BTreeMap::new(), Some(&body), &note.source_hash)
+}
 fn retained_note(
     engine: &ChangeEngine,
     change: &ChangeInspection,

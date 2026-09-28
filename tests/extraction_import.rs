@@ -416,7 +416,7 @@ fn explicit_binding(
         } else {
             "reject_mention"
         };
-        let fields = json!({"wiki_schema":"1","wiki_id":decision,"wiki_kind":"decision","title":"Explicit fixture binding","wiki_status":"active","wiki_action":action,"wiki_input_ids":[],"wiki_output_ids":entity.into_iter().collect::<Vec<_>>(),"wiki_created_at":"2026-09-28T00:00:00Z","wiki_extraction_id":artifact.extraction_id,"wiki_mention_ids":[local]});
+        let fields = json!({"wiki_schema":"1","wiki_id":decision,"wiki_kind":"decision","title":"Explicit fixture binding","wiki_status":"active","wiki_action":action,"wiki_input_ids":[artifact.extraction_id],"wiki_output_ids":entity.into_iter().collect::<Vec<_>>(),"wiki_created_at":"2026-09-28T00:00:00Z","wiki_extraction_id":artifact.extraction_id,"wiki_mention_ids":[local]});
         writes.push(ExpectedWrite {
             target: VaultRelativePath::new(format!("knowledge/decisions/{decision}.md")).unwrap(),
             expected: ExpectedState::Absent,

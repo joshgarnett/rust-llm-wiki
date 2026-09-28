@@ -19,7 +19,7 @@ use std::collections::{BTreeMap, BTreeSet};
 /// Cache identity binds every semantic adapter, not merely frontmatter parsing.
 pub fn parser_fingerprint() -> Blake3Hash {
     Blake3Hash::digest(format!(
-        "{};catalog-v1;canonical-membership-bytewise-v1;source-original-content-span-quote-fence-structural-v2;typed-id-companion-v1;decisions-explicit-conflict-cycle-v1;eligibility-full-note-transitive-v1;markdown-lexical-events-v1;graph-readable-directed-endpoints-v1;unicode61 remove_diacritics 2;no-stemming",
+        "{};catalog-v1;canonical-membership-bytewise-v1;source-original-content-span-quote-fence-structural-v2;typed-id-companion-v1;decisions-explicit-conflict-cycle-v1;mention-complete-artifact-membership-explicit-scope-v1;eligibility-full-note-transitive-v1;markdown-lexical-events-v1;graph-readable-directed-endpoints-v1;unicode61 remove_diacritics 2;no-stemming",
         crate::records::parser_fingerprint()
     ))
 }
