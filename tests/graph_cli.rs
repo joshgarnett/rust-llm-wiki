@@ -251,3 +251,61 @@ fn graph_cli_rebuild_preserves_canonical_rows_and_cursor_scope() {
     );
     assert_eq!(first["data"]["assertions"], rebuilt["data"]["assertions"]);
 }
+
+#[test]
+fn relationship_seed_paths_connect_through_either_endpoint() {
+    let f = fixture();
+    let result = ok(
+        f.path(),
+        &[
+            "graph",
+            "query",
+            FORWARD,
+            "--strategy",
+            "relationship",
+            "--depth",
+            "2",
+            "--limit",
+            "50",
+        ],
+    );
+    let edges = result["data"]["assertions"].as_array().unwrap();
+    assert!(edges.len() > 1);
+    assert!(
+        edges
+            .iter()
+            .any(|edge| !edge["direct_seed"].as_bool().unwrap()
+                && edge["path"][0]["traversal"] == "incoming")
+    );
+    let endpoint = |step: &Value, start: bool| -> Value {
+        let incoming = step["traversal"] == "incoming";
+        if start != incoming {
+            step["subject"]["record_id"].clone()
+        } else if step["object"]["kind"] == "entity" {
+            step["object"]["record_ref"]["record_id"].clone()
+        } else {
+            step["object"].clone()
+        }
+    };
+    for edge in edges {
+        let path = edge["path"].as_array().unwrap();
+        assert_eq!(
+            path.last().unwrap()["assertion"]["record_id"],
+            edge["record_ref"]["record_id"]
+        );
+        for pair in path.windows(2) {
+            assert_eq!(
+                endpoint(&pair[0], false),
+                endpoint(&pair[1], true),
+                "disconnected path: {path:?}"
+            );
+        }
+    }
+    let direct = edges
+        .iter()
+        .find(|edge| edge["record_ref"]["record_id"] == FORWARD)
+        .unwrap();
+    assert_eq!(direct["path"][0]["traversal"], "outgoing");
+    assert_eq!(direct["subject"]["record_id"], NORTH);
+    assert_eq!(direct["object"]["record_ref"]["record_id"], SOUTH);
+}

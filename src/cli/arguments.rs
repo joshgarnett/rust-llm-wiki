@@ -112,6 +112,7 @@ pub enum Command {
         command: IndexCommand,
     },
     Search(SearchArguments),
+    Context(Box<super::context::ContextArguments>),
     Graph {
         #[command(subcommand)]
         command: GraphCommand,
@@ -403,6 +404,7 @@ impl Command {
                 command: IndexCommand::Rebuild,
             } => "index rebuild",
             Self::Search(_) => "search",
+            Self::Context(_) => "context",
             Self::Graph {
                 command: GraphCommand::Query { .. },
             } => "graph query",

@@ -36,6 +36,7 @@ pub const COMMANDS: &[&str] = &[
     "index sync",
     "index rebuild",
     "search",
+    "context",
     "graph query",
     "graph neighbors",
     "check",
@@ -367,6 +368,58 @@ fn execute_inner(args: &Arguments) -> Result<Envelope> {
                 envelope.data = value(result)?;
             }
         }
+        Command::Context(context) => {
+            let request = context.request();
+            if context.search.no_sync && request.scope != retrieval::ContextScope::Snapshot {
+                return Err(WikiError::new(
+                    ErrorCode::FreshnessConflict,
+                    "unverified context requires --scope snapshot",
+                ));
+            }
+            let request = retrieval::context::validate_request(&context.search.query, &request)?;
+            if args.dry_run {
+                envelope.data = json!({"query": context.search.query, "request": request, "dry_run": true, "cache_state_unknown": true, "context": null});
+                envelope
+                    .warnings
+                    .push("context and freshness are unknown during dry-run".into());
+            } else {
+                let catalog = Catalog::with_options(
+                    app.fs().clone(),
+                    app.vault_id().clone(),
+                    CatalogOptions {
+                        busy_timeout_ms: app.options().lock_timeout_ms,
+                        fault: None,
+                    },
+                );
+                let writer = if request.scope == retrieval::ContextScope::Snapshot {
+                    None
+                } else {
+                    Some(WriterPermit::acquire(
+                        app.fs().root(),
+                        Duration::from_millis(app.options().lock_timeout_ms),
+                    )?)
+                };
+                let result = retrieval::verification::context(
+                    &catalog,
+                    writer.as_ref(),
+                    &context.search.query,
+                    &request,
+                )?;
+                envelope.meta.index_generation = Some(result.snapshot().generation);
+                match result.verification() {
+                    SnapshotVerification::IndexSnapshot => {
+                        envelope.meta.freshness = Some("index_snapshot".into())
+                    }
+                    SnapshotVerification::VerifiedSnapshot { verified_at } => {
+                        envelope.meta.freshness = Some("verified_snapshot".into());
+                        envelope.meta.verified_at = Some(verified_at.clone());
+                    }
+                }
+                envelope.meta.partial = result.truncated();
+                envelope.warnings.extend(result.warnings().iter().cloned());
+                envelope.data = value(result)?;
+            }
+        }
         Command::Check => {
             let outcome = app.check()?;
             let count = outcome.error_count;
@@ -687,6 +740,15 @@ pub fn present(
             "{}",
             envelope.data["body"].as_str().unwrap_or_default()
         ),
+        OutputFormat::Human
+            if envelope.command == "context" && envelope.data["text"].is_string() =>
+        {
+            write!(
+                output,
+                "{}",
+                envelope.data["text"].as_str().unwrap_or_default()
+            )
+        }
         OutputFormat::Human if envelope.command == "search" => {
             if let Some(hits) = envelope.data["hits"].as_array() {
                 if let Some(freshness) = &envelope.meta.freshness {

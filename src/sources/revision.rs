@@ -192,9 +192,12 @@ impl<'a> SourceView<'a> {
         dependencies: &mut BTreeMap<VaultRelativePath, ExpectedState>,
     ) -> Result<Vec<u8>> {
         let bytes = if let Some(value) = self.overlay.get(path) {
-            value
-                .clone()
-                .ok_or_else(|| integrity(format!("deleted payload {path}")))?
+            value.clone().ok_or_else(|| {
+                integrity(format!(
+                    "{} payload {path}",
+                    if self.closed { "missing" } else { "deleted" }
+                ))
+            })?
         } else if let Some(note) = self.notes.get(path) {
             note.raw.clone()
         } else if self.closed {
@@ -212,6 +215,26 @@ impl<'a> SourceView<'a> {
             ExpectedState::Hash(Blake3Hash::digest(&bytes)),
         );
         Ok(bytes)
+    }
+    /// Closed proof callers supply explicit absence as well as all present assets.
+    pub(crate) fn expected_state(&self, path: &VaultRelativePath) -> Result<ExpectedState> {
+        if let Some(bytes) = self.overlay.get(path) {
+            Ok(bytes.as_ref().map_or(ExpectedState::Absent, |bytes| {
+                ExpectedState::Hash(Blake3Hash::digest(bytes))
+            }))
+        } else if self.closed {
+            self.notes
+                .get(path)
+                .map(|note| ExpectedState::Hash(note.source_hash.clone()))
+                .ok_or_else(|| integrity(format!("asset absent from closed proof input: {path}")))
+        } else {
+            Ok(self
+                .fs
+                .read_before(path)?
+                .map_or(ExpectedState::Absent, |before| {
+                    ExpectedState::Hash(before.hash)
+                }))
+        }
     }
     pub(crate) fn note_dependency(
         path: &VaultRelativePath,

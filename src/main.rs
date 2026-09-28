@@ -93,7 +93,7 @@ fn main() {
         std::process::exit(1);
     }
     let (envelope, exit) = execute(&args);
-    if format == OutputFormat::Human && envelope.command == "read" {
+    if format == OutputFormat::Human && matches!(envelope.command.as_str(), "read" | "context") {
         if let Some(freshness) = &envelope.meta.freshness {
             eprintln!(
                 "Freshness: {freshness}{}",

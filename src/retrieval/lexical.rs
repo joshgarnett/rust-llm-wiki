@@ -103,8 +103,36 @@ fn compare(a: &Candidate, b: &Candidate) -> Ordering {
 }
 
 pub fn search(reader: &ReaderSnapshot, query: &str, plan: &QueryPlan) -> Result<HitSet> {
+    search_inner(reader, query, plan, None)
+}
+/// Context eligibility is applied before every candidate and hit limit.
+pub(crate) fn search_context(
+    reader: &ReaderSnapshot,
+    query: &str,
+    plan: &QueryPlan,
+    historical: bool,
+) -> Result<HitSet> {
+    search_inner(reader, query, plan, Some(historical))
+}
+fn search_inner(
+    reader: &ReaderSnapshot,
+    query: &str,
+    plan: &QueryPlan,
+    context_scope: Option<bool>,
+) -> Result<HitSet> {
     let plan = validate_plan(query, plan)?;
-    let fingerprint = cursor::fingerprint(query, &plan)?;
+    let base_fingerprint = cursor::fingerprint(query, &plan)?;
+    let fingerprint = if let Some(historical) = context_scope {
+        Blake3Hash::digest(
+            serde_json::to_vec(&("lwiki-context-documents-v1", base_fingerprint, historical))
+                .map_err(|e| WikiError::new(ErrorCode::Internal, e.to_string()))?,
+        )
+    } else {
+        base_fingerprint
+    };
+    let context_policy = context_scope
+        .map(filters::context_policy)
+        .unwrap_or("1".into());
     let offset = cursor::offset(
         reader,
         &fingerprint,
@@ -225,7 +253,7 @@ pub fn search(reader: &ReaderSnapshot, query: &str, plan: &QueryPlan) -> Result<
                 "NULL"
             };
             let sql = format!(
-                "SELECT d.row_json,{score} AS score FROM documents d {joins} LEFT JOIN records r ON r.gen=d.gen AND r.id=d.record_id WHERE d.gen=?2 AND ({condition}) AND ({common}) AND ({policy}) ORDER BY score,coalesce(d.record_id,d.path),d.path LIMIT {bound}"
+                "SELECT d.row_json,{score} AS score FROM documents d {joins} LEFT JOIN records r ON r.gen=d.gen AND r.id=d.record_id WHERE d.gen=?2 AND ({condition}) AND ({common}) AND ({policy}) AND ({context_policy}) ORDER BY score,coalesce(d.record_id,d.path),d.path LIMIT {bound}"
             );
             let mut statement = reader.connection().prepare(&sql).map_err(sql_error)?;
             let rows = statement
@@ -285,7 +313,7 @@ pub fn search(reader: &ReaderSnapshot, query: &str, plan: &QueryPlan) -> Result<
         let common = filters::sql(&plan.filters, &mut values);
         let policy = filters::normal_policy(&plan.filters);
         let sql = format!(
-            "SELECT d.row_json FROM documents d LEFT JOIN records r ON r.gen=d.gen AND r.id=d.record_id WHERE d.gen=?1 AND ({common}) AND ({policy}) ORDER BY coalesce(d.record_id,d.path),d.path"
+            "SELECT d.row_json FROM documents d LEFT JOIN records r ON r.gen=d.gen AND r.id=d.record_id WHERE d.gen=?1 AND ({common}) AND ({policy}) AND ({context_policy}) ORDER BY coalesce(d.record_id,d.path),d.path"
         );
         let mut statement = reader.connection().prepare(&sql).map_err(sql_error)?;
         let rows = statement

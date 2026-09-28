@@ -1,0 +1,396 @@
+{
+  "packages": [
+    "P09"
+  ],
+  "milestone": "M1 local offline exit",
+  "status": "accepted",
+  "baseline_commit": "98d59983d0b11d7031f8a77b45267e6ea910744d",
+  "platform": {
+    "os": "Darwin",
+    "version": "26.5.2",
+    "arch": "arm64"
+  },
+  "tree_fingerprint_sha256": "31afa45336a50aa36121fa5307195dbe2fa258071cda071602694ddaae5cfe5a",
+  "fingerprint_algorithm": "SHA256 compact sorted JSON map path->SHA256 (UTF8)",
+  "file_sha256": {
+    "Cargo.lock": "c6cdcc2fbc2c541159aaae875ea35407e40136f8eafd064a607d6470c0644cb8",
+    "Cargo.toml": "b3f986689fbdfbe5e82921983427a4856eaed7dbdd69ea7927c4e097135b183b",
+    "rust-toolchain.toml": "495c69d1db93f25f53e3d0d2d40d812313366cc368de317871c2ace6c6ffafa4",
+    "schemas/change-v1.json": "bbc593479943f8d06a5895f1643bd38e6733c54242352fdf1da79b8276585380",
+    "schemas/output-v1.json": "7026e79b21bcf9c9dc6c250c86acd06ff574ec56575fcdc7aa7b527bb0d82214",
+    "schemas/record-v1.json": "1c57a46393f508360f652b42c499823802082e4d4488e69529e5dc0e7aa8b20a",
+    "schemas/stream-v1.json": "dcbe9c30bbc651bebab9e4ecf1b3698b0a2a1a58a05a0b2e50c2a14bfd46e7fe",
+    "scripts/seed-fixture.py": "d7ca31788ddce468747f935126575b58045309c18e172b7c63d7de387fd884b3",
+    "src/app/mod.rs": "59283ffd487aaf6f44f2ca7dfa2ff93abacb9415748fdd9830be0b469a409aff",
+    "src/app/offline.rs": "8fd13217fabaf690a6380211a695b33e6d92afc3be6c6f32eecb0b0c12c5d2a0",
+    "src/app/types.rs": "fb52808559feab8760fb2300202c32628e3cb0d3cf63317c340aa95d4e41fa16",
+    "src/catalog/eligibility.rs": "4747c7dc606a9a809b903968a00c2174a02becb2e7ad2e4d24e990adfcf224fe",
+    "src/catalog/integrity.rs": "e25356c50721e692490778e624eca59d67fce4d0742669b1e774206a3bd90f28",
+    "src/catalog/mod.rs": "066967af4a50d3ba529a4a616078f5c441af6bbb4c68a41c147a354b9f39872c",
+    "src/catalog/publish.rs": "d2c585a385a0a2ff2874fff1b812964d51ff1a42edb2aa20254c592d66e282f4",
+    "src/catalog/scan.rs": "994eb5b949778b09f0e5d6e5163940bf2eb005f429e994f424e62f6df0c105ec",
+    "src/catalog/snapshot.rs": "485538aecfeaaf8715c81e8be617c8210b0b875de6541e09eb2453c621348329",
+    "src/catalog/sql.rs": "c96dc1483509dac4813ff134a4e21005f0b99b2d48d1fb74f37cf265d4195907",
+    "src/catalog/types.rs": "95c7855db5c0a37c357b3de1b24270ba55ef595c8c90845bb437fb0897df7473",
+    "src/changes/apply.rs": "4f42e26f51e894410dfa1d5ce051da4aa21777c7a7cc6cefda16bb008fc5d3ca",
+    "src/changes/immutable.rs": "05dbfb5d42bfcd6c54a1b152179891a9432a4aec1fa3a0b9dc92eb48caafc6f0",
+    "src/changes/journal.rs": "659a7b5699a051ec68a48ee4fac4730777c4e968a25943a3e9f15fbc8a6faa1e",
+    "src/changes/mod.rs": "3291cf0acc4b0cd9d9f06bcd505ca34695fd654e0861547b939cd35c23e2161b",
+    "src/changes/outcome.rs": "6ed7c079c84216403005bd20b1f18d7b3604bf4edf4ecb9bbfad185bc18a145e",
+    "src/changes/prepare.rs": "d24ee405450f9bae1d55b07950743fe79dcc0a2cc565850e4a3afd55b1f82b10",
+    "src/changes/recover.rs": "91ce22b61410490a2af465c2c9b71ef064c5dbd62c0a4696788aa49907a6cfbf",
+    "src/changes/rollback.rs": "7d3ac7254552dbdad74ab12560f7b578fbcf9b4e5093a14b63e80b62c41edb0c",
+    "src/changes/types.rs": "0882466d5f54400d69e6198edd4f534c040913e78ff658a2fe21ed57510fb6dc",
+    "src/cli/arguments.rs": "b9dba41a25c265cf220857afa8af3b2a3266f3ffaf46dad096d19106223b8205",
+    "src/cli/context.rs": "d6c274d982bf975b3feb06ffb04e8f9b87e64ba955b714f19f43296b0fc59e64",
+    "src/cli/dispatch.rs": "ef5cb445ba70ac489eb359bcb7227df1909fcfc055ba71a9d72851f99bc32d57",
+    "src/cli/mod.rs": "fbbb76e086a904efc21aced2d949bf11ba47cced1f366bd3ec38f3c31253a580",
+    "src/config/local.rs": "ce6257fd8e5550d1ec4d5c77e9509ff1d56af5f02b9ad03a6d70233f850a4a89",
+    "src/config/mod.rs": "7c0e99a9d6212abf1fa2bbf2f2f8f4f4e559d555740311dc7cc7624dfd69d42c",
+    "src/config/types.rs": "44d6273b3511dfe9ce08312e5ceda9e73e7f8b72752edc8e8d00183732301f82",
+    "src/domain/mod.rs": "be34fba5562d7e48140bfd22b46078c211c1428a06a601ee49608f14470c6a00",
+    "src/domain/records.rs": "a31ba98d025ba63e6fdb3a4812f8882ce3d11542ad0c822fda2d0978ff7f7229",
+    "src/domain/types.rs": "65e25c4d4f644e18e714859f611e9a184d3a712e7347611f996dee47b76e7f87",
+    "src/graph/mod.rs": "c756e083bdd37658bd5ccb95bc52288a499089f8c1721ef9aaa553640168b6f6",
+    "src/graph/query.rs": "29aac7ece437aa16937ff9fed9a29e9b1705e0701f96ff7b09bf93243f2de13b",
+    "src/graph/rank.rs": "4596990f12568524e306bf5ca2c7f02abd0ff7addd784d6fa1b36727a1da0d48",
+    "src/graph/traverse.rs": "2493ac026d99f233ce810b6e26bd3bd77464cf241076e91a8d9a8dbd7989ff49",
+    "src/graph/types.rs": "91294278a38154e7c0eec761821f046c56c5ccff8d4938c6ae2d9c5348526bb6",
+    "src/lib.rs": "427805b4115409a9633d1a8051fb40d5f99d2bf6e8e26ec89abd11aea7c553d2",
+    "src/main.rs": "1632e80a9dfaa5a80bf95e95c7122908dfa32c2df18e155577bd01133e7d7ad2",
+    "src/output.rs": "fc6623e352a9c6822890d6f0af4b791dc0a617ee122cd8abe56796d0901d685c",
+    "src/records/edit.rs": "d8fa5b3b63aa091b58daf3b221b088e699e2e29f3e07134c3b7811de56a4c06b",
+    "src/records/links.rs": "2d82e96722350bf2bbda833eed81d24aa9e30c914c61107097b71d490fb26fff",
+    "src/records/mod.rs": "087dcbc747b2604de3b1b72cddf8a989409c34b163b13e5002e05cf8e648618b",
+    "src/records/parse.rs": "8e828e54160e067f9c7efaa92b54f785fc5a1fba00139f7142cf5332a7807aa0",
+    "src/retrieval/bundles.rs": "52f582eadaddaab3bb2646525fb1117da593d13de73c2f0c8a12138773d14945",
+    "src/retrieval/context.rs": "6e7aa05fae96e2353d5c57b0e69f8bb3d835fd7ec2e479b05c537adef9667e41",
+    "src/retrieval/context_types.rs": "8a5f3e532dddd18c40637ca3a11124b3da9b83d71a72d64b21f60931a5befdf1",
+    "src/retrieval/cursor.rs": "b034d95638ee8c7b9dd5fa25ead908864ca9396c7584df05197015492b89b6f1",
+    "src/retrieval/excerpts.rs": "e084e7682ad24f4f9bec53ebbcca0154d2827b8b43da9ddbd777aa67228d410a",
+    "src/retrieval/filters.rs": "235d83679d74a54baff59702b9150c52efdb98590f95f8ee5f0bb4d8673e257d",
+    "src/retrieval/lexical.rs": "3a6cdb9dad2709ffdce6bbad01540591d353151831670f415c5b7bdbb8188a6a",
+    "src/retrieval/literal.rs": "3f71865c61e2c9c898e54eb26c0cbbff3c05124c620ae1fa805c8447345b5c2e",
+    "src/retrieval/mod.rs": "1f0cf056dd0c24aa8cb4c73b1168fbd9e5534e80aacf4669f31223fca1a004b9",
+    "src/retrieval/types.rs": "95a5793cc5dbb9d56d7c1d9e507043e0bed81943f68464ce6b0389d17e4de1c3",
+    "src/retrieval/verification.rs": "e63226337e38af80597658b1f3060e72f3c3b08df66a35eb300951007297bd39",
+    "src/sources/capture.rs": "5fe7c3c25f43fec7d5276fd5c6aad85b01ae440c0eebc82198c7b7afaf65ed82",
+    "src/sources/evidence.rs": "e8df14a628db1c711e8c9c9725e0145c7d6d1e4db7abcf1ff990b11630fb44b0",
+    "src/sources/lifecycle.rs": "a9d3a9078d6e02ede3644a94072eac93b73dae5fd247673cb685ec9e26f98cdf",
+    "src/sources/mod.rs": "fdb424ab45e00acb11ff694eb11259fe5c593af6ab371078c3aeb6f658a5e5bb",
+    "src/sources/revision.rs": "7e0006b5f899c71135e57bd9a9f312fcf10ce8ae61fe1d74b401cb8ac418e9a6",
+    "src/sources/types.rs": "8b998522fd20efb376936b2db36b03f7aa9d1898d608ebe84b01e4871f0fe85c",
+    "src/vault/discovery.rs": "3d4a6b3d9c21c54d89cc579a490526f8bcd85ccc4bf53eb7cbaa49a827f72eb8",
+    "src/vault/fs.rs": "1314880a286297b7b93c8b8e8ba5b7dfb43115c0c8229917e13b782307aba588",
+    "src/vault/lock.rs": "554b5b9c7174384fd177d3ae97747e73a61df6c7da5d3c3df90edfdf9be14792",
+    "src/vault/mod.rs": "098cf03150fc8bec1420840a9249a5c9ae540aacc2943e2755cc8b7bf116494c",
+    "src/vault/paths.rs": "d81944b68caec8b7392c4463a4cd196653b3518adf038d8efd179ab3a39d366a",
+    "tests/catalog_crash_recovery.rs": "5afa762918a8b52d21b30b791c6893d3b3a949778d31dcca6198ae6b40bb11ce",
+    "tests/catalog_generations.rs": "c0df22987ff4cdb9046eb61da76dca40061e48b372b4919f5010f76bba9dcc39",
+    "tests/catalog_scan_eligibility.rs": "125d852cb88f7b353f67ef5be788db70e172f1103f9aa53cf02c05fd2894a7f4",
+    "tests/change_read_preconditions.rs": "9833ea32dfcd2731aa2c671bdbfc79353b941a29b5f6d9b31e4a3ef79dc2c471",
+    "tests/changes_prepare_journal.rs": "cdd5dc56b1c43e050dc2e562c9c85a9dfcdf31b1b7a2b177ad0abef4322aa629",
+    "tests/changes_recovery.rs": "07617cd8419805a2f6a2bed727d7ee040ffe0e58ccd47a052c171fe25c7c378a",
+    "tests/context_cli.rs": "72354016d7291054665efbd82a77bb83d4440d24f8d0391d1ab35328fd6c1522",
+    "tests/context_freshness.rs": "840249e88b7f0ff699f5dfe9997228ec9eae3ed74d7b8a9a8b511d2c4a8f9fd4",
+    "tests/contracts.rs": "30f5d5da6260460abf77fa298008d60239cf9d4a06015389721612bcf6b70945",
+    "tests/fixtures/bootstrap/README.md": "b97388a827cd38b87fe8a665f82a9457260a7a377c16d4e1ee8f0dea20f76212",
+    "tests/fixtures/bootstrap/expected.json": "e9f2f1e2931b8348973c940ad6bfa645d69fd8ab491401e3157c536a7ca9e386",
+    "tests/fixtures/bootstrap/vault/WIKI.md": "855aa9337433f27268832fc1cbaf803dfe824de7853126f973cae2bbf7a8aa80",
+    "tests/fixtures/bootstrap/vault/knowledge/assertions/dated.md": "fa1ef5b92b180d27d008ab76daba029076221a30d0c825417b1b523dd8e09f5e",
+    "tests/fixtures/bootstrap/vault/knowledge/assertions/forward.md": "daa216b43f26a5d5c86e47a5f70f78a9dde01a132628a925a758be9fd3abbdd0",
+    "tests/fixtures/bootstrap/vault/knowledge/assertions/homonym_negated.md": "75d5a3bd5291ff4b4f4989f9c387acc003ae914312d9a937993727b2728e8959",
+    "tests/fixtures/bootstrap/vault/knowledge/assertions/negated.md": "62a2454ccb88b89424fc30ec14782278cb48bb2f71b532d98d566a4b86258f62",
+    "tests/fixtures/bootstrap/vault/knowledge/assertions/reverse.md": "b92e1fde6cf9e602ca2fe2353454aab74ae786a84e6b1524f0dcffdf0604a564",
+    "tests/fixtures/bootstrap/vault/knowledge/assertions/stale.md": "80d88d3cd746a8430856b265aaf099219df80d434601896f106cdb115dc15592",
+    "tests/fixtures/bootstrap/vault/knowledge/assertions/unicode_property.md": "0cdecf10189315e3300f26b7e0648000a43dfb1a1b36bfab6e4c23e57bc999c3",
+    "tests/fixtures/bootstrap/vault/knowledge/entities/alex_north.md": "a305eb7fec38e705140c8240ef5b020281a556c2df22dc798b85822843b0a319",
+    "tests/fixtures/bootstrap/vault/knowledge/entities/alex_south.md": "41d88536658c41978b1eb1530fa88036e5ec7d99f010c9118cc19f7acf09a0d2",
+    "tests/fixtures/bootstrap/vault/knowledge/entities/north_lab.md": "09c9ca87a9fb00f1ea0564eec606a999e92cc4ed17d73a0cdd855a616fd795fe",
+    "tests/fixtures/bootstrap/vault/knowledge/entities/south_lab.md": "a4f9d40187881ad99a3d09bdb3dc41f235c2244a1422ada834976a5272f6d8f1",
+    "tests/fixtures/bootstrap/vault/knowledge/evidence/dated_support.md": "6f4bf9c10573452361cc9c2d6bf99d4a5e12c7128e5efc3204f9e3331a5d7ddf",
+    "tests/fixtures/bootstrap/vault/knowledge/evidence/forward_contradiction.md": "fafa3ed3796e9ebd8bc05eab789807aba7cf3627767ad0a4c9f1ddaaa61f3813",
+    "tests/fixtures/bootstrap/vault/knowledge/evidence/forward_long.md": "27970f08e4add4a7cddb47ae75f9ec5a2ee53ffdd7cab80989875d29bcfaecd1",
+    "tests/fixtures/bootstrap/vault/knowledge/evidence/forward_short.md": "c8c07565328bfbf04e2afecc37bb25ffbf2cf78b8614ee4e3a6766466f8946a7",
+    "tests/fixtures/bootstrap/vault/knowledge/evidence/homonym_support.md": "98cc2be0e1a4d3f716ecb09e636d825a3bc2ae2983a38fdc3d45f3cca53b2fe3",
+    "tests/fixtures/bootstrap/vault/knowledge/evidence/negated_support.md": "1aa66006d3318c4dc5e4c64b3f80b5cac0f3304eee1101504ffbe2e785f21702",
+    "tests/fixtures/bootstrap/vault/knowledge/evidence/reverse_support.md": "81cc0e158e07f5c021fa9333b8b151344af3b16f5faa462e0cee2c89760a0ce7",
+    "tests/fixtures/bootstrap/vault/knowledge/evidence/stale_support.md": "6c955f0e02b87d2ddec1ef5dc9a5be62dcfb4aab97455d60951977fe6cc04a07",
+    "tests/fixtures/bootstrap/vault/knowledge/evidence/unicode_support.md": "3a8b6fed8ad08495feda7114f8057479f131d6ec5439b604358d6be764b99534",
+    "tests/fixtures/bootstrap/vault/knowledge/pages/architecture.md": "077b1a0b63ed0d369631ea5e75fe4b9ad9cbcea24ef1d7b43128bbed173c133e",
+    "tests/fixtures/bootstrap/vault/sources/source_00000000-0000-7000-8000-000000000005/revisions/revision_00000000-0000-7000-8000-000000000007/content.md": "06856d188a0b7ef98533e3a2bd855eb1ad53e428275595dc21d147b587ecab26",
+    "tests/fixtures/bootstrap/vault/sources/source_00000000-0000-7000-8000-000000000005/revisions/revision_00000000-0000-7000-8000-000000000007/original.md": "06856d188a0b7ef98533e3a2bd855eb1ad53e428275595dc21d147b587ecab26",
+    "tests/fixtures/bootstrap/vault/sources/source_00000000-0000-7000-8000-000000000005/revisions/revision_00000000-0000-7000-8000-000000000007/revision.md": "f9c8105b65930950702bed89b37e77e65332056c1c763e39ec63db2f93654189",
+    "tests/fixtures/bootstrap/vault/sources/source_00000000-0000-7000-8000-000000000005/revisions/revision_00000000-0000-7000-8000-000000000008/content.md": "57b7c4c15cbd34cd9af8bdbe693045dda57f6146c33f6cc8e0bcf432dc9d97dc",
+    "tests/fixtures/bootstrap/vault/sources/source_00000000-0000-7000-8000-000000000005/revisions/revision_00000000-0000-7000-8000-000000000008/original.md": "57b7c4c15cbd34cd9af8bdbe693045dda57f6146c33f6cc8e0bcf432dc9d97dc",
+    "tests/fixtures/bootstrap/vault/sources/source_00000000-0000-7000-8000-000000000005/revisions/revision_00000000-0000-7000-8000-000000000008/revision.md": "7947e6b6e2bb9400dbc500c9b973f70d7b6ff2a238527c51c2a59b2a119b193b",
+    "tests/fixtures/bootstrap/vault/sources/source_00000000-0000-7000-8000-000000000005/source.md": "a1f269c38271b7d5742526d641498d0978eb3f5b93a821f6bd69b3ab9e57b36a",
+    "tests/fixtures/bootstrap/vault/sources/source_00000000-0000-7000-8000-000000000006/revisions/revision_00000000-0000-7000-8000-000000000009/content.md": "de319e74c929109c6185c7c5b0cb57f1b03048d274f16a80e729f8ac2b34921b",
+    "tests/fixtures/bootstrap/vault/sources/source_00000000-0000-7000-8000-000000000006/revisions/revision_00000000-0000-7000-8000-000000000009/original.md": "de319e74c929109c6185c7c5b0cb57f1b03048d274f16a80e729f8ac2b34921b",
+    "tests/fixtures/bootstrap/vault/sources/source_00000000-0000-7000-8000-000000000006/revisions/revision_00000000-0000-7000-8000-000000000009/revision.md": "dd268a057727e1133bedda76fb3f74db5b03df404e9e84f2da3e40bef078dc59",
+    "tests/fixtures/bootstrap/vault/sources/source_00000000-0000-7000-8000-000000000006/source.md": "45c99cc2a2967b95eeb93170984410a741fb949024633507a907858cc244dd8b",
+    "tests/fixtures/p01/lossless-crlf.md": "59470a015db1d44d87c4a3e642778a7f53646643cd1656e961b7b24d4b11de04",
+    "tests/fixtures/p08/README.md": "f35dd942d8b3ce8070a42ee397d59b49285e2f9378cede3f90e22fa03ee8b909",
+    "tests/fixtures/p08/a.md": "cdfdf19b2b28861bccbd91dbc41573a85be9a73c14e9b52e406ca38e96598f1e",
+    "tests/fixtures/p08/b.md": "a3ecfaff0fcf47bc7d97b07226a7d59f36f07ede3f9e180cf05539dc03cba4ce",
+    "tests/fixtures/p08/c.md": "b99883e33cdaf1a694a759e8625b885944071c07a93d51f9958a8e125224ba72",
+    "tests/graph_cli.rs": "9ba7fbf6cd8f00dc16ff680385c98a226084a0b8e3dcd03d2d5a7da6ab1eb12f",
+    "tests/graph_queries.rs": "a215f80c56312ac0ca1235cc9d269a9619890b9a70e05b554a844b414237131e",
+    "tests/m1_workflow.rs": "8d55c22ed7865852ab4ad31992e7d48972a1a9391f366ea896341bb7eb382402",
+    "tests/machine_contract.rs": "44abd144489b988bbbaaf2589f7e84241523b185db20d2c8731b3a1e27922db5",
+    "tests/offline_application.rs": "d717a1d67e05318980d967aff2e614909f6944ef220d0824f0ca42419e20c7b3",
+    "tests/offline_cli.rs": "864f34ac2670eb70df1e5aefafcaaad53c55f98c1c9532e7993ca5c599594358",
+    "tests/records_lossless.rs": "6835c5c94273061ea5b25f51c8ab0b35dbabdf6314b26cd2455ab7683e189bf2",
+    "tests/retrieval_lexical.rs": "10bee8f13e40ba2805829d1aefd32262c557a82a76786d1c75e80706e25100fb",
+    "tests/sources_evidence.rs": "6f3a8eabdbe9683e799bcb9bbb10447f4143f373110f71e6f71f1afd29ebd24e",
+    "tests/vault_fs.rs": "5699ff7207e4b5724625686dbd088453fda9f6e75e05ea78c0e5cd42724400de"
+  },
+  "checks": [
+    {
+      "command": "cargo test --locked --offline --all-targets",
+      "exit_code": 0,
+      "log": "/tmp/lwiki-p09-all-targets.log",
+      "log_sha256": "b5a0a6c10f1c1c769997617e3ea55b423bdbaee6f16b885bbe7c9cf3a4be5cd8",
+      "parent_tests": 210,
+      "ignored_helpers": 2,
+      "results": {
+        "src/lib.rs": {
+          "result": "ok",
+          "passed": 0,
+          "failed": 0,
+          "ignored": 0,
+          "elapsed_seconds": 0.0
+        },
+        "src/main.rs": {
+          "result": "ok",
+          "passed": 0,
+          "failed": 0,
+          "ignored": 0,
+          "elapsed_seconds": 0.0
+        },
+        "tests/catalog_crash_recovery.rs": {
+          "result": "ok",
+          "passed": 2,
+          "failed": 0,
+          "ignored": 1,
+          "elapsed_seconds": 2.47
+        },
+        "tests/catalog_generations.rs": {
+          "result": "ok",
+          "passed": 15,
+          "failed": 0,
+          "ignored": 0,
+          "elapsed_seconds": 2.59
+        },
+        "tests/catalog_scan_eligibility.rs": {
+          "result": "ok",
+          "passed": 14,
+          "failed": 0,
+          "ignored": 0,
+          "elapsed_seconds": 0.28
+        },
+        "tests/change_read_preconditions.rs": {
+          "result": "ok",
+          "passed": 8,
+          "failed": 0,
+          "ignored": 0,
+          "elapsed_seconds": 0.98
+        },
+        "tests/changes_prepare_journal.rs": {
+          "result": "ok",
+          "passed": 17,
+          "failed": 0,
+          "ignored": 0,
+          "elapsed_seconds": 25.78
+        },
+        "tests/changes_recovery.rs": {
+          "result": "ok",
+          "passed": 25,
+          "failed": 0,
+          "ignored": 1,
+          "elapsed_seconds": 350.07
+        },
+        "tests/context_cli.rs": {
+          "result": "ok",
+          "passed": 5,
+          "failed": 0,
+          "ignored": 0,
+          "elapsed_seconds": 6.95
+        },
+        "tests/context_freshness.rs": {
+          "result": "ok",
+          "passed": 18,
+          "failed": 0,
+          "ignored": 0,
+          "elapsed_seconds": 3.89
+        },
+        "tests/contracts.rs": {
+          "result": "ok",
+          "passed": 4,
+          "failed": 0,
+          "ignored": 0,
+          "elapsed_seconds": 0.05
+        },
+        "tests/graph_cli.rs": {
+          "result": "ok",
+          "passed": 4,
+          "failed": 0,
+          "ignored": 0,
+          "elapsed_seconds": 0.71
+        },
+        "tests/graph_queries.rs": {
+          "result": "ok",
+          "passed": 17,
+          "failed": 0,
+          "ignored": 0,
+          "elapsed_seconds": 5.75
+        },
+        "tests/m1_workflow.rs": {
+          "result": "ok",
+          "passed": 1,
+          "failed": 0,
+          "ignored": 0,
+          "elapsed_seconds": 8.19
+        },
+        "tests/machine_contract.rs": {
+          "result": "ok",
+          "passed": 6,
+          "failed": 0,
+          "ignored": 0,
+          "elapsed_seconds": 0.04
+        },
+        "tests/offline_application.rs": {
+          "result": "ok",
+          "passed": 14,
+          "failed": 0,
+          "ignored": 0,
+          "elapsed_seconds": 7.49
+        },
+        "tests/offline_cli.rs": {
+          "result": "ok",
+          "passed": 10,
+          "failed": 0,
+          "ignored": 0,
+          "elapsed_seconds": 3.2
+        },
+        "tests/records_lossless.rs": {
+          "result": "ok",
+          "passed": 8,
+          "failed": 0,
+          "ignored": 0,
+          "elapsed_seconds": 0.02
+        },
+        "tests/retrieval_lexical.rs": {
+          "result": "ok",
+          "passed": 13,
+          "failed": 0,
+          "ignored": 0,
+          "elapsed_seconds": 1.73
+        },
+        "tests/sources_evidence.rs": {
+          "result": "ok",
+          "passed": 15,
+          "failed": 0,
+          "ignored": 0,
+          "elapsed_seconds": 8.7
+        },
+        "tests/vault_fs.rs": {
+          "result": "ok",
+          "passed": 14,
+          "failed": 0,
+          "ignored": 0,
+          "elapsed_seconds": 1.14
+        },
+        "examples/fixture_hash.rs": {
+          "result": "ok",
+          "passed": 0,
+          "failed": 0,
+          "ignored": 0,
+          "elapsed_seconds": 0.0
+        }
+      }
+    },
+    {
+      "command": "cargo test --locked --offline --test context_freshness --test context_cli --test m1_workflow --test graph_cli --test machine_contract",
+      "exit_code": 0,
+      "log": "/tmp/lwiki-p09-final.log",
+      "log_sha256": "f33d6d8225cadc2526853917d8c6a65391cb6fb7430290a0ef62602f1fb414d2",
+      "parent_tests": 34,
+      "ignored_helpers": 0,
+      "results": {
+        "tests/context_cli.rs": {
+          "result": "ok",
+          "passed": 5,
+          "failed": 0,
+          "ignored": 0,
+          "elapsed_seconds": 7.15
+        },
+        "tests/context_freshness.rs": {
+          "result": "ok",
+          "passed": 18,
+          "failed": 0,
+          "ignored": 0,
+          "elapsed_seconds": 4.18
+        },
+        "tests/graph_cli.rs": {
+          "result": "ok",
+          "passed": 4,
+          "failed": 0,
+          "ignored": 0,
+          "elapsed_seconds": 0.71
+        },
+        "tests/m1_workflow.rs": {
+          "result": "ok",
+          "passed": 1,
+          "failed": 0,
+          "ignored": 0,
+          "elapsed_seconds": 8.62
+        },
+        "tests/machine_contract.rs": {
+          "result": "ok",
+          "passed": 6,
+          "failed": 0,
+          "ignored": 0,
+          "elapsed_seconds": 0.05
+        }
+      }
+    },
+    {
+      "command": "cargo clippy --locked --offline --all-targets -- -D warnings",
+      "exit_code": 0,
+      "log": "/tmp/lwiki-p09-clippy-final.log",
+      "log_sha256": "1caa3158b30911e3af46a044f3a37c222c135887cdea7f93a519bb467bad0ecb"
+    },
+    {
+      "command": "cargo build --locked --offline",
+      "exit_code": 0,
+      "log": "/tmp/lwiki-p09-build-final.log",
+      "log_sha256": "86de423830f6138315d76f584bc71b58a5aa42c9fb2e786bc90bbd9799ce14a6"
+    },
+    {
+      "command": "python3 scripts/seed-fixture.py --check",
+      "exit_code": 0,
+      "log": "/tmp/lwiki-p09-seed.log",
+      "log_sha256": "4082b8e8cc523db156ef5837fa1577800a40259482d4b392c124cc90a0b0d4ea"
+    },
+    {
+      "command": "cargo fmt --all -- --check",
+      "exit_code": 0
+    },
+    {
+      "command": "git diff --check",
+      "exit_code": 0
+    }
+  ],
+  "review": {
+    "report": "P09-review.md",
+    "model": "independent gpt-6-sol fallback for unavailable Astra",
+    "findings": "R1 overlap closure/index remapping and R2 historical citation lifecycle resolved"
+  },
+  "limits": [
+    "Full210 gate preceded whitespace-only CLI formatting and equivalent Clippy if/let-chain collapse in context/verification; final34 context/CLI/M1/machine tests and final Clippy/build/fmt passed on fingerprinted sources.",
+    "Durability fault matrix test reran successfully; prior measured250 NativeIo boundaries x before/after=500 faults retained; successful Cargo capture hides its runtime printed counter. DurableIo code/test unchanged. Two enabled changes SIGKILL wrappers and both SQLite SIGKILL wrappers (11 points) passed; two ignored helpers explicitly invoked by wrappers.",
+    "D30 proof counters exclude operational SQLite/journal/recovery/index maintenance byte/file IO, share both attempts, and do not interrupt blocking OS syscalls.",
+    "No live provider/host or native other-platform qualification; E01-E05 remain open. No counting remote transport exists until P16; current local layer has no provider/helper handles."
+  ]
+}

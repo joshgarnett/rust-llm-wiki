@@ -178,5 +178,6 @@
     "No dispatcher/helper/credentials exist in local layer; counting transports remain P16/V16 work.",
     "Native faults/mocks do not qualify power-loss durability/other platforms/live providers/hosts; E01-E05 open.",
     "M1 requires P09; M2-M4 remain required."
-  ]
+  ],
+  "accepted_commit": "98d59983d0b11d7031f8a77b45267e6ea910744d"
 }

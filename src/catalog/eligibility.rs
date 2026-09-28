@@ -11,7 +11,7 @@ use crate::{
     },
     records::{LinkResolution, ParsedNote, RegistryEntry, resolve_typed},
     sources::{CitationScope, SourceView, evidence::evidence_reference, revision::canonical_path},
-    vault::{ExpectedState, VaultFs},
+    vault::VaultFs,
 };
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -445,17 +445,7 @@ pub(crate) fn compute(
                     let path = VaultRelativePath::new(format!("{parent}/{payload}"))?;
                     // Record absence as well as hashes. A later missing-file repair
                     // changes the verification closure even without a note edit.
-                    let expected = if let Some(bytes) = view.overlay.get(&path) {
-                        bytes.as_ref().map_or(ExpectedState::Absent, |bytes| {
-                            ExpectedState::Hash(Blake3Hash::digest(bytes))
-                        })
-                    } else {
-                        view.fs
-                            .read_before(&path)?
-                            .map_or(ExpectedState::Absent, |before| {
-                                ExpectedState::Hash(before.hash)
-                            })
-                    };
+                    let expected = view.expected_state(&path)?;
                     deps.insert(path, expected);
                 }
             }

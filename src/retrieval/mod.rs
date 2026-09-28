@@ -1,4 +1,6 @@
 //! Deterministic discovery and exact-byte excerpts.
+pub mod bundles;
+pub mod context;
 pub mod context_types;
 pub mod cursor;
 pub mod excerpts;
@@ -6,6 +8,7 @@ pub mod filters;
 pub mod lexical;
 pub mod literal;
 pub mod types;
+pub mod verification;
 pub use context_types::*;
 pub use lexical::search;
 pub use types::*;

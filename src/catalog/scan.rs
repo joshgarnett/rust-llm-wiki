@@ -168,6 +168,15 @@ pub(crate) fn diagnostic(
 }
 
 pub fn project(fs: &VaultFs, input: &ValidationInput) -> Result<CatalogProjection> {
+    project_input(fs, input, false)
+}
+
+/// Reconstruct derived authority using only a complete, caller-metered input.
+pub(crate) fn project_closed(fs: &VaultFs, input: &ValidationInput) -> Result<CatalogProjection> {
+    project_input(fs, input, true)
+}
+
+fn project_input(fs: &VaultFs, input: &ValidationInput, closed: bool) -> Result<CatalogProjection> {
     let notes = input_notes(input)?;
     let mut memberships: BTreeMap<RecordId, Vec<VaultRelativePath>> = BTreeMap::new();
     for (path, note) in &notes {
@@ -224,7 +233,11 @@ pub fn project(fs: &VaultFs, input: &ValidationInput) -> Result<CatalogProjectio
             );
         }
     }
-    let source_view = SourceView::from_input(fs, input)?;
+    let source_view = if closed {
+        SourceView::from_closed_input(fs, input)?
+    } else {
+        SourceView::from_input(fs, input)?
+    };
     super::eligibility::compute(&source_view, &notes, &mut records, &mut diagnostics)?;
     let registry: Vec<_> = records
         .values()

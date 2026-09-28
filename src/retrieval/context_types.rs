@@ -77,6 +77,8 @@ pub struct ContextRequest {
 pub struct EvidenceContribution {
     pub reference: EvidenceRef,
     pub stance: EvidenceStance,
+    pub eligibility: Eligibility,
+    pub authored_status: Option<String>,
 }
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct ContextPassage {

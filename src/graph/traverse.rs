@@ -397,11 +397,15 @@ pub(crate) fn walk(
                     omitted.insert(row.record.id().clone());
                     continue;
                 }
+                let mut subject_path = path.clone();
+                if let Some(step) = subject_path.last_mut() {
+                    step.traversal = TraversalDirection::Incoming;
+                }
                 queue.push_back(Frontier {
                     node: subject,
                     seed: row.record.id().clone(),
                     rank: rank + 1,
-                    path: path.clone(),
+                    path: subject_path,
                     depth: 1,
                 });
                 if let GraphObject::Entity { record_ref } = object {

@@ -121,6 +121,27 @@ pub(crate) fn normal_policy(filters: &SearchFilters) -> String {
 pub(crate) fn identity_policy() -> &'static str {
     "d.kind='entity' AND json_extract(r.row_json,'$.identity_eligibility')='current' AND d.eligibility<>'current'"
 }
+/// Mirrors context's canonical authority rules before SQL candidate limits.
+pub(crate) fn context_policy(historical: bool) -> String {
+    let payload = if historical {
+        "d.eligibility<>'invalid'"
+    } else {
+        "d.eligibility='current'"
+    };
+    let page = if historical {
+        "r.authored_status<>'draft' AND r.eligibility<>'invalid'"
+    } else {
+        "r.authored_status='reviewed' AND r.eligibility='current'"
+    };
+    let description = if historical {
+        "json_extract(r.row_json,'$.description_eligibility') IN ('current','historical','stale')"
+    } else {
+        "json_extract(r.row_json,'$.description_eligibility')='current'"
+    };
+    format!(
+        "((d.owner_revision IS NOT NULL AND ({payload})) OR (d.owner_revision IS NULL AND ((r.kind='page' AND ({page})) OR (r.kind='entity' AND ({description})))))"
+    )
+}
 pub(crate) fn row<'a>(
     reader: &'a ReaderSnapshot,
     document: &DocumentRow,

@@ -654,3 +654,37 @@ fn cooperating_writers_serialize() {
     // OS authority is released on abrupt exit even though PID text remains.
     let _permit = WriterPermit::acquire(&root, Duration::ZERO).unwrap();
 }
+
+#[test]
+fn proof_budgets_cover_nested_marker_scans_and_checked_resolution() {
+    use lwiki::domain::WikiError;
+    let (_temp, root) = fixture();
+    fs::create_dir(root.path().join("large")).unwrap();
+    for index in 0..200 {
+        fs::write(
+            root.path().join(format!("large/item-{index}.bin")),
+            b"payload",
+        )
+        .unwrap();
+    }
+    for resolving in [false, true] {
+        let mut calls = 0;
+        let mut budget = || {
+            calls += 1;
+            if calls > 8 {
+                Err(WikiError::new(ErrorCode::BudgetExceeded, "entry budget"))
+            } else {
+                Ok(())
+            }
+        };
+        let error = if resolving {
+            root.resolve_budgeted(&rel("large/item-199.bin"), &mut budget)
+                .unwrap_err()
+        } else {
+            root.scan_markdown_budgeted(&mut budget).unwrap_err()
+        };
+        assert_eq!(error.code, ErrorCode::BudgetExceeded);
+        assert_eq!(calls, 9);
+    }
+    assert!(root.resolve(&rel("large/item-199.bin")).unwrap().is_file());
+}
