@@ -396,6 +396,7 @@ pub enum CitationRef {
     Assertion(EvidenceRef),
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ReadSnapshot {
     pub generation: u64,
     pub parser_fingerprint: Blake3Hash,

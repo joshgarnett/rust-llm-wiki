@@ -1,0 +1,217 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://lwiki.invalid/schemas/change-v1.json",
+  "title": "Retained lwiki-change-v1 manifest",
+  "description": "Format shape only. Engine verifies exact fence-byte hash, vault/change binding, sorted unique nonoverlapping targets, payload ownership and hashes, immutable roles, dependency ordering, expected states and graph policy. Manifest duplicate JSON keys are rejected before deserialization.",
+  "type": "object",
+  "required": [
+    "version",
+    "vault_id",
+    "change_id",
+    "title",
+    "created_at",
+    "origin",
+    "inverse_of",
+    "allocated_ids",
+    "operations"
+  ],
+  "properties": {
+    "version": {
+      "const": 1
+    },
+    "vault_id": {
+      "$ref": "#/$defs/id"
+    },
+    "change_id": {
+      "$ref": "#/$defs/id"
+    },
+    "title": {
+      "type": "string",
+      "minLength": 1
+    },
+    "created_at": {
+      "type": "string",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}[Tt]\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?(?:[Zz]|\\+00:00)$"
+    },
+    "origin": {
+      "oneOf": [
+        {
+          "type": "null"
+        },
+        {
+          "$ref": "#/$defs/origin"
+        }
+      ]
+    },
+    "inverse_of": {
+      "oneOf": [
+        {
+          "type": "null"
+        },
+        {
+          "$ref": "#/$defs/id"
+        }
+      ]
+    },
+    "allocated_ids": {
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/id"
+      }
+    },
+    "operations": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/op"
+      }
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "hash": {
+      "type": "string",
+      "pattern": "^blake3:[0-9a-f]{64}$"
+    },
+    "id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+    },
+    "path": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Slash-relative portable path; Rust validator additionally rejects traversal, reserved components, collisions, symlinks and nested vault boundaries."
+    },
+    "state": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "state"
+          ],
+          "properties": {
+            "state": {
+              "const": "absent"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "state",
+            "hash"
+          ],
+          "properties": {
+            "state": {
+              "const": "hash"
+            },
+            "hash": {
+              "$ref": "#/$defs/hash"
+            }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "payload": {
+      "type": "object",
+      "required": [
+        "path",
+        "hash",
+        "byte_len"
+      ],
+      "properties": {
+        "path": {
+          "$ref": "#/$defs/path"
+        },
+        "hash": {
+          "$ref": "#/$defs/hash"
+        },
+        "byte_len": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 18446744073709551615
+        }
+      },
+      "additionalProperties": false
+    },
+    "origin": {
+      "type": "object",
+      "required": [
+        "operation",
+        "packet_id",
+        "response_hash"
+      ],
+      "properties": {
+        "operation": {
+          "const": "graph_import"
+        },
+        "packet_id": {
+          "$ref": "#/$defs/id"
+        },
+        "response_hash": {
+          "$ref": "#/$defs/hash"
+        }
+      },
+      "additionalProperties": false
+    },
+    "op": {
+      "type": "object",
+      "required": [
+        "target",
+        "before",
+        "after",
+        "before_payload",
+        "after_payload",
+        "role",
+        "apply_after"
+      ],
+      "properties": {
+        "target": {
+          "$ref": "#/$defs/path"
+        },
+        "before": {
+          "$ref": "#/$defs/state"
+        },
+        "after": {
+          "$ref": "#/$defs/state"
+        },
+        "before_payload": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/payload"
+            }
+          ]
+        },
+        "after_payload": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/payload"
+            }
+          ]
+        },
+        "role": {
+          "enum": [
+            "mutable_record",
+            "immutable_asset"
+          ]
+        },
+        "apply_after": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "uniqueItems": true
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

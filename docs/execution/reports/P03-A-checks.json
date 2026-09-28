@@ -1,0 +1,25 @@
+{
+  "package": "P03-A integration",
+  "working_directory": "/Users/jgarnett/Devleopment/rust-llm-wiki",
+  "platform": "macOS 26.5.2 arm64",
+  "toolchain": "Rust/Cargo 1.98.0",
+  "command": "cargo test --locked --offline --test changes_prepare_journal",
+  "result": "passed",
+  "tests": 17,
+  "duration_seconds": 24.79,
+  "source_sha256": {
+    "src/changes/types.rs": "0e78e664cfce2d5554f03f34624eac2957dfe9f75415ada5e3e3d43bfdf9c63c",
+    "src/changes/prepare.rs": "078f6a098351eab3f1f575a52cf69bc3ae8fb08722c751bd79c8b3ebd6717d77",
+    "src/changes/journal.rs": "659a7b5699a051ec68a48ee4fac4730777c4e968a25943a3e9f15fbc8a6faa1e",
+    "src/changes/outcome.rs": "6ed7c079c84216403005bd20b1f18d7b3604bf4edf4ecb9bbfad185bc18a145e",
+    "tests/changes_prepare_journal.rs": "2ba56ffdbad14eaba3c32ef6d658b0b04517790ee8ed9b73a3b485360e5e1767",
+    "schemas/change-v1.json": "a1ea44c7da23bddbf2018b8b72c05ded8309de2d486a8465cc24c29d2d3ac649",
+    "src/domain/types.rs": "65e25c4d4f644e18e714859f611e9a184d3a712e7347611f996dee47b76e7f87",
+    "src/vault/fs.rs": "9617bb209129ea7b5b1c7e533a1040111dc55774e7d40083c5a4122184fabf1e"
+  },
+  "limits": [
+    "P03-B final matrix and independent review pending",
+    "Actual SQLite publication P05 pending",
+    "No power-loss or native other-platform qualification"
+  ]
+}

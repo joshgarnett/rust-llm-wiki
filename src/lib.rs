@@ -1,4 +1,5 @@
 //! Local Markdown wiki operations. Canonical records outlive their indexes.
+pub mod changes;
 pub mod domain;
 pub mod output;
 pub mod records;

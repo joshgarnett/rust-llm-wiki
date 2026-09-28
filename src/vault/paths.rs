@@ -187,8 +187,9 @@ impl VaultRoot {
                 format!("{prefix}/{name}")
             };
             let parts: Vec<_> = relative.split('/').collect();
-            let revision_payload =
-                parts.len() >= 5 && parts[0] == "sources" && parts[2] == "revisions";
+            let revision_payload = parts.len() >= 5
+                && UniCase::unicode(parts[0]).to_folded_case() == "sources"
+                && UniCase::unicode(parts[2]).to_folded_case() == "revisions";
             if revision_payload && !(parts.len() == 5 && parts[4] == "revision.md") {
                 continue;
             }

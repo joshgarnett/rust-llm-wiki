@@ -153,6 +153,26 @@ fn scan_skips_control_payload_and_symlink_paths() {
     );
 }
 
+#[test]
+fn folded_revision_namespace_never_adopts_captured_envelopes() {
+    let (_temp, root) = fixture();
+    let directory = root.path().join("ſources/s/Revisions/r");
+    fs::create_dir_all(&directory).unwrap();
+    let capture = b"---\nwiki_schema: \"1\"\nwiki_id: captured_false_id\nwiki_kind: page\ntitle: Capture\n---\nraw";
+    fs::write(directory.join("content.md"), capture).unwrap();
+    fs::write(directory.join("original.md"), capture).unwrap();
+    fs::write(directory.join("revision.md"), b"revision owner").unwrap();
+    fs::create_dir(directory.join("nested")).unwrap();
+    fs::write(directory.join("nested/page.md"), capture).unwrap();
+    let paths: Vec<_> = root
+        .scan_markdown()
+        .unwrap()
+        .into_iter()
+        .map(|p| p.to_string())
+        .collect();
+    assert_eq!(paths, ["WIKI.md", "ſources/s/Revisions/r/revision.md"]);
+}
+
 #[cfg(unix)]
 #[test]
 fn non_utf8_paths_are_explicit_errors() {

@@ -1,42 +1,37 @@
 # Execution checkpoint
 
-Updated: 2026-09-28. Phase: **P01/P02 accepted; P03 interface preparation**. Root owns this file.
+Updated: 2026-09-28. Phase: **P03 accepted; P04 dispatch next**. Root owns this file.
 
-## Objective
+## Objective / authorization
 
-Implement every P00–P21 package and V01–V17 local gate through M4. E01–E05 external qualification stays separate. User authorized Sol implementation/Astra review, local commits, disposable fixtures/mocks. No live spending/publishing/real-vault writes.
+Implement every P00–P21 package and V01–V17 local gate through M4. User authorized Sol implementation/Astra review, local commits and disposable fixtures/mocks. No real-vault writes, live spending, host installation, publishing or push. E01–E05 external qualification stays separate; full persistent goal remains active.
 
-## Baseline / accepted evidence
+## Accepted baseline and evidence
 
-- Research `4652248`, preserved planning baseline `a97679c`.
-- Branch `impl/autonomous-v1`, HEAD `77ef9b70da707603ca901ef752f03478842acb4e` (accepted P00).
-- Rust/Cargo 1.98.0, Rust 2024, pinned exact toolchain/lock. macOS 26.5.2 arm64.
-- P00 accepted: 10 tests, fmt check, all-targets Clippy -D warnings, debug build, fixture --check. P00-checks.json source hashes; Astra P00-review.md findings resolved.
-- Binary currently supports only capabilities/schema. V01 bootstrap passes; P06/P21 portions and every other gate pending.
-- Git mutations require permitted escalation; initial sandbox denial resolved. Network dependency registry operations require permitted escalation; no bypass.
+- Branch `impl/autonomous-v1`, HEAD `f04a9d5a5ddf9749e20aac5d67f5a7fe7f7fa810` (accepted P00/P01/P02).
+- Research `4652248`; user/planning edits preserved in baseline `a97679c`; P00 commit `77ef9b7`.
+- Rust/Cargo 1.98.0 pinned, Rust 2024, macOS 26.5.2 arm64. Lockfile126 packages.
+- P00:10 tests, fmt/lint/build/seed check, independent findings resolved. P00-checks.json.
+- P01/P02:30 combined tests, all-target Clippy -D warnings, format/build/diff passed; independent findings resolved. P01-P02-checks.json.
+- CLI advertises only capabilities/schema. Later commands and integrated V01–V17 completion remain pending.
+- Git mutations/dependency downloads require permitted escalation; prior sandbox denials resolved without bypass.
 
-## Packages / exclusive leases
+## Exclusive leases / current owners
 
-| Package | State | Owner and leased paths | Evidence / next |
-|---|---|---|---|
-| P00 | accepted | workers handed off | reports/P00.md and P00-checks.json |
-| P01 | accepted | Sol `/root/p01_records` completed: src/records/{parse,edit,links}.rs; tests/records_lossless.rs; tests/fixtures/p01/**; reports/P01.md | lossless parser/ref spike; Cargo only after root registration and lease |
-| P02 | accepted | Sol `/root/p02_vault` completed: src/vault/{fs,paths,lock}.rs; tests/vault_fs.rs; tests/fixtures/p02/**; reports/P02.md | filesystem/lock spike; Cargo serialized by root |
-| P03 analysis | complete | Astra `/root/p03_invariants`, report P03-invariants.md only; read-only, no Cargo | P03-invariants.md recommendations ready; implementation waits P01/P02 acceptance |
-| P03–P21 implementation | pending | none | dependency graph unchanged |
+P00–P03 accepted; all worker/reviewer leases returned. Root owns shared interfaces, Cargo, CLI/schema registries, commits and state. No active Cargo process or code writer. P04–P21 pending; no nested delegation.
 
-Root owns Cargo files, module roots/exports, CLI/output, public schema registry, commits, execution records. No nested delegation. No implementation worker/build active. P01/P02 ownership returned to root. Astra bounded re-review handed off, all findings resolved. Both modules registered. P03 analyst handed off.
+## P03 accepted evidence
 
-## Current dirty paths / dependencies
-
-Cargo.toml/Cargo.lock, STATE and reports/progress updates. P01/P02 leased leaf files may be dirty.
-P01 parser candidates: yaml-rust2 0.13.0 (MIT OR Apache-2.0, Rust 1.85) without encoding; pulldown-cmark 0.13.4 (MIT, Rust 1.71.1) without optional render/SIMD defaults. Spike must pass before adapter accepted. P02 unicase 2.9.0 (MIT OR Apache-2.0; no declared Rust floor); std File advisory locks. unicode-casefold 0.2.0 candidate rejected after source inspection showed Unicode9 tables; unicase tables generated Jan2026 include current mappings. Dependencies resolved/fetched under permitted escalation, lock 126 packages.
-
-## Findings / limits
-
-Three actionable review findings fixed and independently resolved: P01 radix overflow type coercion; P02 mkdir retry durability; P02 nestedvault scope leakage. Reports P01-review/P02-review. Root removed reviewer-only test that asserted bugs; permanent regressions assigned to workers. P01 must reject duplicate keys before converting to BTreeMap (P00 raw serde cannot do that). Three P00 review corrections: args_os usage errors, evidence links schema, exact WIKI.md fixture casing. Keep original worker fingerprints as history; P00-checks.json is accepted root fingerprint.
-D18–D19 added in DECISIONS; E01–E05 open. Other-OS crash/durability, real-provider/host tests unrun. No release claim.
+- P03-checks.json:73 parent tests passed, zero failed; preparation17 (25.35s), recovery25 (347.11s), vault13, lossless8 and contracts10.
+- Required expanded native matrix250 boundaries×before/after =500 faults passed, including immutable binary and ownership-claim durability. Two actual SIGKILL restart wrappers passed; sole ignored child helper is explicitly invoked, not a disabled gate.
+- All-target Clippy -D warnings, fmt, debug build, diff/seed fixture checks passed. Exact source/test/schema/Cargo fingerprints retained.
+- Independent Astra A1 interrupted preparation orphan, B1 independently sealed revision extension and B2 stale Prepared abort resolved. Root direct missing/corrupt/misbound claim cases passed on final tree. P03-review.md/P03.md record dispositions and limits.
+- Root aligned full Unicode namespace folding across inference, tree claims, scan and projected scan; IDs exact case. Changes/source payloads never create adopted envelopes.
+- D20–D25 record manifest/journal encoding, trusted backend boundary, recovery epochs, retained validation, orphan policy and revision-tree claims.
+- Actual complete-graph validation/SQLite publication P05 pending; no permissive production defaults or graph CLI activation. M0 not complete until P05 real spike. Mocks/native I/O tests do not prove SQL isolation, power-loss, native Linux/Windows, host or live-provider compatibility. E01–E05 remain open.
 
 ## Exact next action
 
-Root full quiescent checks passed: 30 tests (10 P00, 8 P01, 12 P02), all-target Clippy -D warnings, fmt check, debug build, diff check. Independent Astra re-review resolved all actionable findings; accepted P01/P02. Root integration fingerprints in P01-P02-checks.json. Commit accepted slice, then freeze P03 interfaces and lease bounded retention/journal implementation. No active Cargo session.
+1. Create local accepted P03 commit from the explicitly owned source/schema/test/report/state paths; update HEAD here.
+2. P04 immutable capture/revision/evidence/lifecycle: read only selected package/linked capture, schema and CLI contracts. Root freezes shared source interfaces/module wiring; bounded Sol implementation, Astra review, root tests.
+3. Then P05 real graph/catalog publication and remaining DAG through M4 without routine confirmation. Full goal not complete at M0/M1.
