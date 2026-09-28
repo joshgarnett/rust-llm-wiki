@@ -87,6 +87,7 @@ impl DurableIo for NativeIo {
     }
 }
 
+#[derive(Clone)]
 pub struct VaultFs {
     root: VaultRoot,
     io: Arc<dyn DurableIo>,

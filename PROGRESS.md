@@ -117,5 +117,6 @@ Start a new `gpt-6-sol` session with the [implementation goal](docs/execution/ST
 - P01 lossless parser/editor and P02 vault filesystem/lock adapters accepted after 30 combined tests, lint/build/format checks and independent review.
 - P03 retained changes, guarded application/recovery and inverse/abort accepted after independent corrections and 73 combined tests, including 500 native I/O failures and two subprocess kill/restart wrappers. Real SQLite publication remains a P05 gate.
 - P04 immutable capture/evidence/lifecycle accepted after 96 combined tests and independent readguard/quotation corrections; exact originals, successor evidence, withdrawal and overlay verification implemented in the library.
-- P05–P21 and V01–V17 integrated completion remain pending; see [checkpoint](docs/execution/STATE.md) and [coverage](docs/execution/reports/coverage.md).
+- P05 catalog/eligibility and real bundled SQLite publication accepted after127 combined parent tests,500 native I/O faults,11 SQLite kill points and independent Sol cross-review substituting for unavailable Astra threads. M0 foundation complete; migration loss notices and cache integrity checked.
+- P06–P21 and V01–V17 integrated completion remain pending; see [checkpoint](docs/execution/STATE.md) and [coverage](docs/execution/reports/coverage.md).
 - External provider/host/platform/release qualification E01–E05 remains unrun; no live spending, real-vault edits or publishing.
