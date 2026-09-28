@@ -1,0 +1,2053 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:lwiki:run-event:1",
+  "$comment": "Bounded canonical run-event JSON. Production validates strict duplicate-free input, exact UTF-8 byte/event ceilings, immutable identities, hash/dependency bindings, lifecycle replay and complete conservative accounting. Schema validation alone grants no dispatch or recovery authority.",
+  "$ref": "#/$defs/EventBody",
+  "$defs": {
+    "RunSpec": {
+      "type": "object",
+      "properties": {
+        "version": {
+          "const": 1
+        },
+        "run_id": {
+          "$ref": "#/$defs/RecordId"
+        },
+        "vault_id": {
+          "$ref": "#/$defs/RecordId"
+        },
+        "title": {
+          "type": "string",
+          "maxLength": 16384
+        },
+        "created_at_utc_ms": {
+          "type": "integer",
+          "minimum": -9223372036854775808,
+          "maximum": 9223372036854775807
+        },
+        "deadline_utc_ms": {
+          "type": "integer",
+          "minimum": -9223372036854775808,
+          "maximum": 9223372036854775807
+        },
+        "scope": {
+          "$ref": "#/$defs/RunScope"
+        },
+        "config_fingerprint": {
+          "$ref": "#/$defs/Blake3Hash"
+        },
+        "input_fingerprint": {
+          "$ref": "#/$defs/Blake3Hash"
+        },
+        "limits": {
+          "$ref": "#/$defs/LifetimeLimits"
+        },
+        "tasks": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/TaskSpec"
+          },
+          "maxItems": 4096
+        },
+        "prior_accounting": {
+          "$ref": "#/$defs/PriorAccounting"
+        }
+      },
+      "required": [
+        "version",
+        "run_id",
+        "vault_id",
+        "title",
+        "created_at_utc_ms",
+        "deadline_utc_ms",
+        "scope",
+        "config_fingerprint",
+        "input_fingerprint",
+        "limits",
+        "tasks",
+        "prior_accounting"
+      ],
+      "additionalProperties": false
+    },
+    "RecordId": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+    },
+    "RunScope": {
+      "type": "object",
+      "properties": {
+        "operation": {
+          "type": "string",
+          "maxLength": 65536
+        },
+        "question": {
+          "anyOf": [
+            {
+              "type": "string",
+              "maxLength": 65536
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "exclusions": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "maxLength": 65536
+          },
+          "maxItems": 65536
+        },
+        "source_snapshot": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ReadSnapshot"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "input_records": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/RecordRef"
+          },
+          "maxItems": 65536
+        },
+        "read_preconditions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ReadDependency"
+          },
+          "maxItems": 65536
+        },
+        "profile_fingerprints": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/Blake3Hash"
+          },
+          "maxProperties": 65536,
+          "propertyNames": {
+            "type": "string",
+            "maxLength": 65536
+          }
+        },
+        "scope_payload_hash": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Blake3Hash"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "operation",
+        "question",
+        "exclusions",
+        "source_snapshot",
+        "input_records",
+        "read_preconditions",
+        "profile_fingerprints",
+        "scope_payload_hash"
+      ],
+      "additionalProperties": false
+    },
+    "ReadSnapshot": {
+      "type": "object",
+      "properties": {
+        "generation": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 18446744073709551615
+        },
+        "parser_fingerprint": {
+          "$ref": "#/$defs/Blake3Hash"
+        },
+        "control_manifest": {
+          "$ref": "#/$defs/Blake3Hash"
+        }
+      },
+      "required": [
+        "generation",
+        "parser_fingerprint",
+        "control_manifest"
+      ],
+      "additionalProperties": false
+    },
+    "Blake3Hash": {
+      "type": "string",
+      "pattern": "^blake3:[0-9a-f]{64}$"
+    },
+    "RecordRef": {
+      "type": "object",
+      "properties": {
+        "vault_id": {
+          "$ref": "#/$defs/RecordId"
+        },
+        "record_id": {
+          "$ref": "#/$defs/RecordId"
+        },
+        "expected_kind": {
+          "$ref": "#/$defs/RecordKind"
+        }
+      },
+      "required": [
+        "vault_id",
+        "record_id",
+        "expected_kind"
+      ],
+      "additionalProperties": false
+    },
+    "RecordKind": {
+      "enum": [
+        "vault",
+        "page",
+        "entity",
+        "assertion",
+        "evidence",
+        "source",
+        "revision",
+        "extraction_packet",
+        "extraction",
+        "decision",
+        "change",
+        "run",
+        "run_event"
+      ]
+    },
+    "ReadDependency": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "$ref": "#/$defs/VaultRelativePath"
+        },
+        "expected": {
+          "$ref": "#/$defs/ExpectedState"
+        }
+      },
+      "required": [
+        "path",
+        "expected"
+      ],
+      "additionalProperties": false
+    },
+    "VaultRelativePath": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 4096
+    },
+    "ExpectedState": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "state": {
+              "const": "absent"
+            }
+          },
+          "required": [
+            "state"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "state": {
+              "const": "hash"
+            },
+            "hash": {
+              "$ref": "#/$defs/Blake3Hash"
+            }
+          },
+          "required": [
+            "state",
+            "hash"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "LifetimeLimits": {
+      "type": "object",
+      "properties": {
+        "requests": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 18446744073709551615
+        },
+        "concurrency": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 4294967295
+        },
+        "attempts_per_task": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 4294967295
+        },
+        "request_bytes": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 18446744073709551615
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "response_bytes": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 18446744073709551615
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "billable_units": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 18446744073709551615
+          },
+          "maxProperties": 65536,
+          "propertyNames": {
+            "$ref": "#/$defs/BillableClass"
+          }
+        },
+        "max_cost": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Money"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "requests_per_minute": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 4294967295
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "tokens_per_minute": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 18446744073709551615
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "requests",
+        "concurrency",
+        "attempts_per_task",
+        "request_bytes",
+        "response_bytes",
+        "billable_units",
+        "max_cost",
+        "requests_per_minute",
+        "tokens_per_minute"
+      ],
+      "additionalProperties": false
+    },
+    "BillableClass": {
+      "enum": [
+        "input",
+        "cached_input",
+        "output",
+        "reasoning",
+        "search_result",
+        "fetch_byte"
+      ]
+    },
+    "Money": {
+      "type": "object",
+      "properties": {
+        "currency": {
+          "$ref": "#/$defs/Currency"
+        },
+        "nanounits": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 18446744073709551615
+        }
+      },
+      "required": [
+        "currency",
+        "nanounits"
+      ],
+      "additionalProperties": false
+    },
+    "Currency": {
+      "type": "string",
+      "pattern": "^[A-Z]{3}$"
+    },
+    "TaskSpec": {
+      "type": "object",
+      "properties": {
+        "key": {
+          "$ref": "#/$defs/Blake3Hash"
+        },
+        "stage": {
+          "$ref": "#/$defs/TaskStage"
+        },
+        "capability": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Capability"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "priority": {
+          "type": "integer",
+          "minimum": -2147483648,
+          "maximum": 2147483647
+        },
+        "dependencies": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Blake3Hash"
+          },
+          "maxItems": 65536
+        },
+        "input_hash": {
+          "$ref": "#/$defs/Blake3Hash"
+        },
+        "prompt_hash": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Blake3Hash"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "schema_hash": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Blake3Hash"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "model_hash": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Blake3Hash"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "settings_hash": {
+          "$ref": "#/$defs/Blake3Hash"
+        },
+        "source_bindings": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ReadDependency"
+          },
+          "maxItems": 65536
+        },
+        "input": {
+          "$ref": "#/$defs/BoundedPayloadRef"
+        }
+      },
+      "required": [
+        "key",
+        "stage",
+        "capability",
+        "priority",
+        "dependencies",
+        "input_hash",
+        "prompt_hash",
+        "schema_hash",
+        "model_hash",
+        "settings_hash",
+        "source_bindings",
+        "input"
+      ],
+      "additionalProperties": false
+    },
+    "TaskStage": {
+      "enum": [
+        "embed",
+        "extract",
+        "inspect_existing",
+        "plan_frontier",
+        "discover",
+        "capture",
+        "assess_gaps",
+        "synthesize",
+        "stage_changes",
+        "probe"
+      ]
+    },
+    "Capability": {
+      "enum": [
+        "embed",
+        "generate",
+        "search",
+        "fetch",
+        "probe",
+        "token_count"
+      ]
+    },
+    "BoundedPayloadRef": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "$ref": "#/$defs/VaultRelativePath"
+        },
+        "hash": {
+          "$ref": "#/$defs/Blake3Hash"
+        },
+        "byte_len": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 18446744073709551615
+        }
+      },
+      "required": [
+        "path",
+        "hash",
+        "byte_len"
+      ],
+      "additionalProperties": false
+    },
+    "PriorAccounting": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "state": {
+              "const": "none"
+            }
+          },
+          "required": [
+            "state"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "state": {
+              "const": "unknown"
+            },
+            "prior_run_ids": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/RecordId"
+              },
+              "maxItems": 65536
+            },
+            "reason": {
+              "type": "string",
+              "maxLength": 65536
+            }
+          },
+          "required": [
+            "state",
+            "prior_run_ids",
+            "reason"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "TaskState": {
+      "enum": [
+        "pending",
+        "running",
+        "completed",
+        "failed"
+      ]
+    },
+    "DurableOutputRef": {
+      "type": "object",
+      "properties": {
+        "record": {
+          "$ref": "#/$defs/RecordRef"
+        },
+        "path": {
+          "$ref": "#/$defs/VaultRelativePath"
+        },
+        "hash": {
+          "$ref": "#/$defs/Blake3Hash"
+        }
+      },
+      "required": [
+        "record",
+        "path",
+        "hash"
+      ],
+      "additionalProperties": false
+    },
+    "VectorCacheRef": {
+      "type": "object",
+      "properties": {
+        "space_hash": {
+          "$ref": "#/$defs/Blake3Hash"
+        },
+        "input_hash": {
+          "$ref": "#/$defs/Blake3Hash"
+        },
+        "vector_hash": {
+          "$ref": "#/$defs/Blake3Hash"
+        },
+        "dimensions": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 4294967295
+        },
+        "membership_fingerprint": {
+          "$ref": "#/$defs/Blake3Hash"
+        }
+      },
+      "required": [
+        "space_hash",
+        "input_hash",
+        "vector_hash",
+        "dimensions",
+        "membership_fingerprint"
+      ],
+      "additionalProperties": false
+    },
+    "EventBody": {
+      "type": "object",
+      "properties": {
+        "version": {
+          "const": 1
+        },
+        "event": {
+          "$ref": "#/$defs/LedgerEvent"
+        }
+      },
+      "required": [
+        "version",
+        "event"
+      ],
+      "additionalProperties": false
+    },
+    "LedgerEvent": {
+      "type": "object",
+      "properties": {
+        "version": {
+          "const": 1
+        },
+        "run_id": {
+          "$ref": "#/$defs/RecordId"
+        },
+        "event_id": {
+          "$ref": "#/$defs/RecordId"
+        },
+        "sequence": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 18446744073709551615
+        },
+        "previous_checksum": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Blake3Hash"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "occurred_at_utc_ms": {
+          "type": "integer",
+          "minimum": -9223372036854775808,
+          "maximum": 9223372036854775807
+        },
+        "payload": {
+          "$ref": "#/$defs/EventPayload"
+        }
+      },
+      "required": [
+        "version",
+        "run_id",
+        "event_id",
+        "sequence",
+        "previous_checksum",
+        "occurred_at_utc_ms",
+        "payload"
+      ],
+      "additionalProperties": false
+    },
+    "EventPayload": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "genesis"
+            },
+            "spec": {
+              "$ref": "#/$defs/RunSpec"
+            },
+            "spec_hash": {
+              "$ref": "#/$defs/Blake3Hash"
+            },
+            "run_note": {
+              "$ref": "#/$defs/DurableOutputRef"
+            }
+          },
+          "required": [
+            "type",
+            "spec",
+            "spec_hash",
+            "run_note"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "tasks_added"
+            },
+            "tasks": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/TaskSpec"
+              },
+              "maxItems": 65536
+            }
+          },
+          "required": [
+            "type",
+            "tasks"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "task_finished"
+            },
+            "task_key": {
+              "$ref": "#/$defs/Blake3Hash"
+            },
+            "state": {
+              "$ref": "#/$defs/TaskState"
+            },
+            "outputs": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/DurableOutputRef"
+              },
+              "maxItems": 65536
+            },
+            "cache_outputs": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/VectorCacheRef"
+              },
+              "maxItems": 65536
+            },
+            "reason": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 65536
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "type",
+            "task_key",
+            "state",
+            "outputs",
+            "cache_outputs",
+            "reason"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "run_transition"
+            },
+            "from": {
+              "$ref": "#/$defs/RunState"
+            },
+            "to": {
+              "$ref": "#/$defs/RunState"
+            },
+            "reason": {
+              "$ref": "#/$defs/StopReason"
+            }
+          },
+          "required": [
+            "type",
+            "from",
+            "to",
+            "reason"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "amendment"
+            },
+            "amendment": {
+              "$ref": "#/$defs/LimitAmendment"
+            }
+          },
+          "required": [
+            "type",
+            "amendment"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "reserved"
+            },
+            "attempt": {
+              "$ref": "#/$defs/AttemptRef"
+            },
+            "bound": {
+              "$ref": "#/$defs/AttemptBound"
+            },
+            "allowance": {
+              "$ref": "#/$defs/Allowance"
+            },
+            "persistence": {
+              "$ref": "#/$defs/PersistenceAllowance"
+            }
+          },
+          "required": [
+            "type",
+            "attempt",
+            "bound",
+            "allowance",
+            "persistence"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "dispatch_intent"
+            },
+            "attempt": {
+              "$ref": "#/$defs/AttemptRef"
+            }
+          },
+          "required": [
+            "type",
+            "attempt"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "send_authorized"
+            },
+            "attempt": {
+              "$ref": "#/$defs/AttemptRef"
+            }
+          },
+          "required": [
+            "type",
+            "attempt"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "released_not_sent"
+            },
+            "attempt": {
+              "$ref": "#/$defs/AttemptRef"
+            },
+            "reason": {
+              "$ref": "#/$defs/NotSentReason"
+            }
+          },
+          "required": [
+            "type",
+            "attempt",
+            "reason"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "received"
+            },
+            "spool": {
+              "$ref": "#/$defs/SpoolRef"
+            }
+          },
+          "required": [
+            "type",
+            "spool"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "outcome_unknown"
+            },
+            "attempt": {
+              "$ref": "#/$defs/AttemptRef"
+            },
+            "reason": {
+              "type": "string",
+              "maxLength": 65536
+            }
+          },
+          "required": [
+            "type",
+            "attempt",
+            "reason"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "outputs_committed"
+            },
+            "attempt": {
+              "$ref": "#/$defs/AttemptRef"
+            },
+            "receipt": {
+              "$ref": "#/$defs/DurableOutputRef"
+            },
+            "outputs": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/DurableOutputRef"
+              },
+              "maxItems": 65536
+            },
+            "cache_outputs": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/VectorCacheRef"
+              },
+              "maxItems": 65536
+            },
+            "change": {
+              "$ref": "#/$defs/PreparedChange"
+            }
+          },
+          "required": [
+            "type",
+            "attempt",
+            "receipt",
+            "outputs",
+            "cache_outputs",
+            "change"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "settled"
+            },
+            "attempt": {
+              "$ref": "#/$defs/AttemptRef"
+            },
+            "billing": {
+              "$ref": "#/$defs/BillingDisposition"
+            },
+            "usage": {
+              "oneOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "state": {
+                      "const": "unknown"
+                    }
+                  },
+                  "required": [
+                    "state"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "state": {
+                      "const": "known"
+                    },
+                    "value": {
+                      "$ref": "#/$defs/Usage"
+                    }
+                  },
+                  "required": [
+                    "state",
+                    "value"
+                  ],
+                  "additionalProperties": false
+                }
+              ]
+            },
+            "cost": {
+              "oneOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "state": {
+                      "const": "unknown"
+                    }
+                  },
+                  "required": [
+                    "state"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "state": {
+                      "const": "known"
+                    },
+                    "value": {
+                      "$ref": "#/$defs/Money"
+                    }
+                  },
+                  "required": [
+                    "state",
+                    "value"
+                  ],
+                  "additionalProperties": false
+                }
+              ]
+            }
+          },
+          "required": [
+            "type",
+            "attempt",
+            "billing",
+            "usage",
+            "cost"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "reconciled"
+            },
+            "attempt": {
+              "$ref": "#/$defs/AttemptRef"
+            },
+            "terminal_confirmed": {
+              "type": "boolean"
+            },
+            "usage": {
+              "oneOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "state": {
+                      "const": "unknown"
+                    }
+                  },
+                  "required": [
+                    "state"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "state": {
+                      "const": "known"
+                    },
+                    "value": {
+                      "$ref": "#/$defs/Usage"
+                    }
+                  },
+                  "required": [
+                    "state",
+                    "value"
+                  ],
+                  "additionalProperties": false
+                }
+              ]
+            },
+            "cost": {
+              "oneOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "state": {
+                      "const": "unknown"
+                    }
+                  },
+                  "required": [
+                    "state"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "state": {
+                      "const": "known"
+                    },
+                    "value": {
+                      "$ref": "#/$defs/Money"
+                    }
+                  },
+                  "required": [
+                    "state",
+                    "value"
+                  ],
+                  "additionalProperties": false
+                }
+              ]
+            },
+            "reason": {
+              "type": "string",
+              "maxLength": 65536
+            }
+          },
+          "required": [
+            "type",
+            "attempt",
+            "terminal_confirmed",
+            "usage",
+            "cost",
+            "reason"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "bound_violated"
+            },
+            "attempt": {
+              "$ref": "#/$defs/AttemptRef"
+            },
+            "actual": {
+              "$ref": "#/$defs/Usage"
+            },
+            "actual_cost": {
+              "oneOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "state": {
+                      "const": "unknown"
+                    }
+                  },
+                  "required": [
+                    "state"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "state": {
+                      "const": "known"
+                    },
+                    "value": {
+                      "$ref": "#/$defs/Money"
+                    }
+                  },
+                  "required": [
+                    "state",
+                    "value"
+                  ],
+                  "additionalProperties": false
+                }
+              ]
+            }
+          },
+          "required": [
+            "type",
+            "attempt",
+            "actual",
+            "actual_cost"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "checkpoint"
+            },
+            "completed_tasks": {
+              "$ref": "#/$defs/CompletedTaskSummary"
+            },
+            "frontier": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/BoundedPayloadRef"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "run_note": {
+              "$ref": "#/$defs/DurableOutputRef"
+            }
+          },
+          "required": [
+            "type",
+            "completed_tasks",
+            "frontier",
+            "run_note"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "spool_removed"
+            },
+            "attempt": {
+              "$ref": "#/$defs/AttemptRef"
+            }
+          },
+          "required": [
+            "type",
+            "attempt"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "clock_observed"
+            },
+            "utc_high_water_ms": {
+              "type": "integer",
+              "minimum": -9223372036854775808,
+              "maximum": 9223372036854775807
+            }
+          },
+          "required": [
+            "type",
+            "utc_high_water_ms"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "RunState": {
+      "enum": [
+        "planned",
+        "running",
+        "paused",
+        "completed",
+        "failed",
+        "stopped"
+      ]
+    },
+    "StopReason": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "reason": {
+              "const": "started"
+            }
+          },
+          "required": [
+            "reason"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "reason": {
+              "const": "completed"
+            }
+          },
+          "required": [
+            "reason"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "reason": {
+              "const": "cancelled"
+            }
+          },
+          "required": [
+            "reason"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "reason": {
+              "const": "deadline"
+            }
+          },
+          "required": [
+            "reason"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "reason": {
+              "const": "budget"
+            }
+          },
+          "required": [
+            "reason"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "reason": {
+              "const": "clock_regression"
+            }
+          },
+          "required": [
+            "reason"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "reason": {
+              "const": "outcome_unknown"
+            }
+          },
+          "required": [
+            "reason"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "reason": {
+              "const": "reconciliation_required"
+            }
+          },
+          "required": [
+            "reason"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "reason": {
+              "const": "inputs_changed"
+            }
+          },
+          "required": [
+            "reason"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "reason": {
+              "const": "failed"
+            },
+            "detail": {
+              "type": "string",
+              "maxLength": 65536
+            }
+          },
+          "required": [
+            "reason",
+            "detail"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "reason": {
+              "const": "user"
+            },
+            "detail": {
+              "type": "string",
+              "maxLength": 65536
+            }
+          },
+          "required": [
+            "reason",
+            "detail"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "LimitAmendment": {
+      "type": "object",
+      "properties": {
+        "requested_at_utc_ms": {
+          "type": "integer",
+          "minimum": -9223372036854775808,
+          "maximum": 9223372036854775807
+        },
+        "reason": {
+          "type": "string",
+          "maxLength": 65536
+        },
+        "limits": {
+          "$ref": "#/$defs/LifetimeLimits"
+        },
+        "deadline_utc_ms": {
+          "type": "integer",
+          "minimum": -9223372036854775808,
+          "maximum": 9223372036854775807
+        }
+      },
+      "required": [
+        "requested_at_utc_ms",
+        "reason",
+        "limits",
+        "deadline_utc_ms"
+      ],
+      "additionalProperties": false
+    },
+    "AttemptRef": {
+      "type": "object",
+      "properties": {
+        "run_id": {
+          "$ref": "#/$defs/RecordId"
+        },
+        "task_key": {
+          "$ref": "#/$defs/Blake3Hash"
+        },
+        "attempt_id": {
+          "$ref": "#/$defs/RecordId"
+        },
+        "number": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 4294967295
+        },
+        "request_hash": {
+          "$ref": "#/$defs/Blake3Hash"
+        }
+      },
+      "required": [
+        "run_id",
+        "task_key",
+        "attempt_id",
+        "number",
+        "request_hash"
+      ],
+      "additionalProperties": false
+    },
+    "AttemptBound": {
+      "type": "object",
+      "properties": {
+        "capability": {
+          "$ref": "#/$defs/Capability"
+        },
+        "profile_id": {
+          "type": "string",
+          "maxLength": 65536
+        },
+        "endpoint_fingerprint": {
+          "$ref": "#/$defs/Blake3Hash"
+        },
+        "config_fingerprint": {
+          "$ref": "#/$defs/Blake3Hash"
+        },
+        "input_hash": {
+          "$ref": "#/$defs/Blake3Hash"
+        },
+        "wire_hash": {
+          "$ref": "#/$defs/Blake3Hash"
+        },
+        "requested_model": {
+          "anyOf": [
+            {
+              "type": "string",
+              "maxLength": 65536
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "requested_model_revision": {
+          "anyOf": [
+            {
+              "type": "string",
+              "maxLength": 65536
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "request_bytes": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 18446744073709551615
+        },
+        "response_bytes": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 18446744073709551615
+        },
+        "timeout_ms": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 18446744073709551615
+        },
+        "applicable_classes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/BillableClass"
+          },
+          "maxItems": 65536,
+          "uniqueItems": true
+        },
+        "billable_bounds": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/TokenBound"
+          },
+          "maxProperties": 65536,
+          "propertyNames": {
+            "$ref": "#/$defs/BillableClass"
+          }
+        },
+        "rate_card": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RateCard"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "quoted_allowance": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Money"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "bounds_fingerprint": {
+          "$ref": "#/$defs/Blake3Hash"
+        }
+      },
+      "required": [
+        "capability",
+        "profile_id",
+        "endpoint_fingerprint",
+        "config_fingerprint",
+        "input_hash",
+        "wire_hash",
+        "requested_model",
+        "requested_model_revision",
+        "request_bytes",
+        "response_bytes",
+        "timeout_ms",
+        "applicable_classes",
+        "billable_bounds",
+        "rate_card",
+        "quoted_allowance",
+        "bounds_fingerprint"
+      ],
+      "additionalProperties": false
+    },
+    "TokenBound": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "quality": {
+              "const": "exact"
+            },
+            "count": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 18446744073709551615
+            },
+            "tokenizer": {
+              "type": "string",
+              "maxLength": 65536
+            },
+            "fingerprint": {
+              "$ref": "#/$defs/Blake3Hash"
+            }
+          },
+          "required": [
+            "quality",
+            "count",
+            "tokenizer",
+            "fingerprint"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "quality": {
+              "const": "proven_upper"
+            },
+            "count": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 18446744073709551615
+            },
+            "method": {
+              "type": "string",
+              "maxLength": 65536
+            },
+            "fingerprint": {
+              "$ref": "#/$defs/Blake3Hash"
+            }
+          },
+          "required": [
+            "quality",
+            "count",
+            "method",
+            "fingerprint"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "quality": {
+              "const": "estimate"
+            },
+            "count": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 18446744073709551615
+            },
+            "method": {
+              "type": "string",
+              "maxLength": 65536
+            }
+          },
+          "required": [
+            "quality",
+            "count",
+            "method"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "quality": {
+              "const": "unknown"
+            }
+          },
+          "required": [
+            "quality"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "RateCard": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "maxLength": 128,
+          "minLength": 1
+        },
+        "version": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 4294967295
+        },
+        "fingerprint": {
+          "$ref": "#/$defs/Blake3Hash"
+        },
+        "currency": {
+          "$ref": "#/$defs/Currency"
+        },
+        "validity": {
+          "$ref": "#/$defs/PriceValidity"
+        },
+        "request_fee_nanounits": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 18446744073709551615
+        },
+        "rates": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/Rate"
+          },
+          "maxProperties": 65536,
+          "propertyNames": {
+            "$ref": "#/$defs/BillableClass"
+          }
+        }
+      },
+      "required": [
+        "id",
+        "version",
+        "fingerprint",
+        "currency",
+        "validity",
+        "request_fee_nanounits",
+        "rates"
+      ],
+      "additionalProperties": false
+    },
+    "PriceValidity": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "pricing": {
+              "const": "dispatch_locked"
+            },
+            "valid_from_utc_ms": {
+              "type": "integer",
+              "minimum": -9223372036854775808,
+              "maximum": 9223372036854775807
+            },
+            "valid_until_utc_ms": {
+              "type": "integer",
+              "minimum": -9223372036854775808,
+              "maximum": 9223372036854775807
+            }
+          },
+          "required": [
+            "pricing",
+            "valid_from_utc_ms",
+            "valid_until_utc_ms"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "pricing": {
+              "const": "entire_attempt"
+            },
+            "valid_from_utc_ms": {
+              "type": "integer",
+              "minimum": -9223372036854775808,
+              "maximum": 9223372036854775807
+            },
+            "valid_until_utc_ms": {
+              "type": "integer",
+              "minimum": -9223372036854775808,
+              "maximum": 9223372036854775807
+            }
+          },
+          "required": [
+            "pricing",
+            "valid_from_utc_ms",
+            "valid_until_utc_ms"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "Rate": {
+      "type": "object",
+      "properties": {
+        "price_nanounits": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 18446744073709551615
+        },
+        "per_units": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 18446744073709551615
+        }
+      },
+      "required": [
+        "price_nanounits",
+        "per_units"
+      ],
+      "additionalProperties": false
+    },
+    "Allowance": {
+      "type": "object",
+      "properties": {
+        "requests": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 18446744073709551615
+        },
+        "request_bytes": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 18446744073709551615
+        },
+        "response_bytes": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 18446744073709551615
+        },
+        "billable_units": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 18446744073709551615
+          },
+          "maxProperties": 65536,
+          "propertyNames": {
+            "$ref": "#/$defs/BillableClass"
+          }
+        },
+        "cost": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Money"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "requests",
+        "request_bytes",
+        "response_bytes",
+        "billable_units",
+        "cost"
+      ],
+      "additionalProperties": false
+    },
+    "PersistenceAllowance": {
+      "type": "object",
+      "properties": {
+        "journal_bytes": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 18446744073709551615
+        },
+        "event_slots": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 4294967295
+        }
+      },
+      "required": [
+        "journal_bytes",
+        "event_slots"
+      ],
+      "additionalProperties": false
+    },
+    "NotSentReason": {
+      "enum": [
+        "credentials_unavailable",
+        "cancelled_before_send",
+        "transport_not_entered",
+        "connect_failed_before_write"
+      ]
+    },
+    "SpoolRef": {
+      "type": "object",
+      "properties": {
+        "attempt": {
+          "$ref": "#/$defs/AttemptRef"
+        },
+        "response": {
+          "$ref": "#/$defs/BoundedPayloadRef"
+        },
+        "metadata": {
+          "$ref": "#/$defs/BoundedPayloadRef"
+        }
+      },
+      "required": [
+        "attempt",
+        "response",
+        "metadata"
+      ],
+      "additionalProperties": false
+    },
+    "PreparedChange": {
+      "type": "object",
+      "properties": {
+        "change_id": {
+          "$ref": "#/$defs/RecordId"
+        },
+        "manifest_hash": {
+          "$ref": "#/$defs/Blake3Hash"
+        }
+      },
+      "required": [
+        "change_id",
+        "manifest_hash"
+      ],
+      "additionalProperties": false
+    },
+    "BillingDisposition": {
+      "enum": [
+        "reserved",
+        "released_not_sent",
+        "known_settled",
+        "unknown_reserved"
+      ]
+    },
+    "Usage": {
+      "type": "object",
+      "properties": {
+        "billable_units": {
+          "type": "object",
+          "additionalProperties": {
+            "oneOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "state": {
+                    "const": "unknown"
+                  }
+                },
+                "required": [
+                  "state"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "state": {
+                    "const": "known"
+                  },
+                  "value": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 18446744073709551615
+                  }
+                },
+                "required": [
+                  "state",
+                  "value"
+                ],
+                "additionalProperties": false
+              }
+            ]
+          },
+          "maxProperties": 65536,
+          "propertyNames": {
+            "$ref": "#/$defs/BillableClass"
+          }
+        },
+        "request_bytes": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 18446744073709551615
+        },
+        "response_bytes": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 18446744073709551615
+        }
+      },
+      "required": [
+        "billable_units",
+        "request_bytes",
+        "response_bytes"
+      ],
+      "additionalProperties": false
+    },
+    "CompletedTaskSummary": {
+      "type": "object",
+      "properties": {
+        "count": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 4096
+        },
+        "fingerprint": {
+          "$ref": "#/$defs/Blake3Hash"
+        }
+      },
+      "required": [
+        "count",
+        "fingerprint"
+      ],
+      "additionalProperties": false
+    }
+  }
+}

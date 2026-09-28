@@ -97,7 +97,7 @@ fn execute_inner(args: &Arguments) -> Result<Envelope> {
         Command::Capabilities => {
             return Ok(Envelope::success(
                 command,
-                json!({"version":env!("CARGO_PKG_VERSION"),"commands":COMMANDS,"schemas":["output","record","stream","extraction","extraction-packet","extraction-state","graph-resolution","graph-resolution-receipt"],"network":false,"search_modes":["literal","lexical"],"jsonl_commands":["index sync","index rebuild","recover","changes apply","source add","source refresh"]}),
+                json!({"version":env!("CARGO_PKG_VERSION"),"commands":COMMANDS,"schemas":["output","record","stream","extraction","extraction-packet","extraction-state","graph-resolution","graph-resolution-receipt","run","run-event","usage-receipt"],"network":false,"search_modes":["literal","lexical"],"jsonl_commands":["index sync","index rebuild","recover","changes apply","source add","source refresh"]}),
             ));
         }
         Command::Schema { name } => {
@@ -109,6 +109,9 @@ fn execute_inner(args: &Arguments) -> Result<Envelope> {
                 "extraction-packet" => include_str!("../../schemas/extraction-packet-v1.json"),
                 "extraction-state" => include_str!("../../schemas/extraction-state-v1.json"),
                 "graph-resolution" => include_str!("../../schemas/graph-resolution-v1.json"),
+                "run" => include_str!("../../schemas/run-v1.json"),
+                "run-event" => include_str!("../../schemas/run-event-v1.json"),
+                "usage-receipt" => include_str!("../../schemas/usage-receipt-v1.json"),
                 "graph-resolution-receipt" => {
                     include_str!("../../schemas/graph-resolution-receipt-v1.json")
                 }

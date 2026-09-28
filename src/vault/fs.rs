@@ -43,6 +43,9 @@ pub trait DurableIo: Send + Sync {
     fn sync_file(&self, file: &File) -> std::io::Result<()>;
     fn replace(&self, staged: &Path, target: &Path) -> std::io::Result<()>;
     fn remove(&self, target: &Path) -> std::io::Result<()>;
+    fn remove_directory(&self, target: &Path) -> std::io::Result<()> {
+        fs::remove_dir(target)
+    }
     fn create_directory(&self, path: &Path) -> std::io::Result<()>;
     fn sync_directory(&self, directory: &Path) -> std::io::Result<DirectorySync>;
 }
@@ -121,6 +124,9 @@ impl VaultFs {
     }
     pub fn root(&self) -> &VaultRoot {
         &self.root
+    }
+    pub(crate) fn durable_io(&self) -> Arc<dyn DurableIo> {
+        Arc::clone(&self.io)
     }
     fn require_operational(target: &VaultRelativePath) -> Result<()> {
         if !target.as_str().starts_with(".wiki/state/") {
