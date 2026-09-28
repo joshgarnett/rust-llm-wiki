@@ -36,6 +36,8 @@ pub const COMMANDS: &[&str] = &[
     "index sync",
     "index rebuild",
     "search",
+    "graph query",
+    "graph neighbors",
     "check",
     "doctor",
     "changes show",
@@ -319,6 +321,50 @@ fn execute_inner(args: &Arguments) -> Result<Envelope> {
                 envelope.meta.partial = hits.truncated;
                 envelope.warnings.extend(hits.warnings.iter().cloned());
                 envelope.data = value(hits)?;
+            }
+        }
+        Command::Graph { command } => {
+            use crate::graph::query;
+            let (options, neighbors) = match command {
+                GraphCommand::Query { options, .. } => (options, false),
+                GraphCommand::Neighbors { options, .. } => (options, true),
+            };
+            let plan = query::validate_plan(&options.plan(neighbors))?;
+            if let GraphCommand::Query { query, .. } = command {
+                retrieval::lexical::lexical_expression(query)?;
+            }
+            if args.dry_run {
+                let projection = crate::catalog::scan::scan(app.fs(), app.vault_id())?;
+                if let GraphCommand::Neighbors { id, .. } = command {
+                    if projection.diagnostics.iter().any(|d| {
+                        d.record_id.as_ref() == Some(id) && d.code == ErrorCode::ReferenceAmbiguous
+                    }) {
+                        return Err(WikiError::new(
+                            ErrorCode::ReferenceAmbiguous,
+                            "neighbor ID is ambiguous",
+                        ));
+                    }
+                    if !projection.records.contains_key(id) {
+                        return Err(WikiError::new(
+                            ErrorCode::RecordNotFound,
+                            "neighbor ID is not present",
+                        ));
+                    }
+                }
+                envelope.data = json!({"plan":plan,"dry_run":true,"cache_state_unknown":true,"canonical_record_count":projection.records.len(),"results":null});
+                envelope
+                    .warnings
+                    .push("graph results and index freshness are unknown during dry-run".into());
+            } else {
+                let (_writer, reader) = reader(&app, options.no_sync)?;
+                let result = match command {
+                    GraphCommand::Query { query, .. } => query::query(&reader, query, &plan)?,
+                    GraphCommand::Neighbors { id, .. } => query::neighbors(&reader, id, &plan)?,
+                };
+                snapshot_metadata(&mut envelope.meta, &reader);
+                envelope.meta.partial = result.truncated;
+                envelope.warnings.extend(result.warnings.iter().cloned());
+                envelope.data = value(result)?;
             }
         }
         Command::Check => {

@@ -476,7 +476,7 @@ pub fn project(fs: &VaultFs, input: &ValidationInput) -> Result<CatalogProjectio
     })
 }
 
-fn manifest_hash(notes: &BTreeMap<VaultRelativePath, ParsedNote>) -> Blake3Hash {
+pub(crate) fn manifest_hash(notes: &BTreeMap<VaultRelativePath, ParsedNote>) -> Blake3Hash {
     let mut bytes = b"lwiki-canonical-control-v1\0".to_vec();
     for (path, note) in notes {
         bytes.extend_from_slice(&(path.as_str().len() as u64).to_le_bytes());

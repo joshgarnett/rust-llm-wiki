@@ -5,6 +5,7 @@ pub mod changes;
 pub mod cli;
 pub mod config;
 pub mod domain;
+pub mod graph;
 pub mod output;
 pub mod records;
 pub mod retrieval;

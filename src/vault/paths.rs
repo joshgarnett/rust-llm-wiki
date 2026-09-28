@@ -30,7 +30,12 @@ fn utf8(path: &Path) -> Result<&str> {
         .ok_or_else(|| WikiError::invalid("non-UTF-8 filesystem path is unsupported"))
 }
 fn exact_marker(path: &Path) -> Result<bool> {
+    exact_marker_budgeted(path, &mut || Ok(()))
+}
+fn exact_marker_budgeted(path: &Path, on_entry: &mut dyn FnMut() -> Result<()>) -> Result<bool> {
+    on_entry()?;
     for entry in fs::read_dir(path).map_err(|e| io_error("read vault directory", e))? {
+        on_entry()?;
         let entry = entry.map_err(|e| io_error("read vault entry", e))?;
         if entry.file_name() == "WIKI.md" {
             let kind = entry
@@ -90,8 +95,17 @@ impl VaultRoot {
     }
     /// Reject existing symlink components, including the final destination.
     pub fn resolve(&self, relative: &VaultRelativePath) -> Result<PathBuf> {
+        self.resolve_budgeted(relative, &mut || Ok(()))
+    }
+    /// Checked path resolution meters component inspection and nested-marker scans.
+    pub fn resolve_budgeted(
+        &self,
+        relative: &VaultRelativePath,
+        on_entry: &mut dyn FnMut() -> Result<()>,
+    ) -> Result<PathBuf> {
         let mut path = self.path.clone();
         for component in relative.as_str().split('/') {
+            on_entry()?;
             path.push(component);
             match fs::symlink_metadata(&path) {
                 Ok(meta) if meta.file_type().is_symlink() => {
@@ -103,7 +117,7 @@ impl VaultRoot {
                     if !canonical.starts_with(&self.path) {
                         return Err(WikiError::invalid("managed path escapes canonical vault"));
                     }
-                    if meta.is_dir() && exact_marker(&path)? {
+                    if meta.is_dir() && exact_marker_budgeted(&path, on_entry)? {
                         return Err(WikiError::invalid(
                             "managed path crosses a nested vault boundary",
                         ));
@@ -160,13 +174,28 @@ impl VaultRoot {
     }
     /// Canonical Markdown envelopes only; source payloads are read via their revision owner.
     pub fn scan_markdown(&self) -> Result<Vec<VaultRelativePath>> {
+        self.scan_markdown_budgeted(&mut || Ok(()))
+    }
+    /// Preserve canonical discovery policy while metering directory/entry work.
+    /// The callback runs before each directory open and before inspecting an entry.
+    pub fn scan_markdown_budgeted(
+        &self,
+        on_entry: &mut dyn FnMut() -> Result<()>,
+    ) -> Result<Vec<VaultRelativePath>> {
         let mut out = Vec::new();
-        Self::scan_dir(&self.path, "", &mut out)?;
+        Self::scan_dir(&self.path, "", &mut out, on_entry)?;
         out.sort_by(|a, b| a.as_str().as_bytes().cmp(b.as_str().as_bytes()));
         Ok(out)
     }
-    fn scan_dir(directory: &Path, prefix: &str, out: &mut Vec<VaultRelativePath>) -> Result<()> {
+    fn scan_dir(
+        directory: &Path,
+        prefix: &str,
+        out: &mut Vec<VaultRelativePath>,
+        on_entry: &mut dyn FnMut() -> Result<()>,
+    ) -> Result<()> {
+        on_entry()?;
         for entry in fs::read_dir(directory).map_err(|e| io_error("scan directory", e))? {
+            on_entry()?;
             let entry = entry.map_err(|e| io_error("scan entry", e))?;
             let name = entry.file_name();
             let name = name
@@ -195,10 +224,10 @@ impl VaultRoot {
             }
             if kind.is_dir() {
                 // An exact regular marker establishes a separate canonical vault.
-                if exact_marker(&entry.path())? {
+                if exact_marker_budgeted(&entry.path(), on_entry)? {
                     continue;
                 }
-                Self::scan_dir(&entry.path(), &relative, out)?;
+                Self::scan_dir(&entry.path(), &relative, out, on_entry)?;
             } else if kind.is_file() && name.ends_with(".md") && name != "index.md" {
                 out.push(VaultRelativePath::new(relative)?);
             }

@@ -83,6 +83,7 @@ impl<'a> SourceView<'a> {
             fs,
             notes,
             overlay: BTreeMap::new(),
+            closed: false,
         })
     }
     pub fn from_input(fs: &'a VaultFs, input: &ValidationInput) -> Result<Self> {
@@ -118,7 +119,18 @@ impl<'a> SourceView<'a> {
                 }
             }
         }
-        Ok(SourceView { fs, notes, overlay })
+        Ok(SourceView {
+            fs,
+            notes,
+            overlay,
+            closed: false,
+        })
+    }
+    /// Source verification over a complete, caller-metered captured input only.
+    pub fn from_closed_input(fs: &'a VaultFs, input: &ValidationInput) -> Result<Self> {
+        let mut view = Self::from_input(fs, input)?;
+        view.closed = true;
+        Ok(view)
     }
     pub(crate) fn resolve(
         &self,
@@ -185,6 +197,10 @@ impl<'a> SourceView<'a> {
                 .ok_or_else(|| integrity(format!("deleted payload {path}")))?
         } else if let Some(note) = self.notes.get(path) {
             note.raw.clone()
+        } else if self.closed {
+            return Err(integrity(format!(
+                "payload absent from closed proof input: {path}"
+            )));
         } else {
             self.fs
                 .read_before(path)?

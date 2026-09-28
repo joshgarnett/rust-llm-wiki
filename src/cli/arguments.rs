@@ -112,6 +112,10 @@ pub enum Command {
         command: IndexCommand,
     },
     Search(SearchArguments),
+    Graph {
+        #[command(subcommand)]
+        command: GraphCommand,
+    },
     Check,
     Doctor {
         #[arg(long)]
@@ -211,6 +215,109 @@ pub enum Mode {
     Literal,
     Lexical,
 }
+#[derive(Debug, Clone, Copy, ValueEnum)]
+pub enum Strategy {
+    Entity,
+    Relationship,
+    Combined,
+}
+#[derive(Debug, Clone, Copy, ValueEnum)]
+pub enum Seed {
+    Lexical,
+}
+#[derive(Debug, Subcommand)]
+pub enum GraphCommand {
+    Query {
+        query: String,
+        #[command(flatten)]
+        options: GraphOptions,
+    },
+    Neighbors {
+        id: RecordId,
+        #[command(flatten)]
+        options: GraphOptions,
+    },
+}
+#[derive(Debug, Args)]
+pub struct GraphOptions {
+    #[arg(long, value_enum, default_value = "combined")]
+    pub strategy: Strategy,
+    #[arg(long, value_enum, default_value = "lexical")]
+    pub seed: Seed,
+    #[arg(long = "kind")]
+    pub kinds: Vec<RecordKind>,
+    #[arg(long = "tag")]
+    pub tags: Vec<String>,
+    #[arg(long = "source-id")]
+    pub source_ids: Vec<RecordId>,
+    #[arg(long)]
+    pub path_prefix: Option<String>,
+    #[arg(long = "status")]
+    pub authored_statuses: Vec<String>,
+    #[arg(long)]
+    pub include_proposed: bool,
+    #[arg(long)]
+    pub include_historical: bool,
+    #[arg(long)]
+    pub navigation: bool,
+    #[arg(long, default_value_t = 80)]
+    pub candidates: usize,
+    #[arg(long, default_value_t = 12)]
+    pub seeds: usize,
+    #[arg(long, default_value_t = 1)]
+    pub depth: usize,
+    #[arg(long, default_value_t = 16)]
+    pub incident_per_seed: usize,
+    #[arg(long, default_value_t = 128)]
+    pub assertions: usize,
+    #[arg(long, default_value_t = 10)]
+    pub limit: usize,
+    #[arg(long, default_value_t = 240)]
+    pub excerpt_bytes: usize,
+    #[arg(long, default_value_t = 2)]
+    pub support_per_assertion: usize,
+    #[arg(long, default_value_t = 1)]
+    pub contradictions_per_assertion: usize,
+    #[arg(long)]
+    pub cursor: Option<String>,
+    #[arg(long)]
+    pub no_sync: bool,
+}
+impl GraphOptions {
+    pub fn plan(&self, neighbors: bool) -> crate::graph::GraphPlan {
+        use crate::graph::*;
+        GraphPlan {
+            strategy: match self.strategy {
+                Strategy::Entity => GraphStrategy::Entity,
+                Strategy::Relationship => GraphStrategy::Relationship,
+                Strategy::Combined => GraphStrategy::Combined,
+            },
+            seed_mode: GraphSeedMode::Lexical,
+            filters: SearchFilters {
+                kinds: self.kinds.clone(),
+                tags: self.tags.clone(),
+                source_ids: self.source_ids.clone(),
+                path_prefix: self.path_prefix.clone(),
+                authored_statuses: self.authored_statuses.clone(),
+                include_proposed: self.include_proposed,
+                include_historical: self.include_historical,
+            },
+            limits: GraphLimits {
+                candidates: self.candidates,
+                seeds: self.seeds,
+                depth: self.depth,
+                incident_per_seed: self.incident_per_seed,
+                assertions: self.assertions,
+                hits: self.limit,
+                excerpt_bytes: self.excerpt_bytes,
+                support_per_assertion: self.support_per_assertion,
+                contradictions_per_assertion: self.contradictions_per_assertion,
+            },
+            include_navigation: self.navigation || neighbors,
+            cursor: self.cursor.clone(),
+        }
+    }
+}
 #[derive(Debug, Args)]
 pub struct SearchArguments {
     pub query: String,
@@ -296,6 +403,12 @@ impl Command {
                 command: IndexCommand::Rebuild,
             } => "index rebuild",
             Self::Search(_) => "search",
+            Self::Graph {
+                command: GraphCommand::Query { .. },
+            } => "graph query",
+            Self::Graph {
+                command: GraphCommand::Neighbors { .. },
+            } => "graph neighbors",
             Self::Check => "check",
             Self::Doctor { .. } => "doctor",
             Self::Changes {

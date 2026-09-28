@@ -17,6 +17,8 @@ pub struct SourceView<'a> {
     pub(crate) fs: &'a VaultFs,
     pub(crate) notes: BTreeMap<VaultRelativePath, ParsedNote>,
     pub(crate) overlay: BTreeMap<VaultRelativePath, Option<Vec<u8>>>,
+    /// Closed proof inputs forbid falling back to unmetered filesystem reads.
+    pub(crate) closed: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

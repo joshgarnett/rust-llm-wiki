@@ -1,6 +1,6 @@
 # Research and planning progress
 
-Started: 2026-09-28. Status: authorized M0–M4 implementation; P00–P07 accepted, M0 complete; graph/context P08/P09 next.
+Started: 2026-09-28. Status: authorized M0–M4 implementation; P00–P08 accepted, M0 complete; verified context P09 next.
 
 ## Scope
 
@@ -119,5 +119,6 @@ Start a new `gpt-6-sol` session with the [implementation goal](docs/execution/ST
 - P04 immutable capture/evidence/lifecycle accepted after 96 combined tests and independent readguard/quotation corrections; exact originals, successor evidence, withdrawal and overlay verification implemented in the library.
 - P05 catalog/eligibility and real bundled SQLite publication accepted after127 combined parent tests,500 native I/O faults,11 SQLite kill points and independent Sol cross-review substituting for unavailable Astra threads. M0 foundation complete; migration loss notices and cache integrity checked.
 - P06 offline application/CLI and P07 literal/lexical retrieval accepted after139 selected integration tests,10 CLI workflows,13 retrieval tests and independent review; retained error IDs and identity-only excerpts corrected. Strict dry-run tree invariance, real recovery coordinator, JSON/JSONL and lossless migration pass.
-- P08–P21 and V01–V17 integrated completion remain pending; see [checkpoint](docs/execution/STATE.md) and [coverage](docs/execution/reports/coverage.md).
+- P08 graph retrieval accepted:17 graph/3 CLI/6 machine tests, root Clippy/fmt/build, independent review resolving per-seed caps/fairness/direct-ID order and explicit navigation depth omissions.
+- P09–P21 and V01–V17 integrated completion remain pending; see [checkpoint](docs/execution/STATE.md) and [coverage](docs/execution/reports/coverage.md).
 - External provider/host/platform/release qualification E01–E05 remains unrun; no live spending, real-vault edits or publishing.

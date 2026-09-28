@@ -1,20 +1,24 @@
 {
   "packages": [
-    "P06",
-    "P07"
+    "P08"
   ],
   "status": "accepted",
-  "baseline_commit": "6158b5810908dffbea8251ddd386831143bc24ba",
+  "baseline_commit": "c90953e3e610e98f2dc2031cfeff72464a25b805",
   "platform": {
     "os": "Darwin",
     "version": "26.5.2",
     "arch": "arm64"
   },
-  "tree_fingerprint_sha256": "bf3a3e2a92286a071cb30af37cbd2737e67d7aef475f5e5ec1f03cb02da1d4df",
+  "tree_fingerprint_sha256": "56234050c864231db3c903cf12fd4fd72c1a117205132e79df206fd825c9ef00",
+  "fingerprint_algorithm": "SHA256 compact sorted JSON map path->SHA256 (UTF8)",
   "file_sha256": {
-    "Cargo.toml": "b3f986689fbdfbe5e82921983427a4856eaed7dbdd69ea7927c4e097135b183b",
     "Cargo.lock": "c6cdcc2fbc2c541159aaae875ea35407e40136f8eafd064a607d6470c0644cb8",
+    "Cargo.toml": "b3f986689fbdfbe5e82921983427a4856eaed7dbdd69ea7927c4e097135b183b",
     "rust-toolchain.toml": "495c69d1db93f25f53e3d0d2d40d812313366cc368de317871c2ace6c6ffafa4",
+    "schemas/change-v1.json": "bbc593479943f8d06a5895f1643bd38e6733c54242352fdf1da79b8276585380",
+    "schemas/output-v1.json": "7026e79b21bcf9c9dc6c250c86acd06ff574ec56575fcdc7aa7b527bb0d82214",
+    "schemas/record-v1.json": "1c57a46393f508360f652b42c499823802082e4d4488e69529e5dc0e7aa8b20a",
+    "schemas/stream-v1.json": "dcbe9c30bbc651bebab9e4ecf1b3698b0a2a1a58a05a0b2e50c2a14bfd46e7fe",
     "src/app/mod.rs": "59283ffd487aaf6f44f2ca7dfa2ff93abacb9415748fdd9830be0b469a409aff",
     "src/app/offline.rs": "8fd13217fabaf690a6380211a695b33e6d92afc3be6c6f32eecb0b0c12c5d2a0",
     "src/app/types.rs": "fb52808559feab8760fb2300202c32628e3cb0d3cf63317c340aa95d4e41fa16",
@@ -22,7 +26,7 @@
     "src/catalog/integrity.rs": "e25356c50721e692490778e624eca59d67fce4d0742669b1e774206a3bd90f28",
     "src/catalog/mod.rs": "066967af4a50d3ba529a4a616078f5c441af6bbb4c68a41c147a354b9f39872c",
     "src/catalog/publish.rs": "d2c585a385a0a2ff2874fff1b812964d51ff1a42edb2aa20254c592d66e282f4",
-    "src/catalog/scan.rs": "816015ef623849cdeb45f89f4de9e868fabf0dbea0c66e21ffedeccbf857e3eb",
+    "src/catalog/scan.rs": "5b332a0e8e87bf4f057eab823b750e7381703494c005b4a5bfc421167c9adb60",
     "src/catalog/snapshot.rs": "485538aecfeaaf8715c81e8be617c8210b0b875de6541e09eb2453c621348329",
     "src/catalog/sql.rs": "c96dc1483509dac4813ff134a4e21005f0b99b2d48d1fb74f37cf265d4195907",
     "src/catalog/types.rs": "95c7855db5c0a37c357b3de1b24270ba55ef595c8c90845bb437fb0897df7473",
@@ -35,8 +39,8 @@
     "src/changes/recover.rs": "91ce22b61410490a2af465c2c9b71ef064c5dbd62c0a4696788aa49907a6cfbf",
     "src/changes/rollback.rs": "7d3ac7254552dbdad74ab12560f7b578fbcf9b4e5093a14b63e80b62c41edb0c",
     "src/changes/types.rs": "0882466d5f54400d69e6198edd4f534c040913e78ff658a2fe21ed57510fb6dc",
-    "src/cli/arguments.rs": "02c6159cfbb8138ac666586aac169f37170830d87960117a43415ca6bd74f259",
-    "src/cli/dispatch.rs": "111e358290a680775b8db7aa4968ed0501d8d82940e71b5e5f523cdc3a5aeb25",
+    "src/cli/arguments.rs": "38ff8e4bac5559c276d4baa49ed92bf014e82a127fb1db41a602a0f0d098ada4",
+    "src/cli/dispatch.rs": "db2ae0f8dca3584345a3df70afa68dc60123895efa4282edb37d1d69034e4a70",
     "src/cli/mod.rs": "041724aef3af66847669ce2de321f5fab508a5aa8e97d1bed2a49a543e8e2af5",
     "src/config/local.rs": "ce6257fd8e5550d1ec4d5c77e9509ff1d56af5f02b9ad03a6d70233f850a4a89",
     "src/config/mod.rs": "7c0e99a9d6212abf1fa2bbf2f2f8f4f4e559d555740311dc7cc7624dfd69d42c",
@@ -44,31 +48,37 @@
     "src/domain/mod.rs": "be34fba5562d7e48140bfd22b46078c211c1428a06a601ee49608f14470c6a00",
     "src/domain/records.rs": "a31ba98d025ba63e6fdb3a4812f8882ce3d11542ad0c822fda2d0978ff7f7229",
     "src/domain/types.rs": "65e25c4d4f644e18e714859f611e9a184d3a712e7347611f996dee47b76e7f87",
-    "src/lib.rs": "9f07bd2a95ca113ee2cb53d0ae19a45520c877b1ac07105251fd3b86cc67fb58",
+    "src/graph/mod.rs": "c756e083bdd37658bd5ccb95bc52288a499089f8c1721ef9aaa553640168b6f6",
+    "src/graph/query.rs": "29aac7ece437aa16937ff9fed9a29e9b1705e0701f96ff7b09bf93243f2de13b",
+    "src/graph/rank.rs": "4596990f12568524e306bf5ca2c7f02abd0ff7addd784d6fa1b36727a1da0d48",
+    "src/graph/traverse.rs": "6dcb3ae212e2e946dba2c10d0a7d8ea4946f6a1498969233e6d897e09546d6cd",
+    "src/graph/types.rs": "91294278a38154e7c0eec761821f046c56c5ccff8d4938c6ae2d9c5348526bb6",
+    "src/lib.rs": "427805b4115409a9633d1a8051fb40d5f99d2bf6e8e26ec89abd11aea7c553d2",
     "src/main.rs": "13b84c74fd24b65c3740d2fe0d30869e7a221cb20da788d4c68a08d37f8d7c3d",
     "src/output.rs": "fc6623e352a9c6822890d6f0af4b791dc0a617ee122cd8abe56796d0901d685c",
     "src/records/edit.rs": "d8fa5b3b63aa091b58daf3b221b088e699e2e29f3e07134c3b7811de56a4c06b",
     "src/records/links.rs": "2d82e96722350bf2bbda833eed81d24aa9e30c914c61107097b71d490fb26fff",
     "src/records/mod.rs": "087dcbc747b2604de3b1b72cddf8a989409c34b163b13e5002e05cf8e648618b",
     "src/records/parse.rs": "8e828e54160e067f9c7efaa92b54f785fc5a1fba00139f7142cf5332a7807aa0",
+    "src/retrieval/context_types.rs": "ae03bd407a1e175fc5fd5ad98a83bf21c8a298f2f558e2c93686831c5b0737a5",
     "src/retrieval/cursor.rs": "b034d95638ee8c7b9dd5fa25ead908864ca9396c7584df05197015492b89b6f1",
     "src/retrieval/excerpts.rs": "e084e7682ad24f4f9bec53ebbcca0154d2827b8b43da9ddbd777aa67228d410a",
     "src/retrieval/filters.rs": "c6ec4b8ae160e0a93764e9c1fda3f5967a7922a7cf69abffdd4ee0b5d6c66ae4",
     "src/retrieval/lexical.rs": "29038a10f1b4f7f1e4f4343d6223a08ac60915cc9406f62926067f85ef9abd2c",
     "src/retrieval/literal.rs": "3f71865c61e2c9c898e54eb26c0cbbff3c05124c620ae1fa805c8447345b5c2e",
-    "src/retrieval/mod.rs": "2f9301a45e5654ea194d0c5085f28bf7ea580c96935d925544ecef2eda986a27",
+    "src/retrieval/mod.rs": "a065b4db39ab7369b5fca005746a3de4e4cb86735be55bf29cd08557191f4333",
     "src/retrieval/types.rs": "95a5793cc5dbb9d56d7c1d9e507043e0bed81943f68464ce6b0389d17e4de1c3",
     "src/sources/capture.rs": "5fe7c3c25f43fec7d5276fd5c6aad85b01ae440c0eebc82198c7b7afaf65ed82",
     "src/sources/evidence.rs": "e8df14a628db1c711e8c9c9725e0145c7d6d1e4db7abcf1ff990b11630fb44b0",
     "src/sources/lifecycle.rs": "a9d3a9078d6e02ede3644a94072eac93b73dae5fd247673cb685ec9e26f98cdf",
     "src/sources/mod.rs": "fdb424ab45e00acb11ff694eb11259fe5c593af6ab371078c3aeb6f658a5e5bb",
-    "src/sources/revision.rs": "e14a641a3160c0db54bd03d41ca1399f1d2477cce4a1c899a66b07a38261f5a5",
-    "src/sources/types.rs": "ca22b09c8228f94119f4a819a531f110c3df6e37c49dc12d5adc023f5a304dd8",
+    "src/sources/revision.rs": "827372544c42bc529117f4d9c644ddb153d28ebb36bbcaaa0bb26b9f931d2d51",
+    "src/sources/types.rs": "8b998522fd20efb376936b2db36b03f7aa9d1898d608ebe84b01e4871f0fe85c",
     "src/vault/discovery.rs": "3d4a6b3d9c21c54d89cc579a490526f8bcd85ccc4bf53eb7cbaa49a827f72eb8",
     "src/vault/fs.rs": "1314880a286297b7b93c8b8e8ba5b7dfb43115c0c8229917e13b782307aba588",
     "src/vault/lock.rs": "554b5b9c7174384fd177d3ae97747e73a61df6c7da5d3c3df90edfdf9be14792",
     "src/vault/mod.rs": "098cf03150fc8bec1420840a9249a5c9ae540aacc2943e2755cc8b7bf116494c",
-    "src/vault/paths.rs": "c77c110fa3d6a833ed44507f6fb19ea049d8dfcc2b687c810012905962ed6996",
+    "src/vault/paths.rs": "d81944b68caec8b7392c4463a4cd196653b3518adf038d8efd179ab3a39d366a",
     "tests/catalog_crash_recovery.rs": "5afa762918a8b52d21b30b791c6893d3b3a949778d31dcca6198ae6b40bb11ce",
     "tests/catalog_generations.rs": "c0df22987ff4cdb9046eb61da76dca40061e48b372b4919f5010f76bba9dcc39",
     "tests/catalog_scan_eligibility.rs": "125d852cb88f7b353f67ef5be788db70e172f1103f9aa53cf02c05fd2894a7f4",
@@ -76,167 +86,97 @@
     "tests/changes_prepare_journal.rs": "cdd5dc56b1c43e050dc2e562c9c85a9dfcdf31b1b7a2b177ad0abef4322aa629",
     "tests/changes_recovery.rs": "07617cd8419805a2f6a2bed727d7ee040ffe0e58ccd47a052c171fe25c7c378a",
     "tests/contracts.rs": "30f5d5da6260460abf77fa298008d60239cf9d4a06015389721612bcf6b70945",
+    "tests/fixtures/p08/README.md": "f35dd942d8b3ce8070a42ee397d59b49285e2f9378cede3f90e22fa03ee8b909",
+    "tests/fixtures/p08/a.md": "cdfdf19b2b28861bccbd91dbc41573a85be9a73c14e9b52e406ca38e96598f1e",
+    "tests/fixtures/p08/b.md": "a3ecfaff0fcf47bc7d97b07226a7d59f36f07ede3f9e180cf05539dc03cba4ce",
+    "tests/fixtures/p08/c.md": "b99883e33cdaf1a694a759e8625b885944071c07a93d51f9958a8e125224ba72",
+    "tests/graph_cli.rs": "09acdc495c9aaf2538fa2b6a6eaa2ba25a1a0f99530c2017d8b98993dd4a8a6b",
+    "tests/graph_queries.rs": "a215f80c56312ac0ca1235cc9d269a9619890b9a70e05b554a844b414237131e",
     "tests/machine_contract.rs": "44abd144489b988bbbaaf2589f7e84241523b185db20d2c8731b3a1e27922db5",
     "tests/offline_application.rs": "d717a1d67e05318980d967aff2e614909f6944ef220d0824f0ca42419e20c7b3",
     "tests/offline_cli.rs": "864f34ac2670eb70df1e5aefafcaaad53c55f98c1c9532e7993ca5c599594358",
     "tests/records_lossless.rs": "6835c5c94273061ea5b25f51c8ab0b35dbabdf6314b26cd2455ab7683e189bf2",
     "tests/retrieval_lexical.rs": "10bee8f13e40ba2805829d1aefd32262c557a82a76786d1c75e80706e25100fb",
     "tests/sources_evidence.rs": "6f3a8eabdbe9683e799bcb9bbb10447f4143f373110f71e6f71f1afd29ebd24e",
-    "tests/vault_fs.rs": "130d4661dba2dd7963596dd8590be672a9c3c4fc0366bfb6af0be700a5e83a9e",
-    "schemas/change-v1.json": "bbc593479943f8d06a5895f1643bd38e6733c54242352fdf1da79b8276585380",
-    "schemas/output-v1.json": "7026e79b21bcf9c9dc6c250c86acd06ff574ec56575fcdc7aa7b527bb0d82214",
-    "schemas/record-v1.json": "1c57a46393f508360f652b42c499823802082e4d4488e69529e5dc0e7aa8b20a",
-    "schemas/stream-v1.json": "dcbe9c30bbc651bebab9e4ecf1b3698b0a2a1a58a05a0b2e50c2a14bfd46e7fe"
+    "tests/vault_fs.rs": "130d4661dba2dd7963596dd8590be672a9c3c4fc0366bfb6af0be700a5e83a9e"
   },
-  "integration": {
-    "command": "cargo test --locked --offline --test contracts --test machine_contract --test records_lossless --test vault_fs --test changes_prepare_journal --test change_read_preconditions --test sources_evidence --test catalog_scan_eligibility --test catalog_generations --test catalog_crash_recovery --test offline_application --test offline_cli --test retrieval_lexical -- --nocapture",
-    "exit": 0,
-    "parent_passed": 139,
-    "parent_failed": 0,
-    "targets": [
-      {
-        "target": "catalog_crash_recovery.rs",
-        "passed": 2,
-        "failed": 0,
-        "ignored_helpers": 1,
-        "seconds": 2.64
-      },
-      {
-        "target": "catalog_generations.rs",
-        "passed": 15,
-        "failed": 0,
-        "ignored_helpers": 0,
-        "seconds": 2.49
-      },
-      {
-        "target": "catalog_scan_eligibility.rs",
-        "passed": 14,
-        "failed": 0,
-        "ignored_helpers": 0,
-        "seconds": 0.26
-      },
-      {
-        "target": "change_read_preconditions.rs",
-        "passed": 8,
-        "failed": 0,
-        "ignored_helpers": 0,
-        "seconds": 1.11
-      },
-      {
-        "target": "changes_prepare_journal.rs",
-        "passed": 17,
-        "failed": 0,
-        "ignored_helpers": 0,
-        "seconds": 24.29
-      },
-      {
-        "target": "contracts.rs",
-        "passed": 4,
-        "failed": 0,
-        "ignored_helpers": 0,
-        "seconds": 0.05
-      },
-      {
-        "target": "machine_contract.rs",
-        "passed": 6,
-        "failed": 0,
-        "ignored_helpers": 0,
-        "seconds": 0.65
-      },
-      {
-        "target": "offline_application.rs",
-        "passed": 14,
-        "failed": 0,
-        "ignored_helpers": 0,
-        "seconds": 7.56
-      },
-      {
-        "target": "offline_cli.rs",
-        "passed": 10,
-        "failed": 0,
-        "ignored_helpers": 0,
-        "seconds": 3.38
-      },
-      {
-        "target": "records_lossless.rs",
-        "passed": 8,
-        "failed": 0,
-        "ignored_helpers": 0,
-        "seconds": 0.02
-      },
-      {
-        "target": "retrieval_lexical.rs",
-        "passed": 13,
-        "failed": 0,
-        "ignored_helpers": 0,
-        "seconds": 2.0
-      },
-      {
-        "target": "sources_evidence.rs",
-        "passed": 15,
-        "failed": 0,
-        "ignored_helpers": 0,
-        "seconds": 8.73
-      },
-      {
-        "target": "vault_fs.rs",
-        "passed": 13,
-        "failed": 0,
-        "ignored_helpers": 0,
-        "seconds": 0.75
+  "checks": [
+    {
+      "command": "cargo test --locked --offline --test graph_queries --test graph_cli --test machine_contract",
+      "exit_code": 0,
+      "parent_tests": 26,
+      "log": "/tmp/lwiki-p08-final.log",
+      "results": {
+        "graph_queries": {
+          "passed": 17,
+          "elapsed_seconds": 5.36
+        },
+        "graph_cli": {
+          "passed": 3,
+          "elapsed_seconds": 1.33
+        },
+        "machine_contract": {
+          "passed": 6,
+          "elapsed_seconds": 0.06
+        }
       }
-    ],
-    "log": "/tmp/lwiki-p06-p07-integration.log"
-  },
-  "final_cli_named_gates": {
-    "command": "cargo test --locked --offline --test offline_cli --test machine_contract",
-    "exit": 0,
-    "passed": 16,
-    "log": "/tmp/lwiki-p06-named-cli-final.log"
-  },
-  "clippy": {
-    "command": "cargo clippy --locked --offline --all-targets -- -D warnings",
-    "exit": 0,
-    "seconds": 0.43,
-    "log": "/tmp/lwiki-p06-p07-clippy-final.log"
-  },
-  "fmt": {
-    "command": "cargo fmt --all -- --check",
-    "exit": 0,
-    "log": "/tmp/lwiki-p06-p07-fmt.log"
-  },
-  "build": {
-    "command": "cargo build --locked --offline",
-    "exit": 0,
-    "log": "/tmp/lwiki-p06-p07-build.log",
-    "seconds": 5.63
-  },
-  "fixture_check": {
-    "command": "python3 scripts/seed-fixture.py --check",
-    "exit": 0,
-    "files": 34,
-    "manifest_sha256": "e9f2f1e2931b8348973c940ad6bfa645d69fd8ab491401e3157c536a7ca9e386"
-  },
-  "diff_check": {
-    "command": "git diff --check",
-    "exit": 0
-  },
+    },
+    {
+      "command": "cargo test --locked --offline --test graph_queries --test graph_cli --test machine_contract --test offline_cli --test vault_fs --test sources_evidence --test catalog_scan_eligibility --test retrieval_lexical",
+      "exit_code": 0,
+      "parent_tests": 85,
+      "log": "/tmp/lwiki-p08-integration.log",
+      "note": "Pre-review graph11/CLI3; unchanged non-graph tests passed. Final26 gate reruns changed graph and machine command registry."
+    },
+    {
+      "command": "cargo clippy --locked --offline --all-targets -- -D warnings",
+      "exit_code": 0,
+      "elapsed_seconds": 0.16,
+      "log": "/tmp/lwiki-p08-clippy.log"
+    },
+    {
+      "command": "cargo fmt --all -- --check",
+      "exit_code": 0
+    },
+    {
+      "command": "cargo build --locked --offline",
+      "exit_code": 0,
+      "elapsed_seconds": 6.04,
+      "log": "/tmp/lwiki-p08-build.log"
+    },
+    {
+      "command": "python3 scripts/seed-fixture.py --check",
+      "exit_code": 0,
+      "files": 34,
+      "manifest_sha256": "e9f2f1e2931b8348973c940ad6bfa645d69fd8ab491401e3157c536a7ca9e386"
+    },
+    {
+      "command": "git diff --check",
+      "exit_code": 0
+    }
+  ],
+  "reviews": [
+    "P08-review.md"
+  ],
+  "resolved_findings": [
+    "per-origin unique assertion/navigation incident budget spans depths",
+    "fused direct seed order preserves exact-ID priority without new RRF votes",
+    "Invalid citation predicate explicitly defended; no escalation reproduced",
+    "origin round-robin typed/navigation admission and repeated-visit fairness",
+    "navigation-only depth cap exposes truncation, admitted backlinks excluded"
+  ],
+  "scaffold_limits": "Context shared types, closed SourceView input and budgeted path/discovery callbacks are preparatory interfaces only; P09 has no implementation/CLI acceptance. No dependency changes. P10-plan.md planning only.",
   "prior_fault_evidence": {
     "report": "P05-checks.json",
-    "unchanged_changes_engine_native_boundaries": 250,
     "fault_cases": 500,
     "changes_sigkill_wrappers": 2,
+    "sql_sigkill_points": 11,
     "rerun": false,
-    "reason": "No changes engine/filesystem/catalog invariant code changed; selected integration re-ran SQLite11killpoints and new application/CLI recovery coordinator tests."
+    "note": "changes engine/SQLite publication invariant code unchanged; VaultRoot added no-op callback wrappers preserving discovery policy, 13 filesystem/15 source tests rerun. Full M1 integration/fault gate after P09."
   },
-  "reviews": [
-    "P06-review.md",
-    "P07-review.md"
-  ],
   "limits": [
-    "No network/helper/credential handle exists in current local path; actual counting transports are future P16/V16 integration, not yet claimed.",
-    "Native macOS faults/mocks do not prove power-loss durability, native Linux/Windows, hosts or live providers. E01-E05 remain open.",
-    "M1 still requires P08/P09, complete objective remains P00-P21 through M4."
-  ],
-  "accepted_commit": "c90953e3e610e98f2dc2031cfeff72464a25b805"
+    "No dispatcher/helper/credentials exist in local layer; counting transports remain P16/V16 work.",
+    "Native faults/mocks do not qualify power-loss durability/other platforms/live providers/hosts; E01-E05 open.",
+    "M1 requires P09; M2-M4 remain required."
+  ]
 }
