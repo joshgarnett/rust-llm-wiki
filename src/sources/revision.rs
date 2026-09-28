@@ -10,6 +10,44 @@ use crate::{
     vault::{ExpectedState, VaultFs},
 };
 use std::collections::{BTreeMap, BTreeSet};
+use std::{fs::File, io::Read};
+
+fn bounded_source_read(
+    fs: &VaultFs,
+    path: &VaultRelativePath,
+    limit: usize,
+) -> Result<Option<Vec<u8>>> {
+    let path = fs.root().resolve(path)?;
+    let io_error = |e: std::io::Error| {
+        WikiError::new(ErrorCode::Internal, format!("bounded source read: {e}"))
+    };
+    let file = match File::open(path) {
+        Ok(file) => file,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(io_error(e)),
+    };
+    let meta = file.metadata().map_err(io_error)?;
+    if !meta.is_file() {
+        return Err(integrity("source read target is not a regular file"));
+    }
+    if meta.len() > limit as u64 {
+        return Err(WikiError::new(
+            ErrorCode::BudgetExceeded,
+            "source file exceeds read ceiling before allocation",
+        ));
+    }
+    let mut bytes = Vec::new();
+    file.take(limit as u64 + 1)
+        .read_to_end(&mut bytes)
+        .map_err(io_error)?;
+    if bytes.len() > limit {
+        return Err(WikiError::new(
+            ErrorCode::BudgetExceeded,
+            "source file exceeds read ceiling",
+        ));
+    }
+    Ok(Some(bytes))
+}
 
 pub(crate) fn integrity(message: impl Into<String>) -> WikiError {
     WikiError::new(ErrorCode::SourceIntegrity, message)
@@ -72,6 +110,47 @@ impl SourceStore {
     }
 }
 impl<'a> SourceView<'a> {
+    /// Bounded canonical input for packet/import work; source assets are read
+    /// separately through revision_content_bounded with their complete hashes.
+    pub fn from_fs_bounded(fs: &'a VaultFs, max_bytes: usize, max_files: usize) -> Result<Self> {
+        if max_bytes == 0 || max_bytes > 64 * 1024 * 1024 || max_files == 0 || max_files > 4096 {
+            return Err(WikiError::new(
+                ErrorCode::Usage,
+                "source view bounds exceed their ceiling",
+            ));
+        }
+        let mut entries = 0usize;
+        let paths = fs.root().scan_markdown_budgeted(&mut || {
+            if entries >= 65536 {
+                return Err(WikiError::new(
+                    ErrorCode::BudgetExceeded,
+                    "source view enumeration limit exceeded",
+                ));
+            }
+            entries += 1;
+            Ok(())
+        })?;
+        let mut notes = BTreeMap::new();
+        let mut remaining = max_bytes;
+        for (files, path) in paths.into_iter().filter(canonical_path).enumerate() {
+            if files >= max_files {
+                return Err(WikiError::new(
+                    ErrorCode::BudgetExceeded,
+                    "source view file limit exceeded",
+                ));
+            }
+            if let Some(bytes) = bounded_source_read(fs, &path, remaining)? {
+                remaining -= bytes.len();
+                notes.insert(path, parse_note(&bytes));
+            }
+        }
+        Ok(Self {
+            fs,
+            notes,
+            overlay: BTreeMap::new(),
+            closed: false,
+        })
+    }
     pub fn from_fs(fs: &'a VaultFs) -> Result<Self> {
         let mut notes = BTreeMap::new();
         for path in fs.root().scan_markdown()? {
@@ -191,7 +270,24 @@ impl<'a> SourceView<'a> {
         path: &VaultRelativePath,
         dependencies: &mut BTreeMap<VaultRelativePath, ExpectedState>,
     ) -> Result<Vec<u8>> {
+        self.read_limited(path, dependencies, None)
+    }
+    fn read_limited(
+        &self,
+        path: &VaultRelativePath,
+        dependencies: &mut BTreeMap<VaultRelativePath, ExpectedState>,
+        limit: Option<usize>,
+    ) -> Result<Vec<u8>> {
         let bytes = if let Some(value) = self.overlay.get(path) {
+            if value
+                .as_ref()
+                .is_some_and(|b| limit.is_some_and(|n| b.len() > n))
+            {
+                return Err(WikiError::new(
+                    ErrorCode::BudgetExceeded,
+                    "source asset exceeds read ceiling",
+                ));
+            }
             value.clone().ok_or_else(|| {
                 integrity(format!(
                     "{} payload {path}",
@@ -199,11 +295,20 @@ impl<'a> SourceView<'a> {
                 ))
             })?
         } else if let Some(note) = self.notes.get(path) {
+            if limit.is_some_and(|n| note.raw.len() > n) {
+                return Err(WikiError::new(
+                    ErrorCode::BudgetExceeded,
+                    "source asset exceeds read ceiling",
+                ));
+            }
             note.raw.clone()
         } else if self.closed {
             return Err(integrity(format!(
                 "payload absent from closed proof input: {path}"
             )));
+        } else if let Some(limit) = limit {
+            bounded_source_read(self.fs, path, limit)?
+                .ok_or_else(|| integrity(format!("missing payload {path}")))?
         } else {
             self.fs
                 .read_before(path)?
@@ -248,6 +353,40 @@ impl<'a> SourceView<'a> {
         source_id: &RecordId,
         revision_id: &RecordId,
         dependencies: &mut BTreeMap<VaultRelativePath, ExpectedState>,
+    ) -> Result<Vec<u8>> {
+        self.revision_content_inner(source_id, revision_id, dependencies, None)
+    }
+    pub(crate) fn revision_content_bounded(
+        &self,
+        source_id: &RecordId,
+        revision_id: &RecordId,
+        dependencies: &mut BTreeMap<VaultRelativePath, ExpectedState>,
+        max_original_bytes: usize,
+        max_content_bytes: usize,
+    ) -> Result<Vec<u8>> {
+        if max_original_bytes == 0
+            || max_original_bytes > 64 * 1024 * 1024
+            || max_content_bytes == 0
+            || max_content_bytes > 64 * 1024 * 1024
+        {
+            return Err(WikiError::new(
+                ErrorCode::Usage,
+                "source payload bounds exceed their ceiling",
+            ));
+        }
+        self.revision_content_inner(
+            source_id,
+            revision_id,
+            dependencies,
+            Some((max_original_bytes, max_content_bytes)),
+        )
+    }
+    fn revision_content_inner(
+        &self,
+        source_id: &RecordId,
+        revision_id: &RecordId,
+        dependencies: &mut BTreeMap<VaultRelativePath, ExpectedState>,
+        limits: Option<(usize, usize)>,
     ) -> Result<Vec<u8>> {
         let (sp, sn) = self.resolve(source_id, RecordKind::Source, None)?;
         let source = sn.canonical.as_ref().expect("resolved canonical");
@@ -320,7 +459,7 @@ impl<'a> SourceView<'a> {
                 .string("wiki_original_path")
                 .expect("validated payload")
         ))?;
-        let original = self.read(&original_path, dependencies)?;
+        let original = self.read_limited(&original_path, dependencies, limits.map(|n| n.0))?;
         if Blake3Hash::digest(&original).as_str()
             != revision
                 .string("wiki_original_hash")
@@ -337,7 +476,7 @@ impl<'a> SourceView<'a> {
                 .string("wiki_content_path")
                 .expect("complete content")
         ))?;
-        let content = self.read(&content_path, dependencies)?;
+        let content = self.read_limited(&content_path, dependencies, limits.map(|n| n.1))?;
         if Blake3Hash::digest(&content).as_str()
             != revision.string("wiki_content_hash").expect("complete hash")
         {

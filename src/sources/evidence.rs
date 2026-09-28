@@ -170,7 +170,7 @@ fn quotation(body: &[u8], separator: &[u8]) -> Result<Vec<u8>> {
     }
     found.ok_or_else(|| integrity("evidence must contain exactly one text quotation"))
 }
-fn note_quote(note: &ParsedNote) -> Result<Vec<u8>> {
+pub(crate) fn note_quote(note: &ParsedNote) -> Result<Vec<u8>> {
     quotation(note.body(), note.newline.as_bytes())
 }
 impl SourceView<'_> {

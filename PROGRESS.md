@@ -1,6 +1,6 @@
 # Research and planning progress
 
-Started: 2026-09-28. Status: authorized M0–M4 implementation; P00–P09 accepted; M0 and M1 local gates complete; M2 packet/import P10 next.
+Started: 2026-09-28. Status: authorized M0–M4 implementation; P00–P10 accepted; M0 and M1 local gates complete; M2 explicit resolution P11 next.
 
 ## Scope
 
@@ -121,5 +121,7 @@ Start a new `gpt-6-sol` session with the [implementation goal](docs/execution/ST
 - P06 offline application/CLI and P07 literal/lexical retrieval accepted after139 selected integration tests,10 CLI workflows,13 retrieval tests and independent review; retained error IDs and identity-only excerpts corrected. Strict dry-run tree invariance, real recovery coordinator, JSON/JSONL and lossless migration pass.
 - P08 graph retrieval accepted:17 graph/3 CLI/6 machine tests, root Clippy/fmt/build, independent review resolving per-seed caps/fairness/direct-ID order and explicit navigation depth omissions.
 - P09 verified context/M1 accepted:210 parent all-target tests plus34 final context/CLI/M1/machine tests, full native fault/SQLite interruption regressions, Clippy/fmt/build/seed; independent overlap/lifecycle findings closed. Exact131 file hashes in P09-checks.json.
-- P10–P21 and V01–V17 final integrated completion remain pending; see [checkpoint](docs/execution/STATE.md) and [coverage](docs/execution/reports/coverage.md).
+- P11–P21 and V01–V17 final integrated completion remain pending; see [checkpoint](docs/execution/STATE.md) and [coverage](docs/execution/reports/coverage.md).
 - External provider/host/platform/release qualification E01–E05 remains unrun; no live spending, real-vault edits or publishing.
+
+- P10 durable packets/strict import locally accepted: persisted deterministic tasks, reserved source-local maps, explicit stage/apply, canonical restoration and109 final integration tests. M2 identity/review/skill and M3–M4 remain required.

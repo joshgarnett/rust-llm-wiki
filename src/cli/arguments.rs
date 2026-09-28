@@ -228,6 +228,8 @@ pub enum Seed {
 }
 #[derive(Debug, Subcommand)]
 pub enum GraphCommand {
+    Extract(super::extraction::ExtractArguments),
+    Import(super::extraction::ImportArguments),
     Query {
         query: String,
         #[command(flatten)]
@@ -405,6 +407,12 @@ impl Command {
             } => "index rebuild",
             Self::Search(_) => "search",
             Self::Context(_) => "context",
+            Self::Graph {
+                command: GraphCommand::Extract(_),
+            } => "graph extract",
+            Self::Graph {
+                command: GraphCommand::Import(_),
+            } => "graph import",
             Self::Graph {
                 command: GraphCommand::Query { .. },
             } => "graph query",

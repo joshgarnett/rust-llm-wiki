@@ -37,6 +37,8 @@ pub const COMMANDS: &[&str] = &[
     "index rebuild",
     "search",
     "context",
+    "graph extract",
+    "graph import",
     "graph query",
     "graph neighbors",
     "check",
@@ -94,7 +96,7 @@ fn execute_inner(args: &Arguments) -> Result<Envelope> {
         Command::Capabilities => {
             return Ok(Envelope::success(
                 command,
-                json!({"version":env!("CARGO_PKG_VERSION"),"commands":COMMANDS,"schemas":["output","record","stream"],"network":false,"search_modes":["literal","lexical"],"jsonl_commands":["index sync","index rebuild","recover","changes apply","source add","source refresh"]}),
+                json!({"version":env!("CARGO_PKG_VERSION"),"commands":COMMANDS,"schemas":["output","record","stream","extraction","extraction-packet","extraction-state"],"network":false,"search_modes":["literal","lexical"],"jsonl_commands":["index sync","index rebuild","recover","changes apply","source add","source refresh"]}),
             ));
         }
         Command::Schema { name } => {
@@ -102,6 +104,9 @@ fn execute_inner(args: &Arguments) -> Result<Envelope> {
                 "output" => include_str!("../../schemas/output-v1.json"),
                 "record" => include_str!("../../schemas/record-v1.json"),
                 "stream" => include_str!("../../schemas/stream-v1.json"),
+                "extraction" => include_str!("../../schemas/extraction-v1.json"),
+                "extraction-packet" => include_str!("../../schemas/extraction-packet-v1.json"),
+                "extraction-state" => include_str!("../../schemas/extraction-state-v1.json"),
                 _ => {
                     return Err(WikiError::new(
                         ErrorCode::CapabilityUnavailable,
@@ -324,11 +329,33 @@ fn execute_inner(args: &Arguments) -> Result<Envelope> {
                 envelope.data = value(hits)?;
             }
         }
+        Command::Graph {
+            command: GraphCommand::Extract(options),
+        } => {
+            let request = options.request(&app)?;
+            let outcome = app.graph_extract_agent(&request)?;
+            envelope.meta.partial = outcome.coverage.omitted_source_bytes > 0;
+            if args.dry_run {
+                envelope
+                    .warnings
+                    .push("packet preview is unpersisted and cannot be imported".into());
+            }
+            envelope.data = value(outcome)?;
+        }
+        Command::Graph {
+            command: GraphCommand::Import(options),
+        } => {
+            envelope.data = app.graph_import(
+                &super::extraction::response_input(&options.file)?,
+                options.new_extraction,
+            )?;
+        }
         Command::Graph { command } => {
             use crate::graph::query;
             let (options, neighbors) = match command {
                 GraphCommand::Query { options, .. } => (options, false),
                 GraphCommand::Neighbors { options, .. } => (options, true),
+                _ => unreachable!("extraction handled above"),
             };
             let plan = query::validate_plan(&options.plan(neighbors))?;
             if let GraphCommand::Query { query, .. } = command {
@@ -361,6 +388,7 @@ fn execute_inner(args: &Arguments) -> Result<Envelope> {
                 let result = match command {
                     GraphCommand::Query { query, .. } => query::query(&reader, query, &plan)?,
                     GraphCommand::Neighbors { id, .. } => query::neighbors(&reader, id, &plan)?,
+                    _ => unreachable!("extraction handled above"),
                 };
                 snapshot_metadata(&mut envelope.meta, &reader);
                 envelope.meta.partial = result.truncated;
@@ -748,6 +776,12 @@ pub fn present(
                 "{}",
                 envelope.data["text"].as_str().unwrap_or_default()
             )
+        }
+        OutputFormat::Human
+            if envelope.command == "graph extract" && envelope.data["ready_to_import"] == true =>
+        {
+            serde_json::to_writer_pretty(&mut *output, &envelope.data["packet"])?;
+            writeln!(output)
         }
         OutputFormat::Human if envelope.command == "search" => {
             if let Some(hits) = envelope.data["hits"].as_array() {

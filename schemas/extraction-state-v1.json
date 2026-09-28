@@ -1,0 +1,269 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:lwiki:extraction-state:1",
+  "$comment": "UTF-8 byte caps, duplicate keys, cross-reference/registry/ownership checks, exact spans/hashes, and interval ordering also require production semantic validation.",
+  "type": "object",
+  "properties": {
+    "schema": {
+      "const": "lwiki.extraction-state.v1"
+    },
+    "extraction_id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+    },
+    "packet_id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+    },
+    "packet_fingerprint": {
+      "type": "string",
+      "pattern": "^blake3:[0-9a-f]{64}$"
+    },
+    "source_id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+    },
+    "source_revision": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+    },
+    "snapshot_hash": {
+      "type": "string",
+      "pattern": "^blake3:[0-9a-f]{64}$"
+    },
+    "response_hash": {
+      "type": "string",
+      "pattern": "^blake3:[0-9a-f]{64}$"
+    },
+    "raw_response": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 262144
+    },
+    "mention_spans": {
+      "type": "object",
+      "propertyNames": {
+        "type": "string",
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+      },
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "window_id": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+          },
+          "span": {
+            "type": "object",
+            "properties": {
+              "start": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 18446744073709551615
+              },
+              "end": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 18446744073709551615
+              }
+            },
+            "required": [
+              "start",
+              "end"
+            ],
+            "additionalProperties": false
+          },
+          "quote_hash": {
+            "type": "string",
+            "pattern": "^blake3:[0-9a-f]{64}$"
+          }
+        },
+        "required": [
+          "window_id",
+          "span",
+          "quote_hash"
+        ],
+        "additionalProperties": false
+      },
+      "maxProperties": 64
+    },
+    "evidence_spans": {
+      "type": "object",
+      "propertyNames": {
+        "type": "string",
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+      },
+      "additionalProperties": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "window_id": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+            },
+            "span": {
+              "type": "object",
+              "properties": {
+                "start": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 18446744073709551615
+                },
+                "end": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 18446744073709551615
+                }
+              },
+              "required": [
+                "start",
+                "end"
+              ],
+              "additionalProperties": false
+            },
+            "quote_hash": {
+              "type": "string",
+              "pattern": "^blake3:[0-9a-f]{64}$"
+            }
+          },
+          "required": [
+            "window_id",
+            "span",
+            "quote_hash"
+          ],
+          "additionalProperties": false
+        },
+        "maxItems": 16
+      },
+      "maxProperties": 128
+    },
+    "allocations": {
+      "type": "object",
+      "properties": {
+        "assertions": {
+          "type": "object",
+          "propertyNames": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+          },
+          "additionalProperties": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+          },
+          "maxProperties": 128
+        },
+        "evidence": {
+          "type": "object",
+          "propertyNames": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+          },
+          "additionalProperties": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+            },
+            "maxItems": 16
+          },
+          "maxProperties": 128
+        }
+      },
+      "required": [
+        "assertions",
+        "evidence"
+      ],
+      "additionalProperties": false
+    },
+    "bindings": {
+      "type": "object",
+      "propertyNames": {
+        "type": "string",
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+      },
+      "additionalProperties": {
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "state": {
+                "const": "pending"
+              }
+            },
+            "required": [
+              "state"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "state": {
+                "const": "resolved"
+              },
+              "entity_id": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+              },
+              "decision_id": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+              }
+            },
+            "required": [
+              "state",
+              "entity_id",
+              "decision_id"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "state": {
+                "const": "rejected"
+              },
+              "decision_id": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+              }
+            },
+            "required": [
+              "state",
+              "decision_id"
+            ],
+            "additionalProperties": false
+          }
+        ]
+      },
+      "maxProperties": 64
+    },
+    "materialized_assertions": {
+      "uniqueItems": true,
+      "type": "array",
+      "items": {
+        "type": "string",
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+      },
+      "maxItems": 128
+    }
+  },
+  "required": [
+    "schema",
+    "extraction_id",
+    "packet_id",
+    "packet_fingerprint",
+    "source_id",
+    "source_revision",
+    "snapshot_hash",
+    "response_hash",
+    "raw_response",
+    "mention_spans",
+    "evidence_spans",
+    "allocations",
+    "bindings",
+    "materialized_assertions"
+  ],
+  "additionalProperties": false
+}

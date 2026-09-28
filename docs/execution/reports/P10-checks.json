@@ -1,27 +1,23 @@
 {
-  "packages": [
-    "P09"
-  ],
-  "milestone": "M1 local offline exit",
-  "status": "accepted",
-  "baseline_commit": "98d59983d0b11d7031f8a77b45267e6ea910744d",
-  "platform": {
-    "os": "Darwin",
-    "version": "26.5.2",
-    "arch": "arm64"
-  },
-  "tree_fingerprint_sha256": "31afa45336a50aa36121fa5307195dbe2fa258071cda071602694ddaae5cfe5a",
-  "fingerprint_algorithm": "SHA256 compact sorted JSON map path->SHA256 (UTF8)",
+  "package": "P10",
+  "base_commit": "21a1c2968a52f59a01cda6cbd4cd163b5dd54b51",
+  "accepted_commit": null,
+  "coherent_checkout": "/var/folders/g0/jdy1y8615k30fs6sbf4x1wt40000gn/T/lwiki-p10-acceptance-tt_1rgd8",
+  "isolation": "HEAD baseline plus exact P10 paths, excluding unfinished disjoint P15 jobs/private IO. Shared target directory reused. All overlaid bytes matched workspace at gate.",
   "file_sha256": {
     "Cargo.lock": "c6cdcc2fbc2c541159aaae875ea35407e40136f8eafd064a607d6470c0644cb8",
     "Cargo.toml": "b3f986689fbdfbe5e82921983427a4856eaed7dbdd69ea7927c4e097135b183b",
     "rust-toolchain.toml": "495c69d1db93f25f53e3d0d2d40d812313366cc368de317871c2ace6c6ffafa4",
     "schemas/change-v1.json": "bbc593479943f8d06a5895f1643bd38e6733c54242352fdf1da79b8276585380",
+    "schemas/extraction-packet-v1.json": "07a219d074c433c7f3fdff674b46a399d4fbe4afcee31e74f84f549afebb9e40",
+    "schemas/extraction-state-v1.json": "ecb702513e7bcc8825c4e5b8080127be6bac32186a74503f82b915e5de7097f2",
+    "schemas/extraction-v1.json": "d84f2596b4b73b25821dc104e47a06998a61a768c532193e384fa87fbb81d992",
     "schemas/output-v1.json": "7026e79b21bcf9c9dc6c250c86acd06ff574ec56575fcdc7aa7b527bb0d82214",
     "schemas/record-v1.json": "1c57a46393f508360f652b42c499823802082e4d4488e69529e5dc0e7aa8b20a",
     "schemas/stream-v1.json": "dcbe9c30bbc651bebab9e4ecf1b3698b0a2a1a58a05a0b2e50c2a14bfd46e7fe",
     "scripts/seed-fixture.py": "d7ca31788ddce468747f935126575b58045309c18e172b7c63d7de387fd884b3",
-    "src/app/mod.rs": "59283ffd487aaf6f44f2ca7dfa2ff93abacb9415748fdd9830be0b469a409aff",
+    "src/app/extraction.rs": "a7bae78299ead906514e464e7943b12f107377086484f14782db3f0f71d266a4",
+    "src/app/mod.rs": "5d67178b4e521f82174fb49f31f97aac04657240b7e7ebc4392c0e6241716578",
     "src/app/offline.rs": "8fd13217fabaf690a6380211a695b33e6d92afc3be6c6f32eecb0b0c12c5d2a0",
     "src/app/types.rs": "fb52808559feab8760fb2300202c32628e3cb0d3cf63317c340aa95d4e41fa16",
     "src/catalog/eligibility.rs": "4747c7dc606a9a809b903968a00c2174a02becb2e7ad2e4d24e990adfcf224fe",
@@ -41,21 +37,26 @@
     "src/changes/recover.rs": "91ce22b61410490a2af465c2c9b71ef064c5dbd62c0a4696788aa49907a6cfbf",
     "src/changes/rollback.rs": "7d3ac7254552dbdad74ab12560f7b578fbcf9b4e5093a14b63e80b62c41edb0c",
     "src/changes/types.rs": "0882466d5f54400d69e6198edd4f534c040913e78ff658a2fe21ed57510fb6dc",
-    "src/cli/arguments.rs": "b9dba41a25c265cf220857afa8af3b2a3266f3ffaf46dad096d19106223b8205",
+    "src/cli/arguments.rs": "842643634b29eacd4f5bd58c7df8869f2ee3525cc425ceed1d0f37e108806289",
     "src/cli/context.rs": "d6c274d982bf975b3feb06ffb04e8f9b87e64ba955b714f19f43296b0fc59e64",
-    "src/cli/dispatch.rs": "ef5cb445ba70ac489eb359bcb7227df1909fcfc055ba71a9d72851f99bc32d57",
-    "src/cli/mod.rs": "fbbb76e086a904efc21aced2d949bf11ba47cced1f366bd3ec38f3c31253a580",
+    "src/cli/dispatch.rs": "cf49e816aed67ee0404a06fb72f4a4af3b4d55d5391a0ce9f048405379c658b7",
+    "src/cli/extraction.rs": "135aa32060387863f6566ab0b36b1119374d2a80880ee28bcc247fc74cf6b583",
+    "src/cli/mod.rs": "a0a66a129acdf6b4559109ca44326b61316f5174ab83e9239ec626d6726c87be",
     "src/config/local.rs": "ce6257fd8e5550d1ec4d5c77e9509ff1d56af5f02b9ad03a6d70233f850a4a89",
     "src/config/mod.rs": "7c0e99a9d6212abf1fa2bbf2f2f8f4f4e559d555740311dc7cc7624dfd69d42c",
     "src/config/types.rs": "44d6273b3511dfe9ce08312e5ceda9e73e7f8b72752edc8e8d00183732301f82",
     "src/domain/mod.rs": "be34fba5562d7e48140bfd22b46078c211c1428a06a601ee49608f14470c6a00",
     "src/domain/records.rs": "a31ba98d025ba63e6fdb3a4812f8882ce3d11542ad0c822fda2d0978ff7f7229",
     "src/domain/types.rs": "65e25c4d4f644e18e714859f611e9a184d3a712e7347611f996dee47b76e7f87",
-    "src/graph/mod.rs": "c756e083bdd37658bd5ccb95bc52288a499089f8c1721ef9aaa553640168b6f6",
+    "src/graph/extraction_types.rs": "66632ef7bc46986a346bb5add06a6abc2e446425780ec3dd5e7e02fffb6a5ced",
+    "src/graph/import.rs": "9613d5d8e00e612b049cab649a9e22ba11db95085bffc61dd55694dbe83366ee",
+    "src/graph/mod.rs": "9c1fd46a4f8e0a57cc48536da40484bc8cea60204ab71d51184c80db5f1d8293",
+    "src/graph/packet.rs": "4ca870447647ec9344e846bbf457dbbe5d2135d1b2c94e192513092d4e049b22",
     "src/graph/query.rs": "29aac7ece437aa16937ff9fed9a29e9b1705e0701f96ff7b09bf93243f2de13b",
     "src/graph/rank.rs": "4596990f12568524e306bf5ca2c7f02abd0ff7addd784d6fa1b36727a1da0d48",
     "src/graph/traverse.rs": "2493ac026d99f233ce810b6e26bd3bd77464cf241076e91a8d9a8dbd7989ff49",
     "src/graph/types.rs": "91294278a38154e7c0eec761821f046c56c5ccff8d4938c6ae2d9c5348526bb6",
+    "src/graph/wire.rs": "bc962c825bac0405f533f2b2c87c84529f5d12716d4b8788e1ee9348214a7230",
     "src/lib.rs": "427805b4115409a9633d1a8051fb40d5f99d2bf6e8e26ec89abd11aea7c553d2",
     "src/main.rs": "1632e80a9dfaa5a80bf95e95c7122908dfa32c2df18e155577bd01133e7d7ad2",
     "src/output.rs": "fc6623e352a9c6822890d6f0af4b791dc0a617ee122cd8abe56796d0901d685c",
@@ -75,10 +76,10 @@
     "src/retrieval/types.rs": "95a5793cc5dbb9d56d7c1d9e507043e0bed81943f68464ce6b0389d17e4de1c3",
     "src/retrieval/verification.rs": "e63226337e38af80597658b1f3060e72f3c3b08df66a35eb300951007297bd39",
     "src/sources/capture.rs": "5fe7c3c25f43fec7d5276fd5c6aad85b01ae440c0eebc82198c7b7afaf65ed82",
-    "src/sources/evidence.rs": "e8df14a628db1c711e8c9c9725e0145c7d6d1e4db7abcf1ff990b11630fb44b0",
+    "src/sources/evidence.rs": "d6d3f4e4f68fb701b72fbd8d6b34d91f5e6c721cadd1ea60473df00553e0d4ba",
     "src/sources/lifecycle.rs": "a9d3a9078d6e02ede3644a94072eac93b73dae5fd247673cb685ec9e26f98cdf",
     "src/sources/mod.rs": "fdb424ab45e00acb11ff694eb11259fe5c593af6ab371078c3aeb6f658a5e5bb",
-    "src/sources/revision.rs": "7e0006b5f899c71135e57bd9a9f312fcf10ce8ae61fe1d74b401cb8ac418e9a6",
+    "src/sources/revision.rs": "59b79279f63db5df8fc2dc9ed525ca074fa72a9517abda8a2fbd9f1006068b1a",
     "src/sources/types.rs": "8b998522fd20efb376936b2db36b03f7aa9d1898d608ebe84b01e4871f0fe85c",
     "src/vault/discovery.rs": "3d4a6b3d9c21c54d89cc579a490526f8bcd85ccc4bf53eb7cbaa49a827f72eb8",
     "src/vault/fs.rs": "1314880a286297b7b93c8b8e8ba5b7dfb43115c0c8229917e13b782307aba588",
@@ -94,6 +95,8 @@
     "tests/context_cli.rs": "72354016d7291054665efbd82a77bb83d4440d24f8d0391d1ab35328fd6c1522",
     "tests/context_freshness.rs": "840249e88b7f0ff699f5dfe9997228ec9eae3ed74d7b8a9a8b511d2c4a8f9fd4",
     "tests/contracts.rs": "30f5d5da6260460abf77fa298008d60239cf9d4a06015389721612bcf6b70945",
+    "tests/extraction_cli.rs": "7eaf124a48ce03b108ba5fc99c42e53860a85f4988f2d71fe93e5af1b334fce6",
+    "tests/extraction_import.rs": "67cc39a07235565124ba11c11d77e47bda3d026526ab05d24d613afd29f1d70b",
     "tests/fixtures/bootstrap/README.md": "b97388a827cd38b87fe8a665f82a9457260a7a377c16d4e1ee8f0dea20f76212",
     "tests/fixtures/bootstrap/expected.json": "e9f2f1e2931b8348973c940ad6bfa645d69fd8ab491401e3157c536a7ca9e386",
     "tests/fixtures/bootstrap/vault/WIKI.md": "855aa9337433f27268832fc1cbaf803dfe824de7853126f973cae2bbf7a8aa80",
@@ -134,6 +137,7 @@
     "tests/fixtures/p08/a.md": "cdfdf19b2b28861bccbd91dbc41573a85be9a73c14e9b52e406ca38e96598f1e",
     "tests/fixtures/p08/b.md": "a3ecfaff0fcf47bc7d97b07226a7d59f36f07ede3f9e180cf05539dc03cba4ce",
     "tests/fixtures/p08/c.md": "b99883e33cdaf1a694a759e8625b885944071c07a93d51f9958a8e125224ba72",
+    "tests/fixtures/p10/source.md": "69d3eb2468b99a3c8a3f90db50d65dafa156fa31dce2e5ab743e525f2a48474d",
     "tests/graph_cli.rs": "9ba7fbf6cd8f00dc16ff680385c98a226084a0b8e3dcd03d2d5a7da6ab1eb12f",
     "tests/graph_queries.rs": "a215f80c56312ac0ca1235cc9d269a9619890b9a70e05b554a844b414237131e",
     "tests/m1_workflow.rs": "8d55c22ed7865852ab4ad31992e7d48972a1a9391f366ea896341bb7eb382402",
@@ -145,253 +149,31 @@
     "tests/sources_evidence.rs": "6f3a8eabdbe9683e799bcb9bbb10447f4143f373110f71e6f71f1afd29ebd24e",
     "tests/vault_fs.rs": "5699ff7207e4b5724625686dbd088453fda9f6e75e05ea78c0e5cd42724400de"
   },
-  "checks": [
-    {
-      "command": "cargo test --locked --offline --all-targets",
-      "exit_code": 0,
-      "log": "/tmp/lwiki-p09-all-targets.log",
-      "log_sha256": "b5a0a6c10f1c1c769997617e3ea55b423bdbaee6f16b885bbe7c9cf3a4be5cd8",
-      "parent_tests": 210,
-      "ignored_helpers": 2,
-      "results": {
-        "src/lib.rs": {
-          "result": "ok",
-          "passed": 0,
-          "failed": 0,
-          "ignored": 0,
-          "elapsed_seconds": 0.0
-        },
-        "src/main.rs": {
-          "result": "ok",
-          "passed": 0,
-          "failed": 0,
-          "ignored": 0,
-          "elapsed_seconds": 0.0
-        },
-        "tests/catalog_crash_recovery.rs": {
-          "result": "ok",
-          "passed": 2,
-          "failed": 0,
-          "ignored": 1,
-          "elapsed_seconds": 2.47
-        },
-        "tests/catalog_generations.rs": {
-          "result": "ok",
-          "passed": 15,
-          "failed": 0,
-          "ignored": 0,
-          "elapsed_seconds": 2.59
-        },
-        "tests/catalog_scan_eligibility.rs": {
-          "result": "ok",
-          "passed": 14,
-          "failed": 0,
-          "ignored": 0,
-          "elapsed_seconds": 0.28
-        },
-        "tests/change_read_preconditions.rs": {
-          "result": "ok",
-          "passed": 8,
-          "failed": 0,
-          "ignored": 0,
-          "elapsed_seconds": 0.98
-        },
-        "tests/changes_prepare_journal.rs": {
-          "result": "ok",
-          "passed": 17,
-          "failed": 0,
-          "ignored": 0,
-          "elapsed_seconds": 25.78
-        },
-        "tests/changes_recovery.rs": {
-          "result": "ok",
-          "passed": 25,
-          "failed": 0,
-          "ignored": 1,
-          "elapsed_seconds": 350.07
-        },
-        "tests/context_cli.rs": {
-          "result": "ok",
-          "passed": 5,
-          "failed": 0,
-          "ignored": 0,
-          "elapsed_seconds": 6.95
-        },
-        "tests/context_freshness.rs": {
-          "result": "ok",
-          "passed": 18,
-          "failed": 0,
-          "ignored": 0,
-          "elapsed_seconds": 3.89
-        },
-        "tests/contracts.rs": {
-          "result": "ok",
-          "passed": 4,
-          "failed": 0,
-          "ignored": 0,
-          "elapsed_seconds": 0.05
-        },
-        "tests/graph_cli.rs": {
-          "result": "ok",
-          "passed": 4,
-          "failed": 0,
-          "ignored": 0,
-          "elapsed_seconds": 0.71
-        },
-        "tests/graph_queries.rs": {
-          "result": "ok",
-          "passed": 17,
-          "failed": 0,
-          "ignored": 0,
-          "elapsed_seconds": 5.75
-        },
-        "tests/m1_workflow.rs": {
-          "result": "ok",
-          "passed": 1,
-          "failed": 0,
-          "ignored": 0,
-          "elapsed_seconds": 8.19
-        },
-        "tests/machine_contract.rs": {
-          "result": "ok",
-          "passed": 6,
-          "failed": 0,
-          "ignored": 0,
-          "elapsed_seconds": 0.04
-        },
-        "tests/offline_application.rs": {
-          "result": "ok",
-          "passed": 14,
-          "failed": 0,
-          "ignored": 0,
-          "elapsed_seconds": 7.49
-        },
-        "tests/offline_cli.rs": {
-          "result": "ok",
-          "passed": 10,
-          "failed": 0,
-          "ignored": 0,
-          "elapsed_seconds": 3.2
-        },
-        "tests/records_lossless.rs": {
-          "result": "ok",
-          "passed": 8,
-          "failed": 0,
-          "ignored": 0,
-          "elapsed_seconds": 0.02
-        },
-        "tests/retrieval_lexical.rs": {
-          "result": "ok",
-          "passed": 13,
-          "failed": 0,
-          "ignored": 0,
-          "elapsed_seconds": 1.73
-        },
-        "tests/sources_evidence.rs": {
-          "result": "ok",
-          "passed": 15,
-          "failed": 0,
-          "ignored": 0,
-          "elapsed_seconds": 8.7
-        },
-        "tests/vault_fs.rs": {
-          "result": "ok",
-          "passed": 14,
-          "failed": 0,
-          "ignored": 0,
-          "elapsed_seconds": 1.14
-        },
-        "examples/fixture_hash.rs": {
-          "result": "ok",
-          "passed": 0,
-          "failed": 0,
-          "ignored": 0,
-          "elapsed_seconds": 0.0
-        }
-      }
-    },
-    {
-      "command": "cargo test --locked --offline --test context_freshness --test context_cli --test m1_workflow --test graph_cli --test machine_contract",
-      "exit_code": 0,
-      "log": "/tmp/lwiki-p09-final.log",
-      "log_sha256": "f33d6d8225cadc2526853917d8c6a65391cb6fb7430290a0ef62602f1fb414d2",
-      "parent_tests": 34,
-      "ignored_helpers": 0,
-      "results": {
-        "tests/context_cli.rs": {
-          "result": "ok",
-          "passed": 5,
-          "failed": 0,
-          "ignored": 0,
-          "elapsed_seconds": 7.15
-        },
-        "tests/context_freshness.rs": {
-          "result": "ok",
-          "passed": 18,
-          "failed": 0,
-          "ignored": 0,
-          "elapsed_seconds": 4.18
-        },
-        "tests/graph_cli.rs": {
-          "result": "ok",
-          "passed": 4,
-          "failed": 0,
-          "ignored": 0,
-          "elapsed_seconds": 0.71
-        },
-        "tests/m1_workflow.rs": {
-          "result": "ok",
-          "passed": 1,
-          "failed": 0,
-          "ignored": 0,
-          "elapsed_seconds": 8.62
-        },
-        "tests/machine_contract.rs": {
-          "result": "ok",
-          "passed": 6,
-          "failed": 0,
-          "ignored": 0,
-          "elapsed_seconds": 0.05
-        }
-      }
-    },
-    {
-      "command": "cargo clippy --locked --offline --all-targets -- -D warnings",
-      "exit_code": 0,
-      "log": "/tmp/lwiki-p09-clippy-final.log",
-      "log_sha256": "1caa3158b30911e3af46a044f3a37c222c135887cdea7f93a519bb467bad0ecb"
-    },
-    {
-      "command": "cargo build --locked --offline",
-      "exit_code": 0,
-      "log": "/tmp/lwiki-p09-build-final.log",
-      "log_sha256": "86de423830f6138315d76f584bc71b58a5aa42c9fb2e786bc90bbd9799ce14a6"
-    },
-    {
-      "command": "python3 scripts/seed-fixture.py --check",
-      "exit_code": 0,
-      "log": "/tmp/lwiki-p09-seed.log",
-      "log_sha256": "4082b8e8cc523db156ef5837fa1577800a40259482d4b392c124cc90a0b0d4ea"
-    },
-    {
-      "command": "cargo fmt --all -- --check",
-      "exit_code": 0
-    },
-    {
-      "command": "git diff --check",
-      "exit_code": 0
-    }
-  ],
-  "review": {
-    "report": "P09-review.md",
-    "model": "independent gpt-6-sol fallback for unavailable Astra",
-    "findings": "R1 overlap closure/index remapping and R2 historical citation lifecycle resolved"
+  "tree_fingerprint_sha256": "8ea89885bae03963bee9df1abdb2c702ce7d54bdb9174609ce975571a3159842",
+  "parent_tests": 109,
+  "test_targets": 11,
+  "checks": {
+    "test": "cargo test --locked --offline --test extraction_cli --test extraction_import --test sources_evidence --test context_freshness --test graph_cli --test offline_cli --test machine_contract --test contracts --test change_read_preconditions --test catalog_scan_eligibility --test vault_fs",
+    "test_exit": 0,
+    "lint": "cargo clippy --locked --offline --all-targets -- -D warnings",
+    "lint_exit": 0,
+    "fmt_exit": 0,
+    "debug_build_exit": 0,
+    "seed_exit": 0,
+    "unchanged_seed_files": 34,
+    "diff_check_exit": 0
+  },
+  "log_sha256": {
+    "/tmp/lwiki-p10-integration.log": "4c0c89b4cfc8aa478d778d605b7b1c03cc244e03fa265c73c097c6ece0de8add",
+    "/tmp/lwiki-p10-final.log": "afab9944ec3c9cf6004c5a7d3650795a14a61e43ee3a4b073107a73e7cab660e",
+    "/tmp/lwiki-p10-clippy-final.log": "ae4bfd9557861409df2136b74bec74259297440a9ff95d9b9bdd65914d4bfa86",
+    "/tmp/lwiki-p10-fmt-final.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "/tmp/lwiki-p10-build.log": "fc7b7113a996c035819ca0ed6e8793345418cfce077ae8f40c3a3c4f2422f869",
+    "/tmp/lwiki-p10-seed.log": "4082b8e8cc523db156ef5837fa1577800a40259482d4b392c124cc90a0b0d4ea"
   },
   "limits": [
-    "Full210 gate preceded whitespace-only CLI formatting and equivalent Clippy if/let-chain collapse in context/verification; final34 context/CLI/M1/machine tests and final Clippy/build/fmt passed on fingerprinted sources.",
-    "Durability fault matrix test reran successfully; prior measured250 NativeIo boundaries x before/after=500 faults retained; successful Cargo capture hides its runtime printed counter. DurableIo code/test unchanged. Two enabled changes SIGKILL wrappers and both SQLite SIGKILL wrappers (11 points) passed; two ignored helpers explicitly invoked by wrappers.",
-    "D30 proof counters exclude operational SQLite/journal/recovery/index maintenance byte/file IO, share both attempts, and do not interrupt blocking OS syscalls.",
-    "No live provider/host or native other-platform qualification; E01-E05 remain open. No counting remote transport exists until P16; current local layer has no provider/helper handles."
-  ],
-  "accepted_commit": "21a1c2968a52f59a01cda6cbd4cd163b5dd54b51"
+    "P09 full native crash gate retained; unrelated P03/P05 fault matrices not repeated.",
+    "No host/provider/credential/helper/production vault/publishing.",
+    "P15 private IO helper tests are separate unaccepted work."
+  ]
 }

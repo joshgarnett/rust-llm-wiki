@@ -1,0 +1,332 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:lwiki:extraction:1",
+  "$comment": "UTF-8 byte caps, duplicate keys, cross-reference/registry/ownership checks, exact spans/hashes, and interval ordering also require production semantic validation.",
+  "type": "object",
+  "properties": {
+    "schema": {
+      "const": "lwiki.extraction.v1"
+    },
+    "packet_id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+    },
+    "packet_fingerprint": {
+      "type": "string",
+      "pattern": "^blake3:[0-9a-f]{64}$"
+    },
+    "mentions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+          },
+          "window_id": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+          },
+          "label": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1024
+          },
+          "type": {
+            "enum": [
+              "person",
+              "organization",
+              "project",
+              "component",
+              "concept",
+              "place",
+              "event",
+              "other"
+            ]
+          },
+          "quote": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 12000
+          },
+          "span": {
+            "type": "object",
+            "properties": {
+              "start": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 18446744073709551615
+              },
+              "end": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 18446744073709551615
+              }
+            },
+            "required": [
+              "start",
+              "end"
+            ],
+            "additionalProperties": false
+          },
+          "description": {
+            "type": "string",
+            "minLength": 0,
+            "maxLength": 4096
+          }
+        },
+        "required": [
+          "id",
+          "window_id",
+          "label",
+          "type",
+          "quote"
+        ],
+        "additionalProperties": false
+      },
+      "maxItems": 64
+    },
+    "assertions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+          },
+          "subject": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+          },
+          "predicate": {
+            "enum": [
+              "is_a",
+              "part_of",
+              "depends_on",
+              "maintains",
+              "works_for",
+              "uses",
+              "plans_to_use",
+              "located_in",
+              "has_property"
+            ]
+          },
+          "object": {
+            "oneOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "const": "mention"
+                  },
+                  "mention_id": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "mention_id"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "const": "literal"
+                  },
+                  "type": {
+                    "enum": [
+                      "string",
+                      "decimal",
+                      "boolean",
+                      "date"
+                    ]
+                  },
+                  "value": {
+                    "type": "string",
+                    "minLength": 0,
+                    "maxLength": 12000
+                  }
+                },
+                "required": [
+                  "kind",
+                  "type",
+                  "value"
+                ],
+                "additionalProperties": false
+              }
+            ]
+          },
+          "negated": {
+            "type": "boolean"
+          },
+          "modality": {
+            "enum": [
+              "asserted",
+              "possible",
+              "planned"
+            ]
+          },
+          "evidence": {
+            "minItems": 1,
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "window_id": {
+                  "type": "string",
+                  "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+                },
+                "stance": {
+                  "enum": [
+                    "supports",
+                    "contradicts"
+                  ]
+                },
+                "quote": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 12000
+                },
+                "span": {
+                  "type": "object",
+                  "properties": {
+                    "start": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 18446744073709551615
+                    },
+                    "end": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 18446744073709551615
+                    }
+                  },
+                  "required": [
+                    "start",
+                    "end"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "required": [
+                "window_id",
+                "stance",
+                "quote"
+              ],
+              "additionalProperties": false
+            },
+            "maxItems": 16
+          },
+          "valid_from": {
+            "type": "string",
+            "format": "date"
+          },
+          "valid_until": {
+            "type": "string",
+            "format": "date"
+          },
+          "unit": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "property": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1024
+          }
+        },
+        "required": [
+          "id",
+          "subject",
+          "predicate",
+          "object",
+          "negated",
+          "modality",
+          "evidence"
+        ],
+        "additionalProperties": false,
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "predicate": {
+                  "const": "has_property"
+                }
+              }
+            },
+            "then": {
+              "required": [
+                "property"
+              ],
+              "properties": {
+                "object": {
+                  "properties": {
+                    "kind": {
+                      "const": "literal"
+                    }
+                  }
+                }
+              }
+            },
+            "else": {
+              "properties": {
+                "object": {
+                  "properties": {
+                    "kind": {
+                      "const": "mention"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        ]
+      },
+      "maxItems": 128
+    },
+    "unresolved": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "window_id": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+          },
+          "quote": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 12000
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4096
+          }
+        },
+        "required": [
+          "window_id",
+          "quote",
+          "reason"
+        ],
+        "additionalProperties": false
+      },
+      "maxItems": 128
+    }
+  },
+  "required": [
+    "schema",
+    "packet_id",
+    "packet_fingerprint",
+    "mentions",
+    "assertions",
+    "unresolved"
+  ],
+  "additionalProperties": false
+}
