@@ -80,7 +80,7 @@ impl ChangeEngine {
         }
         self.require_no_other_unresolved(change)?;
         let input = self.validation_input(manifest)?;
-        let graph = validator.validate(&self.fs, &input)?;
+        let graph = self.validate_graph(manifest, &change.manifest_hash, validator, &input)?;
         let expected_scan = projected_scan(&input);
         self.retain_validation(permit, change, manifest, initial, &graph, &expected_scan)?;
         self.verify_read_preconditions(permit, manifest, &change.manifest_hash)?;
@@ -283,7 +283,8 @@ impl ChangeEngine {
                 self.observe(manifest)?,
             );
         }
-        let final_graph = validator.validate(&self.fs, &final_input)?;
+        let final_graph =
+            self.validate_graph(manifest, &change.manifest_hash, validator, &final_input)?;
         if graph != final_graph {
             return self.conflict(
                 permit,
@@ -524,14 +525,118 @@ impl ChangeEngine {
         }
         Ok(())
     }
-    pub(crate) fn validation_input(&self, manifest: &ChangeManifest) -> Result<ValidationInput> {
-        let documents = self
-            .fs
-            .root()
-            .scan_markdown()?
+    pub(super) fn validate_graph(
+        &self,
+        manifest: &ChangeManifest,
+        manifest_hash: &Blake3Hash,
+        validator: &dyn GraphValidator,
+        input: &ValidationInput,
+    ) -> Result<ValidatedGraph> {
+        if manifest.inverse_of.is_some() {
+            return match self.retained_inverse_input(manifest)? {
+                Some(inverse) => validator.validate_inverse(&self.fs, input, &inverse),
+                None => validator.validate(&self.fs, input),
+            };
+        }
+        let Some(origin) = &manifest.origin else {
+            return validator.validate(&self.fs, input);
+        };
+        if origin.operation != OriginOperation::GraphDecide {
+            return validator.validate(&self.fs, input);
+        }
+        let mut remaining = 128usize * 1024 * 1024;
+        let retained = self.retained_graph_input(manifest, manifest_hash, &mut remaining)?;
+        validator.validate_retained(&self.fs, input, &retained)
+    }
+    pub(super) fn retained_graph_input(
+        &self,
+        manifest: &ChangeManifest,
+        manifest_hash: &Blake3Hash,
+        remaining: &mut usize,
+    ) -> Result<RetainedGraphInput> {
+        Ok(RetainedGraphInput {
+            change_id: manifest.change_id.clone(),
+            manifest_hash: manifest_hash.clone(),
+            origin: manifest
+                .origin
+                .clone()
+                .ok_or_else(|| WikiError::invalid("retained graph origin missing"))?,
+            allocated_ids: manifest.allocated_ids.clone(),
+            operations: self.retained_graph_operations(manifest, remaining)?,
+        })
+    }
+    pub(super) fn retained_graph_operations(
+        &self,
+        manifest: &ChangeManifest,
+        remaining: &mut usize,
+    ) -> Result<Vec<RetainedGraphOperation>> {
+        let mut operations = Vec::with_capacity(manifest.operations.len());
+        for (index, operation) in manifest.operations.iter().enumerate() {
+            let mut payload = |label,
+                               expected: &ExpectedState,
+                               reference: &Option<PayloadRef>|
+             -> Result<Option<Vec<u8>>> {
+                if reference
+                    .as_ref()
+                    .is_some_and(|r| r.byte_len > *remaining as u64)
+                {
+                    return Err(WikiError::new(
+                        ErrorCode::BudgetExceeded,
+                        "retained graph witness exceeds byte ceiling",
+                    ));
+                }
+                let bytes = self.verify_payload_with_limit(
+                    &manifest.change_id,
+                    index,
+                    label,
+                    &operation.target,
+                    (expected, reference),
+                    *remaining,
+                )?;
+                *remaining = remaining
+                    .checked_sub(bytes.as_ref().map_or(0, Vec::len))
+                    .ok_or_else(|| {
+                        WikiError::new(
+                            ErrorCode::BudgetExceeded,
+                            "retained graph witness exceeds byte ceiling",
+                        )
+                    })?;
+                Ok(bytes)
+            };
+            let before_bytes = payload("before", &operation.before, &operation.before_payload)?;
+            let after_bytes = payload("proposed", &operation.after, &operation.after_payload)?;
+            operations.push(RetainedGraphOperation {
+                path: operation.target.clone(),
+                role: operation.role,
+                before: operation.before.clone(),
+                after: operation.after.clone(),
+                before_bytes,
+                after_bytes,
+            });
+        }
+        Ok(operations)
+    }
+
+    pub(super) fn scan_documents(&self) -> Result<Vec<ScanDocument>> {
+        self.scan_documents_bounded(usize::MAX, usize::MAX)
+    }
+    pub(super) fn scan_documents_bounded(
+        &self,
+        mut remaining: usize,
+        max_files: usize,
+    ) -> Result<Vec<ScanDocument>> {
+        self.require_binding()?;
+        let paths = self.fs.root().scan_markdown()?;
+        if paths.len() > max_files {
+            return Err(WikiError::new(
+                ErrorCode::BudgetExceeded,
+                "graph scan file ceiling",
+            ));
+        }
+        paths
             .into_iter()
             .map(|path| {
-                let bytes = read_bounded(&self.fs, &path, MAX_PAYLOAD_BYTES)?
+                let bytes = super::prepare::read_with_budget(&self.fs, &path, &mut remaining)?
                     .ok_or_else(|| recovery_error("scan file disappeared"))?;
                 Ok(ScanDocument {
                     hash: Blake3Hash::digest(&bytes),
@@ -539,22 +644,55 @@ impl ChangeEngine {
                     bytes,
                 })
             })
-            .collect::<Result<Vec<_>>>()?;
+            .collect::<Result<Vec<_>>>()
+    }
+    pub(crate) fn validation_input(&self, manifest: &ChangeManifest) -> Result<ValidationInput> {
+        let mut remaining = if manifest.inverse_of.is_some() {
+            super::prepare::MAX_GRAPH_INPUT_BYTES
+        } else {
+            usize::MAX
+        };
+        let overlay_bytes = manifest
+            .operations
+            .iter()
+            .filter_map(|op| op.after_payload.as_ref())
+            .try_fold(0usize, |n, p| {
+                usize::try_from(p.byte_len)
+                    .ok()
+                    .and_then(|len| n.checked_add(len))
+            });
+        if overlay_bytes.is_none_or(|bytes| bytes > remaining) {
+            return Err(WikiError::new(
+                ErrorCode::BudgetExceeded,
+                "graph overlay aggregate byte ceiling",
+            ));
+        }
+        let documents = if manifest.inverse_of.is_some() {
+            self.scan_documents_bounded(super::prepare::MAX_GRAPH_INPUT_BYTES, 4096)?
+        } else {
+            self.scan_documents()?
+        };
         let overlay = manifest
             .operations
             .iter()
             .enumerate()
             .map(|(i, op)| {
+                let bytes = self.verify_payload_with_limit(
+                    &manifest.change_id,
+                    i,
+                    "proposed",
+                    &op.target,
+                    (&op.after, &op.after_payload),
+                    remaining,
+                )?;
+                remaining = remaining
+                    .checked_sub(bytes.as_ref().map_or(0, Vec::len))
+                    .ok_or_else(|| {
+                        WikiError::new(ErrorCode::BudgetExceeded, "graph overlay byte ceiling")
+                    })?;
                 Ok(ProposedTarget {
                     path: op.target.clone(),
-                    bytes: self.verify_payload(
-                        &manifest.change_id,
-                        i,
-                        "proposed",
-                        &op.target,
-                        &op.after,
-                        &op.after_payload,
-                    )?,
+                    bytes,
                 })
             })
             .collect::<Result<Vec<_>>>()?;

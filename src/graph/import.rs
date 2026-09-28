@@ -361,6 +361,33 @@ pub(crate) fn verify_resolution_transition(
     }
     Ok(())
 }
+/// Historical acknowledgement admits only separately proven explicit remap chains.
+/// Fresh resolution continues to use the Pending-only transition verifier above.
+pub(crate) fn verify_historical_resolution_transition(
+    view: &SourceView<'_>,
+    before: &ExtractionArtifactV1,
+    after: &ExtractionArtifactV1,
+) -> Result<()> {
+    let mut unremapped = after.clone();
+    for (mention, old) in &before.bindings {
+        let next = after
+            .bindings
+            .get(mention)
+            .ok_or_else(|| invalid("historical binding map is incomplete"))?;
+        if old != next && !matches!(old, MentionBinding::Pending) {
+            super::remap::verify_binding_evolution(
+                view,
+                &before.extraction_id,
+                mention,
+                old,
+                next,
+            )?;
+            unremapped.bindings.insert(mention.clone(), old.clone());
+        }
+    }
+    verify_resolution_transition(before, &unremapped)
+}
+
 /// Replace only the existing artifact JSON, preserving surrounding author prose.
 pub(crate) fn edit_extraction_artifact(
     note: &ParsedNote,

@@ -167,7 +167,8 @@
         "operation": {
           "enum": [
             "graph_import",
-            "graph_resolve"
+            "graph_resolve",
+            "graph_decide"
           ]
         },
         "packet_id": {

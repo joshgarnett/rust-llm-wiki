@@ -1,0 +1,692 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:lwiki:entity-decision-receipt:1",
+  "$comment": "Production validates duplicate-free bounded UTF-8 JSON, exact canonical hashes, exhaustive remaps and immutable trace. Explicit receipts authorize only their verified operations; schema validation grants no mutation or identity authority.",
+  "$ref": "#/$defs/EntityDecisionReceiptV1",
+  "$defs": {
+    "EntityDecisionRequest": {
+      "type": "object",
+      "properties": {
+        "schema": {
+          "const": "lwiki.entity-decisions.v1"
+        },
+        "decisions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/EntityDecision"
+          },
+          "maxItems": 16,
+          "minItems": 1
+        }
+      },
+      "required": [
+        "schema",
+        "decisions"
+      ],
+      "additionalProperties": false
+    },
+    "EntityDecision": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "operation": {
+              "const": "MergeEntities"
+            },
+            "reason": {
+              "type": "string",
+              "maxLength": 4096,
+              "minLength": 1
+            },
+            "expected_records": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/ExpectedRecord"
+              },
+              "maxItems": 4096
+            },
+            "remaps": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/EntityRemap"
+              },
+              "maxItems": 1024
+            },
+            "source_ids": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/RecordId"
+              },
+              "maxItems": 16,
+              "minItems": 1,
+              "uniqueItems": true
+            },
+            "target_id": {
+              "$ref": "#/$defs/RecordId"
+            }
+          },
+          "required": [
+            "operation",
+            "reason",
+            "expected_records",
+            "remaps",
+            "source_ids",
+            "target_id"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "operation": {
+              "const": "SplitEntity"
+            },
+            "reason": {
+              "type": "string",
+              "maxLength": 4096,
+              "minLength": 1
+            },
+            "expected_records": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/ExpectedRecord"
+              },
+              "maxItems": 4096
+            },
+            "remaps": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/EntityRemap"
+              },
+              "maxItems": 1024
+            },
+            "source_id": {
+              "$ref": "#/$defs/RecordId"
+            },
+            "new_entities": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/NewEntity"
+              },
+              "maxItems": 16,
+              "minItems": 2
+            }
+          },
+          "required": [
+            "operation",
+            "reason",
+            "expected_records",
+            "remaps",
+            "source_id",
+            "new_entities"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "operation": {
+              "const": "AddAlias"
+            },
+            "reason": {
+              "type": "string",
+              "maxLength": 4096,
+              "minLength": 1
+            },
+            "expected_records": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/ExpectedRecord"
+              },
+              "maxItems": 4096
+            },
+            "remaps": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/EntityRemap"
+              },
+              "maxItems": 0
+            },
+            "entity_id": {
+              "$ref": "#/$defs/RecordId"
+            },
+            "alias": {
+              "type": "string",
+              "maxLength": 1024,
+              "minLength": 1
+            }
+          },
+          "required": [
+            "operation",
+            "reason",
+            "expected_records",
+            "remaps",
+            "entity_id",
+            "alias"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "ExpectedRecord": {
+      "type": "object",
+      "properties": {
+        "record_id": {
+          "$ref": "#/$defs/RecordId"
+        },
+        "hash": {
+          "$ref": "#/$defs/Blake3Hash"
+        }
+      },
+      "required": [
+        "record_id",
+        "hash"
+      ],
+      "additionalProperties": false
+    },
+    "RecordId": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+    },
+    "Blake3Hash": {
+      "type": "string",
+      "pattern": "^blake3:[0-9a-f]{64}$"
+    },
+    "EntityRemap": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "Assertion"
+            },
+            "assertion_id": {
+              "$ref": "#/$defs/RecordId"
+            },
+            "field": {
+              "$ref": "#/$defs/AssertionEntityField"
+            },
+            "old_entity_id": {
+              "$ref": "#/$defs/RecordId"
+            },
+            "target": {
+              "$ref": "#/$defs/RemapTarget"
+            }
+          },
+          "required": [
+            "kind",
+            "assertion_id",
+            "field",
+            "old_entity_id",
+            "target"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "Mention"
+            },
+            "extraction_id": {
+              "$ref": "#/$defs/RecordId"
+            },
+            "mention_id": {
+              "$ref": "#/$defs/PacketLocalId"
+            },
+            "old_entity_id": {
+              "$ref": "#/$defs/RecordId"
+            },
+            "target": {
+              "$ref": "#/$defs/RemapTarget"
+            }
+          },
+          "required": [
+            "kind",
+            "extraction_id",
+            "mention_id",
+            "old_entity_id",
+            "target"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "AssertionEntityField": {
+      "enum": [
+        "subject_id",
+        "object_id"
+      ]
+    },
+    "RemapTarget": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "ExistingEntity"
+            },
+            "entity_id": {
+              "$ref": "#/$defs/RecordId"
+            }
+          },
+          "required": [
+            "kind",
+            "entity_id"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "NewEntity"
+            },
+            "key": {
+              "$ref": "#/$defs/NewEntityKey"
+            }
+          },
+          "required": [
+            "kind",
+            "key"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "NewEntityKey": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+    },
+    "PacketLocalId": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+    },
+    "NewEntity": {
+      "type": "object",
+      "properties": {
+        "key": {
+          "$ref": "#/$defs/NewEntityKey"
+        },
+        "title": {
+          "type": "string",
+          "maxLength": 1024,
+          "minLength": 1
+        },
+        "entity_type": {
+          "enum": [
+            "person",
+            "organization",
+            "project",
+            "component",
+            "concept",
+            "place",
+            "event",
+            "other"
+          ]
+        }
+      },
+      "required": [
+        "key",
+        "title",
+        "entity_type"
+      ],
+      "additionalProperties": false
+    },
+    "EntityDecisionReceiptV1": {
+      "type": "object",
+      "properties": {
+        "schema": {
+          "const": "lwiki.entity-decision-receipt.v1"
+        },
+        "task_id": {
+          "$ref": "#/$defs/RecordId"
+        },
+        "request": {
+          "$ref": "#/$defs/EntityDecisionRequest"
+        },
+        "request_hash": {
+          "$ref": "#/$defs/Blake3Hash"
+        },
+        "allocations": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/EntityDecisionAllocation"
+          },
+          "maxItems": 16,
+          "minItems": 1
+        },
+        "record_paths": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/VaultRelativePath"
+          },
+          "maxProperties": 10000,
+          "propertyNames": {
+            "$ref": "#/$defs/RecordId"
+          }
+        },
+        "extraction_proofs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ExtractionRemapProof"
+          },
+          "maxItems": 4096
+        },
+        "assertion_proofs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/AssertionRemapProof"
+          },
+          "maxItems": 4096
+        },
+        "main_supersessions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/MainDecisionSupersession"
+          },
+          "maxItems": 4096
+        },
+        "operations": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/EntityDecisionWriteProof"
+          },
+          "maxItems": 10000
+        }
+      },
+      "required": [
+        "schema",
+        "task_id",
+        "request",
+        "request_hash",
+        "allocations",
+        "record_paths",
+        "extraction_proofs",
+        "assertion_proofs",
+        "main_supersessions",
+        "operations"
+      ],
+      "additionalProperties": false
+    },
+    "EntityDecisionAllocation": {
+      "type": "object",
+      "properties": {
+        "decision_id": {
+          "$ref": "#/$defs/RecordId"
+        },
+        "entities": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/RecordId"
+          },
+          "maxProperties": 16,
+          "propertyNames": {
+            "$ref": "#/$defs/NewEntityKey"
+          }
+        },
+        "mention_decisions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/MentionDecisionAllocation"
+          },
+          "maxItems": 1024
+        }
+      },
+      "required": [
+        "decision_id",
+        "entities",
+        "mention_decisions"
+      ],
+      "additionalProperties": false
+    },
+    "MentionDecisionAllocation": {
+      "type": "object",
+      "properties": {
+        "extraction_id": {
+          "$ref": "#/$defs/RecordId"
+        },
+        "mention_id": {
+          "$ref": "#/$defs/PacketLocalId"
+        },
+        "predecessor_id": {
+          "$ref": "#/$defs/RecordId"
+        },
+        "decision_id": {
+          "$ref": "#/$defs/RecordId"
+        }
+      },
+      "required": [
+        "extraction_id",
+        "mention_id",
+        "predecessor_id",
+        "decision_id"
+      ],
+      "additionalProperties": false
+    },
+    "VaultRelativePath": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 4096
+    },
+    "ExtractionRemapProof": {
+      "type": "object",
+      "properties": {
+        "extraction_id": {
+          "$ref": "#/$defs/RecordId"
+        },
+        "immutable_extraction_hash": {
+          "$ref": "#/$defs/Blake3Hash"
+        },
+        "prior_bindings": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/MentionBinding"
+          },
+          "maxProperties": 64,
+          "propertyNames": {
+            "$ref": "#/$defs/PacketLocalId"
+          }
+        },
+        "prior_materialized_assertions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/PacketLocalId"
+          },
+          "maxItems": 128
+        },
+        "transitions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/MentionRemapProof"
+          },
+          "maxItems": 64
+        }
+      },
+      "required": [
+        "extraction_id",
+        "immutable_extraction_hash",
+        "prior_bindings",
+        "prior_materialized_assertions",
+        "transitions"
+      ],
+      "additionalProperties": false
+    },
+    "MentionBinding": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "state": {
+              "const": "pending"
+            }
+          },
+          "required": [
+            "state"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "state": {
+              "const": "resolved"
+            },
+            "entity_id": {
+              "$ref": "#/$defs/RecordId"
+            },
+            "decision_id": {
+              "$ref": "#/$defs/RecordId"
+            }
+          },
+          "required": [
+            "state",
+            "entity_id",
+            "decision_id"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "state": {
+              "const": "rejected"
+            },
+            "decision_id": {
+              "$ref": "#/$defs/RecordId"
+            }
+          },
+          "required": [
+            "state",
+            "decision_id"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "MentionRemapProof": {
+      "type": "object",
+      "properties": {
+        "mention_id": {
+          "$ref": "#/$defs/PacketLocalId"
+        },
+        "before": {
+          "$ref": "#/$defs/MentionBinding"
+        },
+        "after": {
+          "$ref": "#/$defs/MentionBinding"
+        },
+        "governing_decision_id": {
+          "$ref": "#/$defs/RecordId"
+        }
+      },
+      "required": [
+        "mention_id",
+        "before",
+        "after",
+        "governing_decision_id"
+      ],
+      "additionalProperties": false
+    },
+    "AssertionRemapProof": {
+      "type": "object",
+      "properties": {
+        "assertion_id": {
+          "$ref": "#/$defs/RecordId"
+        },
+        "field": {
+          "$ref": "#/$defs/AssertionEntityField"
+        },
+        "before_entity_id": {
+          "$ref": "#/$defs/RecordId"
+        },
+        "after_entity_id": {
+          "$ref": "#/$defs/RecordId"
+        },
+        "invariant_proposition_hash": {
+          "$ref": "#/$defs/Blake3Hash"
+        },
+        "governing_decision_id": {
+          "$ref": "#/$defs/RecordId"
+        }
+      },
+      "required": [
+        "assertion_id",
+        "field",
+        "before_entity_id",
+        "after_entity_id",
+        "invariant_proposition_hash",
+        "governing_decision_id"
+      ],
+      "additionalProperties": false
+    },
+    "MainDecisionSupersession": {
+      "type": "object",
+      "properties": {
+        "predecessor_id": {
+          "$ref": "#/$defs/RecordId"
+        },
+        "successor_id": {
+          "$ref": "#/$defs/RecordId"
+        }
+      },
+      "required": [
+        "predecessor_id",
+        "successor_id"
+      ],
+      "additionalProperties": false
+    },
+    "EntityDecisionWriteProof": {
+      "type": "object",
+      "properties": {
+        "target": {
+          "$ref": "#/$defs/VaultRelativePath"
+        },
+        "before": {
+          "$ref": "#/$defs/ExpectedState"
+        },
+        "after": {
+          "$ref": "#/$defs/ExpectedState"
+        }
+      },
+      "required": [
+        "target",
+        "before",
+        "after"
+      ],
+      "additionalProperties": false
+    },
+    "ExpectedState": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "state": {
+              "const": "absent"
+            }
+          },
+          "required": [
+            "state"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "state": {
+              "const": "hash"
+            },
+            "hash": {
+              "$ref": "#/$defs/Blake3Hash"
+            }
+          },
+          "required": [
+            "state",
+            "hash"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    }
+  }
+}

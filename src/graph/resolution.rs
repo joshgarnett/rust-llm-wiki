@@ -336,7 +336,7 @@ pub(crate) fn verify_operation_proofs(
     receipt: &ResolutionReceiptV1,
     extraction: &VerifiedExtractionArtifact,
 ) -> Result<()> {
-    let historical = historical_state(receipt, &extraction.artifact)?;
+    let historical = historical_state(view, receipt, &extraction.artifact)?;
     let prior_ready = ready(&extraction.response, &receipt.prior_bindings, &[]);
     if receipt
         .prior_materialized_assertions
@@ -801,6 +801,7 @@ fn retained_receipt(
 }
 
 fn verify_retained_canonical(
+    view: &SourceView<'_>,
     engine: &ChangeEngine,
     change: &ChangeInspection,
     canonical: &ResolutionReceiptV1,
@@ -873,7 +874,7 @@ fn verify_retained_canonical(
                 {
                     return Err(invalid("retained extraction envelope identity differs"));
                 }
-                if artifact != historical_state(canonical, &current.artifact)? {
+                if artifact != historical_state(view, canonical, &current.artifact)? {
                     return Err(invalid(
                         "retained extraction disagrees with complete prior/after semantic state",
                     ));
@@ -934,7 +935,13 @@ pub fn stage_resolution(
                         "different retained resolution for canonical task scope",
                     ));
                 }
-                verify_retained_canonical(engine, &inspection, canonical, &current.extraction)?;
+                verify_retained_canonical(
+                    &view,
+                    engine,
+                    &inspection,
+                    canonical,
+                    &current.extraction,
+                )?;
                 if retained.replace(inspection).is_some() {
                     return Err(invalid("duplicate retained resolution origins"));
                 }

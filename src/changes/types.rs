@@ -19,6 +19,7 @@ pub struct PayloadRef {
 pub enum OriginOperation {
     GraphImport,
     GraphResolve,
+    GraphDecide,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -231,10 +232,116 @@ pub struct ValidatedGraph {
     pub dependencies: Vec<ReadDependency>,
 }
 
+/// Engine-verified retained payloads supplement actual current documents.
+/// Constructed only inside the changes engine; no unchecked public constructor.
+#[derive(Debug)]
+pub struct RetainedGraphInput {
+    pub(super) change_id: RecordId,
+    pub(super) manifest_hash: Blake3Hash,
+    pub(super) origin: ChangeOrigin,
+    pub(super) allocated_ids: BTreeMap<String, RecordId>,
+    pub(super) operations: Vec<RetainedGraphOperation>,
+}
+#[derive(Debug)]
+pub struct RetainedGraphOperation {
+    pub(super) path: VaultRelativePath,
+    pub(super) role: OperationRole,
+    pub(super) before: ExpectedState,
+    pub(super) after: ExpectedState,
+    pub(super) before_bytes: Option<Vec<u8>>,
+    pub(super) after_bytes: Option<Vec<u8>>,
+}
+impl RetainedGraphInput {
+    pub fn change_id(&self) -> &RecordId {
+        &self.change_id
+    }
+    pub fn manifest_hash(&self) -> &Blake3Hash {
+        &self.manifest_hash
+    }
+    pub fn origin(&self) -> &ChangeOrigin {
+        &self.origin
+    }
+    pub fn allocated_ids(&self) -> &BTreeMap<String, RecordId> {
+        &self.allocated_ids
+    }
+    pub fn operations(&self) -> &[RetainedGraphOperation] {
+        &self.operations
+    }
+}
+impl RetainedGraphOperation {
+    pub fn role(&self) -> OperationRole {
+        self.role
+    }
+    pub fn path(&self) -> &VaultRelativePath {
+        &self.path
+    }
+    pub fn before(&self) -> &ExpectedState {
+        &self.before
+    }
+    pub fn after(&self) -> &ExpectedState {
+        &self.after
+    }
+    pub fn before_bytes(&self) -> Option<&[u8]> {
+        self.before_bytes.as_deref()
+    }
+    pub fn after_bytes(&self) -> Option<&[u8]> {
+        self.after_bytes.as_deref()
+    }
+}
+
+/// Authenticated committed inverse ancestry; only the engine constructs this seal.
+/// No deserializer, Clone, or caller-controlled authorization flag exists.
+#[derive(Debug)]
+pub struct RetainedGraphInverseInput {
+    pub(super) anchor: RetainedGraphInput,
+    pub(super) parent_change_id: RecordId,
+    pub(super) parent_manifest_hash: Blake3Hash,
+    pub(super) parent_operations: Option<Vec<RetainedGraphOperation>>,
+    pub(super) inversion_depth: usize,
+}
+impl RetainedGraphInverseInput {
+    pub fn anchor(&self) -> &RetainedGraphInput {
+        &self.anchor
+    }
+    pub fn parent_change_id(&self) -> &RecordId {
+        &self.parent_change_id
+    }
+    pub fn parent_manifest_hash(&self) -> &Blake3Hash {
+        &self.parent_manifest_hash
+    }
+    pub fn parent_operations(&self) -> &[RetainedGraphOperation] {
+        self.parent_operations
+            .as_deref()
+            .unwrap_or(&self.anchor.operations)
+    }
+    pub fn inversion_depth(&self) -> usize {
+        self.inversion_depth
+    }
+}
+
 /// A trusted application implementation must validate complete graph/reference policy.
 /// There is no permissive default. The CLI installs the P05 validator before applying.
 pub trait GraphValidator: Send + Sync {
     fn validate(&self, fs: &VaultFs, input: &ValidationInput) -> Result<ValidatedGraph>;
+    /// Retained payloads grant no generic mutation exception; the application
+    /// validates exact canonical decision policy against these verified bytes.
+    fn validate_retained(
+        &self,
+        fs: &VaultFs,
+        input: &ValidationInput,
+        _retained: &RetainedGraphInput,
+    ) -> Result<ValidatedGraph> {
+        self.validate(fs, input)
+    }
+    /// Exact committed reversal grants no general proposition-mutation permission.
+    fn validate_inverse(
+        &self,
+        fs: &VaultFs,
+        input: &ValidationInput,
+        _inverse: &RetainedGraphInverseInput,
+    ) -> Result<ValidatedGraph> {
+        self.validate(fs, input)
+    }
 }
 
 /// Constructed only inside the engine after verified files-applied state and dependencies.

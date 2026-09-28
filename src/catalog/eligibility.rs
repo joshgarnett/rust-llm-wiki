@@ -4,7 +4,10 @@ use super::{
     types::*,
 };
 use crate::{
-    changes::{GraphValidator, ReadDependency, ValidatedGraph, ValidationInput},
+    changes::{
+        GraphValidator, ReadDependency, RetainedGraphInput, RetainedGraphInverseInput,
+        ValidatedGraph, ValidationInput,
+    },
     domain::{
         Blake3Hash, CanonicalRecord, CitationRef, Eligibility, ErrorCode, RecordId, RecordKind,
         Result, VaultRelativePath, WikiError,
@@ -21,7 +24,23 @@ use std::collections::{BTreeMap, BTreeSet};
 /// are permitted: those are derived states, not structural corruption.
 impl GraphValidator for CatalogGraphValidator {
     fn validate(&self, fs: &VaultFs, input: &ValidationInput) -> Result<ValidatedGraph> {
-        validate_projection(fs, input, false)
+        validate_projection(fs, input, false, None, None)
+    }
+    fn validate_retained(
+        &self,
+        fs: &VaultFs,
+        input: &ValidationInput,
+        retained: &RetainedGraphInput,
+    ) -> Result<ValidatedGraph> {
+        validate_projection(fs, input, false, Some(retained), None)
+    }
+    fn validate_inverse(
+        &self,
+        fs: &VaultFs,
+        input: &ValidationInput,
+        inverse: &RetainedGraphInverseInput,
+    ) -> Result<ValidatedGraph> {
+        validate_projection(fs, input, false, None, Some(inverse))
     }
 }
 impl CatalogGraphValidator {
@@ -29,14 +48,24 @@ impl CatalogGraphValidator {
     /// Unprovided assets cannot supply current support. Synthetic missing closed
     /// dependencies are not physical read guards; apply retains full reproof.
     pub fn validate_closed(&self, fs: &VaultFs, input: &ValidationInput) -> Result<ValidatedGraph> {
-        validate_projection(fs, input, true)
+        validate_projection(fs, input, true, None, None)
     }
 }
 fn validate_projection(
     fs: &VaultFs,
     input: &ValidationInput,
     closed: bool,
+    retained: Option<&RetainedGraphInput>,
+    inverse_witness: Option<&RetainedGraphInverseInput>,
 ) -> Result<ValidatedGraph> {
+    let inverse = inverse_witness
+        .map(|witness| crate::graph::inverse::verify_inverse_overlay(fs, input, witness))
+        .transpose()?;
+    let remap = if inverse.is_none() {
+        crate::graph::remap::verify_remap_overlay(fs, input, retained)?
+    } else {
+        None
+    };
     let projector = if closed { project_closed } else { project };
     let proposed = projector(fs, input)?;
     let baseline = projector(
@@ -90,16 +119,25 @@ fn validate_projection(
         if row.record.kind() == RecordKind::Assertion {
             if let Some(old) = baseline.records.get(id)
                 && proposition(&old.record) != proposition(&row.record)
+                && !remap
+                    .as_ref()
+                    .is_some_and(|proof| proof.authorized_assertions().contains(id))
+                && !inverse
+                    .as_ref()
+                    .is_some_and(|proof| proof.authorized_assertions().contains(id))
             {
                 return Err(WikiError::invalid(format!(
                     "assertion identity cannot be silently retargeted: {id}"
                 )));
             }
             if row.record.string("wiki_status") == Some("accepted")
-                && baseline
+                && (baseline
                     .records
                     .get(id)
                     .is_none_or(|old| old.record.string("wiki_status") != Some("accepted"))
+                    || inverse
+                        .as_ref()
+                        .is_some_and(|proof| proof.restored_accepted().contains(id)))
                 && row.eligibility != Eligibility::Current
             {
                 return Err(WikiError::invalid(format!(
@@ -116,6 +154,18 @@ fn validate_projection(
                 "proposal invalidates typed record {id}: {}",
                 row.reasons.join(",")
             )));
+        }
+    }
+    if let Some(proof) = &inverse {
+        for id in proof.restored_accepted() {
+            if proposed.records.get(id).is_none_or(|row| {
+                row.record.string("wiki_status") != Some("accepted")
+                    || row.eligibility != Eligibility::Current
+            }) {
+                return Err(WikiError::invalid(format!(
+                    "inverse acceptance requires intact current supporting evidence: {id}"
+                )));
+            }
         }
     }
     for diagnostic in &proposed.diagnostics {
@@ -423,6 +473,30 @@ pub(crate) fn compute(
             }
         }
     }
+    let decision_policy = match crate::graph::remap::verify_decision_policy(notes) {
+        Ok(policy) => policy,
+        Err(error) => {
+            for id in crate::graph::remap::relevant_decision_ids(notes) {
+                if let Some(row) = records.get_mut(&id) {
+                    mark_invalid(
+                        row,
+                        "entity_decision_receipt_invalid",
+                        diagnostics,
+                        serde_json::json!({"error":error}),
+                    );
+                }
+            }
+            None
+        }
+    };
+    if let Some(policy) = &decision_policy {
+        for (predecessor, successor) in policy.supersession_edges() {
+            supersession
+                .entry(successor.clone())
+                .or_default()
+                .insert(predecessor.clone());
+        }
+    }
     for id in cycle_members(&declared) {
         if let Some(row) = records.get_mut(&id) {
             mark_invalid(
@@ -443,7 +517,7 @@ pub(crate) fn compute(
             );
         }
     }
-    apply_decisions(notes, records, diagnostics)?;
+    apply_decisions(notes, records, diagnostics, decision_policy.as_ref())?;
 
     // Verify all original assets, including unsupported captures; failed checks retain
     // dependencies read before failure so later verification cannot overlook tampering.
@@ -989,6 +1063,7 @@ fn apply_decisions(
     notes: &BTreeMap<VaultRelativePath, ParsedNote>,
     records: &mut BTreeMap<RecordId, RecordRow>,
     diagnostics: &mut Vec<CatalogDiagnostic>,
+    decision_policy: Option<&crate::graph::remap::VerifiedDecisionPolicy>,
 ) -> Result<()> {
     let decisions: Vec<_> = records
         .values()
@@ -1120,8 +1195,14 @@ fn apply_decisions(
                     ));
                 }
                 for target in entity_targets {
+                    let historical_alias = action == "add_alias"
+                        && target.record.string("wiki_status") == Some("superseded")
+                        && decision_policy.is_some_and(|policy| {
+                            policy.historical_alias_authority(decision.record.id())
+                        });
                     if target.record.kind() != RecordKind::Entity
                         || target.record.string("wiki_status") != Some("active")
+                            && !historical_alias
                     {
                         disagreements.push((
                             target.record.id().clone(),
@@ -1171,6 +1252,16 @@ fn apply_decisions(
             }
             "reject_mention" => {}
             _ => unreachable!("validated decision action"),
+        }
+        if action == "add_alias"
+            && decision_policy
+                .is_some_and(|policy| policy.historical_alias_authority(decision.record.id()))
+            && targets
+                .iter()
+                .any(|target| target.record.string("wiki_status") == Some("superseded"))
+            && let Some(row) = records.get_mut(decision.record.id())
+        {
+            set(row, Eligibility::Historical, "alias_identity_superseded");
         }
         for (id, reason) in disagreements {
             if let Some(row) = records.get_mut(&id) {
@@ -1233,7 +1324,19 @@ fn apply_decisions(
             .iter()
             .all(|r| r.record.string("wiki_action") == Some("add_alias"));
         let compatible_mentions = compatible_mention_operations(&decisions);
-        if actions.len() > 1 && !compatible_aliases && !compatible_mentions {
+        let compatible_entity_decisions = decision_policy.is_some_and(|policy| {
+            policy.decisions_compatible(
+                &decisions
+                    .iter()
+                    .map(|r| r.record.id().clone())
+                    .collect::<Vec<_>>(),
+            )
+        });
+        if actions.len() > 1
+            && !compatible_aliases
+            && !compatible_mentions
+            && !compatible_entity_decisions
+        {
             if let Some(row) = records.get_mut(&id) {
                 mark_invalid(
                     row,

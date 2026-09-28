@@ -72,6 +72,101 @@ fn draft() -> ChangeDraft {
     }
 }
 struct Validator;
+
+#[test]
+fn inverse_aggregate_limit_refuses_declared_sparse_payloads_before_reading_them() {
+    let (_temp, root) = fixture();
+    let engine = ChangeEngine::new(VaultFs::new(root.clone())).unwrap();
+    let permit = WriterPermit::acquire(&root, Duration::ZERO).unwrap();
+    let mut proposal = draft();
+    proposal.operations.clear();
+    for i in 0..5 {
+        let target = rel(&format!("guard_{i}.md"));
+        fs::write(root.path().join(target.as_str()), b"before").unwrap();
+        proposal.operations.push(ExpectedWrite {
+            target,
+            expected: ExpectedState::Hash(Blake3Hash::digest(b"before")),
+            proposed: Some(b"after".to_vec()),
+            apply_after: vec![],
+        });
+    }
+    let original = engine.prepare(&permit, proposal).unwrap();
+    let mut manifest = original.manifest.clone();
+    for op in &mut manifest.operations {
+        let payload = op.before_payload.as_mut().unwrap();
+        payload.byte_len = 64 * 1024 * 1024;
+        File::options()
+            .write(true)
+            .open(root.path().join(payload.path.as_str()))
+            .unwrap()
+            .set_len(payload.byte_len)
+            .unwrap();
+    }
+    let path = root
+        .path()
+        .join(format!("changes/{}/change.md", manifest.change_id));
+    let original_note = lwiki::records::parse_note(&fs::read(&path).unwrap());
+    for kind in ["ordinary_original", "inverse", "graph_decide"] {
+        manifest.inverse_of = None;
+        manifest.origin = None;
+        if kind == "inverse" {
+            manifest.inverse_of = Some(lwiki::domain::RecordId::new("Original.Other").unwrap());
+        } else if kind == "graph_decide" {
+            manifest.origin = Some(ChangeOrigin {
+                operation: OriginOperation::GraphDecide,
+                packet_id: lwiki::domain::RecordId::new("Task.Guarded").unwrap(),
+                response_hash: Blake3Hash::digest(b"guarded request"),
+            });
+        }
+        let json = serde_json::to_vec(&manifest).unwrap();
+        let hash = Blake3Hash::digest(&json);
+        let body = format!(
+            "```lwiki-change-v1\n{}\n```\n",
+            String::from_utf8(json).unwrap()
+        );
+        let bytes = lwiki::records::edit_note(
+            &original_note,
+            &BTreeMap::from([("wiki_manifest_hash".into(), serde_json::json!(hash))]),
+            Some(body.as_bytes()),
+            &original_note.source_hash,
+        )
+        .unwrap();
+        fs::write(&path, bytes).unwrap();
+        let prepared = PreparedChange {
+            change_id: manifest.change_id.clone(),
+            manifest_hash: hash,
+        };
+        // The payload hashes deliberately no longer match. BudgetExceeded proves
+        // the aggregate check ran before reading even the first sparse payload.
+        assert_eq!(
+            engine.inverse_plan(&prepared).unwrap_err().code,
+            ErrorCode::BudgetExceeded,
+            "{kind}"
+        );
+        if kind != "ordinary_original" {
+            assert_eq!(
+                engine.inspect(&prepared.change_id).unwrap_err().code,
+                ErrorCode::BudgetExceeded,
+                "{kind}"
+            );
+            assert_eq!(
+                engine
+                    .apply(&permit, &prepared, &Validator, &Publisher::default())
+                    .unwrap_err()
+                    .code,
+                ErrorCode::BudgetExceeded,
+                "{kind}"
+            );
+        }
+        for i in 0..5 {
+            assert_eq!(
+                fs::read(root.path().join(format!("guard_{i}.md"))).unwrap(),
+                b"before"
+            );
+        }
+    }
+}
+
 impl GraphValidator for Validator {
     fn validate(&self, _fs: &VaultFs, input: &ValidationInput) -> Result<ValidatedGraph> {
         assert!(
@@ -106,6 +201,133 @@ impl GraphValidator for Validator {
             dependencies: vec![],
         })
     }
+}
+
+struct RetainedValidator {
+    calls: AtomicUsize,
+    interrupt_final: bool,
+}
+impl GraphValidator for RetainedValidator {
+    fn validate(&self, _fs: &VaultFs, _input: &ValidationInput) -> Result<ValidatedGraph> {
+        panic!("GraphDecide must receive engine-verified retained payloads")
+    }
+    fn validate_retained(
+        &self,
+        fs: &VaultFs,
+        input: &ValidationInput,
+        retained: &RetainedGraphInput,
+    ) -> Result<ValidatedGraph> {
+        let call = self.calls.fetch_add(1, Ordering::SeqCst);
+        assert_eq!(retained.origin().operation, OriginOperation::GraphDecide);
+        assert_eq!(retained.operations().len(), 4);
+        let operation = retained
+            .operations()
+            .iter()
+            .find(|op| op.path() == &rel("alpha.md"))
+            .unwrap();
+        assert_eq!(operation.before_bytes(), Some(b"old alpha".as_slice()));
+        assert_eq!(operation.after_bytes(), Some(b"new alpha".as_slice()));
+        assert_eq!(
+            operation.before(),
+            &ExpectedState::Hash(Blake3Hash::digest(b"old alpha"))
+        );
+        assert_eq!(
+            operation.after(),
+            &ExpectedState::Hash(Blake3Hash::digest(b"new alpha"))
+        );
+        let current = input
+            .documents
+            .iter()
+            .find(|d| d.path == rel("alpha.md"))
+            .unwrap();
+        assert_eq!(
+            current.bytes,
+            if call == 0 {
+                b"old alpha"
+            } else {
+                b"new alpha"
+            }
+        );
+        if self.interrupt_final && call == 1 {
+            return Err(WikiError::new(
+                ErrorCode::Internal,
+                "injected interruption after FilesApplied",
+            ));
+        }
+        Validator.validate(fs, input)
+    }
+}
+
+fn retained_draft() -> ChangeDraft {
+    let mut draft = draft();
+    draft.origin = Some(ChangeOrigin {
+        operation: OriginOperation::GraphDecide,
+        packet_id: lwiki::domain::RecordId::new("entity_decisions_fixture").unwrap(),
+        response_hash: Blake3Hash::digest(b"explicit fixture request"),
+    });
+    draft
+}
+
+#[test]
+fn graph_decide_retained_witness_preserves_actual_scan_across_files_applied_recovery() {
+    let (_temp, root) = fixture();
+    let fs = VaultFs::new(root.clone());
+    let engine = ChangeEngine::new(fs).unwrap();
+    let writer = WriterPermit::acquire(&root, Duration::from_secs(1)).unwrap();
+    let change = engine.prepare(&writer, retained_draft()).unwrap().prepared;
+    let validator = RetainedValidator {
+        calls: AtomicUsize::new(0),
+        interrupt_final: true,
+    };
+    let publisher = Publisher::default();
+    assert_eq!(
+        engine
+            .apply(&writer, &change, &validator, &publisher)
+            .unwrap_err()
+            .code,
+        ErrorCode::Internal
+    );
+    assert_eq!(
+        std::fs::read(root.path().join("alpha.md")).unwrap(),
+        b"new alpha"
+    );
+    engine.recover(&writer, &validator, &publisher).unwrap();
+    assert_eq!(validator.calls.load(Ordering::SeqCst), 4);
+    assert_eq!(
+        engine
+            .apply(&writer, &change, &validator, &publisher)
+            .unwrap()
+            .status,
+        ChangeStatus::Committed
+    );
+}
+
+#[test]
+fn graph_decide_retained_witness_refuses_tampered_before_payload_before_mutation() {
+    let (_temp, root) = fixture();
+    let engine = ChangeEngine::new(VaultFs::new(root.clone())).unwrap();
+    let writer = WriterPermit::acquire(&root, Duration::from_secs(1)).unwrap();
+    let change = engine.prepare(&writer, retained_draft()).unwrap().prepared;
+    std::fs::write(
+        root.path()
+            .join(format!("changes/{}/before/00000.md", change.change_id)),
+        b"third bytes",
+    )
+    .unwrap();
+    let validator = RetainedValidator {
+        calls: AtomicUsize::new(0),
+        interrupt_final: false,
+    };
+    assert!(
+        engine
+            .apply(&writer, &change, &validator, &Publisher::default())
+            .is_err()
+    );
+    assert_eq!(validator.calls.load(Ordering::SeqCst), 0);
+    assert_eq!(
+        std::fs::read(root.path().join("alpha.md")).unwrap(),
+        b"old alpha"
+    );
 }
 #[derive(Default)]
 struct Publisher {

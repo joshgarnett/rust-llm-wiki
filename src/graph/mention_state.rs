@@ -110,6 +110,7 @@ pub(crate) fn expected_binding(
     })
 }
 pub(crate) fn validate_receipt_shape(
+    view: &SourceView<'_>,
     receipt: &ResolutionReceiptV1,
     artifact: &ExtractionArtifactV1,
 ) -> Result<()> {
@@ -158,7 +159,7 @@ pub(crate) fn validate_receipt_shape(
             "resolution receipt has incomplete allocation/transition maps",
         ));
     }
-    historical_state(receipt, artifact)?;
+    historical_state(view, receipt, artifact)?;
     let mut ids: BTreeSet<_> = std::iter::once(&artifact.extraction_id)
         .chain(artifact.allocations.assertions.values())
         .chain(artifact.allocations.evidence.values().flatten())
@@ -176,12 +177,13 @@ pub(crate) fn validate_receipt_shape(
     }
     for mapping in &request.mappings {
         let transition = &receipt.transitions[mention(mapping)];
+        // historical_state already proves any explicit descendant chain to the
+        // current binding. This receipt still binds its original Pending-only step.
         if transition.before != MentionBinding::Pending
             || transition.after != expected_binding(mapping, &receipt.allocations)?
-            || artifact.bindings[mention(mapping)] != transition.after
         {
             return Err(invalid(
-                "receipt disagrees with explicit current mention binding",
+                "receipt disagrees with explicit original mention transition",
             ));
         }
     }
@@ -214,6 +216,7 @@ pub(crate) fn validate_receipt_shape(
 }
 
 pub(crate) fn historical_state(
+    view: &SourceView<'_>,
     receipt: &ResolutionReceiptV1,
     current: &ExtractionArtifactV1,
 ) -> Result<ExtractionArtifactV1> {
@@ -249,9 +252,9 @@ pub(crate) fn historical_state(
         .extend(receipt.materialized_assertions.clone());
     after.materialized_assertions.sort();
     import::verify_resolution_transition(&before, &after)?;
-    // Already decided IDs/materializations cannot change; later independent
-    // Pending transitions remain valid and are proven by the current loader.
-    import::verify_resolution_transition(&after, current)?;
+    // Later Pending resolutions and explicit verified remap successors are
+    // acknowledged without granting permission to replay original bytes.
+    import::verify_historical_resolution_transition(view, &after, current)?;
     let mut ids: BTreeSet<_> = [
         &after.extraction_id,
         &after.packet_id,
@@ -312,6 +315,14 @@ pub(crate) fn verify_decision_note(
     mapping: &ResolutionMapping,
     receipt: &ResolutionReceiptV1,
 ) -> Result<()> {
+    verify_decision_note_status(note, mapping, receipt, false)
+}
+fn verify_decision_note_status(
+    note: &ParsedNote,
+    mapping: &ResolutionMapping,
+    receipt: &ResolutionReceiptV1,
+    evolved: bool,
+) -> Result<()> {
     let local = mention(mapping);
     let record = note
         .canonical
@@ -324,7 +335,7 @@ pub(crate) fn verify_decision_note(
     };
     if record.kind() != RecordKind::Decision
         || record.id() != &receipt.allocations.decisions[local]
-        || record.string("wiki_status") != Some("active")
+        || record.string("wiki_status") != Some(if evolved { "superseded" } else { "active" })
         || record.string("wiki_action") != Some(action(mapping))
         || record.string("wiki_extraction_id") != Some(receipt.request.extraction_id.as_str())
         || record.field("wiki_mention_ids") != Some(&json!([local]))
@@ -377,15 +388,24 @@ pub(crate) fn load_resolution_receipt_scoped(
         return Ok(None);
     };
     let extraction = import::load_extraction(view, &receipt.request.extraction_id)?;
-    validate_receipt_shape(&receipt, &extraction.artifact)?;
+    validate_receipt_shape(view, &receipt, &extraction.artifact)?;
     let mut deps = dependency_map(&extraction.dependencies)?;
     let mut locators = vec![];
     for mapping in &receipt.request.mappings {
         let local = mention(mapping);
         let decision_id = &receipt.allocations.decisions[local];
         let (path, note) = view.resolve(decision_id, RecordKind::Decision, None)?;
-        verify_decision_note(note, mapping, &receipt)?;
+        let evolved =
+            extraction.artifact.bindings.get(local) != Some(&receipt.transitions[local].after);
+        // The complete historical transition above proved the explicit successor
+        // chain before accepting an archived original decision/identity.
+        verify_decision_note_status(note, mapping, &receipt, evolved)?;
         SourceView::note_dependency(path, note, &mut deps);
+        if evolved {
+            for (path, note) in &view.notes {
+                SourceView::note_dependency(path, note, &mut deps);
+            }
+        }
         locators.push(locator(view, path, note)?);
         if let MentionBinding::Resolved { entity_id, .. } = &receipt.transitions[local].after {
             let (path, note) = view.resolve(entity_id, RecordKind::Entity, None)?;
@@ -394,6 +414,7 @@ pub(crate) fn load_resolution_receipt_scoped(
                 .as_ref()
                 .and_then(|r| r.string("wiki_status"))
                 != Some("active")
+                && !evolved
             {
                 return Err(invalid(
                     "resolved identity is no longer active; explicit remap required",
@@ -411,7 +432,7 @@ pub(crate) fn load_resolution_receipt_scoped(
                 .canonical
                 .as_ref()
                 .ok_or_else(|| invalid("invalid created entity"))?;
-            if record.string("wiki_status") != Some("active")
+            if record.string("wiki_status") != Some("active") && !evolved
                 || record.string("wiki_entity_type") != Some(entity_type)
             {
                 return Err(invalid(

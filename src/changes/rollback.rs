@@ -1,10 +1,10 @@
 //! Abort only unapplied proposals; rollback is a separately retained, validated inverse.
 use super::{apply::recovery_error, journal, outcome, types::*};
 use crate::{
-    domain::{Blake3Hash, Result, WikiError},
-    vault::WriterPermit,
+    domain::{Blake3Hash, ErrorCode, Result, WikiError},
+    vault::{ExpectedState, WriterPermit},
 };
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 impl ChangeEngine {
     pub fn abort(&self, permit: &WriterPermit, change: &PreparedChange) -> Result<ApplyReport> {
         permit.require_root(self.fs.root())?;
@@ -44,7 +44,8 @@ impl ChangeEngine {
     }
     pub fn inverse_plan(&self, change: &PreparedChange) -> Result<InversePlan> {
         self.require_binding()?;
-        let (manifest, hash) = self.load_manifest(&change.change_id)?;
+        let mut remaining = super::prepare::MAX_INVERSE_PAYLOAD_BYTES;
+        let (manifest, hash) = self.load_manifest_with_budget(&change.change_id, &mut remaining)?;
         if hash != change.manifest_hash {
             return Err(WikiError::invalid("prepared manifest binding changed"));
         }
@@ -55,17 +56,31 @@ impl ChangeEngine {
                 retained_paths.push(op.target.clone());
                 continue;
             }
+            if op
+                .before_payload
+                .as_ref()
+                .is_some_and(|payload| payload.byte_len > remaining as u64)
+            {
+                return Err(WikiError::new(
+                    ErrorCode::BudgetExceeded,
+                    "inverse read ceiling",
+                ));
+            }
+            let proposed = self.verify_payload_with_limit(
+                &manifest.change_id,
+                index,
+                "before",
+                &op.target,
+                (&op.before, &op.before_payload),
+                remaining,
+            )?;
+            remaining = remaining
+                .checked_sub(proposed.as_ref().map_or(0, Vec::len))
+                .ok_or_else(|| WikiError::new(ErrorCode::BudgetExceeded, "inverse read ceiling"))?;
             operations.push(ExpectedWrite {
                 target: op.target.clone(),
                 expected: op.after.clone(),
-                proposed: self.verify_payload(
-                    &manifest.change_id,
-                    index,
-                    "before",
-                    &op.target,
-                    &op.before,
-                    &op.before_payload,
-                )?,
+                proposed,
                 apply_after: Vec::new(),
             });
         }
@@ -108,25 +123,7 @@ impl ChangeEngine {
         let plan = self.inverse_plan(change)?;
         let input = ValidationInput {
             vault_id: self.vault_id.clone(),
-            documents: self
-                .fs
-                .root()
-                .scan_markdown()?
-                .into_iter()
-                .map(|path| {
-                    let bytes = super::prepare::read_bounded(
-                        &self.fs,
-                        &path,
-                        super::prepare::MAX_PAYLOAD_BYTES,
-                    )?
-                    .ok_or_else(|| recovery_error("inverse scan file disappeared"))?;
-                    Ok(ScanDocument {
-                        hash: Blake3Hash::digest(&bytes),
-                        bytes,
-                        path,
-                    })
-                })
-                .collect::<Result<Vec<_>>>()?,
+            documents: self.scan_documents_bounded(super::prepare::MAX_GRAPH_INPUT_BYTES, 4096)?,
             overlay: plan
                 .draft
                 .operations
@@ -137,7 +134,240 @@ impl ChangeEngine {
                 })
                 .collect(),
         };
-        validator.validate(&self.fs, &input)?;
+        self.validate_draft_graph_with_input(&plan.draft, validator, &input)?;
         Ok(self.prepare(permit, plan.draft)?.prepared)
     }
+    /// Read-only semantic preflight; authorities derive from actual retained history.
+    pub fn validate_draft_graph(
+        &self,
+        draft: &ChangeDraft,
+        validator: &dyn GraphValidator,
+    ) -> Result<ValidatedGraph> {
+        self.plan(draft)?;
+        let input = ValidationInput {
+            vault_id: self.vault_id.clone(),
+            documents: if draft.inverse_of.is_some() {
+                self.scan_documents_bounded(super::prepare::MAX_GRAPH_INPUT_BYTES, 4096)?
+            } else {
+                self.scan_documents()?
+            },
+            overlay: draft
+                .operations
+                .iter()
+                .map(|op| ProposedTarget {
+                    path: op.target.clone(),
+                    bytes: op.proposed.clone(),
+                })
+                .collect(),
+        };
+        self.validate_draft_graph_with_input(draft, validator, &input)
+    }
+    fn validate_draft_graph_with_input(
+        &self,
+        draft: &ChangeDraft,
+        validator: &dyn GraphValidator,
+        input: &ValidationInput,
+    ) -> Result<ValidatedGraph> {
+        if draft.inverse_of.is_none() {
+            return validator.validate(&self.fs, input);
+        }
+        let preview = self.draft_manifest(draft)?;
+        match self.retained_inverse_input(&preview)? {
+            Some(inverse) => validator.validate_inverse(&self.fs, input, &inverse),
+            None => validator.validate(&self.fs, input),
+        }
+    }
+    /// An internal operation preview carries no allocated identity or retained status.
+    fn draft_manifest(&self, draft: &ChangeDraft) -> Result<ChangeManifest> {
+        let plan = self.plan(draft)?;
+        let targets = plan
+            .operations
+            .iter()
+            .map(|op| op.target.clone())
+            .collect::<Vec<_>>();
+        let operations = plan
+            .operations
+            .iter()
+            .zip(&plan.roles)
+            .map(|(op, role)| {
+                Ok(ChangeOp {
+                    target: op.target.clone(),
+                    before: op.expected.clone(),
+                    after: op.proposed.as_ref().map_or(ExpectedState::Absent, |bytes| {
+                        ExpectedState::Hash(Blake3Hash::digest(bytes))
+                    }),
+                    before_payload: None,
+                    after_payload: None,
+                    role: *role,
+                    apply_after: op
+                        .apply_after
+                        .iter()
+                        .map(|path| {
+                            targets
+                                .iter()
+                                .position(|target| target == path)
+                                .ok_or_else(|| WikiError::invalid("inverse ordering target absent"))
+                        })
+                        .collect::<Result<Vec<_>>>()?,
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        Ok(ChangeManifest {
+            version: 1,
+            vault_id: self.vault_id.clone(),
+            // This private preview is never persisted or returned as a change.
+            change_id: draft
+                .inverse_of
+                .clone()
+                .unwrap_or_else(|| self.vault_id.clone()),
+            title: draft.title.clone(),
+            created_at: String::new(),
+            origin: draft.origin.clone(),
+            inverse_of: draft.inverse_of.clone(),
+            allocated_ids: draft.allocated_ids.clone(),
+            read_preconditions: plan.read_preconditions,
+            operations,
+        })
+    }
+    /// Read-only validation for an already retained proposal, including partial recovery.
+    pub fn validate_prepared_graph(
+        &self,
+        change: &PreparedChange,
+        validator: &dyn GraphValidator,
+    ) -> Result<ValidatedGraph> {
+        self.require_binding()?;
+        let (manifest, hash) = self.load_manifest(&change.change_id)?;
+        if hash != change.manifest_hash {
+            return Err(WikiError::invalid("prepared manifest binding changed"));
+        }
+        let input = self.validation_input(&manifest)?;
+        self.validate_graph(&manifest, &hash, validator, &input)
+    }
+    pub(super) fn retained_inverse_input(
+        &self,
+        inverse: &ChangeManifest,
+    ) -> Result<Option<RetainedGraphInverseInput>> {
+        let Some(mut parent_id) = inverse.inverse_of.clone() else {
+            return Ok(None);
+        };
+        let mut remaining = super::prepare::MAX_INVERSE_PAYLOAD_BYTES;
+        let mut seen = BTreeSet::new();
+        let mut child = inverse.clone();
+        let mut immediate = None;
+        for depth in 1..=64 {
+            if !seen.insert(parent_id.clone()) {
+                return Err(WikiError::invalid("inverse ancestry cycle"));
+            }
+            let (parent, hash) = self.load_manifest_with_budget(&parent_id, &mut remaining)?;
+            let committed = match outcome::terminal_report(&self.fs, &parent, &hash)? {
+                Some(report) => report.status == ChangeStatus::Committed,
+                None => {
+                    journal::load_journal(&self.fs, &parent, &hash)?.status
+                        == Some(ChangeStatus::Committed)
+                }
+            };
+            if !committed {
+                return Err(WikiError::new(
+                    ErrorCode::RecoveryRequired,
+                    "inverse requires authenticated committed original history",
+                ));
+            }
+            exact_inverse(&child, &parent)?;
+            if immediate.is_none() {
+                immediate = Some((parent.clone(), hash.clone()));
+            }
+            if parent
+                .origin
+                .as_ref()
+                .is_some_and(|origin| origin.operation == OriginOperation::GraphDecide)
+            {
+                if parent.inverse_of.is_some() {
+                    return Err(WikiError::invalid(
+                        "GraphDecide anchor cannot also claim inverse ancestry",
+                    ));
+                }
+                let (first, first_hash) = immediate.expect("first parent retained");
+                let parent_operations = if first.change_id == parent.change_id {
+                    None
+                } else {
+                    Some(self.retained_graph_operations(&first, &mut remaining)?)
+                };
+                let anchor = self.retained_graph_input(&parent, &hash, &mut remaining)?;
+                return Ok(Some(RetainedGraphInverseInput {
+                    anchor,
+                    parent_change_id: first.change_id,
+                    parent_manifest_hash: first_hash,
+                    parent_operations,
+                    inversion_depth: depth,
+                }));
+            }
+            let Some(next) = parent.inverse_of.clone() else {
+                return Ok(None);
+            };
+            child = parent;
+            parent_id = next;
+        }
+        Err(WikiError::new(
+            ErrorCode::BudgetExceeded,
+            "inverse ancestry exceeds64 hops",
+        ))
+    }
+}
+
+fn exact_inverse(child: &ChangeManifest, parent: &ChangeManifest) -> Result<()> {
+    if child.inverse_of.as_ref() != Some(&parent.change_id)
+        || child.origin.is_some()
+        || !child.allocated_ids.is_empty()
+        || !child.read_preconditions.is_empty()
+    {
+        return Err(WikiError::invalid(
+            "inverse contains non-reversal authority",
+        ));
+    }
+    let originals = parent
+        .operations
+        .iter()
+        .filter(|op| op.role != OperationRole::ImmutableAsset)
+        .collect::<Vec<_>>();
+    if originals.len() != child.operations.len() {
+        return Err(WikiError::invalid(
+            "inverse mutable operation membership differs",
+        ));
+    }
+    let mut order: BTreeMap<_, BTreeSet<_>> = originals
+        .iter()
+        .map(|op| (op.target.clone(), BTreeSet::new()))
+        .collect();
+    for op in &originals {
+        for index in &op.apply_after {
+            let dependency = &parent.operations[*index];
+            if let Some(after) = order.get_mut(&dependency.target) {
+                after.insert(op.target.clone());
+            }
+        }
+    }
+    for (op, original) in child.operations.iter().zip(originals) {
+        let actual_order = op
+            .apply_after
+            .iter()
+            .map(|index| {
+                child
+                    .operations
+                    .get(*index)
+                    .map(|op| op.target.clone())
+                    .ok_or_else(|| WikiError::invalid("inverse ordering index invalid"))
+            })
+            .collect::<Result<BTreeSet<_>>>()?;
+        if op.target != original.target
+            || op.before != original.after
+            || op.after != original.before
+            || op.role != OperationRole::MutableRecord
+            || actual_order != order[&op.target]
+        {
+            return Err(WikiError::invalid(
+                "inverse is not the exact guarded mutable reversal",
+            ));
+        }
+    }
+    Ok(())
 }

@@ -278,6 +278,20 @@ impl<'a> SourceView<'a> {
     ) -> Result<Vec<u8>> {
         self.read_limited(path, dependencies, None)
     }
+    pub(crate) fn read_bounded(
+        &self,
+        path: &VaultRelativePath,
+        dependencies: &mut BTreeMap<VaultRelativePath, ExpectedState>,
+        limit: usize,
+    ) -> Result<Vec<u8>> {
+        if limit == 0 || limit > 64 * 1024 * 1024 {
+            return Err(WikiError::new(
+                ErrorCode::BudgetExceeded,
+                "invalid source asset read ceiling",
+            ));
+        }
+        self.read_limited(path, dependencies, Some(limit))
+    }
     fn read_limited(
         &self,
         path: &VaultRelativePath,

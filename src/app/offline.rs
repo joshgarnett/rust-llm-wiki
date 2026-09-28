@@ -424,23 +424,11 @@ impl OfflineApp {
                 .collect(),
         })
     }
-    fn input(&self, draft: &ChangeDraft) -> Result<ValidationInput> {
-        let mut input = scan::scan_input(&self.fs, &self.vault_id)?;
-        input.overlay = draft
-            .operations
-            .iter()
-            .map(|op| ProposedTarget {
-                path: op.target.clone(),
-                bytes: op.proposed.clone(),
-            })
-            .collect();
-        Ok(input)
-    }
     fn execute_draft(&self, draft: ChangeDraft, force_stage: bool) -> Result<MutationOutcome> {
         self.catalog().guard_current(None)?;
         let engine = self.engine()?;
         let plan = engine.plan(&draft)?;
-        CatalogGraphValidator.validate(&self.fs, &self.input(&draft)?)?;
+        engine.validate_draft_graph(&draft, &CatalogGraphValidator)?;
         let summary = summarize(&draft.title, &plan.read_preconditions, &plan.operations);
         let allocated_ids = draft.allocated_ids.clone();
         if self.options.dry_run || plan.operations.is_empty() {
@@ -856,7 +844,7 @@ impl OfflineApp {
                     "change targets contain unfamiliar edits",
                 ));
             }
-            CatalogGraphValidator.validate(&self.fs, &self.input(&draft)?)?;
+            engine.validate_prepared_graph(&i.prepared, &CatalogGraphValidator)?;
             return Ok(MutationOutcome {
                 plan: summary,
                 allocated_ids,

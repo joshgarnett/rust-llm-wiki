@@ -24,6 +24,8 @@ pub const MAX_MANIFEST_BYTES: usize = 4 * 1024 * 1024;
 pub const MAX_PAYLOAD_BYTES: usize = 64 * 1024 * 1024;
 pub const MAX_JOURNAL_BYTES: usize = 64 * 1024 * 1024;
 pub(crate) const MAX_OPS: usize = 10_000;
+pub(super) const MAX_GRAPH_INPUT_BYTES: usize = 64 * 1024 * 1024;
+pub(super) const MAX_INVERSE_PAYLOAD_BYTES: usize = 256 * 1024 * 1024;
 const OPEN: &[u8] = b"```lwiki-change-v1\n";
 
 impl ChangeEngine {
@@ -69,6 +71,17 @@ impl ChangeEngine {
     /// Read-only expected-state validation; does not create a lock or directories.
     pub fn plan(&self, draft: &ChangeDraft) -> Result<ChangePlan> {
         self.require_binding()?;
+        if draft.inverse_of.is_some() {
+            let proposed_bytes = draft.operations.iter().try_fold(0usize, |sum, op| {
+                sum.checked_add(op.proposed.as_ref().map_or(0, Vec::len))
+            });
+            if proposed_bytes.is_none_or(|n| n > MAX_GRAPH_INPUT_BYTES) {
+                return Err(WikiError::new(
+                    ErrorCode::BudgetExceeded,
+                    "inverse proposed bytes exceed aggregate ceiling",
+                ));
+            }
+        }
         if draft.operations.len() > MAX_OPS
             || draft.read_preconditions.len() > MAX_OPS
             || draft.title.len() > 16_384
@@ -101,8 +114,13 @@ impl ChangeEngine {
         let mut images = Vec::new();
         let mut roles = Vec::new();
         let mut dropped = BTreeSet::new();
+        let mut inverse_reads = if draft.inverse_of.is_some() {
+            MAX_GRAPH_INPUT_BYTES
+        } else {
+            usize::MAX
+        };
         for operation in operations {
-            let before = read_bounded(&self.fs, &operation.target, MAX_PAYLOAD_BYTES)?;
+            let before = read_with_budget(&self.fs, &operation.target, &mut inverse_reads)?;
             let actual = state(before.as_deref());
             if operation.expected != actual {
                 return Err(WikiError::new(
@@ -400,6 +418,15 @@ impl ChangeEngine {
         Ok((ids, incomplete))
     }
     pub(crate) fn load_manifest(&self, id: &RecordId) -> Result<(ChangeManifest, Blake3Hash)> {
+        let mut remaining = usize::MAX;
+        self.load_manifest_with_budget(id, &mut remaining)
+    }
+    /// Bound aggregate retained payload reads before validating/allocating any payload.
+    pub(super) fn load_manifest_with_budget(
+        &self,
+        id: &RecordId,
+        remaining: &mut usize,
+    ) -> Result<(ChangeManifest, Blake3Hash)> {
         let bytes = read_bounded(&self.fs, &manifest_path(id)?, MAX_MANIFEST_BYTES + 65_536)?
             .ok_or_else(|| WikiError::invalid("missing retained manifest"))?;
         let parsed = parse_note(&bytes);
@@ -444,6 +471,40 @@ impl ChangeEngine {
             return Err(WikiError::invalid("manifest fence hash mismatch"));
         }
         let manifest: ChangeManifest = strict_json(json)?;
+        let payload_bytes = manifest
+            .operations
+            .iter()
+            .flat_map(|op| [&op.before_payload, &op.after_payload])
+            .flatten()
+            .try_fold(0usize, |total, payload| {
+                usize::try_from(payload.byte_len)
+                    .ok()
+                    .and_then(|len| total.checked_add(len))
+                    .ok_or_else(|| {
+                        WikiError::new(
+                            ErrorCode::BudgetExceeded,
+                            "retained payload aggregate length overflow",
+                        )
+                    })
+            })?;
+        let intrinsic_limit = if manifest.inverse_of.is_some() {
+            MAX_INVERSE_PAYLOAD_BYTES
+        } else if manifest
+            .origin
+            .as_ref()
+            .is_some_and(|origin| origin.operation == OriginOperation::GraphDecide)
+        {
+            128 * 1024 * 1024
+        } else {
+            usize::MAX
+        };
+        if payload_bytes > (*remaining).min(intrinsic_limit) {
+            return Err(WikiError::new(
+                ErrorCode::BudgetExceeded,
+                "retained inverse ancestry exceeds payload read ceiling",
+            ));
+        }
+        *remaining -= payload_bytes;
         self.validate_manifest(&manifest, id)?;
         Ok((manifest, hash))
     }
@@ -546,6 +607,25 @@ impl ChangeEngine {
         expected: &ExpectedState,
         payload: &Option<PayloadRef>,
     ) -> Result<Option<Vec<u8>>> {
+        self.verify_payload_with_limit(
+            id,
+            index,
+            side,
+            target,
+            (expected, payload),
+            MAX_PAYLOAD_BYTES,
+        )
+    }
+    pub(crate) fn verify_payload_with_limit(
+        &self,
+        id: &RecordId,
+        index: usize,
+        side: &str,
+        target: &VaultRelativePath,
+        expected_payload: (&ExpectedState, &Option<PayloadRef>),
+        limit: usize,
+    ) -> Result<Option<Vec<u8>>> {
+        let (expected, payload) = expected_payload;
         match (expected, payload) {
             (ExpectedState::Absent, None) => Ok(None),
             (ExpectedState::Hash(hash), Some(payload)) => {
@@ -555,7 +635,7 @@ impl ChangeEngine {
                 {
                     return Err(WikiError::invalid("invalid retained payload reference"));
                 }
-                let bytes = read_bounded(&self.fs, &payload.path, MAX_PAYLOAD_BYTES)?
+                let bytes = read_bounded(&self.fs, &payload.path, limit.min(MAX_PAYLOAD_BYTES))?
                     .ok_or_else(|| WikiError::invalid("missing retained payload"))?;
                 if bytes.len() as u64 != payload.byte_len
                     || Blake3Hash::digest(&bytes) != payload.hash
@@ -836,6 +916,31 @@ pub(crate) fn read_bounded(
         return Err(WikiError::invalid("managed read exceeds limit"));
     }
     Ok(Some(bytes))
+}
+pub(super) fn read_with_budget(
+    fs: &VaultFs,
+    path: &VaultRelativePath,
+    remaining: &mut usize,
+) -> Result<Option<Vec<u8>>> {
+    let resolved = fs.root().resolve(path)?;
+    match std::fs::metadata(&resolved) {
+        Ok(metadata) if metadata.len() > *remaining as u64 => {
+            return Err(WikiError::new(
+                ErrorCode::BudgetExceeded,
+                "managed reads exceed aggregate byte ceiling",
+            ));
+        }
+        Ok(_) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(io_error(e)),
+    }
+    let bytes = read_bounded(fs, path, MAX_PAYLOAD_BYTES.min(*remaining))?;
+    *remaining = remaining
+        .checked_sub(bytes.as_ref().map_or(0, Vec::len))
+        .ok_or_else(|| {
+            WikiError::new(ErrorCode::BudgetExceeded, "managed read budget exhausted")
+        })?;
+    Ok(bytes)
 }
 /// Recursively reject duplicates while streaming, before conversion into any map.
 pub(crate) fn strict_json<T: DeserializeOwned>(bytes: &[u8]) -> Result<T> {
