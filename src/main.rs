@@ -1,28 +1,43 @@
-use clap::{Parser, Subcommand};
-use lwiki::output::Envelope;
+use clap::Parser;
+use lwiki::{
+    cli::{Arguments, OutputFormat, execute, present},
+    output::Envelope,
+};
 use serde_json::json;
+use std::io::{self, Write};
 
-#[derive(Parser)]
-#[command(name = "lwiki", version, about)]
-struct Arguments {
-    #[arg(long, global = true)]
-    json: bool,
-    #[arg(long, global = true)]
-    offline: bool,
-    #[arg(long, global = true)]
-    dry_run: bool,
-    #[command(subcommand)]
-    command: Command,
+fn stream_event(
+    output: &mut impl Write,
+    invocation: &str,
+    sequence: u64,
+    event: &str,
+    data: serde_json::Value,
+) -> io::Result<()> {
+    serde_json::to_writer(
+        &mut *output,
+        &json!({"schema_version":"1","invocation_id":invocation,"sequence":sequence,"event":event,"data":data}),
+    )?;
+    writeln!(output)?;
+    output.flush()
 }
-
-#[derive(Subcommand)]
-enum Command {
-    /// List only implemented capabilities.
-    Capabilities,
-    /// Emit a versioned public JSON schema.
-    Schema { name: String },
+fn argument_format() -> OutputFormat {
+    let args: Vec<_> = std::env::args_os().collect();
+    if args.iter().any(|a| a == "--jsonl" || a == "--format=jsonl")
+        || args
+            .windows(2)
+            .any(|w| w[0] == "--format" && w[1] == "jsonl")
+    {
+        OutputFormat::Jsonl
+    } else if args.iter().any(|a| a == "--json" || a == "--format=json")
+        || args
+            .windows(2)
+            .any(|w| w[0] == "--format" && w[1] == "json")
+    {
+        OutputFormat::Json
+    } else {
+        OutputFormat::Human
+    }
 }
-
 fn main() {
     let args = match Arguments::try_parse() {
         Ok(args) => args,
@@ -34,68 +49,81 @@ fn main() {
                 error.print().ok();
                 return;
             }
-            if std::env::args_os().any(|arg| arg == "--json") {
-                let envelope = Envelope::failure("arguments", "USAGE", error.to_string());
-                println!(
-                    "{}",
-                    serde_json::to_string(&envelope).expect("serializable envelope")
-                );
+            let envelope = Envelope::failure("arguments", "USAGE", error.to_string());
+            let format = argument_format();
+            if format == OutputFormat::Jsonl {
+                let invocation = uuid::Uuid::now_v7().to_string();
+                let mut output = io::stdout().lock();
+                stream_event(
+                    &mut output,
+                    &invocation,
+                    0,
+                    "started",
+                    json!({"command":"arguments"}),
+                )
+                .ok();
+                stream_event(
+                    &mut output,
+                    &invocation,
+                    1,
+                    "completed",
+                    serde_json::to_value(&envelope).expect("serializable envelope"),
+                )
+                .ok();
+            } else if format == OutputFormat::Json {
+                present(&envelope, format, &mut io::stdout().lock()).ok();
             } else {
                 eprint!("{error}");
             }
             std::process::exit(2);
         }
     };
-    let (result, exit) = match args.command {
-        Command::Capabilities => (
-            Envelope::success(
-                "capabilities",
-                json!({
-                    "version": env!("CARGO_PKG_VERSION"),
-                    "commands": ["capabilities", "schema"],
-                    "schemas": ["output", "record"],
-                    "network": false
-                }),
-            ),
+    let format = args.output_format();
+    let invocation = uuid::Uuid::now_v7().to_string();
+    if format == OutputFormat::Jsonl
+        && stream_event(
+            &mut io::stdout().lock(),
+            &invocation,
             0,
-        ),
-        Command::Schema { name } => {
-            let text = match name.as_str() {
-                "output" => Some(include_str!("../schemas/output-v1.json")),
-                "record" => Some(include_str!("../schemas/record-v1.json")),
-                _ => None,
-            };
-            match text {
-                Some(text) => (
-                    Envelope::success(
-                        "schema",
-                        serde_json::from_str(text).expect("bundled schema"),
-                    ),
-                    0,
-                ),
-                None => (
-                    Envelope::failure(
-                        "schema",
-                        "CAPABILITY_UNAVAILABLE",
-                        format!("Unknown schema: {name}"),
-                    ),
-                    6,
-                ),
-            }
-        }
-    };
-    if args.json {
-        println!(
-            "{}",
-            serde_json::to_string(&result).expect("serializable envelope")
-        );
-    } else if result.ok {
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&result.data).expect("serializable data")
-        );
-    } else if let Some(error) = result.error {
-        eprintln!("{}: {}", error.code, error.message);
+            "started",
+            json!({"command":args.command.name()}),
+        )
+        .is_err()
+    {
+        std::process::exit(1);
     }
-    std::process::exit(exit);
+    let (envelope, exit) = execute(&args);
+    if format == OutputFormat::Human && envelope.command == "read" {
+        if let Some(freshness) = &envelope.meta.freshness {
+            eprintln!(
+                "Freshness: {freshness}{}",
+                envelope
+                    .meta
+                    .verified_at
+                    .as_ref()
+                    .map(|at| format!(" at {at}"))
+                    .unwrap_or_else(|| " (unverified)".into())
+            );
+        }
+        for warning in &envelope.warnings {
+            eprintln!("Warning: {warning}");
+        }
+    }
+    let output_result = if format == OutputFormat::Jsonl {
+        stream_event(
+            &mut io::stdout().lock(),
+            &invocation,
+            1,
+            "completed",
+            serde_json::to_value(&envelope).expect("serializable envelope"),
+        )
+    } else if format == OutputFormat::Human && !envelope.ok {
+        present(&envelope, format, &mut io::stderr().lock())
+    } else {
+        present(&envelope, format, &mut io::stdout().lock())
+    };
+    if output_result.is_err() {
+        std::process::exit(1);
+    }
+    std::process::exit(i32::from(exit));
 }

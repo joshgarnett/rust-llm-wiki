@@ -1,6 +1,6 @@
 {
   "package": "P05",
-  "status": "accepted_tree_checks_passed_commit_pending",
+  "status": "accepted",
   "baseline_commit": "7196eaf741d12fdf1e978511db5560e482108249",
   "platform": {
     "os": "Darwin",
@@ -217,7 +217,8 @@
   "build": {
     "command": "cargo build --locked --offline",
     "exit_code": 0,
-    "log": "/tmp/lwiki-p05-build.log"
+    "log": "/tmp/lwiki-p05-build.log",
+    "seconds": 5.11
   },
   "seed": {
     "files": 34,
@@ -226,5 +227,6 @@
   },
   "diff_check": {
     "exit_code": 0
-  }
+  },
+  "accepted_commit": "6158b5810908dffbea8251ddd386831143bc24ba"
 }

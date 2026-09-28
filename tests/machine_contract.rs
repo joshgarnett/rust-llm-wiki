@@ -28,7 +28,7 @@ fn output_envelope_matches_published_schema() {
 }
 
 #[test]
-fn cli_only_advertises_implemented_commands_and_clean_json() {
+fn capabilities_only_implemented_commands() {
     let binary = env!("CARGO_BIN_EXE_lwiki");
     let output = Command::new(binary)
         .args(["--json", "--offline", "--dry-run", "capabilities"])
@@ -42,10 +42,10 @@ fn cli_only_advertises_implemented_commands_and_clean_json() {
         .unwrap();
     assert_eq!(
         envelope["data"]["commands"],
-        json!(["capabilities", "schema"])
+        json!(lwiki::cli::dispatch::COMMANDS)
     );
     assert_eq!(envelope["meta"]["network_used"], false);
-    for name in ["output", "record"] {
+    for name in ["output", "record", "stream"] {
         let output = Command::new(binary)
             .args(["--json", "schema", name])
             .output()

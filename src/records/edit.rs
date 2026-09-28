@@ -1,8 +1,72 @@
 //! Conservative field-value splicing. No whole-envelope serialization.
-use super::parse::{ParsedNote, line, parse_note};
+use super::parse::{ParseStatus, ParsedNote, line, parse_note};
 use crate::domain::{Blake3Hash, CanonicalRecord, ErrorCode, RecordKind, Result, WikiError};
 use serde_json::Value;
 use std::{collections::BTreeMap, ops::Range};
+
+/// Explicit compatibility migration of a legacy envelope whose entire field set
+/// already validates as v1. Produces guarded proposal bytes, never writes a file.
+pub fn migrate_schema(note: &ParsedNote, target: &str, expected: &Blake3Hash) -> Result<Vec<u8>> {
+    if &note.source_hash != expected || &Blake3Hash::digest(&note.raw) != expected {
+        return Err(WikiError::new(
+            ErrorCode::ContentConflict,
+            "migration predecessor hash differs",
+        ));
+    }
+    if target != "1" {
+        return Err(WikiError::new(
+            ErrorCode::CapabilityUnavailable,
+            "only schema 1 migration is implemented",
+        ));
+    }
+    if !matches!(
+        note.status,
+        ParseStatus::Valid | ParseStatus::UnsupportedSchema
+    ) {
+        return Err(WikiError::invalid(
+            "migration requires a valid lossless YAML envelope",
+        ));
+    }
+    let mut fields = note
+        .fields
+        .clone()
+        .ok_or_else(|| WikiError::invalid("migration metadata unavailable"))?;
+    match fields.get("wiki_schema").and_then(Value::as_str) {
+        Some("1") if note.is_editable() => return Ok(note.raw.clone()),
+        Some("0") => {}
+        _ => {
+            return Err(WikiError::new(
+                ErrorCode::CapabilityUnavailable,
+                "no migration mapping for this schema version",
+            ));
+        }
+    }
+    fields.insert("wiki_schema".into(), Value::String("1".into()));
+    let canonical = CanonicalRecord::new(fields)?;
+    if matches!(
+        canonical.kind(),
+        RecordKind::Revision | RecordKind::ExtractionPacket | RecordKind::RunEvent
+    ) {
+        return Err(WikiError::invalid(
+            "immutable records cannot be migrated in place",
+        ));
+    }
+    let start = *note
+        .field_starts
+        .get("wiki_schema")
+        .ok_or_else(|| WikiError::invalid("migration schema range unavailable"))?;
+    let range = editable_range(note, start, "wiki_schema")?;
+    let mut output = note.raw[..range.start].to_vec();
+    output.extend_from_slice(b"\"1\"");
+    output.extend_from_slice(&note.raw[range.end..]);
+    let result = parse_note(&output);
+    if result.canonical.as_ref() != Some(&canonical) || result.body() != note.body() {
+        return Err(WikiError::invalid(
+            "migration cannot preserve identity, fields and body",
+        ));
+    }
+    Ok(output)
+}
 
 /// Prepare bytes only. The caller must apply through the recoverable changeset engine.
 pub fn edit_note(

@@ -1,4 +1,5 @@
 //! Managed paths, cooperating writer locks, and durable filesystem boundaries.
+pub mod discovery;
 pub mod fs;
 pub mod lock;
 pub mod paths;

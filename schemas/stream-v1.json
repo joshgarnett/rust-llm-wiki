@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:lwiki:stream:1",
+  "type": "object",
+  "properties": {
+    "schema_version": {"const": "1"},
+    "invocation_id": {"type": "string", "minLength": 1},
+    "sequence": {"type": "integer", "minimum": 0},
+    "event": {"enum": ["started", "progress", "checkpoint", "warning", "completed"]},
+    "data": {}
+  },
+  "required": ["schema_version", "invocation_id", "sequence", "event", "data"],
+  "additionalProperties": false
+}

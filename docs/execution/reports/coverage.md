@@ -4,22 +4,22 @@ This ledger retains the complete M0–M4 scope. Planned test names below are obl
 
 | Gate | Required behavior | Packages | Tests / evidence | Status |
 |---|---|---|---|---|
-| V01 Build and contracts | Real library/binary build; pinned usable toolchain/lockfile; exact JSON envelope/errors/schema versions; unknown commands/capabilities not advertised | P00,P06,P21 | P00-checks.json: 10 tests, pinned build, schemas, machine errors; P00-review.md resolved | bootstrap passed; P06/P21 pending |
+| V01 Build and contracts | Real library/binary build; pinned usable toolchain/lockfile; exact JSON envelope/errors/schema versions; unknown commands/capabilities not advertised | P00,P06,P21 | P00-checks.json: 10 tests, pinned build, schemas, machine errors; P00-review.md resolved | P00/P06 machine/build passed; P21 final qualification pending |
 | V02 Lossless records | Comments/unknown fields/body/BOM/CRLF survive authorized edits; invalid/duplicate YAML keys, aliases, unsupported versions, duplicate IDs and ambiguous links diagnosed | P01,P05 | P01-P02-checks.json: 8 lossless tests; P01-review.md resolved | P01/P05 registry passed; later integration pending |
-| V03 Recoverable writes | Faults at actual stage/fsync/journal/replace/publish boundaries; recover old/new states, preserve third-hash edits; lock serialization; abort/rollback checks; no false multi-file atomicity | P02,P03,P06 | P01-P02-checks.json: 12 filesystem/lock tests; P03/P04-checks.json:17 retention/journal+25 recovery,250 boundaries/500faults,2 SIGKILLwrappers; P04 adds8 originalreadguards | P02/P03/P05 actual SQL passed; P06 integration pending |
+| V03 Recoverable writes | Faults at actual stage/fsync/journal/replace/publish boundaries; recover old/new states, preserve third-hash edits; lock serialization; abort/rollback checks; no false multi-file atomicity | P02,P03,P06 | P01-P02-checks.json: 12 filesystem/lock tests; P03/P04-checks.json:17 retention/journal+25 recovery,250 boundaries/500faults,2 SIGKILLwrappers; P04 adds8 originalreadguards | P02/P03/P05 actual SQL/P06 CLI recovery passed; final integrated gate pending |
 | V04 Capture and citations | Immutable originals/revisions; multibyte UTF-8 spans and hashes; ambiguous quotation rejection; direct source citation without fabricated assertion; exact successor revalidation | P04,P09,P13,P19 | P04-checks.json:15 source tests inclnativeoriginal recovery, exactspans/fences/overlap/overlay/successor | P04 passed; P09/P13/P19 integration pending |
 | V05 Catalog and freshness | FTS5 built in; transactionally published generation/FTS view; active reader consistency; new duplicate ID/decision detection; same-size/same-timestamp edits; cache deletion/rebuild without model calls | P05,P09 | P05-checks.json: real bundledFTS/WAL, pinnedreaders, atomicbothFTS+pointer, fullcontrol/sourcehashes, same-timestamp/decision/duplicate/cachedelete rebuild, logicaldrift, migrationloss notices, 11nativeSQLkills | P05 passed; P09 integration pending |
-| V06 Offline retrieval | Literal identifiers and FTS-safe query escaping; deterministic pagination/ties; bounded graph traversal; direction/qualifier preservation; byte/token context caps; no invented transitive assertion | P07,P08,P09 | No passing evidence yet | pending |
+| V06 Offline retrieval | Literal identifiers and FTS-safe query escaping; deterministic pagination/ties; bounded graph traversal; direction/qualifier preservation; byte/token context caps; no invented transitive assertion | P07,P08,P09 | P06-P07-checks.json:13 lexical targets plus CLI search/freshness/cursor/exact spans; independent FFI review closed | P07 passed; P08/P09 pending |
 | V07 Evidence lifecycle | Loss of one/all supports; stale source head; withdrawal/tampering; full-note dependency invalidation; entity identity versus description; honest historical/snapshot/current scopes | P04,P05,P09,P13,P17,P20 | P04/P05-checks.json: current/historical/withdrawn, one/all support loss, fullclosure, cycles, identity/description split and source tampering passed | P04/P05 passed; later integration pending |
 | V08 Host graph workflow | Persist packet → import → apply → resolve → apply → review → apply; homonyms separate; malformed/unknown packet fails; repeated pre/post-apply import idempotent; merge/split/alias remaps; complete active-evidence review | P10,P11,P12,P13 | No passing evidence yet | pending |
-| V09 Skill and machine UX | Real skill export, maintained examples execute against binary; capability-aware commands; JSON/JSONL parse cleanly; documented errors/cancellation; no overwrite of existing host instruction files | P06,P14 | No passing evidence yet | pending |
+| V09 Skill and machine UX | Real skill export, maintained examples execute against binary; capability-aware commands; JSON/JSONL parse cleanly; documented errors/cancellation; no overwrite of existing host instruction files | P06,P14 | P06-P07-checks.json: JSON/JSONL envelopes/errors/schema/capabilities and subprocess CLI10 passed | P06 machine UX passed; P14 skill pending |
 | V10 Dispatch/auth | Real HTTP encode/decode over test transport; exact URL/path/query/model; static key/env/file and dynamic helper; custom headers/TTL/401; no credential leakage; profile trust; redirects and TLS policy | P16,P19 | No passing evidence yet | pending |
 | V11 Budgets and replay | Separate reservation per attempt; concurrent final-slot race; unknown billing retained; checked monetary bounds; invalid/truncated response receipts; response-spool replay; no hidden retries; cancel/resume/deadline | P15,P16,P18,P19,P20 | No passing evidence yet | pending |
 | V12 Embeddings/hybrid | Validate reordered/missing/nonfinite/wrong-dimension vectors; short notes whole; deterministic long splits; exact cosine order; RRF; cache reuse; no stale/mixed spaces; active-space query reproducibility | P16,P17 | No passing evidence yet | pending |
 | V13 Direct extraction | Production generation adapter uses the same strict packet/import/review pipeline; malformed/refused/truncated output cannot activate knowledge; resume/cache reuse without losing decisions | P18,P20 | No passing evidence yet | pending |
 | V14 Acquisition | Search pagination/dedup; explicit URL path; real bounded HTML/text normalization; immutable original capture; DNS/redirect/IP and expansion-size checks; unsupported sources reported | P19,P20 | No passing evidence yet | pending |
 | V15 Research lifecycle | Plan/run/status/resume/report through real planner/dispatcher/storage using mock endpoints; versioned bounded frontier/gap/synthesis outputs; reject malformed/unknown fields, fabricated citations, over-limit outputs and scope/budget/apply changes; bounded rounds/tasks/deadline; no-progress stop; deterministic partial report when budget exhausted; explicit apply behavior | P20 | No passing evidence yet | pending |
-| V16 Network absence | Counting transport/DNS/helper proves no external work for ordinary local commands, `--offline`, or `--dry-run`; dry-run also leaves filesystem/index/journal unchanged | P06–P09,P16–P18,P20 | No passing evidence yet | pending |
+| V16 Network absence | Counting transport/DNS/helper proves no external work for ordinary local commands, `--offline`, or `--dry-run`; dry-run also leaves filesystem/index/journal unchanged | P06–P09,P16–P18,P20 | P06/P07 actual dry-run membership/bytes/mtime unchanged; no network/helper handles in current local layer | local isolation passed; counting transports/P16 and later integrations pending |
 | V17 Final local qualification | Full supported command workflow, relevant fault suite, format/lint/tests, current-platform release build/artifact smoke test, clean capability/requirement coverage, independent review findings resolved | P21 | No passing evidence yet | pending |
 
 ## Package obligations
@@ -29,11 +29,11 @@ This ledger retains the complete M0–M4 scope. Planned test names below are obl
 | P00 | `contracts_valid_examples`, `contracts_invalid_types_and_references`, `id_hash_and_path_newtypes`, `predicate_literal_and_qualifier_matrix`; gate **schema/type bootstrap and reproducible build**. Schema tests distinguish canonical accepted fixtures from later extraction import proposals. | accepted; P00.md, P00-checks.json, P00-review.md (10 tests) |
 | P01 | `frontmatter_preserves_unknown_nested_comments_quotes_bom_crlf`, `reject_duplicate_keys_anchors_tags_and_wrong_types`, `unsupported_schema_is_structured_read_only`, `links_ignore_code_and_preserve_ambiguity`; gate **lossless editing and strict references**. | accepted P01; reports/P01.md, P01-P02-checks.json |
 | P02 | `path_escape_symlink_reserved_and_case_collision`, `scan_skips_control_payload_and_symlink_paths`, `same_directory_replace_and_sync_failures`, `cooperating_writers_serialize`; gate **current-platform filesystem and locking**. | accepted P02; reports/P02.md, P01-P02-checks.json |
-| P03 | `crash_matrix_journal_stage_replace_filesapplied_indexed_commit`, `recovery_old_new_third_hash_and_absence`, `truncated_tail_vs_corrupt_frame`, `rollback_preserves_unfamiliar_edits`, `lost_state_reconstructs_from_payloads`; gate **recoverable canonical changes**. | in progress; P03-A/P03-B/P03-review.md, P03-A-checks.json; final immutable activation fixes/matrix pending |
-| P04 | `capture_preserves_exact_original_and_content`, `unicode_crlf_span_and_separator_newline`, `ambiguous_quote_or_tampered_snapshot_rejected`, `refresh_same_bytes_different_extractor`, `revalidate_successor_never_retargets_old_evidence`; gate **immutable capture and exact evidence**. | pending; reports/P04.md |
+| P03 | `crash_matrix_journal_stage_replace_filesapplied_indexed_commit`, `recovery_old_new_third_hash_and_absence`, `truncated_tail_vs_corrupt_frame`, `rollback_preserves_unfamiliar_edits`, `lost_state_reconstructs_from_payloads`; gate **recoverable canonical changes**. | accepted; P03/P04/P05-checks.json,500 actual I/O faults and real SQL recovery |
+| P04 | `capture_preserves_exact_original_and_content`, `unicode_crlf_span_and_separator_newline`, `ambiguous_quote_or_tampered_snapshot_rejected`, `refresh_same_bytes_different_extractor`, `revalidate_successor_never_retargets_old_evidence`; gate **immutable capture and exact evidence**. | accepted; P04.md/P04-checks.json; exact sources/evidence/read guards passed |
 | P05 | `reader_keeps_snapshot_across_generation_switch`, `failed_fts_publication_preserves_previous_view`, `copied_ids_and_companion_conflicts_exclude_all`, `same_timestamp_edit_and_decision_change_detected`, `cache_delete_rebuild_canonical_equivalence_zero_remote`, `dependency_cycle_and_identity_description_split`; gates **atomic projection publication**, **Markdown-only canonical rebuild**, and **eligibility closure**. | passed; P05.md/P05-checks.json; 127 combined parent tests,31catalog parents,500native I/O faults,11SQLkill points; laterCLI integration pending |
-| P06 | `cli_discovery_precedence_and_exact_ids`, `expected_hash_page_put_rename_and_incoming_links`, `machine_envelope_error_exit_and_no_ansi`, `dry_run_zero_writes_refresh_helpers_dns_http`, `capabilities_only_implemented_commands`, `schema_migration_is_explicit_and_guarded`; gate **offline command and output contract**. | pending; reports/P06.md |
-| P07 | `literal_vec_t_e0308_symbols`, `lexical_or_colon_star_quotes_are_data`, `filter_before_limit_and_stable_ties`, `cursor_query_or_generation_change_is_stale`, `invalid_notes_remain_literal_discovery`; gate **safe deterministic lexical discovery**. | pending; reports/P07.md |
+| P06 | `cli_discovery_precedence_and_exact_ids`, `expected_hash_page_put_rename_and_incoming_links`, `machine_envelope_error_exit_and_no_ansi`, `dry_run_zero_writes_refresh_helpers_dns_http`, `capabilities_only_implemented_commands`, `schema_migration_is_explicit_and_guarded`; gate **offline command and output contract**. | accepted; P06.md/P06-P07-checks.json/P06-review.md; application14/CLI10/machine6 passed |
+| P07 | `literal_vec_t_e0308_symbols`, `lexical_or_colon_star_quotes_are_data`, `filter_before_limit_and_stable_ties`, `cursor_query_or_generation_change_is_stale`, `invalid_notes_remain_literal_discovery`; gate **safe deterministic lexical discovery**. | accepted; P07.md/P06-P07-checks.json/P07-review.md; lexical13 passed, no blocking review findings |
 | P08 | `a_b_c_path_does_not_create_a_c_fact`, `opposite_negated_dated_literal_disputed_edges`, `homonym_labels_never_merge`, `hub_cycle_depth_and_incident_caps`, `graph_lexical_zero_model_calls`; gate **bounded directed graph without inferred assertions**. | pending; reports/P08.md |
 | P09 | `new_decision_or_copied_id_before_emit_is_detected`, `one_support_then_all_support_withdrawal_closure`, `freshness_budget_cannot_claim_verified`, `bundle_support_and_contradiction_fit_or_omit`, `direct_source_vs_note_vs_assertion_citations`, `m1_vertical_rename_refresh_revalidate_recover_rebuild`; gates **verified evidence emission**, **bounded context**, and **M1 offline resilience**. | pending; reports/P09.md |
 | P10 | `packet_exact_window_fingerprint_and_markdown_restore`, `wire_duplicate_unknown_reference_qualifier_and_quote_rejections`, `identical_staged_import_reuses_ids_before_apply`, `conflicting_response_requires_new_extraction`, `model_accepted_flag_cannot_activate`; gate **durable packet-bound proposal import**. | pending; reports/P10.md |
@@ -53,23 +53,23 @@ This ledger retains the complete M0–M4 scope. Planned test names below are obl
 
 | Command | Current status | Owning integration |
 |---|---|---|
-| `init PATH` | pending, except capabilities/schema scaffold | M1 |
-| `capabilities`, `schema NAME` | pending, except capabilities/schema scaffold | M1 |
-| `read --id ID` or `read --path PATH` | pending, except capabilities/schema scaffold | M1 |
-| `page put --file FILE` | pending, except capabilities/schema scaffold | M1 |
-| `page rename ID --to PATH --if-match HASH` | pending, except capabilities/schema scaffold | M1 |
-| `source add FILE` | pending, except capabilities/schema scaffold | M1 |
-| `source refresh ID --file FILE` | pending, except capabilities/schema scaffold | M1 |
-| `source withdraw ID --reason TEXT` | pending, except capabilities/schema scaffold | M1 |
-| `evidence revalidate ID --to-revision REV --if-match HASH` | pending, except capabilities/schema scaffold | M1 |
-| `index sync`, `index rebuild` | pending, except capabilities/schema scaffold | M1 |
-| `search QUERY` | pending, except capabilities/schema scaffold | M1 |
+| `init PATH` | implemented; P06/P07 executable gates passed | M1 |
+| `capabilities`, `schema NAME` | implemented; P06/P07 executable gates passed | M1 |
+| `read --id ID` or `read --path PATH` | implemented; P06/P07 executable gates passed | M1 |
+| `page put --file FILE` | implemented; P06/P07 executable gates passed | M1 |
+| `page rename ID --to PATH --if-match HASH` | implemented; P06/P07 executable gates passed | M1 |
+| `source add FILE` | implemented; P06/P07 executable gates passed | M1 |
+| `source refresh ID --file FILE` | implemented; P06/P07 executable gates passed | M1 |
+| `source withdraw ID --reason TEXT` | implemented; P06/P07 executable gates passed | M1 |
+| `evidence revalidate ID --to-revision REV --if-match HASH` | implemented; P06/P07 executable gates passed | M1 |
+| `index sync`, `index rebuild` | implemented; P06/P07 executable gates passed | M1 |
+| `search QUERY` | implemented; P06/P07 executable gates passed | M1 |
 | `graph neighbors ID`, `graph query QUERY` | pending, except capabilities/schema scaffold | M1 |
 | `context QUERY` | pending, except capabilities/schema scaffold | M1 |
-| `check`, `doctor` | pending, except capabilities/schema scaffold | M1 |
-| `changes show ID`, `changes apply ID` | pending, except capabilities/schema scaffold | M1–M2 |
-| `changes abort ID`, `changes rollback ID` | pending, except capabilities/schema scaffold | M1 |
-| `recover` | pending, except capabilities/schema scaffold | M1 |
+| `check`, `doctor` | implemented; P06/P07 executable gates passed | M1 |
+| `changes show ID`, `changes apply ID` | implemented; P06/P07 executable gates passed | M1–M2 |
+| `changes abort ID`, `changes rollback ID` | implemented; P06/P07 executable gates passed | M1 |
+| `recover` | implemented; P06/P07 executable gates passed | M1 |
 | `graph extract --executor agent` | pending, except capabilities/schema scaffold | M2 |
 | `graph import --file FILE` | pending, except capabilities/schema scaffold | M2 |
 | `graph resolve --file RESOLUTION.json` | pending, except capabilities/schema scaffold | M2 |
