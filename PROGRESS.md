@@ -114,5 +114,6 @@ Start a new `gpt-6-sol` session with the [implementation goal](docs/execution/ST
 - P00 shared types and 13 canonical record schemas implemented; thin CLI currently supports `capabilities` and `schema`.
 - Disposable deterministic bootstrap vault generated with homonyms, Unicode, immutable revisions and exact evidence.
 - Root bootstrap checks: ten all-targets tests, lint, format, build and fixture reproducibility passed; three independent Astra findings corrected and re-reviewed. P00 accepted.
-- All later packages and V01–V17 integrated completion remain pending; see [checkpoint](docs/execution/STATE.md) and [coverage](docs/execution/reports/coverage.md).
+- P01 lossless parser/editor and P02 vault filesystem/lock adapters accepted after 30 combined tests, lint/build/format checks and independent review.
+- P03–P21 and V01–V17 integrated completion remain pending; see [checkpoint](docs/execution/STATE.md) and [coverage](docs/execution/reports/coverage.md).
 - External provider/host/platform/release qualification E01–E05 remains unrun; no live spending, real-vault edits or publishing.

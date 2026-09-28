@@ -37,6 +37,8 @@ Do not reclassify missing code, TODO branches, failing tests, unresolved review 
 | D14 | Do not select a project license or add third-party implementation code without its license obligations | Ordinary dependencies may be evaluated/used; owner licensing decision deferred before publication |
 | D15 | Omitted remote credentials produce a clear capability/configuration error; no silent semantic fallback | Existing CLI contract; explicit lexical fallback remains available where specified |
 | D16 | No real-vault migration, deletion, or provider spending during implementation | Disposable fixtures can exercise destructive/recovery paths safely |
+| D18 | BLAKE3 fingerprints for parser/extractor identities; canonical UTC timestamps accept Z/z/+00:00, reject unknown -00:00 | Explicit reproducible typed spelling; preserves RFC3339 UTC semantics; P00 contracts/tests |
+| D19 | yaml-rust2 event validation + byte-range editor candidate; pulldown-cmark offsets; unicase 2.9.0 portable full folding | P01 spike must prove losslessness. Rejected unicode-casefold 0.2.0 Unicode9 tables after upstream source inspection; modern casing regression in P02 |
 | D17 | Versioned strict model-output schemas for research frontier, gap assessment, and synthesis; root integrates them in P20 | Makes the existing bounded-research contract executable; validated references establish provenance, not semantic truth |
 
 ## Deferred items register
