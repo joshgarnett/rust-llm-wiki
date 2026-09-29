@@ -75,7 +75,6 @@ pub fn spec(fs: &VaultFs, run: &str, count: usize) -> RunSpec {
         created_at_utc_ms: 1_700_000_000_000,
         deadline_utc_ms: 1_700_000_900_000,
         scope: RunScope {
-            research: None,
             operation: "extract".into(),
             question: None,
             exclusions: vec![],

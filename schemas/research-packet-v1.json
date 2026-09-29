@@ -1,0 +1,396 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://lwiki.dev/schemas/research-packet-v1.json",
+  "title": "lwiki research-packet v1",
+  "type": "object",
+  "properties": {
+    "schema": {
+      "const": "lwiki.research-packet.v1"
+    },
+    "vault_id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+    },
+    "run_id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+    },
+    "generation": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 64
+    },
+    "packet_fingerprint": {
+      "type": "string",
+      "pattern": "^blake3:[0-9a-f]{64}$"
+    },
+    "scope_hash": {
+      "type": "string",
+      "pattern": "^blake3:[0-9a-f]{64}$"
+    },
+    "scope": {
+      "type": "object",
+      "properties": {
+        "question": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
+        },
+        "urls": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2048
+          },
+          "maxItems": 32
+        },
+        "exclusions": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2048
+          },
+          "maxItems": 32
+        },
+        "source_ids": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+          },
+          "maxItems": 32
+        },
+        "offline": {
+          "type": "boolean"
+        },
+        "max_rounds": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 8
+        },
+        "max_sources": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 64
+        },
+        "max_source_bytes": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 4194304
+        }
+      },
+      "required": [
+        "question",
+        "urls",
+        "exclusions",
+        "source_ids",
+        "offline",
+        "max_rounds",
+        "max_sources",
+        "max_source_bytes"
+      ],
+      "additionalProperties": false
+    },
+    "stage": {
+      "enum": [
+        "collect_sources",
+        "answer"
+      ]
+    },
+    "round": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 8
+    },
+    "remaining_sources": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 64
+    },
+    "remaining_source_bytes": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 4194304
+    },
+    "instructions": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 4096
+    },
+    "tasks": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 256
+      },
+      "maxItems": 8
+    },
+    "follow_up": {
+      "anyOf": [
+        {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "passages": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "passage_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 16
+          },
+          "citation": {
+            "$ref": "#/$defs/CitationRef"
+          },
+          "quote": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 65536
+          },
+          "dependencies": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/ReadDependency"
+            },
+            "maxItems": 4096
+          }
+        },
+        "required": [
+          "passage_id",
+          "citation",
+          "quote",
+          "dependencies"
+        ],
+        "additionalProperties": false
+      },
+      "maxItems": 32
+    },
+    "response_schema": {
+      "type": "object"
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "gaps": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "maxItems": 64
+    }
+  },
+  "required": [
+    "schema",
+    "vault_id",
+    "run_id",
+    "generation",
+    "packet_fingerprint",
+    "scope_hash",
+    "scope",
+    "stage",
+    "round",
+    "remaining_sources",
+    "remaining_source_bytes",
+    "instructions",
+    "tasks",
+    "follow_up",
+    "passages",
+    "response_schema",
+    "warnings",
+    "gaps"
+  ],
+  "additionalProperties": false,
+  "$defs": {
+    "ReadDependency": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "$ref": "#/$defs/VaultRelativePath"
+        },
+        "expected": {
+          "$ref": "#/$defs/ExpectedState"
+        }
+      },
+      "required": [
+        "path",
+        "expected"
+      ],
+      "additionalProperties": false
+    },
+    "ExpectedState": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "state": {
+              "const": "absent"
+            }
+          },
+          "required": [
+            "state"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "state": {
+              "const": "hash"
+            },
+            "hash": {
+              "$ref": "#/$defs/Blake3Hash"
+            }
+          },
+          "required": [
+            "state",
+            "hash"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "VaultRelativePath": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 4096
+    },
+    "Blake3Hash": {
+      "type": "string",
+      "pattern": "^blake3:[0-9a-f]{64}$"
+    },
+    "RecordId": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+    },
+    "CitationRef": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "source"
+            },
+            "reference": {
+              "type": "object",
+              "properties": {
+                "source_id": {
+                  "$ref": "#/$defs/RecordId"
+                },
+                "source_revision": {
+                  "$ref": "#/$defs/RecordId"
+                },
+                "span": {
+                  "type": "object",
+                  "properties": {
+                    "start": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "end": {
+                      "type": "integer",
+                      "minimum": 0
+                    }
+                  },
+                  "required": [
+                    "start",
+                    "end"
+                  ],
+                  "additionalProperties": false
+                },
+                "quote_hash": {
+                  "$ref": "#/$defs/Blake3Hash"
+                }
+              },
+              "required": [
+                "source_id",
+                "source_revision",
+                "span",
+                "quote_hash"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "kind",
+            "reference"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "assertion"
+            },
+            "reference": {
+              "type": "object",
+              "properties": {
+                "source_id": {
+                  "$ref": "#/$defs/RecordId"
+                },
+                "source_revision": {
+                  "$ref": "#/$defs/RecordId"
+                },
+                "span": {
+                  "type": "object",
+                  "properties": {
+                    "start": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "end": {
+                      "type": "integer",
+                      "minimum": 0
+                    }
+                  },
+                  "required": [
+                    "start",
+                    "end"
+                  ],
+                  "additionalProperties": false
+                },
+                "quote_hash": {
+                  "$ref": "#/$defs/Blake3Hash"
+                },
+                "evidence_id": {
+                  "$ref": "#/$defs/RecordId"
+                },
+                "assertion_id": {
+                  "$ref": "#/$defs/RecordId"
+                }
+              },
+              "required": [
+                "source_id",
+                "source_revision",
+                "span",
+                "quote_hash",
+                "evidence_id",
+                "assertion_id"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "kind",
+            "reference"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    }
+  }
+}

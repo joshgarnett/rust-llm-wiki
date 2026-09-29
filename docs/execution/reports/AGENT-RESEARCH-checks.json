@@ -1,0 +1,564 @@
+{
+  "baseline": "ff3a014f76b3c4e7cb9e3708db8b77056642b239",
+  "scope": "Complete 48-target local suite with affected continuations; not a single all-green invocation. Generic long recovery/unit results reused after research-only guard/schema and fixture/lint corrections.",
+  "live_provider_calls": false,
+  "phases": [
+    {
+      "log": "agent-research-full.log",
+      "outcome": "44 targets passed; lint and three test targets failed, corrected below",
+      "sha256": "66a32632fee91ea0c8ff8718748872bd53007f282944f998ba22a007eaefb202"
+    },
+    {
+      "log": "agent-research-final.log",
+      "outcome": "9 passed; workflow audit fixture failed after earlier recipe fix",
+      "sha256": "50dc3b80cf44d913a0d0ce96eda4329c2bdc9c9bb7e9eb8295bd6aefb0f577fa"
+    },
+    {
+      "log": "agent-research-workflow-final.log",
+      "outcome": "passed",
+      "sha256": "99b63ff49f86eaf0ac14791a52cec713f1e70fc362d17e28f06d4bc036fd4fdf"
+    }
+  ],
+  "targets": [
+    {
+      "target": "//:api_extraction_test",
+      "result": "PASSED",
+      "phase": "agent-research-final.log",
+      "seconds": 38.5,
+      "rust_summary": [
+        12,
+        0,
+        0
+      ],
+      "test_log_sha256": "89ab7b1ec010a2b556a60dc7b20cc5dede8aac0f34ee3d7c2962bdb5a562e7f1"
+    },
+    {
+      "target": "//:binary_tests",
+      "result": "PASSED",
+      "seconds": 0.3,
+      "rust_summary": [
+        0,
+        0,
+        0
+      ],
+      "test_log_sha256": "dda8498500a24c6f25bdd976de84df36843784769c98341dcb7a01c45a090b34"
+    },
+    {
+      "target": "//:build_paths_test",
+      "result": "PASSED",
+      "seconds": 0.4,
+      "rust_summary": [
+        8,
+        0,
+        0
+      ],
+      "test_log_sha256": "9cf6441bce36d243aa021dbb491aa35f01690433355cd876bad4382e4a4ce733"
+    },
+    {
+      "target": "//:catalog_crash_recovery_test",
+      "result": "PASSED",
+      "seconds": 3.2,
+      "rust_summary": [
+        2,
+        0,
+        1
+      ],
+      "test_log_sha256": "e1f76a7379914ea02b12cf4824091918fbcb2c20cd266a4c9b22d96f57d49998"
+    },
+    {
+      "target": "//:catalog_generations_test",
+      "result": "PASSED",
+      "seconds": 3.2,
+      "rust_summary": [
+        15,
+        0,
+        0
+      ],
+      "test_log_sha256": "f395cff9f31f9bb6b9530be69142bea84f6f6df679ef1ed1d513f6024a8837fe"
+    },
+    {
+      "target": "//:catalog_scan_eligibility_test",
+      "result": "PASSED",
+      "seconds": 0.9,
+      "rust_summary": [
+        14,
+        0,
+        0
+      ],
+      "test_log_sha256": "5029eab8d55946f720f8083000ce9c51ade96b380d95e1cae267ea3d619bb4c0"
+    },
+    {
+      "target": "//:change_read_preconditions_test",
+      "result": "PASSED",
+      "seconds": 1.7,
+      "rust_summary": [
+        8,
+        0,
+        0
+      ],
+      "test_log_sha256": "1982e098bda552dc04a82c755924d5cdce1753d98c835640f9d1b64914962659"
+    },
+    {
+      "target": "//:changes_prepare_journal_test",
+      "result": "PASSED",
+      "seconds": 23.7,
+      "rust_summary": [
+        17,
+        0,
+        0
+      ],
+      "test_log_sha256": "205fb77f958dc805d0631363ee5c17ccb4a0884d39a6309b01b3559c6404127d"
+    },
+    {
+      "target": "//:changes_recovery_test",
+      "result": "PASSED",
+      "seconds": 338.1,
+      "rust_summary": [
+        28,
+        0,
+        1
+      ],
+      "test_log_sha256": "f94031c7f5b0c0f8dffcc6cb6dcb8fda858c81fb9f451fdb584c7a0ef31145e6"
+    },
+    {
+      "target": "//:clippy",
+      "result": "PASSED",
+      "phase": "agent-research-workflow-final.log",
+      "seconds": 0.1,
+      "rust_summary": null,
+      "test_log_sha256": "d36c1fa7625aea8e4bcff91fe89957c30b5b4fc30505c49d1da11868677fe5a2"
+    },
+    {
+      "target": "//:context_cli_test",
+      "result": "PASSED",
+      "seconds": 7.4,
+      "rust_summary": [
+        5,
+        0,
+        0
+      ],
+      "test_log_sha256": "6c6ea24726c0ce85abcfdc8759a8807872535a3f5e5e720297cdda4d85624eb2"
+    },
+    {
+      "target": "//:context_freshness_test",
+      "result": "PASSED",
+      "seconds": 4.5,
+      "rust_summary": [
+        18,
+        0,
+        0
+      ],
+      "test_log_sha256": "121671997588a8ab151ba3c63071cb71ca183a8eb52c1dc0eafd58dac923ffee"
+    },
+    {
+      "target": "//:contracts_test",
+      "result": "PASSED",
+      "seconds": 0.7,
+      "rust_summary": [
+        4,
+        0,
+        0
+      ],
+      "test_log_sha256": "4ce86f5b3b10fe2503cb77ce7d0d0baf363c8c593fb812e5874a2338e32422d7"
+    },
+    {
+      "target": "//:doc_tests",
+      "result": "PASSED",
+      "seconds": 2.0,
+      "rust_summary": [
+        0,
+        0,
+        0
+      ],
+      "test_log_sha256": "2561be9ff343002bc37722f94ec521c410d1e76340f34b6842a04f8ab587f371"
+    },
+    {
+      "target": "//:entity_decisions_cli_test",
+      "result": "PASSED",
+      "seconds": 2.3,
+      "rust_summary": [
+        3,
+        0,
+        0
+      ],
+      "test_log_sha256": "fb62b73cbe5755b46ef82609d3ae1048fe3349c2a07fb5c81ed7ccf9e0524352"
+    },
+    {
+      "target": "//:entity_decisions_inverse_test",
+      "result": "PASSED",
+      "seconds": 66.1,
+      "rust_summary": [
+        10,
+        0,
+        0
+      ],
+      "test_log_sha256": "8f27ac5cc11bef9a34f06fdd692fccafc519fda8584d59063746ad87dca97590"
+    },
+    {
+      "target": "//:entity_decisions_test",
+      "result": "PASSED",
+      "seconds": 53.3,
+      "rust_summary": [
+        19,
+        0,
+        0
+      ],
+      "test_log_sha256": "0eb28b71d3649ec3e574bf0b2c0f54c1f343e33345d19a2f93685bd5f5431052"
+    },
+    {
+      "target": "//:extraction_cli_test",
+      "result": "PASSED",
+      "seconds": 2.9,
+      "rust_summary": [
+        3,
+        0,
+        0
+      ],
+      "test_log_sha256": "e0c75b1f0322efafbfe1d3939bee641958cc4f7b7c2956c110f5d0ec9165c6e3"
+    },
+    {
+      "target": "//:extraction_import_test",
+      "result": "PASSED",
+      "seconds": 15.2,
+      "rust_summary": [
+        13,
+        0,
+        0
+      ],
+      "test_log_sha256": "eb6d46cd140ff939a14f6fb75cc4122227623e722171f40f9360b70d35897418"
+    },
+    {
+      "target": "//:fixture_hash_tests",
+      "result": "PASSED",
+      "seconds": 0.3,
+      "rust_summary": [
+        0,
+        0,
+        0
+      ],
+      "test_log_sha256": "6b696c33c2173bed8bd541e1aa33f087afddc3b34299b3b8bcc724d619099682"
+    },
+    {
+      "target": "//:format",
+      "result": "PASSED",
+      "phase": "agent-research-workflow-final.log",
+      "seconds": 0.1,
+      "rust_summary": null,
+      "test_log_sha256": "862b2c9cf9e5c0e7cc1f78d2fbd363e2f876a54149c1a98b93ae20e014d40de5"
+    },
+    {
+      "target": "//:graph_cli_test",
+      "result": "PASSED",
+      "seconds": 1.2,
+      "rust_summary": [
+        4,
+        0,
+        0
+      ],
+      "test_log_sha256": "03131e51f3012e216452f4a452fa010d56fdea68889008b1b3ed98681a9fff39"
+    },
+    {
+      "target": "//:graph_queries_test",
+      "result": "PASSED",
+      "seconds": 6.5,
+      "rust_summary": [
+        17,
+        0,
+        0
+      ],
+      "test_log_sha256": "c019048460a3aec0dcfe5c83b56b8ca930506e024c21d403899695520ef9e44e"
+    },
+    {
+      "target": "//:graph_resolution_test",
+      "result": "PASSED",
+      "seconds": 82.8,
+      "rust_summary": [
+        20,
+        0,
+        0
+      ],
+      "test_log_sha256": "430784e5107cc7ac44101b346f5e8a09d0d09a761decf1827d5586d4256c836e"
+    },
+    {
+      "target": "//:graph_review_test",
+      "result": "PASSED",
+      "seconds": 86.2,
+      "rust_summary": [
+        21,
+        0,
+        0
+      ],
+      "test_log_sha256": "34e55641c82f6a922c8f9069143101afdd6e730864a90024dbfc18a1ee8c82f9"
+    },
+    {
+      "target": "//:job_accounting_test",
+      "result": "PASSED",
+      "seconds": 7.1,
+      "rust_summary": [
+        13,
+        0,
+        1
+      ],
+      "test_log_sha256": "bb236446e14db9fb8889eaa65e00f53d9e6c013cb5a48a11cd32300e33bc8e39"
+    },
+    {
+      "target": "//:m1_workflow_test",
+      "result": "PASSED",
+      "seconds": 8.3,
+      "rust_summary": [
+        1,
+        0,
+        0
+      ],
+      "test_log_sha256": "15f4ca69c4dd9db16fe05c4becf5b4db741448cb9990fc1c39d54af65101a633"
+    },
+    {
+      "target": "//:m2_workflow_test",
+      "result": "PASSED",
+      "seconds": 12.5,
+      "rust_summary": [
+        1,
+        0,
+        0
+      ],
+      "test_log_sha256": "541139b19e8ba8c2ec705021ca164e95e2e2edce2507056aa4e2aca6871850b9"
+    },
+    {
+      "target": "//:machine_contract_test",
+      "result": "PASSED",
+      "phase": "agent-research-final.log",
+      "seconds": 0.6,
+      "rust_summary": [
+        7,
+        0,
+        0
+      ],
+      "test_log_sha256": "66b9be66ff5aced6707b9b9d0fdb25a25f463ee1fe257dcc792b7414abe32515"
+    },
+    {
+      "target": "//:offline_application_test",
+      "result": "PASSED",
+      "seconds": 9.5,
+      "rust_summary": [
+        16,
+        0,
+        0
+      ],
+      "test_log_sha256": "38b37920cf0a199a741c6401098b7fcf5d728c3a5dd83136d162d681cdd54960"
+    },
+    {
+      "target": "//:offline_cli_test",
+      "result": "PASSED",
+      "seconds": 4.2,
+      "rust_summary": [
+        10,
+        0,
+        0
+      ],
+      "test_log_sha256": "a39f29e7dc7fe7979d8e9a99d3a5197be85ccfe972c89e193ae09ebe7273efde"
+    },
+    {
+      "target": "//:provider_dispatch_test",
+      "result": "PASSED",
+      "phase": "agent-research-final.log",
+      "seconds": 5.5,
+      "rust_summary": [
+        6,
+        0,
+        0
+      ],
+      "test_log_sha256": "c3791c9171c1f285a9470797258463ce0b8dc8a0ee88ee75bd909492760a2e0f"
+    },
+    {
+      "target": "//:provider_trust_test",
+      "result": "PASSED",
+      "seconds": 0.5,
+      "rust_summary": [
+        7,
+        0,
+        0
+      ],
+      "test_log_sha256": "76778f7dfb4cd1e1c46a90bf1d6d87e1d62d02298441389ebaeac4d189a4692f"
+    },
+    {
+      "target": "//:provider_wire_test",
+      "result": "PASSED",
+      "seconds": 16.2,
+      "rust_summary": [
+        10,
+        0,
+        0
+      ],
+      "test_log_sha256": "b40965eb92e4ea484e2ba43d808fcacd32e0892762151b86b8ca15c18b684e66"
+    },
+    {
+      "target": "//:records_lossless_test",
+      "result": "PASSED",
+      "seconds": 0.4,
+      "rust_summary": [
+        8,
+        0,
+        0
+      ],
+      "test_log_sha256": "4955ca072f84856ddd2977434b85b51e39f9727172b65a8488094852ae4cb0d4"
+    },
+    {
+      "target": "//:release_workflows_test",
+      "result": "PASSED",
+      "phase": "agent-research-workflow-final.log",
+      "seconds": 40.2,
+      "rust_summary": [
+        1,
+        0,
+        0
+      ],
+      "test_log_sha256": "6f5cad3f3b5627bffbcbd85c91a760b78c5ba71ffc89487ce809f9874ce43458"
+    },
+    {
+      "target": "//:remote_cli_test",
+      "result": "PASSED",
+      "phase": "agent-research-final.log",
+      "seconds": 14.3,
+      "rust_summary": [
+        10,
+        0,
+        0
+      ],
+      "test_log_sha256": "33295354ef4ed63482d4f3ed667c66e295ddad29818a8b7316b64761b7c97bfc"
+    },
+    {
+      "target": "//:research_handoff_test",
+      "result": "PASSED",
+      "phase": "agent-research-final.log",
+      "seconds": 9.5,
+      "rust_summary": [
+        6,
+        0,
+        0
+      ],
+      "test_log_sha256": "0edb1464f7b2954cc01b01f666066ee657064268f9a4b689c6827bc7a8b41f85"
+    },
+    {
+      "target": "//:research_recovery_test",
+      "result": "PASSED",
+      "phase": "agent-research-final.log",
+      "seconds": 25.7,
+      "rust_summary": [
+        4,
+        0,
+        0
+      ],
+      "test_log_sha256": "030faab09e0b37cac23ead4662c4aa58d44b5b4ec43b64717afe17586de4e582"
+    },
+    {
+      "target": "//:resolution_cli_test",
+      "result": "PASSED",
+      "seconds": 5.8,
+      "rust_summary": [
+        4,
+        0,
+        0
+      ],
+      "test_log_sha256": "a3071727beeb6da258850831768f82252694303a5f2ea376eac1406a65f56352"
+    },
+    {
+      "target": "//:retrieval_baseline_test",
+      "result": "PASSED",
+      "seconds": 12.4,
+      "rust_summary": [
+        2,
+        0,
+        1
+      ],
+      "test_log_sha256": "94c77cf622642b1bd844801488c1ec42a756f5304c95072ec8df918dc69037e4"
+    },
+    {
+      "target": "//:retrieval_lexical_test",
+      "result": "PASSED",
+      "seconds": 8.3,
+      "rust_summary": [
+        19,
+        0,
+        0
+      ],
+      "test_log_sha256": "66563eca0da6f45bd1bbf1bd00a8dbb4793c7644580659efe5c71585a979f8de"
+    },
+    {
+      "target": "//:semantic_retrieval_test",
+      "result": "PASSED",
+      "seconds": 19.6,
+      "rust_summary": [
+        21,
+        0,
+        0
+      ],
+      "test_log_sha256": "fe33e57a454ed39a82de38fdfc0fd2a85e45cd9ac8c2d8ef30e2dce6214a1d01"
+    },
+    {
+      "target": "//:skill_export_test",
+      "result": "PASSED",
+      "phase": "agent-research-final.log",
+      "seconds": 9.3,
+      "rust_summary": [
+        4,
+        0,
+        0
+      ],
+      "test_log_sha256": "eacf0b8e53e9ca45e687262dfce542b56f6e132c0e024feaa2c20cd898bbbf24"
+    },
+    {
+      "target": "//:sources_evidence_test",
+      "result": "PASSED",
+      "seconds": 9.2,
+      "rust_summary": [
+        15,
+        0,
+        0
+      ],
+      "test_log_sha256": "7e44b87a8690e061ee5eab9dda769a7c1b9954665bfbd06ded29ea5309d9c70a"
+    },
+    {
+      "target": "//:unit_tests",
+      "result": "PASSED",
+      "seconds": 785.7,
+      "rust_summary": [
+        129,
+        0,
+        3
+      ],
+      "test_log_sha256": "b1ccfcc75b84058d66e25889cb2cd6087251a3ca6638492d84ee7fcc3d799991"
+    },
+    {
+      "target": "//:vault_fs_test",
+      "result": "PASSED",
+      "seconds": 1.2,
+      "rust_summary": [
+        15,
+        0,
+        0
+      ],
+      "test_log_sha256": "621412d2faec86fcd3b88c517d246cfb0ff962cd3eceb069d40a8776f0161779"
+    },
+    {
+      "target": "//:windows_acl_policy_test",
+      "result": "PASSED",
+      "seconds": 0.3,
+      "rust_summary": [
+        7,
+        0,
+        0
+      ],
+      "test_log_sha256": "524a4f62e4897d584aff5f997fbadcba1e4ca7cb89f40d72c6468d810969928c"
+    }
+  ],
+  "rust_cases_passed": 557,
+  "ignored_helpers": 7,
+  "python_tooling_tests_passed": 41,
+  "manual_smoke": {
+    "ok": true,
+    "commands_passed": 30,
+    "vault": "/var/folders/g0/jdy1y8615k30fs6sbf4x1wt40000gn/T/lwiki-0.1.1-manual-dhem85re/vault",
+    "log": "/var/folders/g0/jdy1y8615k30fs6sbf4x1wt40000gn/T/lwiki-0.1.1-manual-dhem85re/commands.jsonl",
+    "network_used": false
+  }
+}

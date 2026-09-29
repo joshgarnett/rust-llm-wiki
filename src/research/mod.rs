@@ -1,17 +1,8 @@
-//! Bounded acquisition and research workflow adapters.
-pub mod acquire;
-
-pub mod frontier;
-pub mod gaps;
-pub mod synthesis;
-pub mod types;
+//! Local, durable handoffs to a host agent. This module never executes tools.
+mod codec;
+mod engine;
+mod inspection;
+mod storage;
+mod types;
+pub use engine::*;
 pub use types::*;
-
-pub mod plan;
-
-pub mod stages;
-
-pub mod inspection;
-
-pub mod report;
-pub mod runner;

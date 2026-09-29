@@ -1,5 +1,4 @@
-//! Current exact-source inspection with a disposable in-memory lexical index.
-use super::{ResearchPassage, ResearchScope};
+use super::{codec::invalid, types::*};
 use crate::{
     catalog::Catalog,
     changes::ReadDependency,
@@ -7,114 +6,121 @@ use crate::{
     sources::{CitationScope, SourceView},
     vault::{ExpectedState, VaultFs},
 };
-use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct ResearchInspection {
-    pub passages: Vec<ResearchPassage>,
-    pub records: Vec<RecordRef>,
-    pub snapshot: ReadSnapshot,
-    pub dependencies: Vec<ReadDependency>,
-    pub warnings: Vec<String>,
-}
-pub fn inspect(
+pub(crate) fn inspect(
     fs: &VaultFs,
     vault: &RecordId,
     scope: &ResearchScope,
-) -> Result<ResearchInspection> {
-    super::plan::validate_scope(scope)?;
-    let reader = Catalog::new(fs.clone(), vault.clone()).canonical_snapshot()?;
-    let hits = crate::retrieval::search(&reader, &scope.question, &scope.limits.retrieval)?;
+) -> Result<Vec<ResearchPassage>> {
     let view = SourceView::from_fs_bounded(fs, 64 * 1024 * 1024, 4096)?;
-    let mut passages = Vec::new();
-    let mut dependencies = BTreeMap::new();
+    let mut citations = vec![];
+    for source in &scope.source_ids {
+        citations.push(source_citation(&view, source)?);
+    }
+    let reader = Catalog::new(fs.clone(), vault.clone()).canonical_snapshot()?;
+    let hits = crate::retrieval::search(
+        &reader,
+        &scope.question,
+        &crate::retrieval::QueryPlan::default(),
+    )?;
+    citations.extend(
+        hits.hits
+            .into_iter()
+            .filter(|h| h.eligibility == Eligibility::Current)
+            .filter_map(|h| h.excerpt.citation),
+    );
     let mut seen = BTreeSet::new();
-    let mut bytes = 0usize;
-    let mut records = BTreeMap::new();
-    let mut warnings = hits.warnings;
-    for hit in hits.hits {
-        if hit.eligibility != Eligibility::Current {
-            continue;
-        }
-        if let Some(reference) = &hit.locator.record
-            && reference.expected_kind == RecordKind::Page
-            && records.len() < scope.limits.stage.max_proposals
-        {
-            dependencies.insert(
-                hit.locator.path.clone(),
-                ExpectedState::Hash(hit.locator.observed_hash.clone()),
-            );
-            records.insert(reference.record_id.clone(), reference.clone());
-        }
-        let Some(citation) = hit.excerpt.citation else {
-            continue;
-        };
+    let mut passages = vec![];
+    let mut total = 0;
+    for citation in citations {
         if !seen.insert(crate::graph::packet::canonical_json(&citation)?) {
             continue;
         }
         let verified = view.verify(&citation, CitationScope::Current)?;
-        bytes = bytes
-            .checked_add(verified.quote.len())
-            .ok_or_else(|| WikiError::invalid("research passage bytes overflow"))?;
-        if bytes > scope.limits.stage.max_text_bytes
-            || passages.len() >= scope.limits.stage.max_citations
-        {
-            warnings.push("Existing source passages exceeded the research context limit".into());
+        if passages.len() == MAX_PASSAGES || total + verified.quote.len() > MAX_PASSAGE_BYTES {
             break;
         }
-        for dep in &verified.dependencies {
-            if dependencies
-                .insert(dep.path.clone(), dep.expected.clone())
-                .is_some_and(|old| old != dep.expected)
-            {
-                return Err(WikiError::new(
-                    ErrorCode::FreshnessConflict,
-                    "research inspection saw conflicting source states",
-                ));
-            }
-        }
+        total += verified.quote.len();
         passages.push(ResearchPassage {
+            passage_id: format!("p{}", passages.len() + 1),
             citation,
             quote: String::from_utf8(verified.quote)
-                .map_err(|_| WikiError::invalid("research quotation UTF-8"))?,
+                .map_err(|_| invalid("research source UTF-8"))?,
             dependencies: verified.dependencies,
         });
     }
-    let source_refs: Vec<_> = passages
-        .iter()
-        .flat_map(|p| match &p.citation {
-            CitationRef::Source(s) => vec![
-                (s.source_id.clone(), RecordKind::Source),
-                (s.source_revision.clone(), RecordKind::Revision),
-            ],
-            CitationRef::Assertion(e) => vec![
-                (e.source_id.clone(), RecordKind::Source),
-                (e.source_revision.clone(), RecordKind::Revision),
-                (e.evidence_id.clone(), RecordKind::Evidence),
-                (e.assertion_id.clone(), RecordKind::Assertion),
-            ],
-        })
-        .collect();
-    for (id, kind) in source_refs {
-        records.insert(
-            id.clone(),
-            RecordRef {
-                vault_id: vault.clone(),
-                record_id: id,
-                expected_kind: kind,
-            },
-        );
+    Ok(passages)
+}
+fn source_citation(view: &SourceView<'_>, source: &RecordId) -> Result<CitationRef> {
+    let (_, note) = view.resolve(source, RecordKind::Source, None)?;
+    let revision = RecordId::new(
+        note.canonical
+            .as_ref()
+            .and_then(|r| r.string("wiki_current_revision"))
+            .ok_or_else(|| invalid("source head missing"))?,
+    )?;
+    let content = view.revision_content_bounded(
+        source,
+        &revision,
+        &mut BTreeMap::new(),
+        1024 * 1024,
+        1024 * 1024,
+    )?;
+    let text = std::str::from_utf8(&content).map_err(|_| invalid("source is not UTF-8"))?;
+    let mut end = text.len().min(4096);
+    while !text.is_char_boundary(end) {
+        end -= 1;
     }
-    Ok(ResearchInspection {
-        passages,
-        records: records.into_values().collect(),
-        snapshot: reader.snapshot().clone(),
-        dependencies: dependencies
-            .into_iter()
-            .map(|(path, expected)| ReadDependency { path, expected })
-            .collect(),
-        warnings,
-    })
+    Ok(CitationRef::Source(SourceSpanRef {
+        source_id: source.clone(),
+        source_revision: revision,
+        span: ByteSpan::new(0, end as u64)?,
+        quote_hash: Blake3Hash::digest(&content[..end]),
+    }))
+}
+pub(crate) fn verify(fs: &VaultFs, packet: &ResearchPacket) -> Result<Vec<ReadDependency>> {
+    let view = SourceView::from_fs_bounded(fs, 64 * 1024 * 1024, 4096)?;
+    let mut dependencies = BTreeMap::new();
+    let mut ids = BTreeSet::new();
+    let mut total = 0;
+    for passage in &packet.passages {
+        total += passage.quote.len();
+        if total > MAX_PASSAGE_BYTES || !ids.insert(&passage.passage_id) {
+            return Err(invalid("packet passage bounds or identity differs"));
+        }
+        let proof = view
+            .verify(&passage.citation, CitationScope::Current)
+            .map_err(stale)?;
+        if proof.quote != passage.quote.as_bytes() {
+            return Err(stale(invalid("packet quotation changed")));
+        }
+        for dependency in &passage.dependencies {
+            if !matches!(&dependency.expected, ExpectedState::Hash(hash) if crate::changes::prepare::read_bounded(fs, &dependency.path, 64 * 1024 * 1024)?.is_some_and(|b| &Blake3Hash::digest(b) == hash))
+            {
+                return Err(stale(invalid("packet dependency changed")));
+            }
+        }
+        for dependency in proof.dependencies {
+            if dependencies
+                .insert(dependency.path, dependency.expected.clone())
+                .is_some_and(|old| old != dependency.expected)
+            {
+                return Err(stale(invalid("inconsistent packet dependencies")));
+            }
+        }
+    }
+    Ok(dependencies
+        .into_iter()
+        .map(|(path, expected)| ReadDependency { path, expected })
+        .collect())
+}
+fn stale(error: WikiError) -> WikiError {
+    WikiError::new(
+        ErrorCode::FreshnessConflict,
+        format!(
+            "Research packet is stale; use research resume RUN --refresh to replace it: {}",
+            error.message
+        ),
+    )
 }

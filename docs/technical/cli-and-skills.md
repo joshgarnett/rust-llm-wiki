@@ -49,7 +49,7 @@ Commands appear in `capabilities` only when implemented. The following is the im
 | `skill export --target HOST --output DIR` | Export the maintained portable usage skill for explicit installation | M2 |
 | `embeddings check`, `embeddings sync` | Validate/probe the configured profile; explicitly generate missing vectors | M3 |
 | `graph extract --executor api` | Execute the same extraction contract through the generation adapter | M3 |
-| `research plan`, `run`, `resume`, `status`, `report` | Durable bounded research lifecycle | M4 |
+| `research plan`, `run`, `resume`, `import`, `status`, `report` | Local [agent handoffs](research-handoffs.md), guarded imports and cited reports | M4 |
 
 `--file -` reads bounded stdin. Body text, bulk payloads, and secrets are not interpolated into shell strings. No command depends on an editor, pager, `jq`, or `rg`. Editor launching can follow after the deterministic file/stdin write path exists. No default destructive purge command or automatic Git commit is needed for v1.
 

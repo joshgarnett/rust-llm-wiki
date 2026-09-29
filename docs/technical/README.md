@@ -30,3 +30,5 @@ Storage owns `RecordRef`, `SourceSpanRef`, `EvidenceRef`, `CitationRef`, `ReadSn
 Source evidence uses zero-based, half-open UTF-8 byte spans against immutable normalized bytes, with named BLAKE3 hashes. Path links help humans navigate; IDs plus kind checks identify records. A graph path is not proof of an unstated new assertion.
 
 The technical documents take precedence over exploratory implementation alternatives in the earlier research and architecture. They preserve the confirmed product requirements; remaining naming/provider/platform choices are listed in the handoff. These are design decisions with acceptance gates. Performance defaults and provider compatibility remain unmeasured until implementation tests and a representative corpus exist.
+
+The implemented research contract is [agent research handoffs](research-handoffs.md). It supersedes the historical built-in research execution plan: host agents own tools; lwiki owns guarded capture, citations and local progress.

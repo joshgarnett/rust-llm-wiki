@@ -150,14 +150,12 @@ impl RemoteArguments {
 pub enum ProbeRole {
     Embed,
     Generate,
-    Search,
 }
 impl ProbeRole {
     pub fn service_role(self) -> crate::providers::types::ServiceRole {
         match self {
             Self::Embed => crate::providers::types::ServiceRole::Embed,
             Self::Generate => crate::providers::types::ServiceRole::Generate,
-            Self::Search => crate::providers::types::ServiceRole::Search,
         }
     }
 }

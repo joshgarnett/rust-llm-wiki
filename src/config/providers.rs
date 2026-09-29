@@ -64,15 +64,12 @@ pub(crate) enum AdapterKind {
     ChatCompletionsV1,
     #[serde(rename = "responses-v1")]
     ResponsesV1,
-    #[serde(rename = "brave-web-v1")]
-    BraveWebV1,
 }
 impl AdapterKind {
     fn capability(self) -> Capability {
         match self {
             Self::EmbeddingsV1 => Capability::Embed,
             Self::ChatCompletionsV1 | Self::ResponsesV1 => Capability::Generate,
-            Self::BraveWebV1 => Capability::Search,
         }
     }
 }
@@ -204,7 +201,6 @@ impl AuthConfig {
 struct ProfileConfig {
     embedding: Option<String>,
     generation: Option<String>,
-    search: Option<String>,
 }
 #[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -341,7 +337,6 @@ impl ProviderConfig {
             for (id, capability) in [
                 (profile.embedding.as_ref(), Capability::Embed),
                 (profile.generation.as_ref(), Capability::Generate),
-                (profile.search.as_ref(), Capability::Search),
             ] {
                 if let Some(id) = id {
                     identifier(id)?;
@@ -427,7 +422,6 @@ impl ProviderConfig {
         let service_id = match capability {
             Capability::Embed => p.embedding.as_ref(),
             Capability::Generate => p.generation.as_ref(),
-            Capability::Search => p.search.as_ref(),
             _ => None,
         }
         .ok_or_else(untrusted)?;
@@ -850,8 +844,7 @@ fn service(r: RawService) -> Result<Service> {
         ) && generation)
         || (r.adapter == AdapterKind::ResponsesV1
             && (r.instruction_role.is_some() || r.output_limit_field.is_some()))
-        || (r.adapter != AdapterKind::BraveWebV1 && r.model.is_none())
-        || (r.adapter == AdapterKind::BraveWebV1 && (r.model.is_some() || r.revision.is_some()))
+        || r.model.is_none()
     {
         return Err(config_error(
             "adapter settings do not match the declared capability",

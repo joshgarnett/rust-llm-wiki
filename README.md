@@ -21,7 +21,7 @@ just candidate .artifacts/candidate-001
 
 Choose a new directory for `init`; it refuses an existing vault. Local capture/search/context do not need provider credentials. Use [the maintained skill workflows](skills/llm-wiki/references/workflows.md) for guarded edits, packet extraction, explicit resolution and review. `skill export --target codex|claude-code|cursor --output DIR` exports the workflow, executable examples and command reference from the running binary.
 
-Remote embedding, API extraction, `doctor --probe` and research require explicit trusted provider configuration and caller budgets. `--offline` prevents remote work; `--dry-run` previews without writes or credential resolution. Research reports retain gaps and unassessed model claims; valid citation bytes do not prove a claim's meaning. Budget stops return exit 7 with retained partial output, and orderly interruption returns exit 130. Resume preserves lifetime limits and accounting; `research resume RUN_ID --amend-limits FILE` is the explicit amendment path.
+Remote embedding, API extraction and `doctor --probe` require explicit trusted provider configuration and caller budgets. Research instead hands bounded packets to a host agent: `research run QUESTION` persists a packet, `research import --file FILE` validates the agent's submitted sources or answer, and `research resume RUN_ID` returns the outstanding packet. The CLI does not search, fetch or generate for research. `--offline` research uses local or already captured content; `--dry-run` and `research plan` only preview. Reports retain gaps and unassessed claims; valid citation bytes do not prove a claim's meaning. Host-agent network and token usage are unobserved by CLI accounting.
 
 Developers use Just with Bazel 9.2.0, rules_rust 0.72.0 and Rust 1.98.0. `just ci` checks formatting, Clippy, build tooling and CLI smoke tests; `just qualify` runs the full native test/doctest/release gates with cached test results disabled and exercises the copied binary with a minimal system PATH in a disposable vault. Normal commands use the native platform wrapper and `--nofetch` after `just deps-fetch`; Cargo remains for metadata, lock maintenance and formatting edits. See [build commands and GitHub workflows](docs/builds.md) for setup, evidence and limits.
 
@@ -39,6 +39,8 @@ The [six native GitHub release jobs](https://github.com/joshgarnett/rust-llm-wik
 - [Entity/relationship graph](docs/knowledge-graph.md): extraction, entity resolution, evidence, incremental updates, and graph retrieval.
 - [Agent integration and skill plan](docs/agent-integration.md): Codex, Claude Code, and Cursor.
 - [Progress](PROGRESS.md): completed work, user decisions, and verification limits.
+
+For the 0.1.1 release, use the [download and test-agent guide](docs/testing-0.1.1.md), including the offline regression script and live gateway checks.
 
 ## Research
 

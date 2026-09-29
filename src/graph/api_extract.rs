@@ -159,7 +159,6 @@ impl OfflineApp {
                 created_at_utc_ms: request.created_at_utc_ms,
                 deadline_utc_ms: request.deadline_utc_ms,
                 scope: RunScope {
-                    research: None,
                     operation: "graph_extract_api".into(),
                     question: None,
                     exclusions: vec![],

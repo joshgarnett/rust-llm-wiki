@@ -141,7 +141,7 @@ pub enum Command {
         #[command(subcommand)]
         command: IndexCommand,
     },
-    /// Plan and run bounded research with retained evidence and budgets.
+    /// Coordinate research with an agent using durable local packets and cited submissions.
     Research(super::research::ResearchArguments),
     /// Inspect local vector coverage or explicitly generate embeddings.
     Embeddings(super::embeddings::EmbeddingArguments),
@@ -627,6 +627,7 @@ impl Command {
                 | Self::Research(super::research::ResearchArguments {
                     command: super::research::ResearchCommand::Run(_)
                         | super::research::ResearchCommand::Resume(_)
+                        | super::research::ResearchCommand::Import { .. }
                 })
                 | Self::Changes {
                     command: ChangesCommand::Apply { .. }

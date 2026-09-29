@@ -392,7 +392,7 @@ fn retained_decode_survives_source_change_but_materialization_requires_freshness
     assert_eq!(mock.calls.load(Ordering::SeqCst), 1);
 }
 #[test]
-fn retained_response_wrong_model_contract_never_reuses_or_resends() {
+fn retained_response_uses_original_model_and_rejects_saved_contract_tampering() {
     let f = Fixture::new();
     let mock = Mock::response(f.response());
     let a = retained(&f, mock.clone());
@@ -406,19 +406,80 @@ fn retained_response_wrong_model_contract_never_reuses_or_resends() {
         .authorize(&f.fs, &id("vault_test"), "primary", Capability::Generate)
         .unwrap();
     let dispatch = f.dispatcher(mock.clone());
-    assert!(
-        dispatch
-            .decode_retained(
-                &f.ledger(),
-                &service,
-                &a.attempt.task_key,
-                lwiki::providers::types::DispatchPurpose::Task,
-                &a.attempt
-            )
-            .is_err()
+    let ledger = f.ledger();
+    let before = ledger.inspect().unwrap();
+    let decoded = dispatch
+        .decode_retained(
+            &ledger,
+            &service,
+            &a.attempt.task_key,
+            lwiki::providers::types::DispatchPurpose::Task,
+            &a.attempt,
+        )
+        .unwrap();
+    let lwiki::providers::types::ValidatedOutput::Generation {
+        value,
+        returned_model,
+        ..
+    } = decoded
+    else {
+        panic!("retained generation required")
+    };
+    assert_eq!(value, f.response());
+    assert_eq!(returned_model.as_deref(), Some("test-model"));
+    assert_eq!(
+        before.attempts[0].bound.requested_model.as_deref(),
+        Some("test-model")
     );
+
+    // Current configuration cannot rewrite the authenticated historical model.
+    // Altering that model in the saved codec must remain a recovery failure,
+    // not a rejected paid output or permission to dispatch again.
+    let codec = f
+        .temp
+        .path()
+        .join(a.bound.codec.as_ref().unwrap().path.as_str());
+    let original = std::fs::read(&codec).unwrap();
+    let mut changed: serde_json::Value = serde_json::from_slice(&original).unwrap();
+    changed["original_bound"]["requested_model"] = json!("changed-model");
+    std::fs::write(
+        &codec,
+        lwiki::graph::packet::canonical_json(&changed).unwrap(),
+    )
+    .unwrap();
+    let error = dispatch
+        .recover_response(&ledger, &service, &a.attempt.task_key, &a.attempt)
+        .err()
+        .expect("tampered historical model must be refused");
+    assert_eq!(
+        error.disposition,
+        lwiki::providers::types::DispatchDisposition::OutcomeUnknown
+    );
+    assert!(error.materialization.is_none());
+    let after = ledger.inspect().unwrap();
+    assert_eq!(after.budget, before.budget);
+    assert_eq!(after.attempts.len(), 1);
+    assert_eq!(after.attempts[0].phase, AttemptPhase::Received);
+    assert!(after.attempts[0].receipt.is_none());
+    assert!(after.attempts[0].outputs.is_empty());
+
+    std::fs::write(&codec, original).unwrap();
+    let recovered =
+        match dispatch.recover_response(&ledger, &service, &a.attempt.task_key, &a.attempt) {
+            Ok(outcome) => outcome,
+            Err(error) => panic!("restored historical codec must decode: {}", error.error),
+        };
+    assert_eq!(recovered.attempt, a.attempt);
+    assert!(matches!(
+        recovered.output,
+        lwiki::providers::types::ValidatedOutput::Generation { returned_model: Some(model), .. }
+            if model == "test-model"
+    ));
     assert_eq!(mock.calls.load(Ordering::SeqCst), 1);
-    assert!(f.ledger().inspect().unwrap().attempts[0].outputs.is_empty());
+    let unchanged = ledger.inspect().unwrap();
+    assert_eq!(unchanged.budget, before.budget);
+    assert!(unchanged.attempts[0].outputs.is_empty());
+    assert!(unchanged.attempts[0].receipt.is_none());
 }
 
 #[test]
@@ -514,7 +575,8 @@ fn local_retained_recovery_failures_never_reject_paid_output_and_restore_without
         "missing_descriptor",
         "missing_body",
         "changed_body",
-        "wrong_service",
+        "missing_codec",
+        "changed_codec",
     ] {
         let f = Fixture::new();
         let mock = Mock::response(f.response());
@@ -528,39 +590,28 @@ fn local_retained_recovery_failures_never_reject_paid_output_and_restore_without
             .temp
             .path()
             .join(attempt.spool.as_ref().unwrap().response.path.as_str());
-        let path = if fault == "missing_descriptor" {
-            &descriptor
-        } else {
-            &body
+        let codec = f
+            .temp
+            .path()
+            .join(attempt.bound.codec.as_ref().unwrap().path.as_str());
+        let path = match fault {
+            "missing_descriptor" => &descriptor,
+            "missing_codec" | "changed_codec" => &codec,
+            _ => &body,
         };
+        let before = ledger.inspect().unwrap();
         let original = std::fs::read(path).unwrap();
         if fault.starts_with("missing_") {
             std::fs::remove_file(path).unwrap();
         }
-        if fault == "changed_body" {
+        if fault.starts_with("changed_") {
             std::fs::write(path, b"changed").unwrap();
         }
-        let config = f.temp.path().join("providers.toml");
-        let config_bytes = std::fs::read(&config).unwrap();
-        let different = if fault == "wrong_service" {
-            let changed = String::from_utf8(config_bytes.clone())
-                .unwrap()
-                .replace("test-model", "changed-model");
-            std::fs::write(&config, changed).unwrap();
-            Some(
-                lwiki::config::providers::ProviderConfig::load(&config)
-                    .unwrap()
-                    .authorize(&f.fs, &id("vault_test"), "primary", Capability::Generate)
-                    .unwrap(),
-            )
-        } else {
-            None
-        };
         let dispatcher = f.dispatcher(mock.clone());
         let error = dispatcher
             .recover_response(
                 &ledger,
-                different.as_ref().unwrap_or(&f.service),
+                &f.service,
                 &attempt.attempt.task_key,
                 &attempt.attempt,
             )
@@ -573,9 +624,14 @@ fn local_retained_recovery_failures_never_reject_paid_output_and_restore_without
         );
         assert_eq!(error.attempt.as_ref(), Some(&attempt.attempt));
         assert!(error.materialization.is_none(), "{fault}");
-        assert!(ledger.inspect().unwrap().attempts[0].receipt.is_none());
+        let after = ledger.inspect().unwrap();
+        assert_eq!(after.budget, before.budget, "{fault}");
+        assert_eq!(after.attempts.len(), 1, "{fault}");
+        assert_eq!(after.attempts[0].phase, AttemptPhase::Received, "{fault}");
+        assert!(after.attempts[0].receipt.is_none(), "{fault}");
+        assert!(after.attempts[0].outputs.is_empty(), "{fault}");
+        assert_eq!(mock.calls.load(Ordering::SeqCst), 1, "{fault}");
         std::fs::write(path, original).unwrap();
-        std::fs::write(config, config_bytes).unwrap();
         let recovered = f
             .app
             .graph_extract_api(&f.request, &f.service, &dispatcher, f.options.clone())

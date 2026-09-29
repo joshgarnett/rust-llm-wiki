@@ -1,0 +1,19 @@
+# Agent research replacement and local 0.1.1 acceptance
+
+User-directed replacement of built-in research with agent handoffs, based on clean main `ff3a014f76b3c4e7cb9e3708db8b77056642b239`. Old research execution, paid run compatibility, search/fetch adapters and schemas were removed; real vault data was not touched. Generic embeddings, direct graph API extraction, probes and paid accounting remain. Package/build versions are 0.1.1. The only dependency removal is unused flate2 and its now-unused transitives; surviving versions were not upgraded.
+
+The implementation and contracts are described in `docs/technical/research-handoffs.md`. The user-facing changes and complete test-agent handoff are `docs/release-notes-0.1.1.md` and `docs/testing-0.1.1.md`. Astra reviewed the design, accounting removal, implementation invariants, final integration and replay test corrections. The linked AGENT-RESEARCH review reports retain findings and resolutions. No unresolved blocking finding remains.
+
+## Actual local checks
+
+`AGENT-RESEARCH-checks.json` records 48 unique Bazel targets, 557 passing Rust parent cases and seven ignored subprocess helpers, plus 41 Python tooling tests and the 30-command disposable offline smoke. Formatting, all-target strict Clippy, doctests, local recovery matrices, API/provider replay, both new research suites, graph review after refresh, derived search lifecycle, skill export and the full native workflow passed across the recorded invocations. The skill recipe contains 36 steps.
+
+This is aggregate acceptance, not a claim that the first full invocation was green. The complete `//:test //:check` invocation took 1725.892 seconds and passed 44 targets. Failures were obsolete lint expectations, missing new recipe assertions, two current-model replay expectations, and a macOS probe mock that inherited nonblocking socket mode. The affected ten-target continuation passed nine targets in 139.744 seconds, then exposed a paid-job audit fixture scanning local handoff heads. Production discovery already used the correct `runs/*/run.md` boundary. The corrected fixture adds a negative assertion that handoffs cannot appear as unknown paid accounting. Astra independently reviewed both fixture corrections. The final format/Clippy/workflow continuation passed all three targets in 42.088 seconds.
+
+The complete unit suite passed 129 cases; change recovery passed 28. Those longer results were reused after a research-only offline follow-up guard, packet schema validation and test/lint corrections. Final research handoff/recovery, direct API, native remote CLI, provider dispatch, machine contract and skill tests ran against the updated library. The final standalone manual smoke passed all 30 commands against the updated native binary with no network use. It reproduces the exact Cedar refresh → extraction → resolve → review → query path, local research and withdrawn-text checks.
+
+The formerly failing paid replay tests now require immutable original-model decoding after current configuration changes; saved-codec model tampering/missing files fail closed, preserve paid state and do not authorize resend. Exact restoration permits recovery without another transport call. The integration audit continues checking prior unknown costs, receipt histories and budgets.
+
+## Limits
+
+All local runtime checks used disposable vaults and mocks. No gateway credential/helper, paid provider call, real vault, host installation or platform-signing change was used. Local build success does not demonstrate live gateway quality or native recovery on all hosts. Windows vault writes remain unsupported. The owner's older installed-copy macOS SIGKILL remains undiagnosed. Six native GitHub builds, archive verification and draft release evidence are recorded separately when complete.

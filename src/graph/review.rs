@@ -1534,6 +1534,7 @@ pub fn verify_review_overlay(
 fn capture(
     view: &SourceView<'_>,
     extra: &BTreeMap<VaultRelativePath, ExpectedState>,
+    source_ids: &BTreeSet<RecordId>,
 ) -> Result<(ValidationInput, Vec<ReadDependency>)> {
     let mut total = view
         .notes
@@ -1594,6 +1595,51 @@ fn capture(
         }
         deps.insert(p.clone(), expected.clone());
     }
+    // The closed projection sees each selected source's entire revision manifest.
+    // Include the payloads of its retained siblings, or an omitted sibling looks
+    // corrupt and invalidates even evidence from the current revision.
+    for source_id in source_ids {
+        let (_, source_note) = view.resolve(source_id, RecordKind::Source, None)?;
+        let source = record(source_note)?;
+        for revision_id in idlist(source, "wiki_revisions")? {
+            let (revision_path, revision_note) =
+                view.resolve(&revision_id, RecordKind::Revision, None)?;
+            let revision = record(revision_note)?;
+            if revision.string("wiki_source_id") != Some(source_id.as_str()) {
+                return Err(bad("review retained revision belongs to another source"));
+            }
+            let parent = revision_path
+                .as_str()
+                .rsplit_once('/')
+                .map(|(parent, _)| parent)
+                .ok_or_else(|| bad("review retained revision has no directory"))?;
+            for field in ["wiki_original_path", "wiki_content_path"] {
+                if let Some(name) = revision.string(field) {
+                    let path = VaultRelativePath::new(format!("{parent}/{name}"))?;
+                    if docs.contains_key(&path) {
+                        continue;
+                    }
+                    if docs.len() >= MAX_REVIEW_CAPTURE_FILES {
+                        return Err(budget());
+                    }
+                    let remaining = MAX_REVIEW_CAPTURE_BYTES
+                        .checked_sub(total)
+                        .filter(|n| *n > 0)
+                        .ok_or_else(budget)?;
+                    let bytes = view.read_bounded(&path, &mut deps, remaining)?;
+                    total = total.checked_add(bytes.len()).ok_or_else(budget)?;
+                    docs.insert(
+                        path.clone(),
+                        ScanDocument {
+                            path,
+                            hash: Blake3Hash::digest(&bytes),
+                            bytes,
+                        },
+                    );
+                }
+            }
+        }
+    }
     Ok((
         ValidationInput {
             vault_id: packet::vault_id(view)?,
@@ -1612,8 +1658,17 @@ pub fn validate_review(view: &SourceView<'_>, bytes: &[u8]) -> Result<ValidatedR
                 "different canonical review for guarded assertion scope",
             ));
         }
-        let (input, dependencies) =
-            capture(view, &packet::dependency_map(&restored.dependencies)?)?;
+        let sources = restored
+            .receipt
+            .evidence_proofs
+            .iter()
+            .map(|proof| proof.source.source_id.clone())
+            .collect();
+        let (input, dependencies) = capture(
+            view,
+            &packet::dependency_map(&restored.dependencies)?,
+            &sources,
+        )?;
         return Ok(ValidatedReview {
             request,
             request_hash,
@@ -1623,8 +1678,12 @@ pub fn validate_review(view: &SourceView<'_>, bytes: &[u8]) -> Result<ValidatedR
             input,
         });
     }
-    let (_, deps) = verify_fresh(view, &request)?;
-    let (input, dependencies) = capture(view, &deps)?;
+    let (proofs, deps) = verify_fresh(view, &request)?;
+    let sources = proofs
+        .iter()
+        .map(|proof| proof.source.source_id.clone())
+        .collect();
+    let (input, dependencies) = capture(view, &deps, &sources)?;
     let closed = SourceView::from_closed_input(view.fs, &input)?;
     verify_fresh(&closed, &request)?;
     Ok(ValidatedReview {

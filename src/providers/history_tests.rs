@@ -1,10 +1,7 @@
 //! Actual sealed wire preparation followed by local original-contract decoding.
-use super::{
-    embedding_wire, generation_wire, history, search_wire, types::*, wire, wire_tests::common::*,
-};
+use super::{embedding_wire, generation_wire, history, types::*, wire_tests::common::*};
 use crate::{
     changes::ReadDependency,
-    config::providers::ProviderConfig,
     domain::*,
     graph::packet::canonical_json,
     jobs::{AttemptBound, TaskSpec, budgets, tasks},
@@ -179,8 +176,7 @@ fn rewritten(c: &Case, original: &AttemptBound, bytes: &[u8]) -> AttemptBound {
     codec.hash = hash(bytes);
     codec.byte_len = bytes.len() as u64;
     codec.path = VaultRelativePath::new(format!(
-        "runs/{}/codecs/{}.json",
-        c.spec.run_id,
+        ".wiki/state/provider-codecs/{}.json",
         codec.hash.hex()
     ))
     .unwrap();
@@ -189,7 +185,7 @@ fn rewritten(c: &Case, original: &AttemptBound, bytes: &[u8]) -> AttemptBound {
     bound
 }
 #[test]
-fn historical_codec_rejects_unknown_version_fields_noncanonical_and_cross_run_paths() {
+fn historical_codec_rejects_unknown_version_fields_noncanonical_and_foreign_paths() {
     let c = generation_case();
     let task = run_task(&c, &generation_input());
     let mut p = prepared_generation(&c, &task);
@@ -267,71 +263,21 @@ fn historical_embedding_preserves_positions_dimensions_and_original_model_basis(
     assert_eq!(c.runner.calls.load(Ordering::SeqCst), 0);
 }
 #[test]
-fn historical_search_preserves_original_page_count_and_has_no_credentials() {
-    let c = generation_case();
-    private(
-        &c.config,
-        format!(
-            "version=1\n[profiles.primary]\nsearch=\"search\"\n[services.search]\nadapter=\"brave-web-v1\"\nurl=\"https://search.example/res/v1/web/search\"\n[services.search.auth]\nkind=\"static\"\nkey_env=\"EXPLICIT_FIXTURE_TOKEN\"\n[vault_bindings.test]\nroot={}\nwiki_id=\"vault_test\"\nallowed_profiles=[\"primary\"]\n",
-            quote(c.fs.root().path().to_str().unwrap())
-        ),
-    );
-    let service = ProviderConfig::load(&c.config)
-        .unwrap()
-        .authorize(
-            &c.fs,
-            &id("vault_test"),
-            "primary",
-            crate::jobs::Capability::Search,
-        )
-        .unwrap();
-    let input = RemoteInput {
-        version: 1,
-        operation: RemoteOperation::Search {
-            query: "bounded history".into(),
-            count: 1,
-            page: 2,
-        },
-    };
-    let mut task = run_task(&c, &input);
-    let fp = wire::task_fingerprints(&service, &input).unwrap();
-    task.capability = Some(crate::jobs::Capability::Search);
-    task.stage = crate::jobs::TaskStage::Discover;
-    task.prompt_hash = fp.prompt;
-    task.schema_hash = fp.schema;
-    task.model_hash = Some(fp.model);
-    task.settings_hash = fp.settings;
-    task.key = tasks::task_key(&task).unwrap();
-    let mut p = search_wire::prepare(&service, &task, &input, DispatchPurpose::Task).unwrap();
-    history::retain(&c.fs, &task, &mut p).unwrap();
-    private(&c.config, b"new search configuration");
-    let restored = history::restore(&c.fs, &task, &p.bound, DispatchPurpose::Task).unwrap();
-    let entry = json!({"url":"https://example.com/","title":"Result","description":"lead only"});
-    let ValidatedOutput::Search { leads } = search_wire::decode(
-        &restored,
-        &reply(json!({"web":{"results":[entry.clone()]}})),
-    )
-    .unwrap() else {
-        panic!("search output required")
-    };
-    assert_eq!(leads[0].rank, 3);
-    assert!(
-        search_wire::decode(
-            &restored,
-            &reply(json!({"web":{"results":[entry.clone(),entry]}}))
-        )
-        .is_err()
-    );
-    assert_eq!(c.inputs.0.load(Ordering::SeqCst), 0);
-    assert_eq!(c.runner.calls.load(Ordering::SeqCst), 0);
-}
-#[test]
-fn historical_retain_rejects_cache_or_unowned_descriptor_paths() {
+fn historical_retain_binds_generic_descriptor_without_run_directory_requirement() {
     let c = generation_case();
     let task = c.spec.tasks[0].clone();
     let mut p = prepared_generation(&c, &task);
-    assert!(history::retain(&c.fs, &task, &mut p).is_err());
-    assert!(p.bound.codec.is_none());
+    history::retain(&c.fs, &task, &mut p).unwrap();
+    assert!(
+        p.bound
+            .codec
+            .as_ref()
+            .unwrap()
+            .path
+            .as_str()
+            .starts_with(".wiki/state/provider-codecs/")
+    );
+    history::restore(&c.fs, &task, &p.bound, DispatchPurpose::Task).unwrap();
 }
 
 #[test]

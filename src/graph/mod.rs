@@ -22,5 +22,3 @@ pub use review_types::*;
 pub mod api_extract;
 pub mod generation_cache;
 pub mod review;
-
-pub mod research_extract;

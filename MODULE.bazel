@@ -1,4 +1,4 @@
-module(name = "rust_llm_wiki", version = "0.1.0")
+module(name = "rust_llm_wiki", version = "0.1.1")
 
 bazel_dep(name = "platforms", version = "1.1.0")
 bazel_dep(name = "rules_rust", version = "0.72.0")

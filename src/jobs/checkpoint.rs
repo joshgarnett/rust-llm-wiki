@@ -1,19 +1,108 @@
 //! Canonical run/event/receipt plans. Operational proofs are checked against actual bytes.
 use super::{events, ledger, types::*};
 use crate::{
+    catalog::{Catalog, CatalogGraphValidator},
     changes::{ChangeDraft, ChangeEngine, ChangeStatus, ExpectedWrite, PreparedChange},
     domain::*,
     records::parse_note,
-    vault::{ExpectedState, VaultFs},
+    vault::{ExpectedState, VaultFs, WriterPermit},
 };
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, time::Duration};
+
+/// Publish a receipt without derived outputs, or verify an earlier publication.
+/// The caller's draft never grants arbitrary write authority: its receipt is
+/// regenerated from retained response accounting under the vault writer lock.
+pub fn settle_receipt(fs: &VaultFs, job: &JobLedger, plan: MaterializationPlan) -> Result<()> {
+    if job.options.policy.dry_run {
+        return Err(WikiError::new(
+            ErrorCode::OfflineUnavailable,
+            "dry-run cannot publish a receipt",
+        ));
+    }
+    let path = event_path(&job.run_id, &plan.receipt.receipt_id)?;
+    if fs.root().path() != job.fs.root().path()
+        || plan.attempt.run_id != job.run_id
+        || plan.receipt.attempt != plan.attempt
+        || plan.receipt.receipt_id != receipt_id(&plan.attempt)?
+        || !plan.receipt.outputs.is_empty()
+        || !plan.receipt.cache_outputs.is_empty()
+        || plan.draft.operations.iter().any(|op| op.target != path)
+    {
+        return Err(WikiError::invalid(
+            "receipt-only materialization binding differs",
+        ));
+    }
+    let writer = WriterPermit::acquire(
+        fs.root(),
+        Duration::from_millis(job.options.lock_timeout_ms),
+    )?;
+    let engine = ChangeEngine::new(fs.clone())?;
+    let catalog = Catalog::new(fs.clone(), job.vault_id.clone());
+    engine.recover(&writer, &CatalogGraphValidator, &catalog)?;
+    // Recover an apply-before-acknowledgement crash before considering another
+    // create. Replay authenticates the original committed changeset manifest.
+    let inspection = job.replay()?.inspection;
+    let actual = inspection
+        .attempts
+        .iter()
+        .find(|a| a.attempt == plan.attempt)
+        .ok_or_else(|| events::corrupt("receipt attempt missing"))?;
+    if let Some(reference) = &actual.receipt {
+        if receipt(fs, reference)? != plan.receipt
+            || !actual.outputs.is_empty()
+            || !actual.cache_outputs.is_empty()
+        {
+            return Err(WikiError::new(
+                ErrorCode::ContentConflict,
+                "acknowledged receipt differs from requested receipt",
+            ));
+        }
+        drop(writer);
+        job.settle(&plan.attempt)?;
+        return Ok(());
+    }
+    let fresh = receipt_plan(
+        job,
+        &plan.attempt,
+        plan.receipt.output_disposition,
+        vec![],
+        vec![],
+        vec![],
+    )?;
+    if fresh.receipt != plan.receipt {
+        return Err(WikiError::new(
+            ErrorCode::ContentConflict,
+            "receipt differs from retained response accounting",
+        ));
+    }
+    let bytes = fresh
+        .draft
+        .operations
+        .iter()
+        .find(|op| op.target == path)
+        .and_then(|op| op.proposed.as_ref())
+        .ok_or_else(|| events::corrupt("unacknowledged receipt has no publication operation"))?;
+    let reference = DurableOutputRef {
+        record: RecordRef {
+            vault_id: job.vault_id.clone(),
+            record_id: fresh.receipt.receipt_id.clone(),
+            expected_kind: RecordKind::RunEvent,
+        },
+        path,
+        hash: Blake3Hash::digest(bytes),
+    };
+    let prepared = engine.prepare(&writer, fresh.draft)?.prepared;
+    engine.apply(&writer, &prepared, &CatalogGraphValidator, &catalog)?;
+    drop(writer);
+    job.outputs_committed(&plan.attempt, &prepared, reference, vec![], vec![])?;
+    job.settle(&plan.attempt)?;
+    Ok(())
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct RunPlanV1 {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub research: Option<ResearchStateV1>,
     pub version: u32,
     pub spec: RunSpec,
     pub spec_hash: Blake3Hash,
@@ -132,7 +221,6 @@ pub(super) fn run_bytes(i: &LedgerInspection) -> Result<Vec<u8>> {
         f,
         "lwiki.run-plan.v1",
         &RunPlanV1 {
-            research: i.research.clone(),
             version: 1,
             spec: i.spec.clone(),
             spec_hash: i.spec_hash.clone(),
@@ -401,14 +489,13 @@ pub(super) fn receipt_plan_locked(
         &loaded.state.inspection.spec,
     );
     if disposition == OutputDisposition::Validated {
-        if !super::research::task_is_active(&loaded.state.inspection, &attempt.task_key) {
-            return Err(WikiError::new(
-                ErrorCode::FreshnessConflict,
-                "retired research tasks cannot publish validated output",
-            ));
-        }
-        d.read_preconditions =
-            super::research::current_read_preconditions(&loaded.state.inspection).to_vec();
+        d.read_preconditions = loaded
+            .state
+            .inspection
+            .spec
+            .scope
+            .read_preconditions
+            .clone();
         if let Some(task) = loaded.state.inspection.tasks.get(&attempt.task_key) {
             for dep in &task.spec.source_bindings {
                 if !d.read_preconditions.contains(dep) {

@@ -238,11 +238,6 @@ pub(super) fn seal(
                 ]),
             )
         }
-        WireContract::Search(_) => {
-            return Err(WikiError::invalid(
-                "search adapter has its own sealed admission bound",
-            ));
-        }
         #[cfg(test)]
         WireContract::Fixture => {
             return Err(WikiError::invalid(

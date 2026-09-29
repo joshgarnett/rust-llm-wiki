@@ -1,4 +1,4 @@
-# Implemented lwiki 0.1.0 commands
+# Implemented lwiki 0.1.1 commands
 
 Generated from the release command registry and argument parser. Run `lwiki --json capabilities` before use.
 
@@ -2115,7 +2115,7 @@ Options:
           Provider capability to probe: embed, generate or search
 
           [default: embed]
-          [possible values: embed, generate, search]
+          [possible values: embed, generate]
 
       --json
           Emit one structured JSON envelope
@@ -2201,23 +2201,23 @@ Options:
 ## research plan
 
 ```text
-Preview a research scope without provider calls or a persisted run
+Preview agent tasks and current passages without persisting a run
 
 Usage: lwiki research plan [OPTIONS] <QUESTION>
 
 Arguments:
   <QUESTION>
-          Research question to investigate
+          Question for the host agent to investigate
 
 Options:
       --url <URLS>
-          Explicit public acquisition URL; repeat as needed
+          Suggested origin for the host agent; lwiki does not fetch it
 
       --wiki <WIKI>
           Wiki root containing WIKI.md; defaults to discovery from the current directory
 
       --exclude <EXCLUSIONS>
-          Research scope exclusion; repeat as needed
+          Scope exclusion to include in the agent packet
 
       --format <FORMAT>
           Output format: human-readable text, a JSON envelope or JSON Lines events
@@ -2227,19 +2227,19 @@ Options:
       --json
           Emit one structured JSON envelope
 
-      --search-profile <SEARCH_PROFILE>
-          Trusted search-provider profile for optional source discovery
+      --source-id <SOURCE_IDS>
+          Include the current captured text of this source; repeat as needed
 
       --jsonl
           Emit JSON Lines events for supported streaming commands
 
       --max-rounds <MAX_ROUNDS>
-          Maximum research rounds across the run
+          Maximum collection/answer rounds (1–8), including the initial round
 
           [default: 3]
 
       --max-sources <MAX_SOURCES>
-          Maximum acquired research sources
+          Maximum total sources accepted from the agent (0–64)
 
           [default: 15]
 
@@ -2249,13 +2249,13 @@ Options:
       --dry-run
           Preview without writes, provider requests or credential resolution
 
-      --stage-output-tokens <STAGE_OUTPUT_TOKENS>
-          Maximum generated output tokens per research stage
+      --max-source-bytes <MAX_SOURCE_BYTES>
+          Maximum lifetime source-content bytes accepted locally (up to 4 MiB)
 
-          [default: 4096]
+          [default: 524288]
 
-      --apply
-          Apply the run's generated page proposals after their guarded preparation
+      --run-id <RUN_ID>
+          New run ID; omit to allocate one. Existing IDs require resume
 
       --stage
           Retain a guarded preparation for a later explicit changes apply
@@ -2263,66 +2263,11 @@ Options:
       --preferences <PREFERENCES>
           Explicit trusted local JSON preferences; never read ambient credentials
 
-      --run-id <RUN_ID>
-          Explicit new run ID; omit to allocate one automatically
-
       --profile <PROFILE>
           Trusted provider profile name from the private provider configuration
 
-      --providers-config <PROVIDERS_CONFIG>
-          Private TOML configuration; never discover provider files inside a vault
-
       --lock-timeout-ms <LOCK_TIMEOUT_MS>
           Maximum time in milliseconds to wait for the vault writer lock
-
-      --max-requests <MAX_REQUESTS>
-          Lifetime request-attempt ceiling, including retries
-
-          [default: 60]
-
-      --concurrency <CONCURRENCY>
-          Maximum simultaneous provider requests
-
-          [default: 2]
-
-      --attempts-per-task <ATTEMPTS_PER_TASK>
-          Maximum attempts for an individual provider task
-
-          [default: 3]
-
-      --deadline-ms <DEADLINE_MS>
-          Overall remote operation deadline in milliseconds from startup
-
-          [default: 900000]
-
-      --max-request-bytes <MAX_REQUEST_BYTES>
-          Lifetime ceiling on outgoing request bytes
-
-      --max-response-bytes <MAX_RESPONSE_BYTES>
-          Lifetime ceiling on incoming response bytes
-
-      --max-input-units <MAX_INPUT_UNITS>
-          Lifetime ceiling for each input and cached-input billable class
-
-      --max-output-units <MAX_OUTPUT_UNITS>
-          Lifetime ceiling for each output and reasoning billable class
-
-      --max-cost <MAX_COST>
-          Checked decimal ceiling; requires a complete provable provider bound
-
-      --currency <CURRENCY>
-          Currency code used with --max-cost
-
-          [default: USD]
-
-      --requests-per-minute <REQUESTS_PER_MINUTE>
-          Maximum provider requests dispatched per minute
-
-      --tokens-per-minute <TOKENS_PER_MINUTE>
-          Maximum accounted provider tokens per minute
-
-      --retry-uncertain
-          Opt into retrying uncertain work under retained accounting; prior attempts may be billed
 
   -h, --help
           Print help
@@ -2332,23 +2277,23 @@ Options:
 ## research run
 
 ```text
-Run bounded research; --offline returns a preview without starting a run
+Start a local research handoff for an agent with its own tools
 
 Usage: lwiki research run [OPTIONS] <QUESTION>
 
 Arguments:
   <QUESTION>
-          Research question to investigate
+          Question for the host agent to investigate
 
 Options:
       --url <URLS>
-          Explicit public acquisition URL; repeat as needed
+          Suggested origin for the host agent; lwiki does not fetch it
 
       --wiki <WIKI>
           Wiki root containing WIKI.md; defaults to discovery from the current directory
 
       --exclude <EXCLUSIONS>
-          Research scope exclusion; repeat as needed
+          Scope exclusion to include in the agent packet
 
       --format <FORMAT>
           Output format: human-readable text, a JSON envelope or JSON Lines events
@@ -2358,19 +2303,19 @@ Options:
       --json
           Emit one structured JSON envelope
 
-      --search-profile <SEARCH_PROFILE>
-          Trusted search-provider profile for optional source discovery
+      --source-id <SOURCE_IDS>
+          Include the current captured text of this source; repeat as needed
 
       --jsonl
           Emit JSON Lines events for supported streaming commands
 
       --max-rounds <MAX_ROUNDS>
-          Maximum research rounds across the run
+          Maximum collection/answer rounds (1–8), including the initial round
 
           [default: 3]
 
       --max-sources <MAX_SOURCES>
-          Maximum acquired research sources
+          Maximum total sources accepted from the agent (0–64)
 
           [default: 15]
 
@@ -2380,13 +2325,13 @@ Options:
       --dry-run
           Preview without writes, provider requests or credential resolution
 
-      --stage-output-tokens <STAGE_OUTPUT_TOKENS>
-          Maximum generated output tokens per research stage
+      --max-source-bytes <MAX_SOURCE_BYTES>
+          Maximum lifetime source-content bytes accepted locally (up to 4 MiB)
 
-          [default: 4096]
+          [default: 524288]
 
-      --apply
-          Apply the run's generated page proposals after their guarded preparation
+      --run-id <RUN_ID>
+          New run ID; omit to allocate one. Existing IDs require resume
 
       --stage
           Retain a guarded preparation for a later explicit changes apply
@@ -2394,66 +2339,11 @@ Options:
       --preferences <PREFERENCES>
           Explicit trusted local JSON preferences; never read ambient credentials
 
-      --run-id <RUN_ID>
-          Explicit new run ID; omit to allocate one automatically
-
       --profile <PROFILE>
           Trusted provider profile name from the private provider configuration
 
-      --providers-config <PROVIDERS_CONFIG>
-          Private TOML configuration; never discover provider files inside a vault
-
       --lock-timeout-ms <LOCK_TIMEOUT_MS>
           Maximum time in milliseconds to wait for the vault writer lock
-
-      --max-requests <MAX_REQUESTS>
-          Lifetime request-attempt ceiling, including retries
-
-          [default: 60]
-
-      --concurrency <CONCURRENCY>
-          Maximum simultaneous provider requests
-
-          [default: 2]
-
-      --attempts-per-task <ATTEMPTS_PER_TASK>
-          Maximum attempts for an individual provider task
-
-          [default: 3]
-
-      --deadline-ms <DEADLINE_MS>
-          Overall remote operation deadline in milliseconds from startup
-
-          [default: 900000]
-
-      --max-request-bytes <MAX_REQUEST_BYTES>
-          Lifetime ceiling on outgoing request bytes
-
-      --max-response-bytes <MAX_RESPONSE_BYTES>
-          Lifetime ceiling on incoming response bytes
-
-      --max-input-units <MAX_INPUT_UNITS>
-          Lifetime ceiling for each input and cached-input billable class
-
-      --max-output-units <MAX_OUTPUT_UNITS>
-          Lifetime ceiling for each output and reasoning billable class
-
-      --max-cost <MAX_COST>
-          Checked decimal ceiling; requires a complete provable provider bound
-
-      --currency <CURRENCY>
-          Currency code used with --max-cost
-
-          [default: USD]
-
-      --requests-per-minute <REQUESTS_PER_MINUTE>
-          Maximum provider requests dispatched per minute
-
-      --tokens-per-minute <TOKENS_PER_MINUTE>
-          Maximum accounted provider tokens per minute
-
-      --retry-uncertain
-          Opt into retrying uncertain work under retained accounting; prior attempts may be billed
 
   -h, --help
           Print help
@@ -2463,17 +2353,17 @@ Options:
 ## research resume
 
 ```text
-Resume retained research with its existing lifetime limits
+Return the outstanding agent packet; never execute tools
 
 Usage: lwiki research resume [OPTIONS] <RUN_ID>
 
 Arguments:
   <RUN_ID>
-          Retained research run ID; use the ID returned by the original run
+          Research run ID returned by run
 
 Options:
-      --providers-config <PROVIDERS_CONFIG>
-          Absolute path to trusted private provider TOML outside the wiki
+      --refresh
+          Replace a stale packet using current sources; invalidate its old fingerprint
 
       --wiki <WIKI>
           Wiki root containing WIKI.md; defaults to discovery from the current directory
@@ -2483,11 +2373,53 @@ Options:
 
           [possible values: human, json, jsonl]
 
-      --retry-uncertain
-          Opt into retrying uncertain work under retained accounting; prior attempts may be billed
+      --json
+          Emit one structured JSON envelope
 
-      --amend-limits <AMEND_LIMITS>
-          JSON with complete lifetime limits, an absolute UTC deadline, and reason. Omit this flag to preserve the run's effective limits and deadline
+      --jsonl
+          Emit JSON Lines events for supported streaming commands
+
+      --offline
+          Prevent provider requests and credential helper calls; local operations remain available
+
+      --dry-run
+          Preview without writes, provider requests or credential resolution
+
+      --stage
+          Retain a guarded preparation for a later explicit changes apply
+
+      --preferences <PREFERENCES>
+          Explicit trusted local JSON preferences; never read ambient credentials
+
+      --profile <PROFILE>
+          Trusted provider profile name from the private provider configuration
+
+      --lock-timeout-ms <LOCK_TIMEOUT_MS>
+          Maximum time in milliseconds to wait for the vault writer lock
+
+  -h, --help
+          Print help
+
+```
+
+## research import
+
+```text
+Validate an agent submission and atomically capture sources or a cited report
+
+Usage: lwiki research import [OPTIONS] --file <FILE>
+
+Options:
+      --file <FILE>
+          JSON submission path, or - for standard input
+
+      --wiki <WIKI>
+          Wiki root containing WIKI.md; defaults to discovery from the current directory
+
+      --format <FORMAT>
+          Output format: human-readable text, a JSON envelope or JSON Lines events
+
+          [possible values: human, json, jsonl]
 
       --json
           Emit one structured JSON envelope
@@ -2521,13 +2453,13 @@ Options:
 ## research status
 
 ```text
-Inspect a retained research run without provider credentials
+Read local handoff progress and remaining work
 
 Usage: lwiki research status [OPTIONS] <RUN_ID>
 
 Arguments:
   <RUN_ID>
-          Retained research run ID; use the ID returned by the original run
+          Research run ID returned by run
 
 Options:
       --wiki <WIKI>
@@ -2570,13 +2502,13 @@ Options:
 ## research report
 
 ```text
-Read the latest retained research report and its gaps
+Read the most recent imported answer and its unresolved gaps
 
 Usage: lwiki research report [OPTIONS] <RUN_ID>
 
 Arguments:
   <RUN_ID>
-          Retained research run ID; use the ID returned by the original run
+          Research run ID returned by run
 
 Options:
       --wiki <WIKI>
@@ -2936,7 +2868,5 @@ Options:
 - `lwiki --json schema entity-decision-receipt`
 - `lwiki --json schema graph-review`
 - `lwiki --json schema graph-review-receipt`
-- `lwiki --json schema research-frontier`
-- `lwiki --json schema research-gaps`
-- `lwiki --json schema research-synthesis`
-- `lwiki --json schema research-run-plan`
+- `lwiki --json schema research-packet`
+- `lwiki --json schema research-submission`

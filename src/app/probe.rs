@@ -60,11 +60,6 @@ impl OfflineApp {
                 output_schema: serde_json::json!({"type":"object","properties":{"ok":{"type":"boolean"}},"required":["ok"],"additionalProperties":false}),
                 max_output_tokens: probe_output_limit(runtime)?,
             },
-            ServiceRole::Search => RemoteOperation::Search {
-                query: "lwiki provider probe".into(),
-                count: 1,
-                page: 0,
-            },
         };
         let input = RemoteInput {
             version: 1,
@@ -102,7 +97,6 @@ impl OfflineApp {
             created_at_utc_ms: runtime.created_at_utc_ms,
             deadline_utc_ms: runtime.deadline_utc_ms,
             scope: RunScope {
-                research: None,
                 operation: "doctor_probe".into(),
                 question: None,
                 exclusions: vec![],
@@ -158,7 +152,7 @@ impl OfflineApp {
                             .find(|a| &a.attempt == attempt);
                         if actual.as_ref().is_some_and(|a| a.receipt.is_none()) {
                             if let Some(plan) = failure.materialization.take() {
-                                crate::research::acquire::settle_receipt(&self.fs, &ledger, plan)?;
+                                crate::jobs::settle_receipt(&self.fs, &ledger, plan)?;
                             }
                         } else if actual
                             .as_ref()
@@ -187,7 +181,7 @@ impl OfflineApp {
                 vec![],
                 vec![],
             )?;
-            crate::research::acquire::settle_receipt(&self.fs, &ledger, receipt)?;
+            crate::jobs::settle_receipt(&self.fs, &ledger, receipt)?;
             ledger.finish_remote_task(&task.key, vec![], vec![], |_| Ok(false))?;
             ledger.complete_run()?;
             Ok(ProbeOutcome {

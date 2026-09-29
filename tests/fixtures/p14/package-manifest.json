@@ -30,6 +30,7 @@
     "research plan",
     "research run",
     "research resume",
+    "research import",
     "research status",
     "research report",
     "changes show",
@@ -40,13 +41,13 @@
     "migrate"
   ],
   "files": {
-    "SKILL.md": "b44c160e3e51d7a526d8c02560535294f3173cd1f303af6db2eecff7dd1de272",
+    "SKILL.md": "95cbd50213a59caac21855199ff9c7283c5440d3e740063eab557c4099bc75c5",
     "agents/openai.yaml": "307ad222dc5d27d563d54b0a0466264fd035378ce2d103bcbf8de4ed2ea1b144",
-    "references/commands.md": "e0a5acf6274d33bfe4fe79a96a60a0580ff9369f25775a6c3806eac5f30b298b",
-    "references/examples.json": "7d070f0d37afe84ef9dd8e2294102f38ba1d70c8203e47d64c824ea2d3156d8e",
-    "references/workflows.md": "1e23776b4d6898133c4ec11b46f125bd1352d9bbf44c6e4eb91f252e5b1b0838"
+    "references/commands.md": "5b203f546360ae3ab68a845b5723c0c725064e56ccdb3b7bc10446e7fe5a414b",
+    "references/examples.json": "45f32655c4a25a0b9059299580a496ffa8a53efe1a2a89676dbd81dd9888eabb",
+    "references/workflows.md": "674bbb37b620b41f4ee9dd91ae0fc03432b9fcc60df2e8502f16ab6e5dac0e47"
   },
-  "package_checksum": "38e1938a7a3a160c0fb581006634bec664551fa0ec040af08d49a3f37ca2f8dd",
+  "package_checksum": "015658df9295bbc4d5d3bcfbc44d1fc2cf130ccb3b3bae3c2132c6e33f0490a7",
   "schema": "lwiki.skill-manifest.v1",
   "schemas": [
     "output",
@@ -64,11 +65,9 @@
     "entity-decision-receipt",
     "graph-review",
     "graph-review-receipt",
-    "research-frontier",
-    "research-gaps",
-    "research-synthesis",
-    "research-run-plan"
+    "research-packet",
+    "research-submission"
   ],
   "target": "codex",
-  "version": "0.1.0"
+  "version": "0.1.1"
 }

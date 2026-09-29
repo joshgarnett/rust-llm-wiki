@@ -59,9 +59,7 @@
         "input",
         "cached_input",
         "output",
-        "reasoning",
-        "search_result",
-        "fetch_byte"
+        "reasoning"
       ]
     },
     "Money": {
@@ -90,8 +88,6 @@
       "enum": [
         "embed",
         "generate",
-        "search",
-        "fetch",
         "probe",
         "token_count"
       ]

@@ -42,7 +42,6 @@ pub(super) fn replay(frames: &[JournalFrame], bytes: u64) -> Result<State> {
     }
     budgets::validate_limits(&spec.limits)?;
     let inspection = LedgerInspection {
-        research: super::research::initial(spec)?,
         spec: spec.clone(),
         spec_hash: spec_hash.clone(),
         effective_limits: spec.limits.clone(),
@@ -103,7 +102,7 @@ fn attempt_mut<'a>(s: &'a mut State, r: &AttemptRef) -> Result<&'a mut AttemptIn
         .find(|a| &a.attempt == r)
         .ok_or_else(bad)
 }
-fn apply(s: &mut State, e: &LedgerEvent, event_ref: &EventRef) -> Result<()> {
+fn apply(s: &mut State, e: &LedgerEvent, _event_ref: &EventRef) -> Result<()> {
     if e.run_id != s.inspection.spec.run_id {
         return Err(bad());
     }
@@ -140,16 +139,7 @@ fn apply(s: &mut State, e: &LedgerEvent, event_ref: &EventRef) -> Result<()> {
     }
     match &e.payload {
         EventPayload::Genesis { .. } => {}
-        EventPayload::ResearchRebound { .. }
-        | EventPayload::ResearchFrontierAdmitted { .. }
-        | EventPayload::ResearchRoundAssessed { .. }
-        | EventPayload::ResearchRetryScheduled { .. } => {
-            super::research::apply(&mut s.inspection, &e.payload, event_ref)?;
-        }
         EventPayload::TasksAdded { tasks: new } => {
-            if s.inspection.research.is_some() {
-                return Err(bad());
-            }
             for spec in new {
                 if s.inspection
                     .tasks
@@ -177,24 +167,6 @@ fn apply(s: &mut State, e: &LedgerEvent, event_ref: &EventRef) -> Result<()> {
             cache_outputs,
             reason,
         } => {
-            if s.inspection.research.is_some()
-                && *state == TaskState::Failed
-                && (!super::research::task_is_active(&s.inspection, task_key)
-                    || !outputs.is_empty()
-                    || !cache_outputs.is_empty()
-                    || s.inspection
-                        .attempts
-                        .iter()
-                        .filter(|a| &a.attempt.task_key == task_key)
-                        .any(|a| {
-                            a.phase != AttemptPhase::Settled
-                                || a.remote_exposure != RemoteExposure::TerminalConfirmed
-                                || !a.outputs.is_empty()
-                                || !a.cache_outputs.is_empty()
-                        }))
-            {
-                return Err(bad());
-            }
             let task = s.inspection.tasks.get_mut(task_key).ok_or_else(bad)?;
             if !matches!(task.state, TaskState::Pending | TaskState::Running)
                 || !matches!(state, TaskState::Completed | TaskState::Failed)
@@ -221,18 +193,6 @@ fn apply(s: &mut State, e: &LedgerEvent, event_ref: &EventRef) -> Result<()> {
                         )
                         | (RunState::Paused | RunState::Stopped, RunState::Running)
                 )
-            {
-                return Err(bad());
-            }
-            if *to == RunState::Completed
-                && s.inspection.research.is_some()
-                && (s.inspection.tasks.values().any(|t| {
-                    super::research::task_is_active(&s.inspection, &t.spec.key)
-                        && t.state != TaskState::Completed
-                }) || s.inspection.attempts.iter().any(|a| {
-                    a.phase != AttemptPhase::Settled
-                        || a.remote_exposure != RemoteExposure::TerminalConfirmed
-                }))
             {
                 return Err(bad());
             }
@@ -266,20 +226,9 @@ fn apply(s: &mut State, e: &LedgerEvent, event_ref: &EventRef) -> Result<()> {
                     .iter()
                     .any(|a| a.attempt.attempt_id == attempt.attempt_id)
                 || attempt.request_hash != bound.wire_hash
-                || !super::research::bound_is_current(&s.inspection, &attempt.task_key, bound)
+                || !tasks::bound_is_current(&s.inspection, &attempt.task_key, bound)
             {
                 return Err(bad());
-            }
-            if let Some(research) = &s.inspection.research {
-                let task = s.inspection.tasks.get(&attempt.task_key).ok_or_else(bad)?;
-                if task.state == TaskState::Running
-                    && research
-                        .retry_not_before
-                        .get(&attempt.task_key)
-                        .is_none_or(|at| now < *at)
-                {
-                    return Err(bad());
-                }
             }
             let task = s
                 .inspection
@@ -313,9 +262,6 @@ fn apply(s: &mut State, e: &LedgerEvent, event_ref: &EventRef) -> Result<()> {
                 return Err(bad());
             }
             task.state = TaskState::Running;
-            if let Some(research) = &mut s.inspection.research {
-                research.retry_not_before.remove(&attempt.task_key);
-            }
             s.inspection.attempts.push(AttemptInspection {
                 attempt: attempt.clone(),
                 phase: AttemptPhase::Reserved,
@@ -337,7 +283,7 @@ fn apply(s: &mut State, e: &LedgerEvent, event_ref: &EventRef) -> Result<()> {
                 .iter()
                 .find(|a| &a.attempt == attempt)
                 .ok_or_else(bad)?;
-            if !super::research::bound_is_current(&s.inspection, &attempt.task_key, &a.bound) {
+            if !tasks::bound_is_current(&s.inspection, &attempt.task_key, &a.bound) {
                 return Err(bad());
             }
             let a = attempt_mut(s, attempt)?;
@@ -355,7 +301,7 @@ fn apply(s: &mut State, e: &LedgerEvent, event_ref: &EventRef) -> Result<()> {
                 .iter()
                 .find(|a| &a.attempt == attempt)
                 .ok_or_else(bad)?;
-            if !super::research::bound_is_current(&s.inspection, &attempt.task_key, &a.bound) {
+            if !tasks::bound_is_current(&s.inspection, &attempt.task_key, &a.bound) {
                 return Err(bad());
             }
             if now < s.inspection.utc_high_water_ms

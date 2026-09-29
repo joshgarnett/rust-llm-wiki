@@ -160,10 +160,6 @@ pub(super) fn event_type(payload: &EventPayload) -> &'static str {
     match payload {
         EventPayload::Genesis { .. } => "genesis",
         EventPayload::TasksAdded { .. } => "tasks_added",
-        EventPayload::ResearchRebound { .. } => "research_rebound",
-        EventPayload::ResearchFrontierAdmitted { .. } => "research_frontier_admitted",
-        EventPayload::ResearchRoundAssessed { .. } => "research_round_assessed",
-        EventPayload::ResearchRetryScheduled { .. } => "research_retry_scheduled",
         EventPayload::TaskFinished { .. } => "task_finished",
         EventPayload::RunTransition { .. } => "run_transition",
         EventPayload::Amendment { .. } => "amendment",

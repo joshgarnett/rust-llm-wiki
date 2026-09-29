@@ -146,3 +146,20 @@ pub fn input_fingerprint(spec: &RunSpec) -> Result<Blake3Hash> {
         |_| WikiError::invalid("input fingerprint encoding"),
     )?))
 }
+
+/// Authenticate the immutable task and configured profile before admission or replay.
+pub(super) fn bound_is_current(
+    i: &LedgerInspection,
+    key: &Blake3Hash,
+    bound: &AttemptBound,
+) -> bool {
+    i.tasks.get(key).is_some_and(|task| {
+        task.spec.capability == Some(bound.capability)
+            && task.spec.input_hash == bound.input_hash
+            && bound.config_fingerprint == i.spec.config_fingerprint
+            && i.spec
+                .scope
+                .profile_fingerprints
+                .contains_key(&bound.profile_id)
+    })
+}

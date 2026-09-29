@@ -21,7 +21,6 @@ fn response() -> ResponseSpoolInput {
     ResponseSpoolInput {
         bytes: b"invalid paid JSON response".to_vec(),
         metadata: ResponseMetadata {
-            acquisition: None,
             provider_request_id: Some("request-1".into()),
             returned_model: Some("mock-model".into()),
             status_code: Some(200),
@@ -101,6 +100,196 @@ fn retry_gets_new_reservation_no_double_settlement() {
     assert_eq!(retry.attempt().number, 2);
     assert_eq!(job.inspect().unwrap().budget.outstanding.requests, 1);
     assert!(fs.root().resolve(&receipt.path).unwrap().exists());
+}
+
+fn copy_materialization(plan: &MaterializationPlan) -> MaterializationPlan {
+    MaterializationPlan {
+        attempt: plan.attempt.clone(),
+        receipt: plan.receipt.clone(),
+        draft: plan.draft.clone(),
+    }
+}
+
+fn assert_single_receipt_settlement(job: &JobLedger, fs: &crate::vault::VaultFs, r: &AttemptRef) {
+    let inspection = job.inspect().unwrap();
+    assert_eq!(inspection.attempts.len(), 1);
+    assert_eq!(inspection.attempts[0].phase, AttemptPhase::Settled);
+    assert_eq!(inspection.budget.dispatched_requests, 1);
+    assert_eq!(inspection.budget.settled.requests, 1);
+    assert_eq!(inspection.budget.outstanding.requests, 0);
+    assert_eq!(
+        inspection.budget.known_costs[&Currency::new("USD").unwrap()],
+        60
+    );
+    let receipt = inspection.attempts[0].receipt.as_ref().unwrap();
+    assert_eq!(checkpoint::receipt(fs, receipt).unwrap().attempt, *r);
+    let files = std::fs::read_dir(fs.root().path().join(format!("runs/{}/events", r.run_id)))
+        .unwrap()
+        .filter(|entry| {
+            entry
+                .as_ref()
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .starts_with("run_event_receipt_")
+        })
+        .count();
+    assert_eq!(files, 1);
+    job.with(false, |_, loaded| {
+        assert_eq!(
+            loaded
+                .frames
+                .iter()
+                .filter(|f| matches!(&f.event.payload,
+            EventPayload::OutputsCommitted { attempt, .. } if attempt == r))
+                .count(),
+            1
+        );
+        assert_eq!(
+            loaded
+                .frames
+                .iter()
+                .filter(|f| matches!(&f.event.payload,
+            EventPayload::Settled { attempt, .. } if attempt == r))
+                .count(),
+            1
+        );
+        Ok(())
+    })
+    .unwrap();
+}
+
+#[test]
+fn receipt_helper_reuses_original_plan_without_second_commit_or_charge() {
+    let (_t, fs, job, spec, clock) = fixture(1, |_| {});
+    let attempt = authorize(&job, &spec.tasks[0]);
+    job.record_response(&attempt, response()).unwrap();
+    let plan = checkpoint::receipt_plan(
+        &job,
+        &attempt,
+        OutputDisposition::Rejected,
+        vec![],
+        vec![],
+        vec![],
+    )
+    .unwrap();
+    super::settle_receipt(&fs, &job, copy_materialization(&plan)).unwrap();
+    let before = job.inspect().unwrap();
+    let receipt = before.attempts[0].receipt.as_ref().unwrap();
+    let receipt_bytes = std::fs::read(fs.root().resolve(&receipt.path).unwrap()).unwrap();
+    let changes = ChangeEngine::new(fs.clone()).unwrap().change_ids().unwrap();
+    let reopened = JobLedger::new(
+        fs.clone(),
+        spec.vault_id.clone(),
+        spec.run_id.clone(),
+        options(clock),
+    )
+    .unwrap();
+    super::settle_receipt(&fs, &reopened, plan).unwrap();
+    assert_single_receipt_settlement(&reopened, &fs, &attempt);
+    let after = reopened.inspect().unwrap();
+    assert_eq!(after.budget, before.budget);
+    assert_eq!(after.last_event, before.last_event);
+    assert_eq!(
+        std::fs::read(fs.root().resolve(&receipt.path).unwrap()).unwrap(),
+        receipt_bytes
+    );
+    assert_eq!(
+        ChangeEngine::new(fs.clone()).unwrap().change_ids().unwrap(),
+        changes
+    );
+}
+
+#[test]
+fn receipt_helper_recovers_apply_before_ack_without_republishing() {
+    let (_t, fs, job, spec, clock) = fixture(1, |_| {});
+    let attempt = authorize(&job, &spec.tasks[0]);
+    job.record_response(&attempt, response()).unwrap();
+    let plan = checkpoint::receipt_plan(
+        &job,
+        &attempt,
+        OutputDisposition::Rejected,
+        vec![],
+        vec![],
+        vec![],
+    )
+    .unwrap();
+    let interrupted = fault_job(&fs, &spec, &clock, LedgerCheckpoint::BeforeOutputsCommitted);
+    assert_eq!(
+        super::settle_receipt(&fs, &interrupted, copy_materialization(&plan))
+            .unwrap_err()
+            .code,
+        ErrorCode::Internal
+    );
+    let path = checkpoint::event_path(&spec.run_id, &plan.receipt.receipt_id).unwrap();
+    let committed_bytes = std::fs::read(fs.root().resolve(&path).unwrap()).unwrap();
+    let before = job.inspect().unwrap();
+    assert_eq!(before.attempts[0].phase, AttemptPhase::Received);
+    assert!(before.attempts[0].receipt.is_none());
+    let changes = ChangeEngine::new(fs.clone()).unwrap().change_ids().unwrap();
+    drop(interrupted);
+    let reopened = JobLedger::new(
+        fs.clone(),
+        spec.vault_id.clone(),
+        spec.run_id.clone(),
+        options(clock),
+    )
+    .unwrap();
+    super::settle_receipt(&fs, &reopened, plan).unwrap();
+    assert_single_receipt_settlement(&reopened, &fs, &attempt);
+    assert_eq!(
+        std::fs::read(fs.root().resolve(&path).unwrap()).unwrap(),
+        committed_bytes
+    );
+    assert_eq!(
+        ChangeEngine::new(fs.clone()).unwrap().change_ids().unwrap(),
+        changes
+    );
+}
+
+#[test]
+fn receipt_helper_rejects_altered_accounting_before_and_after_publication() {
+    let (_t, fs, job, spec, _) = fixture(1, |_| {});
+    let attempt = authorize(&job, &spec.tasks[0]);
+    job.record_response(&attempt, response()).unwrap();
+    let plan = checkpoint::receipt_plan(
+        &job,
+        &attempt,
+        OutputDisposition::Rejected,
+        vec![],
+        vec![],
+        vec![],
+    )
+    .unwrap();
+    let path = checkpoint::event_path(&spec.run_id, &plan.receipt.receipt_id).unwrap();
+    let alter = || {
+        let mut altered = copy_materialization(&plan);
+        altered.receipt.computed_cost =
+            KnownOrUnknown::Known(Money::new(Currency::new("USD").unwrap(), 0));
+        altered
+    };
+    assert_eq!(
+        super::settle_receipt(&fs, &job, alter()).unwrap_err().code,
+        ErrorCode::ContentConflict
+    );
+    assert!(!fs.root().resolve(&path).unwrap().exists());
+    assert_eq!(
+        job.inspect().unwrap().attempts[0].phase,
+        AttemptPhase::Received
+    );
+    super::settle_receipt(&fs, &job, copy_materialization(&plan)).unwrap();
+    let before = job.inspect().unwrap();
+    let bytes = std::fs::read(fs.root().resolve(&path).unwrap()).unwrap();
+    assert_eq!(
+        super::settle_receipt(&fs, &job, alter()).unwrap_err().code,
+        ErrorCode::ContentConflict
+    );
+    assert_eq!(
+        std::fs::read(fs.root().resolve(&path).unwrap()).unwrap(),
+        bytes
+    );
+    assert_eq!(job.inspect().unwrap().budget, before.budget);
+    assert_single_receipt_settlement(&job, &fs, &attempt);
 }
 #[test]
 fn unknown_retains_money_and_remote_exposure_until_reconciled() {
@@ -626,7 +815,7 @@ fn undeclared_unknown_billable_class_breaks_completeness() {
     };
     usage
         .billable_units
-        .insert(BillableClass::FetchByte, KnownOrUnknown::Unknown);
+        .insert(BillableClass::CachedInput, KnownOrUnknown::Unknown);
     job.record_response(&r, response).unwrap();
     assert!(!job.inspect().unwrap().budget.guarantee_intact);
     let receipt = canonical_receipt(&job, &fs, &r);

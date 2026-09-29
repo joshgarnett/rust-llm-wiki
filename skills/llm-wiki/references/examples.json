@@ -552,6 +552,86 @@
       "check": "semantic_unavailable"
     },
     {
+      "name": "research-handoff",
+      "args": [
+        "research",
+        "run",
+        "What do the Ada notes say?",
+        "--source-id",
+        "${source}",
+        "--max-rounds",
+        "1",
+        "--max-sources",
+        "0"
+      ],
+      "bindings": {
+        "research_run": "/data/run_id",
+        "research_collect": "/data/packet/packet_fingerprint"
+      },
+      "check": "research_collect"
+    },
+    {
+      "name": "research-existing-sources",
+      "args": [
+        "research",
+        "import",
+        "--file",
+        "-"
+      ],
+      "stdin": {
+        "schema": "lwiki.research-submission.v1",
+        "run_id": "${research_run}",
+        "packet_fingerprint": "${research_collect}",
+        "response": {
+          "stage": "collect_sources",
+          "sources": [],
+          "gaps": []
+        }
+      },
+      "bindings": {
+        "research_answer": "/data/packet/packet_fingerprint",
+        "research_passage": "/data/packet/passages/0/passage_id"
+      },
+      "check": "research_answer"
+    },
+    {
+      "name": "research-cited-answer",
+      "args": [
+        "research",
+        "import",
+        "--file",
+        "-"
+      ],
+      "stdin": {
+        "schema": "lwiki.research-submission.v1",
+        "run_id": "${research_run}",
+        "packet_fingerprint": "${research_answer}",
+        "response": {
+          "stage": "answer",
+          "claims": [
+            {
+              "text": "The captured notes discuss Ada and Acme.",
+              "passage_ids": [
+                "${research_passage}"
+              ]
+            }
+          ],
+          "gaps": [],
+          "follow_up": null
+        }
+      },
+      "check": "research_complete"
+    },
+    {
+      "name": "research-report",
+      "args": [
+        "research",
+        "report",
+        "${research_run}"
+      ],
+      "check": "research_report"
+    },
+    {
       "name": "withdraw",
       "args": [
         "source",

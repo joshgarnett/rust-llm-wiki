@@ -1,10 +1,10 @@
 # Provider dispatch and durable jobs
 
-Proposed implementation contract, 2026-09-28. M3 introduces authenticated embeddings, generation for extraction, and shared budget accounting; M4 reuses them for research. No implementation or provider interoperability is claimed. [Retrieval](retrieval.md) owns representations/extraction schemas; [storage](storage.md) owns records and commits; [CLI](cli-and-skills.md) owns public envelopes/errors.
+Implementation contract for authenticated embeddings, generation for extraction, probes, and shared budget accounting. Research uses separate local host-agent packets and does not dispatch search, fetch, or generation through this subsystem. Local tests do not establish live-provider interoperability. [Retrieval](retrieval.md) owns representations/extraction schemas; [storage](storage.md) owns records and commits; [CLI](cli-and-skills.md) owns public envelopes/errors.
 
 ## 1. Interfaces and ownership
 
-All CLI-owned network operations pass through one dispatcher, including retries, probes, search pages, fetch redirects, and token-count requests if later supported. Authenticated transport constructors remain private to this module. Conceptual Rust interfaces:
+CLI-owned provider requests for embeddings, generation, and probes pass through one dispatcher, including retries and token-count requests if later supported. Authenticated transport constructors remain private to this module. Conceptual Rust interfaces:
 
 ```rust
 struct DispatchContext {
@@ -16,8 +16,6 @@ enum RemoteRequest {
             inputs: Vec<EmbeddingInput>, expected_dimensions: Option<u32> },
     Generate { profile: TrustedProfileId, prompt: GenerationInput,
                output_contract: SchemaRef, max_output_tokens: u32 },
-    Search { profile: TrustedProfileId, query: String, count: u16, page: u16 },
-    Fetch { url: Url, scope: FetchScope },
 }
 struct EmbeddingInput { input_hash: Blake3Hash, utf8: String }
 struct GenerationInput { instructions: String, data: String }
@@ -28,7 +26,7 @@ async fn execute(ctx: &DispatchContext, request: RemoteRequest)
     -> Result<RemoteOutcome, DispatchFailure>;
 ```
 
-`RemoteOutcome` contains typed embeddings, generation text, search results, or captured bytes, plus a `UsageReceipt` and durable output reference. `DispatchFailure` includes a safe cause, receipt when available, and `NotSent | Rejected | OutcomeUnknown` disposition. Central CLI mapping selects existing error codes. Receipts accompany invalid output too: malformed JSON can still cost money. Fixed allowlisted `details.reason` and retained `failure_code` identify validation failures without copying provider strings or bodies.
+`RemoteOutcome` contains typed embeddings or generation text, plus a `UsageReceipt` and durable output reference. `DispatchFailure` includes a safe cause, receipt when available, and `NotSent | Rejected | OutcomeUnknown` disposition. Central CLI mapping selects existing error codes. Receipts accompany invalid output too: malformed JSON can still cost money. Fixed allowlisted `details.reason` and retained `failure_code` identify validation failures without copying provider strings or bodies.
 
 Adapters implement pure `encode`, `decode`, and `upper_bound` methods; only dispatcher transport sends requests. Jobs supply run identity, limits, reservations, and checkpoints. Retrieval supplies `SpaceId`, actual rendered bytes, and schema validation; generation cannot bypass its importer. Use an injectable transport, clock, jitter source, and credential runner for deterministic tests.
 
@@ -41,7 +39,6 @@ version = 1
 [profiles.primary]
 embedding = "embed-main"
 generation = "generate-main"
-search = "brave-main"
 
 [services.embed-main]
 adapter = "embeddings-v1"
@@ -72,15 +69,6 @@ kind = "static"
 key_file = "/private/path/generation-key"
 header = "Authorization"
 prefix = "Bearer "
-
-[services.brave-main]
-adapter = "brave-web-v1"
-url = "https://api.search.brave.com/res/v1/web/search"
-[services.brave-main.auth]
-kind = "static"
-key_env = "BRAVE_SEARCH_API_KEY"
-header = "X-Subscription-Token"
-prefix = ""
 
 [vault_bindings.example]
 root = "/absolute/path/to/wiki"
@@ -154,13 +142,13 @@ Baseline `text-json` requires the entire returned text to parse as one JSON valu
 
 Output-token limits must include invisible billed tokens when the provider uses them; visible text length is insufficient. OpenAI explicitly documents this distinction. [Token accounting](https://developers.openai.com/api/docs/guides/token-counting) Embedding profiles cannot generate text merely because their URL looks API-compatible. No local model runtime is supported.
 
-## 6. Search and fetch
+## 6. Research boundary
 
-Propose `brave-web-v1` as the first replaceable M4 discovery adapter, subject to the user's provider selection. GET the configured URL with encoded `q,count,offset`, auth header, and no rich callbacks. Validate query length (600 characters/75 words), count (1–20), and page (0–9). Normalize only `web.results` into `{url,title,snippet,rank}`; snippets are leads, not captured evidence. The official API documents these limits and fields. [Brave Web Search reference](https://api-dashboard.search.brave.com/api-reference/web/search/get) Count every page separately; deduplicate overlapping results. Explicit-URL research needs no search subscription.
+`research plan` and dry-run are local previews. `research run` persists a bounded `research-packet` for a host agent; `research import` validates a `research-submission` and retains its source or answer material through guarded local storage. `research resume` returns the outstanding packet or, with `--refresh`, regenerates it against current local state. The CLI does not search the web, fetch URLs, call a model, or open provider credentials for research. Offline research tasks are limited to local or already acquired content.
 
-Fetch accepts bounded public HTTP(S) URLs; no cookies, login, JavaScript, subresource loading, or browser automation. Validate scope and public destination IPs at each redirect and connection, including IPv4-mapped IPv6; pin the validated destination while preserving TLS hostname checks. Reject private/link-local/loopback/reserved targets, URL credentials, non-HTTP schemes, and HTTPS downgrades. Disable ambient proxies; private API endpoints use trusted provider profiles, not the public fetch path. These are local fetch boundaries, not an enterprise authorization system.
+The host can submit bounded inline source content with a key, title, claimed origin and optional provenance, or answer claims referencing packet-local passage IDs. Origin URLs and acquisition metadata are host claims, not an observed CLI HTTP exchange. Exact source and citation bytes are checked before retention; claims remain unassessed, gaps stay explicit, and graph assertions are not autoaccepted. A follow-up answer may request another bounded collection round without dispatching it. Host-agent tool calls, network activity, tokens and spend are outside CLI observation.
 
-Capture observed/final URLs, redirects, timestamp, media type, original bytes/hash, and normalizer version. Decode HTML/text deterministically without executing content; normalization produces a new immutable source revision through storage. Preserve raw evidence before synthesis. Unsupported formats remain unsupported captures, not invented extracted text. Robots/auth walls and unavailable pages become explicit gaps.
+Research defaults are three rounds, fifteen imported sources and 524288 total imported source bytes over the run. Each submission has a separate 64 KiB aggregate inline-content cap. These are local handoff limits, not provider budget guarantees.
 
 ## 7. Proposed limits and retry policy
 
@@ -168,16 +156,13 @@ All defaults are product choices, overridable within validated bounds; provider 
 
 | Control | Default |
 |---|---:|
-| Connect / embedding / generation / fetch timeout | 10 / 60 / 120 / 30 seconds |
+| Connect / embedding / generation timeout | 10 / 60 / 120 seconds |
 | Attempts including first / run concurrency | 3 / 2 |
 | Embedding items / serialized request bytes | 32 / 256 KiB |
 | Generation request / response bytes | 256 KiB / 1 MiB |
 | Embedding response bytes | 8 MiB |
-| Fetch redirects / compressed / expanded bytes | 5 / 4 MiB / 8 MiB |
-| Research rounds / fetched sources / total dispatches | 3 / 15 / 60 |
-| Run deadline / search results per page | 15 minutes / 10 |
 
-Persist limits at run creation; lifetime counters never reset on resume. Raising limits is a recorded user-requested amendment. Use monotonic timers during execution and a persisted UTC deadline; expired runs need a new explicit deadline. Rate controls use per-run requests-per-minute and token-per-minute bounds when known; provider-wide coordination is outside v1.
+Provider jobs persist their dispatch limits and accounting across resume. Local research persists its own round, source, and source-byte limits; resume does not reset them. Provider rate controls use per-run requests-per-minute and token-per-minute bounds when known; provider-wide coordination is outside v1.
 
 Retry 429/selected 5xx with full-jitter exponential backoff, starting at one second and capped at thirty. Respect valid `Retry-After`; if it exceeds the remaining deadline, pause instead of retrying early. Do not retry 400/403, schema failures, or malformed successful responses automatically. A pre-send connect failure may retry; a timeout/reset after possible send pauses with unknown outcome unless retry-uncertain was explicitly enabled. HTTP retries consume new reservations even when earlier billing is unknown. Cancellation interrupts waiting and stops dispatch; it cannot retract accepted provider work.
 
@@ -207,9 +192,7 @@ Events also record attempts, retries, bytes, source/task coverage, and stop reas
 
 Before `received`, fsync the bounded successful response and allowlisted transport metadata to restricted `.wiki/state/requests/<attempt>/`; this sensitive recovery spool is never diagnostic output. Exclude auth headers/helper output; reduce error bodies to safe codes. Validate/materialize it, commit the Markdown receipt/output records, then settle and advance checkpoints. Remove the spool only after verifying committed outputs. Vector bytes may commit to cache first, but membership activation still checks retrieval's snapshot/input fingerprints. These stores are not one atomic transaction: replay reconciles hashes at every boundary. Unspooled responses remain unknown after a crash. Embedding receipts survive cache loss but cannot restore missing vectors.
 
-For M4, the run body contains a versioned `lwiki.run-plan.v1` block with question/exclusions, profile fingerprints, source snapshot references, limits, and tasks `{key,stage,dependencies,input_hash,status,output_refs}`. Stages are `inspect_existing`, `plan_frontier`, `discover`, `capture`, `extract`, `assess_gaps`, `synthesize`, and `stage_changes`. Scope and budgets are immutable inputs except recorded user amendments. Model planning proposes bounded query/URL strings; it cannot dispatch, raise limits, install helpers, or apply changes.
-
-Process ready tasks in stable priority/key order, reserving before parallel execution. Deduplicate URLs without dropping meaningful query parameters and deduplicate captured bytes; retain separate origins. Reuse completed extraction by actual input fingerprint. Assessment may propose another round only within existing limits. Stop on coverage, explicit cancellation, limits, or two consecutive rounds without new supported evidence; record unanswered questions. Synthesis returns a report and proposals, validated against existing evidence. Stage them through storage; applying requires the caller's explicit apply mode. Budget exhaustion saves a deterministic partial report from completed outputs without a final unpaid-for generation call. M3 embedding/extraction jobs reuse task/receipt accounting without requiring this research planner.
+Research does not create provider `RunSpec` tasks or usage receipts. Its local retained packet/submission lifecycle has `collect_sources` and `answer` stages, bounded imports, current source dependencies and explicit gaps. Repeated import of the same submission reuses retained work; stale or conflicting packets do not acquire authority. Embedding and direct API extraction continue to use the ordinary job ledger and receipt accounting.
 
 ## 9. Budget admission and recovery
 
@@ -221,7 +204,7 @@ Keep unknown charges reserved; no timeout refund. Explicit uncertain retry spend
 
 On cancellation, persist completed work, mark unresolved dispatches, and stop new requests. Recovery reconciles journal entries with Markdown outputs before scheduling. Markdown-only restore recovers recorded work, not missing charges: without complete operational accounting or provider reconciliation, continuing the old hard-dollar budget is prohibited. A new run must disclose previous unknown spend. No automatic synthesis or embedding follows cache loss.
 
-## 10. Failure tests required before M3/M4 release
+## 10. Provider failure tests
 
 | Injection | Required outcome |
 |---|---|
@@ -233,7 +216,6 @@ On cancellation, persist completed work, mark unresolved dispatches, and stop ne
 | 429, long Retry-After, timeout after send | Bounded attempts/deadline; unknown charge retained |
 | Two processes reserve final slot | At most one admitted; caps include retries |
 | Crash before/after each journal/commit boundary | Replay without lost completed output/double settlement |
-| DNS rebinding/private redirect/decompression bomb | Fetch rejected within deadline and byte limits |
 | Resume after changed source/model; deleted SQLite | Reuse only matching durable work; no implicit paid rebuild |
 
 Run these against mocks and fault-injected storage first; add opt-in live contract tests for the actual selected endpoints before claiming interoperability.

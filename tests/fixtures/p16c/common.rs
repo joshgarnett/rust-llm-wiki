@@ -133,7 +133,6 @@ pub fn case_with_encoding(
     let adapter = match role {
         ServiceRole::Embed => "embeddings-v1",
         ServiceRole::Generate => "chat-completions-v1",
-        _ => unreachable!(),
     };
     case_with_adapter_encoding(role, input, model, url, extra, canonical, edit, adapter)
 }
@@ -170,7 +169,6 @@ fn case_with_adapter_encoding(
     let binding = match role {
         ServiceRole::Embed => "embedding",
         ServiceRole::Generate => "generation",
-        _ => unreachable!(),
     };
     private(
         &config,
@@ -224,7 +222,6 @@ fn case_with_adapter_encoding(
         created_at_utc_ms: now,
         deadline_utc_ms: now + 900_000,
         scope: RunScope {
-            research: None,
             operation: "embedding".into(),
             question: None,
             exclusions: vec![],
@@ -249,6 +246,7 @@ fn case_with_adapter_encoding(
             && task.input.hash == hash(&bytes)
             && task.input.byte_len == bytes.len() as u64
         {
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
             private(&path, &bytes);
         }
     }

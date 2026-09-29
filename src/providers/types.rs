@@ -15,14 +15,12 @@ use std::{collections::BTreeMap, future::Future, pin::Pin, sync::Arc};
 pub enum ServiceRole {
     Embed,
     Generate,
-    Search,
 }
 impl ServiceRole {
     pub fn capability(self) -> Capability {
         match self {
             Self::Embed => Capability::Embed,
             Self::Generate => Capability::Generate,
-            Self::Search => Capability::Search,
         }
     }
 }
@@ -51,15 +49,6 @@ pub enum RemoteOperation {
         data: String,
         output_schema: serde_json::Value,
         max_output_tokens: u64,
-    },
-    Search {
-        query: String,
-        count: u8,
-        page: u8,
-    },
-    Fetch {
-        url: String,
-        limits: super::public_fetch::FetchLimits,
     },
 }
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
@@ -189,9 +178,6 @@ pub enum ValidatedOutput {
     Probe {
         role: ServiceRole,
     },
-    Search {
-        leads: Vec<super::search_wire::SearchLead>,
-    },
 }
 pub struct DispatchOutcome {
     pub attempt: AttemptRef,
@@ -228,7 +214,6 @@ pub(super) enum WireContract {
     Fixture,
     Embedding(EmbeddingContract),
     Generation(GenerationContract),
-    Search(super::search_wire::SearchContract),
 }
 
 pub(super) struct EmbeddingItemContract {

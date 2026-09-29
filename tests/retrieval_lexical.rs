@@ -1,3 +1,4 @@
+use lwiki as library;
 use lwiki::{
     catalog::*,
     changes::*,
@@ -9,6 +10,12 @@ use lwiki::{
 };
 use serde_json::{Value, json};
 use std::{collections::BTreeMap, fs, path::Path, time::Duration};
+
+#[path = "fixtures/p18/common.rs"]
+mod api_fixture;
+#[allow(dead_code)]
+#[path = "fixtures/p16c/common.rs"]
+mod provider;
 
 fn id(s: &str) -> RecordId {
     RecordId::new(s).unwrap()
@@ -924,4 +931,136 @@ fn exported_packet_windows_never_supply_default_source_search() {
         assert!(units.iter().all(|unit| !unit.utf8.contains("CEDAR-731")));
         assert!(load_packet(&SourceView::from_fs(catalog.fs()).unwrap(), &packet_id).is_ok());
     }
+}
+
+#[test]
+fn api_extraction_and_generation_output_never_supply_current_search() {
+    let f = api_fixture::Fixture::new();
+    let source_id = f.request.export.source_id.clone();
+    let mock = api_fixture::Mock::response(f.response());
+    let outcome = f
+        .app
+        .graph_extract_api(
+            &f.request,
+            &f.service,
+            &f.dispatcher(mock),
+            f.options.clone(),
+        )
+        .unwrap();
+    let output_path = outcome.output.as_ref().unwrap().path.clone();
+    let imported = outcome.import.unwrap();
+    let extraction_path = imported.extraction.path.clone();
+    f.apply(imported.prepared.as_ref().unwrap());
+
+    let before = f.catalog.verified_snapshot(None).unwrap();
+    for path in [&output_path, &extraction_path] {
+        let document = before
+            .projection()
+            .documents
+            .iter()
+            .find(|document| &document.path == path)
+            .unwrap();
+        assert!(document.raw_text.contains("Ada"), "{path}");
+    }
+    let hits = search(&before, "Ada", &literal_plan()).unwrap();
+    assert_eq!(hits.hits.len(), 1, "only the source supplies current text");
+    let units = render::corpus(&before, &EmbeddingSettings::default()).unwrap();
+    assert!(
+        units
+            .iter()
+            .all(|unit| unit.owner != output_path && unit.owner != extraction_path)
+    );
+
+    let withdraw = SourceStore::new(f.fs.clone())
+        .plan_withdraw(&source_id, "fixture withdrawal")
+        .unwrap();
+    let writer = WriterPermit::acquire(f.fs.root(), Duration::from_secs(2)).unwrap();
+    let prepared = f
+        .engine
+        .prepare(&writer, withdraw.draft.unwrap())
+        .unwrap()
+        .prepared;
+    f.engine
+        .apply(&writer, &prepared, &CatalogGraphValidator, &f.catalog)
+        .unwrap();
+    drop(writer);
+    let after = f.catalog.verified_snapshot(None).unwrap();
+    assert!(
+        search(&after, "Ada", &literal_plan())
+            .unwrap()
+            .hits
+            .is_empty()
+    );
+    let mut audit = literal_plan();
+    audit.filters.include_historical = true;
+    let history = search(&after, "Ada", &audit).unwrap();
+    for path in [&output_path, &extraction_path] {
+        assert!(
+            history.hits.iter().any(|hit| {
+                &hit.locator.path == path && hit.eligibility == Eligibility::Withdrawn
+            }),
+            "{path}"
+        );
+    }
+
+    fs::copy(
+        f.temp.path().join(extraction_path.as_str()),
+        f.temp.path().join("copied-extraction.md"),
+    )
+    .unwrap();
+    fs::copy(
+        f.temp.path().join(output_path.as_str()),
+        f.temp.path().join("copied-generation-output.md"),
+    )
+    .unwrap();
+    let copied = reader(f.fs.root(), &f.catalog);
+    assert!(
+        search(&copied, "Ada", &literal_plan())
+            .unwrap()
+            .hits
+            .is_empty()
+    );
+    let copied_units = render::corpus(&copied, &EmbeddingSettings::default()).unwrap();
+    assert!(copied_units.iter().all(|unit| {
+        unit.owner != relative("copied-extraction.md")
+            && unit.owner != relative("copied-generation-output.md")
+    }));
+}
+
+#[test]
+fn malformed_operational_declarations_preserve_ordinary_invalid_discovery() {
+    let (temp, root, catalog) = fixture();
+    let extraction = b"---\nwiki_kind: extraction\nwiki_id: extraction_broken\ninvalid: [unfinished\n---\nCEDAR-731 retained output\n";
+    let output = b"---\nwiki_kind: run_event\nwiki_id: run_event_generation_broken\ninvalid: [unfinished\n---\nCEDAR-731 retained API response\n";
+    write(
+        temp.path(),
+        "knowledge/extractions/extraction_broken.md",
+        extraction,
+    );
+    write(temp.path(), "copied-malformed-extraction.md", extraction);
+    write(
+        temp.path(),
+        "runs/run_api_broken/outputs/run_event_generation_broken.md",
+        output,
+    );
+    write(temp.path(), "copied-malformed-generation-output.md", output);
+    write(
+        temp.path(),
+        "ordinary-invalid.md",
+        b"---\nwiki_kind: page\nwiki_id: broken_page\ninvalid: [unfinished\n---\nCEDAR-731 ordinary author note\n",
+    );
+    let r = reader(&root, &catalog);
+    let hits = search(&r, "CEDAR-731", &literal_plan()).unwrap();
+    assert_eq!(hits.hits.len(), 1);
+    assert_eq!(hits.hits[0].locator.path, relative("ordinary-invalid.md"));
+    let units = render::corpus(&r, &EmbeddingSettings::default()).unwrap();
+    assert!(units.iter().all(|unit| {
+        !unit.owner.as_str().contains("extraction_broken")
+            && !unit.owner.as_str().contains("run_event_generation_broken")
+            && !unit.owner.as_str().starts_with("copied-malformed-")
+    }));
+    let mut audit = literal_plan();
+    audit.filters.include_historical = true;
+    let historical = search(&r, "CEDAR-731", &audit).unwrap();
+    assert_eq!(historical.hits.len(), 5);
 }

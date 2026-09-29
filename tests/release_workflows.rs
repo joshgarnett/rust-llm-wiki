@@ -126,13 +126,11 @@ fn private_config(f: &Vault, address: std::net::SocketAddr) -> PathBuf {
     provider::private(
         &path,
         format!(
-            "version=1\n[profiles.primary]\nembedding=\"embedding\"\ngeneration=\"generation\"\nsearch=\"search\"\n\
+            "version=1\n[profiles.primary]\nembedding=\"embedding\"\ngeneration=\"generation\"\n\
         [services.embedding]\nadapter=\"embeddings-v1\"\nurl=\"http://{address}/embed?retained=yes\"\nallow_loopback_http=true\nmodel=\"test-model\"\n\
         [services.embedding.auth]\nkind=\"static\"\nkey_env=\"EXPLICIT_FIXTURE_TOKEN\"\n\
         [services.generation]\nadapter=\"chat-completions-v1\"\nurl=\"http://{address}/generate?retained=yes\"\nallow_loopback_http=true\nmodel=\"test-model\"\nrevision=\"r1\"\n\
         [services.generation.auth]\nkind=\"static\"\nkey_env=\"EXPLICIT_FIXTURE_TOKEN\"\n\
-        [services.search]\nadapter=\"brave-web-v1\"\nurl=\"http://{address}/search?retained=yes\"\nallow_loopback_http=true\n\
-        [services.search.auth]\nkind=\"static\"\nkey_env=\"EXPLICIT_FIXTURE_TOKEN\"\nheader=\"X-Subscription-Token\"\nprefix=\"\"\n\
         [vault_bindings.test]\nroot={}\nwiki_id=\"Vault.Portable\"\nallowed_profiles=[\"primary\"]\n",
             provider::quote(f.temp.path().to_str().unwrap())
         ),
@@ -268,40 +266,21 @@ fn generation(value: Value) -> Vec<u8> {
         "usage":{"prompt_tokens":10,"completion_tokens":8,"total_tokens":18,"prompt_tokens_details":{"cached_tokens":0},"completion_tokens_details":{"reasoning_tokens":0}}})).unwrap()
 }
 fn probe_reply(request: &Request) -> Vec<u8> {
-    if request.target.starts_with("/search?") {
-        assert_eq!(request.method, "GET");
-        assert_eq!(
-            request.headers["x-subscription-token"],
-            "synthetic-cli-secret"
-        );
-        let query: BTreeMap<_, _> = url::Url::parse(&format!("http://fixture{}", request.target))
-            .unwrap()
-            .query_pairs()
-            .into_owned()
-            .collect();
-        assert_eq!(query["retained"], "yes");
-        assert_eq!(query["q"], "lwiki provider probe");
-        assert_eq!(query["count"], "1");
-        assert_eq!(query["offset"], "0");
-        assert!(request.body.is_null());
-        serde_json::to_vec(&json!({"web":{"results":[]}})).unwrap()
+    assert_eq!(request.method, "POST");
+    assert_eq!(
+        request.headers["authorization"],
+        "Bearer synthetic-cli-secret"
+    );
+    assert_eq!(request.body["model"], "test-model");
+    if request.target == "/embed?retained=yes" {
+        assert_eq!(request.body["encoding_format"], "float");
+        assert_eq!(request.body["input"].as_array().unwrap().len(), 1);
+        serde_json::to_vec(&json!({"model":"test-model","data":[{"index":0,"embedding":[1.0,0.0]}],"usage":{"prompt_tokens":1,"total_tokens":1}})).unwrap()
     } else {
-        assert_eq!(request.method, "POST");
-        assert_eq!(
-            request.headers["authorization"],
-            "Bearer synthetic-cli-secret"
-        );
-        assert_eq!(request.body["model"], "test-model");
-        if request.target == "/embed?retained=yes" {
-            assert_eq!(request.body["encoding_format"], "float");
-            assert_eq!(request.body["input"].as_array().unwrap().len(), 1);
-            serde_json::to_vec(&json!({"model":"test-model","data":[{"index":0,"embedding":[1.0,0.0]}],"usage":{"prompt_tokens":1,"total_tokens":1}})).unwrap()
-        } else {
-            assert_eq!(request.target, "/generate?retained=yes");
-            assert_eq!(request.body["messages"][0]["role"], "system");
-            assert_eq!(request.body["messages"][1]["role"], "user");
-            generation(json!({"ok":true}))
-        }
+        assert_eq!(request.target, "/generate?retained=yes");
+        assert_eq!(request.body["messages"][0]["role"], "system");
+        assert_eq!(request.body["messages"][1]["role"], "user");
+        generation(json!({"ok":true}))
     }
 }
 fn ledger(f: &Vault, run: &str) -> JobLedger {
@@ -488,6 +467,31 @@ fn host_recipe(f: &Vault) -> BTreeMap<String, String> {
                 assert_eq!(v["data"]["commands"], manifest["commands"]);
                 assert_eq!(v["data"]["schemas"], manifest["schemas"]);
             }
+            "research_collect" | "research_answer" => {
+                assert_eq!(v["data"]["persisted"], true);
+                assert_eq!(v["data"]["ready_to_import"], true);
+                assert_eq!(v["data"]["external_tool_usage"], "unobserved");
+                assert_eq!(v["data"]["packet"]["scope"]["offline"], true);
+                let expected = if step["check"] == "research_collect" {
+                    "collect_sources"
+                } else {
+                    "answer"
+                };
+                assert_eq!(v["data"]["packet"]["stage"], expected);
+            }
+            "research_complete" => {
+                assert_eq!(v["data"]["status"], "completed");
+                assert_eq!(v["data"]["ready_to_import"], false);
+                assert_eq!(v["data"]["freshness"], "retained");
+                assert_eq!(v["data"]["report"]["claims"][0]["assessment"], "unassessed");
+            }
+            "research_report" => {
+                assert_eq!(
+                    v["data"]["claims"][0]["citations"][0]["reference"]["source_revision"],
+                    bindings["revision"]
+                );
+                assert_eq!(v["data"]["partial"], false);
+            }
             "repeat_revision" => {
                 assert_eq!(v["data"]["reused"], true);
                 assert_eq!(v["data"]["allocated_ids"]["revision"], bindings["revision"]);
@@ -610,34 +614,7 @@ fn wire_reply(request: &Request) -> Vec<u8> {
             json!({"schema":"lwiki.extraction.v1","packet_id":data["packet_id"],"packet_fingerprint":data["packet_fingerprint"],"mentions":[mention("m1","Ada"),mention("m2","Relay")],"assertions":[{"id":"a1","subject":"m1","predicate":"maintains","object":{"kind":"mention","mention_id":"m2"},"negated":false,"modality":"asserted","evidence":[{"window_id":window["id"],"stance":"supports","quote":"Ada maintains Relay."}]}],"unresolved":[]}),
         );
     }
-    assert_eq!(data["binding"]["version"], 1);
-    assert_eq!(data["binding"]["round"], 1);
-    assert_eq!(data["question"], "Ada");
-    assert_eq!(data["explicit_urls"], json!([]));
-    let passages = data["passages"].as_array().unwrap();
-    assert!(
-        !passages.is_empty(),
-        "research must use actual active captured source"
-    );
-    let citation = passages[0]["citation"].clone();
-    assert!(
-        data["binding"]["citations"]
-            .as_array()
-            .unwrap()
-            .contains(&citation)
-    );
-    generation(match data["binding"]["stage"].as_str().unwrap() {
-        "plan_frontier" => {
-            json!({"queries":[],"urls":[],"reason":"Captured local source is sufficient for provenance inspection."})
-        }
-        "assess_gaps" => {
-            json!({"covered_evidence_ids":[],"gaps":["Identity and entailment remain unassessed."],"next_queries":[],"next_urls":[],"stop":true})
-        }
-        "synthesize" => {
-            json!({"sections":[{"heading":"Local evidence","claims":[{"text":"Ada occurs in the captured local passage.","citations":[citation.clone()]}]}],"unanswered_questions":["No independent entailment assessment was performed."],"proposed_changes":[{"kind":"create_page","title":"P21 research proposal","body":"A retained proposal with verified source provenance; claims remain unassessed.","citations":[citation]}]})
-        }
-        stage => panic!("unexpected production stage {stage}"),
-    })
+    panic!("unexpected generation request outside direct graph extraction");
 }
 fn run_ids(f: &Vault) -> Vec<RecordId> {
     let mut ids = f
@@ -646,6 +623,8 @@ fn run_ids(f: &Vault) -> Vec<RecordId> {
         .scan_markdown()
         .unwrap()
         .into_iter()
+        // Agent handoff heads use research.md and have no paid provider ledger.
+        .filter(|p| p.as_str().starts_with("runs/") && p.as_str().ends_with("/run.md"))
         .filter_map(|p| {
             let note =
                 lwiki::records::parse_note(&std::fs::read(f.temp.path().join(p.as_str())).unwrap());
@@ -688,6 +667,15 @@ fn account_new_runs(f: &Vault, retained: &mut BTreeMap<RecordId, LedgerInspectio
         };
         assert!(!reason.is_empty());
         assert!(prior_run_ids.contains(&self::id("run_restored_p21")));
+        for prior in prior_run_ids {
+            assert!(
+                !f.temp
+                    .path()
+                    .join(format!("runs/{prior}/research.md"))
+                    .exists(),
+                "local agent handoff must not become unknown paid accounting: {prior}"
+            );
+        }
         for previous in retained.keys() {
             assert!(
                 prior_run_ids.contains(previous),
@@ -719,334 +707,116 @@ fn account_new_runs(f: &Vault, retained: &mut BTreeMap<RecordId, LedgerInspectio
         retained.insert(id, inspection);
     }
 }
-fn verify_report(f: &Vault, report: &Value, withdrawn: &str) {
-    let view = lwiki::sources::SourceView::from_fs_bounded(&f.fs, 64 * 1024 * 1024, 4096).unwrap();
-    let passages = report["passages"].as_array().unwrap();
-    assert!(!passages.is_empty());
-    for passage in passages {
-        let citation: CitationRef = serde_json::from_value(passage["citation"].clone()).unwrap();
-        view.verify(&citation, lwiki::sources::CitationScope::Current)
-            .unwrap();
-        assert!(!passage["citation"].to_string().contains(withdrawn));
-    }
-    for claim in report["claim_assessments"].as_array().unwrap() {
-        assert_eq!(claim["status"], "unassessed");
-        assert_eq!(claim["provenance_verified"], true);
-    }
-}
-fn count_pages(f: &Vault) -> usize {
-    f.fs.root()
-        .scan_markdown()
-        .unwrap()
-        .iter()
-        .filter(|p| {
-            lwiki::records::parse_note(&std::fs::read(f.temp.path().join(p.as_str())).unwrap())
-                .canonical
-                .is_some_and(|r| r.kind() == RecordKind::Page)
-        })
-        .count()
-}
-fn research_budget_amend(
-    f: &Vault,
-    config: &Path,
-    server: &Server,
-    withdrawn: &str,
-    retained: &mut BTreeMap<RecordId, LedgerInspection>,
-) {
-    let cfg = config.to_str().unwrap();
-    let pages = count_pages(f);
+fn agent_research_handoff(f: &Vault, source: &str, server: &Server) {
     let count = server.count();
-    let (output, partial) = invoke(
+    let started = success(
         f,
-        "--jsonl",
-        &["--profile", "primary"],
+        &[],
         &[
             "research",
             "run",
             "Ada",
+            "--source-id",
+            source,
             "--run-id",
-            "run_p21_budget",
-            "--max-requests",
-            "2",
-            "--providers-config",
-            cfg,
+            "run_p21_handoff",
         ],
         None,
     );
-    assert_eq!(output.status.code(), Some(7), "{partial}");
-    assert_eq!(partial["error"]["code"], "BUDGET_EXCEEDED");
-    assert_eq!(partial["meta"]["network_used"], true);
-    assert_eq!(partial["meta"]["partial"], true);
-    assert!(partial["data"]["report"]["synthesis"].is_null());
-    verify_report(f, &partial["data"]["report"], withdrawn);
-    assert_eq!(server.count(), count + 2);
-    let run = ledger(f, "run_p21_budget");
-    let original = run.inspect().unwrap();
-    assert_eq!(original.state, RunState::Paused);
-    assert_eq!(original.budget.dispatched_requests, 2);
-    assert_eq!(original.research.as_ref().unwrap().rounds_started, 1);
-    assert_eq!(original.research.as_ref().unwrap().rounds.len(), 1);
-    let (output, unchanged) = invoke(
-        f,
-        "--jsonl",
-        &["--profile", "primary"],
-        &[
-            "research",
-            "resume",
-            "run_p21_budget",
-            "--providers-config",
-            cfg,
-        ],
-        None,
-    );
-    assert_eq!(output.status.code(), Some(7), "{unchanged}");
-    assert_eq!(unchanged["meta"]["network_used"], false);
-    assert_eq!(unchanged["data"]["report"], partial["data"]["report"]);
-    assert_eq!(run.inspect().unwrap().attempts, original.attempts);
-    let before = tree(f.temp.path());
-    let cached = offline(
-        f,
-        &[
-            "research",
-            "resume",
-            "run_p21_budget",
-            "--providers-config",
-            "unavailable.toml",
-        ],
-        None,
-    );
-    assert_eq!(cached["data"]["report"], partial["data"]["report"]);
-    let report = offline(f, &["research", "report", "run_p21_budget"], None);
-    assert_eq!(report["data"], partial["data"]["report"]);
-    assert_eq!(tree(f.temp.path()), before);
-    let mut limits = original.effective_limits.clone();
-    limits.requests = 3;
-    let amendment = lwiki::research::ResearchResumeAmendment {
-        limits,
-        deadline_utc_ms: original.effective_deadline_utc_ms,
-        reason: "Explicit caller authorizes the single remaining synthesis request.".into(),
-    };
-    let path = f.temp.path().join("amendment.json");
-    std::fs::write(&path, serde_json::to_vec(&amendment).unwrap()).unwrap();
-    let before = tree(f.temp.path());
-    let preview = success(
-        f,
-        &["--dry-run"],
-        &[
-            "research",
-            "resume",
-            "run_p21_budget",
-            "--amend-limits",
-            path.to_str().unwrap(),
-            "--providers-config",
-            "unavailable.toml",
-        ],
-        None,
-    );
-    assert_eq!(
-        preview["data"]["amendment"],
-        serde_json::to_value(&amendment).unwrap()
-    );
-    assert_eq!(preview["meta"]["network_used"], false);
-    assert_eq!(tree(f.temp.path()), before);
-    let resumed = success(
-        f,
-        &["--profile", "primary"],
-        &[
-            "research",
-            "resume",
-            "run_p21_budget",
-            "--amend-limits",
-            path.to_str().unwrap(),
-            "--providers-config",
-            cfg,
-        ],
-        None,
-    );
-    assert_eq!(resumed["meta"]["network_used"], true);
-    assert_eq!(resumed["meta"]["partial"], false);
-    verify_report(f, &resumed["data"]["report"], withdrawn);
-    let completed = run.inspect().unwrap();
-    assert_eq!(completed.state, RunState::Completed);
-    assert_eq!(completed.spec, original.spec);
-    assert_eq!(completed.spec.limits.requests, 2);
-    assert_eq!(completed.effective_limits, amendment.limits);
-    assert_eq!(
-        completed.effective_deadline_utc_ms,
-        original.effective_deadline_utc_ms
-    );
-    assert_eq!(completed.budget.dispatched_requests, 3);
-    assert_eq!(completed.attempts.len(), 3);
-    assert_eq!(&completed.attempts[..2], original.attempts.as_slice());
-    assert_eq!(
-        completed.research.as_ref().unwrap().rounds,
-        original.research.as_ref().unwrap().rounds
-    );
-    assert_eq!(
-        completed.research.as_ref().unwrap().origins,
-        original.research.as_ref().unwrap().origins
-    );
-    assert_eq!(
-        completed.tasks[&completed.attempts[2].attempt.task_key]
-            .spec
-            .stage,
-        TaskStage::Synthesize
-    );
-    for held in original.budget.unknown_attempts {
-        assert!(completed.budget.unknown_attempts.contains(&held));
-    }
-    assert_eq!(
-        count_pages(f),
-        pages,
-        "amendment does not authorize application"
-    );
-    assert_eq!(server.count(), count + 3);
-    account_new_runs(f, retained);
-    let proposal = resumed["data"]["report"]["proposed_changes"][0]["change_id"]
-        .as_str()
-        .unwrap();
-    offline(f, &["changes", "apply", proposal], None);
-    assert_eq!(count_pages(f), pages + 1);
-}
-
-#[cfg(unix)]
-fn interrupted_research(f: &Vault, retained: &mut BTreeMap<RecordId, LedgerInspection>) {
-    use std::sync::mpsc;
-    let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
-    let config = f.temp.path().join("interrupt-providers.toml");
-    let main_config = f.temp.path().join("providers.toml");
-    // Keep the main trusted profile intact for the later new-run disclosure check.
-    let main_bytes = std::fs::read(&main_config).unwrap();
-    let temporary_config = private_config(f, listener.local_addr().unwrap());
-    provider::private(&config, std::fs::read(temporary_config).unwrap());
-    provider::private(&main_config, &main_bytes);
-    let (entered, observed) = mpsc::channel();
-    let (release, released) = mpsc::channel();
-    let worker = std::thread::spawn(move || {
-        let (mut socket, _) = listener.accept().unwrap();
-        let sent = request(&mut socket);
-        assert_eq!(sent.target, "/generate?retained=yes");
-        let data: Value =
-            serde_json::from_str(sent.body["messages"][1]["content"].as_str().unwrap()).unwrap();
-        assert_eq!(data["binding"]["stage"], "plan_frontier");
-        entered.send(sent).unwrap();
-        let _ = released.recv_timeout(Duration::from_secs(30));
-        drop(socket);
-        listener.set_nonblocking(true).unwrap();
-        assert!(
-            matches!(listener.accept(), Err(e) if e.kind() == std::io::ErrorKind::WouldBlock),
-            "cancelled research dispatched follow-up work"
-        );
-    });
-    let mut child = std::process::Command::new(test_paths::binary(env!("CARGO_BIN_EXE_lwiki")))
-        .args([
-            "--wiki",
-            f.temp.path().to_str().unwrap(),
-            "--jsonl",
-            "--profile",
-            "primary",
-            "research",
-            "run",
-            "Ada",
-            "--run-id",
-            "run_p21_interrupt",
-            "--providers-config",
-            config.to_str().unwrap(),
-        ])
-        .env("EXPLICIT_FIXTURE_TOKEN", "synthetic-cli-secret")
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .unwrap();
-    observed
-        .recv_timeout(Duration::from_secs(20))
-        .unwrap_or_else(|e| {
-            child.kill().unwrap();
-            panic!("native paid entry not reached: {e}")
-        });
-    // SAFETY: the PID belongs to this owned child at the full-request channel barrier.
-    assert_eq!(
-        unsafe { libc::kill(child.id() as libc::pid_t, libc::SIGINT) },
-        0
-    );
-    let output = child.wait_with_output().unwrap();
-    let envelope = decode_output("--jsonl", &output);
-    assert_eq!(output.status.code(), Some(130), "{envelope}");
-    assert_eq!(envelope["error"]["code"], "CANCELLED");
-    assert_eq!(envelope["meta"]["network_used"], true);
-    assert_eq!(envelope["meta"]["partial"], true);
-    let report = envelope["data"]["report"].clone();
-    assert!(report["synthesis"].is_null());
-    assert!(report["proposed_changes"].as_array().unwrap().is_empty());
-    let run = ledger(f, "run_p21_interrupt");
-    let original = run.inspect().unwrap();
-    assert_eq!(original.state, RunState::Stopped);
-    assert_eq!(original.budget.dispatched_requests, 1);
-    assert_eq!(original.attempts.len(), 1);
-    let unknown = &original.attempts[0];
-    assert_eq!(unknown.phase, AttemptPhase::DispatchIntent);
-    assert_eq!(unknown.billing, BillingDisposition::UnknownReserved);
-    assert_eq!(original.budget.outstanding, unknown.allowance);
-    assert!(unknown.allowance.request_bytes > 0);
-    assert!(unknown.allowance.response_bytes > 0);
-    assert!(unknown.receipt.is_none());
-    assert!(unknown.spool.is_none());
+    assert_eq!(started["meta"]["network_used"], false);
+    assert_eq!(started["data"]["packet"]["stage"], "collect_sources");
+    assert_eq!(started["data"]["ready_to_import"], true);
+    let initial = &started["data"]["packet"];
     assert!(
-        original
-            .budget
-            .unknown_attempts
-            .contains(&unknown.attempt.attempt_id)
+        initial["passages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|passage| { passage["quote"].as_str().unwrap().contains("ACTIVE-P21") })
     );
-    let PriorAccounting::Unknown { prior_run_ids, .. } = &original.spec.prior_accounting else {
-        panic!("interrupted run must disclose all earlier unknown costs")
-    };
-    assert!(prior_run_ids.contains(&id("run_restored_p21")));
-    for previous in retained.keys() {
-        assert!(prior_run_ids.contains(previous));
-    }
-    let (output, refused) = invoke(
+    let collect = json!({
+        "schema":"lwiki.research-submission.v1",
+        "run_id":"run_p21_handoff",
+        "packet_fingerprint":initial["packet_fingerprint"],
+        "response":{"stage":"collect_sources","sources":[{
+            "key":"host_source", "title":"Cedar host report",
+            "origin":"https://example.invalid/cedar", "provenance":"Supplied by the host agent",
+            "content":"Ada maintains Relay. Host report says Cedar backs up on Friday."
+        }],"gaps":[]}
+    });
+    let imported = success(
         f,
-        "--jsonl",
-        &["--profile", "primary"],
-        &[
-            "research",
-            "resume",
-            "run_p21_interrupt",
-            "--providers-config",
-            config.to_str().unwrap(),
-        ],
-        None,
+        &[],
+        &["research", "import", "--file", "-"],
+        Some(&collect),
     );
-    assert!(!output.status.success());
-    assert_eq!(refused["error"]["code"], "RECOVERY_REQUIRED");
-    assert_eq!(refused["meta"]["network_used"], false);
-    std::fs::remove_file(&config).unwrap();
-    let before = tree(f.temp.path());
-    let status = offline(f, &["research", "status", "run_p21_interrupt"], None);
-    assert_eq!(status["data"]["inspection"]["state"], "stopped");
-    let cached = offline(
-        f,
-        &[
-            "research",
-            "resume",
-            "run_p21_interrupt",
-            "--providers-config",
-            config.to_str().unwrap(),
-        ],
-        None,
-    );
-    assert_eq!(cached["data"]["report"], report);
+    assert_eq!(imported["meta"]["network_used"], false);
+    assert_eq!(imported["data"]["packet"]["stage"], "answer");
     assert_eq!(
-        offline(f, &["research", "report", "run_p21_interrupt"], None)["data"],
-        report
+        imported["data"]["imported_sources"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
     );
-    assert_eq!(tree(f.temp.path()), before);
-    let final_state = run.inspect().unwrap();
-    assert_eq!(final_state.attempts, original.attempts);
-    assert_eq!(final_state.budget, original.budget);
-    retained.insert(id("run_p21_interrupt"), final_state);
-    release.send(()).unwrap();
-    worker.join().unwrap();
+    let repeated = success(
+        f,
+        &[],
+        &["research", "import", "--file", "-"],
+        Some(&collect),
+    );
+    assert_eq!(repeated["data"]["reused"], true);
+    assert_eq!(
+        repeated["data"]["imported_sources"],
+        imported["data"]["imported_sources"]
+    );
+    let answer_packet = &imported["data"]["packet"];
+    let passage = &answer_packet["passages"][0];
+    assert_eq!(passage["passage_id"], "p1");
+    assert!(
+        passage["quote"]
+            .as_str()
+            .unwrap()
+            .contains("Cedar backs up on Friday")
+    );
+    let citation: CitationRef = serde_json::from_value(passage["citation"].clone()).unwrap();
+    let view = lwiki::sources::SourceView::from_fs_bounded(&f.fs, 64 * 1024 * 1024, 4096).unwrap();
+    assert_eq!(
+        view.verify(&citation, lwiki::sources::CitationScope::Current)
+            .unwrap()
+            .quote,
+        passage["quote"].as_str().unwrap().as_bytes()
+    );
+    let answer = json!({
+        "schema":"lwiki.research-submission.v1",
+        "run_id":"run_p21_handoff",
+        "packet_fingerprint":answer_packet["packet_fingerprint"],
+        "response":{"stage":"answer","claims":[{
+            "text":"The host report says Cedar backs up on Friday.",
+            "passage_ids":["p1"]
+        }],"gaps":["Entailment remains unassessed."],"follow_up":null}
+    });
+    let completed = success(
+        f,
+        &[],
+        &["research", "import", "--file", "-"],
+        Some(&answer),
+    );
+    assert_eq!(completed["data"]["status"], "completed");
+    assert_eq!(
+        completed["data"]["report"]["claims"][0]["assessment"],
+        "unassessed"
+    );
+    let report = offline(f, &["research", "report", "run_p21_handoff"], None);
+    assert_eq!(report["data"], completed["data"]["report"]);
+    let status = offline(f, &["research", "status", "run_p21_handoff"], None);
+    assert_eq!(status["data"]["imports"], 2);
+    assert_eq!(status["data"]["captured_sources"], 1);
+    assert_eq!(
+        server.count(),
+        count,
+        "research handoff dispatched no provider work"
+    );
 }
 
 #[test]
@@ -1099,7 +869,7 @@ fn m0_m4_full_local_acceptance() {
             "--providers-config",
             cfg,
         ],
-        vec!["research", "run", "Ada", "--providers-config", cfg],
+        vec!["research", "run", "Ada", "--source-id", source],
     ] {
         let preview = success(
             &f,
@@ -1221,9 +991,8 @@ fn m0_m4_full_local_acceptance() {
         api["data"]["import"]["allocations"]
     );
     account_new_runs(&f, &mut retained);
-    research_budget_amend(&f, &config, &server, &bindings["source"], &mut retained);
-    interrupted_research(&f, &mut retained);
-    // A fresh probe after interruption must disclose, preserve and never refund the hold.
+    agent_research_handoff(&f, source, &server);
+    // A fresh probe still discloses and preserves earlier paid accounting.
     let probe_server = Server::new(probe_reply);
     let probe_config = private_config(&f, probe_server.address);
     let probe = success(
@@ -1255,7 +1024,7 @@ fn m0_m4_full_local_acceptance() {
     let probe_run = probe["data"]["probe"]["run_id"].as_str().unwrap();
     let durable_requests: usize = retained
         .iter()
-        .filter(|(run, _)| run.as_str() != "run_p21_interrupt" && run.as_str() != probe_run)
+        .filter(|(run, _)| run.as_str() != probe_run)
         .map(|(_, run)| run.attempts.len())
         .sum();
     assert_eq!(
@@ -1268,16 +1037,7 @@ fn m0_m4_full_local_acceptance() {
             .iter()
             .filter(|r| r.target.starts_with("/generate"))
             .count(),
-        4
+        1,
+        "only direct graph extraction used generation"
     );
-    let stages: Vec<_> = requests
-        .iter()
-        .filter(|r| r.target.starts_with("/generate"))
-        .filter_map(|r| {
-            let data: Value =
-                serde_json::from_str(r.body["messages"][1]["content"].as_str().unwrap()).unwrap();
-            data["binding"]["stage"].as_str().map(str::to_owned)
-        })
-        .collect();
-    assert_eq!(stages, ["plan_frontier", "assess_gaps", "synthesize"]);
 }

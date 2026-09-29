@@ -474,12 +474,11 @@ mod tests {
     }
 
     #[test]
-    fn builtin_extraction_and_research_project_to_strict_grammars() {
+    fn builtin_extraction_and_probe_project_to_strict_grammars() {
         for schema in [
             extraction(),
-            crate::research::frontier::schema(),
-            crate::research::gaps::schema(),
-            crate::research::synthesis::schema(),
+            json!({"type":"object","properties":{"ok":{"type":"boolean"}},
+                "required":["ok"],"additionalProperties":false}),
         ] {
             compile_schema(&schema, false).unwrap();
             let projected = project(&schema).unwrap();

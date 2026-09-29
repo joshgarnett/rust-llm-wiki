@@ -1,6 +1,6 @@
 //! Immutable, nonsecret historical decoding contracts. No credential or transport
 //! authority can be constructed here; source freshness is a publication concern.
-use super::{generation_wire, search_wire, types::*, wire_json};
+use super::{generation_wire, types::*, wire_json};
 use crate::{
     changes::prepare::read_bounded,
     config::providers::{InstructionRole, OutputLimitField, ResponseMode},
@@ -14,6 +14,7 @@ use std::{collections::BTreeMap, sync::Arc, time::Duration};
 
 const MAX_CODEC_BYTES: usize = 256 * 1024;
 const MAX_INPUT_BYTES: usize = 256 * 1024;
+const CODEC_DIRECTORY: &str = ".wiki/state/provider-codecs";
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Snapshot {
@@ -67,10 +68,6 @@ enum Contract {
         schema_fingerprint: Blake3Hash,
         schema: serde_json::Value,
     },
-    Search {
-        count: u8,
-        page: u8,
-    },
 }
 fn bad(message: &str) -> WikiError {
     WikiError::new(ErrorCode::RecoveryRequired, message)
@@ -84,26 +81,8 @@ fn normalized(bound: &AttemptBound) -> Result<AttemptBound> {
     result.bounds_fingerprint = budgets::bound_fingerprint(&result)?;
     Ok(result)
 }
-fn run_directory(task: &TaskSpec) -> Result<String> {
-    let parts: Vec<_> = task.input.path.as_str().split('/').collect();
-    if parts.len() != 4
-        || parts[0] != "runs"
-        || parts[2] != "inputs"
-        || !parts[3].ends_with(".json")
-    {
-        return Err(bad(
-            "historical research descriptor must belong to one run inputs directory",
-        ));
-    }
-    RecordId::new(parts[1])?;
-    Ok(format!("runs/{}", parts[1]))
-}
-fn codec_path(task: &TaskSpec, hash: &Blake3Hash) -> Result<VaultRelativePath> {
-    VaultRelativePath::new(format!(
-        "{}/codecs/{}.json",
-        run_directory(task)?,
-        hash.hex()
-    ))
+fn codec_path(hash: &Blake3Hash) -> Result<VaultRelativePath> {
+    VaultRelativePath::new(format!("{CODEC_DIRECTORY}/{}.json", hash.hex()))
 }
 fn input(fs: &VaultFs, task: &TaskSpec) -> Result<RemoteInput> {
     if task.input.byte_len > MAX_INPUT_BYTES as u64 || task.key != tasks::task_key(task)? {
@@ -209,10 +188,6 @@ impl Contract {
                 total_generated_token_limit: c.total_generated_token_limit,
                 schema_fingerprint: c.schema_fingerprint.clone(),
                 schema: c.schema.as_ref().clone(),
-            },
-            WireContract::Search(c) => Self::Search {
-                count: c.count,
-                page: c.page,
             },
             #[cfg(test)]
             WireContract::Fixture => {
@@ -364,27 +339,6 @@ impl Contract {
                     validator,
                 }))
             }
-            (
-                Self::Search { count, page },
-                RemoteOperation::Search {
-                    query,
-                    count: actual_count,
-                    page: actual_page,
-                },
-            ) if role == ServiceRole::Search => {
-                search_wire::validate(query, count, page)?;
-                if count != *actual_count
-                    || page != *actual_page
-                    || bound.requested_model.is_some()
-                    || bound.requested_model_revision.is_some()
-                {
-                    return Err(bad("historical search options differ"));
-                }
-                Ok(WireContract::Search(search_wire::SearchContract {
-                    count,
-                    page,
-                }))
-            }
             _ => Err(bad("historical codec and operation role differ")),
         }
     }
@@ -450,7 +404,6 @@ pub(super) fn retain(fs: &VaultFs, task: &TaskSpec, prepared: &mut PreparedWire)
     if matches!(prepared.contract, WireContract::Fixture) {
         return Ok(());
     }
-    run_directory(task)?;
     let descriptor = input(fs, task)?;
     if descriptor != prepared.input
         || prepared.bound.bounds_fingerprint != budgets::bound_fingerprint(&prepared.bound)?
@@ -484,13 +437,13 @@ pub(super) fn retain(fs: &VaultFs, task: &TaskSpec, prepared: &mut PreparedWire)
         ));
     }
     let hash = Blake3Hash::digest(&bytes);
-    let path = codec_path(task, &hash)?;
+    let path = codec_path(&hash)?;
     let writer = WriterPermit::acquire(fs.root(), Duration::from_secs(5))?;
     match read_bounded(fs, &path, MAX_CODEC_BYTES)? {
         Some(old) if old != bytes => return Err(bad("immutable historical codec bytes conflict")),
         Some(_) => durable(fs.sync_target(&path, &writer)?)?,
         None => {
-            let parent = VaultRelativePath::new(format!("{}/codecs", run_directory(task)?))?;
+            let parent = VaultRelativePath::new(CODEC_DIRECTORY)?;
             durable(fs.ensure_directory(&parent, &writer)?)?;
             let staged = fs.stage(&path, &bytes, &writer)?;
             durable(fs.replace(staged, &ExpectedState::Absent, &writer)?)?;
@@ -517,7 +470,7 @@ pub(super) fn restore(
         .as_ref()
         .ok_or_else(|| bad("historical codec missing; retained response remains protected"))?;
     if reference.byte_len > MAX_CODEC_BYTES as u64
-        || reference.path != codec_path(task, &reference.hash)?
+        || reference.path != codec_path(&reference.hash)?
         || bound.bounds_fingerprint != budgets::bound_fingerprint(bound)?
     {
         return Err(bad(

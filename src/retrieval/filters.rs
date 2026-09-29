@@ -116,15 +116,20 @@ pub(crate) fn normal_policy(filters: &SearchFilters) -> String {
             }
         )
     };
-    // Older catalog snapshots may still label a packet Current. Its persisted
-    // source window must require an explicit historical audit even there. The
-    // path check also covers a malformed packet with no adopted kind.
-    let packet = if filters.include_historical {
+    // Guard old index snapshots and malformed managed artifacts before any
+    // candidate limit. Readable declarations cover copied operational notes.
+    let operational = if filters.include_historical {
         "1"
     } else {
-        "coalesce(d.kind,'')<>'extraction_packet' AND d.path NOT GLOB 'knowledge/extractions/packets/*'"
+        "coalesce(d.kind,'') NOT IN ('extraction_packet','extraction','run','run_event','change') \
+         AND d.path NOT GLOB 'knowledge/extractions/packets/*' \
+         AND d.path NOT GLOB 'knowledge/extractions/extraction_*.md' \
+         AND d.path NOT GLOB 'runs/*/outputs/run_event_generation_*.md' \
+         AND d.path NOT GLOB 'runs/*/events/run_event_*.md' \
+         AND d.path NOT GLOB 'runs/*/run.md' \
+         AND d.path NOT GLOB 'changes/*/change.md'"
     };
-    format!("({proposed}) AND ({state}) AND ({packet})")
+    format!("({proposed}) AND ({state}) AND ({operational})")
 }
 pub(crate) fn identity_policy() -> &'static str {
     "d.kind='entity' AND json_extract(r.row_json,'$.identity_eligibility')='current' AND d.eligibility<>'current'"

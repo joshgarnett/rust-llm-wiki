@@ -1,6 +1,6 @@
 [package]
 name = "rust-llm-wiki"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 rust-version = "1.98"
 publish = false
@@ -33,7 +33,6 @@ tokio = { version = "=1.53.1", default-features = false, features = ["rt", "time
 rustls = { version = "=0.23.44", default-features = false, features = ["ring", "std", "tls12"] }
 webpki-roots = { version = "=1.0.9", default-features = false }
 httpdate = { version = "=1.0.3", default-features = false }
-flate2 = { version = "=1.1.10", default-features = false, features = ["rust_backend"] }
 getrandom = { version = "=0.4.3", default-features = false, features = ["std"] }
 
 jsonschema = { version = "=0.58.2", default-features = false }

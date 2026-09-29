@@ -384,6 +384,31 @@ fn skill_examples_execute_against_release_binary() {
                     assert!(modes.contains(&json!(mode)), "{name}: missing {mode}");
                 }
             }
+            "research_collect" | "research_answer" => {
+                assert_eq!(v["data"]["persisted"], true);
+                assert_eq!(v["data"]["ready_to_import"], true);
+                assert_eq!(v["data"]["external_tool_usage"], "unobserved");
+                assert_eq!(v["data"]["packet"]["scope"]["offline"], true);
+                let expected = if step["check"] == "research_collect" {
+                    "collect_sources"
+                } else {
+                    "answer"
+                };
+                assert_eq!(v["data"]["packet"]["stage"], expected);
+            }
+            "research_complete" => {
+                assert_eq!(v["data"]["status"], "completed");
+                assert_eq!(v["data"]["ready_to_import"], false);
+                assert_eq!(v["data"]["freshness"], "retained");
+                assert_eq!(v["data"]["report"]["claims"][0]["assessment"], "unassessed");
+            }
+            "research_report" => {
+                assert_eq!(
+                    v["data"]["claims"][0]["citations"][0]["reference"]["source_revision"],
+                    bindings["revision"]
+                );
+                assert_eq!(v["data"]["partial"], false);
+            }
             "repeat_revision" => {
                 assert_eq!(v["data"]["reused"], true);
                 assert_eq!(

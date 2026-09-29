@@ -48,7 +48,7 @@ lwiki --wiki VAULT --json graph extract --executor api --source-id SOURCE_ID \
   --providers-config PROVIDERS --profile PROFILE --max-requests 2
 ```
 
-These commands can make paid requests. Generation probes allow up to 256 output tokens, reduced by configured service and explicit caller ceilings. `--dry-run` and `--offline` continue to prohibit provider requests. Follow the existing staged import/resolve/review flow after extraction, then exercise research with explicit URLs and a small request budget.
+These commands can make paid requests. Generation probes allow up to 256 output tokens, reduced by configured service and explicit caller ceilings. `--dry-run` and `--offline` continue to prohibit provider requests. Follow the existing staged import/resolve/review flow after extraction, then use agent research handoffs (`research run`, `research import`) with the host agent’s own tools. Research does not read provider configuration or execute requests.
 
 An HTTP success can still contain incomplete, refused or invalid output. Errors expose a fixed `reason` in their details (sometimes nested under `cause`) and preserve the same rejection code in local attempt metadata. For example, `incomplete_max_output_tokens` means the provider did not finish within its output allowance; `response_headers_invalid` identifies malformed headers. Error bodies and credential output are never copied into diagnostics. Paid failed attempts remain accounted for, and invalid successful output is not automatically resent.
 

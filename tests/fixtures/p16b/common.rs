@@ -214,7 +214,6 @@ pub fn case_extra(
         created_at_utc_ms: now,
         deadline_utc_ms: now + 900_000,
         scope: RunScope {
-            research: None,
             operation: "embedding".into(),
             question: None,
             exclusions: vec![],

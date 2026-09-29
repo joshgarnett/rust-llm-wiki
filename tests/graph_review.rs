@@ -136,6 +136,162 @@ fn edit(f: &Fixture, id: &RecordId, fields: BTreeMap<String, Value>, body: Optio
     });
 }
 
+fn resolved_from_refreshed_head() -> (Fixture, RecordId, RecordId) {
+    let f = resolved();
+    let original = include_str!("fixtures/p13/source.md").replace('\n', "\r\n");
+    let refreshed = format!("{original}\r\nThe backup destination is ARCHIVE-928.\r\n");
+    let refresh = SourceStore::new(f.engine.fs().clone())
+        .plan_refresh(
+            &f.source,
+            CaptureRequest {
+                title: "Resolution source".into(),
+                origin_kind: SourceOrigin::LocalFile,
+                origin: "disposable.md".into(),
+                original: refreshed.into_bytes(),
+                extraction: ExtractionInput::Utf8Preserve,
+                media_type: Some("text/markdown".into()),
+            },
+        )
+        .unwrap();
+    let head = refresh.revision_id;
+    f.apply(refresh.draft.unwrap());
+    let packet_plan = build_packet(
+        &f.view(),
+        &ExportRequest {
+            source_id: f.source.clone(),
+            revision_id: Some(head.clone()),
+            windows: vec![],
+            limits: ExtractionLimits::default(),
+            candidate_context: vec![],
+        },
+    )
+    .unwrap();
+    f.apply(packet_plan.draft.unwrap());
+    let packet = load_packet(&f.view(), &packet_plan.packet.packet_id).unwrap();
+    let text = &packet.packet().windows[0].text;
+    let mention = |name: &str, label: &str, kind: &str| {
+        let start = text.find(label).unwrap();
+        json!({"id":name,"window_id":"w1","label":label,"type":kind,"quote":label,
+            "span":{"start":start,"end":start+label.len()}})
+    };
+    let response = json!({"schema":EXTRACTION_SCHEMA,"packet_id":packet.packet().packet_id,
+        "packet_fingerprint":packet.packet().packet_fingerprint,
+        "mentions":[mention("m1","Ada","person"),mention("m2","Acme","organization")],
+        "assertions":[{"id":"a1","subject":"m1","predicate":"works_for",
+            "object":{"kind":"mention","mention_id":"m2"},"negated":false,"modality":"asserted",
+            "evidence":[{"window_id":"w1","stance":"supports","quote":"Ada works for Acme.\r\n"}]}],
+        "unresolved":[]});
+    let validated =
+        validate_response(&packet, &f.view(), &serde_json::to_vec(&response).unwrap()).unwrap();
+    let imported = stage_import(
+        &f.engine,
+        &f.writer(),
+        &validated,
+        OriginPolicy::ReuseOrConflict,
+    )
+    .unwrap();
+    f.apply_prepared(imported.prepared.as_ref().unwrap());
+    let extraction = imported.extraction.record.unwrap().record_id;
+    let loaded = load_extraction(&f.view(), &extraction).unwrap();
+    assert_eq!(loaded.artifact().source_revision, head);
+    let assertion = loaded.artifact().allocations.assertions[&local("a1")].clone();
+    let evidence = loaded.artifact().allocations.evidence[&local("a1")][0].clone();
+    let resolution = json!({"schema":RESOLUTION_SCHEMA,"extraction_id":extraction,
+        "expected_hash":loaded.locator().observed_hash,
+        "mappings":[create("m1","Ada","person"),create("m2","Acme","organization")]});
+    let validated =
+        validate_resolution(&f.view(), &serde_json::to_vec(&resolution).unwrap()).unwrap();
+    let resolved = stage_resolution(&f.engine, &f.writer(), &validated).unwrap();
+    f.apply_prepared(resolved.prepared.as_ref().unwrap());
+    (f, assertion, evidence)
+}
+
+#[test]
+fn review_accepts_current_evidence_after_source_refresh_and_queries_it() {
+    let (f, assertion, evidence) = resolved_from_refreshed_head();
+    let review = request(&f, &assertion, "accept", "supports");
+    review_apply(&f, &review);
+    let old_assertion = f.artifact().allocations.assertions[&local("a1")].clone();
+    let old_evidence = f.artifact().allocations.evidence[&local("a1")][0].clone();
+    assert!(review_stage(&f, &request(&f, &old_assertion, "accept", "supports")).is_err());
+    let projection = lwiki::catalog::scan::scan(f.engine.fs(), f.engine.vault_id()).unwrap();
+    assert_eq!(
+        projection.records[&assertion].eligibility,
+        Eligibility::Current
+    );
+    assert_eq!(
+        projection.records[&evidence].eligibility,
+        Eligibility::Current
+    );
+    assert_eq!(
+        projection.records[&old_evidence].eligibility,
+        Eligibility::Historical
+    );
+    let writer = f.writer();
+    f.catalog.sync(&writer).unwrap();
+    drop(writer);
+    let reader = f.catalog.verified_snapshot(None).unwrap();
+    let result =
+        lwiki::graph::query::query(&reader, "Ada", &lwiki::graph::GraphPlan::default()).unwrap();
+    assert!(
+        result
+            .assertions
+            .iter()
+            .any(|edge| edge.record_ref.record_id == assertion)
+    );
+}
+
+#[test]
+fn review_refreshed_head_rejects_tampered_retained_sibling() {
+    for tamper_after_stage in [false, true] {
+        let (f, assertion, _) = resolved_from_refreshed_head();
+        let old_revision = f.artifact().source_revision;
+        let (revision_path, revision_note) = note(&f, &old_revision);
+        let original_name = revision_note
+            .canonical
+            .as_ref()
+            .unwrap()
+            .string("wiki_original_path")
+            .unwrap();
+        let original_path = f
+            .root
+            .path()
+            .join(revision_path.as_str())
+            .parent()
+            .unwrap()
+            .join(original_name);
+        let review = request(&f, &assertion, "accept", "supports");
+        let staged = tamper_after_stage.then(|| review_stage(&f, &review).unwrap());
+        let mut corrupted = fs::read(&original_path).unwrap();
+        corrupted[0] ^= 1;
+        fs::write(&original_path, corrupted).unwrap();
+        let before = canonical_bytes(&f);
+        if let Some(staged) = staged {
+            let err = f
+                .engine
+                .apply(
+                    &f.writer(),
+                    staged.prepared.as_ref().unwrap(),
+                    &CatalogGraphValidator,
+                    &f.catalog,
+                )
+                .unwrap_err();
+            assert_eq!(err.code, ErrorCode::ContentConflict);
+        } else {
+            assert!(review_stage(&f, &review).is_err());
+        }
+        assert_eq!(canonical_bytes(&f), before);
+        assert_eq!(
+            note(&f, &assertion)
+                .1
+                .canonical
+                .unwrap()
+                .string("wiki_status"),
+            Some("proposed")
+        );
+    }
+}
+
 #[test]
 fn review_omitted_or_new_active_evidence_conflicts() {
     let f = resolved();

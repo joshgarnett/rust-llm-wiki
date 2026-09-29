@@ -744,6 +744,99 @@ pub(crate) fn compute(
                     set(row, Eligibility::Unsupported, "operational_packet");
                 }
             }
+            RecordKind::Extraction => {
+                // The retained response repeats source text, but is never an
+                // independent current source. Its declared revision ownership
+                // determines the state exposed by explicit historical audit.
+                let revisions = list(record, "wiki_source_revision_ids");
+                if revisions.is_empty() {
+                    set(row, Eligibility::Unsupported, "operational_extraction");
+                } else {
+                    let mut withdrawn = false;
+                    let mut older = false;
+                    for revision_id in revisions {
+                        let revision = snapshot
+                            .get(&RecordId::new(&revision_id)?)
+                            .expect("valid extraction revision");
+                        let source = snapshot
+                            .get(&RecordId::new(
+                                revision.record.string("wiki_source_id").expect("source"),
+                            )?)
+                            .expect("valid extraction source");
+                        withdrawn |= source.record.string("wiki_status") == Some("withdrawn");
+                        older |= source.record.string("wiki_current_revision")
+                            != Some(revision_id.as_str());
+                    }
+                    if withdrawn {
+                        set(row, Eligibility::Withdrawn, "source_withdrawn");
+                    } else if older {
+                        set(row, Eligibility::Historical, "older_revision");
+                    } else {
+                        set(row, Eligibility::Unsupported, "operational_extraction");
+                    }
+                }
+            }
+            RecordKind::RunEvent
+                if record.string("wiki_event_type") == Some("generation_output") =>
+            {
+                // The canonical run event has no source fields. Only the exact
+                // bounded output body can bind it to a retained packet/source.
+                let output = notes
+                    .get(&row.path)
+                    .and_then(|note| {
+                        crate::graph::packet::fenced_json(
+                            note,
+                            "lwiki-api-extraction-output-v1",
+                            crate::graph::MAX_ARTIFACT_BYTES,
+                        )
+                        .ok()
+                    })
+                    .and_then(|json| {
+                        crate::graph::packet::decode::<
+                            crate::graph::generation_cache::GenerationOutput,
+                        >(json, crate::graph::MAX_ARTIFACT_BYTES)
+                        .ok()
+                    });
+                let packet = output.as_ref().and_then(|out| snapshot.get(&out.packet_id));
+                let bound = output.as_ref().zip(packet).filter(|(out, packet)| {
+                    out.version == 1
+                        && out.attempt.run_id.as_str()
+                            == record.string("wiki_run_id").unwrap_or_default()
+                        && out.attempt.task_key == out.task_key
+                        && Blake3Hash::digest(out.response.as_bytes()) == out.response_hash
+                        && packet.record.kind() == RecordKind::ExtractionPacket
+                        && packet.record.string("wiki_packet_fingerprint")
+                            == Some(out.packet_fingerprint.as_str())
+                });
+                if let Some((_, packet)) = bound {
+                    let source = snapshot
+                        .get(&RecordId::new(
+                            packet
+                                .record
+                                .string("wiki_source_id")
+                                .expect("packet source"),
+                        )?)
+                        .expect("valid packet source");
+                    if source.record.string("wiki_status") == Some("withdrawn") {
+                        set(row, Eligibility::Withdrawn, "source_withdrawn");
+                    } else if source.record.string("wiki_current_revision")
+                        != packet.record.string("wiki_source_revision")
+                    {
+                        set(row, Eligibility::Historical, "older_revision");
+                    } else {
+                        set(
+                            row,
+                            Eligibility::Unsupported,
+                            "operational_generation_output",
+                        );
+                    }
+                } else {
+                    set(row, Eligibility::Unsupported, "unbound_generation_output");
+                }
+            }
+            RecordKind::Run | RecordKind::RunEvent | RecordKind::Change => {
+                set(row, Eligibility::Unsupported, "operational_record");
+            }
             RecordKind::Entity => {
                 let identity = if record.string("wiki_status") == Some("superseded") {
                     Eligibility::Historical

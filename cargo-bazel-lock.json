@@ -1,46 +1,6 @@
 {
-  "checksum": "06099a5704d8fbdf58232d227664e661ed52fe043f951d6519ae60bfe5e086e9",
+  "checksum": "23cd9ab10bb7350ca3593dff952717fec04d46f3e528b4a380b91396026dd05e",
   "crates": {
-    "adler2 2.0.1": {
-      "name": "adler2",
-      "version": "2.0.1",
-      "package_url": "https://github.com/oyvindln/adler2",
-      "repository": {
-        "Http": {
-          "url": "https://static.crates.io/crates/adler2/2.0.1/download",
-          "sha256": "320119579fcad9c21884f5c4861d16174d0e06250625266f50fe6898340abefa"
-        }
-      },
-      "targets": [
-        {
-          "Library": {
-            "crate_name": "adler2",
-            "crate_root": "src/lib.rs",
-            "srcs": {
-              "allow_empty": true,
-              "include": [
-                "**/*.rs"
-              ]
-            }
-          }
-        }
-      ],
-      "library_target_name": "adler2",
-      "common_attrs": {
-        "compile_data_glob": [
-          "**"
-        ],
-        "edition": "2021",
-        "version": "2.0.1"
-      },
-      "license": "0BSD OR MIT OR Apache-2.0",
-      "license_ids": [
-        "0BSD",
-        "Apache-2.0",
-        "MIT"
-      ],
-      "license_file": "LICENSE-0BSD"
-    },
     "ahash 0.8.12": {
       "name": "ahash",
       "version": "0.8.12",
@@ -1939,83 +1899,6 @@
       ],
       "license_file": "LICENSE-APACHE"
     },
-    "crc32fast 1.5.1": {
-      "name": "crc32fast",
-      "version": "1.5.1",
-      "package_url": "https://github.com/srijs/rust-crc32fast",
-      "repository": {
-        "Http": {
-          "url": "https://static.crates.io/crates/crc32fast/1.5.1/download",
-          "sha256": "8498c871161e1742aaa9d52551b2d6ebdd4c3d45a3be423e3728f33b955be550"
-        }
-      },
-      "targets": [
-        {
-          "Library": {
-            "crate_name": "crc32fast",
-            "crate_root": "src/lib.rs",
-            "srcs": {
-              "allow_empty": true,
-              "include": [
-                "**/*.rs"
-              ]
-            }
-          }
-        },
-        {
-          "BuildScript": {
-            "crate_name": "build_script_build",
-            "crate_root": "build.rs",
-            "srcs": {
-              "allow_empty": true,
-              "include": [
-                "**/*.rs"
-              ]
-            }
-          }
-        }
-      ],
-      "library_target_name": "crc32fast",
-      "common_attrs": {
-        "compile_data_glob": [
-          "**"
-        ],
-        "deps": {
-          "common": [
-            {
-              "id": "cfg-if 1.0.5",
-              "target": "cfg_if"
-            }
-          ],
-          "selects": {}
-        },
-        "extra_deps": {
-          "common": [
-            ":build_script_build"
-          ],
-          "selects": {}
-        },
-        "edition": "2021",
-        "version": "1.5.1"
-      },
-      "build_script_attrs": {
-        "compile_data_glob": [
-          "**"
-        ],
-        "compile_data_glob_excludes": [
-          "**/*.rs"
-        ],
-        "data_glob": [
-          "**"
-        ]
-      },
-      "license": "MIT OR Apache-2.0",
-      "license_ids": [
-        "Apache-2.0",
-        "MIT"
-      ],
-      "license_file": "LICENSE-APACHE"
-    },
     "data-encoding 2.11.1": {
       "name": "data-encoding",
       "version": "2.11.1",
@@ -2569,66 +2452,6 @@
         ],
         "edition": "2021",
         "version": "0.1.14"
-      },
-      "license": "MIT OR Apache-2.0",
-      "license_ids": [
-        "Apache-2.0",
-        "MIT"
-      ],
-      "license_file": "LICENSE-APACHE"
-    },
-    "flate2 1.1.10": {
-      "name": "flate2",
-      "version": "1.1.10",
-      "package_url": "https://github.com/rust-lang/flate2-rs",
-      "repository": {
-        "Http": {
-          "url": "https://static.crates.io/crates/flate2/1.1.10/download",
-          "sha256": "6e634e2e0ebac1ee034020da1ca582e17ffe4e0f5e985823721e168928136dcb"
-        }
-      },
-      "targets": [
-        {
-          "Library": {
-            "crate_name": "flate2",
-            "crate_root": "src/lib.rs",
-            "srcs": {
-              "allow_empty": true,
-              "include": [
-                "**/*.rs"
-              ]
-            }
-          }
-        }
-      ],
-      "library_target_name": "flate2",
-      "common_attrs": {
-        "compile_data_glob": [
-          "**"
-        ],
-        "crate_features": {
-          "common": [
-            "any_impl",
-            "miniz_oxide",
-            "rust_backend"
-          ],
-          "selects": {}
-        },
-        "deps": {
-          "common": [
-            {
-              "id": "crc32fast 1.5.1",
-              "target": "crc32fast"
-            },
-            {
-              "id": "miniz_oxide 0.9.1",
-              "target": "miniz_oxide"
-            }
-          ],
-          "selects": {}
-        },
-        "edition": "2018",
-        "version": "1.1.10"
       },
       "license": "MIT OR Apache-2.0",
       "license_ids": [
@@ -6067,68 +5890,6 @@
       ],
       "license_file": "LICENSE.txt"
     },
-    "miniz_oxide 0.9.1": {
-      "name": "miniz_oxide",
-      "version": "0.9.1",
-      "package_url": "https://github.com/Frommi/miniz_oxide/tree/master/miniz_oxide",
-      "repository": {
-        "Http": {
-          "url": "https://static.crates.io/crates/miniz_oxide/0.9.1/download",
-          "sha256": "b63fbc4a50860e98e7b2aa7804ded1db5cbc3aff9193adaff57a6931bf7c4b4c"
-        }
-      },
-      "targets": [
-        {
-          "Library": {
-            "crate_name": "miniz_oxide",
-            "crate_root": "src/lib.rs",
-            "srcs": {
-              "allow_empty": true,
-              "include": [
-                "**/*.rs"
-              ]
-            }
-          }
-        }
-      ],
-      "library_target_name": "miniz_oxide",
-      "common_attrs": {
-        "compile_data_glob": [
-          "**"
-        ],
-        "crate_features": {
-          "common": [
-            "default",
-            "simd",
-            "simd-adler32",
-            "with-alloc"
-          ],
-          "selects": {}
-        },
-        "deps": {
-          "common": [
-            {
-              "id": "adler2 2.0.1",
-              "target": "adler2"
-            },
-            {
-              "id": "simd-adler32 0.3.10",
-              "target": "simd_adler32"
-            }
-          ],
-          "selects": {}
-        },
-        "edition": "2021",
-        "version": "0.9.1"
-      },
-      "license": "MIT OR Zlib OR Apache-2.0",
-      "license_ids": [
-        "Apache-2.0",
-        "MIT",
-        "Zlib"
-      ],
-      "license_file": "LICENSE"
-    },
     "mio 1.2.3": {
       "name": "mio",
       "version": "1.2.3",
@@ -8461,9 +8222,9 @@
       ],
       "license_file": "LICENSE"
     },
-    "rust-llm-wiki 0.1.0": {
+    "rust-llm-wiki 0.1.1": {
       "name": "rust-llm-wiki",
-      "version": "0.1.0",
+      "version": "0.1.1",
       "package_url": null,
       "repository": null,
       "targets": [
@@ -8494,10 +8255,6 @@
             {
               "id": "clap 4.6.6",
               "target": "clap"
-            },
-            {
-              "id": "flate2 1.1.10",
-              "target": "flate2"
             },
             {
               "id": "getrandom 0.4.3",
@@ -8601,7 +8358,7 @@
           "selects": {}
         },
         "edition": "2024",
-        "version": "0.1.0"
+        "version": "0.1.1"
       },
       "license": null,
       "license_ids": [],
@@ -10089,44 +9846,6 @@
         "MIT"
       ],
       "license_file": "LICENSE-APACHE"
-    },
-    "simd-adler32 0.3.10": {
-      "name": "simd-adler32",
-      "version": "0.3.10",
-      "package_url": "https://github.com/mcountryman/simd-adler32",
-      "repository": {
-        "Http": {
-          "url": "https://static.crates.io/crates/simd-adler32/0.3.10/download",
-          "sha256": "3a219298ac11a56ea9a6d2120044824d6f01aeb034955e7af7bc16858527deea"
-        }
-      },
-      "targets": [
-        {
-          "Library": {
-            "crate_name": "simd_adler32",
-            "crate_root": "src/lib.rs",
-            "srcs": {
-              "allow_empty": true,
-              "include": [
-                "**/*.rs"
-              ]
-            }
-          }
-        }
-      ],
-      "library_target_name": "simd_adler32",
-      "common_attrs": {
-        "compile_data_glob": [
-          "**"
-        ],
-        "edition": "2018",
-        "version": "0.3.10"
-      },
-      "license": "MIT",
-      "license_ids": [
-        "MIT"
-      ],
-      "license_file": "LICENSE.md"
     },
     "simd_cesu8 1.2.0": {
       "name": "simd_cesu8",
@@ -15179,7 +14898,7 @@
   },
   "binary_crates": [],
   "workspace_members": {
-    "rust-llm-wiki 0.1.0": ""
+    "rust-llm-wiki 0.1.1": ""
   },
   "conditions": {
     "aarch64-apple-darwin": [
@@ -15327,7 +15046,6 @@
   "direct_deps": [
     "blake3 1.8.5",
     "clap 4.6.6",
-    "flate2 1.1.10",
     "getrandom 0.4.3",
     "httpdate 1.0.3",
     "jsonschema 0.58.2",

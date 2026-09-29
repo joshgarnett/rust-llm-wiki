@@ -780,7 +780,6 @@ impl OfflineApp {
                 .checked_add(runtime.deadline_ms as i64)
                 .ok_or_else(|| WikiError::invalid("deadline overflow"))?,
             scope: RunScope {
-                research: None,
                 operation: operation.into(),
                 question: None,
                 exclusions: Vec::new(),

@@ -53,6 +53,7 @@ pub const COMMANDS: &[&str] = &[
     "research plan",
     "research run",
     "research resume",
+    "research import",
     "research status",
     "research report",
     "changes show",
@@ -78,10 +79,8 @@ pub const SCHEMAS: &[&str] = &[
     "entity-decision-receipt",
     "graph-review",
     "graph-review-receipt",
-    "research-frontier",
-    "research-gaps",
-    "research-synthesis",
-    "research-run-plan",
+    "research-packet",
+    "research-submission",
 ];
 fn usage(message: impl Into<String>) -> WikiError {
     WikiError::new(ErrorCode::Usage, message)
@@ -92,21 +91,6 @@ fn value<T: Serialize>(value: T) -> Result<Value> {
 fn failure(command: &str, error: WikiError) -> Envelope {
     let mut envelope = Envelope::failure(command, &error.code.to_string(), error.message.clone());
     envelope.meta.network_used = error.network_used;
-    if let Some(outcome) = error.details.get("research_outcome") {
-        envelope.data = outcome.clone();
-        envelope.meta.partial = true;
-        envelope.warnings = outcome
-            .get("report")
-            .and_then(|report| report.get("warnings"))
-            .and_then(Value::as_array)
-            .map_or(vec![], |warnings| {
-                warnings
-                    .iter()
-                    .filter_map(Value::as_str)
-                    .map(str::to_owned)
-                    .collect()
-            });
-    }
     if let Some(change) = error.details.get("change") {
         envelope.data = json!({"change":change});
         envelope.meta.partial = true;
@@ -148,12 +132,14 @@ fn execute_inner(args: &Arguments) -> Result<Envelope> {
         Command::Capabilities => {
             return Ok(Envelope::success(
                 command,
-                json!({"version":env!("CARGO_PKG_VERSION"),"commands":COMMANDS,"schemas":SCHEMAS,"network":true,"search_modes":["literal","lexical","semantic","hybrid"],"graph_seed_modes":["lexical","semantic"],"extraction_executors":["agent","api"],"jsonl_commands":["index sync","index rebuild","recover","changes apply","source add","source refresh","research run","research resume","doctor --probe"]}),
+                json!({"version":env!("CARGO_PKG_VERSION"),"commands":COMMANDS,"schemas":SCHEMAS,"network":true,"search_modes":["literal","lexical","semantic","hybrid"],"graph_seed_modes":["lexical","semantic"],"extraction_executors":["agent","api"],"research_executor":"agent-handoff","jsonl_commands":["index sync","index rebuild","recover","changes apply","source add","source refresh","research run","research resume","research import","doctor --probe"]}),
             ));
         }
         Command::Schema { name } => {
             let schema = match name.as_str() {
                 "output" => include_str!("../../schemas/output-v1.json"),
+                "research-packet" => include_str!("../../schemas/research-packet-v1.json"),
+                "research-submission" => include_str!("../../schemas/research-submission-v1.json"),
                 "record" => include_str!("../../schemas/record-v1.json"),
                 "stream" => include_str!("../../schemas/stream-v1.json"),
                 "extraction" => include_str!("../../schemas/extraction-v1.json"),
@@ -168,10 +154,6 @@ fn execute_inner(args: &Arguments) -> Result<Envelope> {
                 "entity-decision-receipt" => {
                     include_str!("../../schemas/entity-decision-receipt-v1.json")
                 }
-                "research-frontier" => include_str!("../../schemas/research-frontier-v1.json"),
-                "research-gaps" => include_str!("../../schemas/research-gaps-v1.json"),
-                "research-synthesis" => include_str!("../../schemas/research-synthesis-v1.json"),
-                "research-run-plan" => include_str!("../../schemas/research-run-plan-v1.json"),
                 "run" => include_str!("../../schemas/run-v1.json"),
                 "run-event" => include_str!("../../schemas/run-event-v1.json"),
                 "usage-receipt" => include_str!("../../schemas/usage-receipt-v1.json"),
@@ -755,8 +737,7 @@ fn execute_inner(args: &Arguments) -> Result<Envelope> {
             }
         }
         Command::Research(arguments) => {
-            let result =
-                super::research::execute(&arguments.command, &app, preferences.profile.as_deref())?;
+            let result = super::research::execute(&arguments.command, &app)?;
             envelope.data = result.data;
             envelope.meta.network_used = result.network_used;
             envelope.meta.partial = result.partial;
