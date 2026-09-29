@@ -1,6 +1,6 @@
 # Execution checkpoint
 
-Updated 2026-09-29. Root owns this checkpoint. **All22 packages P00–P21 and V01–V17 locally accepted: local implementation complete; external qualification pending.** Final local acceptance commit/stamp is being recorded; no implementation or required local gate remains.
+Updated 2026-09-29. Root owns this checkpoint. **All 22 packages P00–P21 and V01–V17 locally accepted: local implementation complete; external qualification pending.** Local acceptance commit is recorded; the final documentation stamp changes no qualified source. No authorized implementation or required local gate remains.
 
 ## Scope and ownership
 
@@ -10,7 +10,7 @@ Updated 2026-09-29. Root owns this checkpoint. **All22 packages P00–P21 and V0
 
 ## Accepted source and artifact
 
-- Branch `impl/autonomous-v1`. Pre-P21 accepted P20 HEAD `f4dcf084b75e38d54637dc05b347127f9e7603a4`; P21 acceptance commit pending local integration below. Git HEAD is authoritative for subsequent documentation stamps.
+- Branch `impl/autonomous-v1`. Pre-P21 accepted P20 HEAD `f4dcf084b75e38d54637dc05b347127f9e7603a4`; P21 accepted implementation/evidence commit `2d10aa9b124ad92e82c8949ffa6857647a76fd4f`; a following documentation stamp changes only references/statuses. Git HEAD is authoritative for subsequent documentation stamps.
 - Frozen319 product/schema/skill/test-fixture/script/CI/Cargo/toolchain files, SHA256 fingerprint `325e425accaad00f69d658c68121d46469cac5e69d7fc3c2ef44d6b07912678a`. Final continuation before/after manifests equal; full maps in P21-checks.json. Mutable reports/prose excluded.
 - Copied native release `/private/tmp/lwiki-p21-final/lwiki`, identical to `target/release/lwiki`,25,526,608bytes, SHA256 `55fc573b9c7c302b653249f4c5998cec874a3ff08d3dc2db1ed6528acc0bceba`; versionlwiki0.1.0;37commands19exactschemas.
 - macOS26.5.2 / Darwin25.5.0 arm64, MacBookPro18,2 / Apple M1 Max /32GiB; pinned Rust/Cargo1.98.0 edition2024. Cargo247packages includingroot;246registry manifests/licenses verified. Owner license unset.
@@ -30,4 +30,4 @@ Updated 2026-09-29. Root owns this checkpoint. **All22 packages P00–P21 and V0
 - FINAL.md / P21.md / P21-checks.json / P21-gate-map.json / P21-test-results.md are authoritative final evidence; individual P00–P20 reports and PROGRESS retain historical commands/failed batches/commits. Failed logs `/private/tmp/lwiki-p21-final-{first,second}-failed`; continuation `/private/tmp/lwiki-p21-final`; defaultpath smoke and source manifests referenced in checks.
 - E01 live providers/billing; E02 actual host discovery/negative controls/Obsidian GUI; E03 other native platforms/clean machines; E04 representative real-model quality; E05 owner name/license/notices/signing/distribution/publication remain pending. Opt-in procedures docs/qualification.md; CI prepared notrun. Windows directory durability Unsupported before paid work; build/pure ACL logic does not qualify native recovery.
 - Known filesystem external-editor/post-check and hostile path races remain documented; native process kill is not power-loss proof. M5/local inference outside scope.
-- Next: finish local P21 acceptance/stamp commits, verify frozen bytes and clean Git, mark persistent implementation goal complete. Future external work requires its own explicit authorization; no routine confirmation is needed to close this completed run.
+- Implementation run complete. Final closing checks verify frozen bytes/clean Git and mark the persistent goal complete. Future external work requires its own explicit authorization; no routine confirmation is needed to close this completed run.

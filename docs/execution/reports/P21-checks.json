@@ -2,7 +2,7 @@
   "package": "P21",
   "status": "locally accepted; external qualification pending",
   "base_commit": "f4dcf084b75e38d54637dc05b347127f9e7603a4",
-  "accepted_commit": null,
+  "accepted_commit": "2d10aa9b124ad92e82c8949ffa6857647a76fd4f",
   "source_hashes": {
     ".github/workflows/qualification.yml": "044297d74e1d049850016dfccf093b37308527562fd6037ec6e6da1c019a9036",
     "Cargo.lock": "e1b6f04e0fd93af2c758fb1210d90627033f20df4b66b0a3c0eba9a968f72def",
@@ -1160,5 +1160,5 @@
     ],
     "evidence_entries": 84
   },
-  "acceptance_commit_state": "root local commit pending; source qualification complete"
+  "acceptance_commit_state": "accepted implementation/evidence commit recorded; subsequent documentation stamp changes no qualified source"
 }
