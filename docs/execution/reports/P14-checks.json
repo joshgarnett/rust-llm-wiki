@@ -1,39 +1,12 @@
 {
-  "package": "P13",
-  "status": "locally accepted",
-  "base_commit": "7e63b4894c6f3435574eda64ee2190f4894264b3",
-  "accepted_commit": "89db071eb81d1a991f9c276f17ac6c95023b76ef",
-  "coherent_checkout": "/var/folders/g0/jdy1y8615k30fs6sbf4x1wt40000gn/T/lwiki-p13-acceptance-pcg83ot3",
-  "isolation": "HEAD P12 plus24 P13-only source overlays; accepted132-package Cargo, all P16 excluded",
-  "overlay_paths": [
-    "schemas/change-v1.json",
-    "schemas/graph-review-v1.json",
-    "schemas/graph-review-receipt-v1.json",
-    "src/app/mod.rs",
-    "src/app/review.rs",
-    "src/catalog/eligibility.rs",
-    "src/changes/types.rs",
-    "src/changes/apply.rs",
-    "src/changes/prepare.rs",
-    "src/changes/rollback.rs",
-    "src/cli/mod.rs",
-    "src/cli/arguments.rs",
-    "src/cli/dispatch.rs",
-    "src/cli/review.rs",
-    "src/graph/mod.rs",
-    "src/graph/review_types.rs",
-    "src/graph/review.rs",
-    "tests/graph_review.rs",
-    "tests/m2_workflow.rs",
-    "tests/fixtures/p13/support.rs",
-    "tests/fixtures/p13/source.md",
-    "src/graph/remap.rs",
-    "src/sources/revision.rs",
-    "src/vault/paths.rs"
-  ],
-  "file_sha256": {
-    "Cargo.lock": "c6cdcc2fbc2c541159aaae875ea35407e40136f8eafd064a607d6470c0644cb8",
-    "Cargo.toml": "b3f986689fbdfbe5e82921983427a4856eaed7dbdd69ea7927c4e097135b183b",
+  "package": "P14",
+  "local_acceptance": "passed",
+  "accepted_commit": null,
+  "predecessor_commit": "89db071eb81d1a991f9c276f17ac6c95023b76ef",
+  "snapshot": "/private/var/folders/g0/jdy1y8615k30fs6sbf4x1wt40000gn/T/lwiki-p14-acceptance-1hnkvjrp",
+  "source_hashes": {
+    "Cargo.lock": "060010587c5202823bec3e994e8e8fe9f02496cfb3bfa64bfa05359a58b8d48b",
+    "Cargo.toml": "32eb5489ffd07e5244793144747c5bd7ad6f430a630a818c15d13231439bbfa9",
     "examples/fixture_hash.rs": "3178ba7c423400ab6f9165c756750fb6b7045f493dd0d3b17295411c92aba57c",
     "rust-toolchain.toml": "495c69d1db93f25f53e3d0d2d40d812313366cc368de317871c2ace6c6ffafa4",
     "schemas/change-v1.json": "4c37b9a187ebfa1a6884dcac1eefc499e4bb0e5f42283d5573e68c6a65373215",
@@ -53,6 +26,11 @@
     "schemas/stream-v1.json": "dcbe9c30bbc651bebab9e4ecf1b3698b0a2a1a58a05a0b2e50c2a14bfd46e7fe",
     "schemas/usage-receipt-v1.json": "846626ad8e0179037e0400052359f2f33d0bd6312b28050fc2e45bac3425243a",
     "scripts/seed-fixture.py": "d7ca31788ddce468747f935126575b58045309c18e172b7c63d7de387fd884b3",
+    "skills/llm-wiki/SKILL.md": "afecc17b274f35a4f2e89534e52285191ef55e0d43fe0f6556866f3baf79677f",
+    "skills/llm-wiki/agents/openai.yaml": "e2f334d89fdf99043c8fb519347a0a27220ef93f46827a58c313e3f83635e66b",
+    "skills/llm-wiki/references/commands.md": "59c9d7def5379630fa719a12deab772d79874b6dd52c1cf43fe3947699431787",
+    "skills/llm-wiki/references/examples.json": "25d0cf5b35351a668d7450acd18b2b19c3d30dbd360b19bb3cfb03912f33dccc",
+    "skills/llm-wiki/references/workflows.md": "af85bc286f2f54a08295fe5cf14d2f327815f14310ba43fd776d21b35c0a2a58",
     "src/app/decisions.rs": "163e58a6024efc36b96228a9d495982438aed9b89a87d36769702854cb1e991c",
     "src/app/extraction.rs": "5860f28b7b634ad28a0a641950b5909f645482d99bc5b8b0fafa9d5fc6bc59cd",
     "src/app/mod.rs": "09e99d22c15ed398df9cdf59442dceb031ffbffc9179a04ea3f2e14f3ae5e37a",
@@ -77,14 +55,15 @@
     "src/changes/recover.rs": "91ce22b61410490a2af465c2c9b71ef064c5dbd62c0a4696788aa49907a6cfbf",
     "src/changes/rollback.rs": "1f232708bbef9eb314947e0b12dda835a4760b6b93083583b1a0471831f12ac1",
     "src/changes/types.rs": "ff8200d1bad1d7f604ad96966ab1a4e294d403787a2160972222025dc055f05d",
-    "src/cli/arguments.rs": "863cdc5e9352ba2ff16be8921dd8ef0f8c0efe7db1ed624443eb23a970e47136",
+    "src/cli/arguments.rs": "96120686d9f79993ecab69fb5755840273ed14a4011ca76a8dafa5e515dc520b",
     "src/cli/context.rs": "d6c274d982bf975b3feb06ffb04e8f9b87e64ba955b714f19f43296b0fc59e64",
     "src/cli/decisions.rs": "712b311bae19321d7c4cd3feb68df904982a03d119cdc517aafa28a2d0ee82b4",
-    "src/cli/dispatch.rs": "3de5fd4abbb296999d4b13ad1ff5327c5252bc8d4e5860caef745ef3424552ac",
+    "src/cli/dispatch.rs": "7eeebf9fd483eed66e0bbd0289b47f10a7956450209488cba23eecd594245330",
     "src/cli/extraction.rs": "cb530fcad3f1dd05cb47566a944582119753702bddafb6a4e5ab6a63099db3fa",
-    "src/cli/mod.rs": "77aec6e4b2ef9627254d0874311e9905c649a14b246cf0d467d0fd919a5c8c41",
+    "src/cli/mod.rs": "aecacd91335d99db2d26edbcd624e618c16857dd76581642c4c5febdfe5ab2ca",
     "src/cli/resolution.rs": "8b207a03ae60d55b0b087bdca3fe28628044814b2aab9cffe09df880a7445ac6",
     "src/cli/review.rs": "d44218787d8f4ae4bdcc9b36d7ac1083b7a0d4bc698674659f8f5241cbc99199",
+    "src/cli/skill_export.rs": "59ae93f8cb34df19ea1a9367a3539e3583b6bfc2821abf2b59fa55b8536da838",
     "src/config/local.rs": "ce6257fd8e5550d1ec4d5c77e9509ff1d56af5f02b9ad03a6d70233f850a4a89",
     "src/config/mod.rs": "7c0e99a9d6212abf1fa2bbf2f2f8f4f4e559d555740311dc7cc7624dfd69d42c",
     "src/config/types.rs": "44d6273b3511dfe9ce08312e5ceda9e73e7f8b72752edc8e8d00183732301f82",
@@ -142,13 +121,15 @@
     "src/sources/mod.rs": "fdb424ab45e00acb11ff694eb11259fe5c593af6ab371078c3aeb6f658a5e5bb",
     "src/sources/revision.rs": "3e47fcba6d36429b175a3f4242643ac425f30855e96f8727d9f1be319590e884",
     "src/sources/types.rs": "8b998522fd20efb376936b2db36b03f7aa9d1898d608ebe84b01e4871f0fe85c",
+    "src/vault/acl_policy.rs": "f6599a05ee449eeddf91ab41764cc9084e9b2ba27db1d73fa75cd1f46ba30875",
     "src/vault/discovery.rs": "3d4a6b3d9c21c54d89cc579a490526f8bcd85ccc4bf53eb7cbaa49a827f72eb8",
     "src/vault/fs.rs": "75e468e0b3665e90684607aeb7574217ee807a60ddf42f31d92706bcbc236204",
     "src/vault/lock.rs": "554b5b9c7174384fd177d3ae97747e73a61df6c7da5d3c3df90edfdf9be14792",
-    "src/vault/mod.rs": "b1f61d7df38183247ed069bcc26c3f68522cbbf10e976f7e5f205944289b620c",
+    "src/vault/mod.rs": "ba1846714c4ca3d8b098451c1e4c0d86ead82117464f0ee4195d38fb8cc3b4dc",
     "src/vault/operational.rs": "0f0ece6e0ccbab0054f3b930df40aca65d09dbd385ed158f9e6f5aa9e087cab9",
     "src/vault/operational_tests.rs": "ec13c7daaeb1879bf3d26a223205bb757ec82bb41129c8fc740af3fd0c05a6d7",
     "src/vault/paths.rs": "a22b6506e2277acfecfa3ba638866bde42448416df58da5860cd40cd87357988",
+    "src/vault/windows_security.rs": "785baab120bf4b89594231f73b9fb0da458a061bd093d563e948291efb36f274",
     "tests/catalog_crash_recovery.rs": "5afa762918a8b52d21b30b791c6893d3b3a949778d31dcca6198ae6b40bb11ce",
     "tests/catalog_generations.rs": "c0df22987ff4cdb9046eb61da76dca40061e48b372b4919f5010f76bba9dcc39",
     "tests/catalog_scan_eligibility.rs": "125d852cb88f7b353f67ef5be788db70e172f1103f9aa53cf02c05fd2894a7f4",
@@ -208,6 +189,7 @@
     "tests/fixtures/p12/source.md": "01dea6b42009f38630af4d2e8067144fedcb13dd3220c5381bccb494288701f3",
     "tests/fixtures/p13/source.md": "01dea6b42009f38630af4d2e8067144fedcb13dd3220c5381bccb494288701f3",
     "tests/fixtures/p13/support.rs": "ad387e5fdf0e207853e9fa2862c3f811df8295fa332b882ef9cfc97cdac258a7",
+    "tests/fixtures/p14/package-manifest.json": "cef225d4205bed2b1dcdf3c608bcef5a6a66a00b653653a915dff6effb99b612",
     "tests/fixtures/p15/common.rs": "408989810fb0e355bcc60b2fae9c91900cf35240e95b4956459bbbc6a0822367",
     "tests/graph_cli.rs": "9ba7fbf6cd8f00dc16ff680385c98a226084a0b8e3dcd03d2d5a7da6ab1eb12f",
     "tests/graph_queries.rs": "a215f80c56312ac0ca1235cc9d269a9619890b9a70e05b554a844b414237131e",
@@ -222,120 +204,200 @@
     "tests/records_lossless.rs": "6835c5c94273061ea5b25f51c8ab0b35dbabdf6314b26cd2455ab7683e189bf2",
     "tests/resolution_cli.rs": "cc34a489aae56a9fca4c67a0e3ed59824036d830648a0dbba73043b86fd28061",
     "tests/retrieval_lexical.rs": "10bee8f13e40ba2805829d1aefd32262c557a82a76786d1c75e80706e25100fb",
+    "tests/skill_export.rs": "b8adb08a0207c7877918296a3a4c784708ac5b5fc6148e485ace4a6462eb3184",
     "tests/sources_evidence.rs": "6f3a8eabdbe9683e799bcb9bbb10447f4143f373110f71e6f71f1afd29ebd24e",
-    "tests/vault_fs.rs": "5699ff7207e4b5724625686dbd088453fda9f6e75e05ea78c0e5cd42724400de"
+    "tests/vault_fs.rs": "5699ff7207e4b5724625686dbd088453fda9f6e75e05ea78c0e5cd42724400de",
+    "tests/windows_acl_policy.rs": "dbbae84d4bebf5f9d8ef8b8ef1cafc830c55d7604723b4956b1be48b7646399e"
   },
-  "tree_fingerprint": "651ea43de14f2ed5eff01bbde39530315fa6807d424ee914c9fc8320c366968e",
-  "checks": [
+  "source_fingerprint": "e79303cb16082d495b411bc790bee9881c6a1073d8d17c97fc33fe2e1d844d00",
+  "binary_sha256": "237ab6fa41761caeb675abf1774f60f940cdd4268fb3d9babbe7759b8e061ff8",
+  "native_checks": [
     {
-      "title": "Graph candidate19",
-      "command": "cargo test --locked --offline --test graph_review --test m2_workflow",
-      "log": "/tmp/lwiki-p13-target20.log",
-      "log_sha256": "d1d709ec2e5e749018bfc5147d4757b3f4d8b04a874f50b0aa0f1d305f8fca9c",
-      "exit_code": 101,
-      "parents": 18
+      "name": "fmt",
+      "command": [
+        "cargo",
+        "fmt",
+        "--all",
+        "--check"
+      ],
+      "cwd": "/private/var/folders/g0/jdy1y8615k30fs6sbf4x1wt40000gn/T/lwiki-p14-acceptance-1hnkvjrp",
+      "exit_code": 0,
+      "elapsed_seconds": 0.667,
+      "log": "/private/tmp/lwiki-p14-root-fmt-final.log"
     },
     {
-      "title": "Corrected sparse1",
-      "command": "cargo test --locked --offline --test graph_review sparse_oversized_source_payload_after_stage_refuses_before_publication",
-      "log": "/tmp/lwiki-p13-sparse-final.log",
-      "log_sha256": "874247f67a3dcbd9ad99a97abed613c157c04da4bc89183f8490414f464323bf",
+      "name": "clippy",
+      "command": [
+        "cargo",
+        "clippy",
+        "--locked",
+        "--offline",
+        "--all-targets",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "cwd": "/private/var/folders/g0/jdy1y8615k30fs6sbf4x1wt40000gn/T/lwiki-p14-acceptance-1hnkvjrp",
       "exit_code": 0,
-      "parents": 1
+      "elapsed_seconds": 5.008,
+      "log": "/private/tmp/lwiki-p14-root-clippy-final.log"
     },
     {
-      "title": "M2 workflow1",
-      "command": "cargo test --locked --offline --test m2_workflow",
-      "log": "/tmp/lwiki-p13-workflow-final.log",
-      "log_sha256": "d0fe0628b99da256190d4ee31b77243e0d86872f641af21f8609b5cf98cc2167",
+      "name": "private",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "--offline",
+        "--lib",
+        "cli::skill_export::tests",
+        "--",
+        "--nocapture"
+      ],
+      "cwd": "/private/var/folders/g0/jdy1y8615k30fs6sbf4x1wt40000gn/T/lwiki-p14-acceptance-1hnkvjrp",
       "exit_code": 0,
-      "parents": 1
+      "elapsed_seconds": 4.321,
+      "log": "/private/tmp/lwiki-p14-root-private-final.log",
+      "actual_parents": 0,
+      "note": "Wrong filter; no runtime evidence. Corrected dedicated filter above."
     },
     {
-      "title": "P12 regressions32",
-      "command": "cargo test --locked --offline --test entity_decisions --test entity_decisions_cli --test entity_decisions_inverse",
-      "log": "/tmp/lwiki-p13-decisions-regression.log",
-      "log_sha256": "8d089b362d6cd02263a278b00061efb9614c1e75be9ecb067860d04bf4320590",
+      "name": "public",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "--offline",
+        "--test",
+        "skill_export",
+        "--test",
+        "windows_acl_policy",
+        "--",
+        "--nocapture"
+      ],
+      "cwd": "/private/var/folders/g0/jdy1y8615k30fs6sbf4x1wt40000gn/T/lwiki-p14-acceptance-1hnkvjrp",
       "exit_code": 0,
-      "parents": 32
+      "elapsed_seconds": 13.544,
+      "log": "/private/tmp/lwiki-p14-root-public-final.log"
     },
     {
-      "title": "Shared12targets145",
-      "command": "cargo test --locked --offline --test catalog_crash_recovery --test catalog_generations --test catalog_scan_eligibility --test change_read_preconditions --test context_freshness --test extraction_import --test graph_resolution --test machine_contract --test offline_application --test offline_cli --test resolution_cli --test sources_evidence",
-      "log": "/tmp/lwiki-p13-shared-regression-corrected.log",
-      "log_sha256": "0d1c21199900a085bbf476ad2015868e7434b9b61d2e7fc9e76b799c9cccc5c3",
+      "name": "build",
+      "command": [
+        "cargo",
+        "build",
+        "--locked",
+        "--offline"
+      ],
+      "cwd": "/private/var/folders/g0/jdy1y8615k30fs6sbf4x1wt40000gn/T/lwiki-p14-acceptance-1hnkvjrp",
       "exit_code": 0,
-      "parents": 145
+      "elapsed_seconds": 13.999,
+      "log": "/private/tmp/lwiki-p14-root-build-final.log"
     },
     {
-      "title": "Native changes28",
-      "command": "cargo test --locked --offline --test changes_recovery",
-      "log": "/tmp/lwiki-p13-native-recovery-final.log",
-      "log_sha256": "33ebcca8f50f7396e910a7b3f4da6306dafbd53f6edc51e2a53019a613f3832d",
+      "name": "anchored_corrected_filter",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "--offline",
+        "--lib",
+        "cli::skill_export::anchored_tests",
+        "--",
+        "--nocapture"
+      ],
       "exit_code": 0,
-      "parents": 28
-    },
-    {
-      "title": "Strict lint",
-      "command": "cargo clippy --locked --offline --all-targets -- -D warnings",
-      "log": "/tmp/lwiki-p13-clippy-final.log",
-      "log_sha256": "d6447364c15508f1cc46ded00bb753374bd4da9fa81e0f19cc865f6bd01f08f0",
-      "exit_code": 0,
-      "parents": null
-    },
-    {
-      "title": "Format",
-      "command": "cargo fmt --all -- --check",
-      "log": "/tmp/lwiki-p13-fmt-final.log",
-      "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "exit_code": 0,
-      "parents": null
-    },
-    {
-      "title": "Build",
-      "command": "cargo build --locked --offline --bin lwiki --example fixture_hash",
-      "log": "/tmp/lwiki-p13-build-final.log",
-      "log_sha256": "c6315a3e985a23dfe214b77fc653d65cf01dc01dee88647b759f4cd17013bff6",
-      "exit_code": 0,
-      "parents": null
-    },
-    {
-      "title": "CLI schemas/capabilities",
-      "command": "all15 emitted CLI schema equality; capabilities29/networkfalse; overlays equal",
-      "log": "/tmp/lwiki-p13-schema-final.log",
-      "log_sha256": "c3cd2febe1e41dd9f555b6bf2dde730b70d418d0978c178782d458e5584f2321",
-      "exit_code": 0,
-      "parents": null
-    },
-    {
-      "title": "Seed",
-      "command": "python3 scripts/seed-fixture.py --check --hash-command absolute fixture_hash",
-      "log": "/tmp/lwiki-p13-seed-final.log",
-      "log_sha256": "4082b8e8cc523db156ef5837fa1577800a40259482d4b392c124cc90a0b0d4ea",
-      "exit_code": 0,
-      "parents": null
-    },
-    {
-      "title": "Published request/actual receipt schema parent",
-      "command": "cargo test --locked --offline --test graph_review review_strict_schema_limits_and_read_only_plan",
-      "log": "/tmp/lwiki-p13-published-schema-parent.log",
-      "log_sha256": "33e78b08ee3e6ebf49634ef62c054645fd08eec0ae8782baf8d2b95eda02d5ad",
-      "exit_code": 0,
-      "parents": 1
-    },
-    {
-      "title": "Final changed-test strict lint",
-      "command": "cargo clippy --locked --offline --all-targets -- -D warnings",
-      "log": "/tmp/lwiki-p13-clippy-schema-final.log",
-      "log_sha256": "802b1fcb1362c6a5cd18775876f7b56d1d37729f12e399c7b41a7aa0b8a8ab48",
-      "exit_code": 0,
-      "parents": null
+      "log": "/private/tmp/lwiki-p14-root-anchored-final.log",
+      "actual_parents": 6
     }
   ],
-  "review": "Independent Sol P13 review plus bounded Astra storage/source/inverse review; root actual runtime acceptance separate.",
-  "attribution": "Graph19 initial gate18PASS and one test classification failure; test-only sparse correction then PASS. Existing strict schema parent augmented with published-schema valid/invalid request and actual committed receipt/date checks, then passed1/6.28s compile2.10s. Final strict lint0.81s/fmt passed. Production source unchanged across these test-only corrections. Full native28/342.81s includes actual subprocess SIGKILL wrappers; one child ignored in harness and explicitly invoked. Shared145/12targets passed final production bytes. All24 overlays match workspace;192 source/fixture hashes identify isolated accepted132-package Cargo. Dynamic native fault count is not reported by captured summary and is not invented.",
+  "windows_adapter_checks": [
+    {
+      "name": "lock",
+      "command": [
+        "cargo",
+        "+1.98.0",
+        "generate-lockfile",
+        "--offline"
+      ],
+      "cwd": "/private/tmp/lwiki-p14-windows-export-check",
+      "exit_code": 0,
+      "elapsed_seconds": 0.201,
+      "log": "/private/tmp/lwiki-p14-windows-export-lock.log"
+    },
+    {
+      "name": "msvc",
+      "command": [
+        "cargo",
+        "+1.98.0",
+        "check",
+        "--locked",
+        "--offline",
+        "--target",
+        "x86_64-pc-windows-msvc"
+      ],
+      "cwd": "/private/tmp/lwiki-p14-windows-export-check",
+      "exit_code": 0,
+      "elapsed_seconds": 5.074,
+      "log": "/private/tmp/lwiki-p14-windows-export-msvc.log"
+    },
+    {
+      "name": "gnu",
+      "command": [
+        "cargo",
+        "+1.98.0",
+        "check",
+        "--locked",
+        "--offline",
+        "--target",
+        "x86_64-pc-windows-gnu"
+      ],
+      "cwd": "/private/tmp/lwiki-p14-windows-export-check",
+      "exit_code": 0,
+      "elapsed_seconds": 2.227,
+      "log": "/private/tmp/lwiki-p14-windows-export-gnu.log"
+    },
+    {
+      "name": "clippy",
+      "command": [
+        "cargo",
+        "+1.98.0",
+        "clippy",
+        "--locked",
+        "--offline",
+        "--target",
+        "x86_64-pc-windows-msvc",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "cwd": "/private/tmp/lwiki-p14-windows-export-check",
+      "exit_code": 0,
+      "elapsed_seconds": 0.519,
+      "log": "/private/tmp/lwiki-p14-windows-export-clippy.log"
+    }
+  ],
+  "native_parents": {
+    "anchored_races_controls": 6,
+    "required_packaging_workflow": 4,
+    "portable_acl_policy": 7
+  },
+  "recipe_steps": 32,
+  "dependency_package_versions_unchanged": true,
+  "external_dependencies": 132,
+  "reviews": [
+    "P14-review.md",
+    "Astra-P14-export-review.md",
+    "Astra-Windows-protection-review.md"
+  ],
   "limits": [
-    "Disposable native macOS faults/SIGKILL do not establish power-loss or other native platform durability.",
-    "No live providers/host qualification. P14/P16-P21 remain required."
-  ]
+    "Native macOS filesystem behavior only; no power-loss claim.",
+    "Windows API/cfg checks compile actual exporter/helper/domain types with minimal CLI parser/registry support stubs, pure blake3 feature, and harness dead_code allowance; not whole-production cross-build or native behavior.",
+    "Independent skill forward artifact used explicitly identified pre-anchor binary; maintained instructions/resources unchanged and final exporter recipes rerun.",
+    "No live providers, installed host discovery, real-vault access or publishing."
+  ],
+  "windows_harness_hashes": {
+    "/private/tmp/lwiki-p14-windows-export-check/Cargo.toml": "b43bb5b2de72c3bdbf1e09e0ec1194cb79cf916227333bf2603797cd5eaeafb4",
+    "/private/tmp/lwiki-p14-windows-export-check/Cargo.lock": "591bc42a21497ac872b6db35b57914c6179ff6a6c162a03db8c92733981f02dc",
+    "/private/tmp/lwiki-p14-windows-export-check/src/lib.rs": "6e9eba73e847366ba74832233dbf343b6ebf859cd05c614dc03a35e22fd6a458"
+  }
 }

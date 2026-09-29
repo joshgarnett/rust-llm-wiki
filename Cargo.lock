@@ -817,6 +817,7 @@ dependencies = [
  "blake3",
  "clap",
  "jsonschema",
+ "libc",
  "pulldown-cmark",
  "rusqlite",
  "serde",
@@ -825,6 +826,7 @@ dependencies = [
  "time",
  "unicase",
  "uuid",
+ "windows-sys",
  "yaml-rust2",
 ]
 

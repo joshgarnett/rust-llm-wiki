@@ -1,0 +1,4 @@
+interface:
+  display_name: "LLM Wiki"
+  short_description: "Maintain a local wiki with cited, bounded evidence"
+  default_prompt: "Use $llm-wiki to find cited evidence and maintain this local wiki."

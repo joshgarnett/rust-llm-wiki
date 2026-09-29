@@ -75,6 +75,10 @@ impl Selector {
 #[derive(Debug, Subcommand)]
 pub enum Command {
     Capabilities,
+    Skill {
+        #[command(subcommand)]
+        command: SkillCommand,
+    },
     Schema {
         name: String,
     },
@@ -379,10 +383,20 @@ impl SearchArguments {
         }
     }
 }
+#[derive(Debug, Subcommand)]
+pub enum SkillCommand {
+    Export {
+        #[arg(long, value_parser = ["codex", "claude-code", "cursor"])]
+        target: String,
+        #[arg(long)]
+        output: PathBuf,
+    },
+}
 impl Command {
     pub fn name(&self) -> &'static str {
         match self {
             Self::Capabilities => "capabilities",
+            Self::Skill { .. } => "skill export",
             Self::Schema { .. } => "schema",
             Self::Init { .. } => "init",
             Self::Read { .. } => "read",

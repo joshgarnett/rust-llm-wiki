@@ -10,3 +10,8 @@ pub mod paths;
 pub use fs::{BeforeImage, DirectorySync, DurableIo, ExpectedState, NativeIo, StagedFile, VaultFs};
 pub use lock::WriterPermit;
 pub use paths::VaultRoot;
+
+#[cfg(windows)]
+pub(crate) mod acl_policy;
+#[cfg(windows)]
+pub(crate) mod windows_security;

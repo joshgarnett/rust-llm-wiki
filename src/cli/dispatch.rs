@@ -24,6 +24,7 @@ use std::{
 
 pub const COMMANDS: &[&str] = &[
     "capabilities",
+    "skill export",
     "schema",
     "init",
     "read",
@@ -53,6 +54,23 @@ pub const COMMANDS: &[&str] = &[
     "recover",
     "migrate",
 ];
+pub const SCHEMAS: &[&str] = &[
+    "output",
+    "record",
+    "stream",
+    "extraction",
+    "extraction-packet",
+    "extraction-state",
+    "graph-resolution",
+    "graph-resolution-receipt",
+    "run",
+    "run-event",
+    "usage-receipt",
+    "entity-decisions",
+    "entity-decision-receipt",
+    "graph-review",
+    "graph-review-receipt",
+];
 fn usage(message: impl Into<String>) -> WikiError {
     WikiError::new(ErrorCode::Usage, message)
 }
@@ -63,6 +81,9 @@ fn failure(command: &str, error: WikiError) -> Envelope {
     let mut envelope = Envelope::failure(command, &error.code.to_string(), error.message.clone());
     if let Some(change) = error.details.get("change") {
         envelope.data = json!({"change":change});
+        envelope.meta.partial = true;
+    }
+    if error.details.get("partial_export").and_then(Value::as_bool) == Some(true) {
         envelope.meta.partial = true;
     }
     envelope.error = Some(error_output(error));
@@ -99,7 +120,7 @@ fn execute_inner(args: &Arguments) -> Result<Envelope> {
         Command::Capabilities => {
             return Ok(Envelope::success(
                 command,
-                json!({"version":env!("CARGO_PKG_VERSION"),"commands":COMMANDS,"schemas":["output","record","stream","extraction","extraction-packet","extraction-state","graph-resolution","graph-resolution-receipt","run","run-event","usage-receipt","entity-decisions","entity-decision-receipt","graph-review","graph-review-receipt"],"network":false,"search_modes":["literal","lexical"],"jsonl_commands":["index sync","index rebuild","recover","changes apply","source add","source refresh"]}),
+                json!({"version":env!("CARGO_PKG_VERSION"),"commands":COMMANDS,"schemas":SCHEMAS,"network":false,"search_modes":["literal","lexical"],"jsonl_commands":["index sync","index rebuild","recover","changes apply","source add","source refresh"]}),
             ));
         }
         Command::Schema { name } => {
@@ -136,6 +157,17 @@ fn execute_inner(args: &Arguments) -> Result<Envelope> {
                 command,
                 serde_json::from_str(schema)
                     .map_err(|e| WikiError::new(ErrorCode::Internal, e.to_string()))?,
+            ));
+        }
+        Command::Skill {
+            command: SkillCommand::Export { target, output },
+        } => {
+            if args.stage {
+                return Err(usage("skill export cannot be staged"));
+            }
+            return Ok(Envelope::success(
+                command,
+                super::skill_export::export_skill(target, output, args.dry_run)?,
             ));
         }
         Command::Init { path, title } => {
@@ -543,7 +575,10 @@ fn execute_inner(args: &Arguments) -> Result<Envelope> {
             &mut envelope,
             app.migrate(selector.record_selector()?, if_match.clone(), to_schema)?,
         )?,
-        Command::Capabilities | Command::Schema { .. } | Command::Init { .. } => unreachable!(),
+        Command::Capabilities
+        | Command::Schema { .. }
+        | Command::Init { .. }
+        | Command::Skill { .. } => unreachable!(),
     }
     Ok(envelope)
 }

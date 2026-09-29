@@ -1,0 +1,572 @@
+{
+  "schema": "lwiki.skill-examples.v1",
+  "fixture": "disposable WIKI.md vault, never a user vault",
+  "steps": [
+    {
+      "name": "capabilities",
+      "args": [
+        "capabilities"
+      ],
+      "check": "capabilities"
+    },
+    {
+      "name": "capture",
+      "args": [
+        "source",
+        "add",
+        "-",
+        "--title",
+        "Employment evidence"
+      ],
+      "stdin": "Ada works for Acme. KEY-731.\nAda is another person.\nThe first Ada does not work for Acme.\n",
+      "bindings": {
+        "source": "/data/allocated_ids/source",
+        "revision": "/data/allocated_ids/revision"
+      }
+    },
+    {
+      "name": "repeat-content",
+      "args": [
+        "source",
+        "refresh",
+        "${source}",
+        "--file",
+        "-"
+      ],
+      "stdin": "Ada works for Acme. KEY-731.\nAda is another person.\nThe first Ada does not work for Acme.\n",
+      "check": "repeat_revision"
+    },
+    {
+      "name": "literal",
+      "args": [
+        "search",
+        "KEY-731",
+        "--mode",
+        "literal",
+        "--limit",
+        "5"
+      ],
+      "check": "literal_citation"
+    },
+    {
+      "name": "lexical",
+      "args": [
+        "search",
+        "works Acme",
+        "--limit",
+        "5"
+      ],
+      "check": "lexical_hits"
+    },
+    {
+      "name": "extract",
+      "args": [
+        "graph",
+        "extract",
+        "--executor",
+        "agent",
+        "--source-id",
+        "${source}",
+        "--max-mentions",
+        "8",
+        "--max-assertions",
+        "4",
+        "--max-output-bytes",
+        "16000"
+      ],
+      "bindings": {
+        "packet": "/data/packet/packet_id",
+        "fingerprint": "/data/packet/packet_fingerprint"
+      }
+    },
+    {
+      "name": "import",
+      "args": [
+        "graph",
+        "import",
+        "--file",
+        "-"
+      ],
+      "stdin": {
+        "schema": "lwiki.extraction.v1",
+        "packet_id": "${packet}",
+        "packet_fingerprint": "${fingerprint}",
+        "mentions": [
+          {
+            "id": "m1",
+            "window_id": "w1",
+            "label": "Ada",
+            "type": "person",
+            "quote": "Ada",
+            "span": {
+              "start": 0,
+              "end": 3
+            }
+          },
+          {
+            "id": "m2",
+            "window_id": "w1",
+            "label": "Acme",
+            "type": "organization",
+            "quote": "Acme",
+            "span": {
+              "start": 14,
+              "end": 18
+            }
+          },
+          {
+            "id": "m3",
+            "window_id": "w1",
+            "label": "Ada",
+            "type": "person",
+            "quote": "Ada",
+            "span": {
+              "start": 29,
+              "end": 32
+            }
+          }
+        ],
+        "assertions": [
+          {
+            "id": "a1",
+            "subject": "m1",
+            "predicate": "works_for",
+            "object": {
+              "kind": "mention",
+              "mention_id": "m2"
+            },
+            "negated": false,
+            "modality": "asserted",
+            "evidence": [
+              {
+                "window_id": "w1",
+                "stance": "supports",
+                "quote": "Ada works for Acme."
+              },
+              {
+                "window_id": "w1",
+                "stance": "contradicts",
+                "quote": "The first Ada does not work for Acme."
+              }
+            ]
+          }
+        ],
+        "unresolved": []
+      },
+      "bindings": {
+        "change": "/data/prepared/change_id",
+        "extraction": "/data/extraction/record/record_id",
+        "assertion": "/data/allocations/assertions/a1",
+        "evidence": "/data/allocations/evidence/a1/0",
+        "counterevidence": "/data/allocations/evidence/a1/1"
+      }
+    },
+    {
+      "name": "inspect-import",
+      "args": [
+        "changes",
+        "show",
+        "${change}"
+      ]
+    },
+    {
+      "name": "apply-import",
+      "args": [
+        "changes",
+        "apply",
+        "${change}"
+      ]
+    },
+    {
+      "name": "extraction-hash",
+      "args": [
+        "read",
+        "--id",
+        "${extraction}"
+      ],
+      "bindings": {
+        "extraction_hash": "/data/hash"
+      }
+    },
+    {
+      "name": "resolve",
+      "args": [
+        "graph",
+        "resolve",
+        "--file",
+        "-"
+      ],
+      "stdin": {
+        "schema": "lwiki.graph-resolution.v1",
+        "extraction_id": "${extraction}",
+        "expected_hash": "${extraction_hash}",
+        "mappings": [
+          {
+            "operation": "CreateEntity",
+            "mention_id": "m1",
+            "reason": "Explicit identity from separate source mention",
+            "title": "Ada",
+            "entity_type": "person"
+          },
+          {
+            "operation": "CreateEntity",
+            "mention_id": "m2",
+            "reason": "Explicit identity from separate source mention",
+            "title": "Acme",
+            "entity_type": "organization"
+          },
+          {
+            "operation": "CreateEntity",
+            "mention_id": "m3",
+            "reason": "Explicit identity from separate source mention",
+            "title": "Ada",
+            "entity_type": "person"
+          }
+        ]
+      },
+      "bindings": {
+        "change": "/data/prepared/change_id",
+        "first_ada": "/data/allocations/entities/m1",
+        "second_ada": "/data/allocations/entities/m3"
+      },
+      "check": "homonyms"
+    },
+    {
+      "name": "inspect-resolve",
+      "args": [
+        "changes",
+        "show",
+        "${change}"
+      ]
+    },
+    {
+      "name": "apply-resolve",
+      "args": [
+        "changes",
+        "apply",
+        "${change}"
+      ]
+    },
+    {
+      "name": "assertion-hash",
+      "args": [
+        "read",
+        "--id",
+        "${assertion}"
+      ],
+      "bindings": {
+        "assertion_hash": "/data/hash"
+      }
+    },
+    {
+      "name": "evidence-hash-and-quote",
+      "args": [
+        "read",
+        "--id",
+        "${evidence}"
+      ],
+      "bindings": {
+        "evidence_hash": "/data/hash"
+      },
+      "check": "evidence_quote"
+    },
+    {
+      "name": "counterevidence-hash-and-quote",
+      "args": [
+        "read",
+        "--id",
+        "${counterevidence}"
+      ],
+      "bindings": {
+        "counterevidence_hash": "/data/hash"
+      },
+      "check": "counterevidence_quote"
+    },
+    {
+      "name": "review",
+      "args": [
+        "graph",
+        "review",
+        "--file",
+        "-"
+      ],
+      "stdin": {
+        "schema": "lwiki.graph-review.v1",
+        "decisions": [
+          {
+            "assertion_id": "${assertion}",
+            "expected_hash": "${assertion_hash}",
+            "decision": "accept",
+            "reason": "Authorized assessment of all active cited evidence",
+            "evidence_checks": [
+              {
+                "evidence_id": "${evidence}",
+                "expected_hash": "${evidence_hash}",
+                "assessment": "supports"
+              },
+              {
+                "evidence_id": "${counterevidence}",
+                "expected_hash": "${counterevidence_hash}",
+                "assessment": "contradicts"
+              }
+            ]
+          }
+        ],
+        "supersedes": []
+      },
+      "bindings": {
+        "change": "/data/prepared/change_id"
+      }
+    },
+    {
+      "name": "inspect-review",
+      "args": [
+        "changes",
+        "show",
+        "${change}"
+      ]
+    },
+    {
+      "name": "apply-review",
+      "args": [
+        "changes",
+        "apply",
+        "${change}"
+      ]
+    },
+    {
+      "name": "relationship",
+      "args": [
+        "graph",
+        "query",
+        "${assertion}",
+        "--strategy",
+        "relationship"
+      ],
+      "check": "relationship"
+    },
+    {
+      "name": "bounded-context",
+      "args": [
+        "context",
+        "${assertion}",
+        "--target",
+        "graph",
+        "--strategy",
+        "relationship",
+        "--max-bytes",
+        "12000",
+        "--max-tokens",
+        "3000"
+      ],
+      "check": "context_citation"
+    },
+    {
+      "name": "repeat-import",
+      "args": [
+        "graph",
+        "import",
+        "--file",
+        "-"
+      ],
+      "stdin": {
+        "schema": "lwiki.extraction.v1",
+        "packet_id": "${packet}",
+        "packet_fingerprint": "${fingerprint}",
+        "mentions": [
+          {
+            "id": "m1",
+            "window_id": "w1",
+            "label": "Ada",
+            "type": "person",
+            "quote": "Ada",
+            "span": {
+              "start": 0,
+              "end": 3
+            }
+          },
+          {
+            "id": "m2",
+            "window_id": "w1",
+            "label": "Acme",
+            "type": "organization",
+            "quote": "Acme",
+            "span": {
+              "start": 14,
+              "end": 18
+            }
+          },
+          {
+            "id": "m3",
+            "window_id": "w1",
+            "label": "Ada",
+            "type": "person",
+            "quote": "Ada",
+            "span": {
+              "start": 29,
+              "end": 32
+            }
+          }
+        ],
+        "assertions": [
+          {
+            "id": "a1",
+            "subject": "m1",
+            "predicate": "works_for",
+            "object": {
+              "kind": "mention",
+              "mention_id": "m2"
+            },
+            "negated": false,
+            "modality": "asserted",
+            "evidence": [
+              {
+                "window_id": "w1",
+                "stance": "supports",
+                "quote": "Ada works for Acme."
+              },
+              {
+                "window_id": "w1",
+                "stance": "contradicts",
+                "quote": "The first Ada does not work for Acme."
+              }
+            ]
+          }
+        ],
+        "unresolved": []
+      },
+      "check": "repeat_import"
+    },
+    {
+      "name": "create-page",
+      "args": [
+        "page",
+        "put",
+        "--file",
+        "-",
+        "--path",
+        "pages/portable.md"
+      ],
+      "stdin": "---\nwiki_schema: \"1\"\nwiki_id: Page.Portable\nwiki_kind: page\nwiki_status: reviewed\ntitle: First heading\n---\n# First heading\nAuthor content KEY-731.\n"
+    },
+    {
+      "name": "page-hash",
+      "args": [
+        "read",
+        "--id",
+        "Page.Portable"
+      ],
+      "bindings": {
+        "page_hash": "/data/hash"
+      }
+    },
+    {
+      "name": "heading-edit",
+      "args": [
+        "page",
+        "put",
+        "--file",
+        "-",
+        "--path",
+        "pages/portable.md",
+        "--if-match",
+        "${page_hash}"
+      ],
+      "stdin": "---\nwiki_schema: \"1\"\nwiki_id: Page.Portable\nwiki_kind: page\nwiki_status: reviewed\ntitle: Second heading\n---\n# Second heading\nAuthor content KEY-731.\n"
+    },
+    {
+      "name": "stable-heading-identity",
+      "args": [
+        "read",
+        "--id",
+        "Page.Portable"
+      ],
+      "bindings": {
+        "new_page_hash": "/data/hash"
+      },
+      "check": "heading_identity"
+    },
+    {
+      "name": "author-conflict",
+      "args": [
+        "page",
+        "put",
+        "--file",
+        "-",
+        "--path",
+        "pages/portable.md",
+        "--if-match",
+        "${page_hash}"
+      ],
+      "stdin": "---\nwiki_schema: \"1\"\nwiki_id: Page.Portable\nwiki_kind: page\nwiki_status: reviewed\ntitle: First heading\n---\n# First heading\nAuthor content KEY-731.\n",
+      "expect_error": "CONTENT_CONFLICT",
+      "check": "author_preserved",
+      "fixture_edit": {
+        "path": "pages/portable.md",
+        "append": "\nHuman-added observation.\n"
+      }
+    },
+    {
+      "name": "bounded-empty-partial",
+      "args": [
+        "context",
+        "KEY-731",
+        "--max-bytes",
+        "1",
+        "--max-tokens",
+        "1",
+        "--instruction-bytes",
+        "1"
+      ],
+      "check": "budget_partial"
+    },
+    {
+      "name": "budget-stop",
+      "args": [
+        "context",
+        "KEY-731",
+        "--max-bytes",
+        "1",
+        "--max-tokens",
+        "1",
+        "--instruction-bytes",
+        "1",
+        "--scope",
+        "snapshot"
+      ],
+      "expect_error": "BUDGET_EXCEEDED"
+    },
+    {
+      "name": "unavailable-semantic",
+      "args": [
+        "search",
+        "works Acme",
+        "--mode",
+        "semantic"
+      ],
+      "expect_error": "USAGE",
+      "check": "semantic_unavailable"
+    },
+    {
+      "name": "withdraw",
+      "args": [
+        "source",
+        "withdraw",
+        "${source}",
+        "--reason",
+        "User withdrew source support"
+      ]
+    },
+    {
+      "name": "withdrawn-relationship",
+      "args": [
+        "graph",
+        "query",
+        "${assertion}",
+        "--strategy",
+        "relationship"
+      ],
+      "check": "withdrawn_support"
+    }
+  ]
+}
