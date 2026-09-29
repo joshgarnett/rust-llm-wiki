@@ -22,6 +22,14 @@ class BazelWrapperTests(unittest.TestCase):
                           "VCTOOLSINSTALLDIR": "compiler", "WINDOWSSDKDIR": "sdk", "WINDOWSSDKVERSION": "version"})
         self.assertIn("GITHUB_TOKEN", source)
 
+    def test_windows_installation_discovery_environment_is_preserved(self):
+        source = {"ProgramFiles": "programs", "ProgramFiles(x86)": "installer",
+                  "ProgramW6432": "native programs", "ProgramData": "VS instances",
+                  "SystemDrive": "C:", "BAZEL_VC": "selected VC", "GITHUB_TOKEN": "fixture"}
+        expected = dict(source)
+        del expected["GITHUB_TOKEN"]
+        self.assertEqual(wrapper.build_environment(source), expected)
+
     def test_native_platforms_are_explicit(self):
         for (system, machine), expected in wrapper.NATIVE_TARGETS.items():
             with self.subTest(system=system, machine=machine):

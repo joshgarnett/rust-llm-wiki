@@ -26,17 +26,20 @@ acceptance report or repeat the sibling project's dependency audit.
 | --- | --- |
 | Native `//:build` | Passed; 866 actions, 78.57 seconds |
 | `//:check //:smoke` | Seven targets passed; formatting, strict Clippy and 32 Rust smoke cases |
-| Build orchestration and release verification regressions | 40 Python tests passed |
+| Build orchestration and release verification regressions | 41 Python tests passed, including Windows discovery environment regression |
 | Workflow syntax | Five YAML files parsed; this is not hosted execution |
 | Full qualification attempt 001 | Failed under concurrent disk-heavy test targets: 24 passed, three failed, 26 skipped after explicit interruption |
 | Serialized affected CLI workflows | Both targets passed uncached in 55.7 seconds |
-| Full qualification attempt 002 | Running; library 136 passed, zero failed, three ignored helpers; final integration/release result pending |
+| Full qualification attempt 002 | All stages passed; all 53 uncached test targets passed in 1862.16 seconds, optimized build in 69.64 seconds, optimized skill test in 5.5 seconds, copied-binary offline workflow and linkage checks passed |
 
 Attempt 001 exhausted the existing elapsed budgets in skill/release workflows
 and a mock listener's accept deadline in semantic retrieval. Tests now compile
 before execution and Bazel schedules one test target at a time. Each Rust
 harness retains its internal concurrency and all existing deadlines/assertions.
-The complete serialized run must pass before local acceptance.
+The complete serialized run passed, including all three previously affected
+targets. The clean native candidate records commit
+`06aa1a9526dc59569f637001d59493ebaebd213c`; its binary SHA-256 is
+`538a5bd2baddf069531f6edf059b7401458639a07c75065ac8190665fd3728fe`.
 
 Local logs are retained in `.artifacts/bazel-check-smoke.log`,
 `.artifacts/bazel-serial-workflows.log`, `.artifacts/build-tools-tests.log`, and
@@ -60,7 +63,13 @@ found two clean-host setup defects: macOS had no Go for the Bazelisk install,
 and Bazel rejected `--version` after startup options. Shared setup now downloads
 the pinned native Bazelisk asset and verifies its checksum; doctor and candidate
 metadata use `version --gnu_format`. All 40 Python regressions still pass.
-Hosted acceptance remains pending. A release is accepted only after all six jobs succeed, downloaded
+The corrected run [36559942359](https://github.com/joshgarnett/rust-llm-wiki/actions/runs/36559942359)
+passed macOS ARM64, but Windows x64/ARM64 could not locate their MSVC tools.
+Astra reviewed the tool-discovery code: setup now selects Visual Studio through
+`vswhere`, checks the native compiler/linker paths and exports `BAZEL_VC` before
+Bazel starts. The wrapper also retains Windows installation directory variables.
+Unix jobs continue; hosted acceptance remains pending.
+A release is accepted only after all six jobs succeed, downloaded
 archives pass checksum/member/metadata/binary checks, and the draft targets
 that exact validated commit. No failed-job artifact is promoted. The draft
 will remain unpublished; live providers, installed host applications, signing

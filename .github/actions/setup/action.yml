@@ -60,6 +60,27 @@ runs:
         "$task_python" -c 'import hashlib, pathlib, sys; actual = hashlib.sha256(pathlib.Path(sys.argv[1]).read_bytes()).hexdigest(); sys.exit(0 if actual == sys.argv[2] else "Bazelisk checksum mismatch")' "$task_tools/$task_executable" "$digest"
         chmod +x "$task_tools/$task_executable"
         printf '%s\n' "$task_tools" >> "$GITHUB_PATH"
+    - name: Locate Windows native compiler
+      if: runner.os == 'Windows'
+      shell: pwsh
+      run: |
+        $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio/Installer/vswhere.exe'
+        $installation = & $vswhere -latest -products '*' -property installationPath
+        if ($LASTEXITCODE -ne 0 -or -not $installation) { throw 'Visual Studio installation not found' }
+        $vc = Join-Path $installation.Trim() 'VC'
+        if (-not (Test-Path (Join-Path $vc 'Auxiliary/Build/vcvarsall.bat'))) { throw 'vcvarsall.bat not found' }
+        $version = (Get-Content (Join-Path $vc 'Auxiliary/Build/Microsoft.VCToolsVersion.default.txt') -Raw).Trim()
+        $target = if ($env:RUNNER_ARCH -eq 'ARM64') { 'arm64' } else { 'x64' }
+        $tools = @('cl.exe', 'link.exe', 'lib.exe', 'dumpbin.exe')
+        if ($target -eq 'x64') { $tools += 'ml64.exe' }
+        foreach ($tool in $tools) {
+          $candidates = @('HostX64', 'HostX86') | ForEach-Object { Join-Path $vc "Tools/MSVC/$version/bin/$_/$target/$tool" }
+          $path = $candidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+          if (-not $path) { throw "Missing Bazel-compatible MSVC tool: $target/$tool" }
+          Write-Host "MSVC $tool`: $path"
+        }
+        "BAZEL_VC=$vc" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+        "BAZEL_VC_FULL_VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
     - name: Inspect installed tools
       shell: bash
       run: just doctor
