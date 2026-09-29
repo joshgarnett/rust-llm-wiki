@@ -50,6 +50,11 @@ pub const COMMANDS: &[&str] = &[
     "graph neighbors",
     "check",
     "doctor",
+    "research plan",
+    "research run",
+    "research resume",
+    "research status",
+    "research report",
     "changes show",
     "changes apply",
     "changes abort",
@@ -73,6 +78,10 @@ pub const SCHEMAS: &[&str] = &[
     "entity-decision-receipt",
     "graph-review",
     "graph-review-receipt",
+    "research-frontier",
+    "research-gaps",
+    "research-synthesis",
+    "research-run-plan",
 ];
 fn usage(message: impl Into<String>) -> WikiError {
     WikiError::new(ErrorCode::Usage, message)
@@ -83,6 +92,21 @@ fn value<T: Serialize>(value: T) -> Result<Value> {
 fn failure(command: &str, error: WikiError) -> Envelope {
     let mut envelope = Envelope::failure(command, &error.code.to_string(), error.message.clone());
     envelope.meta.network_used = error.network_used;
+    if let Some(outcome) = error.details.get("research_outcome") {
+        envelope.data = outcome.clone();
+        envelope.meta.partial = true;
+        envelope.warnings = outcome
+            .get("report")
+            .and_then(|report| report.get("warnings"))
+            .and_then(Value::as_array)
+            .map_or(vec![], |warnings| {
+                warnings
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .map(str::to_owned)
+                    .collect()
+            });
+    }
     if let Some(change) = error.details.get("change") {
         envelope.data = json!({"change":change});
         envelope.meta.partial = true;
@@ -117,14 +141,14 @@ fn execute_inner(args: &Arguments) -> Result<Envelope> {
     let command = args.command.name();
     if args.output_format() == OutputFormat::Jsonl && !args.command.streaming() {
         return Err(usage(
-            "JSONL is supported for index sync/rebuild, recover, changes apply, and source add/refresh",
+            "JSONL is supported for index sync/rebuild, recover, changes apply, source add/refresh, research run/resume, and doctor --probe",
         ));
     }
     match &args.command {
         Command::Capabilities => {
             return Ok(Envelope::success(
                 command,
-                json!({"version":env!("CARGO_PKG_VERSION"),"commands":COMMANDS,"schemas":SCHEMAS,"network":true,"search_modes":["literal","lexical","semantic","hybrid"],"graph_seed_modes":["lexical","semantic"],"extraction_executors":["agent","api"],"jsonl_commands":["index sync","index rebuild","recover","changes apply","source add","source refresh"]}),
+                json!({"version":env!("CARGO_PKG_VERSION"),"commands":COMMANDS,"schemas":SCHEMAS,"network":true,"search_modes":["literal","lexical","semantic","hybrid"],"graph_seed_modes":["lexical","semantic"],"extraction_executors":["agent","api"],"jsonl_commands":["index sync","index rebuild","recover","changes apply","source add","source refresh","research run","research resume","doctor --probe"]}),
             ));
         }
         Command::Schema { name } => {
@@ -144,6 +168,10 @@ fn execute_inner(args: &Arguments) -> Result<Envelope> {
                 "entity-decision-receipt" => {
                     include_str!("../../schemas/entity-decision-receipt-v1.json")
                 }
+                "research-frontier" => include_str!("../../schemas/research-frontier-v1.json"),
+                "research-gaps" => include_str!("../../schemas/research-gaps-v1.json"),
+                "research-synthesis" => include_str!("../../schemas/research-synthesis-v1.json"),
+                "research-run-plan" => include_str!("../../schemas/research-run-plan-v1.json"),
                 "run" => include_str!("../../schemas/run-v1.json"),
                 "run-event" => include_str!("../../schemas/run-event-v1.json"),
                 "usage-receipt" => include_str!("../../schemas/usage-receipt-v1.json"),
@@ -726,18 +754,45 @@ fn execute_inner(args: &Arguments) -> Result<Envelope> {
                 ))));
             }
         }
-        Command::Doctor { probe } => {
-            if *probe {
+        Command::Research(arguments) => {
+            let result =
+                super::research::execute(&arguments.command, &app, preferences.profile.as_deref())?;
+            envelope.data = result.data;
+            envelope.meta.network_used = result.network_used;
+            envelope.meta.partial = result.partial;
+            envelope.warnings.extend(result.warnings);
+        }
+        Command::Doctor {
+            probe,
+            role,
+            remote,
+        } => {
+            if *probe && preferences.offline && !args.dry_run {
                 return Err(WikiError::new(
-                    if preferences.offline {
-                        ErrorCode::OfflineUnavailable
-                    } else {
-                        ErrorCode::CapabilityUnavailable
-                    },
-                    "provider probing is not implemented; local doctor remains available without --probe",
+                    ErrorCode::OfflineUnavailable,
+                    "offline execution cannot probe a provider",
                 ));
             }
-            envelope.data = value(app.doctor()?)?;
+            let mut doctor = app.doctor()?;
+            if *probe {
+                let service_role = role.service_role();
+                remote.limits()?;
+                if args.dry_run {
+                    envelope.data = json!({"doctor":doctor,"probe":{"dry_run":true,"role":service_role,"network_used":false,"remote_work":"unknown"}});
+                } else {
+                    let runtime = remote.runtime(
+                        &app,
+                        preferences.profile.as_deref(),
+                        service_role.capability(),
+                    )?;
+                    let result = app.probe_provider(&runtime, service_role)?;
+                    doctor.provider_probe_performed = result.network_used;
+                    envelope.meta.network_used = result.network_used;
+                    envelope.data = json!({"doctor":doctor,"probe":result});
+                }
+            } else {
+                envelope.data = value(doctor)?;
+            }
         }
         Command::Changes { command } => match command {
             ChangesCommand::Show { id, operation } => {

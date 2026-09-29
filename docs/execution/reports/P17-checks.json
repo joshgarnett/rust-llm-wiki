@@ -2,7 +2,7 @@
   "package": "P17",
   "status": "locally accepted; external qualification pending",
   "base_commit": "cbaf990bfbc35f8e12ffe0396d3e65c814eab34b",
-  "accepted_commit": null,
+  "accepted_commit": "809e119aefa781ad7737c575d43acbaae104ad2b",
   "coherent_checkout": "/var/folders/g0/jdy1y8615k30fs6sbf4x1wt40000gn/T/lwiki-m3-integration-2i0lbu2c",
   "joint_integration": [
     "P17",

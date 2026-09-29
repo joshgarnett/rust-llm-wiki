@@ -14,6 +14,8 @@
     "evidence revalidate",
     "index sync",
     "index rebuild",
+    "embeddings check",
+    "embeddings sync",
     "search",
     "context",
     "graph extract",
@@ -25,6 +27,11 @@
     "graph neighbors",
     "check",
     "doctor",
+    "research plan",
+    "research run",
+    "research resume",
+    "research status",
+    "research report",
     "changes show",
     "changes apply",
     "changes abort",
@@ -33,13 +40,13 @@
     "migrate"
   ],
   "files": {
-    "SKILL.md": "96fdd4a40178f057195052e39658582a0dfea88047cc2370f11270d6573bd50f",
+    "SKILL.md": "b44c160e3e51d7a526d8c02560535294f3173cd1f303af6db2eecff7dd1de272",
     "agents/openai.yaml": "307ad222dc5d27d563d54b0a0466264fd035378ce2d103bcbf8de4ed2ea1b144",
-    "references/commands.md": "795dce6a0ac0c60c031e4c50be2cccb74121a1c48345b3210e7e714c373107a6",
-    "references/examples.json": "fda346106c6c913b0d51fe17820ef6c135e763eab5153bf83e33b6b4a6219f39",
-    "references/workflows.md": "14139c61d7d42170f5e0e5119c09fd58cb9a5317d5940d7de7f5604a6b9291a8"
+    "references/commands.md": "3f4db1adf18f97489dbaf7fcc7f291a038e540e331a021eb95191728fb545616",
+    "references/examples.json": "f1a3128f8e85a0f4ee7fd63b3ce17adacf85b9cfbc64a95017619c71b98c2706",
+    "references/workflows.md": "1e23776b4d6898133c4ec11b46f125bd1352d9bbf44c6e4eb91f252e5b1b0838"
   },
-  "package_checksum": "2867ee3969859d473383c08a03cfcc773ac5a5c33eed89204e6632d6aae893d2",
+  "package_checksum": "074f2eb7c1f88aefda3e376e4059d7e210d4a824930f7febc2a3a2a6e0d1f47f",
   "schema": "lwiki.skill-manifest.v1",
   "schemas": [
     "output",
@@ -56,7 +63,11 @@
     "entity-decisions",
     "entity-decision-receipt",
     "graph-review",
-    "graph-review-receipt"
+    "graph-review-receipt",
+    "research-frontier",
+    "research-gaps",
+    "research-synthesis",
+    "research-run-plan"
   ],
   "target": "codex",
   "version": "0.1.0"

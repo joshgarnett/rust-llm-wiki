@@ -17,3 +17,7 @@ pub mod wire;
 mod wire_json;
 #[cfg(test)]
 pub(crate) mod wire_tests;
+
+mod history;
+#[cfg(test)]
+mod history_tests;

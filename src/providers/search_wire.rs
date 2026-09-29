@@ -90,6 +90,8 @@ pub(super) fn prepare(
         .map_err(|_| WikiError::invalid("search wire hash"))?,
     );
     let mut bound = AttemptBound {
+        codec: None,
+        profile_fingerprint: None,
         capability,
         profile_id: summary.profile_id,
         endpoint_fingerprint: summary.endpoint_fingerprint,

@@ -1,0 +1,1272 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:lwiki:research-run-plan:1",
+  "$comment": "Research projection of the original lifetime run; canonical journal replay remains accounting authority. Bounded canonical run JSON. Production validates strict duplicate-free input, exact UTF-8 byte/event ceilings, immutable identities, hash/dependency bindings, lifecycle replay and complete conservative accounting. Schema validation alone grants no dispatch or recovery authority.",
+  "$ref": "#/$defs/RunPlanV1",
+  "$defs": {
+    "RunPlanV1": {
+      "type": "object",
+      "properties": {
+        "version": {
+          "const": 1
+        },
+        "spec": {
+          "$ref": "#/$defs/RunSpec"
+        },
+        "spec_hash": {
+          "$ref": "#/$defs/Blake3Hash"
+        },
+        "effective_limits": {
+          "$ref": "#/$defs/LifetimeLimits"
+        },
+        "effective_deadline_utc_ms": {
+          "type": "integer",
+          "minimum": -9223372036854775808,
+          "maximum": 9223372036854775807
+        },
+        "tasks": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/TaskInspection"
+          },
+          "maxProperties": 4096,
+          "propertyNames": {
+            "$ref": "#/$defs/Blake3Hash"
+          }
+        },
+        "checkpoint": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/EventRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "research": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ResearchStateV1"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "version",
+        "spec",
+        "spec_hash",
+        "effective_limits",
+        "effective_deadline_utc_ms",
+        "tasks",
+        "checkpoint"
+      ],
+      "additionalProperties": false
+    },
+    "RunSpec": {
+      "type": "object",
+      "properties": {
+        "version": {
+          "const": 1
+        },
+        "run_id": {
+          "$ref": "#/$defs/RecordId"
+        },
+        "vault_id": {
+          "$ref": "#/$defs/RecordId"
+        },
+        "title": {
+          "type": "string",
+          "maxLength": 16384
+        },
+        "created_at_utc_ms": {
+          "type": "integer",
+          "minimum": -9223372036854775808,
+          "maximum": 9223372036854775807
+        },
+        "deadline_utc_ms": {
+          "type": "integer",
+          "minimum": -9223372036854775808,
+          "maximum": 9223372036854775807
+        },
+        "scope": {
+          "$ref": "#/$defs/RunScope"
+        },
+        "config_fingerprint": {
+          "$ref": "#/$defs/Blake3Hash"
+        },
+        "input_fingerprint": {
+          "$ref": "#/$defs/Blake3Hash"
+        },
+        "limits": {
+          "$ref": "#/$defs/LifetimeLimits"
+        },
+        "tasks": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/TaskSpec"
+          },
+          "maxItems": 4096
+        },
+        "prior_accounting": {
+          "$ref": "#/$defs/PriorAccounting"
+        }
+      },
+      "required": [
+        "version",
+        "run_id",
+        "vault_id",
+        "title",
+        "created_at_utc_ms",
+        "deadline_utc_ms",
+        "scope",
+        "config_fingerprint",
+        "input_fingerprint",
+        "limits",
+        "tasks",
+        "prior_accounting"
+      ],
+      "additionalProperties": false
+    },
+    "RecordId": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+    },
+    "RunScope": {
+      "type": "object",
+      "properties": {
+        "operation": {
+          "type": "string",
+          "maxLength": 65536
+        },
+        "question": {
+          "anyOf": [
+            {
+              "type": "string",
+              "maxLength": 65536
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "exclusions": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "maxLength": 65536
+          },
+          "maxItems": 65536
+        },
+        "source_snapshot": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ReadSnapshot"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "input_records": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/RecordRef"
+          },
+          "maxItems": 65536
+        },
+        "read_preconditions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ReadDependency"
+          },
+          "maxItems": 65536
+        },
+        "profile_fingerprints": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/Blake3Hash"
+          },
+          "maxProperties": 65536,
+          "propertyNames": {
+            "type": "string",
+            "maxLength": 65536
+          }
+        },
+        "scope_payload_hash": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Blake3Hash"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "research": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ResearchGenesisV1"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "operation",
+        "question",
+        "exclusions",
+        "source_snapshot",
+        "input_records",
+        "read_preconditions",
+        "profile_fingerprints",
+        "scope_payload_hash"
+      ],
+      "additionalProperties": false
+    },
+    "ReadSnapshot": {
+      "type": "object",
+      "properties": {
+        "generation": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 18446744073709551615
+        },
+        "parser_fingerprint": {
+          "$ref": "#/$defs/Blake3Hash"
+        },
+        "control_manifest": {
+          "$ref": "#/$defs/Blake3Hash"
+        }
+      },
+      "required": [
+        "generation",
+        "parser_fingerprint",
+        "control_manifest"
+      ],
+      "additionalProperties": false
+    },
+    "Blake3Hash": {
+      "type": "string",
+      "pattern": "^blake3:[0-9a-f]{64}$"
+    },
+    "RecordRef": {
+      "type": "object",
+      "properties": {
+        "vault_id": {
+          "$ref": "#/$defs/RecordId"
+        },
+        "record_id": {
+          "$ref": "#/$defs/RecordId"
+        },
+        "expected_kind": {
+          "$ref": "#/$defs/RecordKind"
+        }
+      },
+      "required": [
+        "vault_id",
+        "record_id",
+        "expected_kind"
+      ],
+      "additionalProperties": false
+    },
+    "RecordKind": {
+      "enum": [
+        "vault",
+        "page",
+        "entity",
+        "assertion",
+        "evidence",
+        "source",
+        "revision",
+        "extraction_packet",
+        "extraction",
+        "decision",
+        "change",
+        "run",
+        "run_event"
+      ]
+    },
+    "ReadDependency": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "$ref": "#/$defs/VaultRelativePath"
+        },
+        "expected": {
+          "$ref": "#/$defs/ExpectedState"
+        }
+      },
+      "required": [
+        "path",
+        "expected"
+      ],
+      "additionalProperties": false
+    },
+    "VaultRelativePath": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 4096
+    },
+    "ExpectedState": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "state": {
+              "const": "absent"
+            }
+          },
+          "required": [
+            "state"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "state": {
+              "const": "hash"
+            },
+            "hash": {
+              "$ref": "#/$defs/Blake3Hash"
+            }
+          },
+          "required": [
+            "state",
+            "hash"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "LifetimeLimits": {
+      "type": "object",
+      "properties": {
+        "requests": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 18446744073709551615
+        },
+        "concurrency": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 4294967295
+        },
+        "attempts_per_task": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 4294967295
+        },
+        "request_bytes": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 18446744073709551615
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "response_bytes": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 18446744073709551615
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "billable_units": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 18446744073709551615
+          },
+          "maxProperties": 65536,
+          "propertyNames": {
+            "$ref": "#/$defs/BillableClass"
+          }
+        },
+        "max_cost": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Money"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "requests_per_minute": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 4294967295
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "tokens_per_minute": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 18446744073709551615
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "requests",
+        "concurrency",
+        "attempts_per_task",
+        "request_bytes",
+        "response_bytes",
+        "billable_units",
+        "max_cost",
+        "requests_per_minute",
+        "tokens_per_minute"
+      ],
+      "additionalProperties": false
+    },
+    "BillableClass": {
+      "enum": [
+        "input",
+        "cached_input",
+        "output",
+        "reasoning",
+        "search_result",
+        "fetch_byte"
+      ]
+    },
+    "Money": {
+      "type": "object",
+      "properties": {
+        "currency": {
+          "$ref": "#/$defs/Currency"
+        },
+        "nanounits": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 18446744073709551615
+        }
+      },
+      "required": [
+        "currency",
+        "nanounits"
+      ],
+      "additionalProperties": false
+    },
+    "Currency": {
+      "type": "string",
+      "pattern": "^[A-Z]{3}$"
+    },
+    "TaskSpec": {
+      "type": "object",
+      "properties": {
+        "key": {
+          "$ref": "#/$defs/Blake3Hash"
+        },
+        "stage": {
+          "$ref": "#/$defs/TaskStage"
+        },
+        "capability": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Capability"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "priority": {
+          "type": "integer",
+          "minimum": -2147483648,
+          "maximum": 2147483647
+        },
+        "dependencies": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Blake3Hash"
+          },
+          "maxItems": 65536
+        },
+        "input_hash": {
+          "$ref": "#/$defs/Blake3Hash"
+        },
+        "prompt_hash": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Blake3Hash"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "schema_hash": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Blake3Hash"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "model_hash": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Blake3Hash"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "settings_hash": {
+          "$ref": "#/$defs/Blake3Hash"
+        },
+        "source_bindings": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ReadDependency"
+          },
+          "maxItems": 65536
+        },
+        "input": {
+          "$ref": "#/$defs/BoundedPayloadRef"
+        }
+      },
+      "required": [
+        "key",
+        "stage",
+        "capability",
+        "priority",
+        "dependencies",
+        "input_hash",
+        "prompt_hash",
+        "schema_hash",
+        "model_hash",
+        "settings_hash",
+        "source_bindings",
+        "input"
+      ],
+      "additionalProperties": false
+    },
+    "TaskStage": {
+      "enum": [
+        "embed",
+        "extract",
+        "inspect_existing",
+        "plan_frontier",
+        "discover",
+        "capture",
+        "assess_gaps",
+        "synthesize",
+        "stage_changes",
+        "probe"
+      ]
+    },
+    "Capability": {
+      "enum": [
+        "embed",
+        "generate",
+        "search",
+        "fetch",
+        "probe",
+        "token_count"
+      ]
+    },
+    "BoundedPayloadRef": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "$ref": "#/$defs/VaultRelativePath"
+        },
+        "hash": {
+          "$ref": "#/$defs/Blake3Hash"
+        },
+        "byte_len": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 18446744073709551615
+        }
+      },
+      "required": [
+        "path",
+        "hash",
+        "byte_len"
+      ],
+      "additionalProperties": false
+    },
+    "PriorAccounting": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "state": {
+              "const": "none"
+            }
+          },
+          "required": [
+            "state"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "state": {
+              "const": "unknown"
+            },
+            "prior_run_ids": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/RecordId"
+              },
+              "maxItems": 65536
+            },
+            "reason": {
+              "type": "string",
+              "maxLength": 65536
+            }
+          },
+          "required": [
+            "state",
+            "prior_run_ids",
+            "reason"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "TaskInspection": {
+      "type": "object",
+      "properties": {
+        "spec": {
+          "$ref": "#/$defs/TaskSpec"
+        },
+        "state": {
+          "$ref": "#/$defs/TaskState"
+        },
+        "outputs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/DurableOutputRef"
+          },
+          "maxItems": 65536
+        },
+        "cache_outputs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/VectorCacheRef"
+          },
+          "maxItems": 65536
+        },
+        "failure_code": {
+          "anyOf": [
+            {
+              "type": "string",
+              "maxLength": 65536
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "spec",
+        "state",
+        "outputs",
+        "cache_outputs",
+        "failure_code"
+      ],
+      "additionalProperties": false
+    },
+    "TaskState": {
+      "enum": [
+        "pending",
+        "running",
+        "completed",
+        "failed"
+      ]
+    },
+    "DurableOutputRef": {
+      "type": "object",
+      "properties": {
+        "record": {
+          "$ref": "#/$defs/RecordRef"
+        },
+        "path": {
+          "$ref": "#/$defs/VaultRelativePath"
+        },
+        "hash": {
+          "$ref": "#/$defs/Blake3Hash"
+        }
+      },
+      "required": [
+        "record",
+        "path",
+        "hash"
+      ],
+      "additionalProperties": false
+    },
+    "VectorCacheRef": {
+      "type": "object",
+      "properties": {
+        "space_hash": {
+          "$ref": "#/$defs/Blake3Hash"
+        },
+        "input_hash": {
+          "$ref": "#/$defs/Blake3Hash"
+        },
+        "vector_hash": {
+          "$ref": "#/$defs/Blake3Hash"
+        },
+        "dimensions": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 4294967295
+        },
+        "membership_fingerprint": {
+          "$ref": "#/$defs/Blake3Hash"
+        }
+      },
+      "required": [
+        "space_hash",
+        "input_hash",
+        "vector_hash",
+        "dimensions",
+        "membership_fingerprint"
+      ],
+      "additionalProperties": false
+    },
+    "EventRef": {
+      "type": "object",
+      "properties": {
+        "event_id": {
+          "$ref": "#/$defs/RecordId"
+        },
+        "sequence": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 18446744073709551615
+        },
+        "checksum": {
+          "$ref": "#/$defs/Blake3Hash"
+        }
+      },
+      "required": [
+        "event_id",
+        "sequence",
+        "checksum"
+      ],
+      "additionalProperties": false
+    },
+    "ServiceBindingV1": {
+      "type": "object",
+      "properties": {
+        "profile_id": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "capability": {
+          "enum": [
+            "embed",
+            "generate",
+            "search"
+          ]
+        },
+        "profile_fingerprint": {
+          "$ref": "#/$defs/Blake3Hash"
+        },
+        "endpoint_fingerprint": {
+          "$ref": "#/$defs/Blake3Hash"
+        }
+      },
+      "required": [
+        "profile_id",
+        "capability",
+        "profile_fingerprint",
+        "endpoint_fingerprint"
+      ],
+      "additionalProperties": false
+    },
+    "BindingEpochV1": {
+      "type": "object",
+      "properties": {
+        "version": {
+          "const": 1
+        },
+        "number": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 4294967295
+        },
+        "config_fingerprint": {
+          "$ref": "#/$defs/Blake3Hash"
+        },
+        "source_snapshot": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ReadSnapshot"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "input_records": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/RecordRef"
+          },
+          "maxItems": 4096
+        },
+        "read_preconditions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ReadDependency"
+          },
+          "maxItems": 4096
+        },
+        "services": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ServiceBindingV1"
+          },
+          "maxItems": 16
+        }
+      },
+      "required": [
+        "version",
+        "number",
+        "config_fingerprint",
+        "source_snapshot",
+        "input_records",
+        "read_preconditions",
+        "services"
+      ],
+      "additionalProperties": false
+    },
+    "ResearchAdmissionLimits": {
+      "type": "object",
+      "properties": {
+        "rounds": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 16
+        },
+        "sources": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 256
+        }
+      },
+      "required": [
+        "rounds",
+        "sources"
+      ],
+      "additionalProperties": false
+    },
+    "ResearchGenesisV1": {
+      "type": "object",
+      "properties": {
+        "version": {
+          "const": 1
+        },
+        "scope": {
+          "$ref": "#/$defs/BoundedPayloadRef"
+        },
+        "limits": {
+          "$ref": "#/$defs/ResearchAdmissionLimits"
+        },
+        "initial_binding": {
+          "$ref": "#/$defs/BindingEpochV1"
+        }
+      },
+      "required": [
+        "version",
+        "scope",
+        "limits",
+        "initial_binding"
+      ],
+      "additionalProperties": false
+    },
+    "ResearchOriginV1": {
+      "type": "object",
+      "properties": {
+        "key": {
+          "$ref": "#/$defs/Blake3Hash"
+        },
+        "url": {
+          "type": "string",
+          "maxLength": 8192
+        },
+        "round": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 16
+        }
+      },
+      "required": [
+        "key",
+        "url",
+        "round"
+      ],
+      "additionalProperties": false
+    },
+    "ResearchTaskOriginV1": {
+      "type": "object",
+      "properties": {
+        "task_key": {
+          "$ref": "#/$defs/Blake3Hash"
+        },
+        "origin_key": {
+          "$ref": "#/$defs/Blake3Hash"
+        },
+        "parent_capture": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Blake3Hash"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "task_key",
+        "origin_key",
+        "parent_capture"
+      ],
+      "additionalProperties": false
+    },
+    "ResearchRoundV1": {
+      "type": "object",
+      "properties": {
+        "round": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 16
+        },
+        "epoch": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 4294967295
+        },
+        "task_key": {
+          "$ref": "#/$defs/Blake3Hash"
+        },
+        "output": {
+          "$ref": "#/$defs/DurableOutputRef"
+        },
+        "support_groups": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Blake3Hash"
+          },
+          "maxItems": 256,
+          "uniqueItems": true
+        },
+        "added_groups": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 256
+        }
+      },
+      "required": [
+        "round",
+        "epoch",
+        "task_key",
+        "output",
+        "support_groups",
+        "added_groups"
+      ],
+      "additionalProperties": false
+    },
+    "ResearchTransitionV1": {
+      "type": "object",
+      "properties": {
+        "payload_hash": {
+          "$ref": "#/$defs/Blake3Hash"
+        },
+        "event": {
+          "$ref": "#/$defs/EventRef"
+        }
+      },
+      "required": [
+        "payload_hash",
+        "event"
+      ],
+      "additionalProperties": false
+    },
+    "ResearchStateV1": {
+      "type": "object",
+      "properties": {
+        "version": {
+          "const": 1
+        },
+        "binding": {
+          "$ref": "#/$defs/BindingEpochV1"
+        },
+        "binding_event": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/EventRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "active_tasks": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Blake3Hash"
+          },
+          "maxItems": 4096,
+          "uniqueItems": true
+        },
+        "frontier_revision": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 18446744073709551615
+        },
+        "rounds_started": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 16
+        },
+        "origins": {
+          "type": "object",
+          "propertyNames": {
+            "$ref": "#/$defs/Blake3Hash"
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/ResearchOriginV1"
+          },
+          "maxProperties": 256
+        },
+        "task_origins": {
+          "type": "object",
+          "propertyNames": {
+            "$ref": "#/$defs/Blake3Hash"
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/ResearchTaskOriginV1"
+          },
+          "maxProperties": 4096
+        },
+        "rounds": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ResearchRoundV1"
+          },
+          "maxItems": 16
+        },
+        "support_groups": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Blake3Hash"
+          },
+          "maxItems": 4096,
+          "uniqueItems": true
+        },
+        "no_progress_rounds": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 16
+        },
+        "retry_not_before": {
+          "type": "object",
+          "propertyNames": {
+            "$ref": "#/$defs/Blake3Hash"
+          },
+          "additionalProperties": {
+            "type": "integer",
+            "minimum": -9223372036854775808,
+            "maximum": 9223372036854775807
+          },
+          "maxProperties": 4096
+        },
+        "transitions": {
+          "type": "object",
+          "propertyNames": {
+            "$ref": "#/$defs/Blake3Hash"
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/ResearchTransitionV1"
+          },
+          "maxProperties": 65536
+        }
+      },
+      "required": [
+        "version",
+        "binding",
+        "binding_event",
+        "active_tasks",
+        "frontier_revision",
+        "rounds_started",
+        "origins",
+        "task_origins",
+        "rounds",
+        "support_groups",
+        "no_progress_rounds",
+        "retry_not_before",
+        "transitions"
+      ],
+      "additionalProperties": false
+    },
+    "CitationRef": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "source"
+            },
+            "reference": {
+              "additionalProperties": false,
+              "properties": {
+                "quote_hash": {
+                  "pattern": "^blake3:[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                "source_id": {
+                  "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$",
+                  "type": "string"
+                },
+                "source_revision": {
+                  "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$",
+                  "type": "string"
+                },
+                "span": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "end": {
+                      "maximum": 18446744073709551615,
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "start": {
+                      "maximum": 18446744073709551615,
+                      "minimum": 0,
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "start",
+                    "end"
+                  ],
+                  "type": "object"
+                }
+              },
+              "required": [
+                "source_id",
+                "source_revision",
+                "span",
+                "quote_hash"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "kind",
+            "reference"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "assertion"
+            },
+            "reference": {
+              "additionalProperties": false,
+              "properties": {
+                "assertion_id": {
+                  "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$",
+                  "type": "string"
+                },
+                "evidence_id": {
+                  "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$",
+                  "type": "string"
+                },
+                "quote_hash": {
+                  "pattern": "^blake3:[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                "source_id": {
+                  "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$",
+                  "type": "string"
+                },
+                "source_revision": {
+                  "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$",
+                  "type": "string"
+                },
+                "span": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "end": {
+                      "maximum": 18446744073709551615,
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "start": {
+                      "maximum": 18446744073709551615,
+                      "minimum": 0,
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "start",
+                    "end"
+                  ],
+                  "type": "object"
+                }
+              },
+              "required": [
+                "evidence_id",
+                "assertion_id",
+                "source_id",
+                "source_revision",
+                "span",
+                "quote_hash"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "kind",
+            "reference"
+          ],
+          "type": "object"
+        }
+      ]
+    }
+  }
+}

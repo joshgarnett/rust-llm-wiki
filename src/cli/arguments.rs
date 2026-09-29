@@ -115,6 +115,7 @@ pub enum Command {
         #[command(subcommand)]
         command: IndexCommand,
     },
+    Research(super::research::ResearchArguments),
     Embeddings(super::embeddings::EmbeddingArguments),
     Search(SearchArguments),
     Context(Box<super::context::ContextArguments>),
@@ -126,6 +127,10 @@ pub enum Command {
     Doctor {
         #[arg(long)]
         probe: bool,
+        #[arg(long, value_enum, default_value = "embed", requires = "probe")]
+        role: super::remote::ProbeRole,
+        #[command(flatten)]
+        remote: super::remote::RemoteArguments,
     },
     Changes {
         #[command(subcommand)]
@@ -450,6 +455,7 @@ impl Command {
                 super::embeddings::EmbeddingCommand::Check(_) => "embeddings check",
                 super::embeddings::EmbeddingCommand::Sync(_) => "embeddings sync",
             },
+            Self::Research(arguments) => arguments.command.name(),
             Self::Search(_) => "search",
             Self::Context(_) => "context",
             Self::Graph {
@@ -496,6 +502,11 @@ impl Command {
             self,
             Self::Index { .. }
                 | Self::Recover
+                | Self::Doctor { probe: true, .. }
+                | Self::Research(super::research::ResearchArguments {
+                    command: super::research::ResearchCommand::Run(_)
+                        | super::research::ResearchCommand::Resume(_)
+                })
                 | Self::Changes {
                     command: ChangesCommand::Apply { .. }
                 }

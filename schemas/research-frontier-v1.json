@@ -1,0 +1,37 @@
+{
+  "$comment": "Production validation also enforces UTF-8 byte/item/node/depth ceilings, duplicate keys, query words/controls, public URLs/exclusions, exact caller references and current source provenance. No dispatch, acceptance or apply authority is conveyed.",
+  "$id": "urn:lwiki:research-frontier:1",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "queries": {
+      "items": {
+        "maxLength": 600,
+        "minLength": 1,
+        "type": "string"
+      },
+      "maxItems": 20,
+      "type": "array"
+    },
+    "reason": {
+      "maxLength": 65536,
+      "minLength": 1,
+      "type": "string"
+    },
+    "urls": {
+      "items": {
+        "maxLength": 8192,
+        "minLength": 1,
+        "type": "string"
+      },
+      "maxItems": 60,
+      "type": "array"
+    }
+  },
+  "required": [
+    "queries",
+    "urls",
+    "reason"
+  ],
+  "type": "object"
+}

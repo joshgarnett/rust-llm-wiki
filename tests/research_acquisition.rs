@@ -54,6 +54,7 @@ fn fixture(edit: impl FnOnce(&mut RunSpec)) -> Fixture {
         created_at_utc_ms: now,
         deadline_utc_ms: now + 900_000,
         scope: RunScope {
+            research: None,
             operation: "research".into(),
             question: Some("fixture".into()),
             exclusions: vec![],
@@ -630,6 +631,7 @@ fn search_case(
         created_at_utc_ms: now,
         deadline_utc_ms: now + 900_000,
         scope: RunScope {
+            research: None,
             operation: "research".into(),
             question: Some("fixture".into()),
             exclusions: vec![],

@@ -1,0 +1,54 @@
+{
+  "$comment": "Production validation also enforces UTF-8 byte/item/node/depth ceilings, duplicate keys, query words/controls, public URLs/exclusions, exact caller references and current source provenance. No dispatch, acceptance or apply authority is conveyed.",
+  "$id": "urn:lwiki:research-gaps:1",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "covered_evidence_ids": {
+      "items": {
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$",
+        "type": "string"
+      },
+      "maxItems": 256,
+      "type": "array"
+    },
+    "gaps": {
+      "items": {
+        "maxLength": 65536,
+        "minLength": 1,
+        "type": "string"
+      },
+      "maxItems": 64,
+      "type": "array"
+    },
+    "next_queries": {
+      "items": {
+        "maxLength": 600,
+        "minLength": 1,
+        "type": "string"
+      },
+      "maxItems": 20,
+      "type": "array"
+    },
+    "next_urls": {
+      "items": {
+        "maxLength": 8192,
+        "minLength": 1,
+        "type": "string"
+      },
+      "maxItems": 60,
+      "type": "array"
+    },
+    "stop": {
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "covered_evidence_ids",
+    "gaps",
+    "next_queries",
+    "next_urls",
+    "stop"
+  ],
+  "type": "object"
+}

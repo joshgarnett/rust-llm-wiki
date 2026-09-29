@@ -1,4 +1,5 @@
-//! Short-lock durable admission. No lock spans canonical application or transport.
+//! Durable admission never holds a run lock across transport. Research publication
+//! acquires the writer first, then holds its epoch guard through canonical apply.
 use super::{budgets, checkpoint, events, replay, tasks, types::*};
 use crate::vault::operational::{RunFile, RunLedgerGuard, RunStore, SpoolPart};
 use crate::{
@@ -68,6 +69,97 @@ fn attempt<'a>(loaded: &'a Loaded, r: &AttemptRef) -> Result<&'a AttemptInspecti
         .ok_or_else(|| events::corrupt("attempt identity differs from stored history"))
 }
 impl JobLedger {
+    /// A terminal research failure is retained as a gap. It never refunds paid
+    /// work or finishes a possibly in-flight attempt.
+    pub(crate) fn fail_research_task(&self, key: &Blake3Hash, reason: &str) -> Result<EventRef> {
+        self.local_write()?;
+        if reason.is_empty() || reason.len() > 1024 || reason.chars().any(char::is_control) {
+            return Err(WikiError::invalid("invalid research failure reason"));
+        }
+        self.with(true, |guard, loaded| {
+            self.refresh_observations(guard, loaded)?;
+            let inspection = &loaded.state.inspection;
+            let task = inspection
+                .tasks
+                .get(key)
+                .ok_or_else(|| WikiError::invalid("research task missing"))?;
+            if inspection.research.is_none()
+                || !super::research::task_is_active(inspection, key)
+                || !matches!(
+                    inspection.state,
+                    RunState::Running | RunState::Paused | RunState::Stopped
+                )
+                || task.spec.capability.is_none()
+                || task.state == TaskState::Completed
+                || !task.outputs.is_empty()
+                || !task.cache_outputs.is_empty()
+            {
+                return Err(WikiError::invalid("research task cannot fail"));
+            }
+            if task.state == TaskState::Failed {
+                return loaded
+                    .frames
+                    .iter()
+                    .rev()
+                    .find_map(|frame| match &frame.event.payload {
+                        EventPayload::TaskFinished {
+                            task_key,
+                            state: TaskState::Failed,
+                            reason: old,
+                            ..
+                        } if task_key == key && old.as_deref() == Some(reason) => {
+                            Some(events::event_ref(frame))
+                        }
+                        _ => None,
+                    })
+                    .ok_or_else(|| {
+                        WikiError::new(ErrorCode::ContentConflict, "task failure reason differs")
+                    });
+            }
+            for paid in inspection
+                .attempts
+                .iter()
+                .filter(|a| &a.attempt.task_key == key)
+            {
+                if paid.phase != AttemptPhase::Settled
+                    || paid.remote_exposure != RemoteExposure::TerminalConfirmed
+                    || !paid.outputs.is_empty()
+                    || !paid.cache_outputs.is_empty()
+                {
+                    return Err(fail(
+                        ErrorCode::RecoveryRequired,
+                        "research failure requires safely settled attempts",
+                    ));
+                }
+                if paid.billing != BillingDisposition::ReleasedNotSent {
+                    let receipt = checkpoint::receipt(
+                        &self.fs,
+                        paid.receipt
+                            .as_ref()
+                            .ok_or_else(|| events::corrupt("failed task receipt missing"))?,
+                    )?;
+                    if receipt.attempt != paid.attempt
+                        || receipt.output_disposition == OutputDisposition::Validated
+                    {
+                        return Err(WikiError::invalid(
+                            "validated response cannot become failure",
+                        ));
+                    }
+                }
+            }
+            self.append(
+                guard,
+                loaded,
+                EventPayload::TaskFinished {
+                    task_key: key.clone(),
+                    state: TaskState::Failed,
+                    outputs: vec![],
+                    cache_outputs: vec![],
+                    reason: Some(reason.into()),
+                },
+            )
+        })
+    }
     /// Complete a run only after its concrete tasks ended and all possibly sent
     /// attempts have durable settlement. Unknown charges remain reserved forever.
     pub fn complete_run(&self) -> Result<EventRef> {
@@ -89,8 +181,15 @@ impl JobLedger {
                     .ok_or_else(|| events::corrupt("completed run event missing"));
             }
             if i.state != RunState::Running
-                || i.tasks.values().any(|t| t.state != TaskState::Completed)
-                || i.attempts.iter().any(|a| a.phase != AttemptPhase::Settled)
+                || i.tasks.values().any(|t| {
+                    super::research::task_is_active(i, &t.spec.key)
+                        && t.state != TaskState::Completed
+                })
+                || i.attempts.iter().any(|a| {
+                    a.phase != AttemptPhase::Settled
+                        || i.research.is_some()
+                            && a.remote_exposure != RemoteExposure::TerminalConfirmed
+                })
             {
                 return Err(fail(
                     ErrorCode::RecoveryRequired,
@@ -145,7 +244,9 @@ impl JobLedger {
             {
                 return Err(WikiError::invalid("remote task cannot complete"));
             }
-            tasks::bind(&self.fs, &task.spec)?;
+            if super::research::task_is_active(&loaded.state.inspection, key) {
+                tasks::bind(&self.fs, &task.spec)?;
+            }
             let paid = loaded
                 .state
                 .inspection
@@ -243,13 +344,73 @@ impl JobLedger {
         }
         Ok(())
     }
-    fn local_write(&self) -> Result<()> {
+    /// Caller-requested limits are timestamped under the same run guard that
+    /// validates and appends the amendment. This avoids a native-clock race.
+    pub fn resume_with_requested_limits(
+        &self,
+        limits: LifetimeLimits,
+        deadline_utc_ms: i64,
+        reason: String,
+    ) -> Result<EventRef> {
+        self.resume_internal(
+            Some(LimitAmendment {
+                requested_at_utc_ms: 0,
+                reason,
+                limits,
+                deadline_utc_ms,
+            }),
+            true,
+        )
+    }
+    fn resume_internal(
+        &self,
+        amendment: Option<LimitAmendment>,
+        stamp_request: bool,
+    ) -> Result<EventRef> {
+        self.local_write()?;
+        self.with(true, |g, l| {
+            if !matches!(
+                l.state.inspection.state,
+                RunState::Paused | RunState::Stopped
+            ) {
+                return Err(WikiError::invalid(
+                    "only paused/stopped runs may explicitly resume",
+                ));
+            }
+            self.bind_inputs(&l.state.inspection, &l.frames)?;
+            if let Some(mut amendment) = amendment {
+                let now = self.options.clock.read()?.utc_ms;
+                if stamp_request {
+                    amendment.requested_at_utc_ms = now;
+                }
+                validate_amendment(l, &amendment, now)?;
+                self.append(g, l, EventPayload::Amendment { amendment })?;
+            }
+            self.control_gate(l)?;
+            if l.state.inspection.budget.remote_inflight > 0 {
+                return Err(fail(
+                    ErrorCode::RecoveryRequired,
+                    "possible remote requests require reconciliation before resume",
+                ));
+            }
+            self.append(
+                g,
+                l,
+                EventPayload::RunTransition {
+                    from: l.state.inspection.state,
+                    to: RunState::Running,
+                    reason: StopReason::Started,
+                },
+            )
+        })
+    }
+    pub(super) fn local_write(&self) -> Result<()> {
         if self.options.policy.dry_run {
             return Err(fail(ErrorCode::Usage, "dry run cannot modify job state"));
         }
         Ok(())
     }
-    fn paid_gate(&self) -> Result<()> {
+    pub(super) fn paid_gate(&self) -> Result<()> {
         self.local_write()?;
         if self.options.policy.offline {
             return Err(fail(
@@ -413,7 +574,7 @@ impl JobLedger {
         loaded.head = ExpectedState::Hash(hash);
         Ok(())
     }
-    fn append(
+    pub(super) fn append(
         &self,
         g: &RunLedgerGuard<'_>,
         loaded: &mut Loaded,
@@ -478,7 +639,7 @@ impl JobLedger {
         self.sync_head(g, loaded)?;
         Ok(events::event_ref(&frame))
     }
-    fn active(&self, g: &RunLedgerGuard<'_>, loaded: &mut Loaded) -> Result<i64> {
+    pub(super) fn active(&self, g: &RunLedgerGuard<'_>, loaded: &mut Loaded) -> Result<i64> {
         self.paid_gate()?;
         self.refresh_observations(g, loaded)?;
         self.repair_committed_tasks(g, loaded)?;
@@ -521,12 +682,12 @@ impl JobLedger {
                 "run is not admitting attempts",
             ));
         }
-        self.bind_inputs(i)?;
+        self.bind_inputs(i, &loaded.frames)?;
         Ok(now)
     }
     /// Flushes can cross a deadline or observe cancellation. Durable intent is
     /// retained even when no caller receives the corresponding authority.
-    fn authority_gate(
+    pub(super) fn authority_gate(
         &self,
         g: &RunLedgerGuard<'_>,
         loaded: &mut Loaded,
@@ -597,8 +758,8 @@ impl JobLedger {
         }
         Ok(now)
     }
-    fn bind_inputs(&self, i: &LedgerInspection) -> Result<()> {
-        for dep in &i.spec.scope.read_preconditions {
+    pub(super) fn bind_inputs(&self, i: &LedgerInspection, frames: &[JournalFrame]) -> Result<()> {
+        for dep in super::research::current_read_preconditions(i) {
             let actual = read(&self.fs, &dep.path)?.map_or(ExpectedState::Absent, |b| {
                 ExpectedState::Hash(Blake3Hash::digest(b))
             });
@@ -610,9 +771,11 @@ impl JobLedger {
             }
         }
         for task in i.tasks.values() {
-            tasks::bind(&self.fs, &task.spec)?;
+            if super::research::task_is_active(i, &task.spec.key) {
+                tasks::bind(&self.fs, &task.spec)?;
+            }
             for output in &task.outputs {
-                checkpoint::output(&self.fs, output)?;
+                super::capture_history::output(&self.fs, i, frames, task, output)?;
                 if output.record.vault_id != self.vault_id {
                     return Err(events::corrupt("task output belongs to another vault"));
                 }
@@ -620,7 +783,7 @@ impl JobLedger {
         }
         Ok(())
     }
-    fn admission(
+    pub(super) fn admission(
         &self,
         loaded: &Loaded,
         key: &Blake3Hash,
@@ -674,12 +837,7 @@ impl JobLedger {
             .any(|d| i.tasks[d].state != TaskState::Completed)
             || task.spec.capability != Some(bound.capability)
             || task.spec.input_hash != bound.input_hash
-            || bound.config_fingerprint != i.spec.config_fingerprint
-            || !i
-                .spec
-                .scope
-                .profile_fingerprints
-                .contains_key(&bound.profile_id)
+            || !super::research::bound_is_current(i, key, bound)
         {
             return Err(fail(
                 ErrorCode::FreshnessConflict,
@@ -694,6 +852,25 @@ impl JobLedger {
                 "attempt/concurrency ceiling reached",
             ));
         }
+        super::research::validate_live_bound(&self.fs, i, key, bound)?;
+        if let Some(research) = &i.research {
+            if retry_ready && !research.retry_not_before.contains_key(key) {
+                return Err(fail(
+                    ErrorCode::RecoveryRequired,
+                    "research retry requires durable scheduling",
+                ));
+            }
+            if research
+                .retry_not_before
+                .get(key)
+                .is_some_and(|at| now < *at)
+            {
+                return Err(fail(
+                    ErrorCode::BudgetExceeded,
+                    "research retry is not eligible yet",
+                ));
+            }
+        }
         let allowance =
             budgets::quote_bound(bound, &i.effective_limits, now, i.effective_deadline_utc_ms)?;
         budgets::fits(
@@ -705,7 +882,7 @@ impl JobLedger {
         self.rate_check(loaded, &allowance, now)?;
         Ok(allowance)
     }
-    fn rate_check(&self, loaded: &Loaded, proposed: &Allowance, now: i64) -> Result<()> {
+    pub(super) fn rate_check(&self, loaded: &Loaded, proposed: &Allowance, now: i64) -> Result<()> {
         let i = &loaded.state.inspection;
         let cutoff = now.saturating_sub(60_000);
         let mut requests = 0u64;
@@ -1034,7 +1211,7 @@ impl JobLedgerApi for JobLedger {
                 }
             }
             if !self.options.policy.dry_run{self.refresh_observations(g,l)?;self.recover_committed_receipts(g,l)?;self.sync_head(g,l)?;}
-            let fresh=self.bind_inputs(&l.state.inspection).is_ok();
+            let fresh=self.bind_inputs(&l.state.inspection, &l.frames).is_ok();
             if !fresh{report.warnings.push("source/task/config inputs changed; retained outputs are stale and not reusable".into());}
             for a in &l.state.inspection.attempts {
                 if let Some(receipt) = &a.receipt
@@ -1096,6 +1273,11 @@ impl JobLedgerApi for JobLedger {
     fn add_tasks(&self, new: Vec<TaskSpec>) -> Result<EventRef> {
         self.local_write()?;
         self.with(true, |g, l| {
+            if l.state.inspection.research.is_some() {
+                return Err(WikiError::invalid(
+                    "research tasks require atomic frontier admission",
+                ));
+            }
             if !matches!(
                 l.state.inspection.state,
                 RunState::Running | RunState::Planned
@@ -1114,7 +1296,7 @@ impl JobLedgerApi for JobLedger {
         self.local_write()?;
         self.with(true, |g, l| {
             self.control_gate(l)?;
-            self.bind_inputs(&l.state.inspection)?;
+            self.bind_inputs(&l.state.inspection, &l.frames)?;
             self.append(
                 g,
                 l,
@@ -1155,43 +1337,15 @@ impl JobLedgerApi for JobLedger {
         })
     }
     fn resume(&self, amendment: Option<LimitAmendment>) -> Result<EventRef> {
-        self.local_write()?;
-        self.with(true, |g, l| {
-            if !matches!(
-                l.state.inspection.state,
-                RunState::Paused | RunState::Stopped
-            ) {
-                return Err(WikiError::invalid(
-                    "only paused/stopped runs may explicitly resume",
-                ));
-            }
-            self.bind_inputs(&l.state.inspection)?;
-            if let Some(amendment) = amendment {
-                validate_amendment(l, &amendment, self.options.clock.read()?.utc_ms)?;
-                self.append(g, l, EventPayload::Amendment { amendment })?;
-            }
-            self.control_gate(l)?;
-            if l.state.inspection.budget.remote_inflight > 0 {
-                return Err(fail(
-                    ErrorCode::RecoveryRequired,
-                    "possible remote requests require reconciliation before resume",
-                ));
-            }
-            self.append(
-                g,
-                l,
-                EventPayload::RunTransition {
-                    from: l.state.inspection.state,
-                    to: RunState::Running,
-                    reason: StopReason::Started,
-                },
-            )
-        })
+        self.resume_internal(amendment, false)
     }
     fn ready_tasks(&self) -> Result<Vec<TaskSpec>> {
         self.with(true, |_, l| {
-            self.bind_inputs(&l.state.inspection)?;
-            Ok(tasks::ready(&l.state.inspection.tasks))
+            self.bind_inputs(&l.state.inspection, &l.frames)?;
+            Ok(tasks::ready(&l.state.inspection.tasks)
+                .into_iter()
+                .filter(|t| super::research::task_is_active(&l.state.inspection, &t.key))
+                .collect())
         })
     }
     fn finish_local_task(
@@ -1211,7 +1365,8 @@ impl JobLedgerApi for JobLedger {
             if !matches!(
                 l.state.inspection.state,
                 RunState::Running | RunState::Paused | RunState::Stopped
-            ) || task.spec.capability.is_some()
+            ) || !super::research::task_is_active(&l.state.inspection, key)
+                || task.spec.capability.is_some()
                 || !tasks::ready(&l.state.inspection.tasks)
                     .iter()
                     .any(|t| &t.key == key)
@@ -1251,6 +1406,20 @@ impl JobLedgerApi for JobLedger {
     }
     fn reserve(&self, key: &Blake3Hash, bound: AttemptBound) -> Result<Reservation> {
         self.paid_gate()?;
+        if self.inspect()?.research.is_some() {
+            let mut wave = self.reserve_ready_batch(vec![(key.clone(), bound)])?;
+            if !wave.reservations.is_empty() {
+                // A durable reservation is returned even if its closing gate
+                // stopped; the consumer must retain/release that authority.
+                return Ok(wave.reservations.remove(0));
+            }
+            return Err(wave.stop.unwrap_or_else(|| {
+                fail(
+                    ErrorCode::FreshnessConflict,
+                    "research reservation is not the current ordered prefix",
+                )
+            }));
+        }
         self.with(true, |g, l| {
             let now = self.active(g, l)?;
             let allowance = self.admission(l, key, &bound, now)?;
@@ -1295,6 +1464,12 @@ impl JobLedgerApi for JobLedger {
         self.paid_gate()?;
         self.with(true, |g, l| {
             let now = self.active(g, l)?;
+            super::research::validate_live_bound(
+                &self.fs,
+                &l.state.inspection,
+                &r.attempt.task_key,
+                &r.bound,
+            )?;
             let a = attempt(l, &r.attempt)?;
             if a.phase != AttemptPhase::Reserved
                 || a.bound != r.bound
@@ -1409,6 +1584,7 @@ fn validate_spec(fs: &VaultFs, spec: &RunSpec) -> Result<()> {
         ));
     }
     budgets::validate_limits(&spec.limits)?;
+    super::research::validate_live_genesis(fs, spec)?;
     let tasks = tasks::initial(spec.tasks.clone())?;
     for task in tasks.values() {
         tasks::bind(fs, &task.spec)?;
@@ -1417,7 +1593,10 @@ fn validate_spec(fs: &VaultFs, spec: &RunSpec) -> Result<()> {
                 "task input hash must bind complete descriptor bytes",
             ));
         }
-        if task.spec.capability.is_some() && spec.scope.profile_fingerprints.is_empty() {
+        if task.spec.capability.is_some()
+            && spec.scope.profile_fingerprints.is_empty()
+            && spec.scope.research.is_none()
+        {
             return Err(WikiError::invalid(
                 "remote tasks require declared profile identities",
             ));
@@ -1503,7 +1682,7 @@ fn spool_ref(
         },
     })
 }
-fn validate_amendment(l: &Loaded, a: &LimitAmendment, now: i64) -> Result<()> {
+pub(super) fn validate_amendment(l: &Loaded, a: &LimitAmendment, now: i64) -> Result<()> {
     budgets::validate_limits(&a.limits)?;
     let prior = &l.state.inspection.effective_limits;
     if a.requested_at_utc_ms != now
@@ -1664,6 +1843,7 @@ impl JobLedger {
         i.effective_limits = plan.effective_limits;
         i.effective_deadline_utc_ms = plan.effective_deadline_utc_ms;
         i.tasks = plan.tasks;
+        i.research = plan.research;
         i.state = RunState::Paused;
         i.last_event = None;
         i.run_note = Some(reference(
@@ -1765,7 +1945,7 @@ impl JobLedger {
         }
         Ok(())
     }
-    fn control_gate(&self, l: &Loaded) -> Result<()> {
+    pub(super) fn control_gate(&self, l: &Loaded) -> Result<()> {
         if self.options.cancel.is_cancelled() {
             return Err(fail(
                 ErrorCode::Cancelled,
@@ -1870,6 +2050,12 @@ impl DispatcherLedgerApi for JobLedger {
         self.paid_gate()?;
         self.with(true, |g, l| {
             let now = self.active(g, l)?;
+            super::research::validate_live_bound(
+                &self.fs,
+                &l.state.inspection,
+                &p.attempt.task_key,
+                &p.bound,
+            )?;
             let a = attempt(l, &p.attempt)?;
             if a.phase != AttemptPhase::DispatchIntent
                 || a.bound != p.bound
@@ -2052,8 +2238,20 @@ impl DispatcherLedgerApi for JobLedger {
                     .as_ref()
                     .ok_or_else(|| events::corrupt("settlement receipt missing"))?,
             )?;
+            let task = l
+                .state
+                .inspection
+                .tasks
+                .get(&r.task_key)
+                .ok_or_else(|| events::corrupt("settlement task missing"))?;
             for output in &a.outputs {
-                checkpoint::output(&self.fs, output)?;
+                super::capture_history::output(
+                    &self.fs,
+                    &l.state.inspection,
+                    &l.frames,
+                    task,
+                    output,
+                )?;
             }
             if receipt.attempt != *r
                 || receipt.outputs != a.outputs
@@ -2246,7 +2444,11 @@ fn enrich_observations(state: &mut replay::State, frames: &[JournalFrame]) -> Re
     replay::recount(state)
 }
 impl JobLedger {
-    fn refresh_observations(&self, g: &RunLedgerGuard<'_>, l: &mut Loaded) -> Result<()> {
+    pub(super) fn refresh_observations(
+        &self,
+        g: &RunLedgerGuard<'_>,
+        l: &mut Loaded,
+    ) -> Result<()> {
         for (id, m) in l.state.received_meta.clone() {
             let r = l
                 .state
@@ -2388,8 +2590,20 @@ impl JobLedger {
                     "task completion has no verified output acknowledgment",
                 ));
             }
+            let task = l
+                .state
+                .inspection
+                .tasks
+                .get(&r.task_key)
+                .ok_or_else(|| events::corrupt("completed capture task missing"))?;
             for out in &receipt.outputs {
-                checkpoint::output(&self.fs, out)?;
+                super::capture_history::output(
+                    &self.fs,
+                    &l.state.inspection,
+                    &l.frames,
+                    task,
+                    out,
+                )?;
             }
             self.append(
                 g,

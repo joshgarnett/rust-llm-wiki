@@ -12,6 +12,8 @@ use std::collections::BTreeMap;
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct RunPlanV1 {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub research: Option<ResearchStateV1>,
     pub version: u32,
     pub spec: RunSpec,
     pub spec_hash: Blake3Hash,
@@ -130,6 +132,7 @@ pub(super) fn run_bytes(i: &LedgerInspection) -> Result<Vec<u8>> {
         f,
         "lwiki.run-plan.v1",
         &RunPlanV1 {
+            research: i.research.clone(),
             version: 1,
             spec: i.spec.clone(),
             spec_hash: i.spec_hash.clone(),
@@ -398,13 +401,14 @@ pub(super) fn receipt_plan_locked(
         &loaded.state.inspection.spec,
     );
     if disposition == OutputDisposition::Validated {
-        d.read_preconditions = loaded
-            .state
-            .inspection
-            .spec
-            .scope
-            .read_preconditions
-            .clone();
+        if !super::research::task_is_active(&loaded.state.inspection, &attempt.task_key) {
+            return Err(WikiError::new(
+                ErrorCode::FreshnessConflict,
+                "retired research tasks cannot publish validated output",
+            ));
+        }
+        d.read_preconditions =
+            super::research::current_read_preconditions(&loaded.state.inspection).to_vec();
         if let Some(task) = loaded.state.inspection.tasks.get(&attempt.task_key) {
             for dep in &task.spec.source_bindings {
                 if !d.read_preconditions.contains(dep) {

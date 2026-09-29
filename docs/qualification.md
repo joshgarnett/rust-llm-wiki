@@ -1,0 +1,18 @@
+# Opt-in external qualification
+
+Local automated checks use disposable vaults and deterministic providers. The [local qualification script](../scripts/qualify-local.sh) records tests, a release-profile skill recipe, copied-artifact smoke checks, linkage and locked dependency metadata. The [execution evidence](execution/reports/coverage.md) records results; running this procedure alone does not establish live interoperability or other-platform durability.
+
+## E01: actual provider contracts
+
+This implementation run does not authorize live requests. When an owner later authorizes a particular endpoint and spend ceiling, create a new disposable vault, read its actual `WIKI.md` ID, and configure a private absolute `providers.toml` outside the vault using the [versioned provider configuration](technical/providers-jobs.md#2-private-profiles-and-trust). Bind that exact canonical root and ID. On Unix, protect the configuration and credential files with mode 0600; keep credentials in private references. Verify the deployment's model, revision, output-limit field, usage classes and complete rate card before promising a monetary bound.
+
+First run the chosen operation with `--dry-run`, an explicit `--providers-config` and `--profile`, and bounded request, byte, unit and deadline flags from the [generated command reference](../skills/llm-wiki/references/commands.md). An offline preview must make no network or helper call. After authorization, probe one explicit role using `doctor --probe --role embed`, `generate`, or `search`, with `--max-requests 1 --concurrency 1 --attempts-per-task 1` and confirmed deployment bounds. Record endpoint fingerprint, returned model, usage and the durable run/receipt; exclude credentials and provider error bodies from shared evidence. A successful probe qualifies only that role and response, not the entire service.
+
+Then exercise embeddings sync/query/cache reuse, API packet extraction/import/review, or bounded research as applicable using the smallest disposable corpus. Check exact citations, malformed/refused/truncated response handling, usage accounting and retained offline reuse. Require an explicit supported monetary ceiling when spending authorization depends on dollars; an incomplete provider bound must fail closed. Preserve unknown attempts and obtain billing/reconciliation evidence before retrying uncertain work. Live cancellation can incur an unknown charge.
+
+## E02–E05: hosts, platforms, corpus and publication
+
+- **E02:** export to a new disposable project for each selected host; check discovery, packet/import/apply/resolve/review commands, author-edit conflicts, and Markdown links in an isolated Obsidian vault. Do not overwrite real host instruction files.
+- **E03:** run the opt-in native CI or local script on each intended supported platform, retain its logs/artifacts, and repeat the native fault/kill/concurrency and minimal-runtime checks there. Windows currently reports unsupported directory durability before paid work; a successful Windows build does not qualify writes or recovery. Process kill/restart does not establish power-loss safety.
+- **E04:** select an authorized representative corpus, pin labels and equal context budgets before evaluation, and measure real embedding/model quality, latency, memory, disk and actual billed usage on named hardware. The included synthetic vectors establish retrieval mechanics, not semantic ranking gains.
+- **E05:** choose the final name, owner license and distribution channel; inspect the locked transitive license inventory and required notices, signing and packaging. No publication, push, host installation or licensing choice is performed by the local implementation run.

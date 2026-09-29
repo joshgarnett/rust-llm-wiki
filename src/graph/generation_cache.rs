@@ -90,10 +90,15 @@ pub(crate) fn retain_input(
         }
         return Ok(());
     }
-    fs.ensure_directory(
-        &VaultRelativePath::new(".wiki/cache/generation/inputs")?,
-        writer,
-    )?;
+    let parent = plan
+        .task
+        .input
+        .path
+        .as_str()
+        .rsplit_once('/')
+        .ok_or_else(|| WikiError::invalid("generation input parent missing"))?
+        .0;
+    fs.ensure_directory(&VaultRelativePath::new(parent)?, writer)?;
     let staged = fs.stage(&plan.task.input.path, &plan.descriptor, writer)?;
     fs.replace(staged, &ExpectedState::Absent, writer)?;
     Ok(())

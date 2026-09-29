@@ -200,6 +200,7 @@ pub fn case_with_encoding(
         created_at_utc_ms: now,
         deadline_utc_ms: now + 900_000,
         scope: RunScope {
+            research: None,
             operation: "embedding".into(),
             question: None,
             exclusions: vec![],

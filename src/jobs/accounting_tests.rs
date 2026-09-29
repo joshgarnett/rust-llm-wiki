@@ -1,6 +1,4 @@
-use crate as lwiki;
-#[path = "../../tests/fixtures/p15/common.rs"]
-mod common;
+use super::test_support as common;
 use super::{checkpoint, events, ledger, types::*};
 use crate::{
     catalog::{Catalog, CatalogGraphValidator},

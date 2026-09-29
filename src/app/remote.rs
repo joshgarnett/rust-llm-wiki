@@ -133,7 +133,7 @@ pub fn native_job_options(policy: ExecutionPolicy, lock_timeout_ms: u64) -> JobO
     JobOptions {
         clock: Arc::new(NativeCredentialClock::default()),
         fault: None,
-        cancel: CancellationToken::default(),
+        cancel: CancellationToken::native_cli(),
         policy,
         lock_timeout_ms,
     }

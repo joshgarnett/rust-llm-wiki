@@ -75,6 +75,7 @@ pub fn spec(fs: &VaultFs, run: &str, count: usize) -> RunSpec {
         created_at_utc_ms: 1_700_000_000_000,
         deadline_utc_ms: 1_700_000_900_000,
         scope: RunScope {
+            research: None,
             operation: "extract".into(),
             question: None,
             exclusions: vec![],
@@ -95,6 +96,8 @@ pub fn spec(fs: &VaultFs, run: &str, count: usize) -> RunSpec {
 }
 pub fn bound(task: &TaskSpec) -> AttemptBound {
     let mut b = AttemptBound {
+        codec: None,
+        profile_fingerprint: None,
         capability: Capability::Generate,
         profile_id: "mock".into(),
         endpoint_fingerprint: hash("endpoint"),

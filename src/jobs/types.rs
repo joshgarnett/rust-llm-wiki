@@ -163,7 +163,7 @@ pub struct RateCard {
     /// conservative applicable full-input rate; discount is never inferred.
     pub rates: BTreeMap<BillableClass, Rate>,
 }
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Capability {
     Embed,
@@ -254,6 +254,9 @@ pub struct RunSpec {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RunScope {
+    /// Absent legacy extensions serialize identically to the original v1 scope.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub research: Option<ResearchGenesisV1>,
     pub operation: String,
     pub question: Option<String>,
     pub exclusions: Vec<String>,
@@ -264,6 +267,87 @@ pub struct RunScope {
     /// Host/research strings are bounded data, never executable commands or URLs
     /// that confer trust. P20 owns the versioned scope payload schema.
     pub scope_payload_hash: Option<Blake3Hash>,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ServiceBindingV1 {
+    pub profile_id: String,
+    pub capability: Capability,
+    pub profile_fingerprint: Blake3Hash,
+    pub endpoint_fingerprint: Blake3Hash,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BindingEpochV1 {
+    pub version: u32,
+    pub number: u32,
+    pub config_fingerprint: Blake3Hash,
+    pub source_snapshot: Option<ReadSnapshot>,
+    pub input_records: Vec<RecordRef>,
+    pub read_preconditions: Vec<ReadDependency>,
+    pub services: Vec<ServiceBindingV1>,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ResearchAdmissionLimits {
+    pub rounds: u32,
+    pub sources: u32,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ResearchGenesisV1 {
+    pub version: u32,
+    pub scope: BoundedPayloadRef,
+    pub limits: ResearchAdmissionLimits,
+    pub initial_binding: BindingEpochV1,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ResearchOriginV1 {
+    pub key: Blake3Hash,
+    pub url: String,
+    pub round: u32,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ResearchTaskOriginV1 {
+    pub task_key: Blake3Hash,
+    pub origin_key: Blake3Hash,
+    /// A separately admitted redirect retains its authenticated preceding hop.
+    pub parent_capture: Option<Blake3Hash>,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ResearchRoundV1 {
+    pub round: u32,
+    pub epoch: u32,
+    pub task_key: Blake3Hash,
+    pub output: DurableOutputRef,
+    pub support_groups: Vec<Blake3Hash>,
+    pub added_groups: u32,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ResearchTransitionV1 {
+    pub payload_hash: Blake3Hash,
+    pub event: EventRef,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ResearchStateV1 {
+    pub version: u32,
+    pub binding: BindingEpochV1,
+    pub binding_event: Option<EventRef>,
+    pub active_tasks: BTreeSet<Blake3Hash>,
+    pub frontier_revision: u64,
+    pub rounds_started: u32,
+    pub origins: BTreeMap<Blake3Hash, ResearchOriginV1>,
+    pub task_origins: BTreeMap<Blake3Hash, ResearchTaskOriginV1>,
+    pub rounds: Vec<ResearchRoundV1>,
+    pub support_groups: BTreeSet<Blake3Hash>,
+    pub no_progress_rounds: u32,
+    pub retry_not_before: BTreeMap<Blake3Hash, i64>,
+    pub transitions: BTreeMap<Blake3Hash, ResearchTransitionV1>,
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "state", rename_all = "snake_case", deny_unknown_fields)]
@@ -310,6 +394,11 @@ pub struct AttemptRef {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AttemptBound {
+    /// Immutable nonsecret decoding facts; historical recovery grants no send authority.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub codec: Option<BoundedPayloadRef>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile_fingerprint: Option<Blake3Hash>,
     pub capability: Capability,
     pub profile_id: String,
     pub endpoint_fingerprint: Blake3Hash,
@@ -469,6 +558,10 @@ pub struct JournalFrame {
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "Preserve public durable payload constructors; the journal codec separately bounds frame size"
+)]
 pub enum EventPayload {
     Genesis {
         spec: RunSpec,
@@ -477,6 +570,46 @@ pub enum EventPayload {
     },
     TasksAdded {
         tasks: Vec<TaskSpec>,
+    },
+    ResearchRebound {
+        version: u32,
+        expected_epoch: u32,
+        prior_revision: u64,
+        amendment_id: Blake3Hash,
+        binding: BindingEpochV1,
+        active_tasks: Vec<Blake3Hash>,
+        tasks: Vec<TaskSpec>,
+        reason: String,
+    },
+    ResearchFrontierAdmitted {
+        version: u32,
+        epoch: u32,
+        prior_revision: u64,
+        admission_id: Blake3Hash,
+        /// Zero admits control stages; positive rounds consume the round cap.
+        round: u32,
+        origins: Vec<ResearchOriginV1>,
+        tasks: Vec<TaskSpec>,
+        task_origins: Vec<ResearchTaskOriginV1>,
+        parent_outputs: Vec<DurableOutputRef>,
+    },
+    ResearchRoundAssessed {
+        version: u32,
+        epoch: u32,
+        prior_revision: u64,
+        assessment_id: Blake3Hash,
+        round: u32,
+        task_key: Blake3Hash,
+        output: DurableOutputRef,
+        citations: Vec<crate::domain::CitationRef>,
+        support_groups: Vec<Blake3Hash>,
+    },
+    ResearchRetryScheduled {
+        version: u32,
+        epoch: u32,
+        task_key: Blake3Hash,
+        attempt: AttemptRef,
+        not_before_utc_ms: i64,
     },
     TaskFinished {
         task_key: Blake3Hash,
@@ -624,14 +757,28 @@ pub struct ExecutionPolicy {
     pub dry_run: bool,
     pub retry_uncertain: bool,
 }
+static NATIVE_INTERRUPTED: AtomicBool = AtomicBool::new(false);
+pub(crate) fn record_native_interrupt() {
+    NATIVE_INTERRUPTED.store(true, Ordering::SeqCst);
+}
 #[derive(Clone, Default)]
-pub struct CancellationToken(Arc<AtomicBool>);
+pub struct CancellationToken {
+    cancelled: Arc<AtomicBool>,
+    native: bool,
+}
 impl CancellationToken {
+    pub fn native_cli() -> Self {
+        Self {
+            cancelled: Arc::default(),
+            native: true,
+        }
+    }
     pub fn cancel(&self) {
-        self.0.store(true, Ordering::SeqCst);
+        self.cancelled.store(true, Ordering::SeqCst);
     }
     pub fn is_cancelled(&self) -> bool {
-        self.0.load(Ordering::SeqCst)
+        self.cancelled.load(Ordering::SeqCst)
+            || self.native && NATIVE_INTERRUPTED.load(Ordering::SeqCst)
     }
 }
 #[derive(Debug, Clone, Copy)]
@@ -681,6 +828,12 @@ pub struct Reservation {
     pub(super) persistence: PersistenceAllowance,
     pub(super) genesis_hash: Blake3Hash,
 }
+/// A durable ordered prefix, including its safe stopping cause. Callers retain
+/// every reservation even when a later candidate cannot be admitted.
+pub struct ReservationWave {
+    pub reservations: Vec<Reservation>,
+    pub stop: Option<WikiError>,
+}
 pub struct DispatchPermit {
     pub(super) attempt: AttemptRef,
     pub(super) bound: AttemptBound,
@@ -714,6 +867,9 @@ pub struct SendAuthorization {
     pub(super) effective_deadline_utc_ms: i64,
 }
 impl Reservation {
+    pub(crate) fn bound(&self) -> &AttemptBound {
+        &self.bound
+    }
     pub fn attempt(&self) -> &AttemptRef {
         &self.attempt
     }
@@ -827,6 +983,8 @@ pub struct TaskInspection {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct LedgerInspection {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub research: Option<ResearchStateV1>,
     pub spec: RunSpec,
     pub spec_hash: Blake3Hash,
     pub effective_limits: LifetimeLimits,

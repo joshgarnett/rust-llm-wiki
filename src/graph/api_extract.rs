@@ -36,6 +36,17 @@ pub struct ApiExtractionOutcome {
     pub dry_run: bool,
 }
 
+pub(crate) struct ExtractionTaskContext<'a> {
+    pub task: &'a TaskSpec,
+    pub packet: &'a VerifiedPacket,
+    pub service: &'a TrustedService,
+    pub dispatcher: &'a Dispatcher,
+    pub options: &'a JobOptions,
+    pub new_extraction: bool,
+    pub complete_run: bool,
+    pub coverage: &'a ExtractionCoverage,
+}
+
 impl OfflineApp {
     /// Pure stable default identity; packet storage timestamps do not identify input.
     pub fn default_api_extraction_run_id(
@@ -148,6 +159,7 @@ impl OfflineApp {
                 created_at_utc_ms: request.created_at_utc_ms,
                 deadline_utc_ms: request.deadline_utc_ms,
                 scope: RunScope {
+                    research: None,
                     operation: "graph_extract_api".into(),
                     question: None,
                     exclusions: vec![],
@@ -173,7 +185,7 @@ impl OfflineApp {
                 input_fingerprint: Blake3Hash::digest([]),
                 limits: request.limits.clone(),
                 tasks: vec![task.clone()],
-                prior_accounting: PriorAccounting::None,
+                prior_accounting: self.prior_accounting_for_new_run()?,
             };
             spec.input_fingerprint = jobs::tasks::input_fingerprint(&spec)?;
             ledger.create(&writer, spec)?;
@@ -197,6 +209,49 @@ impl OfflineApp {
                 "extraction run inputs changed; use a new run ID",
             ));
         }
+        self.execute_generation_task(
+            &ledger,
+            ExtractionTaskContext {
+                task,
+                packet: &packet,
+                service,
+                dispatcher,
+                options: &options,
+                new_extraction: request.new_extraction,
+                complete_run: true,
+                coverage: &planned.coverage,
+            },
+        )
+    }
+    pub(crate) fn execute_generation_task(
+        &self,
+        ledger: &JobLedger,
+        context: ExtractionTaskContext<'_>,
+    ) -> Result<ApiExtractionOutcome> {
+        let ExtractionTaskContext {
+            task,
+            packet,
+            service,
+            dispatcher,
+            options,
+            new_extraction,
+            complete_run,
+            coverage,
+        } = context;
+        let offline = self.options.offline || options.policy.offline;
+        let inspection = ledger.replay()?.inspection;
+        if inspection
+            .tasks
+            .get(&task.key)
+            .is_none_or(|t| &t.spec != task)
+        {
+            return Err(WikiError::new(
+                ErrorCode::FreshnessConflict,
+                "extraction task differs from admitted inputs",
+            ));
+        }
+        let engine = ChangeEngine::new(self.fs.clone())?;
+        let catalog = Catalog::new(self.fs.clone(), self.vault_id.clone());
         let retained_task = &inspection.tasks[&task.key];
         let (output, receipt, response, reused) = if retained_task.state == TaskState::Completed {
             let output = retained_task
@@ -209,7 +264,7 @@ impl OfflineApp {
                     )
                 })?
                 .clone();
-            let retained = generation_cache::load_output(&self.fs, &output, task, &packet)?;
+            let retained = generation_cache::load_output(&self.fs, &output, task, packet)?;
             let receipt = inspection
                 .attempts
                 .iter()
@@ -223,10 +278,10 @@ impl OfflineApp {
                 })?;
             ledger.settle(&retained.attempt)?;
             ledger.remove_spool_after_verified_commit(&retained.attempt)?;
-            if inspection.state == RunState::Running {
+            if complete_run && inspection.state == RunState::Running {
                 ledger.complete_run()?;
             }
-            self.checkpoint_generation(&ledger)?;
+            self.checkpoint_generation(ledger)?;
             (output, receipt, retained.response.into_bytes(), true)
         } else {
             let pending = inspection.attempts.iter().find(|a| {
@@ -237,12 +292,12 @@ impl OfflineApp {
                     )
             });
             let generated = if let Some(a) = pending {
-                match dispatcher.recover_response(&ledger, service, &task.key, &a.attempt) {
+                match dispatcher.recover_response(ledger, service, &task.key, &a.attempt) {
                     Ok(output) => output,
                     Err(failure) => {
                         if let Some(plan) = &failure.materialization {
-                            self.commit_generation(&ledger, plan)?;
-                            self.checkpoint_generation(&ledger)?;
+                            self.commit_generation_task(ledger, plan, complete_run)?;
+                            self.checkpoint_generation(ledger)?;
                         }
                         return Err(failure.error);
                     }
@@ -261,13 +316,17 @@ impl OfflineApp {
                     ));
                 }
                 match inspection.state {
-                    RunState::Planned => {
+                    RunState::Planned if complete_run => {
                         ledger.start()?;
                     }
-                    RunState::Paused => {
+                    RunState::Paused if complete_run => {
                         ledger.resume(None)?;
                     }
-                    RunState::Stopped | RunState::Failed | RunState::Completed => {
+                    RunState::Planned
+                    | RunState::Paused
+                    | RunState::Stopped
+                    | RunState::Failed
+                    | RunState::Completed => {
                         return Err(WikiError::new(
                             ErrorCode::RecoveryRequired,
                             "run cannot dispatch new extraction",
@@ -276,14 +335,14 @@ impl OfflineApp {
                     RunState::Running => {}
                 }
                 dispatcher
-                    .execute(&ledger, service, &task.key, DispatchPurpose::Task)
+                    .execute(ledger, service, &task.key, DispatchPurpose::Task)
                     .map_err(|failure| {
                         extraction_failure(
                             failure.error,
-                            request,
-                            &packet,
+                            &inspection.spec.run_id,
+                            packet,
                             &task.key,
-                            &planned.coverage,
+                            coverage,
                         )
                     })?
             };
@@ -292,34 +351,47 @@ impl OfflineApp {
             };
             let response = text.into_bytes();
             let view = SourceView::from_fs_bounded(&self.fs, packet::SOURCE_CAP, 4096)?;
-            if let Err(error) = wire::validate_response(&packet, &view, &response) {
+            let current_packet = packet::load_packet(&view, &packet.packet().packet_id)?;
+            if current_packet.packet() != packet.packet()
+                || current_packet.dependencies() != packet.dependencies()
+            {
+                return Err(WikiError::new(
+                    ErrorCode::FreshnessConflict,
+                    "extraction source changed before publication",
+                ));
+            }
+            if let Err(error) = wire::validate_response(packet, &view, &response) {
+                if error.code != ErrorCode::ExtractionInvalid {
+                    return Err(error);
+                }
                 let rejected = jobs::checkpoint::receipt_plan(
-                    &ledger,
+                    ledger,
                     &generated.attempt,
                     OutputDisposition::Rejected,
                     vec![],
                     vec![],
                     vec![],
                 )?;
-                self.commit_generation(&ledger, &rejected)?;
-                self.checkpoint_generation(&ledger)?;
+                self.commit_generation_task(ledger, &rejected, complete_run)?;
+                self.checkpoint_generation(ledger)?;
                 return Err(extraction_failure(
                     error,
-                    request,
-                    &packet,
+                    &inspection.spec.run_id,
+                    packet,
                     &task.key,
-                    &planned.coverage,
+                    coverage,
                 ));
             }
             if generated.materialization.receipt.output_disposition == OutputDisposition::Validated
             {
-                let (output, receipt) = self.reuse_acknowledged_generation(
-                    &ledger,
+                let (output, receipt) = self.reuse_acknowledged_generation_task(
+                    ledger,
                     task,
-                    &packet,
+                    packet,
                     &generated.attempt,
                     &generated.materialization.receipt,
                     &response,
+                    complete_run,
                 )?;
                 (output, receipt, response, true)
             } else {
@@ -340,20 +412,20 @@ impl OfflineApp {
                 let (output, write) = generation_cache::output_write(
                     &self.vault_id,
                     &generated.attempt,
-                    &packet,
+                    packet,
                     &response,
                     &timestamp,
                 )?;
                 let plan = jobs::checkpoint::receipt_plan(
-                    &ledger,
+                    ledger,
                     &generated.attempt,
                     OutputDisposition::Validated,
                     vec![output.clone()],
                     vec![],
                     vec![write],
                 )?;
-                let receipt = self.commit_generation(&ledger, &plan)?;
-                self.checkpoint_generation(&ledger)?;
+                let receipt = self.commit_generation_task(ledger, &plan, complete_run)?;
+                self.checkpoint_generation(ledger)?;
                 (output, receipt, response, pending.is_some())
             }
         };
@@ -365,12 +437,12 @@ impl OfflineApp {
         engine.recover(&writer, &CatalogGraphValidator, &catalog)?;
         catalog.guard_current(None)?;
         let view = SourceView::from_fs_bounded(&self.fs, packet::SOURCE_CAP, 4096)?;
-        let validated = wire::validate_response(&packet, &view, &response)?;
+        let validated = wire::validate_response(packet, &view, &response)?;
         let imported = import::stage_import(
             &engine,
             &writer,
             &validated,
-            if request.new_extraction {
+            if new_extraction {
                 OriginPolicy::AllowNewResponse
             } else {
                 OriginPolicy::ReuseOrConflict
@@ -379,7 +451,7 @@ impl OfflineApp {
         Ok(ApiExtractionOutcome {
             packet: packet.packet().clone(),
             coverage: imported.coverage.clone(),
-            run_id: request.run_id.clone(),
+            run_id: inspection.spec.run_id.clone(),
             task_key: Some(task.key.clone()),
             import: Some(imported),
             output: Some(output),
@@ -388,6 +460,7 @@ impl OfflineApp {
             dry_run: false,
         })
     }
+    #[cfg(test)]
     fn reuse_acknowledged_generation(
         &self,
         ledger: &JobLedger,
@@ -396,6 +469,27 @@ impl OfflineApp {
         attempt: &AttemptRef,
         retained_receipt: &UsageReceipt,
         response: &[u8],
+    ) -> Result<(DurableOutputRef, DurableOutputRef)> {
+        self.reuse_acknowledged_generation_task(
+            ledger,
+            task,
+            packet,
+            attempt,
+            retained_receipt,
+            response,
+            true,
+        )
+    }
+    #[allow(clippy::too_many_arguments)]
+    fn reuse_acknowledged_generation_task(
+        &self,
+        ledger: &JobLedger,
+        task: &TaskSpec,
+        packet: &VerifiedPacket,
+        attempt: &AttemptRef,
+        retained_receipt: &UsageReceipt,
+        response: &[u8],
+        complete_run: bool,
     ) -> Result<(DurableOutputRef, DurableOutputRef)> {
         if retained_receipt.outputs.len() != 1 || !retained_receipt.cache_outputs.is_empty() {
             return Err(WikiError::new(
@@ -425,17 +519,18 @@ impl OfflineApp {
             })?;
         ledger.settle(attempt)?;
         ledger.finish_remote_task(&task.key, vec![output.clone()], vec![], |_| Ok(false))?;
-        if ledger.inspect()?.state == RunState::Running {
+        if complete_run && ledger.inspect()?.state == RunState::Running {
             ledger.complete_run()?;
         }
         ledger.remove_spool_after_verified_commit(attempt)?;
         self.checkpoint_generation(ledger)?;
         Ok((output, receipt))
     }
-    fn commit_generation(
+    fn commit_generation_task(
         &self,
         ledger: &JobLedger,
         plan: &MaterializationPlan,
+        complete_run: bool,
     ) -> Result<DurableOutputRef> {
         let receipt_id = &plan.receipt.receipt_id;
         let receipt_path = VaultRelativePath::new(format!(
@@ -488,7 +583,9 @@ impl OfflineApp {
                 vec![],
                 |_: &VectorCacheRef| Ok(false),
             )?;
-            ledger.complete_run()?;
+            if complete_run {
+                ledger.complete_run()?;
+            }
         }
         ledger.remove_spool_after_verified_commit(&plan.attempt)?;
         Ok(reference)
@@ -515,12 +612,12 @@ impl OfflineApp {
 
 fn extraction_failure(
     mut error: WikiError,
-    request: &ApiExtractionRequest,
+    run_id: &RecordId,
     packet: &VerifiedPacket,
     task: &Blake3Hash,
     coverage: &ExtractionCoverage,
 ) -> WikiError {
-    error.details = serde_json::json!({"run_id":request.run_id,"task_key":task,"packet_id":packet.packet().packet_id,"coverage":coverage,"proposals_staged":false,"retained_details":error.details});
+    error.details = serde_json::json!({"run_id":run_id,"task_key":task,"packet_id":packet.packet().packet_id,"coverage":coverage,"proposals_staged":false,"retained_details":error.details});
     error
 }
 

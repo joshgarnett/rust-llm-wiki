@@ -1,0 +1,13 @@
+# P20 original decoding contract leaf
+
+Implemented leased `src/providers/history.rs` and `src/providers/history_tests.rs`. Root/dispatcher owners wire module declarations, optional `AttemptBound.codec`, admission, and recovery classification; no shared files were edited by this worker.
+
+`retain(fs, task, prepared)` writes an immutable, canonical, bounded snapshot under the descriptor's `runs/<run>/codecs/<hash>.json`, using `WriterPermit`, expected-absence replacement and directory durability checks. It records complete task fingerprint/identity, descriptor reference, role/purpose, original normalized attempt bound, and nonsecret decoding facts. Generation retains the exact schema/mode/basis; embedding retains every ordered input position and dimension/coordinate limits; Search retains count/page. It stores no request headers/body, credentials, prompt or source data. The resulting optional codec reference enters the bound fingerprint; the wire hash remains unchanged.
+
+`restore(fs, task, bound, purpose)` authenticates snapshot path/run ownership, bytes/hash/length, canonical version/schema, complete task definition, original bound, immutable descriptor and model/prompt/schema/settings proofs. It reconstructs the original private decoder without current configuration or source freshness checks. Generation recompiles the unchanged schema using the existing bounded offline compiler. Its returned private prepared value contains an invalid-for-HTTP decode-only method/URL and empty body/headers; it creates no send authority.
+
+Checks: `rustfmt --edition 2024 --config skip_children=true src/providers/history.rs src/providers/history_tests.rs`; `cargo test --locked --offline --lib providers::history_tests` passed **7/7**, 1.82s, after 15.24s compilation, with no warnings. Full log: `/private/tmp/lwiki-p20-historical-codec-test.log`. Cargo lease returned; no active process.
+
+Tests use actual production preparation/decoding for generation, embeddings and Search. They cover changed private configuration and source bytes, cache deletion, original model/schema/position/dimension/count behavior, idempotent immutable retention, missing/corrupt snapshots or descriptors, unknown versions/fields, noncanonical JSON, cross-run paths, changed priority/purpose/bound, and zero credential/helper calls.
+
+Scope: research descriptors must be inside `runs/<run>/inputs`; legacy tasks remain codec-absent, and test-only Fixture contracts intentionally remain absent. These are local codec tests, not whole-P20 acceptance or live-provider, transport, cross-platform durability, power-loss, or model-quality qualification. Dispatcher classification and current-publication fencing remain shared integration/review obligations.

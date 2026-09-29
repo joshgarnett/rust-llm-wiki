@@ -248,7 +248,7 @@ fn materialize(
 ) -> Result<()> {
     let inspection = ledger.inspect()?;
     let vault_id = inspection.spec.vault_id;
-    let mut outputs = Vec::new();
+    let mut outputs = plan.receipt.outputs.clone();
     if let Some(source) = source
         && let Some(draft) = source.draft
     {

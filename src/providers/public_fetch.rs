@@ -17,7 +17,7 @@ use std::{
     pin::Pin,
     sync::{
         Arc,
-        atomic::{AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
     },
     time::{Duration, Instant},
 };
@@ -689,6 +689,7 @@ pub(crate) fn dispatch(
     ledger: &JobLedger,
     key: &Blake3Hash,
     options: &PublicFetchOptions,
+    network_used: &AtomicBool,
 ) -> std::result::Result<PublicFetchOutcome, Box<DispatchFailure>> {
     if tokio::runtime::Handle::try_current().is_ok() {
         return Err(fail(
@@ -710,16 +711,63 @@ pub(crate) fn dispatch(
                 DispatchDisposition::NotSent,
             )
         })?;
-    let out = runtime.block_on(dispatch_inner(dispatcher_fs, ledger, key, options));
+    let out = runtime.block_on(async {
+        let prepared = prepare_fetch(dispatcher_fs, ledger, key)?;
+        let reservation = ledger
+            .reserve(key, prepared.bound.clone())
+            .map_err(|e| fail(e, None, DispatchDisposition::NotSent))?;
+        send_reserved(
+            dispatcher_fs,
+            ledger,
+            prepared,
+            reservation,
+            options,
+            network_used,
+        )
+        .await
+    });
     runtime.shutdown_timeout(Duration::from_millis(50));
     out
 }
-async fn dispatch_inner(
+fn check_prepared_sources(fs: &VaultFs, task: &TaskSpec, bytes: &[u8]) -> Result<()> {
+    for dep in &task.source_bindings {
+        let actual = read_bounded(fs, &dep.path, crate::changes::prepare::MAX_PAYLOAD_BYTES)?
+            .map_or(ExpectedState::Absent, |b| {
+                ExpectedState::Hash(Blake3Hash::digest(b))
+            });
+        if actual != dep.expected {
+            return Err(WikiError::new(
+                ErrorCode::FreshnessConflict,
+                "public source changed",
+            ));
+        }
+    }
+    let fresh = read_bounded(fs, &task.input.path, 256 * 1024)?
+        .ok_or_else(|| WikiError::invalid("public input missing"))?;
+    if fresh != bytes {
+        return Err(WikiError::new(
+            ErrorCode::FreshnessConflict,
+            "public input changed",
+        ));
+    }
+    Ok(())
+}
+pub(super) struct PreparedFetch {
+    pub(super) bound: AttemptBound,
+    key: Blake3Hash,
+    task: TaskSpec,
+    bytes: Vec<u8>,
+    url: url::Url,
+    observed_url: String,
+    limits: FetchLimits,
+    currency: Currency,
+    deadline: i64,
+}
+pub(super) fn prepare_fetch(
     dispatcher_fs: &VaultFs,
     ledger: &JobLedger,
     key: &Blake3Hash,
-    options: &PublicFetchOptions,
-) -> std::result::Result<PublicFetchOutcome, Box<DispatchFailure>> {
+) -> std::result::Result<PreparedFetch, Box<DispatchFailure>> {
     let (fs, _, _, job_options) = ledger.dispatcher_bindings();
     let notsent = |e| fail(e, None, DispatchDisposition::NotSent);
     if fs.root().path() != dispatcher_fs.root().path() {
@@ -746,8 +794,13 @@ async fn dispatch_inner(
         || task.model_hash.is_some()
         || task.prompt_hash.is_some()
         || task.schema_hash.is_some()
-        || inspect.spec.scope.profile_fingerprints.get(PUBLIC_PROFILE)
-            != Some(&settings_fingerprint())
+        || (inspect.research.is_none()
+            && inspect.spec.scope.profile_fingerprints.get(PUBLIC_PROFILE)
+                != Some(&settings_fingerprint()))
+        || inspect
+            .research
+            .as_ref()
+            .is_some_and(|r| !r.active_tasks.contains(key) || !r.task_origins.contains_key(key))
     {
         return Err(notsent(WikiError::invalid("public task bindings differ")));
     }
@@ -791,30 +844,7 @@ async fn dispatch_inner(
     };
     limits.validate().map_err(notsent)?;
     let url = validate_url(observed_url, None).map_err(notsent)?;
-    let check_sources = || -> Result<()> {
-        for dep in &task.source_bindings {
-            let actual = read_bounded(&fs, &dep.path, crate::changes::prepare::MAX_PAYLOAD_BYTES)?
-                .map_or(ExpectedState::Absent, |b| {
-                    ExpectedState::Hash(Blake3Hash::digest(b))
-                });
-            if actual != dep.expected {
-                return Err(WikiError::new(
-                    ErrorCode::FreshnessConflict,
-                    "public source changed",
-                ));
-            }
-        }
-        let fresh = read_bounded(&fs, &task.input.path, 256 * 1024)?
-            .ok_or_else(|| WikiError::invalid("public input missing"))?;
-        if fresh != bytes {
-            return Err(WikiError::new(
-                ErrorCode::FreshnessConflict,
-                "public input changed",
-            ));
-        }
-        Ok(())
-    };
-    check_sources().map_err(notsent)?;
+    check_prepared_sources(&fs, &task, &bytes).map_err(notsent)?;
     let wire_hash = Blake3Hash::digest(
         canonical_json(&(
             "lwiki.public-wire.v1",
@@ -848,10 +878,18 @@ async fn dispatch_inner(
     };
     card.fingerprint = crate::jobs::budgets::rate_card_fingerprint(&card).map_err(notsent)?;
     let mut bound = AttemptBound {
+        codec: None,
+        profile_fingerprint: inspect.research.as_ref().map(|_| settings_fingerprint()),
         capability: Capability::Fetch,
         profile_id: PUBLIC_PROFILE.into(),
         endpoint_fingerprint: Blake3Hash::digest(url.as_str()),
-        config_fingerprint: inspect.spec.config_fingerprint.clone(),
+        config_fingerprint: inspect
+            .research
+            .as_ref()
+            .map_or(&inspect.spec.config_fingerprint, |r| {
+                &r.binding.config_fingerprint
+            })
+            .clone(),
         input_hash: task.input_hash.clone(),
         wire_hash,
         requested_model: None,
@@ -866,11 +904,75 @@ async fn dispatch_inner(
         bounds_fingerprint: Blake3Hash::digest([]),
     };
     bound.bounds_fingerprint = crate::jobs::budgets::bound_fingerprint(&bound).map_err(notsent)?;
-    let reservation = ledger.reserve(key, bound).map_err(notsent)?;
+    Ok(PreparedFetch {
+        bound,
+        key: key.clone(),
+        task,
+        bytes,
+        url,
+        observed_url: observed_url.clone(),
+        limits: limits.clone(),
+        currency,
+        deadline,
+    })
+}
+pub(super) async fn send_reserved(
+    dispatcher_fs: &VaultFs,
+    ledger: &JobLedger,
+    prepared: PreparedFetch,
+    reservation: Reservation,
+    options: &PublicFetchOptions,
+    network_used: &AtomicBool,
+) -> std::result::Result<PublicFetchOutcome, Box<DispatchFailure>> {
+    let (fs, _, _, job_options) = ledger.dispatcher_bindings();
+    let PreparedFetch {
+        bound,
+        key,
+        task,
+        bytes,
+        url,
+        observed_url,
+        limits,
+        currency,
+        deadline,
+    } = prepared;
     let attempt = reservation.attempt().clone();
-    let permit = ledger
-        .dispatch_intent(reservation)
-        .map_err(|e| fail(e, Some(attempt.clone()), DispatchDisposition::NotSent))?;
+    let notsent = |e| fail(e, Some(attempt.clone()), DispatchDisposition::NotSent);
+    let setup = (|| -> Result<Timer> {
+        if fs.root().path() != dispatcher_fs.root().path()
+            || reservation.attempt().task_key != key
+            || reservation.bound() != &bound
+        {
+            return Err(WikiError::invalid("public reserved binding differs"));
+        }
+        let first = job_options.clock.read()?;
+        let mut timer = Timer::new(first);
+        timer.check(&job_options, deadline, limits.timeout_ms)?;
+        check_prepared_sources(&fs, &task, &bytes)?;
+        Ok(timer)
+    })();
+    let mut timer = match setup {
+        Ok(timer) => timer,
+        Err(error) => {
+            let _ = ledger.release_not_sent(
+                &attempt,
+                NotSentObservation {
+                    reason: NotSentReason::TransportNotEntered,
+                },
+            );
+            return Err(notsent(error));
+        }
+    };
+    let check_sources = || check_prepared_sources(&fs, &task, &bytes);
+    let permit = ledger.dispatch_intent(reservation).map_err(|e| {
+        let _ = ledger.release_not_sent(
+            &attempt,
+            NotSentObservation {
+                reason: NotSentReason::TransportNotEntered,
+            },
+        );
+        fail(e, Some(attempt.clone()), DispatchDisposition::NotSent)
+    })?;
     let host = url
         .host_str()
         .ok_or_else(|| notsent(WikiError::invalid("public host missing")))?
@@ -927,9 +1029,15 @@ async fn dispatch_inner(
         );
         return Err(fail(e, Some(attempt), DispatchDisposition::NotSent));
     }
-    let mut auth = ledger
-        .begin_send(permit)
-        .map_err(|e| fail(e, Some(attempt.clone()), DispatchDisposition::NotSent))?;
+    let mut auth = ledger.begin_send(permit).map_err(|e| {
+        let _ = ledger.release_not_sent(
+            &attempt,
+            NotSentObservation {
+                reason: NotSentReason::TransportNotEntered,
+            },
+        );
+        fail(e, Some(attempt.clone()), DispatchDisposition::NotSent)
+    })?;
     let progress = Arc::new(AtomicU64::new(0));
     let pinned = PinnedRequest {
         url: url.to_string(),
@@ -961,6 +1069,9 @@ async fn dispatch_inner(
         &mut entered,
     )
     .await;
+    if entered {
+        network_used.store(true, Ordering::Relaxed);
+    }
     let reply = match response {
         Ok(reply) => reply,
         Err(e) => {

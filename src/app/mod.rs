@@ -8,3 +8,5 @@ pub mod decisions;
 pub mod embeddings;
 pub mod remote;
 mod review;
+
+pub mod probe;

@@ -37,6 +37,29 @@ impl RetainedDecodeFailure {
     }
 }
 
+/// One current research task. A Fetch task has no credentialed service.
+pub struct ResearchDispatchWork<'a> {
+    pub task_key: Blake3Hash,
+    pub service: Option<&'a TrustedService>,
+    pub purpose: DispatchPurpose,
+}
+pub enum ResearchDispatchOutcome {
+    Remote(std::result::Result<DispatchOutcome, Box<DispatchFailure>>),
+    Public(std::result::Result<super::public_fetch::PublicFetchOutcome, Box<DispatchFailure>>),
+}
+pub struct ResearchDispatchResult {
+    pub task_key: Blake3Hash,
+    pub outcome: ResearchDispatchOutcome,
+}
+pub struct ResearchDispatchBatch {
+    pub outcomes: Vec<ResearchDispatchResult>,
+    pub stop: Option<WikiError>,
+}
+enum PreparedResearch<'a> {
+    Remote(&'a TrustedService, DispatchPurpose, PreparedWire),
+    Public(super::public_fetch::PreparedFetch),
+}
+
 pub struct Dispatcher {
     fs: VaultFs,
     options: DispatchOptions,
@@ -71,7 +94,37 @@ impl Dispatcher {
         key: &Blake3Hash,
         options: &super::public_fetch::PublicFetchOptions,
     ) -> std::result::Result<super::public_fetch::PublicFetchOutcome, Box<DispatchFailure>> {
-        super::public_fetch::dispatch(&self.fs, ledger, key, options)
+        if ledger
+            .inspect()
+            .map_err(|e| failure(e, None))?
+            .research
+            .is_some()
+        {
+            let batch = self
+                .execute_ready_batch(
+                    ledger,
+                    &[ResearchDispatchWork {
+                        task_key: key.clone(),
+                        service: None,
+                        purpose: DispatchPurpose::Task,
+                    }],
+                    options,
+                )
+                .map_err(|e| failure(e, None))?;
+            if let Some(result) = batch.outcomes.into_iter().next() {
+                return match result.outcome {
+                    ResearchDispatchOutcome::Public(out) => out,
+                    ResearchDispatchOutcome::Remote(_) => unreachable!(),
+                };
+            }
+            return Err(failure(
+                batch
+                    .stop
+                    .unwrap_or_else(|| WikiError::invalid("research task was not reserved")),
+                None,
+            ));
+        }
+        super::public_fetch::dispatch(&self.fs, ledger, key, options, &self.network_used)
     }
     /// Decode a hash-bound response already retained by this ledger. This grants
     /// no send authority and does not require live source freshness: callers must
@@ -118,7 +171,15 @@ impl Dispatcher {
         let spool = recorded.spool.as_ref().ok_or_else(|| {
             WikiError::new(ErrorCode::RecoveryRequired, "retained response missing")
         })?;
-        let prepared = prepare_descriptor(&fs, service, &task.spec, purpose)?;
+        let prepared = if recorded.bound.codec.is_some() {
+            super::history::restore(&fs, &task.spec, &recorded.bound, purpose)?
+        } else {
+            let mut prepared = prepare_descriptor(&fs, service, &task.spec, purpose)?;
+            // Restore the original optional proof before exact bound comparison.
+            prepared.bound.profile_fingerprint = recorded.bound.profile_fingerprint.clone();
+            prepared.bound.bounds_fingerprint = jobs::budgets::bound_fingerprint(&prepared.bound)?;
+            prepared
+        };
         if prepared.bound != recorded.bound || spool.attempt != *attempt {
             return Err(RetainedDecodeFailure::Recovery(WikiError::new(
                 ErrorCode::FreshnessConflict,
@@ -284,6 +345,171 @@ impl Dispatcher {
         }
     }
 
+    /// Prepare every selected candidate without network IO, reserve one stable
+    /// prefix, then poll only its opaque one-attempt authorities. Results preserve
+    /// reservation order even when responses finish in a different order.
+    pub fn execute_ready_batch(
+        &self,
+        ledger: &JobLedger,
+        work: &[ResearchDispatchWork<'_>],
+        public_options: &super::public_fetch::PublicFetchOptions,
+    ) -> Result<ResearchDispatchBatch> {
+        if tokio::runtime::Handle::try_current().is_ok() {
+            return Err(WikiError::new(
+                ErrorCode::Usage,
+                "batch dispatch requires application thread",
+            ));
+        }
+        let inspection = ledger.inspect()?;
+        if inspection.research.is_none() {
+            return Err(WikiError::invalid(
+                "research batch requires research genesis",
+            ));
+        }
+        let (fs, _, _, options) = ledger.dispatcher_bindings();
+        if fs.root().path() != self.fs.root().path() {
+            return Err(WikiError::new(
+                ErrorCode::ProfileUntrusted,
+                "dispatcher vault differs",
+            ));
+        }
+        policy(&options, None, inspection.effective_deadline_utc_ms)?;
+        let mut ordered: Vec<_> = work.iter().collect();
+        for item in &ordered {
+            if !inspection.tasks.contains_key(&item.task_key) {
+                return Err(WikiError::new(
+                    ErrorCode::RecordNotFound,
+                    "batch task missing",
+                ));
+            }
+        }
+        ordered.sort_by(|a, b| {
+            inspection.tasks[&a.task_key]
+                .spec
+                .priority
+                .cmp(&inspection.tasks[&b.task_key].spec.priority)
+                .then(a.task_key.cmp(&b.task_key))
+        });
+        if ordered.windows(2).any(|w| w[0].task_key == w[1].task_key) {
+            return Err(WikiError::invalid("duplicate batch task"));
+        }
+        let mut prepared = Vec::with_capacity(ordered.len());
+        let mut candidates = Vec::with_capacity(ordered.len());
+        for item in ordered {
+            let task = &inspection.tasks[&item.task_key].spec;
+            let (bound, request) = if task.capability == Some(Capability::Fetch) {
+                if item.service.is_some() || item.purpose != DispatchPurpose::Task {
+                    return Err(WikiError::new(
+                        ErrorCode::ProfileUntrusted,
+                        "public task role differs",
+                    ));
+                }
+                let request = super::public_fetch::prepare_fetch(&self.fs, ledger, &item.task_key)
+                    .map_err(|e| e.error)?;
+                (request.bound.clone(), PreparedResearch::Public(request))
+            } else {
+                let service = item.service.ok_or_else(|| {
+                    WikiError::new(ErrorCode::ProfileUntrusted, "remote service missing")
+                })?;
+                let request = prepare_effective(&fs, &inspection, service, task, item.purpose)?;
+                (
+                    request.bound.clone(),
+                    PreparedResearch::Remote(service, item.purpose, request),
+                )
+            };
+            prepared.push((item.task_key.clone(), request));
+            candidates.push((item.task_key.clone(), bound));
+        }
+        // This call is deliberately before creating/polling any send future.
+        let wave = ledger.reserve_ready_batch(candidates)?;
+        let concurrency = inspection.effective_limits.concurrency as usize;
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|_| WikiError::new(ErrorCode::Internal, "dispatcher runtime unavailable"));
+        let runtime = match runtime {
+            Ok(runtime) => runtime,
+            Err(error) => {
+                for reservation in wave.reservations {
+                    let _ = ledger.release_not_sent(
+                        reservation.attempt(),
+                        NotSentObservation {
+                            reason: NotSentReason::TransportNotEntered,
+                        },
+                    );
+                }
+                return Err(error);
+            }
+        };
+        let mut futures = Vec::new();
+        for ((key, request), reservation) in prepared.into_iter().zip(wave.reservations) {
+            let future: std::pin::Pin<
+                Box<dyn std::future::Future<Output = ResearchDispatchResult> + '_>,
+            > = Box::pin(async move {
+                let outcome = match request {
+                    PreparedResearch::Remote(service, purpose, prepared) => {
+                        ResearchDispatchOutcome::Remote(
+                            self.execute_inner(
+                                ledger,
+                                service,
+                                &key,
+                                purpose,
+                                Some((prepared, reservation)),
+                            )
+                            .await,
+                        )
+                    }
+                    PreparedResearch::Public(prepared) => ResearchDispatchOutcome::Public(
+                        super::public_fetch::send_reserved(
+                            &self.fs,
+                            ledger,
+                            prepared,
+                            reservation,
+                            public_options,
+                            &self.network_used,
+                        )
+                        .await,
+                    ),
+                };
+                ResearchDispatchResult {
+                    task_key: key,
+                    outcome,
+                }
+            });
+            futures.push(Some(future));
+        }
+        let mut outcomes: Vec<_> = (0..futures.len()).map(|_| None).collect();
+        runtime.block_on(std::future::poll_fn(|cx| {
+            let mut running = 0;
+            let mut finished = true;
+            for (index, future) in futures.iter_mut().enumerate() {
+                if let Some(current) = future {
+                    finished = false;
+                    if running >= concurrency {
+                        continue;
+                    }
+                    match current.as_mut().poll(cx) {
+                        std::task::Poll::Ready(outcome) => {
+                            outcomes[index] = Some(outcome);
+                            *future = None;
+                        }
+                        std::task::Poll::Pending => running += 1,
+                    }
+                }
+            }
+            if finished || futures.iter().all(Option::is_none) {
+                std::task::Poll::Ready(())
+            } else {
+                std::task::Poll::Pending
+            }
+        }));
+        runtime.shutdown_timeout(Duration::from_millis(50));
+        Ok(ResearchDispatchBatch {
+            outcomes: outcomes.into_iter().flatten().collect(),
+            stop: wave.stop,
+        })
+    }
+
     pub fn execute(
         &self,
         ledger: &JobLedger,
@@ -291,6 +517,36 @@ impl Dispatcher {
         task: &Blake3Hash,
         purpose: DispatchPurpose,
     ) -> std::result::Result<DispatchOutcome, Box<DispatchFailure>> {
+        if ledger
+            .inspect()
+            .map_err(|e| failure(e, None))?
+            .research
+            .is_some()
+        {
+            let batch = self
+                .execute_ready_batch(
+                    ledger,
+                    &[ResearchDispatchWork {
+                        task_key: task.clone(),
+                        service: Some(service),
+                        purpose,
+                    }],
+                    &super::public_fetch::PublicFetchOptions::default(),
+                )
+                .map_err(|e| failure(e, None))?;
+            if let Some(result) = batch.outcomes.into_iter().next() {
+                return match result.outcome {
+                    ResearchDispatchOutcome::Remote(out) => out,
+                    ResearchDispatchOutcome::Public(_) => unreachable!(),
+                };
+            }
+            return Err(failure(
+                batch
+                    .stop
+                    .unwrap_or_else(|| WikiError::invalid("research task was not reserved")),
+                None,
+            ));
+        }
         if tokio::runtime::Handle::try_current().is_ok() {
             return Err(failure(
                 WikiError::new(
@@ -309,7 +565,7 @@ impl Dispatcher {
                     None,
                 )
             })?;
-        let result = runtime.block_on(self.execute_inner(ledger, service, task, purpose));
+        let result = runtime.block_on(self.execute_inner(ledger, service, task, purpose, None));
         // OS DNS work may be uncancellable; shutdown must never join it indefinitely.
         runtime.shutdown_timeout(Duration::from_millis(50));
         result
@@ -320,8 +576,13 @@ impl Dispatcher {
         service: &TrustedService,
         key: &Blake3Hash,
         purpose: DispatchPurpose,
+        mut reserved: Option<(PreparedWire, Reservation)>,
     ) -> std::result::Result<DispatchOutcome, Box<DispatchFailure>> {
         let (fs, vault_id, _, options) = ledger.dispatcher_bindings();
+        let mut retry_state = RetryState::default();
+        let mut refresh_epoch = None;
+        let mut retained = RetainedPaid::default();
+        let result = async {
         if fs.root().path() != self.fs.root().path() {
             return Err(failure(
                 WikiError::new(ErrorCode::ProfileUntrusted, "dispatcher vault differs"),
@@ -329,33 +590,11 @@ impl Dispatcher {
             ));
         }
         policy(&options, None, i64::MAX).map_err(|e| failure(e, None))?;
-        let mut retry_state = RetryState::default();
-        let mut refresh_epoch = None;
-        let mut retained = RetainedPaid::default();
-        let result = async {
+
             loop {
                 let inspection = ledger.inspect().map_err(|e| failure(e, None))?;
                 let deadline = inspection.effective_deadline_utc_ms;
                 policy(&options, None, deadline).map_err(|e| failure(e, None))?;
-                service.recheck(&fs).map_err(|e| failure(e, None))?;
-                let summary = service.summary();
-                if inspection.spec.vault_id != vault_id
-                    || inspection.spec.config_fingerprint != summary.config_fingerprint
-                    || inspection
-                        .spec
-                        .scope
-                        .profile_fingerprints
-                        .get(&summary.profile_id)
-                        != Some(&summary.profile_fingerprint)
-                {
-                    return Err(failure(
-                        WikiError::new(
-                            ErrorCode::ProfileUntrusted,
-                            "run profile/config binding differs",
-                        ),
-                        None,
-                    ));
-                }
                 let task = inspection
                     .tasks
                     .get(key)
@@ -381,8 +620,9 @@ impl Dispatcher {
                         None,
                     ));
                 }
-                let prepared =
-                    prepare(&fs, service, &task, purpose).map_err(|e| failure(e, None))?;
+                let research = inspection.research.as_ref();
+                let prepared = prepare_effective(&fs, &inspection, service, &task, purpose)
+                    .map_err(|e| failure(e, None))?;
                 let bound = prepared.bound.clone();
                 let now = policy(&options, None, deadline).map_err(|e| failure(e, None))?;
                 jobs::budgets::quote_bound(
@@ -392,13 +632,22 @@ impl Dispatcher {
                     deadline,
                 )
                 .map_err(|e| failure(e, None))?;
-                let reservation = ledger
-                    .reserve(key, bound.clone())
-                    .map_err(|e| failure(e, None))?;
+                let reservation = if let Some((prior, reservation)) = reserved.take() {
+                    if prior.bound != prepared.bound || prior.body != prepared.body || prior.url != prepared.url {
+                        let _ = ledger.release_not_sent(reservation.attempt(), NotSentObservation { reason: NotSentReason::TransportNotEntered });
+                        return Err(failure(WikiError::new(ErrorCode::FreshnessConflict, "reserved request changed"), Some(reservation.attempt().clone())));
+                    }
+                    reservation
+                } else {
+                    ledger.reserve(key, bound.clone()).map_err(|e| failure(e, None))?
+                };
                 let attempt = reservation.attempt().clone();
                 let permit = match ledger.dispatch_intent(reservation) {
                     Ok(p) => p,
-                    Err(e) => return Err(failure(e, Some(attempt))),
+                    Err(e) => {
+                        let _ = ledger.release_not_sent(&attempt, NotSentObservation { reason: NotSentReason::TransportNotEntered });
+                        return Err(failure(e, Some(attempt)));
+                    }
                 };
                 let context = CredentialContext {
                     policy: options.policy,
@@ -434,10 +683,15 @@ impl Dispatcher {
                     return Err(failure(e, Some(attempt)));
                 }
                 let epoch = lease.epoch();
-                let redactors =
-                    redactors(service, &lease).map_err(|e| failure(e, Some(attempt.clone())))?;
+                let redactors = match redactors(service, &lease) {
+                    Ok(redactors) => redactors,
+                    Err(error) => {
+                        let _ = ledger.release_not_sent(&attempt, NotSentObservation { reason: NotSentReason::TransportNotEntered });
+                        return Err(failure(error, Some(attempt)));
+                    }
+                };
                 // Trust/source proof is refreshed after helper IO, without a ledger/writer lock.
-                if let Err(e) = prepare(&fs, service, &task, purpose).and_then(|fresh| {
+                if let Err(e) = prepare_effective(&fs, &inspection, service, &task, purpose).and_then(|fresh| {
                     if fresh.bound != bound
                         || fresh.body != prepared.body
                         || fresh.url != prepared.url
@@ -462,7 +716,10 @@ impl Dispatcher {
                 }
                 let mut authorization = match ledger.begin_send(permit) {
                     Ok(value) => value,
-                    Err(e) => return Err(failure(e, Some(attempt))),
+                    Err(e) => {
+                        let _ = ledger.release_not_sent(&attempt, NotSentObservation { reason: NotSentReason::TransportNotEntered });
+                        return Err(failure(e, Some(attempt)));
+                    }
                 };
                 if let Err(e) = self
                     .options
@@ -567,9 +824,11 @@ impl Dispatcher {
                         } else {
                             retry::uncertain(options.policy.retry_uncertain)
                         };
-                        if matches!(out.retry, RetryDecision::After { .. })
-                            && error.observed_body_bytes == 0
-                        {
+                        if matches!(out.retry, RetryDecision::After { .. }) && (research.is_some() || error.observed_body_bytes == 0) {
+                            if research.is_some() {
+                                schedule_retry(ledger, &attempt, &mut out);
+                                return Err(out);
+                            }
                             continue;
                         }
                         let _ = pause_running(
@@ -673,9 +932,12 @@ impl Dispatcher {
                     ))
                 };
                 if let Ok(output) = decoded {
-                    let materialization = ledger
-                        .materialization_plan(&attempt)
-                        .map_err(|e| failure(e, Some(attempt.clone())))?;
+                    let materialization = ledger.materialization_plan(&attempt).map_err(|e| {
+                        let mut out = failure(e, Some(attempt.clone()));
+                        out.disposition = DispatchDisposition::OutcomeUnknown;
+                        out.spool = Some(spool.clone());
+                        out
+                    })?;
                     return Ok(DispatchOutcome {
                         attempt,
                         spool,
@@ -695,7 +957,12 @@ impl Dispatcher {
                     Vec::new(),
                     Vec::new(),
                 )
-                .map_err(|e| failure(e, Some(attempt.clone())))?;
+                .map_err(|e| {
+                    let mut failure = failure(e, Some(attempt.clone()));
+                    failure.disposition = DispatchDisposition::Rejected;
+                    failure.spool = out.spool.clone();
+                    failure
+                })?;
                 out.materialization = Some(plan);
                 retained.response(&out);
                 let mut retained_change = None;
@@ -719,7 +986,7 @@ impl Dispatcher {
                     let _ = pause_running(ledger, StopReason::Budget);
                     return Err(out);
                 }
-                if status == 401
+                if research.is_none() && status == 401
                     && !retry_state.command_refresh_used
                     && matches!(&service.service().auth, AuthConfig::Command { .. })
                 {
@@ -730,7 +997,7 @@ impl Dispatcher {
                 out.retry = retry::decide(
                     status,
                     &reply.headers,
-                    retry_state.attempts,
+                    if research.is_some() { attempt.number } else { retry_state.attempts },
                     options
                         .clock
                         .read()
@@ -740,6 +1007,13 @@ impl Dispatcher {
                     self.options.jitter.as_ref(),
                 )
                 .map_err(|e| failure(e, Some(attempt.clone())))?;
+                if research.is_some() {
+                    schedule_retry(ledger, &attempt, &mut out);
+                    if matches!(out.retry, RetryDecision::Pause { .. }) {
+                        let _ = pause_running(ledger, StopReason::Deadline);
+                    }
+                    return Err(out);
+                }
                 match &out.retry {
                     RetryDecision::After { delay_ms, .. } => {
                         if let Err(e) = wait(*delay_ms, &options, deadline).await {
@@ -765,7 +1039,70 @@ impl Dispatcher {
             }
         }
         .await;
+        let mut result = result;
+        if let Some((_, reservation)) = reserved {
+            if let Err(out) = &mut result {
+                out.attempt = Some(reservation.attempt().clone());
+            }
+            let _ = ledger.release_not_sent(
+                reservation.attempt(),
+                NotSentObservation {
+                    reason: NotSentReason::TransportNotEntered,
+                },
+            );
+        }
         result.map_err(|out| retained.finish(out))
+    }
+}
+fn prepare_effective(
+    fs: &VaultFs,
+    inspection: &LedgerInspection,
+    service: &TrustedService,
+    task: &TaskSpec,
+    purpose: DispatchPurpose,
+) -> Result<PreparedWire> {
+    service.recheck(fs)?;
+    let summary = service.summary();
+    let valid = if let Some(research) = &inspection.research {
+        research.active_tasks.contains(&task.key)
+            && research.binding.config_fingerprint == summary.config_fingerprint
+            && research.binding.services.iter().any(|binding| {
+                binding.profile_id == summary.profile_id
+                    && binding.capability == summary.capability
+                    && binding.profile_fingerprint == summary.profile_fingerprint
+                    && binding.endpoint_fingerprint == summary.endpoint_fingerprint
+            })
+    } else {
+        inspection.spec.config_fingerprint == summary.config_fingerprint
+            && inspection
+                .spec
+                .scope
+                .profile_fingerprints
+                .get(&summary.profile_id)
+                == Some(&summary.profile_fingerprint)
+    };
+    if !valid {
+        return Err(WikiError::new(
+            ErrorCode::ProfileUntrusted,
+            "run profile/config binding differs",
+        ));
+    }
+    let mut prepared = prepare(fs, service, task, purpose)?;
+    if inspection.research.is_some() {
+        prepared.bound.profile_fingerprint = Some(summary.profile_fingerprint);
+        prepared.bound.bounds_fingerprint = jobs::budgets::bound_fingerprint(&prepared.bound)?;
+        super::history::retain(fs, task, &mut prepared)?;
+    }
+    Ok(prepared)
+}
+fn schedule_retry(ledger: &JobLedger, attempt: &AttemptRef, out: &mut DispatchFailure) {
+    let RetryDecision::After { delay_ms, .. } = out.retry else {
+        return;
+    };
+    let schedule = ledger.schedule_research_retry_after(&attempt.task_key, attempt, delay_ms);
+    if let Err(error) = schedule {
+        out.error = redacted(error);
+        out.retry = RetryDecision::Never;
     }
 }
 #[derive(Default)]
@@ -1182,6 +1519,8 @@ pub(super) fn fixture_prepare(
         ]),
     };
     let mut bound = AttemptBound {
+        codec: None,
+        profile_fingerprint: None,
         capability,
         profile_id: summary.profile_id,
         endpoint_fingerprint: summary.endpoint_fingerprint,

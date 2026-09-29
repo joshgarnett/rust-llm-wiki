@@ -87,7 +87,7 @@ These are proposals, pending discussion:
 - A filesystem changeset and SQLite transaction are not jointly atomic; recovery and external-edit conflicts need explicit contracts.
 - Current libraries and projects have version-dependent capabilities and licensing; pin and recheck before implementation reuse.
 
-## Verification boundary
+## Planning verification boundary
 
 Research uses current project documentation and papers. No project has been benchmarked locally, no provider calls have been purchased, and no cited performance claim should be read as a measurement of this proposed CLI.
 
@@ -145,3 +145,9 @@ Explicit embeddings/check/sync, isolated-space exact semantic/hybrid retrieval, 
 Saved native debug artifact `/private/tmp/lwiki-m3-root-artifact/lwiki`, SHA256 fc476fb60ca5994f4daa00c89dc107e80fcce4193e5c94a89a7e954c108e19bf:32commands/15exact schemas/five disposable offline CLI operations passed. Native CLI actually exercises embeddings and API, paid-failure and successful-fallback telemetry. Authoritative scopes/hashes/logs live in P17/P18/P19-checks.json. No live-provider/model-quality/power-loss/native-other-OS qualification.
 
 Next: P20 bounded resumable research under one lifetime ledger, then P21 complete local exit. Exposed legacy doctor --probe must also become concrete. Astra P20 architecture is guidance, not runtime evidence.
+
+## P20 local M4 acceptance
+
+Bounded plan/run/resume/status/report and accounted role probes are locally accepted. 273 current integration parents plus 4 skill parents / 32 recipe steps passed, including all 23 research workflows. Formatting and strict all-target Clippy pass; 278 source/schema/skill/test/Cargo hashes match before/after. Independent Astra authority/publication/final-delta reviews close R1–R15; the historical capture helper author and final reviewer are distinct agents. P20-checks.json records exact commands, logs, hashes, artifact and limits. There are 37 concrete commands and 19 schemas. No live provider or other native platform is qualified.
+
+P21 remains required: full current fault/all-target/doctest suite, actual release recipe/copied artifact/linkage, fixed-corpus baseline, and final review/completion audit. The targeted same-vault parent and 48 fixed baseline pairs already pass; those targeted results are not final acceptance.

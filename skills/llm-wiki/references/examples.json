@@ -544,7 +544,7 @@
         "--mode",
         "semantic"
       ],
-      "expect_error": "USAGE",
+      "expect_error": "OFFLINE_UNAVAILABLE",
       "check": "semantic_unavailable"
     },
     {

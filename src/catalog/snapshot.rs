@@ -8,6 +8,51 @@ use rusqlite::params;
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
 impl Catalog {
+    /// Rebuild a verified read view in memory, including FTS. This creates no
+    /// cache files and permits local research after disposable cache deletion.
+    pub fn canonical_snapshot(&self) -> Result<ReaderSnapshot> {
+        self.guard_current(None)?;
+        let projection = scan::scan(&self.fs, &self.vault_id)?;
+        let mut connection = rusqlite::Connection::open_in_memory().map_err(sql::sql_error)?;
+        sql::configure(&connection, self.options.busy_timeout_ms, true)?;
+        sql::initialize(&mut connection)?;
+        let transaction = connection.transaction().map_err(sql::sql_error)?;
+        sql::insert_projection(&transaction, 1, &projection)?;
+        sql::replace_documents_fts(&transaction, 1, &projection)?;
+        sql::replace_graph_fts(&transaction, 1, &projection)?;
+        transaction
+            .execute("UPDATE generations SET state='complete' WHERE gen=1", [])
+            .map_err(sql::sql_error)?;
+        transaction
+            .execute("UPDATE index_meta SET published_gen=1", [])
+            .map_err(sql::sql_error)?;
+        transaction.commit().map_err(sql::sql_error)?;
+        if scan::scan(&self.fs, &self.vault_id)? != projection {
+            return Err(WikiError::new(
+                ErrorCode::FreshnessConflict,
+                "canonical records changed during read-only reconstruction",
+            ));
+        }
+        self.guard_current(None)?;
+        connection
+            .execute_batch("BEGIN DEFERRED")
+            .map_err(sql::sql_error)?;
+        let snapshot = ReadSnapshot {
+            generation: 1,
+            parser_fingerprint: projection.parser_fingerprint.clone(),
+            control_manifest: projection.control_manifest.clone(),
+        };
+        Ok(ReaderSnapshot {
+            connection,
+            snapshot,
+            projection,
+            verification: SnapshotVerification::VerifiedSnapshot {
+                verified_at: OffsetDateTime::now_utc()
+                    .format(&Rfc3339)
+                    .map_err(|_| WikiError::invalid("snapshot UTC encoding"))?,
+            },
+        })
+    }
     pub fn index_snapshot(&self) -> Result<ReaderSnapshot> {
         let path = self.cache_path()?;
         if !path.exists() {

@@ -277,10 +277,17 @@ fn skill_capabilities_do_not_advertise_missing_commands() {
             .as_array()
             .unwrap()
             .iter()
-            .any(
-                |s| ["research run", "lwiki mcp", "embeddings sync"].contains(&s.as_str().unwrap())
-            )
+            .any(|s| s.as_str() == Some("lwiki mcp"))
     );
+    for required in ["research run", "embeddings sync"] {
+        assert!(
+            capabilities["data"]["commands"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|command| command.as_str() == Some(required))
+        );
+    }
     let version = Command::new(env!("CARGO_BIN_EXE_lwiki"))
         .arg("--version")
         .output()
@@ -369,12 +376,12 @@ fn skill_examples_execute_against_release_binary() {
             }
         }
         match step["check"].as_str().unwrap_or("") {
-            "capabilities" => assert!(
-                !v["data"]["search_modes"]
-                    .as_array()
-                    .unwrap()
-                    .contains(&json!("semantic"))
-            ),
+            "capabilities" => {
+                let modes = v["data"]["search_modes"].as_array().unwrap();
+                for mode in ["literal", "lexical", "semantic", "hybrid"] {
+                    assert!(modes.contains(&json!(mode)), "{name}: missing {mode}");
+                }
+            }
             "repeat_revision" => {
                 assert_eq!(v["data"]["reused"], true);
                 assert_eq!(
@@ -431,9 +438,9 @@ fn skill_examples_execute_against_release_binary() {
                 assert!(!v["data"]["omissions"].as_array().unwrap().is_empty());
             }
             "semantic_unavailable" => {
-                assert_eq!(exit, 2);
-                assert_eq!(v["command"], "arguments");
-                assert!(v["error"]["message"].as_str().unwrap().contains("semantic"));
+                assert_eq!(exit, 6);
+                assert_eq!(v["command"], "search");
+                assert_eq!(v["error"]["code"], "OFFLINE_UNAVAILABLE");
             }
             "repeat_import" => {
                 assert_eq!(v["data"]["reused"], true);

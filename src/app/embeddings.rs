@@ -538,10 +538,31 @@ impl OfflineApp {
         }
         Ok(out)
     }
-    fn embedding_prior_accounting(&self) -> Result<PriorAccounting> {
+    pub(crate) fn prior_accounting_for_new_run(&self) -> Result<PriorAccounting> {
         let mut prior = BTreeSet::new();
-        let paths = self.fs.root().scan_markdown()?;
+        let mut entries = 0;
+        let paths = self.fs.root().scan_markdown_budgeted(&mut || {
+            entries += 1;
+            if entries > 65536 {
+                return Err(WikiError::new(
+                    ErrorCode::BudgetExceeded,
+                    "prior accounting discovery ceiling exceeded",
+                ));
+            }
+            Ok(())
+        })?;
         for path in paths {
+            if !path.as_str().starts_with("runs/") || !path.as_str().ends_with("/run.md") {
+                continue;
+            }
+            let Some(bytes) = crate::changes::prepare::read_bounded(
+                &self.fs,
+                &path,
+                crate::changes::prepare::MAX_PAYLOAD_BYTES,
+            )?
+            else {
+                continue;
+            };
             if let Some(name) = path
                 .as_str()
                 .strip_prefix("runs/")
@@ -550,6 +571,11 @@ impl OfflineApp {
                 && let Ok(id) = RecordId::new(name)
             {
                 prior.insert(id);
+            }
+            if let Some(record) = crate::records::parse_note(&bytes).canonical
+                && record.kind() == RecordKind::Run
+            {
+                prior.insert(record.id().clone());
             }
         }
         prior.extend(crate::vault::operational::RunStore::discover_existing(
@@ -561,7 +587,7 @@ impl OfflineApp {
         if prior.is_empty() {
             Ok(PriorAccounting::None)
         } else {
-            Ok(PriorAccounting::Unknown{prior_run_ids:prior.into_iter().collect(),reason:"retained prior run costs may remain unknown; new explicit embedding budget preserves those histories".into()})
+            Ok(PriorAccounting::Unknown{prior_run_ids:prior.into_iter().collect(),reason:"retained prior run costs may remain unknown; new explicit caller budget preserves those histories".into()})
         }
     }
     fn immutable_operational(
@@ -754,6 +780,7 @@ impl OfflineApp {
                 .checked_add(runtime.deadline_ms as i64)
                 .ok_or_else(|| WikiError::invalid("deadline overflow"))?,
             scope: RunScope {
+                research: None,
                 operation: operation.into(),
                 question: None,
                 exclusions: Vec::new(),
@@ -770,7 +797,7 @@ impl OfflineApp {
             input_fingerprint: Blake3Hash::digest([]),
             limits: runtime.limits.clone(),
             tasks: tasks.clone(),
-            prior_accounting: self.embedding_prior_accounting()?,
+            prior_accounting: self.prior_accounting_for_new_run()?,
         };
         run.input_fingerprint = jobs::tasks::input_fingerprint(&run)?;
         let ledger = JobLedger::new(

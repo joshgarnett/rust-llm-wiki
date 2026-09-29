@@ -316,6 +316,8 @@ pub(super) fn seal(
         })
         .collect::<Result<BTreeMap<_, _>>>()?;
     let mut bound = AttemptBound {
+        codec: None,
+        profile_fingerprint: None,
         capability,
         profile_id: summary.profile_id,
         endpoint_fingerprint: summary.endpoint_fingerprint,

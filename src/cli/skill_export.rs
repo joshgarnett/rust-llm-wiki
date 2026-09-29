@@ -116,6 +116,12 @@ fn command_reference() -> Result<Vec<u8>> {
     for name in super::dispatch::SCHEMAS {
         text.push_str(&format!("- `lwiki --json schema {name}`\n"));
     }
+    let text = text
+        .lines()
+        .map(str::trim_end)
+        .collect::<Vec<_>>()
+        .join("\n")
+        + "\n";
     Ok(text.into_bytes())
 }
 fn package(target: &str) -> Result<BTreeMap<String, Vec<u8>>> {

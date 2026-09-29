@@ -1,0 +1,15 @@
+# P20 native CLI tests
+
+Status: eighth combined native target **11 CLI tests and 1 stage test passed**, including the restored-Markdown discovery regression.
+
+Owned leaves: `tests/research_cli.rs` and this report. Existing fixtures/source/shared/Cargo/Git/state were not edited by this worker. All sockets use disposable vaults and explicitly trusted loopback HTTP providers through production sealed generation/search/embedding adapters.
+
+Coverage: complete dry/offline tree snapshots include directories, file kinds/hashes/modes and SQLite/state; unavailable private configuration and marker-producing credentials remain unused. Invalid scope/exclusions fail before provider access. Ordinary doctor compatibility and explicit role gating pass. Probe tests inspect native requests, Probe tasks/receipts, retained decoder role/purpose and zero-resend recovery. Malformed paid generation retains an unknown billing hold and actual network telemetry. Repeated same-vault generation/search/embedding probes disclose prior IDs without changing earlier attempts/holds.
+
+Full local-source research checks three actual paid stage receipt/output chains, cited unassessed claims, staged proposals, JSONL terminal envelopes, JSON status/report, cache loss, retained offline resume and explicit CLI apply. One-request budget stop/online resume return exit7 with deterministic partial data and no final synthesis.
+
+New Unix-native SIGINT test uses a channel barrier after the complete paid request entered, withholds every response, then verifies orderly terminal exit130, Stopped state, partial report, actual network, unresolved conservative hold, no follow-up/apply, online reconciliation refusal and exact zero-write/offline retained reports. New explicit JSON amendment test closes round1 under two requests, previews dry/offline without writes, rejects old resume budget flags, and raises the allowance to three while paying only synthesis and preserving genesis, prior attempts/holds, round/source history and absolute deadline. Both pass.
+
+Checks: leaf rustfmt passed. `cargo test --locked --offline --test research_cli --test research_stages` used reviewed loopback escalation. Eighth log `/private/tmp/lwiki-p20-cli-stages-eighth.log`: exit0, compile1.50s, CLI11/11 in14.98s, stages1/1 in0.77s. Sixth historical log passed11+1 before restored assertions. Seventh exit101/10-of11 exposed missing mandatory status/timestamp in the synthetic Run fixture; corrected only the leaf. Earlier fourth/fifth runs recorded fixture expectations and the root-owned prior-disclosure defect.
+
+Restored-history regression extends the existing role fixture with Markdown-only runs: a fixed directory whose canonical ID differs, and an archived nested run. Dry/offline previews preserve the complete tree/send nothing; actual probes disclose all possible prior IDs and preserve private original bytes. This verifies canonical-identity discovery; the helper's scan ceiling remains source-reviewed rather than a giant CLI fixture. No live-provider/other-OS/public-native-fetch or full-suite qualification follows.

@@ -92,7 +92,13 @@ fn main() {
     {
         std::process::exit(1);
     }
-    let (envelope, exit) = execute(&args);
+    let (envelope, exit) = match lwiki::cli::interrupt::install() {
+        Ok(()) => execute(&args),
+        Err(error) => (
+            Envelope::failure(args.command.name(), &error.code.to_string(), error.message),
+            1,
+        ),
+    };
     if format == OutputFormat::Human && matches!(envelope.command.as_str(), "read" | "context") {
         if let Some(freshness) = &envelope.meta.freshness {
             eprintln!(
