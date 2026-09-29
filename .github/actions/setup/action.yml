@@ -64,6 +64,8 @@ runs:
       if: runner.os == 'Windows'
       shell: pwsh
       run: |
+        # MSVC still rejects some linker inputs whose absolute paths exceed 260 characters.
+        "LWIKI_BAZEL_OUTPUT_ROOT=$env:SystemDrive/lwb" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
         $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio/Installer/vswhere.exe'
         $installation = & $vswhere -latest -products '*' -property installationPath
         if ($LASTEXITCODE -ne 0 -or -not $installation) { throw 'Visual Studio installation not found' }

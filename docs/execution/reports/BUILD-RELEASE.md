@@ -69,6 +69,10 @@ Astra reviewed the tool-discovery code: setup now selects Visual Studio through
 `vswhere`, checks the native compiler/linker paths and exports `BAZEL_VC` before
 Bazel starts. The wrapper also retains Windows installation directory variables.
 Unix jobs continue; hosted acceptance remains pending.
+The following Windows CI run confirmed compiler discovery but exposed a
+264-character Rust standard-library linker input (`LNK1181`). Windows setup
+now uses a short output root on the runner's system drive, as recommended by
+the Bazel Windows guide. This changes orchestration, not Rust source/tests.
 A release is accepted only after all six jobs succeed, downloaded
 archives pass checksum/member/metadata/binary checks, and the draft targets
 that exact validated commit. No failed-job artifact is promoted. The draft

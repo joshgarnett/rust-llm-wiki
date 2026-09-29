@@ -12,6 +12,10 @@ The repository pins Bazel 9.2.0, rules_rust 0.72.0 and Rust 1.98.0.
 A native C compiler/linker and platform SDK are required for bundled SQLite
 and ring. Windows commands also require Git Bash and the MSVC/Windows SDK.
 Python, Just and Bazelisk are development tools, not binary runtime dependencies.
+On Windows, set `LWIKI_BAZEL_OUTPUT_ROOT` to a short writable path such as
+`C:/lwb` before invoking Just. MSVC can reject long linker input paths; this
+follows [Bazel's Windows guidance](https://bazel.build/configure/windows).
+GitHub setup selects that short output root and discovers MSVC explicitly.
 
 ```sh
 just doctor
