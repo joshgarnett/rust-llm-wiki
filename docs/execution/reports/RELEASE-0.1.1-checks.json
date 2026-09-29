@@ -1,0 +1,519 @@
+{
+  "schema_version": 1,
+  "scope": "Six native release builds, CI smoke gates and archive verification; local downloaded macOS smoke. No live provider or full all-platform crash qualification.",
+  "source_commit": "258689d90d301f3b1ed4f7e12cf8b4f71a296141",
+  "package_version": "0.1.1",
+  "release_build": {
+    "url": "https://github.com/joshgarnett/rust-llm-wiki/actions/runs/36631455854",
+    "source_commit": "258689d90d301f3b1ed4f7e12cf8b4f71a296141",
+    "conclusion": "success",
+    "jobs": [
+      {
+        "name": "aarch64-pc-windows-msvc",
+        "url": "https://github.com/joshgarnett/rust-llm-wiki/actions/runs/36631455854/job/109621444333",
+        "conclusion": "success",
+        "startedAt": "2026-09-29T21:10:19Z",
+        "completedAt": "2026-09-29T21:22:07Z"
+      },
+      {
+        "name": "aarch64-unknown-linux-gnu",
+        "url": "https://github.com/joshgarnett/rust-llm-wiki/actions/runs/36631455854/job/109621444421",
+        "conclusion": "success",
+        "startedAt": "2026-09-29T21:10:20Z",
+        "completedAt": "2026-09-29T21:17:14Z"
+      },
+      {
+        "name": "aarch64-apple-darwin",
+        "url": "https://github.com/joshgarnett/rust-llm-wiki/actions/runs/36631455854/job/109621444431",
+        "conclusion": "success",
+        "startedAt": "2026-09-29T21:10:24Z",
+        "completedAt": "2026-09-29T21:23:23Z"
+      },
+      {
+        "name": "x86_64-unknown-linux-gnu",
+        "url": "https://github.com/joshgarnett/rust-llm-wiki/actions/runs/36631455854/job/109621444476",
+        "conclusion": "success",
+        "startedAt": "2026-09-29T21:10:18Z",
+        "completedAt": "2026-09-29T21:19:48Z"
+      },
+      {
+        "name": "x86_64-apple-darwin",
+        "url": "https://github.com/joshgarnett/rust-llm-wiki/actions/runs/36631455854/job/109621444537",
+        "conclusion": "success",
+        "startedAt": "2026-09-29T21:10:20Z",
+        "completedAt": "2026-09-29T21:26:09Z"
+      },
+      {
+        "name": "x86_64-pc-windows-msvc",
+        "url": "https://github.com/joshgarnett/rust-llm-wiki/actions/runs/36631455854/job/109621444589",
+        "conclusion": "success",
+        "startedAt": "2026-09-29T21:10:19Z",
+        "completedAt": "2026-09-29T21:24:14Z"
+      }
+    ]
+  },
+  "ci": {
+    "url": "https://github.com/joshgarnett/rust-llm-wiki/actions/runs/36631438819",
+    "source_commit": "258689d90d301f3b1ed4f7e12cf8b4f71a296141",
+    "conclusion": "success",
+    "jobs": [
+      {
+        "name": "Windows build and capabilities only",
+        "url": "https://github.com/joshgarnett/rust-llm-wiki/actions/runs/36631438819/job/109621382684",
+        "conclusion": "success",
+        "startedAt": "2026-09-29T21:10:08Z",
+        "completedAt": "2026-09-29T21:25:06Z"
+      },
+      {
+        "name": "Build and smoke (ubuntu-24.04)",
+        "url": "https://github.com/joshgarnett/rust-llm-wiki/actions/runs/36631438819/job/109621382792",
+        "conclusion": "success",
+        "startedAt": "2026-09-29T21:10:08Z",
+        "completedAt": "2026-09-29T21:19:47Z"
+      },
+      {
+        "name": "Build and smoke (macos-26)",
+        "url": "https://github.com/joshgarnett/rust-llm-wiki/actions/runs/36631438819/job/109621382895",
+        "conclusion": "success",
+        "startedAt": "2026-09-29T21:10:14Z",
+        "completedAt": "2026-09-29T21:22:35Z"
+      }
+    ]
+  },
+  "verified_assets": 12,
+  "artifacts": [
+    {
+      "target": "aarch64-pc-windows-msvc",
+      "archive": "lwiki-0.1.1-aarch64-pc-windows-msvc.tar.gz",
+      "archive_bytes": 8005061,
+      "archive_sha256": "7bd60c15942afdc3dc9c166fa0da5d6146a73dbcc1cbb3cd9460282d304f6846",
+      "binary_bytes": 20129280,
+      "binary_sha256": "4f0fb32c5b5db182f4c5df7ce8ee21501055c992151059704a39500a6c6a2667",
+      "architecture": "PE32+ executable (console) Aarch64, for MS Windows",
+      "build_info": {
+        "schema_version": 1,
+        "scope": "native release build and copied-binary version/capabilities smoke only; not full qualification",
+        "source": {
+          "commit": "258689d90d301f3b1ed4f7e12cf8b4f71a296141",
+          "dirty": false,
+          "note": "Informational, not qualified provenance. HEAD/status and build contract digests were compared before/after; unchanged status does not prove dirty file contents stayed unchanged."
+        },
+        "bazel": "Bazelisk v1.29.0\nbazel 9.2.0",
+        "host": "aarch64-pc-windows-msvc",
+        "target": "aarch64-pc-windows-msvc",
+        "package_version": "0.1.1",
+        "build_command": [
+          "C:\\hostedtoolcache\\windows\\Python\\3.13.15\\arm64\\python.exe",
+          "C:\\a\\rust-llm-wiki\\rust-llm-wiki\\scripts\\bazel.py",
+          "--",
+          "build",
+          "--config=release",
+          "--nofetch",
+          "//:lwiki"
+        ],
+        "rust_toolchain": "[toolchain]\nchannel = \"1.98.0\"\nprofile = \"minimal\"\ncomponents = [\"clippy\", \"rustfmt\"]\n",
+        "bazel_module": "module(name = \"rust_llm_wiki\", version = \"0.1.1\")\n\nbazel_dep(name = \"platforms\", version = \"1.1.0\")\nbazel_dep(name = \"rules_rust\", version = \"0.72.0\")\n\nrust = use_extension(\"@rules_rust//rust:extensions.bzl\", \"rust\")\nrust.toolchain(\n    edition = \"2024\",\n    versions = [\"1.98.0\"],\n    extra_target_triples = [\n        \"aarch64-apple-darwin\",\n        \"x86_64-apple-darwin\",\n        \"aarch64-unknown-linux-gnu\",\n        \"x86_64-unknown-linux-gnu\",\n        \"aarch64-pc-windows-msvc\",\n        \"x86_64-pc-windows-msvc\",\n    ],\n)\nuse_repo(rust, \"rust_toolchains\")\nregister_toolchains(\"@rust_toolchains//:all\")\n\ncrate = use_extension(\"@rules_rust//crate_universe:extensions.bzl\", \"crate\")\ncrate.from_cargo(\n    name = \"crates\",\n    cargo_lockfile = \"//:Cargo.lock\",\n    lockfile = \"//:cargo-bazel-lock.json\",\n    manifests = [\"//:Cargo.toml\"],\n    isolated = True,\n    supported_platform_triples = [\n        \"aarch64-apple-darwin\",\n        \"x86_64-apple-darwin\",\n        \"aarch64-unknown-linux-gnu\",\n        \"x86_64-unknown-linux-gnu\",\n        \"aarch64-pc-windows-msvc\",\n        \"x86_64-pc-windows-msvc\",\n    ],\n)\ncrate.annotation(\n    crate = \"ring\",\n    version = \"0.17.14\",\n    repositories = [\"crates\"],\n    patches = [\"//bazel:ring_windows_arm64_cflags.patch\"],\n    patch_args = [\"-p1\"],\n)\ncrate.annotation_select(\n    crate = \"ring\",\n    version = \"0.17.14\",\n    repositories = [\"crates\"],\n    triples = [\"aarch64-pc-windows-msvc\"],\n    build_script_env = {\"LWIKI_RING_WINDOWS_ARM64_CLANG\": \"1\"},\n)\nuse_repo(crate, \"crates\")\n",
+        "bazel_version_pin": "9.2.0",
+        "build_contract_sha256": {
+          "Cargo.toml": "e37823772628e2fbe996414c674af563fa2a1f9a1bcb5ef0f3683fab4db01a5c",
+          "Cargo.lock": "1f0d48933e916a2e0148c477b281147fb1634399e8853afadd1ae19fe2889c2f",
+          "MODULE.bazel": "e8bb020c823c1d16c7cc00d5c53b8c11dee09834ee71d2c17f6301c8234a9bbd",
+          "MODULE.bazel.lock": "41e9384a360475fee3c8c58a5e0588cdfdfa5578a8f55259b311155daf8c9909",
+          "cargo-bazel-lock.json": "60ce118226d3f66227ccd41a8753067748a5fb157731f17ef1a7c3b578b63441",
+          ".bazelversion": "0a83cb19bb3a4a8c10032ad6e6305f6b98d8259db91ffc98b2ef72eb88fb46df",
+          ".bazelrc": "b037cd225a9add144b032a1870472ed7e44aecf2fd845154f8139c40dca54794",
+          "rust-toolchain.toml": "90204ca70291b3df79ef4532e2850103c5f5dd35dd73161303a3daf1a19a38d5",
+          "scripts/bazel.py": "840f895f13e470d96b9ee03903fa770072b1b613a4293bc9cdf326b8380044c3"
+        },
+        "cargo_lock_sha256": "1f0d48933e916a2e0148c477b281147fb1634399e8853afadd1ae19fe2889c2f",
+        "binary": "lwiki.exe",
+        "binary_sha256": "4f0fb32c5b5db182f4c5df7ce8ee21501055c992151059704a39500a6c6a2667"
+      },
+      "job": {
+        "name": "aarch64-pc-windows-msvc",
+        "databaseId": 109621444333,
+        "conclusion": "success",
+        "startedAt": "2026-09-29T21:10:19Z",
+        "completedAt": "2026-09-29T21:22:07Z",
+        "url": "https://github.com/joshgarnett/rust-llm-wiki/actions/runs/36631455854/job/109621444333"
+      },
+      "verification": "passed"
+    },
+    {
+      "target": "aarch64-unknown-linux-gnu",
+      "archive": "lwiki-0.1.1-aarch64-unknown-linux-gnu.tar.gz",
+      "archive_bytes": 8971921,
+      "archive_sha256": "e2228daeaaa26522d46c6c3782b710a3f1aac668d031a034c34f85abd947a2c1",
+      "binary_bytes": 26809856,
+      "binary_sha256": "4cd0feaecf5532e5b3fb0d06a14784dca4bd38a11559ed39a35036ad45c02b9d",
+      "architecture": "ELF 64-bit LSB pie executable, ARM aarch64, version 1 (SYSV), dynamically linked, interpreter /lib/ld-linux-aarch64.so.1, for GNU/Linux 3.7.0, BuildID[sha1]=613f70f3e4531053a102d83c3519bd4fed642bc3, not stripped",
+      "build_info": {
+        "schema_version": 1,
+        "scope": "native release build and copied-binary version/capabilities smoke only; not full qualification",
+        "source": {
+          "commit": "258689d90d301f3b1ed4f7e12cf8b4f71a296141",
+          "dirty": false,
+          "note": "Informational, not qualified provenance. HEAD/status and build contract digests were compared before/after; unchanged status does not prove dirty file contents stayed unchanged."
+        },
+        "bazel": "Bazelisk v1.29.0\nbazel 9.2.0",
+        "host": "aarch64-unknown-linux-gnu",
+        "target": "aarch64-unknown-linux-gnu",
+        "package_version": "0.1.1",
+        "build_command": [
+          "/usr/bin/python3",
+          "/home/runner/work/rust-llm-wiki/rust-llm-wiki/scripts/bazel.py",
+          "--",
+          "build",
+          "--config=release",
+          "--nofetch",
+          "//:lwiki"
+        ],
+        "rust_toolchain": "[toolchain]\nchannel = \"1.98.0\"\nprofile = \"minimal\"\ncomponents = [\"clippy\", \"rustfmt\"]\n",
+        "bazel_module": "module(name = \"rust_llm_wiki\", version = \"0.1.1\")\n\nbazel_dep(name = \"platforms\", version = \"1.1.0\")\nbazel_dep(name = \"rules_rust\", version = \"0.72.0\")\n\nrust = use_extension(\"@rules_rust//rust:extensions.bzl\", \"rust\")\nrust.toolchain(\n    edition = \"2024\",\n    versions = [\"1.98.0\"],\n    extra_target_triples = [\n        \"aarch64-apple-darwin\",\n        \"x86_64-apple-darwin\",\n        \"aarch64-unknown-linux-gnu\",\n        \"x86_64-unknown-linux-gnu\",\n        \"aarch64-pc-windows-msvc\",\n        \"x86_64-pc-windows-msvc\",\n    ],\n)\nuse_repo(rust, \"rust_toolchains\")\nregister_toolchains(\"@rust_toolchains//:all\")\n\ncrate = use_extension(\"@rules_rust//crate_universe:extensions.bzl\", \"crate\")\ncrate.from_cargo(\n    name = \"crates\",\n    cargo_lockfile = \"//:Cargo.lock\",\n    lockfile = \"//:cargo-bazel-lock.json\",\n    manifests = [\"//:Cargo.toml\"],\n    isolated = True,\n    supported_platform_triples = [\n        \"aarch64-apple-darwin\",\n        \"x86_64-apple-darwin\",\n        \"aarch64-unknown-linux-gnu\",\n        \"x86_64-unknown-linux-gnu\",\n        \"aarch64-pc-windows-msvc\",\n        \"x86_64-pc-windows-msvc\",\n    ],\n)\ncrate.annotation(\n    crate = \"ring\",\n    version = \"0.17.14\",\n    repositories = [\"crates\"],\n    patches = [\"//bazel:ring_windows_arm64_cflags.patch\"],\n    patch_args = [\"-p1\"],\n)\ncrate.annotation_select(\n    crate = \"ring\",\n    version = \"0.17.14\",\n    repositories = [\"crates\"],\n    triples = [\"aarch64-pc-windows-msvc\"],\n    build_script_env = {\"LWIKI_RING_WINDOWS_ARM64_CLANG\": \"1\"},\n)\nuse_repo(crate, \"crates\")\n",
+        "bazel_version_pin": "9.2.0",
+        "build_contract_sha256": {
+          "Cargo.toml": "98166fc83b115ea3c233066ed89ce3e5288d68aa3c83a6fea7df16fdf8330c7e",
+          "Cargo.lock": "f0aa744560c76cd98d0e2ea3d3e12c1f08de11e72422b6f2c9aba2ceb9b7c3fa",
+          "MODULE.bazel": "848860dd64d4db136edc33a8d5b78030b57734b797678337d8066fc5728de462",
+          "MODULE.bazel.lock": "7879b81486d299d61ae622a561203785d4a7b91e8f0382e3c614d472d9244efa",
+          "cargo-bazel-lock.json": "b548dcf98bfbed3437e996b4bffc0d73ca0f3367a193006f3b254ca335c1531c",
+          ".bazelversion": "1b9487d55bea47fea50d226cc9c53bc548877ad2a318bac8fbc8b320f429e5c5",
+          ".bazelrc": "cb1b3f8a089ca7fb6804c5029a602ae660ff25fb8081fa520b67474d434e38cc",
+          "rust-toolchain.toml": "495c69d1db93f25f53e3d0d2d40d812313366cc368de317871c2ace6c6ffafa4",
+          "scripts/bazel.py": "f727e423befd2ac156a94f482cf02da966cfa5d80e8665f4348245f14d1a2811"
+        },
+        "cargo_lock_sha256": "f0aa744560c76cd98d0e2ea3d3e12c1f08de11e72422b6f2c9aba2ceb9b7c3fa",
+        "binary": "lwiki",
+        "binary_sha256": "4cd0feaecf5532e5b3fb0d06a14784dca4bd38a11559ed39a35036ad45c02b9d"
+      },
+      "job": {
+        "name": "aarch64-unknown-linux-gnu",
+        "databaseId": 109621444421,
+        "conclusion": "success",
+        "startedAt": "2026-09-29T21:10:20Z",
+        "completedAt": "2026-09-29T21:17:14Z",
+        "url": "https://github.com/joshgarnett/rust-llm-wiki/actions/runs/36631455854/job/109621444421"
+      },
+      "verification": "passed"
+    },
+    {
+      "target": "aarch64-apple-darwin",
+      "archive": "lwiki-0.1.1-aarch64-apple-darwin.tar.gz",
+      "archive_bytes": 8610069,
+      "archive_sha256": "35898b5246853ec84df07e458d950add57c00e5a37835497284114a661e47570",
+      "binary_bytes": 23989552,
+      "binary_sha256": "8e657f34d0dc2f04bb4c9f760f14cdeaf75e01b9a584148653637ad0bb6e4ac6",
+      "architecture": "Mach-O 64-bit executable arm64",
+      "build_info": {
+        "schema_version": 1,
+        "scope": "native release build and copied-binary version/capabilities smoke only; not full qualification",
+        "source": {
+          "commit": "258689d90d301f3b1ed4f7e12cf8b4f71a296141",
+          "dirty": false,
+          "note": "Informational, not qualified provenance. HEAD/status and build contract digests were compared before/after; unchanged status does not prove dirty file contents stayed unchanged."
+        },
+        "bazel": "Bazelisk v1.29.0\nbazel 9.2.0",
+        "host": "aarch64-apple-darwin",
+        "target": "aarch64-apple-darwin",
+        "package_version": "0.1.1",
+        "build_command": [
+          "/opt/homebrew/opt/python@3.14/bin/python3.14",
+          "/Users/runner/work/rust-llm-wiki/rust-llm-wiki/scripts/bazel.py",
+          "--",
+          "build",
+          "--config=release",
+          "--nofetch",
+          "//:lwiki"
+        ],
+        "rust_toolchain": "[toolchain]\nchannel = \"1.98.0\"\nprofile = \"minimal\"\ncomponents = [\"clippy\", \"rustfmt\"]\n",
+        "bazel_module": "module(name = \"rust_llm_wiki\", version = \"0.1.1\")\n\nbazel_dep(name = \"platforms\", version = \"1.1.0\")\nbazel_dep(name = \"rules_rust\", version = \"0.72.0\")\n\nrust = use_extension(\"@rules_rust//rust:extensions.bzl\", \"rust\")\nrust.toolchain(\n    edition = \"2024\",\n    versions = [\"1.98.0\"],\n    extra_target_triples = [\n        \"aarch64-apple-darwin\",\n        \"x86_64-apple-darwin\",\n        \"aarch64-unknown-linux-gnu\",\n        \"x86_64-unknown-linux-gnu\",\n        \"aarch64-pc-windows-msvc\",\n        \"x86_64-pc-windows-msvc\",\n    ],\n)\nuse_repo(rust, \"rust_toolchains\")\nregister_toolchains(\"@rust_toolchains//:all\")\n\ncrate = use_extension(\"@rules_rust//crate_universe:extensions.bzl\", \"crate\")\ncrate.from_cargo(\n    name = \"crates\",\n    cargo_lockfile = \"//:Cargo.lock\",\n    lockfile = \"//:cargo-bazel-lock.json\",\n    manifests = [\"//:Cargo.toml\"],\n    isolated = True,\n    supported_platform_triples = [\n        \"aarch64-apple-darwin\",\n        \"x86_64-apple-darwin\",\n        \"aarch64-unknown-linux-gnu\",\n        \"x86_64-unknown-linux-gnu\",\n        \"aarch64-pc-windows-msvc\",\n        \"x86_64-pc-windows-msvc\",\n    ],\n)\ncrate.annotation(\n    crate = \"ring\",\n    version = \"0.17.14\",\n    repositories = [\"crates\"],\n    patches = [\"//bazel:ring_windows_arm64_cflags.patch\"],\n    patch_args = [\"-p1\"],\n)\ncrate.annotation_select(\n    crate = \"ring\",\n    version = \"0.17.14\",\n    repositories = [\"crates\"],\n    triples = [\"aarch64-pc-windows-msvc\"],\n    build_script_env = {\"LWIKI_RING_WINDOWS_ARM64_CLANG\": \"1\"},\n)\nuse_repo(crate, \"crates\")\n",
+        "bazel_version_pin": "9.2.0",
+        "build_contract_sha256": {
+          "Cargo.toml": "98166fc83b115ea3c233066ed89ce3e5288d68aa3c83a6fea7df16fdf8330c7e",
+          "Cargo.lock": "f0aa744560c76cd98d0e2ea3d3e12c1f08de11e72422b6f2c9aba2ceb9b7c3fa",
+          "MODULE.bazel": "848860dd64d4db136edc33a8d5b78030b57734b797678337d8066fc5728de462",
+          "MODULE.bazel.lock": "7879b81486d299d61ae622a561203785d4a7b91e8f0382e3c614d472d9244efa",
+          "cargo-bazel-lock.json": "b548dcf98bfbed3437e996b4bffc0d73ca0f3367a193006f3b254ca335c1531c",
+          ".bazelversion": "1b9487d55bea47fea50d226cc9c53bc548877ad2a318bac8fbc8b320f429e5c5",
+          ".bazelrc": "cb1b3f8a089ca7fb6804c5029a602ae660ff25fb8081fa520b67474d434e38cc",
+          "rust-toolchain.toml": "495c69d1db93f25f53e3d0d2d40d812313366cc368de317871c2ace6c6ffafa4",
+          "scripts/bazel.py": "f727e423befd2ac156a94f482cf02da966cfa5d80e8665f4348245f14d1a2811"
+        },
+        "cargo_lock_sha256": "f0aa744560c76cd98d0e2ea3d3e12c1f08de11e72422b6f2c9aba2ceb9b7c3fa",
+        "binary": "lwiki",
+        "binary_sha256": "8e657f34d0dc2f04bb4c9f760f14cdeaf75e01b9a584148653637ad0bb6e4ac6"
+      },
+      "job": {
+        "name": "aarch64-apple-darwin",
+        "databaseId": 109621444431,
+        "conclusion": "success",
+        "startedAt": "2026-09-29T21:10:24Z",
+        "completedAt": "2026-09-29T21:23:23Z",
+        "url": "https://github.com/joshgarnett/rust-llm-wiki/actions/runs/36631455854/job/109621444431"
+      },
+      "verification": "passed"
+    },
+    {
+      "target": "x86_64-unknown-linux-gnu",
+      "archive": "lwiki-0.1.1-x86_64-unknown-linux-gnu.tar.gz",
+      "archive_bytes": 9450203,
+      "archive_sha256": "82e351d5d46f6b9e9f566ccb8c7813f925a4f2b79c44b693571dffaaa3c11792",
+      "binary_bytes": 28310432,
+      "binary_sha256": "e7de360456ccad963b9d26c3fc93fd954f8e2b4d8b96a33699f0e04568712ef7",
+      "architecture": "ELF 64-bit LSB pie executable, x86-64, version 1 (SYSV), dynamically linked, interpreter /lib64/ld-linux-x86-64.so.2, for GNU/Linux 3.2.0, BuildID[sha1]=590451cb03a054bbb341333f83540dc945a8d758, not stripped",
+      "build_info": {
+        "schema_version": 1,
+        "scope": "native release build and copied-binary version/capabilities smoke only; not full qualification",
+        "source": {
+          "commit": "258689d90d301f3b1ed4f7e12cf8b4f71a296141",
+          "dirty": false,
+          "note": "Informational, not qualified provenance. HEAD/status and build contract digests were compared before/after; unchanged status does not prove dirty file contents stayed unchanged."
+        },
+        "bazel": "Bazelisk v1.29.0\nbazel 9.2.0",
+        "host": "x86_64-unknown-linux-gnu",
+        "target": "x86_64-unknown-linux-gnu",
+        "package_version": "0.1.1",
+        "build_command": [
+          "/usr/bin/python3",
+          "/home/runner/work/rust-llm-wiki/rust-llm-wiki/scripts/bazel.py",
+          "--",
+          "build",
+          "--config=release",
+          "--nofetch",
+          "//:lwiki"
+        ],
+        "rust_toolchain": "[toolchain]\nchannel = \"1.98.0\"\nprofile = \"minimal\"\ncomponents = [\"clippy\", \"rustfmt\"]\n",
+        "bazel_module": "module(name = \"rust_llm_wiki\", version = \"0.1.1\")\n\nbazel_dep(name = \"platforms\", version = \"1.1.0\")\nbazel_dep(name = \"rules_rust\", version = \"0.72.0\")\n\nrust = use_extension(\"@rules_rust//rust:extensions.bzl\", \"rust\")\nrust.toolchain(\n    edition = \"2024\",\n    versions = [\"1.98.0\"],\n    extra_target_triples = [\n        \"aarch64-apple-darwin\",\n        \"x86_64-apple-darwin\",\n        \"aarch64-unknown-linux-gnu\",\n        \"x86_64-unknown-linux-gnu\",\n        \"aarch64-pc-windows-msvc\",\n        \"x86_64-pc-windows-msvc\",\n    ],\n)\nuse_repo(rust, \"rust_toolchains\")\nregister_toolchains(\"@rust_toolchains//:all\")\n\ncrate = use_extension(\"@rules_rust//crate_universe:extensions.bzl\", \"crate\")\ncrate.from_cargo(\n    name = \"crates\",\n    cargo_lockfile = \"//:Cargo.lock\",\n    lockfile = \"//:cargo-bazel-lock.json\",\n    manifests = [\"//:Cargo.toml\"],\n    isolated = True,\n    supported_platform_triples = [\n        \"aarch64-apple-darwin\",\n        \"x86_64-apple-darwin\",\n        \"aarch64-unknown-linux-gnu\",\n        \"x86_64-unknown-linux-gnu\",\n        \"aarch64-pc-windows-msvc\",\n        \"x86_64-pc-windows-msvc\",\n    ],\n)\ncrate.annotation(\n    crate = \"ring\",\n    version = \"0.17.14\",\n    repositories = [\"crates\"],\n    patches = [\"//bazel:ring_windows_arm64_cflags.patch\"],\n    patch_args = [\"-p1\"],\n)\ncrate.annotation_select(\n    crate = \"ring\",\n    version = \"0.17.14\",\n    repositories = [\"crates\"],\n    triples = [\"aarch64-pc-windows-msvc\"],\n    build_script_env = {\"LWIKI_RING_WINDOWS_ARM64_CLANG\": \"1\"},\n)\nuse_repo(crate, \"crates\")\n",
+        "bazel_version_pin": "9.2.0",
+        "build_contract_sha256": {
+          "Cargo.toml": "98166fc83b115ea3c233066ed89ce3e5288d68aa3c83a6fea7df16fdf8330c7e",
+          "Cargo.lock": "f0aa744560c76cd98d0e2ea3d3e12c1f08de11e72422b6f2c9aba2ceb9b7c3fa",
+          "MODULE.bazel": "848860dd64d4db136edc33a8d5b78030b57734b797678337d8066fc5728de462",
+          "MODULE.bazel.lock": "7879b81486d299d61ae622a561203785d4a7b91e8f0382e3c614d472d9244efa",
+          "cargo-bazel-lock.json": "b548dcf98bfbed3437e996b4bffc0d73ca0f3367a193006f3b254ca335c1531c",
+          ".bazelversion": "1b9487d55bea47fea50d226cc9c53bc548877ad2a318bac8fbc8b320f429e5c5",
+          ".bazelrc": "cb1b3f8a089ca7fb6804c5029a602ae660ff25fb8081fa520b67474d434e38cc",
+          "rust-toolchain.toml": "495c69d1db93f25f53e3d0d2d40d812313366cc368de317871c2ace6c6ffafa4",
+          "scripts/bazel.py": "f727e423befd2ac156a94f482cf02da966cfa5d80e8665f4348245f14d1a2811"
+        },
+        "cargo_lock_sha256": "f0aa744560c76cd98d0e2ea3d3e12c1f08de11e72422b6f2c9aba2ceb9b7c3fa",
+        "binary": "lwiki",
+        "binary_sha256": "e7de360456ccad963b9d26c3fc93fd954f8e2b4d8b96a33699f0e04568712ef7"
+      },
+      "job": {
+        "name": "x86_64-unknown-linux-gnu",
+        "databaseId": 109621444476,
+        "conclusion": "success",
+        "startedAt": "2026-09-29T21:10:18Z",
+        "completedAt": "2026-09-29T21:19:48Z",
+        "url": "https://github.com/joshgarnett/rust-llm-wiki/actions/runs/36631455854/job/109621444476"
+      },
+      "verification": "passed"
+    },
+    {
+      "target": "x86_64-apple-darwin",
+      "archive": "lwiki-0.1.1-x86_64-apple-darwin.tar.gz",
+      "archive_bytes": 9171917,
+      "archive_sha256": "ac7b225c5431b69077b52e588c34b0e8acccae9586af402b951d7059eabb5e66",
+      "binary_bytes": 25906176,
+      "binary_sha256": "d87c80e8089848e6a38e7fbe1990dae1869d984f37d35a4de1f53d00221d7bd6",
+      "architecture": "Mach-O 64-bit executable x86_64",
+      "build_info": {
+        "schema_version": 1,
+        "scope": "native release build and copied-binary version/capabilities smoke only; not full qualification",
+        "source": {
+          "commit": "258689d90d301f3b1ed4f7e12cf8b4f71a296141",
+          "dirty": false,
+          "note": "Informational, not qualified provenance. HEAD/status and build contract digests were compared before/after; unchanged status does not prove dirty file contents stayed unchanged."
+        },
+        "bazel": "Bazelisk v1.29.0\nbazel 9.2.0",
+        "host": "x86_64-apple-darwin",
+        "target": "x86_64-apple-darwin",
+        "package_version": "0.1.1",
+        "build_command": [
+          "/usr/local/opt/python@3.14/bin/python3.14",
+          "/Users/runner/work/rust-llm-wiki/rust-llm-wiki/scripts/bazel.py",
+          "--",
+          "build",
+          "--config=release",
+          "--nofetch",
+          "//:lwiki"
+        ],
+        "rust_toolchain": "[toolchain]\nchannel = \"1.98.0\"\nprofile = \"minimal\"\ncomponents = [\"clippy\", \"rustfmt\"]\n",
+        "bazel_module": "module(name = \"rust_llm_wiki\", version = \"0.1.1\")\n\nbazel_dep(name = \"platforms\", version = \"1.1.0\")\nbazel_dep(name = \"rules_rust\", version = \"0.72.0\")\n\nrust = use_extension(\"@rules_rust//rust:extensions.bzl\", \"rust\")\nrust.toolchain(\n    edition = \"2024\",\n    versions = [\"1.98.0\"],\n    extra_target_triples = [\n        \"aarch64-apple-darwin\",\n        \"x86_64-apple-darwin\",\n        \"aarch64-unknown-linux-gnu\",\n        \"x86_64-unknown-linux-gnu\",\n        \"aarch64-pc-windows-msvc\",\n        \"x86_64-pc-windows-msvc\",\n    ],\n)\nuse_repo(rust, \"rust_toolchains\")\nregister_toolchains(\"@rust_toolchains//:all\")\n\ncrate = use_extension(\"@rules_rust//crate_universe:extensions.bzl\", \"crate\")\ncrate.from_cargo(\n    name = \"crates\",\n    cargo_lockfile = \"//:Cargo.lock\",\n    lockfile = \"//:cargo-bazel-lock.json\",\n    manifests = [\"//:Cargo.toml\"],\n    isolated = True,\n    supported_platform_triples = [\n        \"aarch64-apple-darwin\",\n        \"x86_64-apple-darwin\",\n        \"aarch64-unknown-linux-gnu\",\n        \"x86_64-unknown-linux-gnu\",\n        \"aarch64-pc-windows-msvc\",\n        \"x86_64-pc-windows-msvc\",\n    ],\n)\ncrate.annotation(\n    crate = \"ring\",\n    version = \"0.17.14\",\n    repositories = [\"crates\"],\n    patches = [\"//bazel:ring_windows_arm64_cflags.patch\"],\n    patch_args = [\"-p1\"],\n)\ncrate.annotation_select(\n    crate = \"ring\",\n    version = \"0.17.14\",\n    repositories = [\"crates\"],\n    triples = [\"aarch64-pc-windows-msvc\"],\n    build_script_env = {\"LWIKI_RING_WINDOWS_ARM64_CLANG\": \"1\"},\n)\nuse_repo(crate, \"crates\")\n",
+        "bazel_version_pin": "9.2.0",
+        "build_contract_sha256": {
+          "Cargo.toml": "98166fc83b115ea3c233066ed89ce3e5288d68aa3c83a6fea7df16fdf8330c7e",
+          "Cargo.lock": "f0aa744560c76cd98d0e2ea3d3e12c1f08de11e72422b6f2c9aba2ceb9b7c3fa",
+          "MODULE.bazel": "848860dd64d4db136edc33a8d5b78030b57734b797678337d8066fc5728de462",
+          "MODULE.bazel.lock": "7879b81486d299d61ae622a561203785d4a7b91e8f0382e3c614d472d9244efa",
+          "cargo-bazel-lock.json": "b548dcf98bfbed3437e996b4bffc0d73ca0f3367a193006f3b254ca335c1531c",
+          ".bazelversion": "1b9487d55bea47fea50d226cc9c53bc548877ad2a318bac8fbc8b320f429e5c5",
+          ".bazelrc": "cb1b3f8a089ca7fb6804c5029a602ae660ff25fb8081fa520b67474d434e38cc",
+          "rust-toolchain.toml": "495c69d1db93f25f53e3d0d2d40d812313366cc368de317871c2ace6c6ffafa4",
+          "scripts/bazel.py": "f727e423befd2ac156a94f482cf02da966cfa5d80e8665f4348245f14d1a2811"
+        },
+        "cargo_lock_sha256": "f0aa744560c76cd98d0e2ea3d3e12c1f08de11e72422b6f2c9aba2ceb9b7c3fa",
+        "binary": "lwiki",
+        "binary_sha256": "d87c80e8089848e6a38e7fbe1990dae1869d984f37d35a4de1f53d00221d7bd6"
+      },
+      "job": {
+        "name": "x86_64-apple-darwin",
+        "databaseId": 109621444537,
+        "conclusion": "success",
+        "startedAt": "2026-09-29T21:10:20Z",
+        "completedAt": "2026-09-29T21:26:09Z",
+        "url": "https://github.com/joshgarnett/rust-llm-wiki/actions/runs/36631455854/job/109621444537"
+      },
+      "verification": "passed"
+    },
+    {
+      "target": "x86_64-pc-windows-msvc",
+      "archive": "lwiki-0.1.1-x86_64-pc-windows-msvc.tar.gz",
+      "archive_bytes": 8696752,
+      "archive_sha256": "30b85b1a5d70a5f6233c50dedf7559bcab429350c599e9bd05dfb114ab3d33aa",
+      "binary_bytes": 24139264,
+      "binary_sha256": "970a3b634ecf261cee70bd8d66ac605121677d264cc99801ed99b362529573a7",
+      "architecture": "PE32+ executable (console) x86-64, for MS Windows",
+      "build_info": {
+        "schema_version": 1,
+        "scope": "native release build and copied-binary version/capabilities smoke only; not full qualification",
+        "source": {
+          "commit": "258689d90d301f3b1ed4f7e12cf8b4f71a296141",
+          "dirty": false,
+          "note": "Informational, not qualified provenance. HEAD/status and build contract digests were compared before/after; unchanged status does not prove dirty file contents stayed unchanged."
+        },
+        "bazel": "Bazelisk v1.29.0\nbazel 9.2.0",
+        "host": "x86_64-pc-windows-msvc",
+        "target": "x86_64-pc-windows-msvc",
+        "package_version": "0.1.1",
+        "build_command": [
+          "C:\\hostedtoolcache\\windows\\Python\\3.12.10\\x64\\python.exe",
+          "D:\\a\\rust-llm-wiki\\rust-llm-wiki\\scripts\\bazel.py",
+          "--",
+          "build",
+          "--config=release",
+          "--nofetch",
+          "//:lwiki"
+        ],
+        "rust_toolchain": "[toolchain]\nchannel = \"1.98.0\"\nprofile = \"minimal\"\ncomponents = [\"clippy\", \"rustfmt\"]\n",
+        "bazel_module": "module(name = \"rust_llm_wiki\", version = \"0.1.1\")\n\nbazel_dep(name = \"platforms\", version = \"1.1.0\")\nbazel_dep(name = \"rules_rust\", version = \"0.72.0\")\n\nrust = use_extension(\"@rules_rust//rust:extensions.bzl\", \"rust\")\nrust.toolchain(\n    edition = \"2024\",\n    versions = [\"1.98.0\"],\n    extra_target_triples = [\n        \"aarch64-apple-darwin\",\n        \"x86_64-apple-darwin\",\n        \"aarch64-unknown-linux-gnu\",\n        \"x86_64-unknown-linux-gnu\",\n        \"aarch64-pc-windows-msvc\",\n        \"x86_64-pc-windows-msvc\",\n    ],\n)\nuse_repo(rust, \"rust_toolchains\")\nregister_toolchains(\"@rust_toolchains//:all\")\n\ncrate = use_extension(\"@rules_rust//crate_universe:extensions.bzl\", \"crate\")\ncrate.from_cargo(\n    name = \"crates\",\n    cargo_lockfile = \"//:Cargo.lock\",\n    lockfile = \"//:cargo-bazel-lock.json\",\n    manifests = [\"//:Cargo.toml\"],\n    isolated = True,\n    supported_platform_triples = [\n        \"aarch64-apple-darwin\",\n        \"x86_64-apple-darwin\",\n        \"aarch64-unknown-linux-gnu\",\n        \"x86_64-unknown-linux-gnu\",\n        \"aarch64-pc-windows-msvc\",\n        \"x86_64-pc-windows-msvc\",\n    ],\n)\ncrate.annotation(\n    crate = \"ring\",\n    version = \"0.17.14\",\n    repositories = [\"crates\"],\n    patches = [\"//bazel:ring_windows_arm64_cflags.patch\"],\n    patch_args = [\"-p1\"],\n)\ncrate.annotation_select(\n    crate = \"ring\",\n    version = \"0.17.14\",\n    repositories = [\"crates\"],\n    triples = [\"aarch64-pc-windows-msvc\"],\n    build_script_env = {\"LWIKI_RING_WINDOWS_ARM64_CLANG\": \"1\"},\n)\nuse_repo(crate, \"crates\")\n",
+        "bazel_version_pin": "9.2.0",
+        "build_contract_sha256": {
+          "Cargo.toml": "e37823772628e2fbe996414c674af563fa2a1f9a1bcb5ef0f3683fab4db01a5c",
+          "Cargo.lock": "1f0d48933e916a2e0148c477b281147fb1634399e8853afadd1ae19fe2889c2f",
+          "MODULE.bazel": "e8bb020c823c1d16c7cc00d5c53b8c11dee09834ee71d2c17f6301c8234a9bbd",
+          "MODULE.bazel.lock": "41e9384a360475fee3c8c58a5e0588cdfdfa5578a8f55259b311155daf8c9909",
+          "cargo-bazel-lock.json": "60ce118226d3f66227ccd41a8753067748a5fb157731f17ef1a7c3b578b63441",
+          ".bazelversion": "0a83cb19bb3a4a8c10032ad6e6305f6b98d8259db91ffc98b2ef72eb88fb46df",
+          ".bazelrc": "b037cd225a9add144b032a1870472ed7e44aecf2fd845154f8139c40dca54794",
+          "rust-toolchain.toml": "90204ca70291b3df79ef4532e2850103c5f5dd35dd73161303a3daf1a19a38d5",
+          "scripts/bazel.py": "840f895f13e470d96b9ee03903fa770072b1b613a4293bc9cdf326b8380044c3"
+        },
+        "cargo_lock_sha256": "1f0d48933e916a2e0148c477b281147fb1634399e8853afadd1ae19fe2889c2f",
+        "binary": "lwiki.exe",
+        "binary_sha256": "970a3b634ecf261cee70bd8d66ac605121677d264cc99801ed99b362529573a7"
+      },
+      "job": {
+        "name": "x86_64-pc-windows-msvc",
+        "databaseId": 109621444589,
+        "conclusion": "success",
+        "startedAt": "2026-09-29T21:10:19Z",
+        "completedAt": "2026-09-29T21:24:14Z",
+        "url": "https://github.com/joshgarnett/rust-llm-wiki/actions/runs/36631455854/job/109621444589"
+      },
+      "verification": "passed"
+    }
+  ],
+  "local_packaged_macos_arm64_smoke": {
+    "source_commit": "258689d90d301f3b1ed4f7e12cf8b4f71a296141",
+    "version": "lwiki 0.1.1",
+    "codesign_strict": "passed",
+    "codesign_output": "/Users/jgarnett/Devleopment/rust-llm-wiki/.artifacts/011-macos-36631455854/lwiki: valid on disk\n/Users/jgarnett/Devleopment/rust-llm-wiki/.artifacts/011-macos-36631455854/lwiki: satisfies its Designated Requirement",
+    "binary": "/Users/jgarnett/Devleopment/rust-llm-wiki/.artifacts/011-macos-36631455854/lwiki",
+    "smoke": {
+      "ok": true,
+      "commands_passed": 30,
+      "vault": "/var/folders/g0/jdy1y8615k30fs6sbf4x1wt40000gn/T/lwiki-0.1.1-manual-is51x375/vault",
+      "log": "/var/folders/g0/jdy1y8615k30fs6sbf4x1wt40000gn/T/lwiki-0.1.1-manual-is51x375/commands.jsonl",
+      "network_used": false
+    }
+  },
+  "release": {
+    "url": "https://github.com/joshgarnett/rust-llm-wiki/releases/tag/untagged-2e63cc6c5ce4b7acd4d4",
+    "tag": "v0.1.1",
+    "draft": true,
+    "assets": [
+      {
+        "name": "lwiki-0.1.1-aarch64-apple-darwin.tar.gz",
+        "sha256": "35898b5246853ec84df07e458d950add57c00e5a37835497284114a661e47570",
+        "github_digest": "sha256:35898b5246853ec84df07e458d950add57c00e5a37835497284114a661e47570"
+      },
+      {
+        "name": "lwiki-0.1.1-aarch64-apple-darwin.tar.gz.sha256",
+        "sha256": "1c7610852a092b6aed9fd3393d3c29b46470c5b77d0327b3984ecc2bf8b77b8c",
+        "github_digest": "sha256:1c7610852a092b6aed9fd3393d3c29b46470c5b77d0327b3984ecc2bf8b77b8c"
+      },
+      {
+        "name": "lwiki-0.1.1-aarch64-pc-windows-msvc.tar.gz",
+        "sha256": "7bd60c15942afdc3dc9c166fa0da5d6146a73dbcc1cbb3cd9460282d304f6846",
+        "github_digest": "sha256:7bd60c15942afdc3dc9c166fa0da5d6146a73dbcc1cbb3cd9460282d304f6846"
+      },
+      {
+        "name": "lwiki-0.1.1-aarch64-pc-windows-msvc.tar.gz.sha256",
+        "sha256": "43e2bf16f4f2a6a889c37421390ba3853a457418b76185a5578bca3b2408e6ce",
+        "github_digest": "sha256:43e2bf16f4f2a6a889c37421390ba3853a457418b76185a5578bca3b2408e6ce"
+      },
+      {
+        "name": "lwiki-0.1.1-aarch64-unknown-linux-gnu.tar.gz",
+        "sha256": "e2228daeaaa26522d46c6c3782b710a3f1aac668d031a034c34f85abd947a2c1",
+        "github_digest": "sha256:e2228daeaaa26522d46c6c3782b710a3f1aac668d031a034c34f85abd947a2c1"
+      },
+      {
+        "name": "lwiki-0.1.1-aarch64-unknown-linux-gnu.tar.gz.sha256",
+        "sha256": "777334e5553caf8bbc8a3e2e87a9b73fc0025be4c035a24449de7836feb42778",
+        "github_digest": "sha256:777334e5553caf8bbc8a3e2e87a9b73fc0025be4c035a24449de7836feb42778"
+      },
+      {
+        "name": "lwiki-0.1.1-x86_64-apple-darwin.tar.gz",
+        "sha256": "ac7b225c5431b69077b52e588c34b0e8acccae9586af402b951d7059eabb5e66",
+        "github_digest": "sha256:ac7b225c5431b69077b52e588c34b0e8acccae9586af402b951d7059eabb5e66"
+      },
+      {
+        "name": "lwiki-0.1.1-x86_64-apple-darwin.tar.gz.sha256",
+        "sha256": "95c74290af368e84410f6080ad56ee334f03ae26582a714655fdba448117af7e",
+        "github_digest": "sha256:95c74290af368e84410f6080ad56ee334f03ae26582a714655fdba448117af7e"
+      },
+      {
+        "name": "lwiki-0.1.1-x86_64-pc-windows-msvc.tar.gz",
+        "sha256": "30b85b1a5d70a5f6233c50dedf7559bcab429350c599e9bd05dfb114ab3d33aa",
+        "github_digest": "sha256:30b85b1a5d70a5f6233c50dedf7559bcab429350c599e9bd05dfb114ab3d33aa"
+      },
+      {
+        "name": "lwiki-0.1.1-x86_64-pc-windows-msvc.tar.gz.sha256",
+        "sha256": "08d3949a7a52bbd833259c7f2672b6d80da9a82e6c6442347d5111c6b86215bc",
+        "github_digest": "sha256:08d3949a7a52bbd833259c7f2672b6d80da9a82e6c6442347d5111c6b86215bc"
+      },
+      {
+        "name": "lwiki-0.1.1-x86_64-unknown-linux-gnu.tar.gz",
+        "sha256": "82e351d5d46f6b9e9f566ccb8c7813f925a4f2b79c44b693571dffaaa3c11792",
+        "github_digest": "sha256:82e351d5d46f6b9e9f566ccb8c7813f925a4f2b79c44b693571dffaaa3c11792"
+      },
+      {
+        "name": "lwiki-0.1.1-x86_64-unknown-linux-gnu.tar.gz.sha256",
+        "sha256": "f47d5bcb614b572233001a84a0d3c7034cf547b9a67e25dd6d799e724da31c50",
+        "github_digest": "sha256:f47d5bcb614b572233001a84a0d3c7034cf547b9a67e25dd6d799e724da31c50"
+      }
+    ]
+  },
+  "limitations": [
+    "Windows vault writes remain unsupported.",
+    "No live gateway/auth helper or paid provider calls.",
+    "Older owner-installed macOS SIGKILL remains undiagnosed."
+  ],
+  "authenticated_draft_download": {
+    "target": "aarch64-apple-darwin",
+    "checksum_and_archive": "passed",
+    "identical_to_tested_actions_archive": true
+  }
+}

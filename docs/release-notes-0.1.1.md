@@ -20,3 +20,9 @@ Archives and SHA-256 files cover native Linux GNU, macOS and Windows, each on x6
 Use the complete [0.1.1 test-agent handoff](https://github.com/joshgarnett/rust-llm-wiki/blob/v0.1.1/docs/testing-0.1.1.md) for downloads, the offline regression script, agent research submissions, live gateway checks and reporting requirements. The [offline smoke script](https://github.com/joshgarnett/rust-llm-wiki/blob/v0.1.1/scripts/manual_smoke.py) creates a disposable vault and retains every command envelope.
 
 Windows vault writes remain unsupported. Builds and mocks do not establish live gateway quality or native storage qualification on every platform. The old installed-copy macOS SIGKILL has not been diagnosed. The predicate registry still has no dedicated ownership/responsibility relation.
+
+## Verified build
+
+Source: `258689d90d301f3b1ed4f7e12cf8b4f71a296141`. [Six native release builds](https://github.com/joshgarnett/rust-llm-wiki/actions/runs/36631455854) and [all three CI jobs](https://github.com/joshgarnett/rust-llm-wiki/actions/runs/36631438819) passed. All six archives and their checksum files were verified against this clean source, version and native architecture. The downloaded Apple Silicon binary passed strict signature verification and the 30-command offline regression script.
+
+Local acceptance: 557 Rust cases across the complete suite and affected continuations, 41 Python build-tool tests, and the 36-step skill recipe. This release remains a draft for owner inspection; authenticated repository access is required to download draft assets.
