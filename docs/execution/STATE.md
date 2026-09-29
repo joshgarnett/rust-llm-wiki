@@ -1,6 +1,18 @@
 # Execution checkpoint
 
-Updated 2026-09-29. Root owns this checkpoint. **All 22 packages P00–P21 and V01–V17 locally accepted: local implementation complete; external qualification pending.** Local acceptance commit is recorded; the final documentation stamp changes no qualified source. No authorized implementation or required local gate remains.
+Updated 2026-09-29. Root owns this checkpoint. **All 22 packages P00–P21 and V01–V17 locally accepted: local implementation complete; external qualification pending.** Historical local acceptance is recorded below. The active manual/provider follow-up has its own changes and validation checkpoint.
+
+## Manual-test and provider follow-up (in progress)
+
+- User supplied a detailed offline macOS ARM64 report against v0.1.0. Reproduce and fix refreshed-source graph resolution, packet text leaking into Current search, and missing CLI help descriptions. Triage rollback, offline-preview wording, invalid-note warnings and installed-binary launch observations without weakening storage/freshness contracts.
+- Expanded scope: accept LiteLLM response headers and usage extensions, improve fixed-code diagnostics and probe allowance, implement Responses generation with Chat compatibility and no SDK. Offline fixtures only; no gateway/auth helper access. Details in PROVIDERS reports and new docs/providers.md.
+- Baseline main `2953cd598660fec689958ef022c30c4e63ee626d`; tree initially clean. Reported artifacts/binary unavailable on this host; disposable local reproductions only.
+- All worker source leases returned. Sol implemented revision closure, packets, rollback, usage/generation and native probe fixtures; Astra implemented bounded provider schema projection, separately reviewed by Astra P13/P16. Root owns whole candidate/config/types/history/dispatcher/probe/docs/tests/Git. No nested delegation; serialize Cargo/Bazel builds.
+- Manual red regressions reproduced the main three issues, copied/malformed packet bypasses and opaque source rollback. Final six-target manual gate passed 137.839s: machine_contract, graph_resolution, retrieval_lexical, offline_application, research_cli, skill_export. Astra review closed. Offline preview status/warning added; generated skill command reference/manifest updated.
+- First selected provider unit gate passed 49.155s. Independent Astra findings (embedding subset underbilling/schema allocation-before-cap) fixed, regressed and closed. Full unit+remote_cli+provider_trust gate passed809.374s:155 unit cases,3ignored explicit helper tests; native CLI and trust suites passed. Log `.artifacts/providers-integrated.log`. The only product difference since compilation is private-module rustfmt ordering.
+- Broad affected integration gate completed507.330s:32 targets passed, only a test-only Clippy assertion failed. Corrected `get().is_none()` to `!contains_key()`; final format/strict-Clippy/retrieval_lexical gate passed all3 in5.930s. Evidence: PROVIDERS-checks.json and PROVIDERS-2026-09-29.md. No active local build or unresolved source/review finding.
+- Next: commit manual and provider slices, push main, dispatch six-platform release build against the exact accepted commit (artifact-only workflow; preserve existing draft v0.1.0), verify results/assets. Root owns Git and all returned leases.
+- Preserve historical v0.1.0/P21 release evidence. No live providers, signing changes, host installation or publication. Installed-binary SIGKILL and user's missing-manifest report remain unverified without original evidence.
 
 ## Build tooling follow-up (complete)
 

@@ -1,7 +1,9 @@
 //! Nonstreaming text generation with unchanged, offline local schema validation.
 use super::{types::*, wire, wire_json};
 use crate::{
-    config::providers::{InstructionRole, OutputLimitField, ResponseMode, TrustedService},
+    config::providers::{
+        AdapterKind, InstructionRole, OutputLimitField, ResponseMode, TrustedService,
+    },
     domain::*,
     jobs::TaskSpec,
 };
@@ -336,12 +338,18 @@ pub(super) fn prepare(
         .model
         .as_deref()
         .ok_or_else(|| WikiError::invalid("generation model required"))?;
+    let surface = match s.adapter {
+        AdapterKind::ChatCompletionsV1 => GenerationSurface::ChatCompletions,
+        AdapterKind::ResponsesV1 => GenerationSurface::Responses,
+        _ => return Err(WikiError::invalid("generation adapter required")),
+    };
     let instruction_role = s.instruction_role.unwrap_or(InstructionRole::System);
     let output_limit_field = s
         .output_limit_field
         .unwrap_or(OutputLimitField::MaxCompletionTokens);
     let response_mode = s.response_mode.unwrap_or(ResponseMode::TextJson);
-    let basis = if s.ca_bytes.is_none()
+    let basis = if surface == GenerationSurface::ChatCompletions
+        && s.ca_bytes.is_none()
         && s.url == "https://api.openai.com/v1/chat/completions"
         && model == "gpt-4.1-2025-04-14"
         && matches!(output_limit_field, OutputLimitField::MaxCompletionTokens)
@@ -355,16 +363,38 @@ pub(super) fn prepare(
     };
     let validator = compile_schema(
         output_schema,
-        matches!(response_mode, ResponseMode::JsonSchema),
+        surface == GenerationSurface::ChatCompletions
+            && matches!(response_mode, ResponseMode::JsonSchema),
     )?;
-    let mut body = json!({"model":model,"messages":[{"role":match instruction_role{InstructionRole::System=>"system",InstructionRole::Developer=>"developer"},"content":instructions},{"role":"user","content":data}],"stream":false,"n":1});
-    body[match output_limit_field {
-        OutputLimitField::MaxCompletionTokens => "max_completion_tokens",
-        OutputLimitField::MaxTokens => "max_tokens",
-    }] = (*max_output_tokens).into();
-    if matches!(response_mode, ResponseMode::JsonSchema) {
-        body["response_format"] = json!({"type":"json_schema","json_schema":{"name":"lwiki_output","strict":true,"schema":output_schema}});
-    }
+    let provider_schema = if surface == GenerationSurface::Responses
+        && matches!(response_mode, ResponseMode::JsonSchema)
+    {
+        let projected = super::generation_schema::project(output_schema)?;
+        compile_schema(&projected, true)?;
+        Some(Arc::new(projected))
+    } else {
+        None
+    };
+    let body = match surface {
+        GenerationSurface::ChatCompletions => {
+            let mut body = json!({"model":model,"messages":[{"role":match instruction_role{InstructionRole::System=>"system",InstructionRole::Developer=>"developer"},"content":instructions},{"role":"user","content":data}],"stream":false,"n":1});
+            body[match output_limit_field {
+                OutputLimitField::MaxCompletionTokens => "max_completion_tokens",
+                OutputLimitField::MaxTokens => "max_tokens",
+            }] = (*max_output_tokens).into();
+            if matches!(response_mode, ResponseMode::JsonSchema) {
+                body["response_format"] = json!({"type":"json_schema","json_schema":{"name":"lwiki_output","strict":true,"schema":output_schema}});
+            }
+            body
+        }
+        GenerationSurface::Responses => {
+            let mut body = json!({"model":model,"instructions":instructions,"input":[{"role":"user","content":data}],"stream":false,"store":false,"max_output_tokens":max_output_tokens});
+            if matches!(response_mode, ResponseMode::JsonSchema) {
+                body["text"] = json!({"format":{"type":"json_schema","name":"lwiki_output","strict":true,"schema":provider_schema.as_deref().expect("projected schema")}});
+            }
+            body
+        }
+    };
     let schema_fingerprint =
         Blake3Hash::digest(crate::graph::packet::canonical_json(output_schema)?);
     wire::seal(
@@ -376,6 +406,8 @@ pub(super) fn prepare(
         wire::json_body(service, &body)?,
         WireContract::Generation(GenerationContract {
             basis,
+            surface,
+            provider_schema,
             instruction_role,
             output_limit_field,
             response_mode,
@@ -389,6 +421,123 @@ pub(super) fn prepare(
 pub(super) fn observe(p: &PreparedWire, r: &TransportReply) -> ObservedUsage {
     wire_json::observe(p, r, true)
 }
+fn response_error(reason: &'static str) -> WikiError {
+    let mut error = WikiError::invalid("generation response violates sealed contract");
+    error.details = json!({"reason":reason});
+    error
+}
+fn json_text(content: &str, mode: ResponseMode) -> &str {
+    if matches!(mode, ResponseMode::TextJson) {
+        let trimmed = content.trim();
+        if let Some(inner) = trimmed
+            .strip_prefix("```json\n")
+            .and_then(|text| text.strip_suffix("\n```"))
+        {
+            return inner;
+        }
+    }
+    content
+}
+
+fn decode_responses(
+    p: &PreparedWire,
+    c: &GenerationContract,
+    v: &Value,
+) -> Result<ValidatedOutput> {
+    match v.get("status").and_then(Value::as_str) {
+        Some("completed") => {}
+        Some("incomplete") => {
+            let reason = if v
+                .get("incomplete_details")
+                .and_then(|details| details.get("reason"))
+                .and_then(Value::as_str)
+                == Some("max_output_tokens")
+            {
+                "incomplete_max_output_tokens"
+            } else {
+                "incomplete"
+            };
+            return Err(response_error(reason));
+        }
+        Some("failed") => return Err(response_error("failed")),
+        Some("cancelled") => return Err(response_error("cancelled")),
+        _ => return Err(response_error("response_envelope_invalid")),
+    }
+    if v.get("object").and_then(Value::as_str) != Some("response")
+        || v.get("error").is_some_and(|error| !error.is_null())
+        || v.get("incomplete_details")
+            .is_some_and(|details| !details.is_null())
+    {
+        return Err(response_error("response_envelope_invalid"));
+    }
+    let model = wire_json::returned_model(p, v).map_err(|_| response_error("model_invalid"))?;
+    if !wire_json::usage_valid_for(p, v, true)
+        || !wire_json::supported_usage(p, v, true)
+        || !wire_json::totals_within_contract(p, v)
+    {
+        return Err(response_error("usage_invalid"));
+    }
+    let output = v
+        .get("output")
+        .and_then(Value::as_array)
+        .ok_or_else(|| response_error("response_envelope_invalid"))?;
+    let mut message = None;
+    for item in output {
+        match item.get("type").and_then(Value::as_str) {
+            Some("reasoning") => {}
+            Some("message") if message.is_none() => message = Some(item),
+            Some("message") => return Err(response_error("assistant_message_count")),
+            Some("function_call" | "web_search_call" | "file_search_call") => {
+                return Err(response_error("tool_output"));
+            }
+            _ => return Err(response_error("unknown_output_item")),
+        }
+    }
+    let message = message.ok_or_else(|| response_error("assistant_message_count"))?;
+    if message.get("role").and_then(Value::as_str) != Some("assistant") {
+        return Err(response_error("assistant_message_count"));
+    }
+    if message.get("status").and_then(Value::as_str) != Some("completed") {
+        return Err(response_error("message_incomplete"));
+    }
+    let content = message
+        .get("content")
+        .and_then(Value::as_array)
+        .ok_or_else(|| response_error("output_text_missing"))?;
+    let mut text = String::new();
+    for part in content {
+        match part.get("type").and_then(Value::as_str) {
+            Some("output_text") => text.push_str(
+                part.get("text")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| response_error("output_text_missing"))?,
+            ),
+            Some("refusal") => return Err(response_error("refusal")),
+            _ => return Err(response_error("unknown_output_item")),
+        }
+    }
+    if text.is_empty() {
+        return Err(response_error("output_text_missing"));
+    }
+    let text = json_text(&text, c.response_mode).to_owned();
+    let value = wire_json::parse(text.as_bytes(), p.bound.response_bytes as usize, 65536, 32)
+        .map_err(|_| response_error("output_json_invalid"))?;
+    if !c.validator.is_valid(&value) {
+        return Err(response_error("schema_invalid"));
+    }
+    if matches!(p.purpose, DispatchPurpose::Probe { .. }) {
+        Ok(ValidatedOutput::Probe {
+            role: ServiceRole::Generate,
+        })
+    } else {
+        Ok(ValidatedOutput::Generation {
+            value,
+            text,
+            returned_model: Some(model),
+        })
+    }
+}
+
 pub(super) fn decode(p: &PreparedWire, r: &TransportReply) -> Result<ValidatedOutput> {
     if !(200..300).contains(&r.status) {
         return Err(WikiError::invalid("unsuccessful generation response"));
@@ -414,8 +563,11 @@ pub(super) fn decode(p: &PreparedWire, r: &TransportReply) -> Result<ValidatedOu
         ));
     }
     let v = wire_json::reply_json(p, r)?;
+    if c.surface == GenerationSurface::Responses {
+        return decode_responses(p, c, &v);
+    }
     let model = wire_json::returned_model(p, &v)?;
-    if !wire_json::usage_valid(&v, true)
+    if !wire_json::usage_valid_for(p, &v, true)
         || !wire_json::supported_usage(p, &v, true)
         || !wire_json::totals_within_contract(p, &v)
     {
@@ -469,6 +621,7 @@ pub(super) fn decode(p: &PreparedWire, r: &TransportReply) -> Result<ValidatedOu
             "role" | "content" => {}
             "refusal" | "function_call" if value.is_null() => {}
             "tool_calls" if value.is_null() || value.as_array().is_some_and(Vec::is_empty) => {}
+            "reasoning_content" | "reasoning_items" => {}
             _ => {
                 return Err(WikiError::invalid(
                     "generation refusal, tools or extension present",
@@ -483,6 +636,7 @@ pub(super) fn decode(p: &PreparedWire, r: &TransportReply) -> Result<ValidatedOu
         .get("content")
         .and_then(Value::as_str)
         .ok_or_else(|| WikiError::invalid("generation text missing"))?;
+    let content = json_text(content, c.response_mode);
     let value = wire_json::parse(
         content.as_bytes(),
         p.bound.response_bytes as usize,

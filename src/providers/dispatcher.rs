@@ -230,10 +230,16 @@ impl Dispatcher {
             )));
         }
         if !(200..300).contains(&status) || metadata.failure_code.is_some() {
-            return Err(RetainedDecodeFailure::InvalidResponse(WikiError::new(
-                ErrorCode::ProviderResponse,
-                "retained response is rejected",
-            )));
+            return Err(RetainedDecodeFailure::InvalidResponse(
+                super::diagnostics::error(
+                    ErrorCode::ProviderResponse,
+                    metadata
+                        .failure_code
+                        .as_deref()
+                        .filter(|r| super::diagnostics::allowed(r))
+                        .unwrap_or("provider_output_invalid"),
+                ),
+            ));
         }
         let reply = TransportReply {
             status,
@@ -871,15 +877,35 @@ impl Dispatcher {
                 let provider_request_id =
                     clean_field(observed.provider_request_id, &redactors, 128);
                 let returned_model = clean_field(observed.returned_model, &redactors, 256);
-                let failure_code = if observed.contract_violation.is_some() {
-                    Some("wire_contract_violation".into())
-                } else if malformed_transport {
-                    Some("response_bound".into())
-                } else if !(200..300).contains(&status) {
-                    Some(format!("http_{status}"))
+                let transport_reason = if !valid_headers {
+                    "response_headers_invalid"
+                } else if encoded {
+                    "response_encoding_unsupported"
+                } else if oversized {
+                    "response_bound"
+                } else if !(100..600).contains(&status) {
+                    "response_status_invalid"
                 } else {
-                    None
+                    "response_length_invalid"
                 };
+                // Decode once before sealing metadata so rejected paid responses
+                // retain the same fixed reason exposed to the caller.
+                let decoded = if wire_violation {
+                    Err(super::diagnostics::error(ErrorCode::ProviderResponse, "wire_contract_violation"))
+                } else if malformed_transport {
+                    Err(super::diagnostics::error(ErrorCode::ProviderResponse, transport_reason))
+                } else if (200..300).contains(&status) {
+                    decode(&prepared, &reply)
+                } else {
+                    Err(super::diagnostics::error(
+                        if matches!(status, 401 | 403) { ErrorCode::ProviderAuth }
+                        else if status == 429 { ErrorCode::ProviderRateLimit }
+                        else { ErrorCode::ProviderResponse },
+                        &format!("http_{status}"),
+                    ))
+                };
+                let failure_code = decoded.as_ref().err()
+                    .and_then(super::diagnostics::reason).map(str::to_owned);
                 let body = if malformed_transport || !(200..300).contains(&status) {
                     Vec::new()
                 } else {
@@ -912,25 +938,6 @@ impl Dispatcher {
                 };
                 retained.attempt(&attempt, DispatchDisposition::Rejected);
                 retained.spool = Some(spool.clone());
-                let decoded = if malformed_transport || wire_violation {
-                    Err(WikiError::new(
-                        ErrorCode::ProviderResponse,
-                        "response security or size bound failed",
-                    ))
-                } else if (200..300).contains(&status) {
-                    decode(&prepared, &reply)
-                } else {
-                    Err(WikiError::new(
-                        if matches!(status, 401 | 403) {
-                            ErrorCode::ProviderAuth
-                        } else if status == 429 {
-                            ErrorCode::ProviderRateLimit
-                        } else {
-                            ErrorCode::ProviderResponse
-                        },
-                        "provider rejected request",
-                    ))
-                };
                 if let Ok(output) = decoded {
                     let materialization = ledger.materialization_plan(&attempt).map_err(|e| {
                         let mut out = failure(e, Some(attempt.clone()));
@@ -1157,7 +1164,7 @@ impl RetainedPaid {
     }
 }
 fn redacted(error: WikiError) -> WikiError {
-    WikiError::new(error.code, "bounded provider operation failed")
+    super::diagnostics::error(error.code, super::diagnostics::reason(&error).unwrap_or(""))
 }
 fn failure(error: WikiError, attempt: Option<AttemptRef>) -> Box<DispatchFailure> {
     Box::new(DispatchFailure {
@@ -1631,12 +1638,7 @@ fn decode(prepared: &PreparedWire, reply: &TransportReply) -> Result<ValidatedOu
         #[cfg(test)]
         WireContract::Fixture => fixture_decode(prepared.purpose, &reply.body),
     };
-    result.map_err(|_| {
-        WikiError::new(
-            ErrorCode::ProviderResponse,
-            "provider output violates sealed wire contract",
-        )
-    })
+    result.map_err(super::diagnostics::decoded)
 }
 #[cfg(test)]
 fn fixture_decode(purpose: DispatchPurpose, body: &[u8]) -> Result<ValidatedOutput> {

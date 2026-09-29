@@ -199,3 +199,53 @@ fn configured_private_ca_content_is_part_of_endpoint_trust() {
             .is_err()
     );
 }
+
+#[test]
+fn new_generation_defaults_to_responses_and_chat_settings_are_explicit() {
+    let (_t, fs, path, _) = fixture(STATIC);
+    let base = document(fs.root().path(), STATIC)
+        .replace("embedding = \"embed\"", "generation = \"embed\"")
+        .replace("adapter = \"embeddings-v1\"\n", "")
+        .replace("max_batch_items = 32\nmax_batch_bytes = 262144\n", "")
+        .replace("/v1/embeddings?tenant=one", "/v1/responses");
+    private_write(&path, &base);
+    let implicit = ProviderConfig::load(&path)
+        .unwrap()
+        .authorize(&fs, &id("vault_test"), "primary", Capability::Generate)
+        .unwrap()
+        .summary();
+    let explicit = base.replace(
+        "[services.embed]\n",
+        "[services.embed]\nadapter = \"responses-v1\"\n",
+    );
+    private_write(&path, &explicit);
+    let summary = ProviderConfig::load(&path)
+        .unwrap()
+        .authorize(&fs, &id("vault_test"), "primary", Capability::Generate)
+        .unwrap()
+        .summary();
+    assert_eq!(implicit.profile_fingerprint, summary.profile_fingerprint);
+    for extra in [
+        "instruction_role = \"system\"",
+        "output_limit_field = \"max_tokens\"",
+    ] {
+        private_write(
+            &path,
+            explicit.replace(
+                "[services.embed.auth]",
+                &format!("{extra}\n[services.embed.auth]"),
+            ),
+        );
+        assert!(ProviderConfig::load(&path).is_err());
+    }
+    let chat = explicit.replace("responses-v1", "chat-completions-v1")
+        .replace("/v1/responses", "/v1/chat/completions")
+        .replace("[services.embed.auth]", "instruction_role = \"system\"\noutput_limit_field = \"max_tokens\"\n[services.embed.auth]");
+    private_write(&path, chat);
+    assert!(
+        ProviderConfig::load(&path)
+            .unwrap()
+            .authorize(&fs, &id("vault_test"), "primary", Capability::Generate)
+            .is_ok()
+    );
+}

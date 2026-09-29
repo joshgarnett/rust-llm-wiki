@@ -2028,3 +2028,47 @@ fn native_live_timer_floor_refuses_owned_sample_regression_in_either_component()
         assert_eq!(server.count(), 0);
     }
 }
+
+#[test]
+fn fixed_response_diagnostics_are_spooled_without_provider_text() {
+    for invalid_headers in [false, true] {
+        let c = case(
+            "https://gateway.example/v1/embeddings",
+            false,
+            ExecutionPolicy::default(),
+            |_| {},
+            None,
+        );
+        let mut response =
+            TransportReply::new(200, vec![], b"private malformed provider payload".to_vec())
+                .unwrap();
+        if invalid_headers {
+            response
+                .headers
+                .push(("bad:name".into(), "sensitive-value".into()));
+        }
+        let mock = Mock::new(vec![Ok(response)]);
+        let failure = dispatch(&c, mock.clone())
+            .execute(
+                &c.job,
+                &c.trusted,
+                &c.spec.tasks[0].key,
+                DispatchPurpose::Task,
+            )
+            .err()
+            .unwrap();
+        let expected = if invalid_headers {
+            "response_headers_invalid"
+        } else {
+            "provider_output_invalid"
+        };
+        assert_eq!(failure.error.details["reason"], expected);
+        let spool = failure.spool.unwrap();
+        let bytes = std::fs::read(c.fs.root().resolve(&spool.metadata.path).unwrap()).unwrap();
+        let metadata: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(metadata["failure_code"], expected);
+        assert!(!String::from_utf8_lossy(&bytes).contains("private malformed"));
+        assert!(!String::from_utf8_lossy(&bytes).contains("sensitive-value"));
+        assert_eq!(mock.calls.load(Ordering::SeqCst), 1);
+    }
+}

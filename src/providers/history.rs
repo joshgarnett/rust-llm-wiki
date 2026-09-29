@@ -55,6 +55,10 @@ enum Contract {
         maximum_coordinates: u64,
     },
     Generation {
+        #[serde(default, skip_serializing_if = "GenerationSurface::is_chat")]
+        surface: GenerationSurface,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        provider_schema: Option<serde_json::Value>,
         basis: Basis,
         instruction_role: InstructionRole,
         output_limit_field: OutputLimitField,
@@ -196,6 +200,8 @@ impl Contract {
                 maximum_coordinates: c.maximum_coordinates,
             },
             WireContract::Generation(c) => Self::Generation {
+                surface: c.surface,
+                provider_schema: c.provider_schema.as_deref().cloned(),
                 basis: Basis::capture(&c.basis),
                 instruction_role: c.instruction_role,
                 output_limit_field: c.output_limit_field,
@@ -290,6 +296,8 @@ impl Contract {
             }
             (
                 Self::Generation {
+                    surface,
+                    provider_schema,
                     basis,
                     instruction_role,
                     output_limit_field,
@@ -306,7 +314,9 @@ impl Contract {
                 },
             ) if role == ServiceRole::Generate => {
                 let basis = basis.restore(bound, role)?;
-                if &schema != output_schema
+                if (surface == GenerationSurface::Responses
+                    && !matches!(basis, BoundBasis::UnknownCompatible))
+                    || &schema != output_schema
                     || total_generated_token_limit != *max_output_tokens
                     || *max_output_tokens == 0
                     || instructions.is_empty()
@@ -320,11 +330,30 @@ impl Contract {
                 {
                     return Err(bad("historical generation schema or limits differ"));
                 }
+                match (surface, response_mode, &provider_schema) {
+                    (GenerationSurface::Responses, ResponseMode::JsonSchema, Some(grammar)) => {
+                        generation_wire::compile_schema(grammar, true)?;
+                        if super::generation_schema::project(&schema)? != *grammar {
+                            return Err(bad(
+                                "historical provider grammar differs from original schema",
+                            ));
+                        }
+                    }
+                    (GenerationSurface::Responses, ResponseMode::JsonSchema, None)
+                    | (GenerationSurface::ChatCompletions, _, Some(_))
+                    | (_, ResponseMode::TextJson, Some(_)) => {
+                        return Err(bad("historical provider grammar differs"));
+                    }
+                    _ => {}
+                }
                 let validator = generation_wire::compile_schema(
                     &schema,
-                    matches!(response_mode, ResponseMode::JsonSchema),
+                    surface == GenerationSurface::ChatCompletions
+                        && matches!(response_mode, ResponseMode::JsonSchema),
                 )?;
                 Ok(WireContract::Generation(GenerationContract {
+                    provider_schema: provider_schema.map(Arc::new),
+                    surface,
                     basis,
                     instruction_role,
                     output_limit_field,

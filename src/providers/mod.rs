@@ -9,7 +9,9 @@ pub mod retry;
 pub mod transport;
 pub mod types;
 
+mod diagnostics;
 mod embedding_wire;
+mod generation_schema;
 mod generation_wire;
 pub mod public_fetch;
 pub mod search_wire;

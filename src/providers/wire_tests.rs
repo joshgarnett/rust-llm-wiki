@@ -44,6 +44,235 @@ fn reply(v: &Value) -> TransportReply {
 fn chat() -> Value {
     json!({"model":"test-model","choices":[{"index":0,"finish_reason":"stop","message":{"role":"assistant","content":"{\"ok\":true}"}}],"usage":{"prompt_tokens":10,"completion_tokens":8,"total_tokens":18,"prompt_tokens_details":{"cached_tokens":3},"completion_tokens_details":{"reasoning_tokens":2}}})
 }
+fn responses_case(model: &str, extra: &str) -> Case {
+    case_with_adapter(
+        ServiceRole::Generate,
+        generation_input(),
+        model,
+        "https://gateway.example/v1/responses",
+        extra,
+        |_| {},
+        "responses-v1",
+    )
+}
+fn gateway_fixture(name: &str) -> Value {
+    serde_json::from_str(match name {
+        "gpt" => include_str!("../../tests/fixtures/gateway/responses_gpt.json"),
+        "claude" => include_str!("../../tests/fixtures/gateway/responses_claude.json"),
+        "incomplete" => include_str!("../../tests/fixtures/gateway/responses_incomplete.json"),
+        _ => panic!("unknown fixture"),
+    })
+    .unwrap()
+}
+
+#[test]
+fn gateway_embedding_usage_extensions_preserve_full_vector_decode() {
+    for (model, dimensions) in [("titan-embed-v2", 1024), ("gemini-embedding-001", 3072)] {
+        let mut input = embedding_input();
+        let RemoteOperation::Embed {
+            inputs,
+            expected_dimensions,
+            ..
+        } = &mut input.operation
+        else {
+            panic!("embedding input expected");
+        };
+        inputs.truncate(1);
+        *expected_dimensions = Some(dimensions);
+        let c = case(
+            ServiceRole::Embed,
+            input.clone(),
+            model,
+            "https://gateway.example/v1/embeddings",
+            "",
+            |_| {},
+        );
+        let p =
+            embed::prepare(&c.trusted, &c.spec.tasks[0], &input, DispatchPurpose::Task).unwrap();
+        let mut vector = vec![0.0f32; dimensions as usize];
+        vector[0] = 1.0;
+        let response = json!({"object":"list","model":model,"data":[{"index":0,"embedding":vector}],"usage":{"completion_tokens":0,"prompt_tokens":6,"total_tokens":6,"completion_tokens_details":null,"prompt_tokens_details":null}});
+        let ValidatedOutput::Embeddings { vectors, .. } =
+            embed::decode(&p, &reply(&response)).unwrap()
+        else {
+            panic!("embeddings expected")
+        };
+        assert_eq!(vectors.len(), 1);
+        assert_eq!(vectors[0].len(), dimensions as usize);
+        assert!(
+            embed::observe(&p, &reply(&response))
+                .contract_violation
+                .is_none()
+        );
+    }
+}
+
+#[test]
+fn responses_v1_encodes_no_tools_or_storage_and_decodes_gateway_samples() {
+    for (name, model) in [("gpt", "gpt-6-luna"), ("claude", "claude-4.5-haiku")] {
+        let c = responses_case(model, "response_mode=\"json-schema\"\n");
+        let p = genwire::prepare(
+            &c.trusted,
+            &c.spec.tasks[0],
+            &generation_input(),
+            DispatchPurpose::Task,
+        )
+        .unwrap();
+        let request: Value = serde_json::from_slice(&p.body).unwrap();
+        assert_eq!(request["model"], model);
+        assert_eq!(request["instructions"], "Return data");
+        assert_eq!(
+            request["input"],
+            json!([{"role":"user","content":"untrusted data"}])
+        );
+        assert_eq!(request["stream"], false);
+        assert_eq!(request["store"], false);
+        assert_eq!(request["max_output_tokens"], 16);
+        assert_eq!(request["text"]["format"]["type"], "json_schema");
+        for key in [
+            "tools",
+            "tool_choice",
+            "previous_response_id",
+            "messages",
+            "n",
+            "response_format",
+        ] {
+            assert!(request.get(key).is_none(), "{key}");
+        }
+        let fixture = gateway_fixture(name);
+        let ValidatedOutput::Generation {
+            value,
+            text,
+            returned_model,
+        } = genwire::decode(&p, &reply(&fixture)).unwrap()
+        else {
+            panic!("generation expected")
+        };
+        assert_eq!(value, json!({"ok":true}));
+        assert_eq!(text, "{\"ok\":true}");
+        assert_eq!(returned_model.as_deref(), Some(model));
+        assert!(
+            genwire::observe(&p, &reply(&fixture))
+                .contract_violation
+                .is_none()
+        );
+    }
+}
+
+#[test]
+fn responses_incomplete_refusal_and_tools_are_unsuccessful_but_observed() {
+    let c = responses_case("gpt-6-luna", "");
+    let p = genwire::prepare(
+        &c.trusted,
+        &c.spec.tasks[0],
+        &generation_input(),
+        DispatchPurpose::Task,
+    )
+    .unwrap();
+    let incomplete = gateway_fixture("incomplete");
+    let error = genwire::decode(&p, &reply(&incomplete)).err().unwrap();
+    assert_eq!(error.details["reason"], "incomplete_max_output_tokens");
+    let observed = genwire::observe(&p, &reply(&incomplete));
+    assert!(matches!(observed.usage, KnownOrUnknown::Known(_)));
+    let mut response = gateway_fixture("gpt");
+    for (item, reason) in [
+        (
+            json!({"type":"function_call","name":"unsafe"}),
+            "tool_output",
+        ),
+        (json!({"type":"alien"}), "unknown_output_item"),
+    ] {
+        response["output"].as_array_mut().unwrap().push(item);
+        assert_eq!(
+            genwire::decode(&p, &reply(&response))
+                .err()
+                .unwrap()
+                .details["reason"],
+            reason
+        );
+        response["output"].as_array_mut().unwrap().pop();
+    }
+    response["output"][1]["content"] = json!([{"type":"refusal","refusal":"no"}]);
+    assert_eq!(
+        genwire::decode(&p, &reply(&response))
+            .err()
+            .unwrap()
+            .details["reason"],
+        "refusal"
+    );
+    let mut split = gateway_fixture("gpt");
+    split["output"][1]["content"] = json!([
+        {"type":"output_text","text":"{\"ok\":"},
+        {"type":"output_text","text":"true}"}
+    ]);
+    assert!(genwire::decode(&p, &reply(&split)).is_ok());
+    let second = split["output"][1].clone();
+    split["output"].as_array_mut().unwrap().push(second);
+    assert_eq!(
+        genwire::decode(&p, &reply(&split)).err().unwrap().details["reason"],
+        "assistant_message_count"
+    );
+    let mut failed = gateway_fixture("gpt");
+    failed["status"] = "failed".into();
+    assert_eq!(
+        genwire::decode(&p, &reply(&failed)).err().unwrap().details["reason"],
+        "failed"
+    );
+    assert!(matches!(
+        genwire::observe(&p, &reply(&failed)).usage,
+        KnownOrUnknown::Known(_)
+    ));
+}
+
+#[test]
+fn gateway_chat_reasoning_metadata_and_usage_extensions_do_not_replace_text() {
+    for (model, usage, content) in [
+        (
+            "claude-4.5-haiku",
+            json!({"completion_tokens":17,"prompt_tokens":22,"total_tokens":39,"completion_tokens_details":{"reasoning_tokens":0,"text_tokens":17},"prompt_tokens_details":{"cached_tokens":0,"text_tokens":22,"cache_write_tokens":0,"cache_creation_tokens":0},"cache_creation_input_tokens":0,"cache_read_input_tokens":0}),
+            "```json\n{\"ok\":true}\n```",
+        ),
+        (
+            "gpt-6-luna",
+            json!({"completion_tokens":32,"prompt_tokens":24,"total_tokens":56,"completion_tokens_details":{"reasoning_tokens":21},"prompt_tokens_details":{"cached_tokens":0,"cache_write_tokens":0,"cache_creation_tokens":0}}),
+            "{\"ok\":true}",
+        ),
+    ] {
+        let c = case(
+            ServiceRole::Generate,
+            generation_input(),
+            model,
+            "https://gateway.example/v1/chat/completions",
+            "",
+            |_| {},
+        );
+        let p = genwire::prepare(
+            &c.trusted,
+            &c.spec.tasks[0],
+            &generation_input(),
+            DispatchPurpose::Task,
+        )
+        .unwrap();
+        let mut response = chat();
+        response["model"] = model.into();
+        response["usage"] = usage;
+        response["choices"][0]["message"]["content"] = content.into();
+        response["choices"][0]["message"]["reasoning_content"] = "not output".into();
+        response["choices"][0]["message"]["reasoning_items"] = json!([{"text":"also not output"}]);
+        let ValidatedOutput::Generation { value, text, .. } =
+            genwire::decode(&p, &reply(&response)).unwrap()
+        else {
+            panic!("generation expected")
+        };
+        assert_eq!(value, json!({"ok":true}));
+        assert_eq!(text, "{\"ok\":true}");
+        assert!(
+            genwire::observe(&p, &reply(&response))
+                .contract_violation
+                .is_none()
+        );
+    }
+}
 
 #[test]
 fn reordered_vectors_valid_missing_nan_dimension_batch_rejected() {
@@ -156,8 +385,16 @@ fn refusal_truncation_tools_malformed_generation_receipt_no_repair() {
     let input = generation_input();
     let p = genwire::prepare(&c.trusted, &c.spec.tasks[0], &input, DispatchPurpose::Task).unwrap();
     assert!(genwire::decode(&p, &reply(&chat())).is_ok());
+    let mut fenced = chat();
+    fenced["choices"][0]["message"]["content"] = "```json\n{\"ok\":true}\n```".into();
+    assert!(genwire::decode(&p, &reply(&fenced)).is_ok());
+    let mut reasoning = chat();
+    reasoning["choices"][0]["message"]["reasoning_content"] = "private reasoning".into();
+    reasoning["choices"][0]["message"]["reasoning_items"] = json!([{"opaque":"ignored"}]);
+    assert!(genwire::decode(&p, &reply(&reasoning)).is_ok());
     for content in [
-        "```json\n{\"ok\":true}\n```",
+        "prose ```json\n{\"ok\":true}\n```",
+        "```json\n{\"ok\":true}\n``` trailing",
         "prose {\"ok\":true}",
         "{\"ok\":true} false",
         "{\"ok\":false,\"ok\":true}",
@@ -522,4 +759,49 @@ fn usage_partitions_missing_details_and_model_violation_preserve_paid_counts() {
     assert!(observed.contract_violation.is_none());
     assert_eq!(observed.computed_cost, KnownOrUnknown::Unknown);
     assert!(genwire::decode(&p, &reply(&malformed)).is_err());
+}
+
+#[test]
+fn embedding_output_details_without_total_never_settle_input_only_cost() {
+    let c = case(
+        ServiceRole::Embed,
+        embedding_input(),
+        "test-model",
+        "https://gateway.example/embeddings",
+        "",
+        |_| {},
+    );
+    let mut p = embed::prepare(
+        &c.trusted,
+        &c.spec.tasks[0],
+        &embedding_input(),
+        DispatchPurpose::Task,
+    )
+    .unwrap();
+    p.bound.rate_card = Some(RateCard {
+        id: "fixture".into(),
+        version: 1,
+        fingerprint: hash("rates"),
+        currency: Currency::new("USD").unwrap(),
+        validity: PriceValidity::DispatchLocked {
+            valid_from_utc_ms: 0,
+            valid_until_utc_ms: i64::MAX,
+        },
+        request_fee_nanounits: 0,
+        rates: std::collections::BTreeMap::from([(
+            BillableClass::Input,
+            Rate {
+                price_nanounits: 1,
+                per_units: std::num::NonZeroU64::new(1).unwrap(),
+            },
+        )]),
+    });
+    for field in ["reasoning_tokens", "text_tokens"] {
+        let response = json!({"model":"test-model","data":[{"index":0,"embedding":[1,2]},{"index":1,"embedding":[3,4]}],
+            "usage":{"prompt_tokens":6,"total_tokens":6,"completion_tokens_details":{field:1}}});
+        let observed = embed::observe(&p, &reply(&response));
+        assert_eq!(observed.computed_cost, KnownOrUnknown::Unknown);
+        assert!(observed.contract_violation.is_some());
+        assert!(embed::decode(&p, &reply(&response)).is_err());
+    }
 }

@@ -52,12 +52,18 @@ fn default_header() -> String {
     "Authorization".into()
 }
 
+fn default_generation_adapter() -> AdapterKind {
+    AdapterKind::ResponsesV1
+}
+
 #[derive(Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 pub(crate) enum AdapterKind {
     #[serde(rename = "embeddings-v1")]
     EmbeddingsV1,
     #[serde(rename = "chat-completions-v1")]
     ChatCompletionsV1,
+    #[serde(rename = "responses-v1")]
+    ResponsesV1,
     #[serde(rename = "brave-web-v1")]
     BraveWebV1,
 }
@@ -65,7 +71,7 @@ impl AdapterKind {
     fn capability(self) -> Capability {
         match self {
             Self::EmbeddingsV1 => Capability::Embed,
-            Self::ChatCompletionsV1 => Capability::Generate,
+            Self::ChatCompletionsV1 | Self::ResponsesV1 => Capability::Generate,
             Self::BraveWebV1 => Capability::Search,
         }
     }
@@ -210,6 +216,7 @@ struct VaultBinding {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RawService {
+    #[serde(default = "default_generation_adapter")]
     adapter: AdapterKind,
     url: String,
     model: Option<String>,
@@ -837,7 +844,12 @@ fn service(r: RawService) -> Result<Service> {
         || r.response_mode.is_some()
         || r.max_output_tokens.is_some();
     if (r.adapter != AdapterKind::EmbeddingsV1 && embedding)
-        || (r.adapter != AdapterKind::ChatCompletionsV1 && generation)
+        || (!matches!(
+            r.adapter,
+            AdapterKind::ChatCompletionsV1 | AdapterKind::ResponsesV1
+        ) && generation)
+        || (r.adapter == AdapterKind::ResponsesV1
+            && (r.instruction_role.is_some() || r.output_limit_field.is_some()))
         || (r.adapter != AdapterKind::BraveWebV1 && r.model.is_none())
         || (r.adapter == AdapterKind::BraveWebV1 && (r.model.is_some() || r.revision.is_some()))
     {

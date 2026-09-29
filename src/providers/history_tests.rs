@@ -333,3 +333,71 @@ fn historical_retain_rejects_cache_or_unowned_descriptor_paths() {
     assert!(history::retain(&c.fs, &task, &mut p).is_err());
     assert!(p.bound.codec.is_none());
 }
+
+#[test]
+fn responses_codec_retains_provider_grammar_and_recovers_without_current_config() {
+    let mut input = generation_input();
+    if let RemoteOperation::Generate { output_schema, .. } = &mut input.operation {
+        *output_schema = json!({"type":"object","properties":{"ok":{"type":"boolean"},
+            "details":{"type":"object","properties":{"note":{"type":"string","minLength":1}},"required":[],"additionalProperties":false}},
+            "required":["ok","details"],"additionalProperties":false});
+    }
+    let c = case_with_adapter(
+        ServiceRole::Generate,
+        input.clone(),
+        "gateway-model",
+        "https://gateway.example/v1/responses",
+        "response_mode=\"json-schema\"\n",
+        |_| {},
+        "responses-v1",
+    );
+    let task = run_task(&c, &input);
+    let mut prepared =
+        generation_wire::prepare(&c.trusted, &task, &input, DispatchPurpose::Task).unwrap();
+    history::retain(&c.fs, &task, &mut prepared).unwrap();
+    let codec = prepared.bound.codec.as_ref().unwrap();
+    let retained: Value =
+        serde_json::from_slice(&std::fs::read(c.fs.root().resolve(&codec.path).unwrap()).unwrap())
+            .unwrap();
+    assert_eq!(retained["contract"]["surface"], "responses");
+    assert!(retained["contract"]["provider_schema"].is_object());
+    std::fs::remove_file(c.temp.path().join("providers.toml")).unwrap();
+    let restored = history::restore(&c.fs, &task, &prepared.bound, DispatchPurpose::Task).unwrap();
+    let response = |text: &str| {
+        reply(
+            json!({"object":"response","status":"completed","model":"gateway-model",
+        "output":[{"type":"reasoning","encrypted_content":"ignored"},
+            {"type":"message","role":"assistant","status":"completed","content":[{"type":"output_text","text":text}]}]}),
+        )
+    };
+    assert!(generation_wire::decode(&restored, &response("{\"ok\":true,\"details\":{}}")).is_ok());
+    assert!(
+        generation_wire::decode(
+            &restored,
+            &response("{\"ok\":true,\"details\":{\"note\":\"\"}}")
+        )
+        .is_err()
+    );
+    let mut bad = retained;
+    bad["contract"]["provider_schema"]["properties"]["ok"]["type"] = json!("string");
+    let bound = rewritten(&c, &prepared.bound, &canonical_json(&bad).unwrap());
+    assert!(history::restore(&c.fs, &task, &bound, DispatchPurpose::Task).is_err());
+}
+
+#[test]
+fn legacy_chat_codec_omits_new_fields_and_remains_canonical() {
+    let c = generation_case();
+    let task = run_task(&c, &generation_input());
+    let mut p = prepared_generation(&c, &task);
+    history::retain(&c.fs, &task, &mut p).unwrap();
+    let bytes = std::fs::read(
+        c.fs.root()
+            .resolve(&p.bound.codec.as_ref().unwrap().path)
+            .unwrap(),
+    )
+    .unwrap();
+    let value: Value = serde_json::from_slice(&bytes).unwrap();
+    assert!(value["contract"].get("surface").is_none());
+    assert!(value["contract"].get("provider_schema").is_none());
+    assert!(history::restore(&c.fs, &task, &p.bound, DispatchPurpose::Task).is_ok());
+}

@@ -250,7 +250,22 @@ pub(super) struct EmbeddingContract {
     pub(super) maximum_coordinates: u64,
 }
 
+#[derive(Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum GenerationSurface {
+    #[default]
+    ChatCompletions,
+    Responses,
+}
+impl GenerationSurface {
+    pub(super) fn is_chat(&self) -> bool {
+        matches!(self, Self::ChatCompletions)
+    }
+}
+
 pub(super) struct GenerationContract {
+    pub(super) surface: GenerationSurface,
+    pub(super) provider_schema: Option<Arc<serde_json::Value>>,
     pub(super) basis: BoundBasis,
     pub(super) instruction_role: InstructionRole,
     pub(super) output_limit_field: OutputLimitField,

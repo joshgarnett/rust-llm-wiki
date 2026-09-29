@@ -50,3 +50,5 @@ The [six native GitHub release jobs](https://github.com/joshgarnett/rust-llm-wik
 - [Prompts for independent external research](docs/external-research-prompts.md)
 
 The initial research and architecture are committed as `4652248`. The technical designs define the implementation contracts; some historical planning pages still describe proposed behavior. Local validation uses disposable vaults and mock providers. It does not establish live-provider compatibility or real-model retrieval quality. The research distinguishes documented capabilities, authors' experimental claims, and this project's design. The supplied Markdown-versus-RAG report informed the questions; its embedded citation identifiers cannot be resolved here, so linked primary-source research supplies the evidence base.
+
+Provider setup and retesting: [Responses, compatible gateways and probes](docs/providers.md).

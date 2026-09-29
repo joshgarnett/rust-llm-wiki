@@ -28,7 +28,7 @@ async fn execute(ctx: &DispatchContext, request: RemoteRequest)
     -> Result<RemoteOutcome, DispatchFailure>;
 ```
 
-`RemoteOutcome` contains typed embeddings, generation text, search results, or captured bytes, plus a `UsageReceipt` and durable output reference. `DispatchFailure` includes a safe cause, receipt when available, and `NotSent | Rejected | OutcomeUnknown` disposition. Central CLI mapping selects existing error codes. Receipts accompany invalid output too: malformed JSON can still cost money.
+`RemoteOutcome` contains typed embeddings, generation text, search results, or captured bytes, plus a `UsageReceipt` and durable output reference. `DispatchFailure` includes a safe cause, receipt when available, and `NotSent | Rejected | OutcomeUnknown` disposition. Central CLI mapping selects existing error codes. Receipts accompany invalid output too: malformed JSON can still cost money. Fixed allowlisted `details.reason` and retained `failure_code` identify validation failures without copying provider strings or bodies.
 
 Adapters implement pure `encode`, `decode`, and `upper_bound` methods; only dispatcher transport sends requests. Jobs supply run identity, limits, reservations, and checkpoints. Retrieval supplies `SpaceId`, actual rendered bytes, and schema validation; generation cannot bypass its importer. Use an injectable transport, clock, jitter source, and credential runner for deterministic tests.
 
@@ -61,13 +61,11 @@ header = "Authorization"
 prefix = "Bearer "
 
 [services.generate-main]
-adapter = "chat-completions-v1"
-url = "https://gateway.example/v1/chat/completions"
+adapter = "responses-v1"
+url = "https://gateway.example/v1/responses"
 model = "generation-deployment"
 revision = "deployment-2026-09"
-instruction_role = "system"
-output_limit_field = "max_completion_tokens"
-response_mode = "text-json"
+response_mode = "json-schema"
 
 [services.generate-main.auth]
 kind = "static"
@@ -125,11 +123,17 @@ Require exactly one vector for every requested index; accept reordered entries, 
 
 An active older space retains its non-secret endpoint/model/revision/render specification during replacement. Query dispatch must reproduce that specification and reauthorize its endpoint against current private trust; it must never embed with newly configured settings and compare against old vectors. If no longer permitted or reproducible, require a matching cached query or report semantic unavailable.
 
-Reject an invalid batch as a whole; persist a bounded failure receipt and leave its inputs pending. Successful earlier batches remain checkpointed. Commit validated vectors and their receipt before scheduling another batch. A missing usage field means unknown, not zero. Token estimates never establish model limits: use verified tokenization or a proven bound, otherwise enforce bytes/items and expose uncertainty. Overlong-input failures return to deterministic segmentation; never truncate or automatically spend on a repair call.
+Reject an invalid batch as a whole; persist a bounded failure receipt and leave its inputs pending. Successful earlier batches remain checkpointed. Commit validated vectors and their receipt before scheduling another batch. A missing usage field or subset means unknown, not zero. Embedding usage accepts zero/null completion counts and nullable detail blocks. Bounded unknown usage keys do not reject valid output; unknown extensions and positive cache-write/creation classes keep computed cost unknown. Recognized counts still require valid types, sums and subset bounds; nonzero embedding completion is unsupported. Provider-reported cost never authorizes settlement. Token estimates never establish model limits: use verified tokenization or a proven bound, otherwise enforce bytes/items and expose uncertainty. Overlong-input failures return to deterministic segmentation; never truncate or automatically spend on a repair call.
 
 ## 5. Separate generation adapter
 
-Start with nonstreaming Chat Completions-compatible text generation. This is an interoperability choice; OpenAI recommends Responses for new applications and documents model-dependent parameters. The chosen surface uses `model`, `messages`, `stream:false`, one choice, and a configured output-token limit. Parse `choices[0].message.content`, finish reason, returned model, request ID, and usage. [Official Chat Completions reference](https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create)
+Use nonstreaming `responses-v1` for new generation services. Omitting `adapter` selects Responses; existing explicit `chat-completions-v1` services retain their behavior and endpoint. URLs are never rewritten or probed speculatively. Responses uses top-level `instructions`, one user `input` item, `stream:false`, `store:false`, and `max_output_tokens`; no tools, prior response IDs, or conversation state are sent. Explicit `response_mode = "json-schema"` sends `text.format`; omitted response mode remains `text-json`. [Official migration guide](https://developers.openai.com/api/docs/guides/migrate-to-responses)
+
+Responses success requires `status:completed`, no error/incomplete condition, and exactly one completed assistant message. Join its `output_text` parts in order and validate the entire result locally. Reasoning items are ignored as output; refusals, tool items, unknown output item kinds and incomplete/failed/cancelled statuses are unsuccessful paid responses. Incomplete output allowance reports `incomplete_max_output_tokens`. Usage maps input/cached input and output/reasoning partitions without assuming missing subsets are zero.
+
+For Responses schema mode, a bounded provider grammar preserves optional-field absence through closed object alternatives. Provider-only constraints may be broader; the original full schema remains the local acceptance rule. No null substitution, fabricated optional values or hidden text-mode fallback occurs. Both schemas are retained with the original Responses codec for offline recovery. Legacy Chat schema mode retains its existing strict subset. Unsupported/open/dynamic or excessive schemas fail before dispatch.
+
+`chat-completions-v1` remains available for gateways without Responses. Only this adapter accepts `instruction_role` and `output_limit_field`; it sends `model`, `messages`, `stream:false`, one choice, and the configured output-token limit. [Official Chat reference](https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create)
 
 ```json
 {
@@ -146,7 +150,7 @@ Start with nonstreaming Chat Completions-compatible text generation. This is an 
 
 Instruction role (`system`/`developer`) and legacy `max_tokens` are explicit tested profile capabilities; no speculative fallback requests. Omit temperature and provider-specific options by default. Never send tool definitions or execute returned tool calls. Source text stays in the data message and cannot configure dispatch.
 
-Baseline `text-json` requires the entire returned text to parse as one JSON value; no regex extraction from prose. A tested `json-schema` mode may send `response_format` with the importer schema, but refusals and truncated responses still need handling. [Structured output guidance](https://developers.openai.com/api/docs/guides/structured-outputs) Require one index-zero choice, assistant text, no refusal/tool calls, and `finish_reason:stop`; preserve other results as unsuccessful outputs. Schema repair is a new explicitly requested budgeted task. `lwiki.extraction.v1` validation and changeset staging remain retrieval's responsibility.
+Baseline `text-json` requires the entire returned text to parse as one JSON value. One outer ` ```json ` fence with newline delimiters may be removed; prose, extra fences and fragments are not extracted. For Chat, tested `json-schema` mode sends `response_format` with the importer schema, but refusals and truncated responses still need handling. [Structured output guidance](https://developers.openai.com/api/docs/guides/structured-outputs) Require one index-zero choice, assistant text, no refusal/tool calls, and `finish_reason:stop`; preserve other results as unsuccessful outputs. Schema repair is a new explicitly requested budgeted task. `lwiki.extraction.v1` validation and changeset staging remain retrieval's responsibility.
 
 Output-token limits must include invisible billed tokens when the provider uses them; visible text length is insufficient. OpenAI explicitly documents this distinction. [Token accounting](https://developers.openai.com/api/docs/guides/token-counting) Embedding profiles cannot generate text merely because their URL looks API-compatible. No local model runtime is supported.
 
@@ -233,3 +237,9 @@ On cancellation, persist completed work, mark unresolved dispatches, and stop ne
 | Resume after changed source/model; deleted SQLite | Reuse only matching durable work; no implicit paid rebuild |
 
 Run these against mocks and fault-injected storage first; add opt-in live contract tests for the actual selected endpoints before claiming interoperability.
+
+### Probe allowance and gateway headers
+
+Explicit generation probes request up to 256 output tokens, bounded by the configured service maximum and caller output-unit ceiling. Unproven gateway token/cost ceilings still fail admission rather than promising unsupported hard guarantees; request/byte ceilings remain available. Responses and Chat use the configured adapter for probes.
+
+Response header names follow RFC 9110 token syntax, including underscores, while count/byte/name/value-control limits remain enforced. Invalid headers report `response_headers_invalid`; oversized bodies report `response_bound`. [RFC 9110 §5.6.2](https://www.rfc-editor.org/rfc/rfc9110.html#name-tokens)

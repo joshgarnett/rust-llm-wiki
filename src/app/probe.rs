@@ -58,7 +58,7 @@ impl OfflineApp {
                 instructions: "Return a JSON object with ok set to true.".into(),
                 data: "Explicit provider probe.".into(),
                 output_schema: serde_json::json!({"type":"object","properties":{"ok":{"type":"boolean"}},"required":["ok"],"additionalProperties":false}),
-                max_output_tokens: 32,
+                max_output_tokens: probe_output_limit(runtime)?,
             },
             ServiceRole::Search => RemoteOperation::Search {
                 query: "lwiki provider probe".into(),
@@ -203,4 +203,20 @@ impl OfflineApp {
             error
         })
     }
+}
+
+fn probe_output_limit(runtime: &RemoteRuntime) -> Result<u64> {
+    let mut limit = 256u64.min(runtime.service.service().max_output_tokens.unwrap_or(4096));
+    for class in [BillableClass::Output, BillableClass::Reasoning] {
+        if let Some(ceiling) = runtime.limits.billable_units.get(&class) {
+            limit = limit.min(*ceiling);
+        }
+    }
+    if limit == 0 {
+        return Err(WikiError::new(
+            ErrorCode::BudgetExceeded,
+            "generation probe output allowance is zero",
+        ));
+    }
+    Ok(limit)
 }

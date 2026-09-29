@@ -58,7 +58,9 @@ pub(super) fn headers_valid(headers: &[(String, String)]) -> bool {
             .try_fold(0usize, |total, (name, value)| {
                 if name.len() > 128
                     || name.is_empty()
-                    || !name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
+                    || !name
+                        .bytes()
+                        .all(|b| b.is_ascii_alphanumeric() || b"!#$%&'*+-.^_`|~".contains(&b))
                     || value.len() > HEADER_FIELD
                     || value.chars().any(|c| c.is_control())
                 {
@@ -504,5 +506,30 @@ mod tests {
                 assert_eq!((timer.last.utc_ms, timer.last.monotonic_ms), (250, 250));
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod header_tests {
+    use super::*;
+    #[test]
+    fn response_header_names_accept_http_tokens_and_preserve_bounds() {
+        let headers = vec![
+            ("llm_provider-x-amzn-requestid".into(), "request".into()),
+            ("!#$%&'*+-.^_`|~09AZaz".into(), "value".into()),
+        ];
+        assert!(TransportReply::new(200, headers, b"{}".to_vec()).is_ok());
+        for name in ["bad name", "bad:name", "bad\rname", "", "é"] {
+            assert!(!headers_valid(&[(name.into(), "value".into())]));
+        }
+        assert!(!headers_valid(&[("good".into(), "bad\nvalue".into())]));
+        assert!(!headers_valid(&vec![
+            ("good".into(), "v".into());
+            HEADER_COUNT + 1
+        ]));
+        assert!(!headers_valid(&[(
+            "good".into(),
+            "v".repeat(HEADER_FIELD + 1)
+        )]));
     }
 }

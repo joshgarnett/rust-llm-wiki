@@ -130,6 +130,35 @@ pub fn case_with_encoding(
     canonical: bool,
     edit: impl FnOnce(&mut RunSpec),
 ) -> Case {
+    let adapter = match role {
+        ServiceRole::Embed => "embeddings-v1",
+        ServiceRole::Generate => "chat-completions-v1",
+        _ => unreachable!(),
+    };
+    case_with_adapter_encoding(role, input, model, url, extra, canonical, edit, adapter)
+}
+pub fn case_with_adapter(
+    role: ServiceRole,
+    input: RemoteInput,
+    model: &str,
+    url: &str,
+    extra: &str,
+    edit: impl FnOnce(&mut RunSpec),
+    adapter: &str,
+) -> Case {
+    case_with_adapter_encoding(role, input, model, url, extra, true, edit, adapter)
+}
+#[allow(clippy::too_many_arguments)]
+fn case_with_adapter_encoding(
+    role: ServiceRole,
+    input: RemoteInput,
+    model: &str,
+    url: &str,
+    extra: &str,
+    canonical: bool,
+    edit: impl FnOnce(&mut RunSpec),
+    adapter: &str,
+) -> Case {
     let policy = ExecutionPolicy::default();
     let hook = None;
     let temp = tempfile::tempdir().unwrap();
@@ -141,11 +170,6 @@ pub fn case_with_encoding(
     let binding = match role {
         ServiceRole::Embed => "embedding",
         ServiceRole::Generate => "generation",
-        _ => unreachable!(),
-    };
-    let adapter = match role {
-        ServiceRole::Embed => "embeddings-v1",
-        ServiceRole::Generate => "chat-completions-v1",
         _ => unreachable!(),
     };
     private(

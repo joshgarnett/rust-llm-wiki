@@ -1,6 +1,6 @@
 //! Pure task fingerprints and sealed request construction. No credentials or IO.
 use super::types::*;
-use crate::config::providers::{InstructionRole, OutputLimitField, ResponseMode};
+use crate::config::providers::{AdapterKind, InstructionRole, OutputLimitField, ResponseMode};
 use crate::{
     config::providers::TrustedService,
     domain::*,
@@ -174,7 +174,15 @@ pub(super) fn seal(
             (&c.basis, BTreeMap::from([(BillableClass::Input, count)]))
         }
         WireContract::Generation(c) => {
-            if role != ServiceRole::Generate {
+            if role != ServiceRole::Generate
+                || !matches!(
+                    (service.service().adapter, c.surface),
+                    (
+                        AdapterKind::ChatCompletionsV1,
+                        GenerationSurface::ChatCompletions
+                    ) | (AdapterKind::ResponsesV1, GenerationSurface::Responses)
+                )
+            {
                 return Err(WikiError::invalid("generation wire role differs"));
             }
             if std::mem::discriminant(&c.instruction_role)
@@ -194,6 +202,17 @@ pub(super) fn seal(
                 || task.schema_hash.as_ref() != Some(&c.schema_fingerprint)
             {
                 return Err(WikiError::invalid("generation sealed settings differ"));
+            }
+            match (c.surface, c.response_mode, &c.provider_schema) {
+                (GenerationSurface::Responses, ResponseMode::JsonSchema, Some(grammar)) => {
+                    super::generation_wire::compile_schema(grammar, true)?;
+                }
+                (GenerationSurface::Responses, ResponseMode::JsonSchema, None)
+                | (GenerationSurface::ChatCompletions, _, Some(_))
+                | (_, ResponseMode::TextJson, Some(_)) => {
+                    return Err(WikiError::invalid("generation provider grammar differs"));
+                }
+                _ => {}
             }
             let known = matches!(c.basis, BoundBasis::OpenAiChatGpt41SnapshotV1);
             if known

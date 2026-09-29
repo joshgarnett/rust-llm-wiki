@@ -76,22 +76,35 @@ fn remote_cli_dry_run_needs_no_provider_and_preserves_vault_bytes() {
 }
 #[test]
 fn native_api_cli_stages_proposals_and_offline_reuses_paid_output() {
-    native_api_cli_case(false);
+    native_api_cli_case(false, false);
 }
 #[test]
 fn native_api_cli_failed_paid_response_reports_actual_network_activity() {
-    native_api_cli_case(true);
+    native_api_cli_case(true, false);
 }
-fn native_api_cli_case(invalid_response: bool) {
+#[test]
+fn native_responses_api_cli_stages_and_reuses_projected_schema_output() {
+    native_api_cli_case(false, true);
+}
+fn native_api_cli_case(invalid_response: bool, responses: bool) {
     let f = Fixture::new();
     let listener = std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).unwrap();
     let address = listener.local_addr().unwrap();
     listener.set_nonblocking(true).unwrap();
     let mock = Mock::response(f.response());
+    let mut response_value = mock.body.lock().unwrap().as_ref().unwrap().clone();
+    if responses {
+        let content = response_value["choices"][0]["message"]["content"].clone();
+        response_value = json!({"object":"response","status":"completed","model":"test-model",
+            "output":[{"type":"reasoning","encrypted_content":"ignored"},
+                {"type":"message","role":"assistant","status":"completed","content":[{"type":"output_text","text":content}]}],
+            "usage":{"input_tokens":10,"output_tokens":8,"total_tokens":18,
+                "input_tokens_details":{"cached_tokens":0,"cache_write_tokens":0},"output_tokens_details":{"reasoning_tokens":0},"cost":null}});
+    }
     let response = if invalid_response {
         b"{}".to_vec()
     } else {
-        serde_json::to_vec(mock.body.lock().unwrap().as_ref().unwrap()).unwrap()
+        serde_json::to_vec(&response_value).unwrap()
     };
     let server = std::thread::spawn(move || {
         let deadline = Instant::now() + Duration::from_secs(20);
@@ -139,9 +152,18 @@ fn native_api_cli_case(invalid_response: bool) {
         let body: Value =
             serde_json::from_slice(&request[header_end..header_end + length]).unwrap();
         assert_eq!(body["model"], "test-model");
-        assert_eq!(body["messages"][0]["role"], "system");
-        assert_eq!(body["messages"][1]["role"], "user");
-        write!(socket,"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", response.len()).unwrap();
+        if responses {
+            assert!(body.get("messages").is_none());
+            assert!(body.get("tools").is_none());
+            assert_eq!(body["store"], false);
+            assert_eq!(body["input"][0]["role"], "user");
+            assert_eq!(body["text"]["format"]["type"], "json_schema");
+            assert!(body["instructions"].is_string());
+        } else {
+            assert_eq!(body["messages"][0]["role"], "system");
+            assert_eq!(body["messages"][1]["role"], "user");
+        }
+        write!(socket,"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nllm_provider-x-amzn-requestid: synthetic-id\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", response.len()).unwrap();
         socket.write_all(&response).unwrap();
         socket.flush().unwrap();
     });
@@ -156,6 +178,14 @@ fn native_api_cli_case(invalid_response: bool) {
             "model=\"test-model\"",
             "allow_loopback_http=true\nmodel=\"test-model\"",
         );
+    let content = if responses {
+        content.replace(
+            "adapter=\"chat-completions-v1\"",
+            "adapter=\"responses-v1\"\nresponse_mode=\"json-schema\"",
+        )
+    } else {
+        content
+    };
     std::fs::write(&config, content).unwrap();
     let invoke = |offline: bool| {
         let mut command =
@@ -217,6 +247,244 @@ fn native_api_cli_case(invalid_response: bool) {
     );
 }
 
+#[test]
+fn native_responses_doctor_probe_uses_default_and_service_capped_output() {
+    native_generation_probe_case(true, None, false);
+    native_generation_probe_case(true, Some(64), false);
+}
+
+#[test]
+fn native_chat_doctor_probe_keeps_legacy_output_limit() {
+    native_generation_probe_case(false, None, false);
+}
+
+#[test]
+fn native_incomplete_responses_probe_retains_one_paid_attempt_and_fixed_reason() {
+    native_generation_probe_case(true, None, true);
+}
+
+fn native_generation_probe_case(responses: bool, service_cap: Option<u64>, incomplete: bool) {
+    let f = Fixture::new();
+    let listener = std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).unwrap();
+    let address = listener.local_addr().unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let body = if incomplete {
+        json!({"status":"incomplete","incomplete_details":{"reason":"max_output_tokens"},"error":null,
+            "usage":{"input_tokens":24,"input_tokens_details":{"cached_tokens":0,"cache_write_tokens":0},
+                "output_tokens":16,"output_tokens_details":{"reasoning_tokens":16},"total_tokens":40,"cost":null}})
+    } else if responses {
+        json!({"object":"response","status":"completed","model":"test-model","incomplete_details":null,"error":null,
+            "output":[{"type":"reasoning","encrypted_content":"ignored"},
+                {"type":"message","role":"assistant","status":"completed","content":[{"type":"output_text","text":"{\"ok\":true}"}]}],
+            "usage":{"input_tokens":24,"input_tokens_details":{"cached_tokens":0,"cache_write_tokens":0},
+                "output_tokens":16,"output_tokens_details":{"reasoning_tokens":0},"total_tokens":40,"cost":null}})
+    } else {
+        json!({"model":"test-model","choices":[{"index":0,"finish_reason":"stop",
+            "message":{"role":"assistant","content":"{\"ok\":true}"}}],
+            "usage":{"prompt_tokens":24,"prompt_tokens_details":{"cached_tokens":0},
+                "completion_tokens":16,"completion_tokens_details":{"reasoning_tokens":0},"total_tokens":40}})
+    };
+    let reply = serde_json::to_vec(&body).unwrap();
+    let server = std::thread::spawn(move || {
+        let deadline = Instant::now() + Duration::from_secs(20);
+        let mut socket = loop {
+            match listener.accept() {
+                Ok((socket, _)) => break socket,
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    assert!(Instant::now() < deadline, "doctor probe never reached mock");
+                    std::thread::sleep(Duration::from_millis(2));
+                }
+                Err(error) => panic!("doctor mock accept: {error}"),
+            }
+        };
+        socket
+            .set_read_timeout(Some(Duration::from_secs(10)))
+            .unwrap();
+        let mut request = Vec::new();
+        let (header_end, length) = loop {
+            let mut chunk = [0; 4096];
+            let size = socket.read(&mut chunk).unwrap();
+            assert!(size > 0);
+            request.extend_from_slice(&chunk[..size]);
+            assert!(request.len() < 512 * 1024);
+            if let Some(end) = request.windows(4).position(|part| part == b"\r\n\r\n") {
+                let header = std::str::from_utf8(&request[..end]).unwrap();
+                let length = header
+                    .lines()
+                    .find_map(|line| {
+                        let (name, value) = line.split_once(':')?;
+                        name.eq_ignore_ascii_case("content-length")
+                            .then(|| value.trim().parse::<usize>().unwrap())
+                    })
+                    .unwrap();
+                break (end + 4, length);
+            }
+        };
+        while request.len() < header_end + length {
+            let mut chunk = [0; 4096];
+            let size = socket.read(&mut chunk).unwrap();
+            assert!(size > 0);
+            request.extend_from_slice(&chunk[..size]);
+        }
+        let request: Value =
+            serde_json::from_slice(&request[header_end..header_end + length]).unwrap();
+        write!(socket,"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",reply.len()).unwrap();
+        socket.write_all(&reply).unwrap();
+        socket.flush().unwrap();
+        request
+    });
+    let config = f.temp.path().join("providers.toml");
+    let content = std::fs::read_to_string(&config)
+        .unwrap()
+        .replace(
+            "https://gateway.example/chat",
+            &format!("http://{address}/probe"),
+        )
+        .replace(
+            "model=\"test-model\"",
+            "allow_loopback_http=true\nmodel=\"test-model\"",
+        );
+    let content = if responses {
+        content.replace(
+            "adapter=\"chat-completions-v1\"",
+            "adapter=\"responses-v1\"\nresponse_mode=\"json-schema\"",
+        )
+    } else {
+        content
+    };
+    let content = if let Some(cap) = service_cap {
+        content.replace(
+            "revision=\"r1\"",
+            &format!("revision=\"r1\"\nmax_output_tokens={cap}"),
+        )
+    } else {
+        content
+    };
+    std::fs::write(&config, content).unwrap();
+    let result = std::process::Command::new(test_paths::binary(env!("CARGO_BIN_EXE_lwiki")))
+        .args([
+            "--wiki",
+            f.temp.path().to_str().unwrap(),
+            "--json",
+            "--profile",
+            "primary",
+            "doctor",
+            "--probe",
+            "--role",
+            "generate",
+            "--providers-config",
+            config.to_str().unwrap(),
+            "--max-requests",
+            "1",
+            "--attempts-per-task",
+            "1",
+        ])
+        .env("EXPLICIT_FIXTURE_TOKEN", "synthetic-cli-secret")
+        .output()
+        .unwrap();
+    let value: Value = serde_json::from_slice(&result.stdout).unwrap();
+    let request = server.join().unwrap();
+    let expected = service_cap.unwrap_or(256);
+    if responses {
+        assert_eq!(request["max_output_tokens"], expected);
+        assert!(request.get("messages").is_none());
+        assert_eq!(request["store"], false);
+    } else {
+        assert_eq!(request["max_completion_tokens"], expected);
+        assert!(request.get("input").is_none());
+    }
+    assert_eq!(result.status.success(), !incomplete, "{value}");
+    assert_eq!(value["meta"]["network_used"], true);
+    if incomplete {
+        assert_eq!(value["error"]["code"], "PROVIDER_RESPONSE");
+        assert_eq!(
+            value["error"]["details"]["cause"]["reason"],
+            "incomplete_max_output_tokens"
+        );
+        let run = value["error"]["details"]["run_id"].as_str().unwrap();
+        let projection =
+            lwiki::catalog::scan::scan(&f.fs, &lwiki::domain::RecordId::new("vault_test").unwrap())
+                .unwrap();
+        let receipts: Vec<_> = projection
+            .records
+            .values()
+            .filter(|row| {
+                row.record.kind() == lwiki::domain::RecordKind::RunEvent
+                    && row.record.string("wiki_run_id") == Some(run)
+                    && row.record.string("wiki_event_type") == Some("usage_receipt")
+            })
+            .collect();
+        assert_eq!(receipts.len(), 1);
+        let bytes = std::fs::read(f.temp.path().join(receipts[0].path.as_str())).unwrap();
+        let retained = String::from_utf8(bytes).unwrap();
+        assert!(retained.contains("incomplete_max_output_tokens"));
+        assert!(retained.contains("\"billable_units\""));
+    } else {
+        assert_eq!(value["data"]["probe"]["validated"], true);
+        assert_eq!(
+            value["data"]["probe"]["inspection"]["attempts"]
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
+    }
+}
+
+#[test]
+fn native_generation_probe_unknown_unit_bound_refuses_before_send() {
+    let f = Fixture::new();
+    let listener = std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).unwrap();
+    let address = listener.local_addr().unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let config = f.temp.path().join("providers.toml");
+    let content = std::fs::read_to_string(&config)
+        .unwrap()
+        .replace(
+            "https://gateway.example/chat",
+            &format!("http://{address}/probe"),
+        )
+        .replace(
+            "model=\"test-model\"",
+            "allow_loopback_http=true\nmodel=\"test-model\"",
+        )
+        .replace(
+            "adapter=\"chat-completions-v1\"",
+            "adapter=\"responses-v1\"\nresponse_mode=\"json-schema\"",
+        );
+    std::fs::write(&config, content).unwrap();
+    let result = std::process::Command::new(test_paths::binary(env!("CARGO_BIN_EXE_lwiki")))
+        .args([
+            "--wiki",
+            f.temp.path().to_str().unwrap(),
+            "--json",
+            "--profile",
+            "primary",
+            "doctor",
+            "--probe",
+            "--role",
+            "generate",
+            "--providers-config",
+            config.to_str().unwrap(),
+            "--max-requests",
+            "1",
+            "--attempts-per-task",
+            "1",
+            "--max-output-units",
+            "64",
+        ])
+        .env("EXPLICIT_FIXTURE_TOKEN", "synthetic-cli-secret")
+        .output()
+        .unwrap();
+    let value: Value = serde_json::from_slice(&result.stdout).unwrap();
+    assert!(!result.status.success(), "{value}");
+    assert_eq!(value["error"]["code"], "CAPABILITY_UNAVAILABLE");
+    assert_eq!(value["meta"]["network_used"], false);
+    assert!(
+        matches!(listener.accept(), Err(error) if error.kind() == std::io::ErrorKind::WouldBlock)
+    );
+}
+
 #[path = "fixtures/p17/common.rs"]
 mod embedding_fixture;
 #[test]
@@ -272,9 +540,9 @@ fn native_embedding_cli_sync_query_graph_context_and_cached_offline_reuse() {
             }
             let response = serde_json::to_vec(&json!({"model":"test-model",
                 "data":[{"index":0,"embedding":[1.0,0.0]}],
-                "usage":{"prompt_tokens":2,"total_tokens":2}}))
+                "usage":{"prompt_tokens":2,"total_tokens":2,"completion_tokens":0,"prompt_tokens_details":null,"completion_tokens_details":null}}))
             .unwrap();
-            write!(socket,"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",response.len()).unwrap();
+            write!(socket,"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nllm_provider-x-amzn-requestid: synthetic-id\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",response.len()).unwrap();
             socket.write_all(&response).unwrap();
             socket.flush().unwrap();
         }
