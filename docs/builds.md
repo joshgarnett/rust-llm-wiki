@@ -129,6 +129,11 @@ the jobs, hashes and limits. These hosted gates do not run the full recovery
 suite; Windows vault writes remain unsupported. Publishing, signing and
 branch-protection settings remain owner decisions.
 
+[Regular CI run 36568046880](https://github.com/joshgarnett/rust-llm-wiki/actions/runs/36568046880)
+also passed on Linux, macOS and Windows after the Windows job allowance was
+raised to 60 minutes. Product source and build commands match the release
+commit; only CI timing and documentation changed.
+
 For subsequent releases, create a **draft** only after all six release jobs pass and the downloaded archives match
 their checksums, embedded binary hashes, target, version and workflow commit.
 Artifacts retained from failed jobs are diagnostics, not accepted releases.

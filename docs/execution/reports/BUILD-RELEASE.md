@@ -126,7 +126,12 @@ Regular CI run36564578882 passed Linux/macOS and Windows source/tooling checks,
 but its Windows optimized build reached the 30-minute job limit. The six-target
 release uses a 60-minute limit and passed. Regular Windows CI now has the same
 60-minute allowance; all existing source, tooling and candidate checks remain.
-Confirmation of that CI rerun is recorded below when complete.
+[CI rerun 36568046880](https://github.com/joshgarnett/rust-llm-wiki/actions/runs/36568046880)
+passed all three jobs at `18820b44be4c716e460a8398217d66aac5e99333`, including
+the Windows optimized candidate. The only workflow change
+from the release source is that time limit; product source and build commands
+are unchanged. The final documentation-only checkpoint records these results
+and skips redundant CI execution.
 
 The draft remains unpublished. Unix hosted jobs run the short gate and
 optimized skill recipes, not the full recovery suite. Windows vault writes

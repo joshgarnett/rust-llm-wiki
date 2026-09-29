@@ -175,5 +175,45 @@
     "Hosted Unix jobs run short CI and optimized skill recipes, not the full recovery suite.",
     "Windows compiles all test sources and smokes binary version/capabilities; vault writes remain unsupported.",
     "No musl artifacts; builds unsigned; live-provider and installed host integration qualification remain separate."
-  ]
+  ],
+  "regular_ci": {
+    "id": 36568046880,
+    "url": "https://github.com/joshgarnett/rust-llm-wiki/actions/runs/36568046880",
+    "source_commit": "18820b44be4c716e460a8398217d66aac5e99333",
+    "conclusion": "success",
+    "verified_at": "2026-09-29T12:53:57.007235+00:00",
+    "delta_from_release_source": "Windows CI time limit changed from 30 to 60 minutes; other changes are documentation/evidence. Build commands and product source unchanged.",
+    "jobs": [
+      {
+        "databaseId": 109404780729,
+        "name": "Windows build and capabilities only",
+        "url": "https://github.com/joshgarnett/rust-llm-wiki/actions/runs/36568046880/job/109404780729",
+        "conclusion": "success",
+        "startedAt": "2026-09-29T12:25:54Z",
+        "completedAt": "2026-09-29T12:53:43Z"
+      },
+      {
+        "databaseId": 109404780892,
+        "name": "Build and smoke (macos-26)",
+        "url": "https://github.com/joshgarnett/rust-llm-wiki/actions/runs/36568046880/job/109404780892",
+        "conclusion": "success",
+        "startedAt": "2026-09-29T12:25:55Z",
+        "completedAt": "2026-09-29T12:31:33Z"
+      },
+      {
+        "databaseId": 109404780945,
+        "name": "Build and smoke (ubuntu-24.04)",
+        "url": "https://github.com/joshgarnett/rust-llm-wiki/actions/runs/36568046880/job/109404780945",
+        "conclusion": "success",
+        "startedAt": "2026-09-29T12:25:53Z",
+        "completedAt": "2026-09-29T12:40:24Z"
+      }
+    ],
+    "previous_run": {
+      "id": 36564578882,
+      "conclusion": "cancelled",
+      "windows_failure_annotation": "The job has exceeded the maximum execution time of 30m0s",
+      "passed_before_timeout": "Linux and macOS jobs; Windows full-source build and tooling tests"
+    }
+  }
 }
