@@ -1,0 +1,240 @@
+{
+  "schema_version": 1,
+  "scope": "Native release builds, workflow smoke gates and downloaded archive verification; not full platform recovery or live provider qualification.",
+  "source_commit": "196da5f72e92aac00aba68ee064b2d3393c53ec3",
+  "package_version": "0.1.0",
+  "release_build": {
+    "url": "https://github.com/joshgarnett/rust-llm-wiki/actions/runs/36615314084",
+    "source_commit": "196da5f72e92aac00aba68ee064b2d3393c53ec3",
+    "conclusion": "success",
+    "jobs": [
+      {
+        "name": "x86_64-pc-windows-msvc",
+        "url": "https://github.com/joshgarnett/rust-llm-wiki/actions/runs/36615314084/job/109566714389",
+        "conclusion": "success",
+        "startedAt": "2026-09-29T18:53:47Z",
+        "completedAt": "2026-09-29T19:07:24Z"
+      },
+      {
+        "name": "x86_64-unknown-linux-gnu",
+        "url": "https://github.com/joshgarnett/rust-llm-wiki/actions/runs/36615314084/job/109566714624",
+        "conclusion": "success",
+        "startedAt": "2026-09-29T18:53:47Z",
+        "completedAt": "2026-09-29T19:02:24Z"
+      },
+      {
+        "name": "x86_64-apple-darwin",
+        "url": "https://github.com/joshgarnett/rust-llm-wiki/actions/runs/36615314084/job/109566714719",
+        "conclusion": "success",
+        "startedAt": "2026-09-29T18:53:50Z",
+        "completedAt": "2026-09-29T19:19:59Z"
+      },
+      {
+        "name": "aarch64-unknown-linux-gnu",
+        "url": "https://github.com/joshgarnett/rust-llm-wiki/actions/runs/36615314084/job/109566714749",
+        "conclusion": "success",
+        "startedAt": "2026-09-29T18:53:50Z",
+        "completedAt": "2026-09-29T19:00:20Z"
+      },
+      {
+        "name": "aarch64-apple-darwin",
+        "url": "https://github.com/joshgarnett/rust-llm-wiki/actions/runs/36615314084/job/109566714780",
+        "conclusion": "success",
+        "startedAt": "2026-09-29T18:53:51Z",
+        "completedAt": "2026-09-29T19:02:37Z"
+      },
+      {
+        "name": "aarch64-pc-windows-msvc",
+        "url": "https://github.com/joshgarnett/rust-llm-wiki/actions/runs/36615314084/job/109566714859",
+        "conclusion": "success",
+        "startedAt": "2026-09-29T18:53:48Z",
+        "completedAt": "2026-09-29T19:06:17Z"
+      }
+    ]
+  },
+  "ci": {
+    "url": "https://github.com/joshgarnett/rust-llm-wiki/actions/runs/36615283430",
+    "source_commit": "196da5f72e92aac00aba68ee064b2d3393c53ec3",
+    "conclusion": "success",
+    "jobs": [
+      {
+        "name": "Build and smoke (ubuntu-24.04)",
+        "url": "https://github.com/joshgarnett/rust-llm-wiki/actions/runs/36615283430/job/109566602283",
+        "conclusion": "success",
+        "startedAt": "2026-09-29T18:53:31Z",
+        "completedAt": "2026-09-29T19:02:34Z"
+      },
+      {
+        "name": "Windows build and capabilities only",
+        "url": "https://github.com/joshgarnett/rust-llm-wiki/actions/runs/36615283430/job/109566602635",
+        "conclusion": "success",
+        "startedAt": "2026-09-29T18:53:31Z",
+        "completedAt": "2026-09-29T19:07:39Z"
+      },
+      {
+        "name": "Build and smoke (macos-26)",
+        "url": "https://github.com/joshgarnett/rust-llm-wiki/actions/runs/36615283430/job/109566602764",
+        "conclusion": "success",
+        "startedAt": "2026-09-29T18:53:36Z",
+        "completedAt": "2026-09-29T19:04:57Z"
+      }
+    ]
+  },
+  "verification_command": "python3 scripts/verify_release.py .artifacts/release-36615314084 --commit 196da5f72e92aac00aba68ee064b2d3393c53ec3 --version 0.1.0",
+  "verified_assets": 12,
+  "artifacts": [
+    {
+      "target": "aarch64-apple-darwin",
+      "archive": "lwiki-0.1.0-aarch64-apple-darwin.tar.gz",
+      "archive_bytes": 9163679,
+      "archive_sha256": "99d90271bf429e51d09ceddadacecdfc9c2908600688201598c999b4e1e906b9",
+      "binary_bytes": 25469872,
+      "binary_sha256": "65e6b69b54bea5dff43fe1161fb21750f25d8828877d983da44d04aedadd8a33",
+      "architecture": "Mach-O 64-bit executable arm64",
+      "verification": "passed",
+      "native_host": "aarch64-apple-darwin",
+      "source_clean": true,
+      "build_contract_sha256": {
+        "Cargo.toml": "63f9dc7c4a3073d388258e93351bb802a6ef2d5e70aceff3b6e2915f7c2757fb",
+        "Cargo.lock": "e1b6f04e0fd93af2c758fb1210d90627033f20df4b66b0a3c0eba9a968f72def",
+        "MODULE.bazel": "aa11e56c4cb7120b24ad3e222929df603b1ae2e7a75993104b2f5cf73210e7ec",
+        "MODULE.bazel.lock": "7879b81486d299d61ae622a561203785d4a7b91e8f0382e3c614d472d9244efa",
+        "cargo-bazel-lock.json": "a57cde06e1cbeeba2d9c11d7bd78680b0da615ac18be5098441d14ed4a8c6b5c",
+        ".bazelversion": "1b9487d55bea47fea50d226cc9c53bc548877ad2a318bac8fbc8b320f429e5c5",
+        ".bazelrc": "cb1b3f8a089ca7fb6804c5029a602ae660ff25fb8081fa520b67474d434e38cc",
+        "rust-toolchain.toml": "495c69d1db93f25f53e3d0d2d40d812313366cc368de317871c2ace6c6ffafa4",
+        "scripts/bazel.py": "f727e423befd2ac156a94f482cf02da966cfa5d80e8665f4348245f14d1a2811"
+      }
+    },
+    {
+      "target": "aarch64-pc-windows-msvc",
+      "archive": "lwiki-0.1.0-aarch64-pc-windows-msvc.tar.gz",
+      "archive_bytes": 8578354,
+      "archive_sha256": "786ebda1dfb73c7de80a80176ecff5d0e1455548d29382ca37a5efde4920ba08",
+      "binary_bytes": 21595648,
+      "binary_sha256": "6b88ab5cf9f288acc60d4d75520595b5b1a80ad7f909bc5cd0790b6484452d4e",
+      "architecture": "PE32+ executable (console) Aarch64, for MS Windows",
+      "verification": "passed",
+      "native_host": "aarch64-pc-windows-msvc",
+      "source_clean": true,
+      "build_contract_sha256": {
+        "Cargo.toml": "b403bc491c64bc14e822870fbf4168244244d0f026c51a5f52f92d9a7322b460",
+        "Cargo.lock": "fa9aabd9c363c31e817a4b51a62fa603b8389587f6e54f99857a9fa221d2d39a",
+        "MODULE.bazel": "5badf75869184f504790b913e87f57db36d10ca7090336b05810c3a0a2c579eb",
+        "MODULE.bazel.lock": "41e9384a360475fee3c8c58a5e0588cdfdfa5578a8f55259b311155daf8c9909",
+        "cargo-bazel-lock.json": "7d76dd1b515e9ad6b8d0220cb0f552b40287cf31b14ac249481c013eb252f66a",
+        ".bazelversion": "0a83cb19bb3a4a8c10032ad6e6305f6b98d8259db91ffc98b2ef72eb88fb46df",
+        ".bazelrc": "b037cd225a9add144b032a1870472ed7e44aecf2fd845154f8139c40dca54794",
+        "rust-toolchain.toml": "90204ca70291b3df79ef4532e2850103c5f5dd35dd73161303a3daf1a19a38d5",
+        "scripts/bazel.py": "840f895f13e470d96b9ee03903fa770072b1b613a4293bc9cdf326b8380044c3"
+      }
+    },
+    {
+      "target": "aarch64-unknown-linux-gnu",
+      "archive": "lwiki-0.1.0-aarch64-unknown-linux-gnu.tar.gz",
+      "archive_bytes": 9539701,
+      "archive_sha256": "6a6854ad34e4b59f1e3414e74f735e7647cc7fc79975df21e7dc7ca05714e74a",
+      "binary_bytes": 28377152,
+      "binary_sha256": "3ec8c59bd73e669ce8e24f84a101fccc7c4dc5d7796c79ceea4b8b48d11e962c",
+      "architecture": "ELF 64-bit LSB pie executable, ARM aarch64, version 1 (SYSV), dynamically linked, interpreter /lib/ld-linux-aarch64.so.1, for GNU/Linux 3.7.0, BuildID[sha1]=2ed246c0f14b57985ff87d68165f4871ba0865a1, not stripped",
+      "verification": "passed",
+      "native_host": "aarch64-unknown-linux-gnu",
+      "source_clean": true,
+      "build_contract_sha256": {
+        "Cargo.toml": "63f9dc7c4a3073d388258e93351bb802a6ef2d5e70aceff3b6e2915f7c2757fb",
+        "Cargo.lock": "e1b6f04e0fd93af2c758fb1210d90627033f20df4b66b0a3c0eba9a968f72def",
+        "MODULE.bazel": "aa11e56c4cb7120b24ad3e222929df603b1ae2e7a75993104b2f5cf73210e7ec",
+        "MODULE.bazel.lock": "7879b81486d299d61ae622a561203785d4a7b91e8f0382e3c614d472d9244efa",
+        "cargo-bazel-lock.json": "a57cde06e1cbeeba2d9c11d7bd78680b0da615ac18be5098441d14ed4a8c6b5c",
+        ".bazelversion": "1b9487d55bea47fea50d226cc9c53bc548877ad2a318bac8fbc8b320f429e5c5",
+        ".bazelrc": "cb1b3f8a089ca7fb6804c5029a602ae660ff25fb8081fa520b67474d434e38cc",
+        "rust-toolchain.toml": "495c69d1db93f25f53e3d0d2d40d812313366cc368de317871c2ace6c6ffafa4",
+        "scripts/bazel.py": "f727e423befd2ac156a94f482cf02da966cfa5d80e8665f4348245f14d1a2811"
+      }
+    },
+    {
+      "target": "x86_64-apple-darwin",
+      "archive": "lwiki-0.1.0-x86_64-apple-darwin.tar.gz",
+      "archive_bytes": 9748272,
+      "archive_sha256": "406f23d4fe1209f9b3333fc3ea99a45e5f3828d526f7b71807bad6ffa2d87890",
+      "binary_bytes": 27527240,
+      "binary_sha256": "8e1c91ab9ce33f2491451adab73ae805afab67a69aab61bdc1d752b2db8788d8",
+      "architecture": "Mach-O 64-bit executable x86_64",
+      "verification": "passed",
+      "native_host": "x86_64-apple-darwin",
+      "source_clean": true,
+      "build_contract_sha256": {
+        "Cargo.toml": "63f9dc7c4a3073d388258e93351bb802a6ef2d5e70aceff3b6e2915f7c2757fb",
+        "Cargo.lock": "e1b6f04e0fd93af2c758fb1210d90627033f20df4b66b0a3c0eba9a968f72def",
+        "MODULE.bazel": "aa11e56c4cb7120b24ad3e222929df603b1ae2e7a75993104b2f5cf73210e7ec",
+        "MODULE.bazel.lock": "7879b81486d299d61ae622a561203785d4a7b91e8f0382e3c614d472d9244efa",
+        "cargo-bazel-lock.json": "a57cde06e1cbeeba2d9c11d7bd78680b0da615ac18be5098441d14ed4a8c6b5c",
+        ".bazelversion": "1b9487d55bea47fea50d226cc9c53bc548877ad2a318bac8fbc8b320f429e5c5",
+        ".bazelrc": "cb1b3f8a089ca7fb6804c5029a602ae660ff25fb8081fa520b67474d434e38cc",
+        "rust-toolchain.toml": "495c69d1db93f25f53e3d0d2d40d812313366cc368de317871c2ace6c6ffafa4",
+        "scripts/bazel.py": "f727e423befd2ac156a94f482cf02da966cfa5d80e8665f4348245f14d1a2811"
+      }
+    },
+    {
+      "target": "x86_64-pc-windows-msvc",
+      "archive": "lwiki-0.1.0-x86_64-pc-windows-msvc.tar.gz",
+      "archive_bytes": 9258176,
+      "archive_sha256": "ea0ed66765b8c0db72a31673a483d12e3845ebff2b8ef25989456846dd5bf3e1",
+      "binary_bytes": 25786880,
+      "binary_sha256": "631f6aaf8364b31e7d5d33733db624fa228ef25cac053b18d18e63481429c6b5",
+      "architecture": "PE32+ executable (console) x86-64, for MS Windows",
+      "verification": "passed",
+      "native_host": "x86_64-pc-windows-msvc",
+      "source_clean": true,
+      "build_contract_sha256": {
+        "Cargo.toml": "b403bc491c64bc14e822870fbf4168244244d0f026c51a5f52f92d9a7322b460",
+        "Cargo.lock": "fa9aabd9c363c31e817a4b51a62fa603b8389587f6e54f99857a9fa221d2d39a",
+        "MODULE.bazel": "5badf75869184f504790b913e87f57db36d10ca7090336b05810c3a0a2c579eb",
+        "MODULE.bazel.lock": "41e9384a360475fee3c8c58a5e0588cdfdfa5578a8f55259b311155daf8c9909",
+        "cargo-bazel-lock.json": "7d76dd1b515e9ad6b8d0220cb0f552b40287cf31b14ac249481c013eb252f66a",
+        ".bazelversion": "0a83cb19bb3a4a8c10032ad6e6305f6b98d8259db91ffc98b2ef72eb88fb46df",
+        ".bazelrc": "b037cd225a9add144b032a1870472ed7e44aecf2fd845154f8139c40dca54794",
+        "rust-toolchain.toml": "90204ca70291b3df79ef4532e2850103c5f5dd35dd73161303a3daf1a19a38d5",
+        "scripts/bazel.py": "840f895f13e470d96b9ee03903fa770072b1b613a4293bc9cdf326b8380044c3"
+      }
+    },
+    {
+      "target": "x86_64-unknown-linux-gnu",
+      "archive": "lwiki-0.1.0-x86_64-unknown-linux-gnu.tar.gz",
+      "archive_bytes": 10037368,
+      "archive_sha256": "24cadfd5c024a4b59847a764376d7a4358b6b2297a14df8716b0d8a340240d01",
+      "binary_bytes": 30110568,
+      "binary_sha256": "77aca468a23c512075a0a4075bf9c20e665085ce5d7d6abe24053845647013c0",
+      "architecture": "ELF 64-bit LSB pie executable, x86-64, version 1 (SYSV), dynamically linked, interpreter /lib64/ld-linux-x86-64.so.2, for GNU/Linux 3.2.0, BuildID[sha1]=91f8005070eec4abf71f65534586a0c2959451ea, not stripped",
+      "verification": "passed",
+      "native_host": "x86_64-unknown-linux-gnu",
+      "source_clean": true,
+      "build_contract_sha256": {
+        "Cargo.toml": "63f9dc7c4a3073d388258e93351bb802a6ef2d5e70aceff3b6e2915f7c2757fb",
+        "Cargo.lock": "e1b6f04e0fd93af2c758fb1210d90627033f20df4b66b0a3c0eba9a968f72def",
+        "MODULE.bazel": "aa11e56c4cb7120b24ad3e222929df603b1ae2e7a75993104b2f5cf73210e7ec",
+        "MODULE.bazel.lock": "7879b81486d299d61ae622a561203785d4a7b91e8f0382e3c614d472d9244efa",
+        "cargo-bazel-lock.json": "a57cde06e1cbeeba2d9c11d7bd78680b0da615ac18be5098441d14ed4a8c6b5c",
+        ".bazelversion": "1b9487d55bea47fea50d226cc9c53bc548877ad2a318bac8fbc8b320f429e5c5",
+        ".bazelrc": "cb1b3f8a089ca7fb6804c5029a602ae660ff25fb8081fa520b67474d434e38cc",
+        "rust-toolchain.toml": "495c69d1db93f25f53e3d0d2d40d812313366cc368de317871c2ace6c6ffafa4",
+        "scripts/bazel.py": "f727e423befd2ac156a94f482cf02da966cfa5d80e8665f4348245f14d1a2811"
+      }
+    }
+  ],
+  "local_packaged_macos_arm64_smoke": {
+    "codesign_strict": "passed",
+    "version": "lwiki 0.1.0",
+    "offline_commands_passed": 8,
+    "source_hits_before_withdrawal": 1,
+    "source_hits_after_withdrawal": 0,
+    "network_used": false
+  },
+  "publication": "Actions candidates only; existing draft v0.1.0 unchanged.",
+  "limitations": [
+    "No live gateway, auth helper or paid provider requests.",
+    "Windows vault writes remain unsupported.",
+    "Original owner-installed macOS SIGKILL and missing-manifest artifact unavailable.",
+    "These build/smoke results do not establish native crash recovery on all platforms."
+  ]
+}
