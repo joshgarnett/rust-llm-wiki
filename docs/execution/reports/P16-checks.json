@@ -1,12 +1,52 @@
 {
-  "package": "P14",
-  "local_acceptance": "passed",
-  "accepted_commit": "f1cef3b1affff8cafa82e10ba3b9682b1491d91a",
-  "predecessor_commit": "89db071eb81d1a991f9c276f17ac6c95023b76ef",
-  "snapshot": "/private/var/folders/g0/jdy1y8615k30fs6sbf4x1wt40000gn/T/lwiki-p14-acceptance-1hnkvjrp",
-  "source_hashes": {
-    "Cargo.lock": "060010587c5202823bec3e994e8e8fe9f02496cfb3bfa64bfa05359a58b8d48b",
-    "Cargo.toml": "32eb5489ffd07e5244793144747c5bd7ad6f430a630a818c15d13231439bbfa9",
+  "package": "P16",
+  "status": "locally accepted; external qualification pending",
+  "base_commit": "f1cef3b1affff8cafa82e10ba3b9682b1491d91a",
+  "accepted_commit": null,
+  "coherent_checkout": "/var/folders/g0/jdy1y8615k30fs6sbf4x1wt40000gn/T/lwiki-p16-integration-n10pjymt",
+  "overlay_paths": [
+    "Cargo.lock",
+    "Cargo.toml",
+    "src/config/mod.rs",
+    "src/config/providers.rs",
+    "src/jobs/accounting_tests.rs",
+    "src/jobs/checkpoint.rs",
+    "src/jobs/ledger.rs",
+    "src/jobs/types.rs",
+    "src/lib.rs",
+    "src/providers/credential_tests.rs",
+    "src/providers/credentials.rs",
+    "src/providers/dispatch_tests.rs",
+    "src/providers/dispatcher.rs",
+    "src/providers/embedding_wire.rs",
+    "src/providers/generation_wire.rs",
+    "src/providers/mod.rs",
+    "src/providers/retry.rs",
+    "src/providers/transport.rs",
+    "src/providers/types.rs",
+    "src/providers/wire.rs",
+    "src/providers/wire_json.rs",
+    "src/providers/wire_tests.rs",
+    "src/vault/fs.rs",
+    "src/vault/lock.rs",
+    "src/vault/operational.rs",
+    "src/vault/operational_tests.rs",
+    "tests/fixtures/p16/common.rs",
+    "tests/fixtures/p16b/README.md",
+    "tests/fixtures/p16b/ca.pem",
+    "tests/fixtures/p16b/cert.cnf",
+    "tests/fixtures/p16b/common.rs",
+    "tests/fixtures/p16b/server-key.pem",
+    "tests/fixtures/p16b/server.pem",
+    "tests/fixtures/p16c/common.rs",
+    "tests/provider_dispatch.rs",
+    "tests/provider_trust.rs",
+    "tests/provider_wire.rs",
+    "tests/vault_fs.rs"
+  ],
+  "file_sha256": {
+    "Cargo.lock": "7fd917c35db1a530e9e7b1425b78bc08dff8f8e32a12cc7b0f631b673a88aa17",
+    "Cargo.toml": "55c09e535ee58675ff161ef6e357d02b80a1a8a4046f9f64de7230ad52f11518",
     "examples/fixture_hash.rs": "3178ba7c423400ab6f9165c756750fb6b7045f493dd0d3b17295411c92aba57c",
     "rust-toolchain.toml": "495c69d1db93f25f53e3d0d2d40d812313366cc368de317871c2ace6c6ffafa4",
     "schemas/change-v1.json": "4c37b9a187ebfa1a6884dcac1eefc499e4bb0e5f42283d5573e68c6a65373215",
@@ -65,7 +105,8 @@
     "src/cli/review.rs": "d44218787d8f4ae4bdcc9b36d7ac1083b7a0d4bc698674659f8f5241cbc99199",
     "src/cli/skill_export.rs": "59ae93f8cb34df19ea1a9367a3539e3583b6bfc2821abf2b59fa55b8536da838",
     "src/config/local.rs": "ce6257fd8e5550d1ec4d5c77e9509ff1d56af5f02b9ad03a6d70233f850a4a89",
-    "src/config/mod.rs": "7c0e99a9d6212abf1fa2bbf2f2f8f4f4e559d555740311dc7cc7624dfd69d42c",
+    "src/config/mod.rs": "4ce6338657ce0312422acb934b8195467bc37f5f4ebb3f524a82ff782f915bfe",
+    "src/config/providers.rs": "7e120e7b7db7a6d6e3ae469ae3b2d788f5dd7b6b9d04f9b6cc53c31f7af606ff",
     "src/config/types.rs": "44d6273b3511dfe9ce08312e5ceda9e73e7f8b72752edc8e8d00183732301f82",
     "src/domain/mod.rs": "be34fba5562d7e48140bfd22b46078c211c1428a06a601ee49608f14470c6a00",
     "src/domain/records.rs": "a31ba98d025ba63e6fdb3a4812f8882ce3d11542ad0c822fda2d0978ff7f7229",
@@ -88,18 +129,31 @@
     "src/graph/traverse.rs": "2493ac026d99f233ce810b6e26bd3bd77464cf241076e91a8d9a8dbd7989ff49",
     "src/graph/types.rs": "91294278a38154e7c0eec761821f046c56c5ccff8d4938c6ae2d9c5348526bb6",
     "src/graph/wire.rs": "b311d5b645aabcda48cc5b1790c9d1749c744d725a40715db59c6a4420ed0299",
-    "src/jobs/accounting_tests.rs": "8019479a5b6d6c768ea815ce0db58a9c0b8cbaa685989a4c48f60d0ae6cd1343",
+    "src/jobs/accounting_tests.rs": "f56013efd4396bebddbad3f7e5dd9148a7dd0cc43d6e8fb33e92ed726d15da97",
     "src/jobs/budgets.rs": "2d1d7969f9b3583a79751cf930fe730473323deed921e7b035cf6caea9dde817",
-    "src/jobs/checkpoint.rs": "5acf98115e819896e3e9b3c6e54bc5e8bbfe4a1bf37009f1a8ff58982ad2d385",
+    "src/jobs/checkpoint.rs": "da5410da77527b62f6a36a5431d12f339b31c39dc8e17d3e8ebba2f73a625d3c",
     "src/jobs/events.rs": "22611f0c44f0131fa152a3b0325ff6005d6d9a5bbfbe9b4eabaeb24e573575f3",
-    "src/jobs/ledger.rs": "364f643bf30cc8caf86bcb445baba75bc7a28f1bd0755c5bb92ffbfc05f7e2dd",
+    "src/jobs/ledger.rs": "63a6e024c07c2775152024a27c49e022096dd4b19fa9fffd6807606bdc1bba8e",
     "src/jobs/mod.rs": "9021f655afbeadfc2c29160706309b1c3b8392110f6747ebcf8183c20f7c47db",
     "src/jobs/replay.rs": "f99433cfae9ae424cd0dea4f6a7c6832e51346b3805d99e8423da15332324893",
     "src/jobs/tasks.rs": "949a1beb2c5c8c5269c761d39744e143b8ab3a63f4862cd47a1a4cf0f3d85f50",
-    "src/jobs/types.rs": "5ac965c138742c2a3161cf25f18cde18e83d4b5fc9ecde1b87f67572006caaf9",
-    "src/lib.rs": "7fa51c10256b51e106493b4848792d9a38b441456c5e72073d58d15c3e4f6362",
+    "src/jobs/types.rs": "38931ea88f1ed89db6e151b5a83365062503e8500e64227f61b993a6dba4f5ef",
+    "src/lib.rs": "233209889e5f46fe2a24fdff3ad7df7e875ee6e30fee10a874847e2aa36c0ea8",
     "src/main.rs": "1632e80a9dfaa5a80bf95e95c7122908dfa32c2df18e155577bd01133e7d7ad2",
     "src/output.rs": "fc6623e352a9c6822890d6f0af4b791dc0a617ee122cd8abe56796d0901d685c",
+    "src/providers/credential_tests.rs": "9333eff9f1a66a6407333393fe69f4de772495e3e7b590576a728df598f19f41",
+    "src/providers/credentials.rs": "48d29297969db0b1c53bcc5d44607964340ba865a551f4644e0f51d350cda3cb",
+    "src/providers/dispatch_tests.rs": "e97910d443dd807721d9009f39f7a037e7c4330e76d9d03835a8f0d00f7e0be8",
+    "src/providers/dispatcher.rs": "6e2a65088149f062b09a9e9e465f3e754978fe0fdd8676c19679936424b1e975",
+    "src/providers/embedding_wire.rs": "3ebd4d67c75a53d7a21519d416e5b4151eddf9464b5e589c47f868f37c2ab7aa",
+    "src/providers/generation_wire.rs": "a042459053e229e74a072f903f77293a3021f632cfba74f5a94df872d1dcbb1b",
+    "src/providers/mod.rs": "1a79bfa0058794cd7d0be94cbef1a9c8040fd0382e870ecf76022305062e930d",
+    "src/providers/retry.rs": "671ee6a64193827abda00e9022559db90dffe50b453488add3eff80e944df74a",
+    "src/providers/transport.rs": "90e70bdc404e1b2452d1b282b59b23e104607b23ab2d652601846a8335f68952",
+    "src/providers/types.rs": "072b17f188898c79083dd2d3701afd708d451062bb31e1722aa2f4d9de5ba713",
+    "src/providers/wire.rs": "40996de71d138a79ca3528198d45bfa7b66fe7bf5ab16688627124ade4f97314",
+    "src/providers/wire_json.rs": "59df866f8c8d150484590fdb234d697fe49d42ccbc0081bcae635e9784d4f832",
+    "src/providers/wire_tests.rs": "1a626bf6c0ad9f0d0e860881bd4f884b1ce7564fb32df94ba2c792ccd9f1bc89",
     "src/records/edit.rs": "d8fa5b3b63aa091b58daf3b221b088e699e2e29f3e07134c3b7811de56a4c06b",
     "src/records/links.rs": "2d82e96722350bf2bbda833eed81d24aa9e30c914c61107097b71d490fb26fff",
     "src/records/mod.rs": "087dcbc747b2604de3b1b72cddf8a989409c34b163b13e5002e05cf8e648618b",
@@ -123,11 +177,11 @@
     "src/sources/types.rs": "8b998522fd20efb376936b2db36b03f7aa9d1898d608ebe84b01e4871f0fe85c",
     "src/vault/acl_policy.rs": "f6599a05ee449eeddf91ab41764cc9084e9b2ba27db1d73fa75cd1f46ba30875",
     "src/vault/discovery.rs": "3d4a6b3d9c21c54d89cc579a490526f8bcd85ccc4bf53eb7cbaa49a827f72eb8",
-    "src/vault/fs.rs": "75e468e0b3665e90684607aeb7574217ee807a60ddf42f31d92706bcbc236204",
-    "src/vault/lock.rs": "554b5b9c7174384fd177d3ae97747e73a61df6c7da5d3c3df90edfdf9be14792",
+    "src/vault/fs.rs": "aba8bcfe474155e12909dbb092eb13cf455d9b426573e26b41c7613ad402b934",
+    "src/vault/lock.rs": "ef1fa31d142c0888cae72405136983c9b833d08f79cbffb47dd7e2d697966878",
     "src/vault/mod.rs": "ba1846714c4ca3d8b098451c1e4c0d86ead82117464f0ee4195d38fb8cc3b4dc",
-    "src/vault/operational.rs": "0f0ece6e0ccbab0054f3b930df40aca65d09dbd385ed158f9e6f5aa9e087cab9",
-    "src/vault/operational_tests.rs": "ec13c7daaeb1879bf3d26a223205bb757ec82bb41129c8fc740af3fd0c05a6d7",
+    "src/vault/operational.rs": "c3e066a40ad6bd13e53a191e9d9bf81a76d07eb93d84c7f806fe4dbeacb80b26",
+    "src/vault/operational_tests.rs": "c30df33b4079ed2ab557c55920cecc859ecb35af42ac3ce42d5d89eac6aa1c57",
     "src/vault/paths.rs": "a22b6506e2277acfecfa3ba638866bde42448416df58da5860cd40cd87357988",
     "src/vault/windows_security.rs": "785baab120bf4b89594231f73b9fb0da458a061bd093d563e948291efb36f274",
     "tests/catalog_crash_recovery.rs": "5afa762918a8b52d21b30b791c6893d3b3a949778d31dcca6198ae6b40bb11ce",
@@ -191,6 +245,14 @@
     "tests/fixtures/p13/support.rs": "ad387e5fdf0e207853e9fa2862c3f811df8295fa332b882ef9cfc97cdac258a7",
     "tests/fixtures/p14/package-manifest.json": "cef225d4205bed2b1dcdf3c608bcef5a6a66a00b653653a915dff6effb99b612",
     "tests/fixtures/p15/common.rs": "408989810fb0e355bcc60b2fae9c91900cf35240e95b4956459bbbc6a0822367",
+    "tests/fixtures/p16/common.rs": "4b07b3db3802ef0dbffe41aaaf93749655ae7ef03b9c4156e6dbf11886408544",
+    "tests/fixtures/p16b/README.md": "036acbe6e6aed929306dce3dccaf767fe0eefbac03d3911cd2be0bbc895adc36",
+    "tests/fixtures/p16b/ca.pem": "be793c9a8e77d20a2ed7a69457c965bda3f8745f9229db84353fc5258464dc92",
+    "tests/fixtures/p16b/cert.cnf": "9bbb62529b2de3e99dc972758cecc3d04f5672f16757a830c06882c04fc5f352",
+    "tests/fixtures/p16b/common.rs": "f10d10c8973d462d69d550963d10534c47adabf6f9715958fa5e21489b10de9f",
+    "tests/fixtures/p16b/server-key.pem": "b4dced2f0f9881dd7d0aa0e006ac7305ff94ef33f2e0c870a7d5ef7d6f1ac775",
+    "tests/fixtures/p16b/server.pem": "30eac77528725d03f14acdcd3fa176a42f1e895f8daf10cffacfb6e928037241",
+    "tests/fixtures/p16c/common.rs": "8c9177ec263290d1fb9220286c67f9220cf38fca0a4819baf27f2a84e49b1c10",
     "tests/graph_cli.rs": "9ba7fbf6cd8f00dc16ff680385c98a226084a0b8e3dcd03d2d5a7da6ab1eb12f",
     "tests/graph_queries.rs": "a215f80c56312ac0ca1235cc9d269a9619890b9a70e05b554a844b414237131e",
     "tests/graph_resolution.rs": "7eea590b4d4081b79ef1164e8ec933194e31ec5ad88cf3570f92926d6a830294",
@@ -201,203 +263,101 @@
     "tests/machine_contract.rs": "44abd144489b988bbbaaf2589f7e84241523b185db20d2c8731b3a1e27922db5",
     "tests/offline_application.rs": "d717a1d67e05318980d967aff2e614909f6944ef220d0824f0ca42419e20c7b3",
     "tests/offline_cli.rs": "864f34ac2670eb70df1e5aefafcaaad53c55f98c1c9532e7993ca5c599594358",
+    "tests/provider_dispatch.rs": "ba6062d0b8fe5ab41a6e15eb382b2cb437243f714ff632f0b0b86d84af8953c3",
+    "tests/provider_trust.rs": "d617e7346bf34e499330f350b4c5d7fa38f1d003e70d7f9e7a35f7b52379d0e5",
+    "tests/provider_wire.rs": "4270b5c17b92ca165b38432990c71178fa53fed9eaa95a8f6059f2fbf45ee470",
     "tests/records_lossless.rs": "6835c5c94273061ea5b25f51c8ab0b35dbabdf6314b26cd2455ab7683e189bf2",
     "tests/resolution_cli.rs": "cc34a489aae56a9fca4c67a0e3ed59824036d830648a0dbba73043b86fd28061",
     "tests/retrieval_lexical.rs": "10bee8f13e40ba2805829d1aefd32262c557a82a76786d1c75e80706e25100fb",
     "tests/skill_export.rs": "b8adb08a0207c7877918296a3a4c784708ac5b5fc6148e485ace4a6462eb3184",
     "tests/sources_evidence.rs": "6f3a8eabdbe9683e799bcb9bbb10447f4143f373110f71e6f71f1afd29ebd24e",
-    "tests/vault_fs.rs": "5699ff7207e4b5724625686dbd088453fda9f6e75e05ea78c0e5cd42724400de",
+    "tests/vault_fs.rs": "a184748334216a3c93f86009d5e0c049aa2fe8c3f06388c3594d4eebe241c371",
     "tests/windows_acl_policy.rs": "dbbae84d4bebf5f9d8ef8b8ef1cafc830c55d7604723b4956b1be48b7646399e"
   },
-  "source_fingerprint": "e79303cb16082d495b411bc790bee9881c6a1073d8d17c97fc33fe2e1d844d00",
-  "binary_sha256": "237ab6fa41761caeb675abf1774f60f940cdd4268fb3d9babbe7759b8e061ff8",
-  "native_checks": [
-    {
-      "name": "fmt",
-      "command": [
-        "cargo",
-        "fmt",
-        "--all",
-        "--check"
-      ],
-      "cwd": "/private/var/folders/g0/jdy1y8615k30fs6sbf4x1wt40000gn/T/lwiki-p14-acceptance-1hnkvjrp",
-      "exit_code": 0,
-      "elapsed_seconds": 0.667,
-      "log": "/private/tmp/lwiki-p14-root-fmt-final.log"
-    },
-    {
-      "name": "clippy",
-      "command": [
-        "cargo",
-        "clippy",
-        "--locked",
-        "--offline",
-        "--all-targets",
-        "--",
-        "-D",
-        "warnings"
-      ],
-      "cwd": "/private/var/folders/g0/jdy1y8615k30fs6sbf4x1wt40000gn/T/lwiki-p14-acceptance-1hnkvjrp",
-      "exit_code": 0,
-      "elapsed_seconds": 5.008,
-      "log": "/private/tmp/lwiki-p14-root-clippy-final.log"
-    },
-    {
-      "name": "private",
-      "command": [
-        "cargo",
-        "test",
-        "--locked",
-        "--offline",
-        "--lib",
-        "cli::skill_export::tests",
-        "--",
-        "--nocapture"
-      ],
-      "cwd": "/private/var/folders/g0/jdy1y8615k30fs6sbf4x1wt40000gn/T/lwiki-p14-acceptance-1hnkvjrp",
-      "exit_code": 0,
-      "elapsed_seconds": 4.321,
-      "log": "/private/tmp/lwiki-p14-root-private-final.log",
-      "actual_parents": 0,
-      "note": "Wrong filter; no runtime evidence. Corrected dedicated filter above."
-    },
-    {
-      "name": "public",
-      "command": [
-        "cargo",
-        "test",
-        "--locked",
-        "--offline",
-        "--test",
-        "skill_export",
-        "--test",
-        "windows_acl_policy",
-        "--",
-        "--nocapture"
-      ],
-      "cwd": "/private/var/folders/g0/jdy1y8615k30fs6sbf4x1wt40000gn/T/lwiki-p14-acceptance-1hnkvjrp",
-      "exit_code": 0,
-      "elapsed_seconds": 13.544,
-      "log": "/private/tmp/lwiki-p14-root-public-final.log"
-    },
-    {
-      "name": "build",
-      "command": [
-        "cargo",
-        "build",
-        "--locked",
-        "--offline"
-      ],
-      "cwd": "/private/var/folders/g0/jdy1y8615k30fs6sbf4x1wt40000gn/T/lwiki-p14-acceptance-1hnkvjrp",
-      "exit_code": 0,
-      "elapsed_seconds": 13.999,
-      "log": "/private/tmp/lwiki-p14-root-build-final.log"
-    },
-    {
-      "name": "anchored_corrected_filter",
-      "command": [
-        "cargo",
-        "test",
-        "--locked",
-        "--offline",
-        "--lib",
-        "cli::skill_export::anchored_tests",
-        "--",
-        "--nocapture"
-      ],
-      "exit_code": 0,
-      "log": "/private/tmp/lwiki-p14-root-anchored-final.log",
-      "actual_parents": 6
-    }
-  ],
-  "windows_adapter_checks": [
-    {
-      "name": "lock",
-      "command": [
-        "cargo",
-        "+1.98.0",
-        "generate-lockfile",
-        "--offline"
-      ],
-      "cwd": "/private/tmp/lwiki-p14-windows-export-check",
-      "exit_code": 0,
-      "elapsed_seconds": 0.201,
-      "log": "/private/tmp/lwiki-p14-windows-export-lock.log"
-    },
-    {
-      "name": "msvc",
-      "command": [
-        "cargo",
-        "+1.98.0",
-        "check",
-        "--locked",
-        "--offline",
-        "--target",
-        "x86_64-pc-windows-msvc"
-      ],
-      "cwd": "/private/tmp/lwiki-p14-windows-export-check",
-      "exit_code": 0,
-      "elapsed_seconds": 5.074,
-      "log": "/private/tmp/lwiki-p14-windows-export-msvc.log"
-    },
-    {
-      "name": "gnu",
-      "command": [
-        "cargo",
-        "+1.98.0",
-        "check",
-        "--locked",
-        "--offline",
-        "--target",
-        "x86_64-pc-windows-gnu"
-      ],
-      "cwd": "/private/tmp/lwiki-p14-windows-export-check",
-      "exit_code": 0,
-      "elapsed_seconds": 2.227,
-      "log": "/private/tmp/lwiki-p14-windows-export-gnu.log"
-    },
-    {
-      "name": "clippy",
-      "command": [
-        "cargo",
-        "+1.98.0",
-        "clippy",
-        "--locked",
-        "--offline",
-        "--target",
-        "x86_64-pc-windows-msvc",
-        "--",
-        "-D",
-        "warnings"
-      ],
-      "cwd": "/private/tmp/lwiki-p14-windows-export-check",
-      "exit_code": 0,
-      "elapsed_seconds": 0.519,
-      "log": "/private/tmp/lwiki-p14-windows-export-clippy.log"
-    }
-  ],
-  "native_parents": {
-    "anchored_races_controls": 6,
-    "required_packaging_workflow": 4,
-    "portable_acl_policy": 7
+  "source_fingerprint": "0896305598129df5fa78c076a0f6b6b698fdb5a407fc7d9c1f168b5fead03d32",
+  "fingerprint_algorithm": "SHA256 of sorted path + NUL + file SHA256 + LF",
+  "source_reconciliation": {
+    "workspace_equals_snapshot": true,
+    "first_native_inventory": "/private/tmp/lwiki-p16-integrated-running-hashes.json",
+    "first_native_fingerprint": "fde6f800d63d3d7824c3180e895a8fefa7b02a29aecf14b0912176eeb288dfed",
+    "changes_after_first_native_suite": [
+      "tests/provider_dispatch.rs"
+    ],
+    "production_and_private_fixture_bytes_unchanged": true
   },
-  "recipe_steps": 32,
-  "dependency_package_versions_unchanged": true,
-  "external_dependencies": 132,
+  "checks": [
+    {
+      "command": "cargo test --locked --offline --lib --test provider_trust --test provider_dispatch --test provider_wire --test vault_fs --test job_accounting -- --nocapture",
+      "log": "/private/tmp/lwiki-p16-integrated-native-first.log",
+      "exit_code": 101,
+      "scope": "lib100 passed/3 ignored explicit helpers (757.69s); job_accounting13 passed/one ignored explicit helper (6.06s); provider_dispatch3 passed/1 stale expected-unavailable failure; remaining targets not executed",
+      "qualification": "First batch is NOT a passing batch. Library/accounting production bytes match accepted source; external dispatcher test alone corrected."
+    },
+    {
+      "command": "cargo test --locked --offline --test provider_dispatch --test provider_trust --test provider_wire --test vault_fs -- --nocapture",
+      "log": "/private/tmp/lwiki-p16-integrated-public-final.log",
+      "exit_code": 0,
+      "scope": "provider_dispatch4/1.38s, provider_trust6/0.02s, provider_wire10/13.91s, vault_fs15/0.99s; vault child explicitly invoked",
+      "qualification": "Noncanonical retained input refuses before any secret/helper/reservation/transport; successful production encode/decode exercised by provider_wire."
+    },
+    {
+      "command": "cargo fmt --all -- --check",
+      "log": "/private/tmp/lwiki-p16-integrated-fmt-final.log",
+      "exit_code": 0
+    },
+    {
+      "command": "cargo clippy --locked --offline --all-targets -- -D warnings",
+      "log": "/private/tmp/lwiki-p16-integrated-clippy-final-after-test.log",
+      "exit_code": 0,
+      "elapsed_reported_seconds": 1.07
+    },
+    {
+      "command": "cargo build --locked --offline",
+      "log": "/private/tmp/lwiki-p16-integrated-build-final.log",
+      "exit_code": 0,
+      "elapsed_reported_seconds": 18.5
+    },
+    {
+      "command": "saved binary --offline --dry-run --json capabilities; schema NAME for each advertised schema",
+      "exit_code": 0,
+      "scope": "30 commands,15 exact published schema matches, networkfalse",
+      "artifact": "/private/tmp/lwiki-p16-root-artifact",
+      "binary_sha256": "af607e25f735444b69d0de14aa5a6ee427143d0db5d7371e6087dfbdb3388f84"
+    }
+  ],
+  "durable_faults": {
+    "bootstrap_native_calls": 241,
+    "ledger_native_calls": 266,
+    "operational_native_calls": 67,
+    "before_after_fault_positions": 1148,
+    "scope": "actual current-production durable I/O replay; fault injection is not power-loss certification"
+  },
   "reviews": [
-    "P14-review.md",
-    "Astra-P14-export-review.md",
-    "Astra-Windows-protection-review.md"
+    "P16a-review.md",
+    "P16b-accounting-review.md",
+    "P16c-accounting-review.md",
+    "Astra-P16c-review.md",
+    "Astra-P13-P16-review.md",
+    "P16-integration-review.md",
+    "Windows-callers-review.md"
   ],
+  "dependencies": {
+    "external_packages": 241,
+    "total_packages": 242,
+    "all_prior_P16a_165_package_version_pairs_retained": true,
+    "audit_log": "/tmp/lwiki-p16b-dependency-audit.log"
+  },
   "limits": [
-    "Native macOS filesystem behavior only; no power-loss claim.",
-    "Windows API/cfg checks compile actual exporter/helper/domain types with minimal CLI parser/registry support stubs, pure blake3 feature, and harness dead_code allowance; not whole-production cross-build or native behavior.",
-    "Independent skill forward artifact used explicitly identified pre-anchor binary; maintained instructions/resources unchanged and final exporter recipes rerun.",
-    "No live providers, installed host discovery, real-vault access or publishing."
+    "Native macOS fixture/mock-provider qualification only; no live provider or production credentials.",
+    "Windows helper/export adapter GNU/MSVC API/cfg checks and source caller reviews are not native Windows or full production cross-build qualification. Windows directory durability explicitly Unsupported before paid send.",
+    "P16 codecs/dispatcher/accounting are concrete library capabilities. Successful caller materialization has OutputsCommitted; high-level workflow settlement belongs to P17/P18. Search codec belongs to P19.",
+    "Header parser thresholds/exposed capacity proofs are conditional bounds, not RSS or complete header allocation ceilings.",
+    "Public Dispatcher failure is boxed without loss of retained paid attempt/spool/receipt fields.",
+    "No production paid calls, host installation, publishing or push."
   ],
-  "windows_harness_hashes": {
-    "/private/tmp/lwiki-p14-windows-export-check/Cargo.toml": "b43bb5b2de72c3bdbf1e09e0ec1194cb79cf916227333bf2603797cd5eaeafb4",
-    "/private/tmp/lwiki-p14-windows-export-check/Cargo.lock": "591bc42a21497ac872b6db35b57914c6179ff6a6c162a03db8c92733981f02dc",
-    "/private/tmp/lwiki-p14-windows-export-check/src/lib.rs": "6e9eba73e847366ba74832233dbf343b6ebf859cd05c614dc03a35e22fd6a458"
+  "historical_scoped_evidence": {
+    "P16a": "P16.md records original private18/public6; original165-package isolated scope.",
+    "P16b": "P16b.md plus continuity/private32/public4/poll-sentinel1 evidence; final ledger UTC/monotonic floor and actual HTTP entry seal independently closed.",
+    "P16c": "P16c.md and Astra-P16c-review.md; strict partition usage/total breach and quote findings closed; current production private5/public10 rerun in combined native/public suites."
   }
 }

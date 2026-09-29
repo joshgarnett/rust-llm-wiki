@@ -1,0 +1,14 @@
+[req]
+prompt=no
+distinguished_name=dn
+[dn]
+CN=lwiki disposable loopback fixture
+[ca]
+basicConstraints=critical,CA:TRUE
+keyUsage=critical,keyCertSign,cRLSign
+subjectKeyIdentifier=hash
+[server]
+basicConstraints=critical,CA:FALSE
+keyUsage=critical,digitalSignature,keyEncipherment
+extendedKeyUsage=serverAuth
+subjectAltName=IP:127.0.0.1

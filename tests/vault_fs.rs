@@ -317,6 +317,55 @@ impl DurableIo for FaultIo {
     }
 }
 
+#[cfg(unix)]
+#[test]
+fn private_creation_is_protected_before_payload_and_requires_adapter_support() {
+    use std::os::unix::fs::PermissionsExt;
+    let temp = tempfile::tempdir().unwrap();
+    let file_path = temp.path().join("private.bin");
+    let directory_path = temp.path().join("private-dir");
+    let public_only = FaultIo {
+        fail: "",
+        after: false,
+        events: Mutex::new(Vec::new()),
+    };
+    assert_eq!(
+        public_only
+            .create_private_stage(&file_path)
+            .unwrap_err()
+            .kind(),
+        io::ErrorKind::Unsupported
+    );
+    assert_eq!(
+        public_only
+            .create_private_directory(&directory_path)
+            .unwrap_err()
+            .kind(),
+        io::ErrorKind::Unsupported
+    );
+    assert!(public_only.events.lock().unwrap().is_empty());
+    assert!(!file_path.exists() && !directory_path.exists());
+
+    // Inspect immediately after exclusive creation, before any chmod or payload write.
+    let mut file = NativeIo.create_private_stage(&file_path).unwrap();
+    assert_eq!(file.metadata().unwrap().permissions().mode() & 0o077, 0);
+    assert_eq!(file.metadata().unwrap().len(), 0);
+    NativeIo.create_private_directory(&directory_path).unwrap();
+    assert_eq!(
+        fs::metadata(&directory_path).unwrap().permissions().mode() & 0o077,
+        0
+    );
+    NativeIo.write_stage(&mut file, b"private payload").unwrap();
+    assert_eq!(
+        NativeIo
+            .create_private_stage(&file_path)
+            .unwrap_err()
+            .kind(),
+        io::ErrorKind::AlreadyExists
+    );
+    assert_eq!(fs::read(&file_path).unwrap(), b"private payload");
+}
+
 #[test]
 fn interrupted_directory_creation_retry_resyncs_every_directory_and_parent() {
     for (fail, after) in [("mkdir", true), ("dirsync", false), ("dirsync", true)] {

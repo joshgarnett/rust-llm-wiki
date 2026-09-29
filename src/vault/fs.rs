@@ -37,6 +37,13 @@ pub enum DirectorySync {
 /// Methods must perform exactly the requested operation, without hidden retries.
 pub trait DurableIo: Send + Sync {
     fn create_stage(&self, path: &Path) -> std::io::Result<File>;
+    /// Adapters must explicitly implement protected creation before accepting private payloads.
+    fn create_private_stage(&self, _path: &Path) -> std::io::Result<File> {
+        Err(std::io::ErrorKind::Unsupported.into())
+    }
+    fn create_private_directory(&self, _path: &Path) -> std::io::Result<()> {
+        Err(std::io::ErrorKind::Unsupported.into())
+    }
     fn open_append(&self, path: &Path) -> std::io::Result<File>;
     fn truncate_file(&self, file: &File, length: u64) -> std::io::Result<()>;
     fn write_stage(&self, file: &mut File, bytes: &[u8]) -> std::io::Result<()>;
@@ -54,6 +61,47 @@ pub struct NativeIo;
 impl DurableIo for NativeIo {
     fn create_stage(&self, path: &Path) -> std::io::Result<File> {
         OpenOptions::new().write(true).create_new(true).open(path)
+    }
+    fn create_private_stage(&self, path: &Path) -> std::io::Result<File> {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .mode(0o600)
+                .open(path)
+        }
+        #[cfg(windows)]
+        {
+            // Operational callers retain a pinned private parent through replacement.
+            Ok(super::windows_security::create_private_file(
+                path,
+                super::windows_security::Sharing::Stage,
+            )?
+            .into_file())
+        }
+        #[cfg(not(any(unix, windows)))]
+        {
+            let _ = path;
+            Err(std::io::ErrorKind::Unsupported.into())
+        }
+    }
+    fn create_private_directory(&self, path: &Path) -> std::io::Result<()> {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::DirBuilderExt;
+            fs::DirBuilder::new().mode(0o700).create(path)
+        }
+        #[cfg(windows)]
+        {
+            super::windows_security::create_private_directory(path).map(|_| ())
+        }
+        #[cfg(not(any(unix, windows)))]
+        {
+            let _ = path;
+            Err(std::io::ErrorKind::Unsupported.into())
+        }
     }
     fn write_stage(&self, file: &mut File, bytes: &[u8]) -> std::io::Result<()> {
         file.write_all(bytes)
@@ -82,7 +130,11 @@ impl DurableIo for NativeIo {
             File::open(directory)?.sync_all()?;
             Ok(DirectorySync::Supported)
         }
-        #[cfg(not(unix))]
+        #[cfg(windows)]
+        {
+            super::windows_security::inspect_directory(directory)
+        }
+        #[cfg(not(any(unix, windows)))]
         {
             let _ = directory;
             Ok(DirectorySync::Unsupported)

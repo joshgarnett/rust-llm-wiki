@@ -612,13 +612,6 @@ pub enum NotSentReason {
     ConnectFailedBeforeWrite,
 }
 /// Dispatcher-only observation; deserialized event reasons never release allowances.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "Dispatcher-only accounting boundary is consumed by P16 and exercised by private ledger tests"
-    )
-)]
 pub(crate) struct NotSentObservation {
     pub(crate) reason: NotSentReason,
 }
@@ -648,6 +641,8 @@ pub trait JobClock: Send + Sync {
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LedgerCheckpoint {
+    #[cfg(test)]
+    BeforeSendAuthorityFlush,
     BeforeAppend,
     AfterAppend,
     AfterJournalSync,
@@ -683,13 +678,6 @@ pub struct Reservation {
     pub(super) persistence: PersistenceAllowance,
     pub(super) genesis_hash: Blake3Hash,
 }
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "Dispatcher-only accounting boundary is consumed by P16 and exercised by private ledger tests"
-    )
-)]
 pub struct DispatchPermit {
     pub(super) attempt: AttemptRef,
     pub(super) bound: AttemptBound,
@@ -697,18 +685,30 @@ pub struct DispatchPermit {
     pub(super) genesis_hash: Blake3Hash,
 }
 /// The private dispatcher/transport consumes this exactly once. Replay never returns it.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "Dispatcher-only accounting boundary is consumed by P16 and exercised by private ledger tests"
-    )
-)]
 pub struct SendAuthorization {
     pub(super) attempt: AttemptRef,
     pub(super) bound: AttemptBound,
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "retained opaque authorization provenance is asserted by ledger tests"
+        )
+    )]
     pub(super) send_event: EventRef,
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "retained opaque authorization provenance is asserted by ledger tests"
+        )
+    )]
     pub(super) genesis_hash: Blake3Hash,
+    pub(super) closing_reading: ClockReading,
+    pub(super) clock: Arc<dyn JobClock>,
+    pub(super) cancel: CancellationToken,
+    pub(super) effective_limits: LifetimeLimits,
+    pub(super) effective_deadline_utc_ms: i64,
 }
 impl Reservation {
     pub fn attempt(&self) -> &AttemptRef {
@@ -723,14 +723,42 @@ impl DispatchPermit {
         &self.bound
     }
 }
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "Dispatcher-only accounting boundary is consumed by P16 and exercised by private ledger tests"
-    )
-)]
 impl SendAuthorization {
+    pub(crate) fn closing_reading(&self) -> ClockReading {
+        self.closing_reading
+    }
+    /// Recheck the exact authority at the actual first network poll. Only the
+    /// owning ledger's clock and original complete bound can extend this proof.
+    pub(crate) fn check_before_entry(&mut self) -> Result<ClockReading> {
+        self.check_before_entry_after(self.closing_reading)
+    }
+    /// A transport's later observed reading can only strengthen the existing
+    /// floor; it cannot replace the ledger clock or weaken its closing proof.
+    pub(crate) fn check_before_entry_after(&mut self, floor: ClockReading) -> Result<ClockReading> {
+        let now = self.clock.read()?;
+        if self.cancel.is_cancelled() {
+            return Err(WikiError::new(
+                ErrorCode::Cancelled,
+                "job cancelled before transport entry",
+            ));
+        }
+        if now.utc_ms < self.closing_reading.utc_ms.max(floor.utc_ms)
+            || now.monotonic_ms < self.closing_reading.monotonic_ms.max(floor.monotonic_ms)
+        {
+            return Err(WikiError::new(
+                ErrorCode::BudgetExceeded,
+                "clock regressed before transport entry",
+            ));
+        }
+        super::budgets::quote_bound(
+            &self.bound,
+            &self.effective_limits,
+            now.utc_ms,
+            self.effective_deadline_utc_ms,
+        )?;
+        self.closing_reading = now;
+        Ok(now)
+    }
     pub(crate) fn attempt(&self) -> &AttemptRef {
         &self.attempt
     }
@@ -868,13 +896,6 @@ pub trait JobLedgerApi: Sized {
 /// record_response validates stored attempt/genesis/request binding and spool ceiling;
 /// it deliberately accepts stored identity after execute consumed send authority.
 /// replay/reconcile return data only, never Reservation/DispatchPermit/SendAuthorization.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "Dispatcher-only accounting boundary is consumed by P16 and exercised by private ledger tests"
-    )
-)]
 pub(crate) trait DispatcherLedgerApi {
     fn begin_send(&self, permit: DispatchPermit) -> Result<SendAuthorization>;
     fn release_not_sent(&self, attempt: &AttemptRef, proof: NotSentObservation)
@@ -886,6 +907,13 @@ pub(crate) trait DispatcherLedgerApi {
         response: ResponseSpoolInput,
     ) -> Result<SpoolRef>;
     fn settle(&self, attempt: &AttemptRef) -> Result<EventRef>;
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "verified reconciliation contract exercised by accounting tests; workflows consume it separately"
+        )
+    )]
     fn reconcile(
         &self,
         attempt: &AttemptRef,
@@ -894,5 +922,12 @@ pub(crate) trait DispatcherLedgerApi {
         cost: KnownOrUnknown<Money>,
         reason: &str,
     ) -> Result<EventRef>;
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "verified spool cleanup contract exercised by accounting tests"
+        )
+    )]
     fn remove_spool_after_verified_commit(&self, attempt: &AttemptRef) -> Result<EventRef>;
 }

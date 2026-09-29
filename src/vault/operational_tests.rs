@@ -256,6 +256,12 @@ impl DurableIo for FaultIo {
     fn create_stage(&self, p: &Path) -> std::io::Result<File> {
         self.call(|| NativeIo.create_stage(p))
     }
+    fn create_private_stage(&self, p: &Path) -> std::io::Result<std::fs::File> {
+        self.call(|| NativeIo.create_private_stage(p))
+    }
+    fn create_private_directory(&self, p: &Path) -> std::io::Result<()> {
+        self.call(|| NativeIo.create_private_directory(p))
+    }
     fn open_append(&self, p: &Path) -> std::io::Result<File> {
         self.call(|| NativeIo.open_append(p))
     }

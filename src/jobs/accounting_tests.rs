@@ -968,6 +968,12 @@ impl crate::vault::DurableIo for FaultIo {
     fn create_stage(&self, p: &std::path::Path) -> std::io::Result<std::fs::File> {
         self.call(|| crate::vault::NativeIo.create_stage(p))
     }
+    fn create_private_stage(&self, p: &std::path::Path) -> std::io::Result<std::fs::File> {
+        self.call(|| crate::vault::NativeIo.create_private_stage(p))
+    }
+    fn create_private_directory(&self, p: &std::path::Path) -> std::io::Result<()> {
+        self.call(|| crate::vault::NativeIo.create_private_directory(p))
+    }
     fn open_append(&self, p: &std::path::Path) -> std::io::Result<std::fs::File> {
         self.call(|| crate::vault::NativeIo.open_append(p))
     }
@@ -1580,4 +1586,657 @@ fn proven_not_sent_refunds_once_but_old_authorization_and_attempt_number_cannot_
     assert_eq!(retry.attempt().number, 2);
     assert_ne!(retry.attempt().attempt_id, r.attempt_id);
     assert_eq!(job.inspect().unwrap().budget.outstanding.requests, 1);
+}
+
+fn unknown_http_response(status: Option<u16>, terminal: bool) -> ResponseSpoolInput {
+    let mut paid = response();
+    paid.metadata.status_code = status;
+    paid.metadata.terminal_response = terminal;
+    paid.metadata.usage = KnownOrUnknown::Unknown;
+    paid.metadata.computed_cost = KnownOrUnknown::Unknown;
+    if let Some(status) = status.filter(|status| *status != 200) {
+        paid.metadata.failure_code = Some(format!("HTTP_{status}"));
+    }
+    paid
+}
+
+fn reopen_job(fs: &crate::vault::VaultFs, spec: &RunSpec, clock: &Arc<Clock>) -> JobLedger {
+    JobLedger::new(
+        fs.clone(),
+        spec.vault_id.clone(),
+        spec.run_id.clone(),
+        options(clock.clone()),
+    )
+    .unwrap()
+}
+
+#[test]
+fn terminal_http_unknown_billing_retries_keep_full_charges_after_reopen() {
+    for status in [401, 429, 503] {
+        let (_t, fs, job, spec, clock) = fixture(1, |s| {
+            s.limits.concurrency = 1;
+            s.limits.max_cost = Some(Money::new(Currency::new("USD").unwrap(), 2));
+        });
+        let r = authorize_bound(&job, &spec.tasks[0], priced(&spec.tasks[0]));
+        job.record_response(&r, unknown_http_response(Some(status), true))
+            .unwrap();
+        let receipt = canonical_receipt(&job, &fs, &r);
+        job.settle(&r).unwrap();
+        let job = reopen_job(&fs, &spec, &clock);
+        let before = job.inspect().unwrap();
+        assert_eq!(
+            before.attempts[0].billing,
+            BillingDisposition::UnknownReserved
+        );
+        assert_eq!(before.attempts[0].phase, AttemptPhase::Settled);
+        assert_eq!(
+            before.budget.outstanding.cost.as_ref().unwrap().nanounits(),
+            1
+        );
+        assert_eq!(before.budget.concurrency_admitted, 0);
+        assert_eq!(before.budget.settled.requests, 0);
+        assert!(fs.root().resolve(&receipt.path).unwrap().exists());
+        let second = job
+            .reserve(&spec.tasks[0].key, priced(&spec.tasks[0]))
+            .unwrap();
+        assert_eq!(second.attempt().number, 2);
+        assert_ne!(second.attempt().attempt_id, r.attempt_id);
+        let after = job.inspect().unwrap();
+        assert_eq!(after.budget.dispatched_requests, 1);
+        assert_eq!(after.budget.outstanding_requests, 1);
+        assert_eq!(after.budget.outstanding.requests, 2);
+        assert_eq!(after.budget.outstanding.request_bytes, 200);
+        assert_eq!(after.budget.outstanding.response_bytes, 2000);
+        assert_eq!(
+            after.budget.outstanding.billable_units[&BillableClass::Reasoning],
+            100
+        );
+        assert_eq!(
+            after.budget.outstanding.cost.as_ref().unwrap().nanounits(),
+            2
+        );
+        assert_eq!(after.budget.concurrency_admitted, 1);
+        assert_eq!(after.budget.unknown_attempts, vec![r.attempt_id]);
+        let second = job
+            .begin_send(job.dispatch_intent(second).unwrap())
+            .unwrap();
+        let second = second.attempt().clone();
+        job.record_response(&second, unknown_http_response(Some(503), true))
+            .unwrap();
+        canonical_receipt(&job, &fs, &second);
+        job.settle(&second).unwrap();
+        let job = reopen_job(&fs, &spec, &clock);
+        assert_eq!(job.inspect().unwrap().budget.concurrency_admitted, 0);
+        assert_eq!(
+            job.reserve(&spec.tasks[0].key, priced(&spec.tasks[0]))
+                .err()
+                .unwrap()
+                .code,
+            ErrorCode::BudgetExceeded
+        );
+        assert_eq!(job.inspect().unwrap().attempts.len(), 2);
+    }
+}
+
+#[test]
+fn terminal_http_third_retry_needs_every_prior_status_spool() {
+    for remove_first in [false, true] {
+        let (_t, fs, job, spec, clock) = fixture(1, |s| {
+            s.limits.concurrency = 1;
+            s.limits.max_cost = Some(Money::new(Currency::new("USD").unwrap(), 3));
+        });
+        let first = authorize_bound(&job, &spec.tasks[0], priced(&spec.tasks[0]));
+        job.record_response(&first, unknown_http_response(Some(429), true))
+            .unwrap();
+        canonical_receipt(&job, &fs, &first);
+        job.settle(&first).unwrap();
+        let second = authorize_bound(&job, &spec.tasks[0], priced(&spec.tasks[0]));
+        job.record_response(&second, unknown_http_response(Some(503), true))
+            .unwrap();
+        canonical_receipt(&job, &fs, &second);
+        job.settle(&second).unwrap();
+        if remove_first {
+            job.remove_spool_after_verified_commit(&first).unwrap();
+        }
+        let job = reopen_job(&fs, &spec, &clock);
+        let result = job.reserve(&spec.tasks[0].key, priced(&spec.tasks[0]));
+        if remove_first {
+            assert_eq!(result.err().unwrap().code, ErrorCode::RecoveryRequired);
+            assert_eq!(job.inspect().unwrap().attempts.len(), 2);
+        } else {
+            assert_eq!(result.unwrap().attempt().number, 3);
+            let inspection = job.inspect().unwrap();
+            assert_eq!(inspection.budget.outstanding.requests, 3);
+            assert_eq!(
+                inspection
+                    .budget
+                    .outstanding
+                    .cost
+                    .as_ref()
+                    .unwrap()
+                    .nanounits(),
+                3
+            );
+            assert_eq!(inspection.budget.unknown_attempts.len(), 2);
+        }
+    }
+}
+
+#[test]
+fn terminal_http_retry_does_not_hide_an_older_possible_send() {
+    let (_t, fs, job, spec, clock) = fixture(1, |_| {});
+    let first = authorize_bound(&job, &spec.tasks[0], priced(&spec.tasks[0]));
+    job.outcome_unknown(&first, "TIMEOUT").unwrap();
+    let mut explicit = options(clock.clone());
+    explicit.policy.retry_uncertain = true;
+    let explicit = JobLedger::new(
+        fs.clone(),
+        spec.vault_id.clone(),
+        spec.run_id.clone(),
+        explicit,
+    )
+    .unwrap();
+    let second = authorize_bound(&explicit, &spec.tasks[0], priced(&spec.tasks[0]));
+    explicit
+        .record_response(&second, unknown_http_response(Some(503), true))
+        .unwrap();
+    canonical_receipt(&explicit, &fs, &second);
+    explicit.settle(&second).unwrap();
+    let job = reopen_job(&fs, &spec, &clock);
+    assert_eq!(
+        job.reserve(&spec.tasks[0].key, priced(&spec.tasks[0]))
+            .err()
+            .unwrap()
+            .code,
+        ErrorCode::RecoveryRequired
+    );
+    let inspection = job.inspect().unwrap();
+    assert_eq!(inspection.attempts.len(), 2);
+    assert_eq!(inspection.budget.remote_inflight, 1);
+    assert_eq!(
+        inspection
+            .budget
+            .outstanding
+            .cost
+            .as_ref()
+            .unwrap()
+            .nanounits(),
+        2
+    );
+}
+
+#[test]
+fn terminal_http_retry_requires_received_status_not_public_reconciliation() {
+    let (_t, fs, job, spec, clock) = fixture(1, |_| {});
+    let first = authorize_bound(&job, &spec.tasks[0], priced(&spec.tasks[0]));
+    job.outcome_unknown(&first, "TIMEOUT").unwrap();
+    job.reconcile(
+        &first,
+        true,
+        KnownOrUnknown::Unknown,
+        KnownOrUnknown::Unknown,
+        "TERMINAL_CONFIRMED",
+    )
+    .unwrap();
+    let job = reopen_job(&fs, &spec, &clock);
+    let inspection = job.inspect().unwrap();
+    assert_eq!(
+        inspection.attempts[0].remote_exposure,
+        RemoteExposure::TerminalConfirmed
+    );
+    assert_eq!(inspection.budget.concurrency_admitted, 0);
+    assert_eq!(
+        job.reserve(&spec.tasks[0].key, priced(&spec.tasks[0]))
+            .err()
+            .unwrap()
+            .code,
+        ErrorCode::RecoveryRequired
+    );
+    assert_eq!(
+        job.inspect()
+            .unwrap()
+            .budget
+            .outstanding
+            .cost
+            .as_ref()
+            .unwrap()
+            .nanounits(),
+        1
+    );
+}
+
+#[test]
+fn terminal_http_default_retry_refuses_invalid_status_or_missing_corrupt_proof() {
+    for (status, terminal) in [
+        (Some(200), true),
+        (Some(400), true),
+        (Some(403), true),
+        (None, true),
+        (Some(503), false),
+    ] {
+        let (_t, fs, job, spec, clock) = fixture(1, |_| {});
+        let first = authorize_bound(&job, &spec.tasks[0], priced(&spec.tasks[0]));
+        job.record_response(&first, unknown_http_response(status, terminal))
+            .unwrap();
+        canonical_receipt(&job, &fs, &first);
+        job.settle(&first).unwrap();
+        let job = reopen_job(&fs, &spec, &clock);
+        assert_eq!(
+            job.reserve(&spec.tasks[0].key, priced(&spec.tasks[0]))
+                .err()
+                .unwrap()
+                .code,
+            ErrorCode::RecoveryRequired
+        );
+        assert_eq!(
+            job.inspect()
+                .unwrap()
+                .budget
+                .outstanding
+                .cost
+                .as_ref()
+                .unwrap()
+                .nanounits(),
+            1
+        );
+    }
+    for corrupt in [false, true] {
+        use crate::vault::operational::{RunFile, SpoolPart};
+        let (_t, fs, job, spec, clock) = fixture(1, |_| {});
+        let first = authorize_bound(&job, &spec.tasks[0], priced(&spec.tasks[0]));
+        job.record_response(&first, unknown_http_response(Some(503), true))
+            .unwrap();
+        canonical_receipt(&job, &fs, &first);
+        job.settle(&first).unwrap();
+        job.with(false, |g, l| {
+            let spool = l.state.inspection.attempts[0].spool.as_ref().unwrap();
+            if corrupt {
+                let bytes =
+                    serde_json::to_vec(&unknown_http_response(Some(200), true).metadata).unwrap();
+                g.secure_replace(
+                    RunFile::Spool {
+                        attempt: &first,
+                        part: SpoolPart::Metadata,
+                    },
+                    crate::vault::ExpectedState::Hash(spool.metadata.hash.clone()),
+                    &bytes,
+                )?;
+            } else {
+                g.remove_spool_file(&first, SpoolPart::Metadata, &spool.metadata.hash)?;
+            }
+            Ok(())
+        })
+        .unwrap();
+        let job = reopen_job(&fs, &spec, &clock);
+        let error = job
+            .reserve(&spec.tasks[0].key, priced(&spec.tasks[0]))
+            .err()
+            .unwrap();
+        assert_eq!(error.code, ErrorCode::RecoveryRequired);
+    }
+}
+
+#[test]
+fn wire_contract_violation_survives_received_interrupt_and_cannot_resume() {
+    for unknown in [false, true] {
+        for interrupt_received in [false, true] {
+            let (_t, fs, job, spec, clock) = fixture(2, |s| {
+                s.limits.max_cost = Some(Money::new(Currency::new("USD").unwrap(), 2));
+            });
+            let r = authorize_bound(&job, &spec.tasks[0], priced(&spec.tasks[0]));
+            let mut paid = response();
+            paid.metadata.failure_code = Some("wire_contract_violation".into());
+            if unknown {
+                paid.metadata.usage = KnownOrUnknown::Unknown;
+                paid.metadata.computed_cost = KnownOrUnknown::Unknown;
+            } else {
+                // Every actual unit and the cost fits admission. The breach is
+                // the sealed adapter's semantic observation, not numeric excess.
+                paid.metadata.computed_cost =
+                    KnownOrUnknown::Known(Money::new(Currency::new("USD").unwrap(), 1));
+            }
+            let expected_metadata = paid.metadata.clone();
+            if interrupt_received {
+                let interrupted = fault_job(&fs, &spec, &clock, LedgerCheckpoint::AfterReceived);
+                assert_eq!(
+                    interrupted.record_response(&r, paid).unwrap_err().code,
+                    ErrorCode::Internal
+                );
+            } else {
+                job.record_response(&r, paid).unwrap();
+            }
+            let job = reopen_job(&fs, &spec, &clock);
+            job.with(false, |g, l| {
+                let spool = l.state.inspection.attempts[0].spool.as_ref().unwrap();
+                let metadata = g.read_spool(&r, crate::vault::operational::SpoolPart::Metadata, 64 * 1024)?.unwrap();
+                assert_eq!(metadata.hash, spool.metadata.hash);
+                assert_eq!(metadata.bytes.len() as u64, spool.metadata.byte_len);
+                assert_eq!(serde_json::from_slice::<ResponseMetadata>(&metadata.bytes).unwrap(), expected_metadata);
+                assert!(l.frames.iter().any(|f| matches!(&f.event.payload, EventPayload::Received { spool } if spool.attempt == r)));
+                assert_eq!(l.frames.iter().filter(|f| matches!(&f.event.payload, EventPayload::BoundViolated { attempt, .. } if attempt == &r)).count(), usize::from(!interrupt_received));
+                Ok(())
+            }).unwrap();
+            let inspection = job.inspect().unwrap();
+            assert_eq!(inspection.state, RunState::Paused);
+            assert!(!inspection.budget.guarantee_intact);
+            assert_eq!(inspection.attempts[0].phase, AttemptPhase::Received);
+            assert_eq!(inspection.budget.dispatched_requests, 1);
+            assert_eq!(inspection.budget.outstanding.requests, 1);
+            assert_eq!(
+                inspection
+                    .budget
+                    .outstanding
+                    .cost
+                    .as_ref()
+                    .unwrap()
+                    .nanounits(),
+                1
+            );
+            assert_eq!(inspection.budget.concurrency_admitted, 0);
+            let replayed = job.replay().unwrap();
+            assert!(!replayed.inspection.budget.guarantee_intact);
+            job.replay().unwrap();
+            job.with(false, |_, l| {
+                assert_eq!(l.frames.iter().filter(|f| matches!(&f.event.payload, EventPayload::BoundViolated { attempt, .. } if attempt == &r)).count(), 1);
+                assert!(l.frames.iter().any(|f| matches!(&f.event.payload, EventPayload::Reconciled { attempt, .. } if attempt == &r)));
+                Ok(())
+            }).unwrap();
+            // Paid receipt retention is still possible after authority stops.
+            let receipt = canonical_receipt(&job, &fs, &r);
+            let receipt_json = fence_json(
+                &ledger::read(&fs, &receipt.path).unwrap().unwrap(),
+                "lwiki.run-event.v1",
+            );
+            assert_eq!(
+                receipt_json["receipt"]["failure_code"],
+                "wire_contract_violation"
+            );
+            job.settle(&r).unwrap();
+            let job = reopen_job(&fs, &spec, &clock);
+            assert!(
+                job.reserve(&spec.tasks[1].key, priced(&spec.tasks[1]))
+                    .is_err()
+            );
+            assert_eq!(
+                job.resume(None).unwrap_err().code,
+                ErrorCode::BudgetExceeded
+            );
+            let mut higher_limits = spec.limits.clone();
+            higher_limits.requests += 1;
+            higher_limits.max_cost = Some(Money::new(Currency::new("USD").unwrap(), 3));
+            assert_eq!(
+                job.resume(Some(LimitAmendment {
+                    requested_at_utc_ms: clock.read().unwrap().utc_ms,
+                    reason: "raise limits after retained wire breach".into(),
+                    limits: higher_limits,
+                    deadline_utc_ms: spec.deadline_utc_ms,
+                }))
+                .unwrap_err()
+                .code,
+                ErrorCode::BudgetExceeded
+            );
+            let inspection = job.inspect().unwrap();
+            assert!(!inspection.budget.guarantee_intact);
+            assert_eq!(inspection.state, RunState::Paused);
+            assert_eq!(inspection.attempts.len(), 1);
+            assert_eq!(inspection.budget.dispatched_requests, 1);
+            if unknown {
+                assert_eq!(
+                    inspection.attempts[0].billing,
+                    BillingDisposition::UnknownReserved
+                );
+                assert_eq!(
+                    inspection
+                        .budget
+                        .outstanding
+                        .cost
+                        .as_ref()
+                        .unwrap()
+                        .nanounits(),
+                    1
+                );
+            } else {
+                assert_eq!(
+                    inspection.attempts[0].billing,
+                    BillingDisposition::KnownSettled
+                );
+                assert_eq!(
+                    inspection.budget.settled.cost.as_ref().unwrap().nanounits(),
+                    1
+                );
+            }
+            assert!(
+                job.reserve(&spec.tasks[1].key, priced(&spec.tasks[1]))
+                    .is_err()
+            );
+        }
+    }
+}
+
+#[test]
+fn wire_contract_ordinary_paid_output_failures_do_not_invalidate_bounds() {
+    for label in ["MALFORMED", "REFUSAL", "wire_contract_violation_suffix"] {
+        for unknown in [false, true] {
+            let (_t, fs, job, spec, clock) = fixture(2, |s| {
+                s.limits.max_cost = Some(Money::new(Currency::new("USD").unwrap(), 2));
+            });
+            let r = authorize_bound(&job, &spec.tasks[0], priced(&spec.tasks[0]));
+            let mut paid = response();
+            paid.metadata.failure_code = Some(label.into());
+            if unknown {
+                paid.metadata.usage = KnownOrUnknown::Unknown;
+                paid.metadata.computed_cost = KnownOrUnknown::Unknown;
+            } else {
+                paid.metadata.computed_cost =
+                    KnownOrUnknown::Known(Money::new(Currency::new("USD").unwrap(), 1));
+            }
+            job.record_response(&r, paid).unwrap();
+            canonical_receipt(&job, &fs, &r);
+            job.settle(&r).unwrap();
+            let job = reopen_job(&fs, &spec, &clock);
+            let inspection = job.replay().unwrap().inspection;
+            assert!(inspection.budget.guarantee_intact);
+            assert_eq!(inspection.state, RunState::Running);
+            job.with(false, |_, l| {
+                assert!(!l.frames.iter().any(|f| matches!(&f.event.payload, EventPayload::BoundViolated { attempt, .. } if attempt == &r)));
+                Ok(())
+            }).unwrap();
+            // A separately ready task remains admissible. Invalid knowledge did
+            // not become a free response or a fabricated guarantee violation.
+            job.reserve(&spec.tasks[1].key, priced(&spec.tasks[1]))
+                .unwrap();
+            let inspection = job.inspect().unwrap();
+            assert_eq!(inspection.attempts.len(), 2);
+            assert_eq!(inspection.budget.dispatched_requests, 1);
+            assert_eq!(inspection.budget.outstanding_requests, 1);
+            if unknown {
+                assert_eq!(
+                    inspection
+                        .budget
+                        .outstanding
+                        .cost
+                        .as_ref()
+                        .unwrap()
+                        .nanounits(),
+                    2
+                );
+            } else {
+                assert_eq!(
+                    inspection.budget.settled.cost.as_ref().unwrap().nanounits(),
+                    1
+                );
+                assert_eq!(
+                    inspection
+                        .budget
+                        .outstanding
+                        .cost
+                        .as_ref()
+                        .unwrap()
+                        .nanounits(),
+                    1
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn begin_send_rejects_utc_regression_below_unpersisted_before_flush_sample() {
+    use std::sync::Mutex;
+
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    enum Phase {
+        Idle,
+        BeforeFlush,
+        AppendTimestamp,
+        Closing,
+    }
+    struct State {
+        phase: Phase,
+        sampled: Vec<i64>,
+        syncs: usize,
+    }
+    struct ClockAndFault {
+        baseline: i64,
+        state: Mutex<State>,
+    }
+    impl JobClock for ClockAndFault {
+        fn read(&self) -> Result<ClockReading> {
+            let mut s = self.state.lock().unwrap();
+            let delta = match s.phase {
+                Phase::Idle => 0,
+                Phase::BeforeFlush => {
+                    s.phase = Phase::AppendTimestamp;
+                    100
+                }
+                Phase::AppendTimestamp => 90,
+                Phase::Closing => 95,
+            };
+            let utc = self.baseline + delta;
+            if s.phase != Phase::Idle {
+                s.sampled.push(utc);
+            }
+            Ok(ClockReading {
+                utc_ms: utc,
+                // Exactly stable throughout; a monotonic-regression check
+                // cannot explain the required failure.
+                monotonic_ms: 10,
+            })
+        }
+    }
+    impl LedgerFault for ClockAndFault {
+        fn check(&self, point: LedgerCheckpoint) -> Result<()> {
+            let mut s = self.state.lock().unwrap();
+            if point == LedgerCheckpoint::BeforeSendAuthorityFlush {
+                assert!(s.phase == Phase::Idle, "send-boundary hook fired twice");
+                s.phase = Phase::BeforeFlush;
+            } else if point == LedgerCheckpoint::AfterJournalSync
+                && s.phase == Phase::AppendTimestamp
+            {
+                // SendAuthorized's timestamp was sampled before its append.
+                // Only now move to the closing reading. Later Pause event
+                // flushes leave the clock stable at T+95.
+                assert_eq!(s.sampled, vec![self.baseline + 100, self.baseline + 90]);
+                s.syncs += 1;
+                s.phase = Phase::Closing;
+            }
+            Ok(())
+        }
+    }
+
+    let (_temp, fs, job, spec, fixture_clock) = fixture(1, |_| {});
+    let attempt_bound = priced(&spec.tasks[0]);
+    let reservation = job
+        .reserve(&spec.tasks[0].key, attempt_bound.clone())
+        .unwrap();
+    let permit = job.dispatch_intent(reservation).unwrap();
+    let attempt = permit.attempt().clone();
+    let baseline = job.inspect().unwrap().utc_high_water_ms;
+    assert_eq!(baseline, spec.created_at_utc_ms);
+
+    let injected = Arc::new(ClockAndFault {
+        baseline,
+        state: Mutex::new(State {
+            phase: Phase::Idle,
+            sampled: Vec::new(),
+            syncs: 0,
+        }),
+    });
+    let mut opts = options(fixture_clock.clone());
+    opts.clock = injected.clone();
+    opts.fault = Some(injected.clone());
+    let sender =
+        JobLedger::new(fs.clone(), spec.vault_id.clone(), spec.run_id.clone(), opts).unwrap();
+
+    // Positive control: rate interval/deadline admission at closing T+95 is
+    // valid. The closing UTC exceeds persisted SendAuthorized timestamp T+90.
+    super::budgets::quote_bound(
+        &attempt_bound,
+        &spec.limits,
+        baseline + 95,
+        spec.deadline_utc_ms,
+    )
+    .unwrap();
+    let error = sender
+        .begin_send(permit)
+        .err()
+        .expect("UTC below the unpersisted before-flush sample must withhold authority");
+    assert_eq!(error.code, ErrorCode::BudgetExceeded);
+    {
+        let s = injected.state.lock().unwrap();
+        assert_eq!(s.syncs, 1);
+        assert!(s.sampled.len() >= 3);
+        assert_eq!(
+            &s.sampled[..3],
+            &[baseline + 100, baseline + 90, baseline + 95]
+        );
+        assert!(s.sampled[2..].iter().all(|utc| *utc == baseline + 95));
+    }
+
+    // Inspect actual durable events through the existing private helper.
+    // Send authorization was durably recorded, but no capsule escaped; its
+    // uncertainty must not be refunded merely because the closing gate refused.
+    sender
+        .with(false, |_, loaded| {
+            let sends: Vec<_> = loaded.frames.iter().filter(|f| {
+                matches!(&f.event.payload, EventPayload::SendAuthorized { attempt: a } if a == &attempt)
+            }).collect();
+            assert_eq!(sends.len(), 1);
+            assert_eq!(sends[0].event.occurred_at_utc_ms, baseline + 90);
+            let prior_high = loaded.frames.iter()
+                .take_while(|f| f.event.sequence < sends[0].event.sequence)
+                .map(|f| f.event.occurred_at_utc_ms)
+                .max().unwrap();
+            assert_eq!(prior_high, baseline);
+            assert!(loaded.frames.iter().any(|f| {
+                f.event.occurred_at_utc_ms == baseline + 95
+                    && matches!(&f.event.payload, EventPayload::RunTransition {
+                        from: RunState::Running,
+                        to: RunState::Paused,
+                        reason: StopReason::ClockRegression,
+                    })
+            }));
+            Ok(())
+        })
+        .unwrap();
+
+    fixture_clock
+        .0
+        .store(baseline + 95, std::sync::atomic::Ordering::SeqCst);
+    let reopened = JobLedger::new(fs, spec.vault_id, spec.run_id, options(fixture_clock)).unwrap();
+    let replayed = reopened.replay().unwrap().inspection;
+    assert_eq!(replayed.state, RunState::Paused);
+    assert_eq!(replayed.attempts.len(), 1);
+    assert_eq!(replayed.attempts[0].attempt, attempt);
+    assert_eq!(replayed.attempts[0].phase, AttemptPhase::DispatchIntent);
+    assert_eq!(
+        replayed.attempts[0].billing,
+        BillingDisposition::UnknownReserved
+    );
+    assert_eq!(
+        replayed.attempts[0].remote_exposure,
+        RemoteExposure::PossiblyInFlight
+    );
+    assert_eq!(replayed.budget.dispatched_requests, 1);
+    assert_eq!(replayed.budget.outstanding.requests, 1);
 }

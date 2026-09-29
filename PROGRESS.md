@@ -1,6 +1,6 @@
 # Research and planning progress
 
-Started: 2026-09-28. Status: authorized M0–M4 implementation; P00–P15 locally accepted; M0–M2 local gates complete; P16 provider integration next.
+Started: 2026-09-28. Status: authorized M0–M4 implementation; P00–P16 locally accepted; M0–M2 complete and M3 provider foundation qualified; P17–P21 remain required.
 
 ## Scope
 
@@ -135,3 +135,5 @@ Start a new `gpt-6-sol` session with the [implementation goal](docs/execution/ST
 - P13 complete explicit evidence review locally accepted:19 graph parents verified across final sparse/schema corrections, real M2 CLI lifecycle1, P12 regression32, shared145 and native changes28; strict lint/fmt/build, all15 schema equality and seed34 passed. Actual Review→Merge reset→Review→Refresh/revalidation→Review and historical acknowledgement preserve stable allocations. P14 and P16–P21 remain required.
 
 - P14 portable skill locally accepted: release-matched three host layouts, exact no-overwrite/reuse/dry-run,32 executed recipe steps, six deterministic anchored filesystem race/control parents, seven portable ACL policy parents, full strict lint/fmt/build. Independent Sol skill forward task and bounded Astra anchored/Windows reviews retained with exact artifact limits. P14-checks.json records final source. Native Windows and installed-host qualification remain external.
+
+- P16 private trust/accounted HTTP/strict wire adapters locally accepted: current integrated library100 and accounting13 passed, public dispatch4/trust6/wire10/vault_fs15 passed after one explicitly recorded stale-test correction;1148 current durable fault positions, dispatcher crash/replay, fmt/strict lint/build and saved-artifact/schema checks passed. Bounded Astra invariants and final delta review closed. P17–P21 and final V01–V17 qualification remain required.

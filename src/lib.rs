@@ -8,6 +8,7 @@ pub mod domain;
 pub mod graph;
 pub mod jobs;
 pub mod output;
+pub mod providers;
 pub mod records;
 pub mod retrieval;
 pub mod sources;

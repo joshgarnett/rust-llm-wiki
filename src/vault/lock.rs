@@ -3,16 +3,21 @@ use super::fs::{DurableIo, NativeIo};
 use super::paths::{VaultRoot, io_error};
 use crate::domain::{ErrorCode, Result, VaultRelativePath, WikiError};
 use std::{
-    fs::{self, File, OpenOptions},
+    fs::File,
     io::{Seek, Write},
     thread,
     time::{Duration, Instant},
 };
 
+#[cfg(not(windows))]
+use std::fs::OpenOptions;
+
 #[derive(Debug)]
 pub struct WriterPermit {
     file: File,
     root: VaultRoot,
+    #[cfg(windows)]
+    pinned_dirs: Vec<super::windows_security::DirectoryGuard>,
 }
 impl WriterPermit {
     pub fn acquire(root: &VaultRoot, timeout: Duration) -> Result<Self> {
@@ -21,7 +26,7 @@ impl WriterPermit {
             let relative = VaultRelativePath::new(relative)?;
             root.validate_portable_paths(std::slice::from_ref(&relative))?;
             let path = root.resolve(&relative)?;
-            match fs::create_dir(&path) {
+            match NativeIo.create_private_directory(&path) {
                 Ok(()) => {
                     NativeIo
                         .sync_directory(&path)
@@ -37,6 +42,11 @@ impl WriterPermit {
         let relative = VaultRelativePath::new(".wiki/state/writer.lock")?;
         root.validate_portable_paths(std::slice::from_ref(&relative))?;
         let path = root.resolve(&relative)?;
+        #[cfg(windows)]
+        let (mut file, pinned_dirs) = super::windows_security::open_or_create_private_lock(&path)
+            .map_err(|error| io_error("open protected writer lock", error))?
+            .into_parts();
+        #[cfg(not(windows))]
         let mut file = OpenOptions::new()
             .create(true)
             .truncate(false)
@@ -76,6 +86,8 @@ impl WriterPermit {
         Ok(Self {
             file,
             root: root.clone(),
+            #[cfg(windows)]
+            pinned_dirs,
         })
     }
     pub fn root(&self) -> &VaultRoot {
@@ -83,6 +95,21 @@ impl WriterPermit {
     }
     pub(crate) fn require_root(&self, root: &VaultRoot) -> Result<()> {
         if &self.root == root {
+            #[cfg(windows)]
+            {
+                for directory in &self.pinned_dirs {
+                    directory
+                        .verify_binding()
+                        .map_err(|error| io_error("verify writer lock ancestors", error))?;
+                }
+                let path = root.resolve(&VaultRelativePath::new(".wiki/state/writer.lock")?)?;
+                super::windows_security::validate_same_file(
+                    &self.file,
+                    &path,
+                    super::acl_policy::Protection::Private,
+                )
+                .map_err(|error| io_error("verify held writer lock identity", error))?;
+            }
             Ok(())
         } else {
             Err(WikiError::invalid(

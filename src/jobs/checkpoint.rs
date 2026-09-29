@@ -477,13 +477,6 @@ pub(super) fn committed(
 }
 
 /// Trusted later materializers supply validated disposition and guarded output operations.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "Dispatcher-only accounting boundary is consumed by P16 and exercised by private ledger tests"
-    )
-)]
 pub(crate) fn receipt_plan(
     job: &JobLedger,
     attempt: &AttemptRef,

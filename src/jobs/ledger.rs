@@ -68,6 +68,15 @@ fn attempt<'a>(loaded: &'a Loaded, r: &AttemptRef) -> Result<&'a AttemptInspecti
         .ok_or_else(|| events::corrupt("attempt identity differs from stored history"))
 }
 impl JobLedger {
+    /// Read-only dispatcher context; dispatch policy remains the ledger's policy.
+    pub(crate) fn dispatcher_bindings(&self) -> (VaultFs, RecordId, RecordId, JobOptions) {
+        (
+            self.fs.clone(),
+            self.vault_id.clone(),
+            self.run_id.clone(),
+            self.options.clone(),
+        )
+    }
     fn io_store(&self) -> Result<RunStore> {
         RunStore::open_existing(&self.fs, &self.vault_id, &self.run_id)
     }
@@ -366,7 +375,7 @@ impl JobLedger {
         loaded: &mut Loaded,
         bound: &AttemptBound,
         before: ClockReading,
-    ) -> Result<()> {
+    ) -> Result<ClockReading> {
         let now = self.options.clock.read()?;
         let i = &loaded.state.inspection;
         let rejected = if self.options.cancel.is_cancelled() {
@@ -378,7 +387,10 @@ impl JobLedger {
                     "job cancelled during durable authority recording",
                 ),
             ))
-        } else if now.monotonic_ms < before.monotonic_ms || now.utc_ms < i.utc_high_water_ms {
+        } else if now.monotonic_ms < before.monotonic_ms
+            || now.utc_ms < before.utc_ms
+            || now.utc_ms < i.utc_high_water_ms
+        {
             Some((
                 RunState::Paused,
                 StopReason::ClockRegression,
@@ -426,7 +438,7 @@ impl JobLedger {
                 "durable attempt cannot return dispatch authority",
             ));
         }
-        Ok(())
+        Ok(now)
     }
     fn bind_inputs(&self, i: &LedgerInspection) -> Result<()> {
         for dep in &i.spec.scope.read_preconditions {
@@ -468,9 +480,18 @@ impl JobLedger {
             .iter()
             .filter(|a| &a.attempt.task_key == key)
             .collect::<Vec<_>>();
-        let uncertain = previous
-            .iter()
-            .any(|a| a.billing == BillingDisposition::UnknownReserved);
+        let uncertain = previous.iter().any(|a| {
+            a.billing == BillingDisposition::UnknownReserved
+                && !(a.remote_exposure == RemoteExposure::TerminalConfirmed
+                    && loaded
+                        .state
+                        .received_meta
+                        .get(&a.attempt.attempt_id)
+                        .is_some_and(|m| {
+                            m.terminal_response
+                                && matches!(m.status_code, Some(401 | 429 | 500 | 502 | 503 | 504))
+                        }))
+        });
         let retry_ready = task.state == TaskState::Running
             && !previous.is_empty()
             && previous.iter().all(|a| {
@@ -1706,6 +1727,8 @@ impl DispatcherLedgerApi for JobLedger {
                 now,
                 l.state.inspection.effective_deadline_utc_ms,
             )?;
+            #[cfg(test)]
+            self.fault(LedgerCheckpoint::BeforeSendAuthorityFlush)?;
             let before_flush = self.options.clock.read()?;
             let send_event = self.append(
                 g,
@@ -1714,12 +1737,17 @@ impl DispatcherLedgerApi for JobLedger {
                     attempt: p.attempt.clone(),
                 },
             )?;
-            self.authority_gate(g, l, &p.bound, before_flush)?;
+            let closing_reading = self.authority_gate(g, l, &p.bound, before_flush)?;
             Ok(SendAuthorization {
                 attempt: p.attempt,
                 bound: p.bound,
                 send_event,
                 genesis_hash: p.genesis_hash,
+                closing_reading,
+                clock: self.options.clock.clone(),
+                cancel: self.options.cancel.clone(),
+                effective_limits: l.state.inspection.effective_limits.clone(),
+                effective_deadline_utc_ms: l.state.inspection.effective_deadline_utc_ms,
             })
         })
     }
@@ -1950,13 +1978,6 @@ impl DispatcherLedgerApi for JobLedger {
         })
     }
 }
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "Dispatcher-only accounting boundary is consumed by P16 and exercised by private ledger tests"
-    )
-)]
 fn replace_spool(
     g: &RunLedgerGuard<'_>,
     r: &AttemptRef,
@@ -1977,13 +1998,6 @@ fn replace_spool(
     g.secure_replace(RunFile::Spool { attempt: r, part }, expected, bytes)?;
     Ok(())
 }
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "Dispatcher-only accounting boundary is consumed by P16 and exercised by private ledger tests"
-    )
-)]
 fn safe_code(value: &str) -> Result<()> {
     if value.is_empty()
         || value.len() > 128
@@ -1998,6 +2012,11 @@ fn safe_code(value: &str) -> Result<()> {
     Ok(())
 }
 fn observation_violation(a: &AttemptInspection, m: &ResponseMetadata) -> bool {
+    // The sealed provider adapter can disprove a wire contract even when an
+    // unsupported usage class cannot be represented by the admitted token map.
+    // Retain this fixed safe code in hash-bound metadata so crash replay reaches
+    // the same permanent guarantee invalidation before materialization/retry.
+    let contract = m.failure_code.as_deref() == Some("wire_contract_violation");
     let units = match &m.usage {
         KnownOrUnknown::Known(u) => budgets::usage_violates(&a.bound, u),
         _ => false,
@@ -2008,7 +2027,7 @@ fn observation_violation(a: &AttemptInspection, m: &ResponseMetadata) -> bool {
         }
         _ => false,
     };
-    units || cost
+    contract || units || cost
 }
 fn observation_usage(a: &AttemptInspection, m: &ResponseMetadata) -> Usage {
     match &m.usage {

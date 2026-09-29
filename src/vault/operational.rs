@@ -2,6 +2,8 @@
 use super::{BeforeImage, DirectorySync, DurableIo, ExpectedState, VaultFs, WriterPermit};
 use crate::{domain::*, jobs::AttemptRef, records::parse_note};
 use serde::{Deserialize, Serialize};
+#[cfg(windows)]
+use std::io::Seek;
 use std::{
     fs::{self, File, OpenOptions},
     io::Read,
@@ -20,13 +22,6 @@ pub(crate) enum SpoolPart {
     Metadata,
 }
 pub(crate) enum RunFile<'a> {
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "Dispatcher-only accounting boundary is consumed by P16 and exercised by private ledger tests"
-        )
-    )]
     Spool {
         attempt: &'a AttemptRef,
         part: SpoolPart,
@@ -45,11 +40,15 @@ pub(crate) struct RunStore {
     vault_id: RecordId,
     run_id: RecordId,
     io: Arc<dyn DurableIo>,
+    #[cfg(windows)]
+    pinned_dirs: std::sync::Mutex<Vec<super::windows_security::DirectoryGuard>>,
 }
 pub(crate) struct RunLedgerGuard<'a> {
     store: &'a RunStore,
     file: File,
     lock_path: PathBuf,
+    #[cfg(windows)]
+    pinned_dirs: Vec<super::windows_security::DirectoryGuard>,
 }
 fn conflict(message: &str) -> WikiError {
     WikiError::new(ErrorCode::ContentConflict, message)
@@ -61,6 +60,9 @@ fn io_error(action: &str, _: std::io::Error) -> WikiError {
     WikiError::new(ErrorCode::Internal, action)
 }
 fn private_file(file: &File) -> Result<()> {
+    #[cfg(windows)]
+    super::windows_security::validate_file_security(file, super::acl_policy::Protection::Private)
+        .map_err(|e| io_error("validate private job file protection", e))?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -70,6 +72,9 @@ fn private_file(file: &File) -> Result<()> {
     Ok(())
 }
 fn private_dir(path: &Path) -> Result<()> {
+    #[cfg(windows)]
+    super::windows_security::open_pinned_directory(path, super::acl_policy::Protection::Private)
+        .map_err(|e| io_error("validate private job directory protection", e))?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -93,12 +98,27 @@ fn same_inode(file: &File, path: &Path) -> Result<()> {
             return Err(conflict("job lock inode changed"));
         }
     }
-    #[cfg(not(unix))]
+    #[cfg(windows)]
     {
         let _ = a;
+        super::windows_security::validate_same_file(
+            file,
+            path,
+            super::acl_policy::Protection::Private,
+        )
+        .map_err(|e| io_error("validate held job file identity", e))?;
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = a;
+        return Err(WikiError::new(
+            ErrorCode::CapabilityUnavailable,
+            "protected file identity unavailable",
+        ));
     }
     Ok(())
 }
+#[cfg(not(windows))]
 fn read(path: &Path, limit: u64) -> Result<Option<BeforeImage>> {
     let meta = match fs::symlink_metadata(path) {
         Ok(m) => m,
@@ -125,9 +145,59 @@ fn read(path: &Path, limit: u64) -> Result<Option<BeforeImage>> {
         bytes,
     }))
 }
+#[cfg(windows)]
+fn read_windows(
+    path: &Path,
+    limit: u64,
+    protection: super::acl_policy::Protection,
+) -> Result<Option<BeforeImage>> {
+    let _parent = if protection == super::acl_policy::Protection::Private {
+        Some(
+            super::windows_security::open_pinned_directory(
+                path.parent()
+                    .ok_or_else(|| conflict("private file has no parent"))?,
+                super::acl_policy::Protection::Private,
+            )
+            .map_err(|error| io_error("pin private payload directory", error))?,
+        )
+    } else {
+        None
+    };
+    let meta = match fs::symlink_metadata(path) {
+        Ok(value) => value,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(io_error("inspect protected job payload", error)),
+    };
+    if !meta.is_file() || meta.file_type().is_symlink() {
+        return Err(conflict("job payload must be a regular file"));
+    }
+    if meta.len() > limit {
+        return Err(budget("job payload exceeds read ceiling"));
+    }
+    let limit =
+        usize::try_from(limit).map_err(|_| budget("job payload ceiling exceeds platform"))?;
+    let bytes = super::windows_security::read_protected(path, limit, protection)
+        .map_err(|error| io_error("read protected held job payload", error))?;
+    Ok(Some(BeforeImage {
+        hash: Blake3Hash::digest(&bytes),
+        bytes,
+    }))
+}
+#[cfg(windows)]
+fn read(path: &Path, limit: u64) -> Result<Option<BeforeImage>> {
+    read_windows(path, limit, super::acl_policy::Protection::Private)
+}
 fn require_vault(fs: &VaultFs, vault_id: &RecordId) -> Result<()> {
     let path = fs.root().resolve(&VaultRelativePath::new("WIKI.md")?)?;
-    let bytes = read(&path, 256 * 1024)?
+    #[cfg(windows)]
+    let image = read_windows(
+        &path,
+        256 * 1024,
+        super::acl_policy::Protection::IntegrityProtected,
+    )?;
+    #[cfg(not(windows))]
+    let image = read(&path, 256 * 1024)?;
+    let bytes = image
         .ok_or_else(|| conflict("vault identity missing"))?
         .bytes;
     let note = parse_note(&bytes);
@@ -157,6 +227,15 @@ impl RunStore {
         let directory = fs
             .root()
             .resolve(&VaultRelativePath::new(".wiki/state/jobs")?)?;
+        #[cfg(windows)]
+        let _directory = match super::windows_security::open_pinned_directory(
+            &directory,
+            super::acl_policy::Protection::Private,
+        ) {
+            Ok(guard) => guard,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(vec![]),
+            Err(error) => return Err(io_error("pin private run discovery directory", error)),
+        };
         let entries = match fs::read_dir(&directory) {
             Ok(entries) => entries,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(vec![]),
@@ -183,6 +262,12 @@ impl RunStore {
             if !metadata.is_dir() || metadata.file_type().is_symlink() {
                 return Err(conflict("private run namespace must be a directory"));
             }
+            #[cfg(windows)]
+            let _child = super::windows_security::open_pinned_directory(
+                &child,
+                super::acl_policy::Protection::Private,
+            )
+            .map_err(|error| io_error("pin discovered private run", error))?;
             ids.insert(id);
         }
         require_vault(fs, vault_id)?;
@@ -194,7 +279,44 @@ impl RunStore {
             vault_id: vault_id.clone(),
             run_id: run_id.clone(),
             io: fs.durable_io(),
+            #[cfg(windows)]
+            pinned_dirs: std::sync::Mutex::new(vec![
+                super::windows_security::open_pinned_directory(
+                    fs.root().path(),
+                    super::acl_policy::Protection::IntegrityProtected,
+                )
+                .map_err(|error| io_error("pin private job root", error))?,
+            ]),
         };
+        #[cfg(windows)]
+        for relative in [
+            ".wiki".to_owned(),
+            ".wiki/state".to_owned(),
+            ".wiki/state/jobs".to_owned(),
+            store.run_dir(),
+            ".wiki/state/requests".to_owned(),
+        ] {
+            let path = store.path(&relative)?;
+            match fs::symlink_metadata(&path) {
+                Ok(_) => store
+                    .pinned_dirs
+                    .lock()
+                    .map_err(|_| conflict("private directory guard unavailable"))?
+                    .push(
+                        super::windows_security::open_pinned_directory(
+                            &path,
+                            if relative == ".wiki" || relative == ".wiki/state" {
+                                super::acl_policy::Protection::IntegrityProtected
+                            } else {
+                                super::acl_policy::Protection::Private
+                            },
+                        )
+                        .map_err(|error| io_error("pin existing job directory", error))?,
+                    ),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => return Err(io_error("inspect existing job directory", error)),
+            }
+        }
         store.binding()?;
         Ok(store)
     }
@@ -214,7 +336,7 @@ impl RunStore {
             ".wiki/state/requests".to_owned(),
         ] {
             let path = store.path(&relative)?;
-            match store.io.create_directory(&path) {
+            match store.io.create_private_directory(&path) {
                 Ok(()) => {}
                 Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists && path.is_dir() => {}
                 Err(e) => return Err(io_error("create private job directory", e)),
@@ -222,6 +344,24 @@ impl RunStore {
             if relative.starts_with(".wiki/state/jobs") || relative == ".wiki/state/requests" {
                 private_dir(&path)?;
             }
+            #[cfg(windows)]
+            store
+                .pinned_dirs
+                .lock()
+                .map_err(|_| conflict("private directory guard unavailable"))?
+                .push(
+                    super::windows_security::open_pinned_directory(
+                        &path,
+                        if relative.starts_with(".wiki/state/jobs")
+                            || relative == ".wiki/state/requests"
+                        {
+                            super::acl_policy::Protection::Private
+                        } else {
+                            super::acl_policy::Protection::IntegrityProtected
+                        },
+                    )
+                    .map_err(|error| io_error("pin created private directory", error))?,
+                );
             store.sync_dir(&path)?;
             store.sync_dir(
                 path.parent()
@@ -231,7 +371,7 @@ impl RunStore {
         // Preserve existing bytes on bootstrap retry; never truncate or replace authority.
         for name in ["ledger.lock", "journal.bin"] {
             let path = store.path(&format!("{}/{}", store.run_dir(), name))?;
-            match store.io.create_stage(&path) {
+            match store.io.create_private_stage(&path) {
                 Ok(file) => {
                     private_file(&file)?;
                     store
@@ -266,6 +406,17 @@ impl RunStore {
         Self::new(fs, vault_id, run_id)
     }
     fn binding(&self) -> Result<()> {
+        #[cfg(windows)]
+        for directory in self
+            .pinned_dirs
+            .lock()
+            .map_err(|_| conflict("private directory guard unavailable"))?
+            .iter()
+        {
+            directory
+                .verify_binding()
+                .map_err(|error| io_error("verify private directory binding", error))?;
+        }
         require_vault(&self.fs, &self.vault_id)
     }
     fn run_dir(&self) -> String {
@@ -300,6 +451,16 @@ impl RunStore {
         }
         self.binding()?;
         let path = self.path(&format!("{}/ledger.lock", self.run_dir()))?;
+        #[cfg(windows)]
+        let (file, pinned_dirs) = super::windows_security::open_checked_file(
+            &path,
+            super::acl_policy::Protection::Private,
+            super::windows_security::Sharing::Lock,
+            true,
+        )
+        .map_err(|error| io_error("open held private job lock", error))?
+        .into_parts();
+        #[cfg(not(windows))]
         let file = OpenOptions::new()
             .read(true)
             .write(true)
@@ -329,6 +490,8 @@ impl RunStore {
             store: self,
             file,
             lock_path: path,
+            #[cfg(windows)]
+            pinned_dirs,
         };
         guard.check()?;
         check()?;
@@ -342,6 +505,12 @@ impl Drop for RunLedgerGuard<'_> {
 }
 impl RunLedgerGuard<'_> {
     fn check(&self) -> Result<()> {
+        #[cfg(windows)]
+        for directory in &self.pinned_dirs {
+            directory
+                .verify_binding()
+                .map_err(|error| io_error("verify held job lock ancestors", error))?;
+        }
         same_inode(&self.file, &self.lock_path)?;
         self.store.binding()
     }
@@ -465,17 +634,10 @@ impl RunLedgerGuard<'_> {
         }
         Ok(())
     }
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "Dispatcher-only accounting boundary is consumed by P16 and exercised by private ledger tests"
-        )
-    )]
     pub(crate) fn ensure_attempt_dir(&self, attempt: &AttemptRef) -> Result<()> {
         self.check()?;
         let path = self.attempt_dir(attempt)?;
-        match self.store.io.create_directory(&path) {
+        match self.store.io.create_private_directory(&path) {
             Ok(()) => {}
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists && path.is_dir() => {}
             Err(e) => return Err(io_error("create attempt spool", e)),
@@ -534,6 +696,12 @@ impl RunLedgerGuard<'_> {
         if !directory.exists() {
             return Ok(None);
         }
+        #[cfg(windows)]
+        let _directory = super::windows_security::open_pinned_directory(
+            &directory,
+            super::acl_policy::Protection::Private,
+        )
+        .map_err(|error| io_error("pin spool read directory", error))?;
         if read(&directory.join("owner.json"), OWNER_LIMIT)?.is_none() {
             if fs::read_dir(&directory)
                 .map_err(|e| io_error("inspect cleaned spool", e))?
@@ -567,12 +735,23 @@ impl RunLedgerGuard<'_> {
         }
         Self::guarded(path, expected, limit)?;
         let parent = path.parent().expect("private payload parent");
+        #[cfg(windows)]
+        let private_parent = super::windows_security::open_pinned_directory(
+            parent,
+            super::acl_policy::Protection::Private,
+        )
+        .map_err(|error| io_error("pin private replacement parent", error))?;
+
         let stage = parent.join(format!(".lwiki-private-{}.tmp", uuid::Uuid::now_v7()));
         let result = (|| {
+            #[cfg(windows)]
+            private_parent
+                .verify_binding()
+                .map_err(|error| io_error("verify private replacement parent", error))?;
             let mut file = self
                 .store
                 .io
-                .create_stage(&stage)
+                .create_private_stage(&stage)
                 .map_err(|e| io_error("create private stage", e))?;
             private_file(&file)?;
             self.store
@@ -583,7 +762,35 @@ impl RunLedgerGuard<'_> {
                 .io
                 .sync_file(&file)
                 .map_err(|e| io_error("sync private stage", e))?;
+            #[cfg(not(windows))]
             let staged = read(&stage, limit)?.ok_or_else(|| conflict("private stage missing"))?;
+            #[cfg(windows)]
+            let staged = {
+                same_inode(&file, &stage)?;
+                file.rewind()
+                    .map_err(|error| io_error("rewind held private stage", error))?;
+                let mut retained = Vec::new();
+                (&mut file)
+                    .take(limit.saturating_add(1))
+                    .read_to_end(&mut retained)
+                    .map_err(|error| io_error("read held private stage", error))?;
+                if retained.len() as u64 > limit {
+                    return Err(budget("private stage exceeds read ceiling"));
+                }
+                same_inode(&file, &stage)?;
+                if file
+                    .metadata()
+                    .map_err(|error| io_error("inspect held private stage", error))?
+                    .len()
+                    != retained.len() as u64
+                {
+                    return Err(conflict("private stage size changed while reading"));
+                }
+                BeforeImage {
+                    hash: Blake3Hash::digest(&retained),
+                    bytes: retained,
+                }
+            };
             let hash = Blake3Hash::digest(bytes);
             if staged.hash != hash {
                 return Err(conflict("private stage changed"));
@@ -630,7 +837,7 @@ impl RunLedgerGuard<'_> {
         not(test),
         expect(
             dead_code,
-            reason = "Dispatcher-only accounting boundary is consumed by P16 and exercised by private ledger tests"
+            reason = "verified spool cleanup contract exercised by accounting tests"
         )
     )]
     pub(crate) fn remove_spool_file(
@@ -667,7 +874,7 @@ impl RunLedgerGuard<'_> {
         not(test),
         expect(
             dead_code,
-            reason = "Dispatcher-only accounting boundary is consumed by P16 and exercised by private ledger tests"
+            reason = "verified spool cleanup contract exercised by accounting tests"
         )
     )]
     pub(crate) fn remove_empty_attempt_dir(&self, attempt: &AttemptRef) -> Result<()> {
@@ -676,6 +883,18 @@ impl RunLedgerGuard<'_> {
         if !path.exists() {
             return Ok(());
         }
+        #[cfg(windows)]
+        let _parent = super::windows_security::open_pinned_directory(
+            path.parent().expect("spool parent"),
+            super::acl_policy::Protection::Private,
+        )
+        .map_err(|error| io_error("pin spool cleanup parent", error))?;
+        #[cfg(windows)]
+        let directory = super::windows_security::open_pinned_directory(
+            &path,
+            super::acl_policy::Protection::Private,
+        )
+        .map_err(|error| io_error("pin spool cleanup directory", error))?;
         let owner_path = path.join("owner.json");
         let owner_present = read(&owner_path, OWNER_LIMIT)?.is_some();
         if owner_present {
@@ -700,6 +919,8 @@ impl RunLedgerGuard<'_> {
                 .map_err(|e| io_error("remove verified spool owner", e))?;
         }
         self.store.sync_dir(&path)?;
+        #[cfg(windows)]
+        drop(directory); // Release this directory's no-delete handle before removing it.
         self.store
             .io
             .remove_directory(&path)
@@ -716,6 +937,12 @@ impl RunLedgerGuard<'_> {
             return Err(budget("spool enumeration ceiling invalid"));
         }
         let path = self.store.path(".wiki/state/requests")?;
+        #[cfg(windows)]
+        let _requests = super::windows_security::open_pinned_directory(
+            &path,
+            super::acl_policy::Protection::Private,
+        )
+        .map_err(|error| io_error("pin request enumeration directory", error))?;
         let mut out = Vec::new();
         for (index, entry) in fs::read_dir(&path)
             .map_err(|e| io_error("enumerate request spools", e))?
@@ -733,6 +960,12 @@ impl RunLedgerGuard<'_> {
             let id = RecordId::new(name)?;
             let relative = format!(".wiki/state/requests/{id}/owner.json");
             let owner_path = self.store.path(&relative)?;
+            #[cfg(windows)]
+            let _attempt = super::windows_security::open_pinned_directory(
+                owner_path.parent().expect("owner parent"),
+                super::acl_policy::Protection::Private,
+            )
+            .map_err(|error| io_error("pin enumerated private attempt", error))?;
             let Some(owner) = read(&owner_path, OWNER_LIMIT)? else {
                 // A crash after verified cleanup removes owner before its empty dir.
                 // It carries no response/dispatch authority and is safe to report absent.
