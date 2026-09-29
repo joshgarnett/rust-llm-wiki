@@ -7,6 +7,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: qualification-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   unix-qualification:
     strategy:
@@ -14,20 +18,15 @@ jobs:
       matrix:
         runner: [ubuntu-24.04, macos-26]
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 60
+    timeout-minutes: 90
     steps:
       # https://github.com/actions/checkout/releases/tag/v7.0.1
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
-      - name: Install pinned development toolchain
-        run: rustup toolchain install 1.98.0 --profile minimal --component rustfmt --component clippy
-      - name: Fetch locked dependencies
-        run: cargo fetch --locked
+      - uses: ./.github/actions/setup
       - name: Qualify with disposable fixtures and mock providers
-        run: scripts/qualify-local.sh "$RUNNER_TEMP/lwiki-qualification"
-        env:
-          LWIKI_P21_EVIDENCE: ${{ runner.temp }}/lwiki-retrieval-baseline.json
+        run: just qualify "$RUNNER_TEMP/lwiki-qualification"
       - name: Retain qualification evidence
         if: always()
         # https://github.com/actions/upload-artifact/releases/tag/v7.0.1
@@ -38,7 +37,13 @@ jobs:
             ${{ runner.temp }}/lwiki-qualification/*.log
             ${{ runner.temp }}/lwiki-qualification/*.json
             ${{ runner.temp }}/lwiki-qualification/*.txt
-            ${{ runner.temp }}/lwiki-retrieval-baseline.json
+            ${{ runner.temp }}/lwiki-qualification/artifact/*.tar.gz
+            ${{ runner.temp }}/lwiki-qualification/artifact/*.sha256
+            ${{ runner.temp }}/lwiki-qualification/artifact/*.json
+            ${{ runner.temp }}/lwiki-qualification/artifact/*.log
+            ${{ runner.temp }}/lwiki-qualification/artifact/*.jsonl
+            ${{ runner.temp }}/lwiki-qualification/artifact/*.txt
+            ${{ runner.temp }}/lwiki-qualification/*.zip
           if-no-files-found: warn
           retention-days: 14
 
@@ -49,16 +54,24 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
-      - name: Install pinned development toolchain
-        run: rustup toolchain install 1.98.0 --profile minimal --component rustfmt --component clippy
-      - name: Fetch locked dependencies
-        run: cargo fetch --locked
+      - uses: ./.github/actions/setup
       - name: Check full Windows source and build artifact
+        shell: bash
         run: |
-          cargo check --locked --offline --all-targets
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          cargo build --locked --offline --release
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          .\target\release\lwiki.exe --json capabilities
-          exit $LASTEXITCODE
+          python scripts/bazel.py -- build --nofetch //:build //:test_build
+          just candidate "$RUNNER_TEMP/lwiki-candidate"
         # Build/capabilities do not establish native Windows write/crash safety.
+      - name: Retain Windows candidate and logs
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: lwiki-windows-build-only
+          path: |
+            ${{ runner.temp }}/lwiki-candidate/*.tar.gz
+            ${{ runner.temp }}/lwiki-candidate/*.sha256
+            ${{ runner.temp }}/lwiki-candidate/*.json
+            ${{ runner.temp }}/lwiki-candidate/*.log
+            ${{ runner.temp }}/lwiki-candidate/*.jsonl
+            ${{ runner.temp }}/lwiki-candidate/*.txt
+          if-no-files-found: warn
+          retention-days: 14

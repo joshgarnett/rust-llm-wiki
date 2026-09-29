@@ -1,4 +1,6 @@
 //! Runtime tests execute the maintained recipe; no host install or live provider.
+#[path = "../test_support/paths.rs"]
+mod test_paths;
 use serde_json::{Value, json};
 use std::{
     collections::BTreeMap,
@@ -19,7 +21,7 @@ fn invoke(
     args: &[String],
     input: Option<&Value>,
 ) -> (i32, Value, String) {
-    let mut cmd = Command::new(env!("CARGO_BIN_EXE_lwiki"));
+    let mut cmd = Command::new(test_paths::binary(env!("CARGO_BIN_EXE_lwiki")));
     cmd.current_dir(cwd).args(["--offline", "--json"]);
     if let Some(wiki) = wiki {
         cmd.arg("--wiki").arg(wiki);
@@ -262,7 +264,7 @@ fn skill_capabilities_do_not_advertise_missing_commands() {
         assert!(reference.contains(&format!("## {name}\n")));
         let mut args: Vec<_> = name.split_whitespace().map(str::to_string).collect();
         args.push("--help".into());
-        let out = Command::new(env!("CARGO_BIN_EXE_lwiki"))
+        let out = Command::new(test_paths::binary(env!("CARGO_BIN_EXE_lwiki")))
             .args(args)
             .output()
             .unwrap();
@@ -288,7 +290,7 @@ fn skill_capabilities_do_not_advertise_missing_commands() {
                 .any(|command| command.as_str() == Some(required))
         );
     }
-    let version = Command::new(env!("CARGO_BIN_EXE_lwiki"))
+    let version = Command::new(test_paths::binary(env!("CARGO_BIN_EXE_lwiki")))
         .arg("--version")
         .output()
         .unwrap();

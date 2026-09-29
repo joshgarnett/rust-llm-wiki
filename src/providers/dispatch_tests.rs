@@ -1,4 +1,5 @@
 use crate as library;
+use crate::test_paths;
 #[path = "../../tests/fixtures/p16b/common.rs"]
 mod common;
 use super::{
@@ -718,7 +719,7 @@ impl Drop for Server {
     }
 }
 fn native_case(server: &Server, tls: bool) -> Case {
-    let ca = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/p16b/ca.pem");
+    let ca = test_paths::fixture(env!("CARGO_MANIFEST_DIR"), "tests/fixtures/p16b/ca.pem");
     let extra = if tls {
         format!("ca_file={}", quote(ca.to_str().unwrap()))
     } else {

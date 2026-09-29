@@ -1,0 +1,144 @@
+load("@crates//:defs.bzl", "all_crate_deps")
+load("@rules_rust//rust:defs.bzl", "rust_clippy_test", "rust_doc_test", "rustfmt_test")
+load("//bazel:rust.bzl", "owned_binary", "owned_crate_test", "owned_integration_test", "owned_library")
+
+package(default_visibility = ["//visibility:public"])
+
+exports_files(["Cargo.lock", "Cargo.toml"])
+
+filegroup(
+    name = "compile_assets",
+    srcs = glob([
+        "schemas/**",
+        "skills/**",
+        "tests/fixtures/**",
+    ]),
+)
+
+filegroup(
+    name = "test_assets",
+    srcs = glob(["tests/fixtures/**"]) + ["Cargo.lock"],
+)
+
+owned_library(
+    name = "lwiki_lib",
+    crate_name = "lwiki",
+    srcs = glob(["src/**/*.rs", "test_support/**/*.rs"], exclude = ["src/main.rs"]),
+    compile_data = [":compile_assets"],
+)
+
+owned_binary(
+    name = "lwiki",
+    src = "src/main.rs",
+    deps = [":lwiki_lib"],
+)
+
+owned_crate_test(
+    name = "unit_tests",
+    crate = ":lwiki_lib",
+    compile_data = [":compile_assets"],
+    data = [":test_assets"],
+    # The full local recovery matrix can take roughly thirteen minutes.
+    timeout = "eternal",
+)
+
+owned_crate_test(
+    name = "binary_tests",
+    crate = ":lwiki",
+    compile_data = [":compile_assets"],
+    data = [":test_assets"],
+)
+
+rust_doc_test(
+    name = "doc_tests",
+    crate = ":lwiki_lib",
+    deps = all_crate_deps(normal_dev = True),
+    proc_macro_deps = all_crate_deps(proc_macro_dev = True),
+)
+
+_EXAMPLE_SOURCES = glob(["examples/*.rs"])
+_EXAMPLES = [":" + src[len("examples/"):-len(".rs")] for src in _EXAMPLE_SOURCES]
+_EXAMPLE_TESTS = [name + "_tests" for name in _EXAMPLES]
+
+[
+    owned_binary(
+        name = src[len("examples/"):-len(".rs")],
+        src = src,
+        deps = [":lwiki_lib"],
+    )
+    for src in _EXAMPLE_SOURCES
+]
+
+[
+    owned_crate_test(
+        name = name[1:] + "_tests",
+        crate = name,
+        compile_data = [":compile_assets"],
+        data = [":test_assets"],
+    )
+    for name in _EXAMPLES
+]
+
+_INTEGRATION_SOURCES = glob(["tests/*.rs"])
+_INTEGRATION_TESTS = [":" + src[len("tests/"):-len(".rs")] + "_test" for src in _INTEGRATION_SOURCES]
+_SHARED_TEST_SOURCES = glob(["tests/**/*.rs", "test_support/**/*.rs"], exclude = ["tests/*.rs"]) + ["src/vault/acl_policy.rs"]
+
+[
+    owned_integration_test(
+        name = src[len("tests/"):-len(".rs")] + "_test",
+        src = src,
+        shared_srcs = _SHARED_TEST_SOURCES,
+        compile_data = [":compile_assets"],
+        data = [":test_assets"],
+    )
+    for src in _INTEGRATION_SOURCES
+]
+
+_BUILD_TARGETS = [":lwiki_lib", ":lwiki"] + _EXAMPLES
+_TEST_TARGETS = [":unit_tests", ":binary_tests"] + _EXAMPLE_TESTS + _INTEGRATION_TESTS
+_RUST_TARGETS = _BUILD_TARGETS + _TEST_TARGETS
+
+filegroup(
+    name = "build",
+    srcs = _BUILD_TARGETS,
+)
+
+# Windows checks compile the full test source without running recovery tests.
+filegroup(
+    name = "test_build",
+    srcs = _TEST_TARGETS,
+    testonly = True,
+)
+
+rustfmt_test(
+    name = "format",
+    targets = _RUST_TARGETS,
+    transitive = True,
+)
+
+rust_clippy_test(
+    name = "clippy",
+    targets = _RUST_TARGETS,
+    transitive = True,
+)
+
+test_suite(
+    name = "check",
+    tests = [":format", ":clippy"],
+)
+
+test_suite(
+    name = "test",
+    tests = _TEST_TARGETS + [":doc_tests"],
+)
+
+test_suite(
+    name = "smoke",
+    tests = [
+        ":build_paths_test",
+        ":contracts_test",
+        ":machine_contract_test",
+        ":offline_cli_test",
+        ":skill_export_test",
+    ],
+)

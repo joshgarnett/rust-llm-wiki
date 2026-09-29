@@ -1,4 +1,6 @@
 //! Fixed held-out corpus measurements, not a semantic-model benchmark.
+#[path = "../test_support/paths.rs"]
+mod test_paths;
 use lwiki::{
     app::{OfflineApp, OperationOptions},
     catalog::{Catalog, SnapshotVerification},
@@ -46,7 +48,7 @@ struct Question {
     evidence_set: Vec<String>,
 }
 fn fixture_path() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/p21")
+    test_paths::fixture(env!("CARGO_MANIFEST_DIR"), "tests/fixtures/p21")
 }
 fn questions() -> Vec<Question> {
     serde_json::from_str(include_str!("fixtures/p21/queries.json")).unwrap()
@@ -608,13 +610,17 @@ fn heldout_fixed_corpus_equal_budget_baseline() {
         (key.clone(), Value::Object(metrics))
     }).collect();
     let artifact = json!({"version":1,"corpus":manifest,"k":K,
-        "measurement_build":{"debug_assertions":cfg!(debug_assertions),"test_executable_blake3":Blake3Hash::digest(fs::read(std::env::current_exe().unwrap()).unwrap()),"rustc":system_command("rustc", &["--version"]),"cargo_lock_blake3":Blake3Hash::digest(fs::read(Path::new(env!("CARGO_MANIFEST_DIR")).join("Cargo.lock")).unwrap())},"context_budget":{"max_bytes":MAX_BYTES,"max_estimated_tokens":MAX_TOKENS,"accounting":"ceil(rendered_utf8_bytes/4)"},
+        "measurement_build":{"debug_assertions":cfg!(debug_assertions),"test_executable_blake3":Blake3Hash::digest(fs::read(std::env::current_exe().unwrap()).unwrap()),"rustc":system_command("rustc", &["--version"]),"cargo_lock_blake3":Blake3Hash::digest(fs::read(test_paths::fixture(env!("CARGO_MANIFEST_DIR"), "Cargo.lock")).unwrap())},"context_budget":{"max_bytes":MAX_BYTES,"max_estimated_tokens":MAX_TOKENS,"accounting":"ceil(rendered_utf8_bytes/4)"},
         "hardware":{"os_arch":format!("{} {}",std::env::consts::OS,std::env::consts::ARCH),"uname":system_command("uname", &["-a"]),
             "model":system_command("sysctl", &["-n","hw.model"]),"cpu":system_command("sysctl", &["-n","machdep.cpu.brand_string"]),"physical_memory_bytes":system_command("sysctl", &["-n","hw.memsize"])},
         "limits":{"dense":"deterministic synthetic hash vectors; no semantic-model quality or ranking-gain claim","latency":"fresh process with prebuilt on-disk caches; OS caches not flushed; warm repeats same query/process", "memory":"per-child process peak RSS, includes setup/retrieval/validation","disk":"logical file bytes including transient SQLite files","quality":"target-specific binary relevance; exported passage paths followed by bundle IDs in rendered output order, deduplicated k=10; held-out labels, no tuning; no generated answer precision"},
         "by_method_and_class":means,"measurements":measurements});
     let path = std::env::var_os("LWIKI_P21_EVIDENCE")
         .map(PathBuf::from)
+        .or_else(|| {
+            std::env::var_os("TEST_UNDECLARED_OUTPUTS_DIR")
+                .map(|directory| PathBuf::from(directory).join("retrieval-baseline.json"))
+        })
         .unwrap_or_else(|| std::env::temp_dir().join("lwiki-p21-retrieval-baseline.json"));
     fs::write(&path, serde_json::to_vec_pretty(&artifact).unwrap()).unwrap();
     println!("P21 measured artifact: {}", path.display());

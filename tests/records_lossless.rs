@@ -1,3 +1,5 @@
+#[path = "../test_support/paths.rs"]
+mod test_paths;
 use lwiki::{
     domain::{Blake3Hash, ErrorCode, RecordId, RecordKind, VaultRelativePath},
     records::{edit::edit_note, links::*, parse::*},
@@ -362,7 +364,7 @@ fn delimiter_bounds_and_unsafe_edits() {
 fn bootstrap_canonical_bytes_match_manifest() {
     let expected: Value =
         serde_json::from_str(include_str!("fixtures/bootstrap/expected.json")).unwrap();
-    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/bootstrap");
+    let root = test_paths::fixture(env!("CARGO_MANIFEST_DIR"), "tests/fixtures/bootstrap");
     for fixture in expected["records"].as_array().unwrap() {
         let path = format!("vault/{}", fixture["path"].as_str().unwrap());
         let raw = std::fs::read(root.join(&path)).unwrap();

@@ -1,0 +1,79 @@
+name: Release build
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-build-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  native:
+    name: ${{ matrix.target }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+          - runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+          - runner: macos-26-intel
+            target: x86_64-apple-darwin
+          - runner: macos-26
+            target: aarch64-apple-darwin
+          - runner: windows-2025
+            target: x86_64-pc-windows-msvc
+          - runner: windows-11-arm
+            target: aarch64-pc-windows-msvc
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup
+      - name: Verify native target and source commit
+        env:
+          EXPECTED_TARGET: ${{ matrix.target }}
+          EXPECTED_COMMIT: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          task_python=python3
+          if [[ "$RUNNER_OS" = Windows ]]; then task_python=python; fi
+          test "$("$task_python" scripts/bazel.py --print-target)" = "$EXPECTED_TARGET"
+          test "$(git rev-parse HEAD)" = "$EXPECTED_COMMIT"
+          test -z "$(git status --porcelain)"
+      - name: Unix format, lint and smoke gate
+        if: runner.os != 'Windows'
+        run: just ci
+      - name: Windows full-source build and tooling tests
+        if: runner.os == 'Windows'
+        run: |
+          python scripts/bazel.py -- build --nofetch //:build //:test_build
+          just build-tools-test
+      - name: Build native release candidate
+        run: just candidate "$RUNNER_TEMP/lwiki-candidate"
+      - name: Native Unix release recipe tests
+        if: runner.os != 'Windows'
+        run: python3 scripts/bazel.py -- test --nofetch --config=release --nocache_test_results //:skill_export_test
+      - name: Retain release archive, checksum and diagnostics
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: lwiki-${{ matrix.target }}-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/lwiki-candidate/*.tar.gz
+            ${{ runner.temp }}/lwiki-candidate/*.sha256
+            ${{ runner.temp }}/lwiki-candidate/*.json
+            ${{ runner.temp }}/lwiki-candidate/*.jsonl
+            ${{ runner.temp }}/lwiki-candidate/*.txt
+            ${{ runner.temp }}/lwiki-candidate/*.log
+          if-no-files-found: warn
+          retention-days: 14

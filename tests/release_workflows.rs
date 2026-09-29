@@ -1,6 +1,8 @@
 //! One vault crosses the maintained host recipe and all local M0–M4 CLI phases.
 //! Every paid request targets an explicit trusted loopback mock with a fake key.
 #![cfg(unix)]
+#[path = "../test_support/paths.rs"]
+mod test_paths;
 use lwiki as library;
 use lwiki::{domain::*, jobs::*, vault::*};
 use serde_json::{Value, json};
@@ -362,7 +364,7 @@ fn invoke(
     command: &[&str],
     input: Option<&Value>,
 ) -> (Output, Value) {
-    let mut child = std::process::Command::new(env!("CARGO_BIN_EXE_lwiki"))
+    let mut child = std::process::Command::new(test_paths::binary(env!("CARGO_BIN_EXE_lwiki")))
         .current_dir(f.temp.path())
         .args(["--wiki", f.temp.path().to_str().unwrap(), format])
         .args(globals)
@@ -936,7 +938,7 @@ fn interrupted_research(f: &Vault, retained: &mut BTreeMap<RecordId, LedgerInspe
             "cancelled research dispatched follow-up work"
         );
     });
-    let mut child = std::process::Command::new(env!("CARGO_BIN_EXE_lwiki"))
+    let mut child = std::process::Command::new(test_paths::binary(env!("CARGO_BIN_EXE_lwiki")))
         .args([
             "--wiki",
             f.temp.path().to_str().unwrap(),

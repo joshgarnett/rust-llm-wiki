@@ -1,3 +1,5 @@
+#[path = "../test_support/paths.rs"]
+mod test_paths;
 use lwiki as library;
 #[path = "fixtures/p18/common.rs"]
 mod common;
@@ -156,7 +158,8 @@ fn native_api_cli_case(invalid_response: bool) {
         );
     std::fs::write(&config, content).unwrap();
     let invoke = |offline: bool| {
-        let mut command = std::process::Command::new(env!("CARGO_BIN_EXE_lwiki"));
+        let mut command =
+            std::process::Command::new(test_paths::binary(env!("CARGO_BIN_EXE_lwiki")));
         command.args([
             "--wiki",
             f.temp.path().to_str().unwrap(),
@@ -282,7 +285,8 @@ fn native_embedding_cli_sync_query_graph_context_and_cached_offline_reuse() {
     );
     embedding_fixture::private_write(&f.config, content);
     let invoke = |command: &[&str], offline: bool| {
-        let mut process = std::process::Command::new(env!("CARGO_BIN_EXE_lwiki"));
+        let mut process =
+            std::process::Command::new(test_paths::binary(env!("CARGO_BIN_EXE_lwiki")));
         process.args([
             "--wiki",
             f.fs.root().path().to_str().unwrap(),
@@ -399,7 +403,7 @@ fn native_cli_successful_fallback_keeps_prior_paid_network_activity() {
         socket.write_all(b"HTTP/1.1 503 Service Unavailable\r\nContent-Length: 2\r\nRetry-After: 0\r\nConnection: close\r\n\r\n{}").unwrap();
         socket.flush().unwrap();
     });
-    let result = std::process::Command::new(env!("CARGO_BIN_EXE_lwiki"))
+    let result = std::process::Command::new(test_paths::binary(env!("CARGO_BIN_EXE_lwiki")))
         .args([
             "--wiki",
             f.fs.root().path().to_str().unwrap(),

@@ -1,3 +1,5 @@
+#[path = "../test_support/paths.rs"]
+mod test_paths;
 use lwiki::domain::Blake3Hash;
 use serde_json::{Value, json};
 use std::{
@@ -9,7 +11,7 @@ use std::{
 };
 
 fn invoke(root: Option<&Path>, args: &[&str], stdin: Option<&[u8]>) -> (i32, Value) {
-    let mut command = Command::new(env!("CARGO_BIN_EXE_lwiki"));
+    let mut command = Command::new(test_paths::binary(env!("CARGO_BIN_EXE_lwiki")));
     command.args(["--json", "--offline"]);
     if let Some(root) = root {
         command.arg("--wiki").arg(root);
@@ -444,7 +446,7 @@ fn machine_envelope_error_exit_and_no_ansi() {
             .unwrap()
             .is_empty()
     );
-    let output = Command::new(env!("CARGO_BIN_EXE_lwiki"))
+    let output = Command::new(test_paths::binary(env!("CARGO_BIN_EXE_lwiki")))
         .args(["capabilities", "--format", "json"])
         .output()
         .unwrap();
@@ -457,7 +459,7 @@ fn jsonl_started_and_terminal_events_share_invocation_and_sequence() {
     let schema: Value = serde_json::from_str(include_str!("../schemas/stream-v1.json")).unwrap();
     let validator = jsonschema::validator_for(&schema).unwrap();
     for (args, expected) in [(vec!["index", "sync"], 0), (vec!["search", "q"], 2)] {
-        let output = Command::new(env!("CARGO_BIN_EXE_lwiki"))
+        let output = Command::new(test_paths::binary(env!("CARGO_BIN_EXE_lwiki")))
             .arg("--wiki")
             .arg(temp.path())
             .args(["--jsonl", "--offline"])
@@ -516,7 +518,7 @@ fn retained_apply_failure_returns_inspectable_change_and_human_snapshot_is_label
         &["page", "put", "--file", "-"],
         Some(&page("view", "Visible")),
     );
-    let search = Command::new(env!("CARGO_BIN_EXE_lwiki"))
+    let search = Command::new(test_paths::binary(env!("CARGO_BIN_EXE_lwiki")))
         .arg("--wiki")
         .arg(root)
         .args(["search", "Visible", "--no-sync"])
@@ -528,7 +530,7 @@ fn retained_apply_failure_returns_inspectable_change_and_human_snapshot_is_label
             .unwrap()
             .contains("index_snapshot (unverified)")
     );
-    let read = Command::new(env!("CARGO_BIN_EXE_lwiki"))
+    let read = Command::new(test_paths::binary(env!("CARGO_BIN_EXE_lwiki")))
         .arg("--wiki")
         .arg(root)
         .args(["read", "--id", "view", "--no-sync"])

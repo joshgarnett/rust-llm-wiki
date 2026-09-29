@@ -1,0 +1,14 @@
+common --enable_bzlmod
+common --lockfile_mode=error
+common --incompatible_strict_action_env
+common --repository_cache=.build-cache/repository
+common --repo_contents_cache=
+build --verbose_failures
+test --test_output=errors
+# Each Rust harness retains its own concurrency. Targets serialize to avoid
+# competing fsync-heavy recovery fixtures exhausting elapsed-time budgets.
+test --local_test_jobs=1
+build:clippy --aspects=@rules_rust//rust:defs.bzl%rust_clippy_aspect
+build:clippy --output_groups=+clippy_checks
+build:clippy --@rules_rust//rust/settings:clippy_flag=-Dwarnings
+build:release --compilation_mode=opt --stamp=no

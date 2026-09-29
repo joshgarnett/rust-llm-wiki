@@ -1,0 +1,52 @@
+name: Set up build tools
+description: Install pinned Rust, Just and Bazelisk, then fetch the locked Bazel graph.
+
+runs:
+  using: composite
+  steps:
+    - name: Read the pinned toolchain
+      id: toolchain
+      shell: bash
+      run: |
+        set -euo pipefail
+        toolchain=$(sed -n 's/^channel = "\([0-9][0-9.]*\)"$/\1/p' rust-toolchain.toml)
+        test -n "$toolchain"
+        printf 'version=%s\n' "$toolchain" >> "$GITHUB_OUTPUT"
+    - name: Install Rust
+      shell: bash
+      env:
+        TOOLCHAIN: ${{ steps.toolchain.outputs.version }}
+      run: rustup toolchain install "$TOOLCHAIN" --profile minimal --component rustfmt --component clippy
+    - name: Cache downloaded dependencies and Just
+      uses: actions/cache@cdf6c1fa76f9f475f3d7449005a359c84ca0f306 # v5.0.3
+      with:
+        path: |
+          ~/.cargo/registry/index
+          ~/.cargo/registry/cache
+          ~/.cargo/registry/src
+          ~/.cargo/git/db
+          ~/.cargo/bin/just
+          ~/.cargo/bin/just.exe
+          .build-cache/repository
+        key: tools-${{ runner.os }}-${{ runner.arch }}-just1.58.0-${{ steps.toolchain.outputs.version }}-${{ hashFiles('Cargo.lock', 'MODULE.bazel.lock', 'cargo-bazel-lock.json', '.bazelversion') }}
+        restore-keys: |
+          tools-${{ runner.os }}-${{ runner.arch }}-just1.58.0-${{ steps.toolchain.outputs.version }}-
+    - name: Install Just
+      shell: bash
+      run: |
+        set -euo pipefail
+        if ! command -v just >/dev/null || [[ "$(just --version)" != "just 1.58.0" ]]; then
+          cargo install just --locked --version 1.58.0 --force
+        fi
+    - name: Install Bazelisk
+      shell: bash
+      run: |
+        set -euo pipefail
+        go install github.com/bazelbuild/bazelisk@v1.29.0
+        printf '%s/bin\n' "$(go env GOPATH)" >> "$GITHUB_PATH"
+    - name: Inspect installed tools
+      shell: bash
+      run: just doctor
+    - name: Fetch locked Bazel dependencies
+      shell: bash
+      run: just deps-fetch

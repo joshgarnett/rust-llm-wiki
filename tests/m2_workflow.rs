@@ -1,3 +1,5 @@
+#[path = "../test_support/paths.rs"]
+mod test_paths;
 use lwiki::{domain::*, records::parse_note, vault::VaultRoot};
 use serde_json::{Value, json};
 use std::{
@@ -9,7 +11,7 @@ use std::{
     time::SystemTime,
 };
 fn invoke(root: &Path, args: &[&str], request: Option<&[u8]>) -> (i32, Value) {
-    let mut child = Command::new(env!("CARGO_BIN_EXE_lwiki"))
+    let mut child = Command::new(test_paths::binary(env!("CARGO_BIN_EXE_lwiki")))
         .arg("--wiki")
         .arg(root)
         .args(["--offline", "--json"])

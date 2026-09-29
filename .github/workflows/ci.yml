@@ -1,0 +1,85 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_NET_RETRY: "5"
+
+jobs:
+  unix-checks:
+    name: Build and smoke (${{ matrix.runner }})
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-24.04, macos-26]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup
+      - name: Format, lint, build tooling and CLI smoke tests
+        run: just ci
+      - name: Build and smoke a native candidate
+        run: just candidate "$RUNNER_TEMP/lwiki-candidate"
+      - name: Retain candidate archive and build logs
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: lwiki-candidate-${{ matrix.runner }}-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/lwiki-candidate/*.tar.gz
+            ${{ runner.temp }}/lwiki-candidate/*.sha256
+            ${{ runner.temp }}/lwiki-candidate/*.log
+            ${{ runner.temp }}/lwiki-candidate/*.json
+            ${{ runner.temp }}/lwiki-candidate/*.jsonl
+            ${{ runner.temp }}/lwiki-candidate/*.txt
+          if-no-files-found: warn
+          retention-days: 7
+
+  windows-build-only:
+    name: Windows build and capabilities only
+    runs-on: windows-2025
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup
+      - name: Check full Windows source and build tooling
+        run: |
+          python scripts/bazel.py -- build --nofetch //:build //:test_build
+          just build-tools-test
+      - name: Build and smoke a native candidate
+        run: just candidate "$RUNNER_TEMP/lwiki-candidate"
+      - name: Retain candidate archive and build logs
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: lwiki-candidate-windows-2025-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/lwiki-candidate/*.tar.gz
+            ${{ runner.temp }}/lwiki-candidate/*.sha256
+            ${{ runner.temp }}/lwiki-candidate/*.log
+            ${{ runner.temp }}/lwiki-candidate/*.json
+            ${{ runner.temp }}/lwiki-candidate/*.jsonl
+            ${{ runner.temp }}/lwiki-candidate/*.txt
+          if-no-files-found: warn
+          retention-days: 7
+        # Building and capability output do not qualify Windows writes/recovery.

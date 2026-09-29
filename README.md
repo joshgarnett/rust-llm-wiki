@@ -6,22 +6,24 @@ A Rust CLI for a local wiki that people and coding agents can read, maintain, an
 
 Canonical records and captured sources live in Obsidian-compatible Markdown. Bundled SQLite provides rebuildable full-text search, metadata, graphs and vector caches. Extraction uses an existing agent or a configured generation API; semantic search uses a remote embeddings API and stores vectors locally. Short notes stay whole by default; long inputs split only when needed. The core does not require a model runtime, database server, Python, Node, or a background service.
 
-Build with the pinned Rust toolchain and inspect the actual command registry:
+Install the pinned development tools described in [builds and CI](docs/builds.md),
+then create a native candidate with Just and Bazel and inspect its command registry:
 
 ```sh
-cargo build --locked --release
-./target/release/lwiki --json capabilities
-./target/release/lwiki init /tmp/my-wiki
-./target/release/lwiki --wiki /tmp/my-wiki source add ./notes.txt
-./target/release/lwiki --wiki /tmp/my-wiki --offline search 'identifier' --mode literal
-./target/release/lwiki --wiki /tmp/my-wiki --offline context 'question' --max-bytes 12000 --max-tokens 3000
+just deps-fetch
+just candidate .artifacts/candidate-001
+./.artifacts/candidate-001/lwiki --json capabilities
+./.artifacts/candidate-001/lwiki init /tmp/my-wiki
+./.artifacts/candidate-001/lwiki --wiki /tmp/my-wiki source add ./notes.txt
+./.artifacts/candidate-001/lwiki --wiki /tmp/my-wiki --offline search 'identifier' --mode literal
+./.artifacts/candidate-001/lwiki --wiki /tmp/my-wiki --offline context 'question' --max-bytes 12000 --max-tokens 3000
 ```
 
 Choose a new directory for `init`; it refuses an existing vault. Local capture/search/context do not need provider credentials. Use [the maintained skill workflows](skills/llm-wiki/references/workflows.md) for guarded edits, packet extraction, explicit resolution and review. `skill export --target codex|claude-code|cursor --output DIR` exports the workflow, executable examples and command reference from the running binary.
 
 Remote embedding, API extraction, `doctor --probe` and research require explicit trusted provider configuration and caller budgets. `--offline` prevents remote work; `--dry-run` previews without writes or credential resolution. Research reports retain gaps and unassessed model claims; valid citation bytes do not prove a claim's meaning. Budget stops return exit 7 with retained partial output, and orderly interruption returns exit 130. Resume preserves lifetime limits and accounting; `research resume RUN_ID --amend-limits FILE` is the explicit amendment path.
 
-Developers can run [scripts/qualify-local.sh](scripts/qualify-local.sh) after fetching locked dependencies. It runs format/lint/full tests/doctests, builds a release artifact, and exercises that copied binary with a minimal system PATH in a disposable vault. Dependency metadata and native linkage are retained with the logs. The [manual CI workflow](.github/workflows/qualification.yml) is prepared for future opt-in execution; its existence is not a passing hosted or other-platform result. Windows currently refuses unsupported directory durability before paid work; its CI job checks building and capability output only.
+Developers use Just with Bazel 9.2.0, rules_rust 0.72.0 and Rust 1.98.0. `just ci` checks formatting, Clippy, build tooling and CLI smoke tests; `just qualify` runs the full native test/doctest/release gates with cached test results disabled and exercises the copied binary with a minimal system PATH in a disposable vault. Normal commands use the native platform wrapper and `--nofetch` after `just deps-fetch`; Cargo remains for metadata, lock maintenance and formatting edits. See [build commands and GitHub workflows](docs/builds.md) for setup, evidence and limits. The [GitHub repository](https://github.com/joshgarnett/rust-llm-wiki) has its initial `main`; hosted Bazel results are pending. Windows currently refuses unsupported directory durability before paid work; its Git Bash jobs check building and capability output only.
 
 ## Start here
 

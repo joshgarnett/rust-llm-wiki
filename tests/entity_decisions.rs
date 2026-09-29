@@ -1,3 +1,5 @@
+#[path = "../test_support/paths.rs"]
+mod test_paths;
 use lwiki::{
     catalog::*,
     changes::*,
@@ -44,7 +46,7 @@ impl Fixture {
     fn new() -> Self {
         let temp = tempfile::tempdir().unwrap();
         copy(
-            &Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/bootstrap/vault"),
+            &test_paths::fixture(env!("CARGO_MANIFEST_DIR"), "tests/fixtures/bootstrap/vault"),
             temp.path(),
         );
         let root = VaultRoot::explicit(temp.path()).unwrap();

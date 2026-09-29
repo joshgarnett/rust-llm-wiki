@@ -45,7 +45,10 @@ impl Fixture {
     pub(crate) fn new() -> Self {
         let temp = tempfile::tempdir().unwrap();
         copy(
-            &Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/bootstrap/vault"),
+            &crate::test_paths::fixture(
+                env!("CARGO_MANIFEST_DIR"),
+                "tests/fixtures/bootstrap/vault",
+            ),
             temp.path(),
         );
         let root = VaultRoot::explicit(temp.path()).unwrap();

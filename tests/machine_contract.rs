@@ -1,3 +1,5 @@
+#[path = "../test_support/paths.rs"]
+mod test_paths;
 use lwiki::output::Envelope;
 use serde_json::{Value, json};
 use std::process::Command;
@@ -29,8 +31,8 @@ fn output_envelope_matches_published_schema() {
 
 #[test]
 fn capabilities_only_implemented_commands() {
-    let binary = env!("CARGO_BIN_EXE_lwiki");
-    let output = Command::new(binary)
+    let binary = test_paths::binary(env!("CARGO_BIN_EXE_lwiki"));
+    let output = Command::new(&binary)
         .args(["--json", "--offline", "--dry-run", "capabilities"])
         .output()
         .unwrap();
@@ -46,7 +48,7 @@ fn capabilities_only_implemented_commands() {
     );
     assert_eq!(envelope["meta"]["network_used"], false);
     for name in ["output", "record", "stream"] {
-        let output = Command::new(binary)
+        let output = Command::new(&binary)
             .args(["--json", "schema", name])
             .output()
             .unwrap();
@@ -54,7 +56,7 @@ fn capabilities_only_implemented_commands() {
         let envelope: Value = serde_json::from_slice(&output.stdout).unwrap();
         assert!(jsonschema::meta::is_valid(&envelope["data"]));
     }
-    let output = Command::new(binary)
+    let output = Command::new(&binary)
         .args(["--json", "not-implemented"])
         .output()
         .unwrap();
@@ -62,7 +64,7 @@ fn capabilities_only_implemented_commands() {
     let envelope: Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(envelope["error"]["code"], "USAGE");
     assert_eq!(envelope["ok"], false);
-    let output = Command::new(binary)
+    let output = Command::new(&binary)
         .args(["--json", "schema", "unknown"])
         .output()
         .unwrap();
@@ -101,8 +103,8 @@ fn published_record_schema_validates_types_and_qualifiers() {
 #[test]
 fn canonical_fixture_schema_hashes_and_utf8_spans_agree() {
     use lwiki::domain::{Blake3Hash, ByteSpan, CanonicalRecord};
-    use std::{collections::BTreeSet, fs, path::Path};
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/bootstrap");
+    use std::{collections::BTreeSet, fs};
+    let root = test_paths::fixture(env!("CARGO_MANIFEST_DIR"), "tests/fixtures/bootstrap");
     assert!(root.join("vault/WIKI.md").is_file());
     assert!(
         fs::read_dir(root.join("vault"))
@@ -174,7 +176,7 @@ fn evidence_link_schema_rejects_plain_strings() {
 #[test]
 fn invalid_utf8_arguments_return_clean_usage_envelope() {
     use std::{ffi::OsString, os::unix::ffi::OsStringExt};
-    let output = Command::new(env!("CARGO_BIN_EXE_lwiki"))
+    let output = Command::new(test_paths::binary(env!("CARGO_BIN_EXE_lwiki")))
         .arg("schema")
         .arg(OsString::from_vec(vec![0xff]))
         .arg("--json")

@@ -1,5 +1,7 @@
 #[path = "fixtures/p17/common.rs"]
 mod common;
+#[path = "../test_support/paths.rs"]
+mod test_paths;
 use common::*;
 use lwiki::{
     app::OperationOptions,
@@ -452,7 +454,7 @@ fn auto_dimension_probe_and_invalid_batch_do_not_fix_corpus() {
 fn bootstrap() -> (tempfile::TempDir, lwiki::app::OfflineApp, Catalog) {
     let temp = tempfile::tempdir().unwrap();
     copy(
-        &std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/bootstrap/vault"),
+        &test_paths::fixture(env!("CARGO_MANIFEST_DIR"), "tests/fixtures/bootstrap/vault"),
         temp.path(),
     );
     let fs = lwiki::vault::VaultFs::new(lwiki::vault::VaultRoot::explicit(temp.path()).unwrap());

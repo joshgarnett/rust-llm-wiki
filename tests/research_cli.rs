@@ -1,4 +1,6 @@
 //! Native CLI exercises use disposable vaults and explicit loopback provider endpoints.
+#[path = "../test_support/paths.rs"]
+mod test_paths;
 use lwiki as library;
 #[path = "fixtures/p18/common.rs"]
 mod common;
@@ -65,7 +67,7 @@ fn tree(root: &Path) -> BTreeMap<PathBuf, TreeEntry> {
 }
 
 fn invoke(f: &Fixture, format: &str, globals: &[&str], command: &[&str]) -> (Output, Value) {
-    let output = std::process::Command::new(env!("CARGO_BIN_EXE_lwiki"))
+    let output = std::process::Command::new(test_paths::binary(env!("CARGO_BIN_EXE_lwiki")))
         .args(["--wiki", f.temp.path().to_str().unwrap(), format])
         .args(globals)
         .args(command)
@@ -1093,7 +1095,7 @@ fn native_sigint_after_paid_entry_emits_terminal_130_and_retains_unknown_partial
             "cancelled research sent follow-up work"
         );
     });
-    let mut child = std::process::Command::new(env!("CARGO_BIN_EXE_lwiki"))
+    let mut child = std::process::Command::new(test_paths::binary(env!("CARGO_BIN_EXE_lwiki")))
         .args([
             "--wiki",
             f.temp.path().to_str().unwrap(),

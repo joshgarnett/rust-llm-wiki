@@ -1,5 +1,7 @@
 #[path = "fixtures/p13/support.rs"]
 mod support;
+#[path = "../test_support/paths.rs"]
+mod test_paths;
 use serde_json::{Value, json};
 use std::{
     collections::BTreeMap,

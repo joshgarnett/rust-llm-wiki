@@ -15,4 +15,7 @@ pub mod records;
 pub mod research;
 pub mod retrieval;
 pub mod sources;
+#[cfg(test)]
+#[path = "../test_support/paths.rs"]
+mod test_paths;
 pub mod vault;

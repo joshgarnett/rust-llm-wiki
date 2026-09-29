@@ -1,4 +1,5 @@
 use crate as library;
+use crate::test_paths;
 #[allow(dead_code)]
 #[path = "../../tests/fixtures/p16c/common.rs"]
 pub(crate) mod common;
@@ -297,7 +298,7 @@ fn curated_identity_bounds_and_options_cannot_be_inferred_or_forged() {
         p.bound.billable_bounds[&BillableClass::Input],
         TokenBound::Unknown
     );
-    let ca = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/p16b/ca.pem");
+    let ca = test_paths::fixture(env!("CARGO_MANIFEST_DIR"), "tests/fixtures/p16b/ca.pem");
     let c = case(
         ServiceRole::Embed,
         embedding_input(),
