@@ -75,7 +75,7 @@ def build(output, repo=None):
         if len(targets) != 1 or not targets[0].strip():
             raise BuildError("Bazel wrapper did not report one native target")
         host = targets[0].strip()
-        bazel = run(wrapper + ["--", "--version"], repo, output,
+        bazel = run(wrapper + ["--", "version", "--gnu_format"], repo, output,
                     "bazel-version.txt").read_text(encoding="utf-8").strip()
         metadata_path = run(
             ["cargo", "metadata", "--locked", "--offline", "--no-deps", "--format-version", "1"],

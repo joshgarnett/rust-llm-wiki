@@ -94,8 +94,8 @@ decisions remain in [external qualification](qualification.md).
   gate and optimized skill recipe; Windows jobs compile all test sources and
   smoke the copied binary's capabilities. Each job uploads a versioned archive,
   checksum and build information.
-- Shared setup installs pinned Rust and Just, installs Bazelisk through the
-  hosted runner's Go toolchain, caches downloaded dependency archives and Just by OS,
+- Shared setup installs pinned Rust and Just, downloads the pinned native
+  Bazelisk binary with its checksum, caches downloaded dependency archives and Just by OS,
   architecture, toolchain and lockfiles, then fetches the locked Bazel graph.
   Compiled targets are not cached across hosted runs.
 - Actions are pinned to full commit IDs, checkout credentials are not persisted,

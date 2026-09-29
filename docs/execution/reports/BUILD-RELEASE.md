@@ -54,8 +54,13 @@ serialization. Final release workflow review found no blocking issue. A separate
 archive-verifier review added an executable-permission check for Unix binaries;
 its regression passes alongside malformed archive and metadata rejection cases.
 
-GitHub Actions is enabled on the private repository. Hosted execution is
-pending. A release is accepted only after all six jobs succeed, downloaded
+GitHub Actions is enabled on the private repository. Commit `0e53983` was
+pushed to `main`; release run [36559473261](https://github.com/joshgarnett/rust-llm-wiki/actions/runs/36559473261)
+found two clean-host setup defects: macOS had no Go for the Bazelisk install,
+and Bazel rejected `--version` after startup options. Shared setup now downloads
+the pinned native Bazelisk asset and verifies its checksum; doctor and candidate
+metadata use `version --gnu_format`. All 40 Python regressions still pass.
+Hosted acceptance remains pending. A release is accepted only after all six jobs succeed, downloaded
 archives pass checksum/member/metadata/binary checks, and the draft targets
 that exact validated commit. No failed-job artifact is promoted. The draft
 will remain unpublished; live providers, installed host applications, signing

@@ -54,7 +54,7 @@ class MockTools:
             args = command[2:]
             if args == ["--print-target"]:
                 content = self.host + "\n"
-            elif args == ["--", "--version"]:
+            elif args == ["--", "version", "--gnu_format"]:
                 content = "bazel 9.2.0\n"
             elif args == ["--", "build", "--config=release", "--nofetch", "//:lwiki"]:
                 if self.change_lock:

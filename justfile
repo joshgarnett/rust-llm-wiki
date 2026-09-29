@@ -11,7 +11,7 @@ doctor:
     rustc -vV
     cargo -vV
     {{ python }} --version
-    {{ python }} scripts/bazel.py -- --version
+    {{ python }} scripts/bazel.py -- version --gnu_format
 
 # Fetch the pinned Bazel modules, toolchains and Cargo-derived dependencies.
 deps-fetch:
