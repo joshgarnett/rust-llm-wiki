@@ -101,7 +101,9 @@ decisions remain in [external qualification](qualification.md).
   Linux GNU, macOS and Windows, each on x64 and ARM64. Unix jobs run the short
   gate and optimized skill recipe; Windows jobs compile all test sources and
   smoke the copied binary's capabilities. Each job uploads a versioned archive,
-  checksum and build information.
+  checksum and build information. Different commits may build concurrently;
+  duplicate runs of the same commit serialize. Release creation remains a
+  separate step after all six artifacts from one successful run are verified.
 - Shared setup installs pinned Rust and Just, downloads the pinned native
   Bazelisk binary with its checksum, caches downloaded dependency archives and Just by OS,
   architecture, toolchain and lockfiles, then fetches the locked Bazel graph.
