@@ -1,0 +1,1045 @@
+{
+  "schema_version": 1,
+  "date": "2026-09-29",
+  "scope": "Read-only end-to-end implementation/reference audit; reports/state changes only",
+  "audited_commit": "63b2439f5cd57211e2a2bc5587ac5bace3d03ea2",
+  "release_commit": "d8a82a5a345549fada06987dec986801c6842252",
+  "release_version": "0.1.2",
+  "native_reproduction_binary": {
+    "path": "/Users/jgarnett/Devleopment/rust-llm-wiki/.artifacts/012-macos/lwiki",
+    "sha256": "b3eb83e82603811cb8040b0c4a7435bb85cab43a0566635048aadf421172ca0e",
+    "version": "lwiki 0.1.2"
+  },
+  "source_manifest": {
+    "file_count": 329,
+    "encoding": "SHA256 of compact sort-key JSON path-to-SHA256 map",
+    "sha256": "eff2c254e441289c098bdf955f252b255b2029d3f8e61dd016eb23e950d68738",
+    "path": ".artifacts/audit-source-manifest.json",
+    "after_review_matches": true,
+    "after_full_suite_matches": true
+  },
+  "reviews": [
+    {
+      "report": "AUDIT-storage.md",
+      "model": "gpt-6-astra"
+    },
+    {
+      "report": "AUDIT-providers.md",
+      "model": "gpt-6-astra"
+    },
+    {
+      "report": "AUDIT-graph-retrieval.md",
+      "model": "gpt-6-sol"
+    },
+    {
+      "report": "AUDIT-agent-workflows.md",
+      "model": "gpt-6-sol"
+    },
+    {
+      "report": "AUDIT-build-reference.md",
+      "model": "root"
+    }
+  ],
+  "checks": {
+    "full_rust_suite": {
+      "command": "LWIKI_BAZEL_OUTPUT_ROOT=/private/tmp/lwiki-bazel python3 scripts/bazel.py -- test --nofetch --nocache_test_results //:test",
+      "log": ".artifacts/audit-full-tests.log",
+      "status": "passed",
+      "exit_code": 0,
+      "targets": 47,
+      "elapsed_seconds": 1776.311,
+      "parent_case_counts": {
+        "passed": 577,
+        "failed": 0,
+        "ignored": 7
+      },
+      "count_method": "Final Rust test result line per current Bazel target; nested helper process outputs are not double-counted. Ignored helpers are separately invoked by their parent tests.",
+      "targets_detail": [
+        {
+          "target": "//:api_extraction_test",
+          "status": "ok",
+          "passed": 12,
+          "failed": 0,
+          "ignored": 0,
+          "seconds": 38.7,
+          "test_log_sha256": "d28c2da3c74d4e10db4df9523a07b13b23fcbcb6bf785e3314ba1f3cfb29f301"
+        },
+        {
+          "target": "//:binary_tests",
+          "status": "ok",
+          "passed": 0,
+          "failed": 0,
+          "ignored": 0,
+          "seconds": 0.3,
+          "test_log_sha256": "dda8498500a24c6f25bdd976de84df36843784769c98341dcb7a01c45a090b34"
+        },
+        {
+          "target": "//:build_paths_test",
+          "status": "ok",
+          "passed": 8,
+          "failed": 0,
+          "ignored": 0,
+          "seconds": 0.1,
+          "test_log_sha256": "b47f2e73ac9be765d1371e532e8eebede47bef2ad09df9a62f2fab293af08721"
+        },
+        {
+          "target": "//:catalog_crash_recovery_test",
+          "status": "ok",
+          "passed": 2,
+          "failed": 0,
+          "ignored": 1,
+          "seconds": 3.0,
+          "test_log_sha256": "253eb8244cd4b9e7e68ae50b268d8ca776f2b5413dd80dd0f85266c998a46d57"
+        },
+        {
+          "target": "//:catalog_generations_test",
+          "status": "ok",
+          "passed": 15,
+          "failed": 0,
+          "ignored": 0,
+          "seconds": 3.0,
+          "test_log_sha256": "db7d8636e7afd525bc7d789a34149079a10bae6f1fbd4fc8fdbc4010003590a1"
+        },
+        {
+          "target": "//:catalog_scan_eligibility_test",
+          "status": "ok",
+          "passed": 14,
+          "failed": 0,
+          "ignored": 0,
+          "seconds": 1.0,
+          "test_log_sha256": "2e91cc5d4ae9e95c32e43c72ced83c15ab61a6d65a65cf0843cf1444192ce392"
+        },
+        {
+          "target": "//:change_read_preconditions_test",
+          "status": "ok",
+          "passed": 8,
+          "failed": 0,
+          "ignored": 0,
+          "seconds": 1.6,
+          "test_log_sha256": "f957455dbdd6435168d6ce519933778f59a46071c82f436886ff09e12d7bf2be"
+        },
+        {
+          "target": "//:changes_prepare_journal_test",
+          "status": "ok",
+          "passed": 17,
+          "failed": 0,
+          "ignored": 0,
+          "seconds": 24.7,
+          "test_log_sha256": "259adbbb51751873d4b5ee3588e02edee4f9a2471c29cbcd8064a9475d4948b3"
+        },
+        {
+          "target": "//:changes_recovery_test",
+          "status": "ok",
+          "passed": 28,
+          "failed": 0,
+          "ignored": 1,
+          "seconds": 332.5,
+          "test_log_sha256": "3060cae6a5ba6af0eeced443d5a188b5743ad4a92ee1b1145f887d2145e299d8"
+        },
+        {
+          "target": "//:context_cli_test",
+          "status": "ok",
+          "passed": 5,
+          "failed": 0,
+          "ignored": 0,
+          "seconds": 7.6,
+          "test_log_sha256": "4dcc9ede36c0b565ad20b542f4628cbc9d7c898e08e9402181316d62afb1b1b7"
+        },
+        {
+          "target": "//:context_freshness_test",
+          "status": "ok",
+          "passed": 18,
+          "failed": 0,
+          "ignored": 0,
+          "seconds": 4.5,
+          "test_log_sha256": "55ef7bd45c5ce06b36cbae6613170ad46415e60b9956e0169ad7c4ef5ba4dfa2"
+        },
+        {
+          "target": "//:contracts_test",
+          "status": "ok",
+          "passed": 4,
+          "failed": 0,
+          "ignored": 0,
+          "seconds": 0.1,
+          "test_log_sha256": "75acb51df72ac777d797a44a4226c5617e67719f78fab1ff470a84177eb0bf0a"
+        },
+        {
+          "target": "//:doc_tests",
+          "status": "ok",
+          "passed": 0,
+          "failed": 0,
+          "ignored": 0,
+          "seconds": 1.6,
+          "test_log_sha256": "2561be9ff343002bc37722f94ec521c410d1e76340f34b6842a04f8ab587f371"
+        },
+        {
+          "target": "//:embedding_bounds_test",
+          "status": "ok",
+          "passed": 4,
+          "failed": 0,
+          "ignored": 0,
+          "seconds": 1.0,
+          "test_log_sha256": "12f9e6a04085973d6bb423a2040a91f0a1c2e66d1d939e7b13fabad5098f3ac3"
+        },
+        {
+          "target": "//:entity_decisions_cli_test",
+          "status": "ok",
+          "passed": 3,
+          "failed": 0,
+          "ignored": 0,
+          "seconds": 2.0,
+          "test_log_sha256": "210f88071b66fa408e9980b930c749a3566099244b92df596d87631130e0a45a"
+        },
+        {
+          "target": "//:entity_decisions_inverse_test",
+          "status": "ok",
+          "passed": 10,
+          "failed": 0,
+          "ignored": 0,
+          "seconds": 65.8,
+          "test_log_sha256": "5a353653e6d52cb8aa3f5531ad0194f078ec0c6a6b8f1860f70adfd4df451a07"
+        },
+        {
+          "target": "//:entity_decisions_test",
+          "status": "ok",
+          "passed": 19,
+          "failed": 0,
+          "ignored": 0,
+          "seconds": 52.9,
+          "test_log_sha256": "032a785fb580b34bef340775b4f11ab2634fee4bdae8577c83d5cf8db582c7a1"
+        },
+        {
+          "target": "//:extraction_cli_test",
+          "status": "ok",
+          "passed": 3,
+          "failed": 0,
+          "ignored": 0,
+          "seconds": 3.0,
+          "test_log_sha256": "8156364e5c581167fc2e6dadbcc9a0aad7cf3b07104c5d9a3323a06046fb8eec"
+        },
+        {
+          "target": "//:extraction_import_test",
+          "status": "ok",
+          "passed": 13,
+          "failed": 0,
+          "ignored": 0,
+          "seconds": 15.5,
+          "test_log_sha256": "ba3a86c3d8450728a91ae05edc43e29815dc0550d615795c80fb33658ad257e9"
+        },
+        {
+          "target": "//:fixture_hash_tests",
+          "status": "ok",
+          "passed": 0,
+          "failed": 0,
+          "ignored": 0,
+          "seconds": 0.3,
+          "test_log_sha256": "6b696c33c2173bed8bd541e1aa33f087afddc3b34299b3b8bcc724d619099682"
+        },
+        {
+          "target": "//:graph_cli_test",
+          "status": "ok",
+          "passed": 4,
+          "failed": 0,
+          "ignored": 0,
+          "seconds": 1.6,
+          "test_log_sha256": "d214dade5dd67819b1e60d76eb93f45bfc73611ed75de1fb7c8302eebda0f1be"
+        },
+        {
+          "target": "//:graph_queries_test",
+          "status": "ok",
+          "passed": 19,
+          "failed": 0,
+          "ignored": 0,
+          "seconds": 7.2,
+          "test_log_sha256": "68df2680f67b3c935475b14dc6564fb5945d2fca6e47813c3f127db6cf17d549"
+        },
+        {
+          "target": "//:graph_resolution_test",
+          "status": "ok",
+          "passed": 20,
+          "failed": 0,
+          "ignored": 0,
+          "seconds": 81.8,
+          "test_log_sha256": "d4469ad3d9c09fc525743577e4b12332f5d51c44ff6866a3fd9ee87096f1d565"
+        },
+        {
+          "target": "//:graph_review_test",
+          "status": "ok",
+          "passed": 21,
+          "failed": 0,
+          "ignored": 0,
+          "seconds": 87.4,
+          "test_log_sha256": "fd5ac0c12c9e79a6d0039a6f64f471e1ce638be9bb31ecdd5936c433a0cf2e3a"
+        },
+        {
+          "target": "//:job_accounting_test",
+          "status": "ok",
+          "passed": 13,
+          "failed": 0,
+          "ignored": 1,
+          "seconds": 8.3,
+          "test_log_sha256": "69af24fd75581ba20a543b5d7834b761ae42c479e06af4bef37d413cc83226f1"
+        },
+        {
+          "target": "//:m1_workflow_test",
+          "status": "ok",
+          "passed": 1,
+          "failed": 0,
+          "ignored": 0,
+          "seconds": 8.3,
+          "test_log_sha256": "5e98a55499c72770b50709795eb0949b67c6a20b696992a39e76018b3749a86a"
+        },
+        {
+          "target": "//:m2_workflow_test",
+          "status": "ok",
+          "passed": 1,
+          "failed": 0,
+          "ignored": 0,
+          "seconds": 12.4,
+          "test_log_sha256": "f36a7b1ed9fdf8982cecb984f23605f14ff1f873de8e75c3f276158e0e29ccd0"
+        },
+        {
+          "target": "//:machine_contract_test",
+          "status": "ok",
+          "passed": 7,
+          "failed": 0,
+          "ignored": 0,
+          "seconds": 0.2,
+          "test_log_sha256": "ef8e0a725b25b75d9a37682aae77d115951af5ba0ab88259673983531ff1b8e2"
+        },
+        {
+          "target": "//:offline_application_test",
+          "status": "ok",
+          "passed": 16,
+          "failed": 0,
+          "ignored": 0,
+          "seconds": 9.8,
+          "test_log_sha256": "6aa18a4212c4a6f3e29839fd8bfc3acd1b59f1a3b08a6a9709d3371b5a9d3db5"
+        },
+        {
+          "target": "//:offline_cli_test",
+          "status": "ok",
+          "passed": 12,
+          "failed": 0,
+          "ignored": 0,
+          "seconds": 5.9,
+          "test_log_sha256": "c4d8720a1e46edc1c42bbf48d487ba057d86ff0607bd65f86daf101694ac0d47"
+        },
+        {
+          "target": "//:provider_dispatch_test",
+          "status": "ok",
+          "passed": 6,
+          "failed": 0,
+          "ignored": 0,
+          "seconds": 5.6,
+          "test_log_sha256": "a20cb0afaa0458cf31033b544bd6be3c3dab1d7243b5dcf4dd0cf97a779898d6"
+        },
+        {
+          "target": "//:provider_trust_test",
+          "status": "ok",
+          "passed": 7,
+          "failed": 0,
+          "ignored": 0,
+          "seconds": 0.4,
+          "test_log_sha256": "50305b367130f01ee6195829ae77edc2c5903dd76c7871e096342c9896b8d5c8"
+        },
+        {
+          "target": "//:provider_wire_test",
+          "status": "ok",
+          "passed": 10,
+          "failed": 0,
+          "ignored": 0,
+          "seconds": 16.1,
+          "test_log_sha256": "5d8ca4d03804edf8efa7c05f389d8a98498f132c1dab9fe935d9df844cf87714"
+        },
+        {
+          "target": "//:records_lossless_test",
+          "status": "ok",
+          "passed": 8,
+          "failed": 0,
+          "ignored": 0,
+          "seconds": 0.4,
+          "test_log_sha256": "39d489b9377a8318044d237577559bc50d2b7e39337daee10abcd3a020a64d2a"
+        },
+        {
+          "target": "//:release_workflows_test",
+          "status": "ok",
+          "passed": 1,
+          "failed": 0,
+          "ignored": 0,
+          "seconds": 41.5,
+          "test_log_sha256": "74fb82484015e73824fb371e1ce90848677fbb4a79c44c8543c03f140afaccc3"
+        },
+        {
+          "target": "//:remote_cli_test",
+          "status": "ok",
+          "passed": 10,
+          "failed": 0,
+          "ignored": 0,
+          "seconds": 13.8,
+          "test_log_sha256": "0a5767b09b3c0563fbbdc05e118c7cc725395f330ec490ea060ee5d2520bcd58"
+        },
+        {
+          "target": "//:research_handoff_test",
+          "status": "ok",
+          "passed": 12,
+          "failed": 0,
+          "ignored": 0,
+          "seconds": 27.8,
+          "test_log_sha256": "e9e0c80148e65814fd291f48941f44e1fc75c995e7b8ed0530a5c15c94ffd50b"
+        },
+        {
+          "target": "//:research_recovery_test",
+          "status": "ok",
+          "passed": 5,
+          "failed": 0,
+          "ignored": 0,
+          "seconds": 28.4,
+          "test_log_sha256": "8c8fe435d2c5c3960cdc60db8a8db6f4267a3096a90ce6e827d929ce1860a7fb"
+        },
+        {
+          "target": "//:resolution_cli_test",
+          "status": "ok",
+          "passed": 4,
+          "failed": 0,
+          "ignored": 0,
+          "seconds": 5.2,
+          "test_log_sha256": "5e7b58d41b4290945f3787de1c25266c8b2e6838d0d0d8113039148c6a5f6713"
+        },
+        {
+          "target": "//:retrieval_baseline_test",
+          "status": "ok",
+          "passed": 2,
+          "failed": 0,
+          "ignored": 1,
+          "seconds": 12.6,
+          "test_log_sha256": "db61a3dd8e565a112f46591bc75681f2a2c616c6e6639468bea7fc59dcc093f2"
+        },
+        {
+          "target": "//:retrieval_lexical_test",
+          "status": "ok",
+          "passed": 20,
+          "failed": 0,
+          "ignored": 0,
+          "seconds": 8.6,
+          "test_log_sha256": "83f2a4973989f2f77ef41a935ecd369dcf9699924ae842aa49a834ec4ef345ae"
+        },
+        {
+          "target": "//:semantic_retrieval_test",
+          "status": "ok",
+          "passed": 21,
+          "failed": 0,
+          "ignored": 0,
+          "seconds": 20.0,
+          "test_log_sha256": "51e5a148e018bc151fc79b9ebbb090ec976c40fc95decd414dae2626ac28abc1"
+        },
+        {
+          "target": "//:skill_export_test",
+          "status": "ok",
+          "passed": 4,
+          "failed": 0,
+          "ignored": 0,
+          "seconds": 9.3,
+          "test_log_sha256": "a1360aa0333826e41ff2d60350352d974772996ff3446b2cfc2e8d1a7e116cb5"
+        },
+        {
+          "target": "//:sources_evidence_test",
+          "status": "ok",
+          "passed": 18,
+          "failed": 0,
+          "ignored": 0,
+          "seconds": 11.0,
+          "test_log_sha256": "02d66653435fc50e66e53e5b639889b235c91932685da4335d03fd32765f971e"
+        },
+        {
+          "target": "//:unit_tests",
+          "status": "ok",
+          "passed": 130,
+          "failed": 0,
+          "ignored": 3,
+          "seconds": 787.6,
+          "test_log_sha256": "a7dc55dc86d0b9c8c1247e41a726c98eaecf97acee7764b7424799243fd15cb0"
+        },
+        {
+          "target": "//:vault_fs_test",
+          "status": "ok",
+          "passed": 15,
+          "failed": 0,
+          "ignored": 0,
+          "seconds": 1.4,
+          "test_log_sha256": "da424b9025097ba9ee222c5996c76908b6787f3895ed447312e03fc315a1430d"
+        },
+        {
+          "target": "//:windows_acl_policy_test",
+          "status": "ok",
+          "passed": 7,
+          "failed": 0,
+          "ignored": 0,
+          "seconds": 0.4,
+          "test_log_sha256": "a871a33512fa569946ee3488cd613e5f871752200a9fb6062c70cd7b5e086368"
+        }
+      ],
+      "log_sha256": "1c1531f707d066a3191ad90b05372cec33b4f1c5c1618f85c91ef47209059bb9"
+    },
+    "python_tooling": {
+      "command": "python3 -m unittest discover -s scripts -p 'test_*.py'",
+      "exit_code": 0,
+      "tests": 41,
+      "log": ".artifacts/audit-tooling-tests.log",
+      "log_sha256": "84e4fa477dde1e47c45eaf67c6e2bc028150e224b812e0cee099255c41f172fb"
+    }
+  },
+  "diagnostic_reproduction": {
+    "script": ".artifacts/audit_provider_diagnostics.py",
+    "evidence": "/private/tmp/lwiki-audit-provider-54oerv7s/results.json",
+    "cases": [
+      {
+        "command": "doctor",
+        "exit_code": 8,
+        "error_code": "PROVIDER_RESPONSE",
+        "cli_reason": "usage_invalid",
+        "retained_failure_codes": [
+          "usage_invalid"
+        ]
+      },
+      {
+        "command": "embedding_check",
+        "exit_code": 8,
+        "error_code": "PROVIDER_RESPONSE",
+        "cli_reason": null,
+        "retained_failure_codes": [
+          "usage_invalid"
+        ]
+      },
+      {
+        "command": "embedding_sync",
+        "exit_code": 8,
+        "error_code": "PROVIDER_RESPONSE",
+        "cli_reason": null,
+        "retained_failure_codes": [
+          "usage_invalid"
+        ]
+      }
+    ]
+  },
+  "worker_reproduction_evidence": {
+    "storage": "/private/tmp/lwiki-storage-audit-d1pjhas8/log.json",
+    "provider": "/private/tmp/lwiki-provider-audit-5_yi654q/results.json",
+    "provider_journal": "/private/tmp/lwiki-provider-audit-5_yi654q/journal-events.json",
+    "provider_poisoned_sync": "/private/tmp/lwiki-provider-audit-5_yi654q/poisoned-sync.json",
+    "graph_scripts": "/private/tmp/lwiki-audit-graph-dAXyAR",
+    "semantic_vault": "/private/tmp/lwiki-semantic-audit-jvf7yi0w",
+    "ambiguous_source_api": "/private/tmp/lwiki-s2-api-iadmx46f/result.json",
+    "valid_output_then_ambiguous_source": "/private/tmp/lwiki-s2-clean-w8rku3az",
+    "provider_live_report_followup": "/private/tmp/lwiki-provider-followup-sytlokuj/results.json",
+    "quotation_diagnostics": "/private/tmp/lwiki-quote-audit-j6fza9u4/result.json",
+    "decision_search": "/private/tmp/lwiki-decision-audit-yf5zo9qh/result.json"
+  },
+  "limitations": [
+    "No live provider/credential helper/paid service call or real vault used.",
+    "Loopback mocks and macOS release reproductions do not qualify other native platforms or real billing.",
+    "No product fixes, new release or publication in this audit.",
+    "Findings identify bounded observed defects, not proof of absence elsewhere."
+  ],
+  "worker_observations": {
+    "storage": [
+      {
+        "case": "init",
+        "exit_code": 0,
+        "ok": true,
+        "error_code": null,
+        "message": null
+      },
+      {
+        "case": "stage",
+        "exit_code": 0,
+        "ok": true,
+        "error_code": null,
+        "message": null,
+        "reused": false
+      },
+      {
+        "case": "lost-journal-third-state-recover",
+        "exit_code": 4,
+        "ok": false,
+        "error_code": "CONTENT_CONFLICT",
+        "message": "change conflict during staged recovery; unfamiliar bytes preserved"
+      },
+      {
+        "case": "restored-old-recover-",
+        "exit_code": 5,
+        "ok": false,
+        "error_code": "RECOVERY_REQUIRED",
+        "message": "durable conflict blocks automatic recovery"
+      },
+      {
+        "case": "restored-old-changes-apply",
+        "exit_code": 5,
+        "ok": false,
+        "error_code": "RECOVERY_REQUIRED",
+        "message": "change has a durable conflict requiring explicit resolution"
+      },
+      {
+        "case": "restored-old-changes-abort",
+        "exit_code": 5,
+        "ok": false,
+        "error_code": "RECOVERY_REQUIRED",
+        "message": "an applying or conflicted change cannot be aborted"
+      },
+      {
+        "case": "restored-old-changes-rollback",
+        "exit_code": 4,
+        "ok": false,
+        "error_code": "CONTENT_CONFLICT",
+        "message": "expected state mismatch: pages/audit.md"
+      },
+      {
+        "case": "restored-old-index-rebuild",
+        "exit_code": 5,
+        "ok": false,
+        "error_code": "RECOVERY_REQUIRED",
+        "message": "unresolved apply requires recovery before current catalog publication"
+      },
+      {
+        "case": "evidence-baseline-check",
+        "exit_code": 0,
+        "ok": true,
+        "error_code": null,
+        "message": null,
+        "error_count": 0
+      },
+      {
+        "case": "evidence-wrong-membership-check",
+        "exit_code": 0,
+        "ok": true,
+        "error_code": null,
+        "message": null,
+        "error_count": 0
+      },
+      {
+        "case": "evidence-wrong-membership-sync",
+        "exit_code": 0,
+        "ok": true,
+        "error_code": null,
+        "message": null
+      },
+      {
+        "case": "restored-new-rollback",
+        "exit_code": 5,
+        "ok": false,
+        "error_code": "RECOVERY_REQUIRED",
+        "message": "unresolved apply requires recovery before current catalog publication"
+      },
+      {
+        "case": "restored-new-apply",
+        "exit_code": 5,
+        "ok": false,
+        "error_code": "RECOVERY_REQUIRED",
+        "message": "change has a durable conflict requiring explicit resolution"
+      },
+      {
+        "case": "broken-duplicate-check",
+        "exit_code": 9,
+        "ok": false,
+        "error_code": "RECORD_INVALID",
+        "message": "11 knowledge diagnostics",
+        "error_count": 11
+      },
+      {
+        "case": "broken-duplicate-packet-preview",
+        "exit_code": 0,
+        "ok": true,
+        "error_code": null,
+        "message": null,
+        "persisted": false,
+        "ready_to_import": false,
+        "reused": false
+      },
+      {
+        "case": "broken-duplicate-packet-export",
+        "exit_code": 9,
+        "ok": false,
+        "error_code": "RECORD_INVALID",
+        "message": "proposed typed record is invalid: knowledge/extractions/packets/packet_7e34d0959c8348d3f49f54e786128c978a0b311ef2b10fe2b280448afa0416a8.md"
+      },
+      {
+        "case": "initial-persisted-packet",
+        "exit_code": 0,
+        "ok": true,
+        "error_code": null,
+        "message": null,
+        "persisted": true,
+        "ready_to_import": true,
+        "reused": false
+      },
+      {
+        "case": "duplicate-reused-packet-export",
+        "exit_code": 0,
+        "ok": true,
+        "error_code": null,
+        "message": null,
+        "persisted": true,
+        "ready_to_import": true,
+        "reused": true
+      }
+    ],
+    "provider": [
+      {
+        "case": "deadline-original",
+        "exit_code": 7,
+        "ok": false,
+        "error_code": "BUDGET_EXCEEDED",
+        "message": "clock/deadline or invalidated budget blocks restart",
+        "requests": 0
+      },
+      {
+        "case": "deadline-raised",
+        "exit_code": 7,
+        "ok": false,
+        "error_code": "BUDGET_EXCEEDED",
+        "message": "clock/deadline or invalidated budget blocks restart",
+        "requests": 0
+      },
+      {
+        "case": "probe-invalid",
+        "exit_code": 8,
+        "ok": false,
+        "error_code": "PROVIDER_RESPONSE",
+        "message": "bounded provider operation failed",
+        "requests": 1
+      },
+      {
+        "case": "probe-retry-valid",
+        "exit_code": 5,
+        "ok": false,
+        "error_code": "RECOVERY_REQUIRED",
+        "message": "vector cache references lack exact settled validated receipt",
+        "requests": 0
+      },
+      {
+        "case": "uncertain-original",
+        "exit_code": 8,
+        "ok": false,
+        "error_code": "PROVIDER_UNAVAILABLE",
+        "message": "bounded provider operation failed",
+        "requests": 1
+      },
+      {
+        "case": "uncertain-retry-opt-in",
+        "exit_code": 5,
+        "ok": false,
+        "error_code": "RECOVERY_REQUIRED",
+        "message": "prior embedding send outcome remains unknown; no repeat send authorized",
+        "requests": 0
+      }
+    ],
+    "ambiguous_source_api": {
+      "request_count": 1,
+      "exit": 101,
+      "response": {
+        "ok": false,
+        "error": {
+          "code": "PROCESS_FAILURE",
+          "stderr": "\nthread 'main' (110946648) panicked at src/catalog/eligibility.rs:865:26:\nvalid packet source\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n",
+          "stdout": ""
+        }
+      }
+    },
+    "semantic_owner_starvation": {
+      "documents": 2,
+      "generated_inputs": 226,
+      "covered_units": 226,
+      "returned_candidate_count": 1,
+      "mock_requests": 16,
+      "source": "AUDIT-graph-retrieval.md"
+    },
+    "provider_live_report_followup": [
+      {
+        "case": "packet",
+        "exit_code": 0,
+        "requests": 0,
+        "ok": true,
+        "error_code": null,
+        "message": null,
+        "hint": null,
+        "wiki_id": "vault_00000000-0000-7000-8000-00000000001b",
+        "run_id": null
+      },
+      {
+        "case": "limit-dryrun",
+        "exit_code": 0,
+        "requests": 0,
+        "ok": true,
+        "error_code": null,
+        "message": null,
+        "hint": null,
+        "wiki_id": "vault_00000000-0000-7000-8000-00000000001b",
+        "run_id": null
+      },
+      {
+        "case": "limit8192",
+        "exit_code": 9,
+        "requests": 0,
+        "ok": false,
+        "error_code": "RECORD_INVALID",
+        "message": "bounded provider operation failed",
+        "hint": null,
+        "wiki_id": null,
+        "run_id": "run_api_9cbe3834f89f1dfea0338d39e699194c58cb3d438f8098c920635e0363033f49"
+      },
+      {
+        "case": "invalidquote-default",
+        "exit_code": 9,
+        "requests": 1,
+        "ok": false,
+        "error_code": "EXTRACTION_INVALID",
+        "message": "quotation must have one exact match in its declared window",
+        "hint": null,
+        "wiki_id": null,
+        "run_id": "run_api_ff0763939260da15147b32a6ba6531a40a37225cc2a74c8680abdeda141a142f"
+      },
+      {
+        "case": "retry-default",
+        "exit_code": 5,
+        "requests": 0,
+        "ok": false,
+        "error_code": "RECOVERY_REQUIRED",
+        "message": "bounded provider operation failed",
+        "hint": null,
+        "wiki_id": null,
+        "run_id": "run_api_ff0763939260da15147b32a6ba6531a40a37225cc2a74c8680abdeda141a142f"
+      },
+      {
+        "case": "retry-maxrequests100",
+        "exit_code": 5,
+        "requests": 0,
+        "ok": false,
+        "error_code": "RECOVERY_REQUIRED",
+        "message": "bounded provider operation failed",
+        "hint": null,
+        "wiki_id": null,
+        "run_id": "run_api_ff0763939260da15147b32a6ba6531a40a37225cc2a74c8680abdeda141a142f"
+      },
+      {
+        "case": "retry-uncertain-valid",
+        "exit_code": 0,
+        "requests": 1,
+        "ok": true,
+        "error_code": null,
+        "message": null,
+        "hint": null,
+        "wiki_id": "vault_00000000-0000-7000-8000-00000000001b",
+        "run_id": "run_api_ff0763939260da15147b32a6ba6531a40a37225cc2a74c8680abdeda141a142f"
+      }
+    ],
+    "quotation_diagnostics": {
+      "ambiguous": {
+        "exit_code": 9,
+        "ok": false,
+        "error_code": "EXTRACTION_INVALID",
+        "message": "quotation must have one exact match in its declared window",
+        "details": null,
+        "matches": 6
+      },
+      "absent": {
+        "exit_code": 9,
+        "ok": false,
+        "error_code": "EXTRACTION_INVALID",
+        "message": "quotation must have one exact match in its declared window",
+        "details": null,
+        "matches": 0
+      },
+      "explicit": {
+        "exit_code": 0,
+        "ok": true,
+        "error_code": null,
+        "message": null,
+        "details": null
+      }
+    },
+    "decision_search": {
+      "read_assertion": {
+        "exit_code": 0,
+        "ok": true,
+        "error_code": null
+      },
+      "read_evidence": {
+        "exit_code": 0,
+        "ok": true,
+        "error_code": null
+      },
+      "review": {
+        "exit_code": 0,
+        "ok": true,
+        "error_code": null
+      },
+      "review_apply": {
+        "exit_code": 0,
+        "ok": true,
+        "error_code": null
+      },
+      "withdraw": {
+        "exit_code": 0,
+        "ok": true,
+        "error_code": null
+      },
+      "withdraw_apply": {
+        "exit_code": 0,
+        "ok": true,
+        "error_code": null
+      },
+      "check": {
+        "exit_code": 0,
+        "ok": true,
+        "error_code": null,
+        "error_count": 0
+      },
+      "index": {
+        "exit_code": 0,
+        "ok": true,
+        "error_code": null
+      },
+      "search": {
+        "exit_code": 0,
+        "ok": true,
+        "error_code": null,
+        "hits": [
+          {
+            "path": "knowledge/decisions/decision_01a0ef85-4a19-7360-9a24-a51181919398.md",
+            "kind": "decision",
+            "eligibility": "current",
+            "label": null,
+            "citation": null
+          }
+        ]
+      },
+      "context": {
+        "exit_code": 2,
+        "ok": false,
+        "error_code": "USAGE",
+        "note": "Initial script used invalid --target lexical; corrected root follow-up stored separately."
+      }
+    }
+  },
+  "worker_evidence_sha256": {
+    "storage": "65a17902d5cb879496d883f4ffad022da0711c088e1471280f46bb4c289eb4ee",
+    "provider": "6cdd289a1eefbd3c95cd8e0648ad5446f4403d94c3f0591747d2e58472720020",
+    "provider_journal": "c13d1e4d854a3132c25f11920c232bc914511cc6a2ce17893a4c2a1f67696ca9",
+    "provider_poisoned_sync": "5f73b998ad6e3aec7158a191d8cacc251681fb918a4cb6c81c0f64c721cb7b0e",
+    "ambiguous_source_api": "395741395a215f979a7beb10fccf663b1fb4bdca6cc3eca234a7981e439e1dbd",
+    "provider_live_report_followup": "f63ec00a6010c05481890cbaaaeed98b8e58bc00128ad13e614aa132ead95f2c",
+    "quotation_diagnostics": "1c736ebf41c7fb1eaf9d8ca557d1ebe7ac5223800a99666eba0d669ecbc3f21c",
+    "decision_search": "ec72c2183e86040c0d2a333df2b47ca70ce2a3f1f39466d6bbd5151c0c5281ad"
+  },
+  "audit_result": {
+    "prioritized_work_items": 23,
+    "high_priority_items": [
+      "01 durable conflict resolution",
+      "02 source identity/catalog panic",
+      "03 rejected embedding probe recovery"
+    ],
+    "product_changes": false,
+    "draft_release_changes": false,
+    "independent_consolidation_review": "Astra; same-space probe regression wording corrected; no material overclaim or unsafe recommended fix identified"
+  },
+  "owner_reported_live_evidence": {
+    "report": "AUDIT-owner-test-0.1.2.md",
+    "executed_by_audit_agents": false,
+    "release_commit": "d8a82a5a345549fada06987dec986801c6842252",
+    "prior_B1_B13": "all dispositions passed",
+    "offline_smoke": "30/30",
+    "exported_recipe": "36/36",
+    "live_probes": "4 validated",
+    "refreshed_Cedar_API_lifecycle": "passed",
+    "real_web_extraction": "owner reports only one of six source variants successful",
+    "new_findings": "N1\u2013N5 and decision-search policy incorporated; local N3 follow-up corrected permanent-lockout interpretation"
+  },
+  "decision_search_followup": {
+    "file": ".artifacts/audit-decision-followup.json",
+    "sha256": "5fb3827575116464b319d331ae0252737dd01fb6eb63b466bd107730a84febe3",
+    "observations": {
+      "context": {
+        "exit_code": 0,
+        "ok": true,
+        "network_used": false,
+        "data": {
+          "bundles": [],
+          "dependency_fingerprint": "blake3:c7a2098a26e0f135d26f6e68fb3cb9f4ade1dbab98bbf47b6c909af534e9e8b8",
+          "network_used": false,
+          "omissions": [],
+          "passages": [],
+          "snapshot": {
+            "control_manifest": "blake3:cdfd920d5100cd7cf5bb71d25ed13fdba038dc6b9d1e885b724ed750131a1e92",
+            "generation": 3,
+            "parser_fingerprint": "blake3:32dea9032807ddc64a99b6da5f680d80b69180852ee58582a9e0e4c899811191"
+          },
+          "text": "",
+          "truncated": false,
+          "usage": {
+            "estimated_tokens": 0,
+            "graph_bytes": 0,
+            "graph_estimated_tokens": 0,
+            "rendered_bytes": 0,
+            "reserved_bytes": 0,
+            "reserved_tokens": 0,
+            "token_accounting": "estimated_utf8_bytes_div4_ceil",
+            "verification_bytes": 96486,
+            "verification_entries": 1544,
+            "verification_files": 68
+          },
+          "verification": {
+            "mode": "verified_snapshot",
+            "verified_at": "2026-09-29T23:43:42.692Z"
+          },
+          "warnings": [
+            "tokens are UTF-8 byte estimates (ceil(bytes/4)); no exact tokenizer accounting",
+            "proof bytes/files meter canonical notes and source/dependency payloads only; directory/component/entry counts are logical operations; operational journals/SQLite/recovery/index maintenance are separate local safety work; elapsed checks do not interrupt blocking syscalls"
+          ]
+        }
+      },
+      "lexical": {
+        "exit_code": 0,
+        "ok": true,
+        "network_used": false,
+        "hits": [
+          {
+            "path": "knowledge/entities/north_lab.md",
+            "kind": "entity",
+            "eligibility": "unsupported",
+            "citation": null
+          },
+          {
+            "path": "knowledge/entities/south_lab.md",
+            "kind": "entity",
+            "eligibility": "unsupported",
+            "citation": null
+          },
+          {
+            "path": "knowledge/decisions/decision_01a0ef85-4a19-7360-9a24-a51181919398.md",
+            "kind": "decision",
+            "eligibility": "current",
+            "citation": null
+          },
+          {
+            "path": "knowledge/pages/architecture.md",
+            "kind": "page",
+            "eligibility": "current",
+            "citation": null
+          },
+          {
+            "path": "sources/source_00000000-0000-7000-8000-000000000006/revisions/revision_00000000-0000-7000-8000-000000000009/content.md",
+            "kind": null,
+            "eligibility": "current",
+            "citation": null
+          }
+        ]
+      },
+      "assertion_search": {
+        "exit_code": 0,
+        "ok": true,
+        "network_used": false,
+        "hits": []
+      }
+    }
+  }
+}
