@@ -12,31 +12,43 @@ pub struct RemoteArguments {
     /// Private TOML configuration; never discover provider files inside a vault.
     #[arg(long)]
     pub providers_config: Option<PathBuf>,
+    /// Lifetime request-attempt ceiling, including retries.
     #[arg(long, default_value_t = 60)]
     pub max_requests: u64,
+    /// Maximum simultaneous provider requests.
     #[arg(long, default_value_t = 2)]
     pub concurrency: u32,
+    /// Maximum attempts for an individual provider task.
     #[arg(long, default_value_t = 3)]
     pub attempts_per_task: u32,
+    /// Overall remote operation deadline in milliseconds from startup.
     #[arg(long, default_value_t = 900000)]
     pub deadline_ms: u64,
+    /// Lifetime ceiling on outgoing request bytes.
     #[arg(long)]
     pub max_request_bytes: Option<u64>,
+    /// Lifetime ceiling on incoming response bytes.
     #[arg(long)]
     pub max_response_bytes: Option<u64>,
+    /// Lifetime ceiling for each input and cached-input billable class.
     #[arg(long)]
     pub max_input_units: Option<u64>,
+    /// Lifetime ceiling for each output and reasoning billable class.
     #[arg(long)]
     pub max_output_units: Option<u64>,
     /// Checked decimal ceiling; requires a complete provable provider bound.
     #[arg(long)]
     pub max_cost: Option<String>,
+    /// Currency code used with --max-cost.
     #[arg(long, default_value = "USD")]
     pub currency: String,
+    /// Maximum provider requests dispatched per minute.
     #[arg(long)]
     pub requests_per_minute: Option<u32>,
+    /// Maximum accounted provider tokens per minute.
     #[arg(long)]
     pub tokens_per_minute: Option<u64>,
+    /// Opt into retrying uncertain work under retained accounting; prior attempts may be billed.
     #[arg(long)]
     pub retry_uncertain: bool,
 }

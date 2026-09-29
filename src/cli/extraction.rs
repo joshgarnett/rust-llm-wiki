@@ -18,27 +18,37 @@ pub enum Executor {
 pub struct ExtractArguments {
     #[command(flatten)]
     pub remote: super::remote::RemoteArguments,
+    /// Existing extraction run ID to resume with retained accounting.
     #[arg(long)]
     pub run: Option<RecordId>,
+    /// Maximum generated output tokens for API extraction.
     #[arg(long, default_value_t = 4096)]
     pub max_output_tokens: u64,
+    /// Explicitly permit a separate extraction for a different response to the same packet.
     #[arg(long)]
     pub new_extraction: bool,
+    /// Captured source ID to extract from.
     #[arg(long)]
     pub source_id: RecordId,
+    /// Explicit source revision ID; defaults to the source head.
     #[arg(long)]
     pub revision_id: Option<RecordId>,
+    /// Export a packet for an agent or execute through a trusted generation API.
     #[arg(long, value_enum, default_value = "agent")]
     pub executor: Executor,
     /// Exact UTF-8 source byte window START:END; repeat up to16 times.
     #[arg(long = "window")]
     pub windows: Vec<String>,
+    /// Maximum source-local mentions allowed in the extraction response.
     #[arg(long, default_value_t = 64)]
     pub max_mentions: usize,
+    /// Maximum assertions allowed in the extraction response.
     #[arg(long, default_value_t = 128)]
     pub max_assertions: usize,
+    /// Maximum extraction response bytes.
     #[arg(long, default_value_t = 262144)]
     pub max_output_bytes: usize,
+    /// Existing entity ID to include as candidate context; repeat as needed.
     #[arg(long = "candidate-id")]
     pub candidate_ids: Vec<RecordId>,
 }
@@ -84,8 +94,10 @@ impl ExtractArguments {
 }
 #[derive(Debug, Args)]
 pub struct ImportArguments {
+    /// Packet-bound extraction response JSON; use - for stdin.
     #[arg(long)]
     pub file: PathBuf,
+    /// Explicitly permit a separate extraction for a different response to the same packet.
     #[arg(long)]
     pub new_extraction: bool,
 }

@@ -15,11 +15,22 @@ pub struct ResearchArguments {
 }
 #[derive(Debug, Subcommand)]
 pub enum ResearchCommand {
+    /// Preview a research scope without provider calls or a persisted run.
     Plan(ResearchPlanArguments),
+    /// Run bounded research; --offline returns a preview without starting a run.
     Run(ResearchPlanArguments),
+    /// Resume retained research with its existing lifetime limits.
     Resume(ResearchResumeArguments),
-    Status { run_id: RecordId },
-    Report { run_id: RecordId },
+    /// Inspect a retained research run without provider credentials.
+    Status {
+        /// Retained research run ID; use the ID returned by the original run.
+        run_id: RecordId,
+    },
+    /// Read the latest retained research report and its gaps.
+    Report {
+        /// Retained research run ID; use the ID returned by the original run.
+        run_id: RecordId,
+    },
 }
 impl ResearchCommand {
     pub fn name(&self) -> &'static str {
@@ -34,22 +45,30 @@ impl ResearchCommand {
 }
 #[derive(Debug, Args)]
 pub struct ResearchPlanArguments {
+    /// Research question to investigate.
     pub question: String,
+    /// Explicit public acquisition URL; repeat as needed.
     #[arg(long = "url")]
     pub urls: Vec<String>,
+    /// Research scope exclusion; repeat as needed.
     #[arg(long = "exclude")]
     pub exclusions: Vec<String>,
+    /// Trusted search-provider profile for optional source discovery.
     #[arg(long)]
     pub search_profile: Option<String>,
+    /// Maximum research rounds across the run.
     #[arg(long, default_value_t = 3)]
     pub max_rounds: u32,
+    /// Maximum acquired research sources.
     #[arg(long, default_value_t = 15)]
     pub max_sources: u32,
+    /// Maximum generated output tokens per research stage.
     #[arg(long, default_value_t = 4096)]
     pub stage_output_tokens: u64,
     /// Apply the run's generated page proposals after their guarded preparation.
     #[arg(long)]
     pub apply: bool,
+    /// Explicit new run ID; omit to allocate one automatically.
     #[arg(long)]
     pub run_id: Option<RecordId>,
     #[command(flatten)]
@@ -57,9 +76,12 @@ pub struct ResearchPlanArguments {
 }
 #[derive(Debug, Args)]
 pub struct ResearchResumeArguments {
+    /// Retained research run ID; use the ID returned by the original run.
     pub run_id: RecordId,
+    /// Absolute path to trusted private provider TOML outside the wiki.
     #[arg(long)]
     pub providers_config: Option<std::path::PathBuf>,
+    /// Opt into retrying uncertain work under retained accounting; prior attempts may be billed.
     #[arg(long)]
     pub retry_uncertain: bool,
     /// JSON with complete lifetime limits, an absolute UTC deadline, and reason.
@@ -221,11 +243,15 @@ pub fn execute(
                 ));
             }
             if app.options().offline {
-                return Ok(local(
-                    json!({"scope":scope,"inspection":current,"offline":true,
+                let mut outcome = local(
+                    json!({"status":"offline_preview","scope":scope,"inspection":current,"offline":true,
                     "remote_work":"unavailable","persisted":false}),
                     true,
-                ));
+                );
+                outcome
+                    .warnings
+                    .push("Offline preview only: no research run was started or persisted.".into());
+                return Ok(outcome);
             }
             if app.options().stage_only {
                 return Err(WikiError::new(

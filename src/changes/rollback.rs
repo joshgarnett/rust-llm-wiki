@@ -1,7 +1,8 @@
 //! Abort only unapplied proposals; rollback is a separately retained, validated inverse.
 use super::{apply::recovery_error, journal, outcome, types::*};
 use crate::{
-    domain::{Blake3Hash, ErrorCode, Result, WikiError},
+    domain::{Blake3Hash, ErrorCode, RecordKind, Result, WikiError},
+    records::parse_note,
     vault::{ExpectedState, WriterPermit},
 };
 use std::collections::{BTreeMap, BTreeSet};
@@ -108,6 +109,86 @@ impl ChangeEngine {
             operations,
         };
         self.plan(&draft)?; // Preserves unfamiliar edits and immutable source rules in read-only planning.
+        // A source-add inverse cannot remove its mutable manifest while its
+        // immutable revision tree remains. Explain this specific rejected
+        // operation before generic graph validation reports orphaned revisions.
+        for operation in &draft.operations {
+            let path = operation.target.as_str();
+            if operation.proposed.is_some()
+                || !path.starts_with("sources/")
+                || !path.ends_with("/source.md")
+            {
+                continue;
+            }
+            if remaining == 0 {
+                return Err(WikiError::new(
+                    ErrorCode::BudgetExceeded,
+                    "inverse source preflight read ceiling",
+                ));
+            }
+            let Some(bytes) = super::prepare::read_bounded(
+                &self.fs,
+                &operation.target,
+                remaining.min(super::prepare::MAX_PAYLOAD_BYTES),
+            )?
+            else {
+                return Err(WikiError::new(
+                    ErrorCode::ContentConflict,
+                    format!(
+                        "source changed after inverse preflight: {}",
+                        operation.target
+                    ),
+                ));
+            };
+            remaining = remaining.checked_sub(bytes.len()).ok_or_else(|| {
+                WikiError::new(
+                    ErrorCode::BudgetExceeded,
+                    "inverse source preflight read ceiling",
+                )
+            })?;
+            if operation.expected != ExpectedState::Hash(Blake3Hash::digest(&bytes)) {
+                return Err(WikiError::new(
+                    ErrorCode::ContentConflict,
+                    format!(
+                        "source changed after inverse preflight: {}",
+                        operation.target
+                    ),
+                ));
+            }
+            let note = parse_note(&bytes);
+            let Some(source) = note
+                .canonical
+                .as_ref()
+                .filter(|record| record.kind() == RecordKind::Source)
+            else {
+                continue;
+            };
+            let retained_revision = source
+                .field("wiki_revisions")
+                .and_then(serde_json::Value::as_array)
+                .is_some_and(|revisions| {
+                    revisions
+                        .iter()
+                        .filter_map(serde_json::Value::as_str)
+                        .any(|id| {
+                            let revision_path =
+                                format!("sources/{}/revisions/{id}/revision.md", source.id());
+                            retained_paths
+                                .iter()
+                                .any(|path| path.as_str() == revision_path)
+                        })
+                });
+            if retained_revision {
+                return Err(WikiError::new(
+                    ErrorCode::RecordInvalid,
+                    format!(
+                        "rollback would orphan immutable revisions of source {}; use `source withdraw {} --reason ...` to retain their history",
+                        source.id(),
+                        source.id()
+                    ),
+                ));
+            }
+        }
         Ok(InversePlan {
             draft,
             retained_paths,

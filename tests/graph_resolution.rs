@@ -44,6 +44,9 @@ struct Fixture {
 }
 impl Fixture {
     fn new() -> Self {
+        Self::new_with_prior_revision(false)
+    }
+    fn new_with_prior_revision(refresh_before_extract: bool) -> Self {
         let temp = tempfile::tempdir().unwrap();
         copy(
             &test_paths::fixture(env!("CARGO_MANIFEST_DIR"), "tests/fixtures/bootstrap/vault"),
@@ -74,9 +77,28 @@ impl Fixture {
             raw: vec![],
         };
         fixture.apply(capture.draft.unwrap());
+        let mut revision_id = capture.revision_id;
+        if refresh_before_extract {
+            let refresh = SourceStore::new(fixture.engine.fs().clone())
+                .plan_refresh(
+                    &fixture.source,
+                    CaptureRequest {
+                        title: "Resolution source".into(),
+                        origin_kind: SourceOrigin::LocalFile,
+                        origin: "disposable.md".into(),
+                        original: format!("{text}\r\nA later source-only addition.\r\n")
+                            .into_bytes(),
+                        extraction: ExtractionInput::Utf8Preserve,
+                        media_type: Some("text/markdown".into()),
+                    },
+                )
+                .unwrap();
+            revision_id = refresh.revision_id;
+            fixture.apply(refresh.draft.unwrap());
+        }
         let request = ExportRequest {
             source_id: fixture.source.clone(),
-            revision_id: Some(capture.revision_id),
+            revision_id: Some(revision_id),
             windows: vec![],
             limits: ExtractionLimits::default(),
             candidate_context: vec![],
@@ -622,6 +644,192 @@ fn pure_plan_dry_run_preserves_membership_bytes_and_mtime() {
     assert_eq!(plan.summary.create_decisions, 5);
     assert_eq!(plan.summary.materialize_assertions.len(), 4);
     assert_eq!(snapshot(f.root.path()), before);
+}
+
+#[test]
+fn resolution_after_source_refresh_materializes_historical_evidence() {
+    let f = Fixture::new();
+    let previous = f.artifact().source_revision;
+    let content = format!(
+        "{}\r\nA later source-only addition.\r\n",
+        include_str!("fixtures/p11/source.md").replace('\n', "\r\n")
+    );
+    let refresh = SourceStore::new(f.engine.fs().clone())
+        .plan_refresh(
+            &f.source,
+            CaptureRequest {
+                title: "Resolution source".into(),
+                origin_kind: SourceOrigin::LocalFile,
+                origin: "disposable.md".into(),
+                original: content.into_bytes(),
+                extraction: ExtractionInput::Utf8Preserve,
+                media_type: Some("text/markdown".into()),
+            },
+        )
+        .unwrap();
+    let head = refresh.revision_id;
+    f.apply(refresh.draft.unwrap());
+    assert_ne!(previous, head);
+    let request = f.request(vec![
+        create("m1", "Ada", "person"),
+        create("m2", "Acme", "organization"),
+    ]);
+    let outcome = f.resolve(&request);
+    assert_eq!(outcome.summary.materialize_assertions, [local("a1")]);
+    let artifact = f.artifact();
+    assert_eq!(artifact.source_revision, previous);
+    let evidence = &artifact.allocations.evidence[&local("a1")][0];
+    let projection = scan::scan(f.engine.fs(), &id(VAULT)).unwrap();
+    let row = &projection.records[evidence];
+    assert_eq!(row.eligibility, Eligibility::Historical);
+    assert!(row.reasons.contains(&"older_revision".to_owned()));
+    let assertion = &artifact.allocations.assertions[&local("a1")];
+    assert_eq!(
+        projection.records[assertion].eligibility,
+        Eligibility::Unsupported
+    );
+    assert_eq!(
+        projection.records[assertion].record.string("wiki_status"),
+        Some("proposed")
+    );
+}
+
+#[test]
+fn resolution_on_refreshed_head_preserves_retained_revision_integrity() {
+    let f = Fixture::new_with_prior_revision(true);
+    let artifact = f.artifact();
+    let request = f.request(vec![
+        create("m1", "Ada", "person"),
+        create("m2", "Acme", "organization"),
+    ]);
+    let outcome = f.resolve(&request);
+    assert_eq!(outcome.summary.materialize_assertions, [local("a1")]);
+    let projection = scan::scan(f.engine.fs(), &id(VAULT)).unwrap();
+    assert_eq!(
+        projection
+            .diagnostics
+            .iter()
+            .filter(|diagnostic| diagnostic.code == ErrorCode::RecordInvalid)
+            .count(),
+        0
+    );
+    let source = &projection.records[&f.source].record;
+    assert_eq!(
+        source.string("wiki_current_revision"),
+        Some(artifact.source_revision.as_str())
+    );
+    let evidence = &artifact.allocations.evidence[&local("a1")][0];
+    assert_eq!(
+        projection.records[evidence].eligibility,
+        Eligibility::Current
+    );
+    let assertion = &artifact.allocations.assertions[&local("a1")];
+    assert_eq!(
+        projection.records[assertion].eligibility,
+        Eligibility::Unsupported
+    );
+    assert_eq!(
+        projection.records[assertion].record.string("wiki_status"),
+        Some("proposed")
+    );
+}
+
+#[test]
+fn resolution_rejects_tampered_retained_sibling_revision() {
+    let f = Fixture::new_with_prior_revision(true);
+    let current = f.artifact().source_revision;
+    let projection = scan::scan(f.engine.fs(), &id(VAULT)).unwrap();
+    let source = &projection.records[&f.source].record;
+    let previous = source
+        .field("wiki_revisions")
+        .unwrap()
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|value| id(value.as_str().unwrap()))
+        .find(|revision| revision != &current)
+        .unwrap();
+    let row = &projection.records[&previous];
+    let parent = row.path.as_str().rsplit_once('/').unwrap().0;
+    let original = row.record.string("wiki_original_path").unwrap();
+    fs::write(
+        f.root.path().join(format!("{parent}/{original}")),
+        b"tampered retained payload",
+    )
+    .unwrap();
+    let request = f.request(vec![
+        create("m1", "Ada", "person"),
+        create("m2", "Acme", "organization"),
+    ]);
+    let validated = f.validate(&request);
+    let before = snapshot(f.root.path());
+    assert!(stage_resolution(&f.engine, &f.writer(), &validated).is_err());
+    for (path, (bytes, _)) in before {
+        assert_eq!(fs::read(f.root.path().join(path)).unwrap(), bytes);
+    }
+}
+
+#[test]
+fn resolution_apply_detects_retained_sibling_asset_drift() {
+    let f = Fixture::new_with_prior_revision(true);
+    let artifact = f.artifact();
+    let current = artifact.source_revision.clone();
+    let request = f.request(vec![
+        create("m1", "Ada", "person"),
+        create("m2", "Acme", "organization"),
+    ]);
+    let outcome = f.stage(&request);
+    let projection = scan::scan(f.engine.fs(), &id(VAULT)).unwrap();
+    let source = &projection.records[&f.source].record;
+    let previous = source
+        .field("wiki_revisions")
+        .unwrap()
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|value| id(value.as_str().unwrap()))
+        .find(|revision| revision != &current)
+        .unwrap();
+    let row = &projection.records[&previous];
+    let parent = row.path.as_str().rsplit_once('/').unwrap().0;
+    let original = row.record.string("wiki_original_path").unwrap();
+    fs::write(
+        f.root.path().join(format!("{parent}/{original}")),
+        b"changed after resolution preparation",
+    )
+    .unwrap();
+    let error = f
+        .engine
+        .apply(
+            &f.writer(),
+            outcome.prepared.as_ref().unwrap(),
+            &CatalogGraphValidator,
+            &f.catalog,
+        )
+        .unwrap_err();
+    assert_eq!(error.code, ErrorCode::ContentConflict);
+    for entity in outcome.allocations.entities.values() {
+        assert!(
+            !f.root
+                .path()
+                .join(record_path("entities", entity).as_str())
+                .exists()
+        );
+    }
+    let assertion = &artifact.allocations.assertions[&local("a1")];
+    let evidence = &artifact.allocations.evidence[&local("a1")][0];
+    assert!(
+        !f.root
+            .path()
+            .join(record_path("assertions", assertion).as_str())
+            .exists()
+    );
+    assert!(
+        !f.root
+            .path()
+            .join(record_path("evidence", evidence).as_str())
+            .exists()
+    );
 }
 
 #[test]

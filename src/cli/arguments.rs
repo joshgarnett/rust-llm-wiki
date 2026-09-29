@@ -16,16 +16,22 @@ pub enum OutputFormat {
     about = "A local Markdown wiki with traceable evidence"
 )]
 pub struct Arguments {
+    /// Wiki root containing WIKI.md; defaults to discovery from the current directory.
     #[arg(long, global = true)]
     pub wiki: Option<PathBuf>,
+    /// Output format: human-readable text, a JSON envelope or JSON Lines events.
     #[arg(long, global = true, value_enum, conflicts_with_all = ["json", "jsonl"])]
     pub format: Option<OutputFormat>,
+    /// Emit one structured JSON envelope.
     #[arg(long, global = true, conflicts_with = "jsonl")]
     pub json: bool,
+    /// Emit JSON Lines events for supported streaming commands.
     #[arg(long, global = true)]
     pub jsonl: bool,
+    /// Prevent provider requests and credential helper calls; local operations remain available.
     #[arg(long, global = true)]
     pub offline: bool,
+    /// Preview without writes, provider requests or credential resolution.
     #[arg(long, global = true)]
     pub dry_run: bool,
     /// Retain a guarded preparation for a later explicit changes apply.
@@ -34,8 +40,10 @@ pub struct Arguments {
     /// Explicit trusted local JSON preferences; never read ambient credentials.
     #[arg(long, global = true)]
     pub preferences: Option<PathBuf>,
+    /// Trusted provider profile name from the private provider configuration.
     #[arg(long, global = true)]
     pub profile: Option<String>,
+    /// Maximum time in milliseconds to wait for the vault writer lock.
     #[arg(long, global = true)]
     pub lock_timeout_ms: Option<u64>,
     #[command(subcommand)]
@@ -55,8 +63,10 @@ impl Arguments {
 #[derive(Debug, Args)]
 #[group(required = true, multiple = false)]
 pub struct Selector {
+    /// Select a record by its stable ID.
     #[arg(long)]
     pub id: Option<RecordId>,
+    /// Select a record by its vault-relative path.
     #[arg(long)]
     pub path: Option<VaultRelativePath>,
 }
@@ -74,150 +84,214 @@ impl Selector {
 }
 #[derive(Debug, Subcommand)]
 pub enum Command {
+    /// List implemented commands, schemas and supported modes.
     Capabilities,
+    /// Export portable instructions and examples for a coding agent.
     Skill {
         #[command(subcommand)]
         command: SkillCommand,
     },
+    /// Print a published JSON input or output schema.
     Schema {
+        /// Published schema name; inspect capabilities for available schemas.
         name: String,
     },
+    /// Create a new Markdown wiki in a directory that does not exist.
     Init {
+        /// New wiki directory; initialization refuses an existing path.
         path: PathBuf,
+        /// Human-readable title.
         #[arg(long, default_value = "Local wiki")]
         title: String,
     },
+    /// Read a record by ID or vault-relative path.
     Read {
         #[command(flatten)]
         selector: Selector,
+        /// Maximum UTF-8 bytes to return.
         #[arg(long)]
         max_bytes: Option<usize>,
+        /// Start of the zero-based, half-open UTF-8 byte range.
         #[arg(long, requires = "end")]
         start: Option<u64>,
+        /// End of the zero-based, half-open UTF-8 byte range.
         #[arg(long, requires = "start")]
         end: Option<u64>,
+        /// Read the existing index snapshot without syncing; freshness is not verified.
         #[arg(long)]
         no_sync: bool,
     },
+    /// Create, update or rename pages with guarded changes.
     Page {
         #[command(subcommand)]
         command: PageCommand,
     },
+    /// Capture source files, refresh immutable revisions or withdraw support.
     Source {
         #[command(subcommand)]
         command: SourceCommand,
     },
+    /// Revalidate quoted evidence against a newer source revision.
     Evidence {
         #[command(subcommand)]
         command: EvidenceCommand,
     },
+    /// Sync or rebuild the disposable local search index.
     Index {
         #[command(subcommand)]
         command: IndexCommand,
     },
+    /// Plan and run bounded research with retained evidence and budgets.
     Research(super::research::ResearchArguments),
+    /// Inspect local vector coverage or explicitly generate embeddings.
     Embeddings(super::embeddings::EmbeddingArguments),
+    /// Find text with literal, lexical, semantic or hybrid retrieval.
     Search(SearchArguments),
+    /// Assemble cited context within byte and token budgets.
     Context(Box<super::context::ContextArguments>),
+    /// Extract, resolve, review and query evidence-backed assertions.
     Graph {
         #[command(subcommand)]
         command: GraphCommand,
     },
+    /// Check canonical records, references and source integrity.
     Check,
+    /// Inspect local health; contact a provider only with --probe.
     Doctor {
+        /// Explicitly contact the selected provider within the supplied request limits.
         #[arg(long)]
         probe: bool,
+        /// Provider capability to probe: embed, generate or search.
         #[arg(long, value_enum, default_value = "embed", requires = "probe")]
         role: super::remote::ProbeRole,
         #[command(flatten)]
         remote: super::remote::RemoteArguments,
     },
+    /// Inspect, apply, abort or prepare an inverse of retained changes.
     Changes {
         #[command(subcommand)]
         command: ChangesCommand,
     },
+    /// Reconcile interrupted changes while preserving unfamiliar edits.
     Recover,
     /// Stage a compatible schema migration; future schemas are never downgraded.
     Migrate {
         #[command(flatten)]
         selector: Selector,
+        /// Expected current BLAKE3 content hash; reject intervening edits.
         #[arg(long)]
         if_match: Blake3Hash,
+        /// Target schema version; future schemas cannot be downgraded.
         #[arg(long, default_value = "1")]
         to_schema: String,
     },
 }
 #[derive(Debug, Subcommand)]
 pub enum PageCommand {
+    /// Create a page or replace one using its expected content hash.
     Put {
+        /// Markdown page file with a valid page envelope; use - for stdin.
         #[arg(long)]
         file: PathBuf,
+        /// Destination vault-relative path; defaults to pages/<record-id>.md.
         #[arg(long)]
         path: Option<VaultRelativePath>,
+        /// Required current BLAKE3 hash when replacing an existing page.
         #[arg(long)]
         if_match: Option<Blake3Hash>,
     },
+    /// Move a page and update known links while preserving its ID.
     Rename {
+        /// Stable record or changeset ID returned by an earlier command.
         id: RecordId,
+        /// New vault-relative page path.
         #[arg(long)]
         to: VaultRelativePath,
+        /// Expected current BLAKE3 content hash; reject intervening edits.
         #[arg(long)]
         if_match: Blake3Hash,
     },
 }
 #[derive(Debug, Subcommand)]
 pub enum SourceCommand {
+    /// Capture a local file as a new source with an immutable revision.
     Add {
+        /// Input file; use - to read bounded standard input.
         file: PathBuf,
+        /// Human-readable title.
         #[arg(long)]
         title: Option<String>,
+        /// Explicit media type for the captured input.
         #[arg(long)]
         media_type: Option<String>,
     },
+    /// Capture changed content as a new revision of an existing source.
     Refresh {
+        /// Stable record or changeset ID returned by an earlier command.
         id: RecordId,
+        /// Input file; use - to read bounded standard input.
         #[arg(long)]
         file: PathBuf,
+        /// Human-readable title.
         #[arg(long)]
         title: Option<String>,
+        /// Explicit media type for the captured input.
         #[arg(long)]
         media_type: Option<String>,
     },
+    /// Withdraw a source from current support while retaining its history.
     Withdraw {
+        /// Stable record or changeset ID returned by an earlier command.
         id: RecordId,
+        /// Reason recorded with the withdrawal.
         #[arg(long)]
         reason: String,
     },
 }
 #[derive(Debug, Subcommand)]
 pub enum EvidenceCommand {
+    /// Stage successor evidence when its quotation uniquely matches the target revision.
     Revalidate {
+        /// Stable record or changeset ID returned by an earlier command.
         id: RecordId,
+        /// Target immutable source revision ID.
         #[arg(long)]
         to_revision: RecordId,
+        /// Expected current BLAKE3 content hash; reject intervening edits.
         #[arg(long)]
         if_match: Blake3Hash,
     },
 }
 #[derive(Debug, Subcommand)]
 pub enum IndexCommand {
+    /// Refresh the index from changed Markdown and source records.
     Sync,
+    /// Recreate the disposable index from canonical files without provider calls.
     Rebuild,
 }
 #[derive(Debug, Subcommand)]
 pub enum ChangesCommand {
+    /// Inspect a retained changeset and its exact proposed operations.
     Show {
+        /// Stable record or changeset ID returned by an earlier command.
         id: RecordId,
+        /// Zero-based operation index to inspect within the changeset.
         #[arg(long)]
         operation: Option<usize>,
     },
+    /// Apply a prepared changeset with expected-hash guards and recovery.
     Apply {
+        /// Stable record or changeset ID returned by an earlier command.
         id: RecordId,
     },
+    /// Discard an unapplied preparation while retaining its history.
     Abort {
+        /// Stable record or changeset ID returned by an earlier command.
         id: RecordId,
     },
+    /// Stage a guarded inverse; immutable source captures remain retained.
     Rollback {
+        /// Stable record or changeset ID returned by an earlier command.
         id: RecordId,
     },
 }
@@ -241,17 +315,26 @@ pub enum Seed {
 }
 #[derive(Debug, Subcommand)]
 pub enum GraphCommand {
+    /// Export an agent packet or run bounded API extraction; never accept assertions.
     Extract(super::extraction::ExtractArguments),
+    /// Validate a packet-bound extraction response and stage proposed records.
     Import(super::extraction::ImportArguments),
+    /// Stage explicit mention bindings or new entities using expected hashes.
     Resolve(super::resolution::ResolveArguments),
+    /// Stage explicit entity merges, splits or aliases with complete remaps.
     Decide(super::decisions::DecideArguments),
+    /// Stage assertion decisions and assessments of every active evidence item.
     Review(super::review::ReviewArguments),
+    /// Search and traverse eligible graph assertions with cited evidence.
     Query {
+        /// Search text; lexical terms are treated as data, not query operators.
         query: String,
         #[command(flatten)]
         options: GraphOptions,
     },
+    /// Inspect bounded assertion and navigation links around a record.
     Neighbors {
+        /// Stable record or changeset ID returned by an earlier command.
         id: RecordId,
         #[command(flatten)]
         options: GraphOptions,
@@ -265,46 +348,67 @@ pub struct GraphOptions {
     #[arg(long)]
     pub lexical_fallback: bool,
 
+    /// Rank entities, relationships or both when traversing the graph.
     #[arg(long, value_enum, default_value = "combined")]
     pub strategy: Strategy,
+    /// Seed the graph with lexical matches or compatible semantic embeddings.
     #[arg(long, value_enum, default_value = "lexical")]
     pub seed: Seed,
+    /// Filter by record kind; repeat for multiple kinds.
     #[arg(long = "kind")]
     pub kinds: Vec<RecordKind>,
+    /// Filter by tag; repeat for multiple tags.
     #[arg(long = "tag")]
     pub tags: Vec<String>,
+    /// Filter by source ID before applying result limits; repeat as needed.
     #[arg(long = "source-id")]
     pub source_ids: Vec<RecordId>,
+    /// Restrict results to a vault-relative path prefix.
     #[arg(long)]
     pub path_prefix: Option<String>,
+    /// Filter by authored status; this does not change derived eligibility.
     #[arg(long = "status")]
     pub authored_statuses: Vec<String>,
+    /// Include labeled proposed assertions without accepting them.
     #[arg(long)]
     pub include_proposed: bool,
+    /// Include labeled historical, withdrawn and otherwise ineligible records.
     #[arg(long)]
     pub include_historical: bool,
+    /// Include separately labeled page and provenance links.
     #[arg(long)]
     pub navigation: bool,
+    /// Maximum ranked candidates considered before final selection.
     #[arg(long, default_value_t = 80)]
     pub candidates: usize,
+    /// Maximum graph seed records.
     #[arg(long, default_value_t = 12)]
     pub seeds: usize,
+    /// Maximum graph traversal depth.
     #[arg(long, default_value_t = 1)]
     pub depth: usize,
+    /// Maximum incident assertions examined per graph seed.
     #[arg(long, default_value_t = 16)]
     pub incident_per_seed: usize,
+    /// Maximum assertions examined during graph traversal.
     #[arg(long, default_value_t = 128)]
     pub assertions: usize,
+    /// Maximum result count.
     #[arg(long, default_value_t = 10)]
     pub limit: usize,
+    /// Maximum UTF-8 bytes in each excerpt.
     #[arg(long, default_value_t = 240)]
     pub excerpt_bytes: usize,
+    /// Maximum supporting evidence items returned per assertion.
     #[arg(long, default_value_t = 2)]
     pub support_per_assertion: usize,
+    /// Maximum contradicting evidence items returned per assertion.
     #[arg(long, default_value_t = 1)]
     pub contradictions_per_assertion: usize,
+    /// Continuation cursor from an identical query on the same index generation.
     #[arg(long)]
     pub cursor: Option<String>,
+    /// Read the existing index snapshot without syncing; freshness is not verified.
     #[arg(long)]
     pub no_sync: bool,
 }
@@ -357,31 +461,45 @@ pub struct SearchArguments {
     #[arg(long)]
     pub lexical_fallback: bool,
 
+    /// Search text; lexical terms are treated as data, not query operators.
     pub query: String,
+    /// Retrieval mode; semantic and hybrid modes require compatible embeddings.
     #[arg(long, value_enum, default_value = "lexical")]
     pub mode: Mode,
+    /// Filter by record kind; repeat for multiple kinds.
     #[arg(long = "kind")]
     pub kinds: Vec<RecordKind>,
+    /// Filter by tag; repeat for multiple tags.
     #[arg(long = "tag")]
     pub tags: Vec<String>,
+    /// Filter by source ID before applying result limits; repeat as needed.
     #[arg(long = "source-id")]
     pub source_ids: Vec<RecordId>,
+    /// Restrict results to a vault-relative path prefix.
     #[arg(long)]
     pub path_prefix: Option<String>,
+    /// Filter by authored status; this does not change derived eligibility.
     #[arg(long = "status")]
     pub authored_statuses: Vec<String>,
+    /// Include labeled proposed assertions without accepting them.
     #[arg(long)]
     pub include_proposed: bool,
+    /// Include labeled historical, withdrawn and otherwise ineligible records.
     #[arg(long)]
     pub include_historical: bool,
+    /// Maximum result count.
     #[arg(long, default_value_t = 10)]
     pub limit: usize,
+    /// Maximum ranked candidates considered before final selection.
     #[arg(long, default_value_t = 80)]
     pub candidates: usize,
+    /// Maximum UTF-8 bytes in each excerpt.
     #[arg(long, default_value_t = 240)]
     pub excerpt_bytes: usize,
+    /// Continuation cursor from an identical query on the same index generation.
     #[arg(long)]
     pub cursor: Option<String>,
+    /// Read the existing index snapshot without syncing; freshness is not verified.
     #[arg(long)]
     pub no_sync: bool,
 }
@@ -414,9 +532,12 @@ impl SearchArguments {
 }
 #[derive(Debug, Subcommand)]
 pub enum SkillCommand {
+    /// Write host-specific skill files to a new output directory.
     Export {
+        /// Host format for the exported skill.
         #[arg(long, value_parser = ["codex", "claude-code", "cursor"])]
         target: String,
+        /// New directory for exported skill files; existing files are not overwritten.
         #[arg(long)]
         output: PathBuf,
     },

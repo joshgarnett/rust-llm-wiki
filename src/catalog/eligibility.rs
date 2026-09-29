@@ -726,6 +726,24 @@ pub(crate) fn compute(
                     set(row, Eligibility::Unsupported, "unsupported_extraction");
                 }
             }
+            RecordKind::ExtractionPacket => {
+                // A retained extraction task is operational history. Its source
+                // window is never a second current note or independent evidence.
+                let source = snapshot
+                    .get(&RecordId::new(
+                        record.string("wiki_source_id").expect("source"),
+                    )?)
+                    .expect("valid reference");
+                if source.record.string("wiki_status") == Some("withdrawn") {
+                    set(row, Eligibility::Withdrawn, "source_withdrawn");
+                } else if source.record.string("wiki_current_revision")
+                    != record.string("wiki_source_revision")
+                {
+                    set(row, Eligibility::Historical, "older_revision");
+                } else {
+                    set(row, Eligibility::Unsupported, "operational_packet");
+                }
+            }
             RecordKind::Entity => {
                 let identity = if record.string("wiki_status") == Some("superseded") {
                     Eligibility::Historical

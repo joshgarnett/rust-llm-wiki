@@ -414,6 +414,36 @@ fn research_and_doctor_dry_runs_preserve_complete_tree_without_provider_access()
 }
 
 #[test]
+fn offline_research_run_explicitly_reports_preview_without_starting_a_run() {
+    let f = Fixture::new();
+    let before = tree(f.temp.path());
+    let (output, envelope) = invoke(
+        &f,
+        "--json",
+        &["--offline"],
+        &["research", "run", "Ada", "--max-requests", "1"],
+    );
+    assert!(output.status.success(), "{envelope}");
+    assert_eq!(envelope["data"]["status"], "offline_preview");
+    assert_eq!(envelope["data"]["persisted"], false);
+    assert_eq!(envelope["data"]["remote_work"], "unavailable");
+    assert_eq!(envelope["meta"]["network_used"], false);
+    assert_eq!(envelope["meta"]["partial"], true);
+    assert!(
+        envelope["warnings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|warning| {
+                warning
+                    .as_str()
+                    .is_some_and(|text| text.contains("Offline preview only"))
+            })
+    );
+    assert_eq!(tree(f.temp.path()), before);
+}
+
+#[test]
 fn research_cli_rejects_excessive_scope_and_caller_exclusions_without_writes() {
     let f = Fixture::new();
     let missing = f.temp.path().join("unavailable/providers.toml");

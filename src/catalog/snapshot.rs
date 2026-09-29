@@ -66,6 +66,15 @@ impl Catalog {
         c.execute_batch("BEGIN DEFERRED").map_err(sql::sql_error)?;
         // The first read establishes SQLite's snapshot, including both FTS virtual tables.
         let (generation,parser,manifest,serialized):(i64,String,String,String)=c.query_row("SELECT g.gen,g.parser_hash,g.manifest_hash,g.projection_json FROM generations g JOIN index_meta m ON g.gen=m.published_gen WHERE g.state='complete'",[],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?))).map_err(|e|if matches!(e,rusqlite::Error::QueryReturnedNoRows){WikiError::new(ErrorCode::OfflineUnavailable,"catalog has no published generation")}else{sql::sql_error(e)})?;
+        // An older projection may have classified copied packet windows as
+        // ordinary invalid notes. Refuse that snapshot before any query can
+        // search its rows; callers with a writer can sync and retry.
+        if parser != scan::parser_fingerprint().as_str() {
+            return Err(WikiError::new(
+                ErrorCode::OfflineUnavailable,
+                "catalog parser fingerprint changed; run index sync or rebuild",
+            ));
+        }
         let projection: CatalogProjection = serde_json::from_str(&serialized)
             .map_err(|e| WikiError::new(ErrorCode::IndexCorrupt, e.to_string()))?;
         let snapshot = ReadSnapshot {

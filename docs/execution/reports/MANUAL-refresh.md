@@ -1,0 +1,11 @@
+# Manual refreshed-source resolution follow-up
+
+The user reported `RECORD_INVALID` for proposed evidence while resolving mentions after refreshing a source with changed content. The temporary user vault was unavailable here, so this follow-up uses disposable vaults and the existing CRLF extraction fixture.
+
+The closed catalog projection during resolution preparation included the source's complete revision manifest but only captured payloads used by the selected extraction. A valid sibling revision therefore appeared to lack its original/content snapshot. Its `revision_integrity` error propagated through the source's `wiki_revisions` reference to the new evidence, making the proposed typed evidence invalid. This was a projection-closure error; old-revision evidence must remain historical, while current-head evidence can be current only as evidence for a still-proposed assertion.
+
+`src/graph/resolution.rs` now captures bounded original/content assets for every revision retained by the selected source when building the closed projection. Their hashes enter the prepared change's read preconditions. Missing or modified retained assets still reject; the change does not relax catalog eligibility or source verification. The capture has a 64 MiB aggregate payload ceiling. The existing full canonical-note membership guards remain in place.
+
+Regressions in `tests/graph_resolution.rs` cover resolution of an imported old revision after refresh, extraction from the refreshed head with zero invalid diagnostics, tampered sibling payload rejection before stage, and sibling payload drift between successful preparation and apply returning `CONTENT_CONFLICT` without entity/assertion/evidence writes. Both successful cases retain proposed assertion status; the old evidence is historical.
+
+The root's pre-fix run of `resolution_after_source_refresh_materializes_historical_evidence` failed at resolution preparation with `RECORD_INVALID: proposed typed record is invalid: knowledge/evidence/...md` (`.artifacts/manual-refresh-red.log`). The worker ran `rustfmt --edition 2024 src/graph/resolution.rs tests/graph_resolution.rs` and `git diff --check` on leased paths. No Cargo/Bazel/test execution was run by this worker. Root owns the post-fix and integration test outcomes.

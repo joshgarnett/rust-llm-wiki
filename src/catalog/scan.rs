@@ -19,7 +19,7 @@ use std::collections::{BTreeMap, BTreeSet};
 /// Cache identity binds every semantic adapter, not merely frontmatter parsing.
 pub fn parser_fingerprint() -> Blake3Hash {
     Blake3Hash::digest(format!(
-        "{};catalog-v1;canonical-membership-bytewise-v1;source-original-content-span-quote-fence-structural-v2;typed-id-companion-v1;decisions-explicit-conflict-cycle-v1;mention-complete-artifact-membership-explicit-scope-v1;entity-explicit-exhaustive-remap-receipt-supersession-v1;eligibility-full-note-transitive-v1;markdown-lexical-events-v1;graph-readable-directed-endpoints-v1;unicode61 remove_diacritics 2;no-stemming",
+        "{};catalog-v1;canonical-membership-bytewise-v1;source-original-content-span-quote-fence-structural-v2;typed-id-companion-v1;decisions-explicit-conflict-cycle-v1;mention-complete-artifact-membership-explicit-scope-v1;entity-explicit-exhaustive-remap-receipt-supersession-v1;eligibility-full-note-transitive-v1;packet-source-lifecycle-v2;markdown-lexical-events-v1;graph-readable-directed-endpoints-v1;unicode61 remove_diacritics 2;no-stemming",
         crate::records::parser_fingerprint()
     ))
 }
@@ -96,6 +96,23 @@ pub(crate) fn readable_id(note: &ParsedNote) -> Option<RecordId> {
     } else {
         None
     }
+}
+
+/// Packet windows remain operational text when malformed metadata or a copied
+/// ID prevents canonical adoption. Raw bytes remain available for audit.
+fn declares_packet(note: &ParsedNote) -> bool {
+    note.canonical
+        .as_ref()
+        .is_some_and(|record| record.kind() == RecordKind::ExtractionPacket)
+        || note
+            .fields
+            .as_ref()
+            .and_then(|fields| fields.get("wiki_kind"))
+            .and_then(serde_json::Value::as_str)
+            == Some("extraction_packet")
+        || isolated_fields(note).iter().any(|fields| {
+            fields.get("wiki_kind").and_then(serde_json::Value::as_str) == Some("extraction_packet")
+        })
 }
 
 fn readable_ids(note: &ParsedNote) -> BTreeSet<RecordId> {
@@ -263,12 +280,14 @@ fn project_input(fs: &VaultFs, input: &ValidationInput, closed: bool) -> Result<
             .filter(|row| &row.path == path);
         let raw_text = note.literal_text().unwrap_or_default().to_owned();
         let body = std::str::from_utf8(note.body()).unwrap_or_default();
-        let excluded = row.is_some_and(|r| {
-            matches!(
-                r.record.kind(),
-                RecordKind::Evidence | RecordKind::Extraction | RecordKind::ExtractionPacket
-            )
-        });
+        let packet = declares_packet(note);
+        let excluded = packet
+            || row.is_some_and(|r| {
+                matches!(
+                    r.record.kind(),
+                    RecordKind::Evidence | RecordKind::Extraction | RecordKind::ExtractionPacket
+                )
+            });
         let (headings, normalized) = if excluded {
             (String::new(), String::new())
         } else {
@@ -282,7 +301,9 @@ fn project_input(fs: &VaultFs, input: &ValidationInput, closed: bool) -> Result<
             path: path.clone(),
             hash: note.source_hash.clone(),
             record_id: row.map(|r| r.record.id().clone()),
-            kind: row.map(|r| r.record.kind()),
+            kind: row
+                .map(|r| r.record.kind())
+                .or_else(|| packet.then_some(RecordKind::ExtractionPacket)),
             title,
             aliases: row.map_or_else(Vec::new, |r| list(&r.record, "aliases")),
             headings,

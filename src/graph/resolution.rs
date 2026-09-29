@@ -481,12 +481,71 @@ fn allocation_map(allocations: &ResolutionAllocations) -> BTreeMap<String, Recor
 fn capture_dependencies(
     view: &SourceView<'_>,
     original: &[ReadDependency],
+    source_id: &RecordId,
 ) -> Result<Vec<ReadDependency>> {
     let mut items = original.to_vec();
     items.extend(view.notes.iter().map(|(path, note)| ReadDependency {
         path: path.clone(),
         expected: ExpectedState::Hash(note.source_hash.clone()),
     }));
+    // The closed catalog projection sees the source's complete revision manifest.
+    // Capture every retained revision's assets as well: leaving a sibling payload
+    // out makes that revision appear corrupt and invalidates the source through
+    // its typed references, including evidence from the selected revision.
+    let (_, source_note) = view.resolve(source_id, RecordKind::Source, None)?;
+    let source = source_note.canonical.as_ref().expect("resolved source");
+    let revisions = source
+        .field("wiki_revisions")
+        .and_then(serde_json::Value::as_array)
+        .ok_or_else(|| invalid("source revision manifest is invalid"))?;
+    let mut assets = BTreeMap::new();
+    let mut captured = 0usize;
+    for value in revisions {
+        let revision_id = RecordId::new(
+            value
+                .as_str()
+                .ok_or_else(|| invalid("source revision manifest is invalid"))?,
+        )?;
+        let (revision_path, revision_note) =
+            view.resolve(&revision_id, RecordKind::Revision, None)?;
+        let revision = revision_note.canonical.as_ref().expect("resolved revision");
+        if revision.string("wiki_source_id") != Some(source_id.as_str()) {
+            return Err(invalid("retained revision belongs to another source"));
+        }
+        let parent = revision_path
+            .as_str()
+            .rsplit_once('/')
+            .map(|(parent, _)| parent)
+            .ok_or_else(|| invalid("retained revision has no directory"))?;
+        for field in ["wiki_original_path", "wiki_content_path"] {
+            if let Some(name) = revision.string(field) {
+                let path = VaultRelativePath::new(format!("{parent}/{name}"))?;
+                if assets.contains_key(&path) {
+                    continue;
+                }
+                let remaining = SOURCE_CAP
+                    .checked_sub(captured)
+                    .filter(|n| *n > 0)
+                    .ok_or_else(|| {
+                        WikiError::new(
+                            ErrorCode::BudgetExceeded,
+                            "retained revision assets exceed resolution projection ceiling",
+                        )
+                    })?;
+                let bytes = view.read_bounded(&path, &mut assets, remaining)?;
+                captured = captured
+                    .checked_add(bytes.len())
+                    .filter(|n| *n <= SOURCE_CAP)
+                    .ok_or_else(|| {
+                        WikiError::new(
+                            ErrorCode::BudgetExceeded,
+                            "retained revision assets exceed resolution projection ceiling",
+                        )
+                    })?;
+            }
+        }
+    }
+    items.extend(dependencies(assets));
     Ok(dependencies(dependency_map(&items)?))
 }
 
@@ -685,7 +744,8 @@ fn build_draft(view: &SourceView<'_>, validated: &ValidatedResolution) -> Result
     }
     // Full canonical scan guards prevent another author changing unrelated identity
     // or decisions between projection validation and application.
-    let read_preconditions = capture_dependencies(view, &validated.dependencies)?;
+    let read_preconditions =
+        capture_dependencies(view, &validated.dependencies, &before.source_id)?;
     let projected = guarded_projection(view, &read_preconditions, &writes)?;
     let (_, note) = projected.resolve(&before.extraction_id, RecordKind::Extraction, None)?;
     import::verify_extraction_note(&projected, extraction_path, note)?;

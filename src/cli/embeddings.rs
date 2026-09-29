@@ -8,17 +8,23 @@ pub struct EmbeddingArguments {
 }
 #[derive(Debug, Subcommand)]
 pub enum EmbeddingCommand {
+    /// Inspect local embedding coverage; --probe explicitly contacts the provider.
     Check(EmbeddingCheckArguments),
+    /// Generate missing embeddings through a trusted remote provider.
     Sync(EmbeddingSyncArguments),
 }
 #[derive(Debug, Args, Default)]
 pub struct EmbeddingSettingsArguments {
+    /// Text prepended to document embedding inputs; part of the embedding space identity.
     #[arg(long, default_value = "")]
     pub document_prefix: String,
+    /// Text prepended to query embedding inputs; part of the embedding space identity.
     #[arg(long, default_value = "")]
     pub query_prefix: String,
+    /// Maximum UTF-8 bytes per embedding input.
     #[arg(long, default_value_t = 12000)]
     pub max_input_bytes: usize,
+    /// Preferred segment size below the hard embedding input ceiling.
     #[arg(long)]
     pub quality_target_bytes: Option<usize>,
 }
@@ -38,6 +44,7 @@ pub struct EmbeddingCheckArguments {
     pub settings: EmbeddingSettingsArguments,
     #[command(flatten)]
     pub remote: super::remote::RemoteArguments,
+    /// Explicitly contact the selected provider within the supplied request limits.
     #[arg(long)]
     pub probe: bool,
 }

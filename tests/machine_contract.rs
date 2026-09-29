@@ -4,6 +4,32 @@ use lwiki::output::Envelope;
 use serde_json::{Value, json};
 use std::process::Command;
 
+#[test]
+fn help_describes_every_command_and_option() {
+    use clap::CommandFactory;
+
+    fn check(command: &clap::Command, path: &str) {
+        assert!(
+            command.get_about().is_some(),
+            "missing command help: {path}"
+        );
+        for argument in command.get_arguments() {
+            assert!(
+                argument.get_help().is_some(),
+                "missing argument help: {path} {}",
+                argument.get_id()
+            );
+        }
+        for child in command.get_subcommands() {
+            check(child, &format!("{path} {}", child.get_name()));
+        }
+    }
+
+    let mut command = lwiki::cli::arguments::Arguments::command();
+    command.build();
+    check(&command, "lwiki");
+}
+
 fn validator(text: &str) -> jsonschema::Validator {
     let schema: Value = serde_json::from_str(text).unwrap();
     assert!(jsonschema::meta::is_valid(&schema));

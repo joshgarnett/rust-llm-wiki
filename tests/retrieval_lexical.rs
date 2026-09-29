@@ -2,7 +2,8 @@ use lwiki::{
     catalog::*,
     changes::*,
     domain::*,
-    retrieval::{lexical::lexical_expression, *},
+    graph::{extraction_types::*, packet::*},
+    retrieval::{lexical::lexical_expression, render, spaces::EmbeddingSettings, *},
     sources::{evidence::exact_quote_body, *},
     vault::*,
 };
@@ -251,6 +252,158 @@ fn invalid_notes_remain_literal_discovery() {
             .hits
             .iter()
             .any(|h| h.locator.path == relative("invalid.md"))
+    );
+}
+
+#[test]
+fn malformed_packet_path_requires_explicit_historical_audit() {
+    let (temp, root, catalog) = fixture();
+    let malformed = b"---\nwiki_kind: extraction_packet\nwiki_id: packet_broken\ninvalid: [unfinished\n---\nCEDAR-731 retained window\n";
+    write(
+        temp.path(),
+        "knowledge/extractions/packets/broken.md",
+        malformed,
+    );
+    write(
+        temp.path(),
+        "ordinary-invalid.md",
+        b"---\nwiki_kind: page\nwiki_id: broken_page\ninvalid: [unfinished\n---\nCEDAR-731 ordinary invalid note\n",
+    );
+    write(temp.path(), "copied-malformed-packet.md", malformed);
+    let r = reader(&root, &catalog);
+    let hits = search(&r, "CEDAR-731", &literal_plan()).unwrap();
+    assert_eq!(hits.hits.len(), 1);
+    assert_eq!(hits.hits[0].locator.path, relative("ordinary-invalid.md"));
+    assert_eq!(hits.hits[0].eligibility, Eligibility::Invalid);
+    let mut audit = literal_plan();
+    audit.filters.include_historical = true;
+    assert!(
+        search(&r, "CEDAR-731", &audit)
+            .unwrap()
+            .hits
+            .iter()
+            .any(|hit| hit.locator.path == relative("knowledge/extractions/packets/broken.md"))
+    );
+}
+
+#[test]
+fn copied_packet_with_duplicate_id_never_becomes_invalid_note_source() {
+    let (temp, root, catalog) = fixture();
+    let captured = capture(&root, &catalog, b"CEDAR-731 source window");
+    let view = SourceView::from_fs(catalog.fs()).unwrap();
+    let packet = build_packet(
+        &view,
+        &ExportRequest {
+            source_id: captured.source_id.clone(),
+            revision_id: Some(captured.revision_id.clone()),
+            windows: vec![],
+            limits: ExtractionLimits::default(),
+            candidate_context: vec![],
+        },
+    )
+    .unwrap();
+    let packet_path = packet.locator.path.clone();
+    let engine = ChangeEngine::new(VaultFs::new(root.clone())).unwrap();
+    let writer = WriterPermit::acquire(&root, Duration::from_millis(200)).unwrap();
+    let prepared = engine
+        .prepare(&writer, packet.draft.unwrap())
+        .unwrap()
+        .prepared;
+    engine
+        .apply(&writer, &prepared, &CatalogGraphValidator, &catalog)
+        .unwrap();
+    drop(writer);
+    fs::copy(
+        root.path().join(packet_path.as_str()),
+        temp.path().join("copied-packet.md"),
+    )
+    .unwrap();
+
+    let before = reader(&root, &catalog);
+    assert!(
+        !before
+            .projection()
+            .records
+            .contains_key(&packet.packet.packet_id)
+    );
+    let hits = search(&before, "CEDAR-731", &literal_plan()).unwrap();
+    assert_eq!(
+        hits.hits.len(),
+        1,
+        "only the captured source is default-searchable"
+    );
+    assert_eq!(
+        hits.hits[0].owner_revision,
+        Some(captured.revision_id.clone())
+    );
+
+    let withdraw = SourceStore::new(VaultFs::new(root.clone()))
+        .plan_withdraw(&captured.source_id, "fixture withdrawal")
+        .unwrap();
+    let writer = WriterPermit::acquire(&root, Duration::from_millis(200)).unwrap();
+    let prepared = engine
+        .prepare(&writer, withdraw.draft.unwrap())
+        .unwrap()
+        .prepared;
+    engine
+        .apply(&writer, &prepared, &CatalogGraphValidator, &catalog)
+        .unwrap();
+    drop(writer);
+    let after = reader(&root, &catalog);
+    assert!(
+        search(&after, "CEDAR-731", &literal_plan())
+            .unwrap()
+            .hits
+            .is_empty()
+    );
+}
+
+#[test]
+fn older_packet_projection_requires_sync_before_index_snapshot() {
+    let (temp, root, catalog) = fixture();
+    page(temp.path(), "page.md", "page", "Page", "CEDAR-731", &[]);
+    let first = reader(&root, &catalog);
+    let old = Blake3Hash::digest(b"previous packet projection semantics");
+    assert_ne!(first.snapshot().parser_fingerprint, old);
+    drop(first);
+    let cache = root.path().join(".wiki/cache/index.sqlite");
+    let connection = rusqlite::Connection::open(cache).unwrap();
+    let (generation, serialized): (i64, String) = connection
+        .query_row(
+            "SELECT g.gen,g.projection_json FROM generations g JOIN index_meta m ON g.gen=m.published_gen",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    let mut projection: CatalogProjection = serde_json::from_str(&serialized).unwrap();
+    projection.parser_fingerprint = old.clone();
+    connection
+        .execute(
+            "UPDATE generations SET parser_hash=?1,projection_json=?2 WHERE gen=?3",
+            rusqlite::params![
+                old.as_str(),
+                serde_json::to_string(&projection).unwrap(),
+                generation
+            ],
+        )
+        .unwrap();
+    drop(connection);
+    assert_eq!(
+        catalog.index_snapshot().err().unwrap().code,
+        ErrorCode::OfflineUnavailable
+    );
+    let writer = WriterPermit::acquire(&root, Duration::from_millis(200)).unwrap();
+    let current = catalog.verified_snapshot(Some(&writer)).unwrap();
+    assert_eq!(
+        current.snapshot().parser_fingerprint,
+        lwiki::catalog::scan::parser_fingerprint()
+    );
+    assert_eq!(
+        search(&current, "CEDAR-731", &literal_plan())
+            .unwrap()
+            .hits
+            .len(),
+        1
     );
 }
 
@@ -526,6 +679,10 @@ fn lexical_metadata_and_transcripts_are_excluded_but_literal_is_audit() {
         plan.filters.kinds.push(kind);
         assert!(search(&r, query, &plan).unwrap().hits.is_empty());
         plan.mode = SearchMode::Literal;
+        if kind == RecordKind::ExtractionPacket {
+            assert!(search(&r, query, &plan).unwrap().hits.is_empty());
+            plan.filters.include_historical = true;
+        }
         let hits = search(&r, query, &plan).unwrap();
         assert_eq!(hits.hits.len(), 1);
         assert_eq!(hits.hits[0].excerpt.label, ExcerptLabel::NoteText);
@@ -654,4 +811,117 @@ fn withdrawn_payload_requires_explicit_history_and_keeps_exact_ownership() {
         .quote,
         hit.excerpt.text.as_bytes()
     );
+}
+
+#[test]
+fn exported_packet_windows_never_supply_default_source_search() {
+    let (_temp, root, catalog) = fixture();
+    let captured = capture(&root, &catalog, b"CEDAR-731 original source window");
+    let engine = ChangeEngine::new(VaultFs::new(root.clone())).unwrap();
+    let view = SourceView::from_fs(catalog.fs()).unwrap();
+    let packet = build_packet(
+        &view,
+        &ExportRequest {
+            source_id: captured.source_id.clone(),
+            revision_id: Some(captured.revision_id.clone()),
+            windows: vec![],
+            limits: ExtractionLimits::default(),
+            candidate_context: vec![],
+        },
+    )
+    .unwrap();
+    let packet_id = packet.packet.packet_id.clone();
+    assert!(packet.packet.windows[0].text.contains("CEDAR-731"));
+    let writer = WriterPermit::acquire(&root, Duration::from_millis(200)).unwrap();
+    let prepared = engine
+        .prepare(&writer, packet.draft.unwrap())
+        .unwrap()
+        .prepared;
+    engine
+        .apply(&writer, &prepared, &CatalogGraphValidator, &catalog)
+        .unwrap();
+    drop(writer);
+
+    let before = catalog.verified_snapshot(None).unwrap();
+    assert!(before.projection().records.contains_key(&packet_id));
+    assert_eq!(
+        before.projection().records[&packet_id].eligibility,
+        Eligibility::Unsupported
+    );
+    let hits = search(&before, "CEDAR-731", &literal_plan()).unwrap();
+    assert_eq!(hits.hits.len(), 1, "packet must not duplicate source text");
+    assert_eq!(
+        hits.hits[0].owner_revision,
+        Some(captured.revision_id.clone())
+    );
+    let mut packet_audit = literal_plan();
+    packet_audit
+        .filters
+        .kinds
+        .push(RecordKind::ExtractionPacket);
+    packet_audit.filters.include_historical = true;
+    let packet_hits = search(&before, "CEDAR-731", &packet_audit).unwrap();
+    assert_eq!(packet_hits.hits.len(), 1);
+    assert_eq!(packet_hits.hits[0].eligibility, Eligibility::Unsupported);
+    let units = render::corpus(&before, &EmbeddingSettings::default()).unwrap();
+    assert!(units.iter().any(|unit| unit.utf8.contains("CEDAR-731")));
+    assert!(
+        units
+            .iter()
+            .all(|unit| unit.owner != packet_hits.hits[0].locator.path)
+    );
+
+    let withdraw = SourceStore::new(VaultFs::new(root.clone()))
+        .plan_withdraw(&captured.source_id, "fixture withdrawal")
+        .unwrap();
+    let writer = WriterPermit::acquire(&root, Duration::from_millis(200)).unwrap();
+    let prepared = engine
+        .prepare(&writer, withdraw.draft.unwrap())
+        .unwrap()
+        .prepared;
+    engine
+        .apply(&writer, &prepared, &CatalogGraphValidator, &catalog)
+        .unwrap();
+    drop(writer);
+    for rebuild in [false, true] {
+        if rebuild {
+            let writer = WriterPermit::acquire(&root, Duration::from_millis(200)).unwrap();
+            catalog.rebuild(&writer).unwrap();
+        }
+        let after = catalog.verified_snapshot(None).unwrap();
+        assert_eq!(
+            after.projection().records[&packet_id].eligibility,
+            Eligibility::Withdrawn
+        );
+        assert!(
+            search(&after, "CEDAR-731", &literal_plan())
+                .unwrap()
+                .hits
+                .is_empty()
+        );
+        assert!(
+            search(
+                &catalog.index_snapshot().unwrap(),
+                "CEDAR-731",
+                &literal_plan()
+            )
+            .unwrap()
+            .hits
+            .is_empty()
+        );
+        let mut history = literal_plan();
+        history.filters.include_historical = true;
+        let hits = search(&after, "CEDAR-731", &history).unwrap();
+        assert!(
+            hits.hits
+                .iter()
+                .any(|h| h.owner_revision == Some(captured.revision_id.clone()))
+        );
+        let packet_hits = search(&after, "CEDAR-731", &packet_audit).unwrap();
+        assert_eq!(packet_hits.hits.len(), 1);
+        assert_eq!(packet_hits.hits[0].eligibility, Eligibility::Withdrawn);
+        let units = render::corpus(&after, &EmbeddingSettings::default()).unwrap();
+        assert!(units.iter().all(|unit| !unit.utf8.contains("CEDAR-731")));
+        assert!(load_packet(&SourceView::from_fs(catalog.fs()).unwrap(), &packet_id).is_ok());
+    }
 }

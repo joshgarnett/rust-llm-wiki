@@ -405,6 +405,50 @@ fn staged_changes_show_apply_abort_and_guarded_inverse() {
     assert!(!t.path().join("abort.md").exists());
     a.recover().unwrap();
 }
+
+#[test]
+fn source_add_rollback_explains_retained_history_and_withdraws_safely() {
+    let (t, root) = fixture();
+    let a = app(&root, false);
+    let captured = a.source_add(request(b"Captured source\n")).unwrap();
+    let source = captured.allocated_ids["source"].clone();
+    let change = captured.change.unwrap();
+    let source_folder = t.path().join("sources").join(source.as_str());
+    let before = tree(&source_folder);
+    let error = a.changes_rollback(change.change_id).unwrap_err();
+    assert_eq!(error.code, ErrorCode::RecordInvalid);
+    assert!(error.message.contains("source withdraw"), "{error:?}");
+    assert_eq!(tree(&source_folder), before);
+    let revisions = tree(&source_folder.join("revisions"));
+    a.source_withdraw(source.clone(), "Retain captured history")
+        .unwrap();
+    assert_eq!(tree(&source_folder.join("revisions")), revisions);
+    assert_eq!(
+        scan(a.fs(), a.vault_id()).unwrap().records[&source].eligibility,
+        Eligibility::Withdrawn
+    );
+}
+
+#[test]
+fn edited_source_still_conflicts_before_rollback_history_hint() {
+    let (t, root) = fixture();
+    let a = app(&root, false);
+    let captured = a.source_add(request(b"Captured source\n")).unwrap();
+    let source = &captured.allocated_ids["source"];
+    let note = t
+        .path()
+        .join("sources")
+        .join(source.as_str())
+        .join("source.md");
+    let mut bytes = fs::read(&note).unwrap();
+    bytes.extend_from_slice(b"\nUnfamiliar author edit.\n");
+    fs::write(&note, &bytes).unwrap();
+    let error = a
+        .changes_rollback(captured.change.unwrap().change_id)
+        .unwrap_err();
+    assert_eq!(error.code, ErrorCode::ContentConflict);
+    assert_eq!(fs::read(note).unwrap(), bytes);
+}
 #[test]
 fn source_refresh_withdrawal_and_revalidation_stage_only() {
     let (t, root) = fixture();
