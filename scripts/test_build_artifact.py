@@ -94,7 +94,7 @@ class BuildArtifactTests(unittest.TestCase):
         self.repo = Path(self.temp.name).resolve() / "repo"
         self.repo.mkdir()
         (self.repo / "Cargo.toml").write_text('[package]\nname = "rust-llm-wiki"\n')
-        (self.repo / "Cargo.lock").write_text("mock lock\n")
+        (self.repo / "Cargo.lock").write_bytes(b"mock lock\n")
         contract_contents = {
             "MODULE.bazel": 'module(name = "rust_llm_wiki", version = "0.1.0")\n',
             "MODULE.bazel.lock": '{}\n',

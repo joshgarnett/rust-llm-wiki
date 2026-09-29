@@ -82,6 +82,10 @@ librarian and linker settings remain intact. Bazel's mapping was regenerated;
 Cargo.toml/Cargo.lock and all dependency versions are unchanged. The updated
 native macOS `just ci` gate passed, including 41 tooling tests and all smoke
 targets. Native Windows ARM64 confirmation remains pending.
+Windows x64 completed all Rust source/test compilation in run36562096258, then
+found a fixture-only packaging regression: text-mode writes made a mock lockfile
+CRLF while its fixed expected digest assumed LF. The fixture now writes exact
+bytes; production hashing already used the correct on-disk bytes.
 A release is accepted only after all six jobs succeed, downloaded
 archives pass checksum/member/metadata/binary checks, and the draft targets
 that exact validated commit. No failed-job artifact is promoted. The draft
