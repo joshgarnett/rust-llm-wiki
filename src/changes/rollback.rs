@@ -146,7 +146,13 @@ impl ChangeEngine {
         self.plan(draft)?;
         let input = ValidationInput {
             vault_id: self.vault_id.clone(),
-            documents: if draft.inverse_of.is_some() {
+            documents: if draft.inverse_of.is_some()
+                || draft.origin.as_ref().is_some_and(|origin| {
+                    matches!(
+                        origin.operation,
+                        OriginOperation::GraphDecide | OriginOperation::GraphReview
+                    )
+                }) {
                 self.scan_documents_bounded(super::prepare::MAX_GRAPH_INPUT_BYTES, 4096)?
             } else {
                 self.scan_documents()?
@@ -276,14 +282,15 @@ impl ChangeEngine {
             if immediate.is_none() {
                 immediate = Some((parent.clone(), hash.clone()));
             }
-            if parent
-                .origin
-                .as_ref()
-                .is_some_and(|origin| origin.operation == OriginOperation::GraphDecide)
-            {
+            if parent.origin.as_ref().is_some_and(|origin| {
+                matches!(
+                    origin.operation,
+                    OriginOperation::GraphDecide | OriginOperation::GraphReview
+                )
+            }) {
                 if parent.inverse_of.is_some() {
                     return Err(WikiError::invalid(
-                        "GraphDecide anchor cannot also claim inverse ancestry",
+                        "graph decision anchor cannot also claim inverse ancestry",
                     ));
                 }
                 let (first, first_hash) = immediate.expect("first parent retained");

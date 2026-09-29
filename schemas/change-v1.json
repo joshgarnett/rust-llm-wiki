@@ -168,7 +168,8 @@
           "enum": [
             "graph_import",
             "graph_resolve",
-            "graph_decide"
+            "graph_decide",
+                  "graph_review"
           ]
         },
         "packet_id": {

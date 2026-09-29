@@ -182,8 +182,16 @@ impl VaultRoot {
         &self,
         on_entry: &mut dyn FnMut() -> Result<()>,
     ) -> Result<Vec<VaultRelativePath>> {
+        self.scan_markdown_limited(usize::MAX, on_entry)
+    }
+    /// Reject the next canonical file before retaining its path.
+    pub fn scan_markdown_limited(
+        &self,
+        max_files: usize,
+        on_entry: &mut dyn FnMut() -> Result<()>,
+    ) -> Result<Vec<VaultRelativePath>> {
         let mut out = Vec::new();
-        Self::scan_dir(&self.path, "", &mut out, on_entry)?;
+        Self::scan_dir(&self.path, "", &mut out, max_files, on_entry)?;
         out.sort_by(|a, b| a.as_str().as_bytes().cmp(b.as_str().as_bytes()));
         Ok(out)
     }
@@ -191,6 +199,7 @@ impl VaultRoot {
         directory: &Path,
         prefix: &str,
         out: &mut Vec<VaultRelativePath>,
+        max_files: usize,
         on_entry: &mut dyn FnMut() -> Result<()>,
     ) -> Result<()> {
         on_entry()?;
@@ -227,8 +236,14 @@ impl VaultRoot {
                 if exact_marker_budgeted(&entry.path(), on_entry)? {
                     continue;
                 }
-                Self::scan_dir(&entry.path(), &relative, out, on_entry)?;
+                Self::scan_dir(&entry.path(), &relative, out, max_files, on_entry)?;
             } else if kind.is_file() && name.ends_with(".md") && name != "index.md" {
+                if out.len() >= max_files {
+                    return Err(WikiError::new(
+                        ErrorCode::BudgetExceeded,
+                        "canonical scan file ceiling",
+                    ));
+                }
                 out.push(VaultRelativePath::new(relative)?);
             }
         }

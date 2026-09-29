@@ -1,0 +1,129 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:lwiki:graph-review:1",
+  "$comment": "Production requires bounded duplicate-free JSON, exact canonical/source/membership validation and engine-sealed retained history. Snapshots cannot recreate lost manifests or prove committed application.",
+  "$ref": "#/$defs/ReviewRequest",
+  "$defs": {
+    "ReviewRequest": {
+      "type": "object",
+      "properties": {
+        "schema": {
+          "const": "lwiki.graph-review.v1"
+        },
+        "decisions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/AssertionReview"
+          },
+          "maxItems": 16,
+          "minItems": 1
+        },
+        "supersedes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ExpectedRecord"
+          },
+          "maxItems": 128
+        }
+      },
+      "required": [
+        "schema",
+        "decisions"
+      ],
+      "additionalProperties": false
+    },
+    "ExpectedRecord": {
+      "type": "object",
+      "properties": {
+        "record_id": {
+          "$ref": "#/$defs/RecordId"
+        },
+        "hash": {
+          "$ref": "#/$defs/Blake3Hash"
+        }
+      },
+      "required": [
+        "record_id",
+        "hash"
+      ],
+      "additionalProperties": false
+    },
+    "Blake3Hash": {
+      "type": "string",
+      "pattern": "^blake3:[0-9a-f]{64}$"
+    },
+    "RecordId": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+    },
+    "AssertionReview": {
+      "type": "object",
+      "properties": {
+        "assertion_id": {
+          "$ref": "#/$defs/RecordId"
+        },
+        "expected_hash": {
+          "$ref": "#/$defs/Blake3Hash"
+        },
+        "decision": {
+          "$ref": "#/$defs/ReviewDecision"
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
+        },
+        "evidence_checks": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/EvidenceCheck"
+          },
+          "maxItems": 256
+        }
+      },
+      "required": [
+        "assertion_id",
+        "expected_hash",
+        "decision",
+        "reason",
+        "evidence_checks"
+      ],
+      "additionalProperties": false
+    },
+    "EvidenceCheck": {
+      "type": "object",
+      "properties": {
+        "evidence_id": {
+          "$ref": "#/$defs/RecordId"
+        },
+        "expected_hash": {
+          "$ref": "#/$defs/Blake3Hash"
+        },
+        "assessment": {
+          "$ref": "#/$defs/EvidenceAssessment"
+        }
+      },
+      "required": [
+        "evidence_id",
+        "expected_hash",
+        "assessment"
+      ],
+      "additionalProperties": false
+    },
+    "EvidenceAssessment": {
+      "type": "string",
+      "enum": [
+        "supports",
+        "contradicts",
+        "insufficient"
+      ]
+    },
+    "ReviewDecision": {
+      "type": "string",
+      "enum": [
+        "accept",
+        "reject"
+      ]
+    }
+  }
+}

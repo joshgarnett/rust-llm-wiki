@@ -541,7 +541,10 @@ impl ChangeEngine {
         let Some(origin) = &manifest.origin else {
             return validator.validate(&self.fs, input);
         };
-        if origin.operation != OriginOperation::GraphDecide {
+        if !matches!(
+            origin.operation,
+            OriginOperation::GraphDecide | OriginOperation::GraphReview
+        ) {
             return validator.validate(&self.fs, input);
         }
         let mut remaining = 128usize * 1024 * 1024;
@@ -626,7 +629,22 @@ impl ChangeEngine {
         max_files: usize,
     ) -> Result<Vec<ScanDocument>> {
         self.require_binding()?;
-        let paths = self.fs.root().scan_markdown()?;
+        let paths = if max_files == usize::MAX {
+            self.fs.root().scan_markdown()?
+        } else {
+            let start = std::time::Instant::now();
+            let mut entries = 0usize;
+            self.fs.root().scan_markdown_limited(max_files, &mut || {
+                if entries >= 65536 || start.elapsed() >= std::time::Duration::from_secs(30) {
+                    return Err(WikiError::new(
+                        ErrorCode::BudgetExceeded,
+                        "graph scan enumeration ceiling",
+                    ));
+                }
+                entries += 1;
+                Ok(())
+            })?
+        };
         if paths.len() > max_files {
             return Err(WikiError::new(
                 ErrorCode::BudgetExceeded,
@@ -647,7 +665,14 @@ impl ChangeEngine {
             .collect::<Result<Vec<_>>>()
     }
     pub(crate) fn validation_input(&self, manifest: &ChangeManifest) -> Result<ValidationInput> {
-        let mut remaining = if manifest.inverse_of.is_some() {
+        let bounded_graph = manifest.inverse_of.is_some()
+            || manifest.origin.as_ref().is_some_and(|origin| {
+                matches!(
+                    origin.operation,
+                    OriginOperation::GraphDecide | OriginOperation::GraphReview
+                )
+            });
+        let mut remaining = if bounded_graph {
             super::prepare::MAX_GRAPH_INPUT_BYTES
         } else {
             usize::MAX
@@ -667,7 +692,7 @@ impl ChangeEngine {
                 "graph overlay aggregate byte ceiling",
             ));
         }
-        let documents = if manifest.inverse_of.is_some() {
+        let documents = if bounded_graph {
             self.scan_documents_bounded(super::prepare::MAX_GRAPH_INPUT_BYTES, 4096)?
         } else {
             self.scan_documents()?

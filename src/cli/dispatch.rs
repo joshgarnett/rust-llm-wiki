@@ -41,6 +41,7 @@ pub const COMMANDS: &[&str] = &[
     "graph import",
     "graph resolve",
     "graph decide",
+    "graph review",
     "graph query",
     "graph neighbors",
     "check",
@@ -98,7 +99,7 @@ fn execute_inner(args: &Arguments) -> Result<Envelope> {
         Command::Capabilities => {
             return Ok(Envelope::success(
                 command,
-                json!({"version":env!("CARGO_PKG_VERSION"),"commands":COMMANDS,"schemas":["output","record","stream","extraction","extraction-packet","extraction-state","graph-resolution","graph-resolution-receipt","run","run-event","usage-receipt","entity-decisions","entity-decision-receipt"],"network":false,"search_modes":["literal","lexical"],"jsonl_commands":["index sync","index rebuild","recover","changes apply","source add","source refresh"]}),
+                json!({"version":env!("CARGO_PKG_VERSION"),"commands":COMMANDS,"schemas":["output","record","stream","extraction","extraction-packet","extraction-state","graph-resolution","graph-resolution-receipt","run","run-event","usage-receipt","entity-decisions","entity-decision-receipt","graph-review","graph-review-receipt"],"network":false,"search_modes":["literal","lexical"],"jsonl_commands":["index sync","index rebuild","recover","changes apply","source add","source refresh"]}),
             ));
         }
         Command::Schema { name } => {
@@ -110,6 +111,10 @@ fn execute_inner(args: &Arguments) -> Result<Envelope> {
                 "extraction-packet" => include_str!("../../schemas/extraction-packet-v1.json"),
                 "extraction-state" => include_str!("../../schemas/extraction-state-v1.json"),
                 "graph-resolution" => include_str!("../../schemas/graph-resolution-v1.json"),
+                "graph-review" => include_str!("../../schemas/graph-review-v1.json"),
+                "graph-review-receipt" => {
+                    include_str!("../../schemas/graph-review-receipt-v1.json")
+                }
                 "entity-decisions" => include_str!("../../schemas/entity-decisions-v1.json"),
                 "entity-decision-receipt" => {
                     include_str!("../../schemas/entity-decision-receipt-v1.json")
@@ -377,6 +382,14 @@ fn execute_inner(args: &Arguments) -> Result<Envelope> {
             envelope.data = app.graph_decide(&super::extraction::bounded_json_input(
                 &options.file,
                 "entity decisions",
+            )?)?;
+        }
+        Command::Graph {
+            command: GraphCommand::Review(options),
+        } => {
+            envelope.data = app.graph_review(&super::extraction::bounded_json_input(
+                &options.file,
+                "graph review",
             )?)?;
         }
         Command::Graph { command } => {

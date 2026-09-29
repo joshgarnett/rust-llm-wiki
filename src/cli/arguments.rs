@@ -232,6 +232,7 @@ pub enum GraphCommand {
     Import(super::extraction::ImportArguments),
     Resolve(super::resolution::ResolveArguments),
     Decide(super::decisions::DecideArguments),
+    Review(super::review::ReviewArguments),
     Query {
         query: String,
         #[command(flatten)]
@@ -421,6 +422,9 @@ impl Command {
             Self::Graph {
                 command: GraphCommand::Decide(_),
             } => "graph decide",
+            Self::Graph {
+                command: GraphCommand::Review(_),
+            } => "graph review",
             Self::Graph {
                 command: GraphCommand::Query { .. },
             } => "graph query",

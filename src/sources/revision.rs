@@ -120,7 +120,7 @@ impl<'a> SourceView<'a> {
             ));
         }
         let mut entries = 0usize;
-        let paths = fs.root().scan_markdown_budgeted(&mut || {
+        let paths = fs.root().scan_markdown_limited(max_files, &mut || {
             if entries >= 65536 {
                 return Err(WikiError::new(
                     ErrorCode::BudgetExceeded,
@@ -298,11 +298,11 @@ impl<'a> SourceView<'a> {
         dependencies: &mut BTreeMap<VaultRelativePath, ExpectedState>,
         limit: Option<usize>,
     ) -> Result<Vec<u8>> {
+        // Captured source payloads share the engine's 64 MiB per-file ceiling.
+        // Even ordinary integrity checks must enforce it before allocation.
+        let limit = limit.unwrap_or(64 * 1024 * 1024);
         let bytes = if let Some(value) = self.overlay.get(path) {
-            if value
-                .as_ref()
-                .is_some_and(|b| limit.is_some_and(|n| b.len() > n))
-            {
+            if value.as_ref().is_some_and(|b| b.len() > limit) {
                 return Err(WikiError::new(
                     ErrorCode::BudgetExceeded,
                     "source asset exceeds read ceiling",
@@ -315,7 +315,7 @@ impl<'a> SourceView<'a> {
                 ))
             })?
         } else if let Some(note) = self.notes.get(path) {
-            if limit.is_some_and(|n| note.raw.len() > n) {
+            if note.raw.len() > limit {
                 return Err(WikiError::new(
                     ErrorCode::BudgetExceeded,
                     "source asset exceeds read ceiling",
@@ -326,14 +326,9 @@ impl<'a> SourceView<'a> {
             return Err(integrity(format!(
                 "payload absent from closed proof input: {path}"
             )));
-        } else if let Some(limit) = limit {
+        } else {
             bounded_source_read(self.fs, path, limit)?
                 .ok_or_else(|| integrity(format!("missing payload {path}")))?
-        } else {
-            self.fs
-                .read_before(path)?
-                .ok_or_else(|| integrity(format!("missing payload {path}")))?
-                .bytes
         };
         dependencies.insert(
             path.clone(),
@@ -344,6 +339,15 @@ impl<'a> SourceView<'a> {
     /// Closed proof callers supply explicit absence as well as all present assets.
     pub(crate) fn expected_state(&self, path: &VaultRelativePath) -> Result<ExpectedState> {
         if let Some(bytes) = self.overlay.get(path) {
+            if bytes
+                .as_ref()
+                .is_some_and(|bytes| bytes.len() > 64 * 1024 * 1024)
+            {
+                return Err(WikiError::new(
+                    ErrorCode::BudgetExceeded,
+                    "source asset exceeds read ceiling",
+                ));
+            }
             Ok(bytes.as_ref().map_or(ExpectedState::Absent, |bytes| {
                 ExpectedState::Hash(Blake3Hash::digest(bytes))
             }))
@@ -353,11 +357,9 @@ impl<'a> SourceView<'a> {
                 .map(|note| ExpectedState::Hash(note.source_hash.clone()))
                 .ok_or_else(|| integrity(format!("asset absent from closed proof input: {path}")))
         } else {
-            Ok(self
-                .fs
-                .read_before(path)?
-                .map_or(ExpectedState::Absent, |before| {
-                    ExpectedState::Hash(before.hash)
+            Ok(bounded_source_read(self.fs, path, 64 * 1024 * 1024)?
+                .map_or(ExpectedState::Absent, |bytes| {
+                    ExpectedState::Hash(Blake3Hash::digest(bytes))
                 }))
         }
     }

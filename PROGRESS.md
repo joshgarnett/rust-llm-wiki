@@ -1,6 +1,6 @@
 # Research and planning progress
 
-Started: 2026-09-28. Status: authorized M0–M4 implementation; P00–P12 and P15 accepted; M0 and M1 local gates complete; M2 evidence review P13 next.
+Started: 2026-09-28. Status: authorized M0–M4 implementation; P00–P13 and P15 accepted; M0 and M1 local gates complete; M2 portable skill P14 next.
 
 ## Scope
 
@@ -131,3 +131,5 @@ Start a new `gpt-6-sol` session with the [implementation goal](docs/execution/ST
 - P15 durable jobs/accounting locally accepted:43 targeted parents,19 explicit subprocess invocations,1148 injected faults across574 native I/O calls;131 final integrated parents plus strict lint/fmt/build/schema/seed. P16 trust/transport and M2/M3/M4 workflows remain required.
 
 - P12 exhaustive entity decisions and authenticated inverses locally accepted: forward19/inverse10/CLI3, native changes28 and shared145 parents; strict lint/fmt/build/schema/capabilities28/seed34. Complete hashed remaps, conservative accepted reset, exact retained operation membership and Current accepted restoration verified. P13–P14 and M3–M4 remain required.
+
+- P13 complete explicit evidence review locally accepted:19 graph parents verified across final sparse/schema corrections, real M2 CLI lifecycle1, P12 regression32, shared145 and native changes28; strict lint/fmt/build, all15 schema equality and seed34 passed. Actual Review→Merge reset→Review→Refresh/revalidation→Review and historical acknowledgement preserve stable allocations. P14 and P16–P21 remain required.

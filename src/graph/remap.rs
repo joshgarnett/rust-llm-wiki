@@ -382,8 +382,12 @@ impl VerifiedDecisionPolicy {
 pub struct VerifiedRemapOverlay {
     assertions: BTreeSet<RecordId>,
     policy: VerifiedDecisionPolicy,
+    requires_retained: bool,
 }
 impl VerifiedRemapOverlay {
+    pub(crate) fn requires_retained_input(&self) -> bool {
+        self.requires_retained
+    }
     pub fn authorized_assertions(&self) -> &BTreeSet<RecordId> {
         &self.assertions
     }
@@ -1761,6 +1765,7 @@ pub fn verify_remap_overlay(
         },
     )?;
     let mut authorized = BTreeSet::new();
+    let mut requires_retained = false;
     if let Some(w) = witness {
         let matched = policy
             .receipts
@@ -1792,6 +1797,7 @@ pub fn verify_remap_overlay(
         if !relevant {
             continue;
         }
+        requires_retained = true;
         verify_exact_decision_writes(&logical, &proposed, input, witness, r)?;
         verify_exact_changes(&logical, &proposed, &current, r)?;
         for guard in r.request.decisions.iter().flat_map(expected) {
@@ -1948,6 +1954,7 @@ pub fn verify_remap_overlay(
     Ok(Some(VerifiedRemapOverlay {
         assertions: authorized,
         policy,
+        requires_retained,
     }))
 }
 

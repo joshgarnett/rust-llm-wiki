@@ -71,7 +71,14 @@ impl ChangeEngine {
     /// Read-only expected-state validation; does not create a lock or directories.
     pub fn plan(&self, draft: &ChangeDraft) -> Result<ChangePlan> {
         self.require_binding()?;
-        if draft.inverse_of.is_some() {
+        let bounded_graph = draft.inverse_of.is_some()
+            || draft.origin.as_ref().is_some_and(|origin| {
+                matches!(
+                    origin.operation,
+                    OriginOperation::GraphDecide | OriginOperation::GraphReview
+                )
+            });
+        if bounded_graph {
             let proposed_bytes = draft.operations.iter().try_fold(0usize, |sum, op| {
                 sum.checked_add(op.proposed.as_ref().map_or(0, Vec::len))
             });
@@ -114,7 +121,7 @@ impl ChangeEngine {
         let mut images = Vec::new();
         let mut roles = Vec::new();
         let mut dropped = BTreeSet::new();
-        let mut inverse_reads = if draft.inverse_of.is_some() {
+        let mut inverse_reads = if bounded_graph {
             MAX_GRAPH_INPUT_BYTES
         } else {
             usize::MAX
@@ -489,11 +496,12 @@ impl ChangeEngine {
             })?;
         let intrinsic_limit = if manifest.inverse_of.is_some() {
             MAX_INVERSE_PAYLOAD_BYTES
-        } else if manifest
-            .origin
-            .as_ref()
-            .is_some_and(|origin| origin.operation == OriginOperation::GraphDecide)
-        {
+        } else if manifest.origin.as_ref().is_some_and(|origin| {
+            matches!(
+                origin.operation,
+                OriginOperation::GraphDecide | OriginOperation::GraphReview
+            )
+        }) {
             128 * 1024 * 1024
         } else {
             usize::MAX

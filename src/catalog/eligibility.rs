@@ -58,14 +58,53 @@ fn validate_projection(
     retained: Option<&RetainedGraphInput>,
     inverse_witness: Option<&RetainedGraphInverseInput>,
 ) -> Result<ValidatedGraph> {
-    let inverse = inverse_witness
-        .map(|witness| crate::graph::inverse::verify_inverse_overlay(fs, input, witness))
+    let review_inverse = inverse_witness
+        .filter(|w| w.anchor().origin().operation == crate::changes::OriginOperation::GraphReview)
+        .map(|w| crate::graph::review::verify_review_inverse_overlay(fs, input, w))
         .transpose()?;
-    let remap = if inverse.is_none() {
-        crate::graph::remap::verify_remap_overlay(fs, input, retained)?
+    let inverse = inverse_witness
+        .filter(|w| w.anchor().origin().operation == crate::changes::OriginOperation::GraphDecide)
+        .map(|w| crate::graph::inverse::verify_inverse_overlay(fs, input, w))
+        .transpose()?;
+    let is_inverse = inverse_witness.is_some();
+    let remap = if !is_inverse {
+        crate::graph::remap::verify_remap_overlay(
+            fs,
+            input,
+            retained
+                .filter(|w| w.origin().operation == crate::changes::OriginOperation::GraphDecide),
+        )?
     } else {
         None
     };
+    let review = if !is_inverse {
+        crate::graph::review::verify_review_overlay(
+            fs,
+            input,
+            retained
+                .filter(|w| w.origin().operation == crate::changes::OriginOperation::GraphReview),
+        )?
+    } else {
+        None
+    };
+    if !closed
+        && review.is_some()
+        && retained
+            .is_none_or(|w| w.origin().operation != crate::changes::OriginOperation::GraphReview)
+    {
+        return Err(WikiError::invalid(
+            "review activation requires authenticated GraphReview origin and allocations",
+        ));
+    }
+    if !closed
+        && remap.as_ref().is_some_and(|p| p.requires_retained_input())
+        && retained
+            .is_none_or(|w| w.origin().operation != crate::changes::OriginOperation::GraphDecide)
+    {
+        return Err(WikiError::invalid(
+            "entity decision activation requires authenticated GraphDecide origin and allocations",
+        ));
+    }
     let projector = if closed { project_closed } else { project };
     let proposed = projector(fs, input)?;
     let baseline = projector(
@@ -137,6 +176,12 @@ fn validate_projection(
                     .is_none_or(|old| old.record.string("wiki_status") != Some("accepted"))
                     || inverse
                         .as_ref()
+                        .is_some_and(|proof| proof.restored_accepted().contains(id))
+                    || review
+                        .as_ref()
+                        .is_some_and(|proof| proof.accepted_assertions().contains(id))
+                    || review_inverse
+                        .as_ref()
                         .is_some_and(|proof| proof.restored_accepted().contains(id)))
                 && row.eligibility != Eligibility::Current
             {
@@ -164,6 +209,26 @@ fn validate_projection(
             }) {
                 return Err(WikiError::invalid(format!(
                     "inverse acceptance requires intact current supporting evidence: {id}"
+                )));
+            }
+        }
+    }
+    for ids in [
+        review.as_ref().map(|proof| proof.accepted_assertions()),
+        review_inverse
+            .as_ref()
+            .map(|proof| proof.restored_accepted()),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        for id in ids {
+            if proposed.records.get(id).is_none_or(|row| {
+                row.record.string("wiki_status") != Some("accepted")
+                    || row.eligibility != Eligibility::Current
+            }) {
+                return Err(WikiError::invalid(format!(
+                    "review acceptance requires intact current supporting evidence: {id}"
                 )));
             }
         }
@@ -489,6 +554,32 @@ pub(crate) fn compute(
             None
         }
     };
+    let review_policy = match crate::graph::review::verify_review_policy(notes) {
+        Ok(policy) => policy,
+        Err(error) => {
+            for id in crate::graph::review::relevant_decision_ids(notes) {
+                if let Some(row) = records.get_mut(&id) {
+                    mark_invalid(
+                        row,
+                        "review_receipt_invalid",
+                        diagnostics,
+                        serde_json::json!({"error":error}),
+                    );
+                }
+            }
+            None
+        }
+    };
+    let review_edges = review_policy
+        .as_ref()
+        .map(|p| p.supersession_edges().clone())
+        .unwrap_or_default();
+    for (predecessor, successor) in &review_edges {
+        supersession
+            .entry(successor.clone())
+            .or_default()
+            .insert(predecessor.clone());
+    }
     if let Some(policy) = &decision_policy {
         for (predecessor, successor) in policy.supersession_edges() {
             supersession
@@ -517,7 +608,23 @@ pub(crate) fn compute(
             );
         }
     }
-    apply_decisions(notes, records, diagnostics, decision_policy.as_ref())?;
+    for id in overlong_supersession_roots(&supersession) {
+        if let Some(row) = records.get_mut(&id) {
+            mark_invalid(
+                row,
+                "supersession_chain_over_limit",
+                diagnostics,
+                serde_json::Value::Null,
+            );
+        }
+    }
+    apply_decisions(
+        notes,
+        records,
+        diagnostics,
+        decision_policy.as_ref(),
+        &review_edges,
+    )?;
 
     // Verify all original assets, including unsupported captures; failed checks retain
     // dependencies read before failure so later verification cannot overlook tampering.
@@ -580,6 +687,9 @@ pub(crate) fn compute(
                 .map(|(path, expected)| ReadDependency { path, expected }),
         );
         if let Err(error) = integrity {
+            if error.code == ErrorCode::BudgetExceeded {
+                return Err(error);
+            }
             mark_invalid(
                 row,
                 "revision_integrity",
@@ -672,6 +782,9 @@ pub(crate) fn compute(
                 row.dependencies.extend(verified.dependencies);
             }
             Err(error) => {
+                if error.code == ErrorCode::BudgetExceeded {
+                    return Err(error);
+                }
                 mark_invalid(
                     row,
                     "evidence_integrity",
@@ -921,6 +1034,51 @@ fn apply_dependency_eligibility(
     }
 }
 
+// Supersession maps successor to predecessors. Bound the combined ordinary,
+// entity-decision and review graph independently of ID order or receipt type.
+fn overlong_supersession_roots(
+    edges: &BTreeMap<RecordId, BTreeSet<RecordId>>,
+) -> BTreeSet<RecordId> {
+    let mut pending = BTreeMap::new();
+    let mut successors: BTreeMap<RecordId, BTreeSet<RecordId>> = BTreeMap::new();
+    for (successor, predecessors) in edges {
+        pending.insert(successor.clone(), predecessors.len());
+        for predecessor in predecessors {
+            successors
+                .entry(predecessor.clone())
+                .or_default()
+                .insert(successor.clone());
+        }
+    }
+    for predecessor in successors.keys() {
+        pending.entry(predecessor.clone()).or_insert(0);
+    }
+    let mut ready: Vec<_> = pending
+        .iter()
+        .filter(|(_, n)| **n == 0)
+        .map(|(id, _)| id.clone())
+        .collect();
+    let mut longest: BTreeMap<RecordId, usize> = BTreeMap::new();
+    let mut invalid = BTreeSet::new();
+    while let Some(id) = ready.pop() {
+        let depth = longest.get(&id).copied().unwrap_or(0);
+        if depth > crate::graph::MAX_AUTHORIZED_EVOLUTION_HOPS {
+            invalid.insert(id.clone());
+        }
+        for successor in successors.get(&id).into_iter().flatten() {
+            let next = longest.entry(successor.clone()).or_default();
+            *next = (*next).max(depth + 1);
+            let left = pending.get_mut(successor).expect("supersession node");
+            *left -= 1;
+            if *left == 0 {
+                ready.push(successor.clone());
+            }
+        }
+    }
+    // Cycles are diagnosed separately; no receipt/ID order affects longest paths.
+    invalid
+}
+
 fn cycle_members(edges: &BTreeMap<RecordId, BTreeSet<RecordId>>) -> BTreeSet<RecordId> {
     let mut cycles = BTreeSet::new();
     for start in edges.keys() {
@@ -1064,6 +1222,7 @@ fn apply_decisions(
     records: &mut BTreeMap<RecordId, RecordRow>,
     diagnostics: &mut Vec<CatalogDiagnostic>,
     decision_policy: Option<&crate::graph::remap::VerifiedDecisionPolicy>,
+    review_edges: &BTreeSet<(RecordId, RecordId)>,
 ) -> Result<()> {
     let decisions: Vec<_> = records
         .values()
@@ -1282,7 +1441,7 @@ fn apply_decisions(
             }
         }
     }
-    let explicitly_superseded: BTreeSet<_> = records
+    let mut explicitly_superseded: BTreeSet<_> = records
         .values()
         .filter(|r| {
             r.record.kind() == RecordKind::Decision && r.eligibility != Eligibility::Invalid
@@ -1290,6 +1449,7 @@ fn apply_decisions(
         .filter_map(|r| r.record.string("wiki_supersedes_id"))
         .map(str::to_owned)
         .collect();
+    explicitly_superseded.extend(review_edges.iter().map(|(before, _)| before.to_string()));
     for decision in &decisions {
         if decision.record.string("wiki_status") == Some("active")
             && explicitly_superseded.contains(decision.record.id().as_str())

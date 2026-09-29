@@ -20,6 +20,7 @@ pub enum OriginOperation {
     GraphImport,
     GraphResolve,
     GraphDecide,
+    GraphReview,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
