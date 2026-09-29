@@ -43,10 +43,10 @@
     "SKILL.md": "b44c160e3e51d7a526d8c02560535294f3173cd1f303af6db2eecff7dd1de272",
     "agents/openai.yaml": "307ad222dc5d27d563d54b0a0466264fd035378ce2d103bcbf8de4ed2ea1b144",
     "references/commands.md": "e0a5acf6274d33bfe4fe79a96a60a0580ff9369f25775a6c3806eac5f30b298b",
-    "references/examples.json": "f1a3128f8e85a0f4ee7fd63b3ce17adacf85b9cfbc64a95017619c71b98c2706",
+    "references/examples.json": "7d070f0d37afe84ef9dd8e2294102f38ba1d70c8203e47d64c824ea2d3156d8e",
     "references/workflows.md": "1e23776b4d6898133c4ec11b46f125bd1352d9bbf44c6e4eb91f252e5b1b0838"
   },
-  "package_checksum": "ec939c611bb257db65c0a260d7d31b08983fca64fa182be2e551acd84d751ea4",
+  "package_checksum": "38e1938a7a3a160c0fb581006634bec664551fa0ec040af08d49a3f37ca2f8dd",
   "schema": "lwiki.skill-manifest.v1",
   "schemas": [
     "output",

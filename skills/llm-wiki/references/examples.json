@@ -357,9 +357,27 @@
         "--max-bytes",
         "12000",
         "--max-tokens",
-        "3000"
+        "3000",
+        "--verification-max-elapsed-ms",
+        "30000"
       ],
       "check": "context_citation"
+    },
+    {
+      "name": "bounded-empty-partial",
+      "args": [
+        "context",
+        "KEY-731",
+        "--max-bytes",
+        "1",
+        "--max-tokens",
+        "1",
+        "--instruction-bytes",
+        "1",
+        "--verification-max-elapsed-ms",
+        "30000"
+      ],
+      "check": "budget_partial"
     },
     {
       "name": "repeat-import",
@@ -505,20 +523,6 @@
         "path": "pages/portable.md",
         "append": "\nHuman-added observation.\n"
       }
-    },
-    {
-      "name": "bounded-empty-partial",
-      "args": [
-        "context",
-        "KEY-731",
-        "--max-bytes",
-        "1",
-        "--max-tokens",
-        "1",
-        "--instruction-bytes",
-        "1"
-      ],
-      "check": "budget_partial"
     },
     {
       "name": "budget-stop",

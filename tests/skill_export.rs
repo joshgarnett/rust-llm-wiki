@@ -436,8 +436,17 @@ fn skill_examples_execute_against_release_binary() {
             }
             "budget_partial" => {
                 assert_eq!(v["meta"]["partial"], true);
+                assert_eq!(v["meta"]["freshness"], "verified_snapshot");
                 assert_eq!(v["data"]["text"], "");
-                assert!(!v["data"]["omissions"].as_array().unwrap().is_empty());
+                assert!(v["data"]["passages"].as_array().unwrap().is_empty());
+                assert!(v["data"]["bundles"].as_array().unwrap().is_empty());
+                assert!(
+                    v["data"]["omissions"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .any(|o| { o["reason"] == "required_bundle_or_passage_does_not_fit" })
+                );
             }
             "semantic_unavailable" => {
                 assert_eq!(exit, 6);
