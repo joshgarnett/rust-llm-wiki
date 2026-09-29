@@ -6,7 +6,7 @@ task_repo_root=$(cd "$(dirname "$0")/.." && pwd)
 cd "$task_repo_root"
 task_evidence_dir=${1:-$(mktemp -d "${TMPDIR:-/tmp}/lwiki-qualification.XXXXXX")}
 mkdir -p "$task_evidence_dir"
-task_evidence_dir=$(cd "$task_evidence_dir" && pwd)
+task_evidence_dir=$(cd "$task_evidence_dir" && pwd -P)
 
 cargo fmt --all -- --check > "$task_evidence_dir/fmt.log" 2>&1
 cargo clippy --locked --offline --all-targets -- -D warnings > "$task_evidence_dir/clippy.log" 2>&1

@@ -1,6 +1,6 @@
 # Implementation coverage ledger
 
-This ledger retains the complete M0–M4 scope. Planned test names below are obligations, not evidence. Update actual tests, revision fingerprints, commands and results after integration. External E01–E05 are unqualified.
+P00–P21 and V01–V17 are locally accepted on the available native macOS platform. Historical package observations remain below; current exact named tests, per-target logs/source hashes and aggregate qualification are in P21-gate-map.json, P21-test-results.md, P21-checks.json and FINAL.md. Both whole all-target attempts remain failed; unchanged passing targets plus the completed final continuation qualify all 51 Cargo targets. Historical fault counts are not fresh P21 numeric observations. External E01–E05 remain unqualified.
 
 | Gate | Required behavior | Packages | Tests / evidence | Status |
 |---|---|---|---|---|
@@ -47,7 +47,7 @@ This ledger retains the complete M0–M4 scope. Planned test names below are obl
 | P18 | `api_and_agent_same_packet_import_semantics`, `cached_resume_preserves_reject_accept_and_resolution`, `malformed_response_charged_no_partial_activation_or_repair`, `changed_source_prompt_model_creates_new_task`, `cancel_after_dispatch_retains_completed_output_unknown_attempt`; gate **resumable API proposals without implicit acceptance**. | accepted jointly; P18-checks.json; current104public/56provider/1APIhelper parents, strict lint/build/fmt/artifact |
 | P19 | `search_limits_pages_dedup_snippets_are_not_evidence`, `explicit_url_without_search_capability`, `dns_rebind_private_redirect_ipv4_mapped_ipv6_rejected`, `ambient_proxy_auth_downgrade_credentials_rejected`, `redirect_and_decompression_caps_accounted`, `capture_raw_before_normalize_and_unsupported_gap`; gate **bounded public acquisition and captured provenance**. | accepted jointly; P19-checks.json; current104public/56provider/1APIhelper parents, strict lint/build/fmt/artifact |
 | P20 | `mock_standalone_research_full_plan_to_evidence_report`, `research_stage_schemas_limits_unknown_refs_and_invented_paths`, `synthesis_citation_bytes_verified_unsupported_claims_not_accepted`, `resume_completed_tasks_changed_source_model_revalidate`, `lifetime_round_request_source_deadline_limits_do_not_reset`, `budget_stop_deterministic_partial_report_no_final_generation`, `cancel_restart_unknown_attempts_and_preserved_report`, `planner_cannot_raise_limits_dispatch_or_apply`, `unverifiable_claims_and_coverage_gaps_remain_explicit`, `dry_run_research_zero_side_effects`; gate **complete bounded resumable M4 research**. | locally accepted; P20.md/P20-checks.json, 273 integration + 4 skill parents, full 23 workflows and independent Astra closure |
-| P21 | `m0_m4_full_local_acceptance`, `clean_artifact_smoke_no_auxiliary_runtime`, `jsonl_terminal_event_and_interrupted_state`, `heldout_fixed_corpus_equal_budget_baseline`, `all_fault_injection_and_counted_offline_gates`; gate **complete local M0–M4 qualification**. Run formatting, full required tests, linting, and release build once on the final integrated revision; repeat only for changes/failures or unresolved evidence. | pending; reports/P21.md |
+| P21 | `m0_m4_full_local_acceptance`, `clean_artifact_smoke_no_auxiliary_runtime`, `jsonl_terminal_event_and_interrupted_state`, `heldout_fixed_corpus_equal_budget_baseline`, `all_fault_injection_and_counted_offline_gates`; gate **complete local M0–M4 qualification**. Run formatting, full required tests, linting, and release build once on the final integrated revision; repeat only for changes/failures or unresolved evidence. | accepted locally; P21.md/P21-checks.json/FINAL.md; independent Astra closed |
 
 ## Complete command target
 
@@ -71,6 +71,7 @@ This ledger retains the complete M0–M4 scope. Planned test names below are obl
 | `changes show ID`, `changes apply ID` | implemented; P06/P07 executable gates passed | M1–M2 |
 | `changes abort ID`, `changes rollback ID` | implemented; P06/P07 executable gates passed | M1 |
 | `recover` | implemented; P06/P07 executable gates passed | M1 |
+| `migrate --id ID --if-match HASH` | explicit staged lossless guarded migration; P06/P07 executable gates passed | M1 |
 | `graph extract --executor agent` | implemented; P10 executable gates passed | M2 |
 | `graph import --file FILE` | implemented; P10 executable gates passed | M2 |
 | `graph resolve --file RESOLUTION.json` | implemented; P11 executable gates passed | M2 |

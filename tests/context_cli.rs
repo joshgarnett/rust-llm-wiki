@@ -373,7 +373,7 @@ fn context_cli_dry_run_is_pure_and_bad_requests_never_claim_verification() {
         vec!["--limit", "51"],
         vec!["--target", "graph", "--depth", "3"],
         vec!["--instruction-bytes", "12001"],
-        vec!["--seed", "semantic"],
+        vec!["--seed", "unknown"],
     ] {
         let mut args = vec!["context", "uses"];
         args.extend(flags);

@@ -1,0 +1,2581 @@
+{
+  "status": "all V01\u2013V17 local gates accepted; external E01\u2013E05 pending",
+  "scope": "current native macOS disposable vaults/mock endpoints; external E01\u2013E05 unqualified",
+  "gates": {
+    "V01": {
+      "test_targets_or_checks": [
+        "contracts",
+        "machine_contract",
+        "offline_cli",
+        "skill_export"
+      ],
+      "status": "passed on available native platform; external qualification pending",
+      "actual_evidence": [
+        {
+          "selector": "contracts",
+          "result": {
+            "target": "tests/contracts.rs",
+            "passed": 4,
+            "failed": 0,
+            "ignored_explicit_children": 0,
+            "seconds": 0.05,
+            "log": "/private/tmp/lwiki-p21-final-second-failed/tests.log",
+            "log_sha256": "6bad232e1d90bcd0d63e410a2f7ad1f1f547a50fccbb31353e101605527a5cf3",
+            "observed_source_fingerprint": "ea627f8d6e0cad300f8f29398ab771d61ec32397f97544f0171862edc43d24ab",
+            "reuse": "product, Cargo, shared fixtures and this target source byte-equal to final tree"
+          },
+          "passing_named_tests": [
+            "contracts_invalid_types_and_references",
+            "contracts_valid_examples",
+            "id_hash_and_path_newtypes",
+            "predicate_literal_and_qualifier_matrix"
+          ],
+          "log": "/private/tmp/lwiki-p21-final-second-failed/tests.log",
+          "log_sha256": "6bad232e1d90bcd0d63e410a2f7ad1f1f547a50fccbb31353e101605527a5cf3"
+        },
+        {
+          "selector": "machine_contract",
+          "result": {
+            "target": "tests/machine_contract.rs",
+            "passed": 6,
+            "failed": 0,
+            "ignored_explicit_children": 0,
+            "seconds": 0.07,
+            "log": "/private/tmp/lwiki-p21-final/tests.log",
+            "log_sha256": "e229ccaf0bc0c2b19557fb5f10a5da5d185ac253d99bb86bee56ae8c75c057b7",
+            "observed_source_fingerprint": "325e425accaad00f69d658c68121d46469cac5e69d7fc3c2ef44d6b07912678a"
+          },
+          "passing_named_tests": [
+            "canonical_fixture_schema_hashes_and_utf8_spans_agree",
+            "capabilities_only_implemented_commands",
+            "evidence_link_schema_rejects_plain_strings",
+            "invalid_utf8_arguments_return_clean_usage_envelope",
+            "output_envelope_matches_published_schema",
+            "published_record_schema_validates_types_and_qualifiers"
+          ],
+          "log": "/private/tmp/lwiki-p21-final/tests.log",
+          "log_sha256": "e229ccaf0bc0c2b19557fb5f10a5da5d185ac253d99bb86bee56ae8c75c057b7"
+        },
+        {
+          "selector": "offline_cli",
+          "result": {
+            "target": "tests/offline_cli.rs",
+            "passed": 10,
+            "failed": 0,
+            "ignored_explicit_children": 0,
+            "seconds": 3.49,
+            "log": "/private/tmp/lwiki-p21-final/tests.log",
+            "log_sha256": "e229ccaf0bc0c2b19557fb5f10a5da5d185ac253d99bb86bee56ae8c75c057b7",
+            "observed_source_fingerprint": "325e425accaad00f69d658c68121d46469cac5e69d7fc3c2ef44d6b07912678a"
+          },
+          "passing_named_tests": [
+            "dry_run_cli_leaves_existing_vault_cache_changes_and_directories_exactly_unchanged",
+            "executable_put_read_rename_stage_apply_rollback_abort_workflow",
+            "init_subprocess_and_bounded_file_input_are_guarded",
+            "jsonl_started_and_terminal_events_share_invocation_and_sequence",
+            "machine_envelope_error_exit_and_no_ansi",
+            "migration_is_lossless_staged_guarded_and_future_versions_remain_readable",
+            "no_sync_reads_cached_bytes_and_search_reports_freshness_and_channel",
+            "normal_cli_search_recovers_committed_sql_with_incomplete_change_journal",
+            "retained_apply_failure_returns_inspectable_change_and_human_snapshot_is_labelled",
+            "source_cli_capture_refresh_reuse_and_withdraw_preserve_immutable_bytes"
+          ],
+          "log": "/private/tmp/lwiki-p21-final/tests.log",
+          "log_sha256": "e229ccaf0bc0c2b19557fb5f10a5da5d185ac253d99bb86bee56ae8c75c057b7"
+        },
+        {
+          "selector": "skill_export",
+          "result": {
+            "target": "tests/skill_export.rs",
+            "passed": 4,
+            "failed": 0,
+            "ignored_explicit_children": 0,
+            "seconds": 7.35,
+            "log": "/private/tmp/lwiki-p21-final/tests.log",
+            "log_sha256": "e229ccaf0bc0c2b19557fb5f10a5da5d185ac253d99bb86bee56ae8c75c057b7",
+            "observed_source_fingerprint": "325e425accaad00f69d658c68121d46469cac5e69d7fc3c2ef44d6b07912678a"
+          },
+          "passing_named_tests": [
+            "skill_capabilities_do_not_advertise_missing_commands",
+            "skill_examples_execute_against_release_binary",
+            "skill_exports_correct_single_discovery_layout",
+            "skill_refuses_host_instruction_overwrite"
+          ],
+          "log": "/private/tmp/lwiki-p21-final/tests.log",
+          "log_sha256": "e229ccaf0bc0c2b19557fb5f10a5da5d185ac253d99bb86bee56ae8c75c057b7"
+        }
+      ]
+    },
+    "V02": {
+      "test_targets_or_checks": [
+        "records_lossless",
+        "catalog_scan_eligibility"
+      ],
+      "status": "passed on available native platform; external qualification pending",
+      "actual_evidence": [
+        {
+          "selector": "records_lossless",
+          "result": {
+            "target": "tests/records_lossless.rs",
+            "passed": 8,
+            "failed": 0,
+            "ignored_explicit_children": 0,
+            "seconds": 0.02,
+            "log": "/private/tmp/lwiki-p21-final/tests.log",
+            "log_sha256": "e229ccaf0bc0c2b19557fb5f10a5da5d185ac253d99bb86bee56ae8c75c057b7",
+            "observed_source_fingerprint": "325e425accaad00f69d658c68121d46469cac5e69d7fc3c2ef44d6b07912678a"
+          },
+          "passing_named_tests": [
+            "bootstrap_canonical_bytes_match_manifest",
+            "delimiter_bounds_and_unsafe_edits",
+            "frontmatter_preserves_unknown_nested_comments_quotes_bom_crlf",
+            "links_ignore_code_and_preserve_ambiguity",
+            "numeric_syntax_never_falls_back_to_string_and_spans_remain_exact",
+            "reject_duplicate_keys_anchors_tags_and_wrong_types",
+            "scalar_comment_ranges_and_inline_list_edits",
+            "unsupported_schema_is_structured_read_only"
+          ],
+          "log": "/private/tmp/lwiki-p21-final/tests.log",
+          "log_sha256": "e229ccaf0bc0c2b19557fb5f10a5da5d185ac253d99bb86bee56ae8c75c057b7"
+        },
+        {
+          "selector": "catalog_scan_eligibility",
+          "result": {
+            "target": "tests/catalog_scan_eligibility.rs",
+            "passed": 14,
+            "failed": 0,
+            "ignored_explicit_children": 0,
+            "seconds": 0.25,
+            "log": "/private/tmp/lwiki-p21-final-second-failed/tests.log",
+            "log_sha256": "6bad232e1d90bcd0d63e410a2f7ad1f1f547a50fccbb31353e101605527a5cf3",
+            "observed_source_fingerprint": "ea627f8d6e0cad300f8f29398ab771d61ec32397f97544f0171862edc43d24ab",
+            "reuse": "product, Cargo, shared fixtures and this target source byte-equal to final tree"
+          },
+          "passing_named_tests": [
+            "borrowed_overlay_verifies_new_assets_and_direct_source_labels",
+            "conflicting_decisions_and_supersession_cycles_are_explicit",
+            "copied_ids_and_companion_conflicts_exclude_all",
+            "dependency_cycle_and_identity_description_split",
+            "evidence_successors_preserve_chain_and_empty_decisions_are_invalid",
+            "graph_endpoints_use_resolved_names_and_keep_direction",
+            "missing_payload_absence_and_literal_qualifiers_are_projected",
+            "one_then_all_support_withdrawal_recomputes_full_closure",
+            "output_only_conflicts_and_invalid_superseders_never_gain_authority",
+            "same_timestamp_edit_and_decision_change_detected",
+            "source_advance_preserves_historical_evidence_and_stales_descendants",
+            "tampered_bytes_are_invalid_and_complete_dependencies_include_original",
+            "unsupported_binary_and_payload_frontmatter_never_supply_identity",
+            "validator_rejects_new_invalidity_and_silent_retargeting"
+          ],
+          "log": "/private/tmp/lwiki-p21-final-second-failed/tests.log",
+          "log_sha256": "6bad232e1d90bcd0d63e410a2f7ad1f1f547a50fccbb31353e101605527a5cf3"
+        }
+      ]
+    },
+    "V03": {
+      "test_targets_or_checks": [
+        "changes_prepare_journal",
+        "changes_recovery",
+        "change_read_preconditions",
+        "lib::jobs::accounting_tests",
+        "vault_fs",
+        "lib::vault::operational_tests"
+      ],
+      "status": "passed on available native platform; external qualification pending",
+      "actual_evidence": [
+        {
+          "selector": "changes_prepare_journal",
+          "result": {
+            "target": "tests/changes_prepare_journal.rs",
+            "passed": 17,
+            "failed": 0,
+            "ignored_explicit_children": 0,
+            "seconds": 24.2,
+            "log": "/private/tmp/lwiki-p21-final-second-failed/tests.log",
+            "log_sha256": "6bad232e1d90bcd0d63e410a2f7ad1f1f547a50fccbb31353e101605527a5cf3",
+            "observed_source_fingerprint": "ea627f8d6e0cad300f8f29398ab771d61ec32397f97544f0171862edc43d24ab",
+            "reuse": "product, Cargo, shared fixtures and this target source byte-equal to final tree"
+          },
+          "passing_named_tests": [
+            "actual_prepare_durable_io_failure_matrix_never_mutates_targets",
+            "cycles_case_prefix_reserved_and_exact_noops",
+            "dry_run_and_all_preconditions_before_retained_writes",
+            "duplicate_journal_keys_and_torn_tail_repaired_before_append",
+            "exact_binary_retention_and_manifest_schema_and_identity",
+            "immutable_revision_tree_and_record_kind_independent_of_source_head",
+            "incomplete_preparations_preserve_payloads_but_missing_manifest_with_evidence_refuses",
+            "journal_rejects_unknown_nested_snapshot_fields_and_wrong_binding",
+            "lost_journal_remains_staged_even_when_targets_new_or_mixed",
+            "missing_tampered_escaped_payload_and_duplicate_manifest_keys_fail_closed",
+            "origin_build_once_reuse_all_terminal_states_and_different_response",
+            "recovery_applying_epoch_resets_completions_and_pending_intent",
+            "source_head_infers_all_new_revision_prerequisites_and_terminal_history_ignores_targets",
+            "tail_repair_truncate_and_sync_failures_stop_append",
+            "truncated_tail_complete_corruption_sequence_and_topological_events",
+            "vault_identity_and_permit_binding_cannot_be_changed",
+            "verified_terminal_receipt_survives_journal_loss_and_origin_retry"
+          ],
+          "log": "/private/tmp/lwiki-p21-final-second-failed/tests.log",
+          "log_sha256": "6bad232e1d90bcd0d63e410a2f7ad1f1f547a50fccbb31353e101605527a5cf3"
+        },
+        {
+          "selector": "changes_recovery",
+          "result": {
+            "target": "tests/changes_recovery.rs",
+            "passed": 28,
+            "failed": 0,
+            "ignored_explicit_children": 1,
+            "seconds": 341.32,
+            "log": "/private/tmp/lwiki-p21-final-second-failed/tests.log",
+            "log_sha256": "6bad232e1d90bcd0d63e410a2f7ad1f1f547a50fccbb31353e101605527a5cf3",
+            "observed_source_fingerprint": "ea627f8d6e0cad300f8f29398ab771d61ec32397f97544f0171862edc43d24ab",
+            "reuse": "product, Cargo, shared fixtures and this target source byte-equal to final tree"
+          },
+          "passing_named_tests": [
+            "another_unresolved_apply_blocks_before_new_mutation",
+            "applying_third_hash_and_absence_become_durable_conflicts",
+            "bookkeeping_edit_and_receipt_corruption_fail_closed",
+            "crash_matrix_journal_stage_replace_filesapplied_indexed_commit",
+            "extra_revision_bytes_during_validation_block_publication_and_durably_conflict",
+            "extra_unplanned_revision_member_before_apply_preserves_all_bytes",
+            "graph_decide_retained_witness_preserves_actual_scan_across_files_applied_recovery",
+            "graph_decide_retained_witness_refuses_tampered_before_payload_before_mutation",
+            "independently_prepared_revision_extension_refuses_even_permissive_graph",
+            "interrupted_apply_preserves_outside_scan_and_binary_read_dependencies",
+            "inverse_aggregate_limit_refuses_declared_sparse_payloads_before_reading_them",
+            "inverse_keeps_immutable_captures_and_stale_prepared_abort_is_safe",
+            "known_prepared_abort_ignores_obsolete_directory_nested_vault_and_symlink_targets",
+            "lost_journal_revision_owner_is_bound_to_its_original_manifest_and_baseline",
+            "lost_state_reconstructs_from_payloads",
+            "missing_corrupt_or_misbound_revision_receipt_refuses_recovery",
+            "missing_immutable_capture_after_filesapplied_is_restored_from_exact_payload",
+            "missing_journal_abort_still_refuses_obsolete_target_scope_and_types",
+            "observed_validation_receipt_syncs_before_applying_on_retry",
+            "overlapping_staged_changes_do_not_block_publication",
+            "own_interrupted_revision_members_resume_but_extras_become_conflict",
+            "publication_refuses_unavailable_bad_payload_and_mismatched_snapshot",
+            "recovery_old_new_third_hash_and_absence",
+            "recovery_replays_old_despite_done_filesapplied_and_indexed_flags",
+            "rollback_preserves_unfamiliar_edits",
+            "subprocess_abrupt_kill_restarts_at_real_replace_boundary",
+            "subprocess_killed_after_private_revision_stage_creation_recovers_exact_members",
+            "unicode_namespace_captured_frontmatter_stays_out_of_canonical_scan"
+          ],
+          "log": "/private/tmp/lwiki-p21-final-second-failed/tests.log",
+          "log_sha256": "6bad232e1d90bcd0d63e410a2f7ad1f1f547a50fccbb31353e101605527a5cf3"
+        },
+        {
+          "selector": "change_read_preconditions",
+          "result": {
+            "target": "tests/change_read_preconditions.rs",
+            "passed": 8,
+            "failed": 0,
+            "ignored_explicit_children": 0,
+            "seconds": 1.01,
+            "log": "/private/tmp/lwiki-p21-final-second-failed/tests.log",
+            "log_sha256": "6bad232e1d90bcd0d63e410a2f7ad1f1f547a50fccbb31353e101605527a5cf3",
+            "observed_source_fingerprint": "ea627f8d6e0cad300f8f29398ab771d61ec32397f97544f0171862edc43d24ab",
+            "reuse": "product, Cargo, shared fixtures and this target source byte-equal to final tree"
+          },
+          "passing_named_tests": [
+            "absent_guard_and_duplicate_paths_fail_closed",
+            "interrupted_apply_never_refreshes_changed_original_read_authorization",
+            "no_op_read_guard_survives_but_matching_write_guard_normalizes",
+            "origin_retry_retains_original_guard_without_rebinding_or_allocating",
+            "original_guards_fail_before_preparation_or_activation",
+            "publication_dependency_edit_denies_completion_and_preserves_bytes",
+            "read_write_ancestor_and_portable_case_collisions_reject_before_allocation",
+            "terminal_history_and_legacy_manifest_encoding_ignore_later_guard_edits"
+          ],
+          "log": "/private/tmp/lwiki-p21-final-second-failed/tests.log",
+          "log_sha256": "6bad232e1d90bcd0d63e410a2f7ad1f1f547a50fccbb31353e101605527a5cf3"
+        },
+        {
+          "selector": "lib::jobs::accounting_tests",
+          "passing_named_tests": [
+            "jobs::accounting_tests::after_received_and_orphan_overrun_stop_before_another_admission",
+            "jobs::accounting_tests::begin_send_rejects_utc_regression_below_unpersisted_before_flush_sample",
+            "jobs::accounting_tests::bounded_checkpoint_batches_advance_exact_prefix_without_resetting_lifetime_counts",
+            "jobs::accounting_tests::canonical_run_drift_after_send_preserves_operational_paid_cost_without_overwrite",
+            "jobs::accounting_tests::checkpoint_requires_actual_committed_exact_run_and_events",
+            "jobs::accounting_tests::delayed_reservations_cannot_burst_actual_send_rate",
+            "jobs::accounting_tests::dispatch_authority_is_one_use_and_replay_never_mints_it",
+            "jobs::accounting_tests::every_actual_ledger_io_boundary_replays_without_duplicate_charge",
+            "jobs::accounting_tests::every_bootstrap_genesis_head_and_canonical_create_io_boundary_is_retryable",
+            "jobs::accounting_tests::final_durable_authority_gate_retains_accounting_without_returning_capsules",
+            "jobs::accounting_tests::full_task_checkpoint_summary_is_bounded_and_exact",
+            "jobs::accounting_tests::historical_checkpoint_proof_loss_cannot_block_post_send_paid_retention",
+            "jobs::accounting_tests::interrupted_validated_output_ack_repairs_task_and_dependency_without_new_request",
+            "jobs::accounting_tests::native_sigkill_each_ledger_lifecycle_boundary",
+            "jobs::accounting_tests::optional_corrections_do_not_spend_receipt_slots_and_work_after_cleanup",
+            "jobs::accounting_tests::oversized_paid_body_records_actual_cost_and_breach_without_spooling",
+            "jobs::accounting_tests::produced_canonical_run_events_and_receipts_obey_authoritative_strict_schemas",
+            "jobs::accounting_tests::proven_not_sent_refunds_once_but_old_authorization_and_attempt_number_cannot_reset",
+            "jobs::accounting_tests::replay_each_spool_output_receipt_settlement_boundary",
+            "jobs::accounting_tests::retry_gets_new_reservation_no_double_settlement",
+            "jobs::accounting_tests::source_drift_keeps_paid_accounting_but_blocks_derived_activation_and_resume",
+            "jobs::accounting_tests::stopped_control_headroom_stays_released_for_mandatory_receipt_lifecycle",
+            "jobs::accounting_tests::stopped_run_finishes_only_already_planned_ready_local_partial_work",
+            "jobs::accounting_tests::terminal_http_default_retry_refuses_invalid_status_or_missing_corrupt_proof",
+            "jobs::accounting_tests::terminal_http_retry_does_not_hide_an_older_possible_send",
+            "jobs::accounting_tests::terminal_http_retry_requires_received_status_not_public_reconciliation",
+            "jobs::accounting_tests::terminal_http_third_retry_needs_every_prior_status_spool",
+            "jobs::accounting_tests::terminal_http_unknown_billing_retries_keep_full_charges_after_reopen",
+            "jobs::accounting_tests::undeclared_unknown_billable_class_breaks_completeness",
+            "jobs::accounting_tests::unknown_retains_money_and_remote_exposure_until_reconciled",
+            "jobs::accounting_tests::unknown_usage_known_cost_overrun_and_currency_are_independent_violations",
+            "jobs::accounting_tests::wire_contract_ordinary_paid_output_failures_do_not_invalidate_bounds",
+            "jobs::accounting_tests::wire_contract_violation_survives_received_interrupt_and_cannot_resume"
+          ],
+          "count": 33,
+          "log": "/private/tmp/lwiki-p21-final-second-failed/tests.log",
+          "log_sha256": "6bad232e1d90bcd0d63e410a2f7ad1f1f547a50fccbb31353e101605527a5cf3"
+        },
+        {
+          "selector": "vault_fs",
+          "result": {
+            "target": "tests/vault_fs.rs",
+            "passed": 15,
+            "failed": 0,
+            "ignored_explicit_children": 0,
+            "seconds": 1.1,
+            "log": "/private/tmp/lwiki-p21-final/tests.log",
+            "log_sha256": "e229ccaf0bc0c2b19557fb5f10a5da5d185ac253d99bb86bee56ae8c75c057b7",
+            "observed_source_fingerprint": "325e425accaad00f69d658c68121d46469cac5e69d7fc3c2ef44d6b07912678a"
+          },
+          "passing_named_tests": [
+            "cooperating_writers_serialize",
+            "discovery_is_nearest_exact_case_and_explicit",
+            "folded_revision_namespace_never_adopts_captured_envelopes",
+            "interrupted_directory_creation_retry_resyncs_every_directory_and_parent",
+            "lock_subprocess_worker",
+            "missing_roots_return_vault_not_found",
+            "nested_vaults_are_separate_scan_and_managed_path_scopes",
+            "non_utf8_paths_are_explicit_errors",
+            "operational_append_truncate_and_recovery_sync_are_real_boundaries",
+            "path_escape_symlink_reserved_and_case_collision",
+            "private_creation_is_protected_before_payload_and_requires_adapter_support",
+            "proof_budgets_cover_nested_marker_scans_and_checked_resolution",
+            "same_directory_replace_and_sync_failures",
+            "scan_skips_control_payload_and_symlink_paths",
+            "staged_same_byte_symlink_cannot_be_published"
+          ],
+          "log": "/private/tmp/lwiki-p21-final/tests.log",
+          "log_sha256": "e229ccaf0bc0c2b19557fb5f10a5da5d185ac253d99bb86bee56ae8c75c057b7"
+        },
+        {
+          "selector": "lib::vault::operational_tests",
+          "passing_named_tests": [
+            "vault::operational_tests::operational_cleanup_interruption_and_missing_authority_preserve_history",
+            "vault::operational_tests::operational_injected_before_after_durable_boundaries_keep_exact_payloads",
+            "vault::operational_tests::operational_private_spool_bounds_permissions_and_guards",
+            "vault::operational_tests::operational_run_discovery_is_bounded_readonly_and_preserves_incomplete_history",
+            "vault::operational_tests::operational_symlink_changed_inode_and_sparse_spool_refuse"
+          ],
+          "count": 5,
+          "log": "/private/tmp/lwiki-p21-final-second-failed/tests.log",
+          "log_sha256": "6bad232e1d90bcd0d63e410a2f7ad1f1f547a50fccbb31353e101605527a5cf3"
+        }
+      ]
+    },
+    "V04": {
+      "test_targets_or_checks": [
+        "sources_evidence",
+        "change_read_preconditions"
+      ],
+      "status": "passed on available native platform; external qualification pending",
+      "actual_evidence": [
+        {
+          "selector": "sources_evidence",
+          "result": {
+            "target": "tests/sources_evidence.rs",
+            "passed": 15,
+            "failed": 0,
+            "ignored_explicit_children": 0,
+            "seconds": 9.53,
+            "log": "/private/tmp/lwiki-p21-final/tests.log",
+            "log_sha256": "e229ccaf0bc0c2b19557fb5f10a5da5d185ac253d99bb86bee56ae8c75c057b7",
+            "observed_source_fingerprint": "325e425accaad00f69d658c68121d46469cac5e69d7fc3c2ef44d6b07912678a"
+          },
+          "passing_named_tests": [
+            "ambiguous_quote_or_tampered_snapshot_rejected",
+            "binary_unsupported_and_explicit_extraction",
+            "capture_preserves_exact_original_and_content",
+            "duplicate_id_companion_disagreement_and_source_ownership_rejected",
+            "fenced_quote_tampering_and_retracted_evidence_rejected_current",
+            "hidden_comment_cannot_supply_bytes_for_a_different_structural_quotation",
+            "interrupted_original_capture_recovers_through_changes_engine",
+            "malformed_copied_identity_blocks_unique_resolution",
+            "nested_markdown_text_quotation_is_rejected_by_writer_and_verifier",
+            "refresh_same_bytes_different_extractor",
+            "revalidate_successor_never_retargets_old_evidence",
+            "revalidation_predecessor_hash_is_retained_until_apply",
+            "stale_companion_path_and_renamed_source_resolve_exact_ids",
+            "unicode_crlf_span_and_separator_newline",
+            "withdrawal_labels_history_retains_bytes_and_invalidates_assertions"
+          ],
+          "log": "/private/tmp/lwiki-p21-final/tests.log",
+          "log_sha256": "e229ccaf0bc0c2b19557fb5f10a5da5d185ac253d99bb86bee56ae8c75c057b7"
+        },
+        {
+          "selector": "change_read_preconditions",
+          "result": {
+            "target": "tests/change_read_preconditions.rs",
+            "passed": 8,
+            "failed": 0,
+            "ignored_explicit_children": 0,
+            "seconds": 1.01,
+            "log": "/private/tmp/lwiki-p21-final-second-failed/tests.log",
+            "log_sha256": "6bad232e1d90bcd0d63e410a2f7ad1f1f547a50fccbb31353e101605527a5cf3",
+            "observed_source_fingerprint": "ea627f8d6e0cad300f8f29398ab771d61ec32397f97544f0171862edc43d24ab",
+            "reuse": "product, Cargo, shared fixtures and this target source byte-equal to final tree"
+          },
+          "passing_named_tests": [
+            "absent_guard_and_duplicate_paths_fail_closed",
+            "interrupted_apply_never_refreshes_changed_original_read_authorization",
+            "no_op_read_guard_survives_but_matching_write_guard_normalizes",
+            "origin_retry_retains_original_guard_without_rebinding_or_allocating",
+            "original_guards_fail_before_preparation_or_activation",
+            "publication_dependency_edit_denies_completion_and_preserves_bytes",
+            "read_write_ancestor_and_portable_case_collisions_reject_before_allocation",
+            "terminal_history_and_legacy_manifest_encoding_ignore_later_guard_edits"
+          ],
+          "log": "/private/tmp/lwiki-p21-final-second-failed/tests.log",
+          "log_sha256": "6bad232e1d90bcd0d63e410a2f7ad1f1f547a50fccbb31353e101605527a5cf3"
+        }
+      ]
+    },
+    "V05": {
+      "test_targets_or_checks": [
+        "catalog_generations",
+        "catalog_crash_recovery",
+        "catalog_scan_eligibility"
+      ],
+      "status": "passed on available native platform; external qualification pending",
+      "actual_evidence": [
+        {
+          "selector": "catalog_generations",
+          "result": {
+            "target": "tests/catalog_generations.rs",
+            "passed": 15,
+            "failed": 0,
+            "ignored_explicit_children": 0,
+            "seconds": 2.21,
+            "log": "/private/tmp/lwiki-p21-final-second-failed/tests.log",
+            "log_sha256": "6bad232e1d90bcd0d63e410a2f7ad1f1f547a50fccbb31353e101605527a5cf3",
+            "observed_source_fingerprint": "ea627f8d6e0cad300f8f29398ab771d61ec32397f97544f0171862edc43d24ab",
+            "reuse": "product, Cargo, shared fixtures and this target source byte-equal to final tree"
+          },
+          "passing_named_tests": [
+            "cache_delete_rebuild_canonical_equivalence_zero_remote",
+            "cache_schema_damage_rejected_before_canonical_mutation",
+            "committed_migration_retains_loss_notice_after_failed_return",
+            "explicit_cache_migration_reports_only_actual_vector_loss",
+            "failed_cache_migration_rolls_back_schema_and_vector_rows",
+            "failed_fts_publication_preserves_previous_view",
+            "logical_cache_drift_refuses_verified_output_and_rebuild_repairs",
+            "missing_cache_invalid_timeout_is_rejected_without_side_effects",
+            "reader_keeps_snapshot_across_generation_switch",
+            "real_apply_capture_and_page_recovery_after_sql_commit",
+            "reclaimed_generations_preserve_held_reader_and_bound_ordinary_rows",
+            "snapshot_readonly_freshness_and_idempotent_sync",
+            "unavailable_cache_rejected_before_canonical_mutation",
+            "unpublished_rows_reclaimed_when_canonical_reverts",
+            "wide_invalid_evidence_span_remains_diagnosed_and_rebuildable"
+          ],
+          "log": "/private/tmp/lwiki-p21-final-second-failed/tests.log",
+          "log_sha256": "6bad232e1d90bcd0d63e410a2f7ad1f1f547a50fccbb31353e101605527a5cf3"
+        },
+        {
+          "selector": "catalog_crash_recovery",
+          "result": {
+            "target": "tests/catalog_crash_recovery.rs",
+            "passed": 2,
+            "failed": 0,
+            "ignored_explicit_children": 1,
+            "seconds": 2.23,
+            "log": "/private/tmp/lwiki-p21-final-second-failed/tests.log",
+            "log_sha256": "6bad232e1d90bcd0d63e410a2f7ad1f1f547a50fccbb31353e101605527a5cf3",
+            "observed_source_fingerprint": "ea627f8d6e0cad300f8f29398ab771d61ec32397f97544f0171862edc43d24ab",
+            "reuse": "product, Cargo, shared fixtures and this target source byte-equal to final tree"
+          },
+          "passing_named_tests": [
+            "sqlite_migration_sigkill_preserves_vectors_or_retains_loss_notice",
+            "sqlite_publication_sigkill_recovers_real_graph"
+          ],
+          "log": "/private/tmp/lwiki-p21-final-second-failed/tests.log",
+          "log_sha256": "6bad232e1d90bcd0d63e410a2f7ad1f1f547a50fccbb31353e101605527a5cf3"
+        },
+        {
+          "selector": "catalog_scan_eligibility",
+          "result": {
+            "target": "tests/catalog_scan_eligibility.rs",
+            "passed": 14,
+            "failed": 0,
+            "ignored_explicit_children": 0,
+            "seconds": 0.25,
+            "log": "/private/tmp/lwiki-p21-final-second-failed/tests.log",
+            "log_sha256": "6bad232e1d90bcd0d63e410a2f7ad1f1f547a50fccbb31353e101605527a5cf3",
+            "observed_source_fingerprint": "ea627f8d6e0cad300f8f29398ab771d61ec32397f97544f0171862edc43d24ab",
+            "reuse": "product, Cargo, shared fixtures and this target source byte-equal to final tree"
+          },
+          "passing_named_tests": [
+            "borrowed_overlay_verifies_new_assets_and_direct_source_labels",
+            "conflicting_decisions_and_supersession_cycles_are_explicit",
+            "copied_ids_and_companion_conflicts_exclude_all",
+            "dependency_cycle_and_identity_description_split",
+            "evidence_successors_preserve_chain_and_empty_decisions_are_invalid",
+            "graph_endpoints_use_resolved_names_and_keep_direction",
+            "missing_payload_absence_and_literal_qualifiers_are_projected",
+            "one_then_all_support_withdrawal_recomputes_full_closure",
+            "output_only_conflicts_and_invalid_superseders_never_gain_authority",
+            "same_timestamp_edit_and_decision_change_detected",
+            "source_advance_preserves_historical_evidence_and_stales_descendants",
+            "tampered_bytes_are_invalid_and_complete_dependencies_include_original",
+            "unsupported_binary_and_payload_frontmatter_never_supply_identity",
+            "validator_rejects_new_invalidity_and_silent_retargeting"
+          ],
+          "log": "/private/tmp/lwiki-p21-final-second-failed/tests.log",
+          "log_sha256": "6bad232e1d90bcd0d63e410a2f7ad1f1f547a50fccbb31353e101605527a5cf3"
+        }
+      ]
+    },
+    "V06": {
+      "test_targets_or_checks": [
+        "retrieval_lexical",
+        "graph_queries",
+        "context_cli",
+        "context_freshness",
+        "retrieval_baseline"
+      ],
+      "status": "passed on available native platform; external qualification pending",
+      "actual_evidence": [
+        {
+          "selector": "retrieval_lexical",
+          "result": {
+            "target": "tests/retrieval_lexical.rs",
+            "passed": 13,
+            "failed": 0,
+            "ignored_explicit_children": 0,
+            "seconds": 1.97,
+            "log": "/private/tmp/lwiki-p21-final/tests.log",
+            "log_sha256": "e229ccaf0bc0c2b19557fb5f10a5da5d185ac253d99bb86bee56ae8c75c057b7",
+            "observed_source_fingerprint": "325e425accaad00f69d658c68121d46469cac5e69d7fc3c2ef44d6b07912678a"
+          },
+          "passing_named_tests": [
+            "current_identity_seeds_exclude_unsupported_description",
+            "cursor_query_or_generation_change_is_stale",
+            "exact_ids_and_homonym_labels_rank_without_merging",
+            "filter_before_limit_and_stable_ties",
+            "invalid_notes_remain_literal_discovery",
+            "lexical_metadata_and_transcripts_are_excluded_but_literal_is_audit",
+            "lexical_or_colon_star_quotes_are_data",
+            "literal_vec_t_e0308_symbols",
+            "markdown_transforms_never_invent_exact_match_offsets",
+            "original_source_spans_and_unicode_tokenizer_are_exact",
+            "pure_plan_validation_has_no_cache_dependency",
+            "query_and_candidate_bounds_are_explicit",
+            "withdrawn_payload_requires_explicit_history_and_keeps_exact_ownership"
+          ],
+          "log": "/private/tmp/lwiki-p21-final/tests.log",
+          "log_sha256": "e229ccaf0bc0c2b19557fb5f10a5da5d185ac253d99bb86bee56ae8c75c057b7"
+        },
+        {
+          "selector": "graph_queries",
+          "result": {
+            "target": "tests/graph_queries.rs",
+            "passed": 17,
+            "failed": 0,
+            "ignored_explicit_children": 0,
+            "seconds": 5.46,
+            "log": "/private/tmp/lwiki-p21-final/tests.log",
+            "log_sha256": "e229ccaf0bc0c2b19557fb5f10a5da5d185ac253d99bb86bee56ae8c75c057b7",
+            "observed_source_fingerprint": "325e425accaad00f69d658c68121d46469cac5e69d7fc3c2ef44d6b07912678a"
+          },
+          "passing_named_tests": [
+            "a_b_c_path_does_not_create_a_c_fact",
+            "direct_assertion_pages_preserve_fused_exact_id_seed_order",
+            "filtered_graph_candidates_rank_and_cursor_are_stable",
+            "graph_lexical_zero_model_calls",
+            "graph_limits_and_duplicate_identity_refuse_unsafe_requests",
+            "homonym_labels_never_merge",
+            "hub_cycle_depth_and_incident_caps",
+            "invalid_historical_assertion_never_emits_citation_authority",
+            "later_better_parent_replaces_expanded_rank_and_recorded_path",
+            "navigation_budget_spans_hops_and_rejection_does_not_hide_other_seed",
+            "navigation_only_neighbors_page_without_asserted_facts",
+            "navigation_round_robin_and_depth_omissions_are_visible",
+            "navigation_shares_incident_and_total_budgets",
+            "opposite_negated_dated_literal_disputed_edges",
+            "original_seed_budget_spans_branched_depth_two",
+            "proposals_history_and_evidence_omissions_remain_discovery",
+            "typed_depth_two_rotates_origins_and_repeats_do_not_consume_turns"
+          ],
+          "log": "/private/tmp/lwiki-p21-final/tests.log",
+          "log_sha256": "e229ccaf0bc0c2b19557fb5f10a5da5d185ac253d99bb86bee56ae8c75c057b7"
+        },
+        {
+          "selector": "context_cli",
+          "result": {
+            "target": "tests/context_cli.rs",
+            "passed": 5,
+            "failed": 0,
+            "ignored_explicit_children": 0,
+            "seconds": 8.11,
+            "log": "/private/tmp/lwiki-p21-final-second-failed/tests.log",
+            "log_sha256": "6bad232e1d90bcd0d63e410a2f7ad1f1f547a50fccbb31353e101605527a5cf3",
+            "observed_source_fingerprint": "ea627f8d6e0cad300f8f29398ab771d61ec32397f97544f0171862edc43d24ab",
+            "reuse": "product, Cargo, shared fixtures and this target source byte-equal to final tree"
+          },
+          "passing_named_tests": [
+            "context_cli_dry_run_is_pure_and_bad_requests_never_claim_verification",
+            "context_cli_preserves_scopes_stances_and_exact_text_budget",
+            "context_cli_reservations_and_bundle_omissions_are_visible",
+            "context_human_stdout_is_exact_budgeted_authority",
+            "executable_m1_context_tracks_rename_revalidation_withdrawal_and_cache_rebuild"
+          ],
+          "log": "/private/tmp/lwiki-p21-final-second-failed/tests.log",
+          "log_sha256": "6bad232e1d90bcd0d63e410a2f7ad1f1f547a50fccbb31353e101605527a5cf3"
+        },
+        {
+          "selector": "context_freshness",
+          "result": {
+            "target": "tests/context_freshness.rs",
+            "passed": 18,
+            "failed": 0,
+            "ignored_explicit_children": 0,
+            "seconds": 3.8,
+            "log": "/private/tmp/lwiki-p21-final-second-failed/tests.log",
+            "log_sha256": "6bad232e1d90bcd0d63e410a2f7ad1f1f547a50fccbb31353e101605527a5cf3",
+            "observed_source_fingerprint": "ea627f8d6e0cad300f8f29398ab771d61ec32397f97544f0171862edc43d24ab",
+            "reuse": "product, Cargo, shared fixtures and this target source byte-equal to final tree"
+          },
+          "passing_named_tests": [
+            "both_attempts_share_the_file_budget",
+            "bridge_overlap_closure_preserves_all_stances_and_remaps_prior_bundles",
+            "bundle_support_and_contradiction_fit_or_omit",
+            "closed_projection_matches_existing_invalid_and_missing_assets",
+            "closed_source_input_never_falls_back_and_enumeration_can_stop",
+            "combined_graph_share_and_full_render_accounting_are_bounded",
+            "complete_registry_mirrors_overlap_and_capped_discovery_preserve_contributors",
+            "consistently_forged_cache_text_cannot_be_verified",
+            "context_eligibility_filters_precede_literal_and_lexical_candidate_caps",
+            "direct_source_vs_note_vs_assertion_citations",
+            "draft_and_unsupported_descriptions_remain_discovery_only",
+            "freshness_budget_cannot_claim_verified",
+            "historical_citation_lifecycle_matches_verified_rejected_assertion",
+            "new_decision_or_copied_id_before_emit_is_detected",
+            "one_support_then_all_support_withdrawal_closure",
+            "pure_assembly_rebinds_public_candidates_and_refuses_bad_paths_or_budgets",
+            "second_change_fails_without_a_third_attempt",
+            "unverified_snapshot_labels_text_and_never_issues_citations"
+          ],
+          "log": "/private/tmp/lwiki-p21-final-second-failed/tests.log",
+          "log_sha256": "6bad232e1d90bcd0d63e410a2f7ad1f1f547a50fccbb31353e101605527a5cf3"
+        },
+        {
+          "selector": "retrieval_baseline",
+          "result": {
+            "target": "tests/retrieval_baseline.rs",
+            "passed": 2,
+            "failed": 0,
+            "ignored_explicit_children": 1,
+            "seconds": 12.25,
+            "log": "/private/tmp/lwiki-p21-final/tests.log",
+            "log_sha256": "e229ccaf0bc0c2b19557fb5f10a5da5d185ac253d99bb86bee56ae8c75c057b7",
+            "observed_source_fingerprint": "325e425accaad00f69d658c68121d46469cac5e69d7fc3c2ef44d6b07912678a"
+          },
+          "passing_named_tests": [
+            "fixed_corpus_current_evidence_withdrawal_homonyms_and_isolated_spaces",
+            "heldout_fixed_corpus_equal_budget_baseline"
+          ],
+          "log": "/private/tmp/lwiki-p21-final/tests.log",
+          "log_sha256": "e229ccaf0bc0c2b19557fb5f10a5da5d185ac253d99bb86bee56ae8c75c057b7"
+        }
+      ]
+    },
+    "V07": {
+      "test_targets_or_checks": [
+        "context_freshness",
+        "sources_evidence",
+        "semantic_retrieval",
+        "graph_review",
+        "entity_decisions_inverse",
+        "research_workflow"
+      ],
+      "status": "passed on available native platform; external qualification pending",
+      "actual_evidence": [
+        {
+          "selector": "context_freshness",
+          "result": {
+            "target": "tests/context_freshness.rs",
+            "passed": 18,
+            "failed": 0,
+            "ignored_explicit_children": 0,
+            "seconds": 3.8,
+            "log": "/private/tmp/lwiki-p21-final-second-failed/tests.log",
+            "log_sha256": "6bad232e1d90bcd0d63e410a2f7ad1f1f547a50fccbb31353e101605527a5cf3",
+            "observed_source_fingerprint": "ea627f8d6e0cad300f8f29398ab771d61ec32397f97544f0171862edc43d24ab",
+            "reuse": "product, Cargo, shared fixtures and this target source byte-equal to final tree"
+          },
+          "passing_named_tests": [
+            "both_attempts_share_the_file_budget",
+            "bridge_overlap_closure_preserves_all_stances_and_remaps_prior_bundles",
+            "bundle_support_and_contradiction_fit_or_omit",
+            "closed_projection_matches_existing_invalid_and_missing_assets",
+            "closed_source_input_never_falls_back_and_enumeration_can_stop",
+            "combined_graph_share_and_full_render_accounting_are_bounded",
+            "complete_registry_mirrors_overlap_and_capped_discovery_preserve_contributors",
+            "consistently_forged_cache_text_cannot_be_verified",
+            "context_eligibility_filters_precede_literal_and_lexical_candidate_caps",
+            "direct_source_vs_note_vs_assertion_citations",
+            "draft_and_unsupported_descriptions_remain_discovery_only",
+            "freshness_budget_cannot_claim_verified",
+            "historical_citation_lifecycle_matches_verified_rejected_assertion",
+            "new_decision_or_copied_id_before_emit_is_detected",
+            "one_support_then_all_support_withdrawal_closure",
+            "pure_assembly_rebinds_public_candidates_and_refuses_bad_paths_or_budgets",
+            "second_change_fails_without_a_third_attempt",
+            "unverified_snapshot_labels_text_and_never_issues_citations"
+          ],
+          "log": "/private/tmp/lwiki-p21-final-second-failed/tests.log",
+          "log_sha256": "6bad232e1d90bcd0d63e410a2f7ad1f1f547a50fccbb31353e101605527a5cf3"
+        },
+        {
+          "selector": "sources_evidence",
+          "result": {
+            "target": "tests/sources_evidence.rs",
+            "passed": 15,
+            "failed": 0,
+            "ignored_explicit_children": 0,
+            "seconds": 9.53,
+            "log": "/private/tmp/lwiki-p21-final/tests.log",
+            "log_sha256": "e229ccaf0bc0c2b19557fb5f10a5da5d185ac253d99bb86bee56ae8c75c057b7",
+            "observed_source_fingerprint": "325e425accaad00f69d658c68121d46469cac5e69d7fc3c2ef44d6b07912678a"
+          },
+          "passing_named_tests": [
+            "ambiguous_quote_or_tampered_snapshot_rejected",
+            "binary_unsupported_and_explicit_extraction",
+            "capture_preserves_exact_original_and_content",
+            "duplicate_id_companion_disagreement_and_source_ownership_rejected",
+            "fenced_quote_tampering_and_retracted_evidence_rejected_current",
+            "hidden_comment_cannot_supply_bytes_for_a_different_structural_quotation",
+            "interrupted_original_capture_recovers_through_changes_engine",
+            "malformed_copied_identity_blocks_unique_resolution",
+            "nested_markdown_text_quotation_is_rejected_by_writer_and_verifier",
+            "refresh_same_bytes_different_extractor",
+            "revalidate_successor_never_retargets_old_evidence",
+            "revalidation_predecessor_hash_is_retained_until_apply",
+            "stale_companion_path_and_renamed_source_resolve_exact_ids",
+            "unicode_crlf_span_and_separator_newline",
+            "withdrawal_labels_history_retains_bytes_and_invalidates_assertions"
+          ],
+          "log": "/private/tmp/lwiki-p21-final/tests.log",
+          "log_sha256": "e229ccaf0bc0c2b19557fb5f10a5da5d185ac253d99bb86bee56ae8c75c057b7"
+        },
+        {
+          "selector": "semantic_retrieval",
+          "result": {
+            "target": "tests/semantic_retrieval.rs",
+            "passed": 21,
+            "failed": 0,
+            "ignored_explicit_children": 0,
+            "seconds": 17.4,
+            "log": "/private/tmp/lwiki-p21-final/tests.log",
+            "log_sha256": "e229ccaf0bc0c2b19557fb5f10a5da5d185ac253d99bb86bee56ae8c75c057b7",
+            "observed_source_fingerprint": "325e425accaad00f69d658c68121d46469cac5e69d7fc3c2ef44d6b07912678a"
+          },
+          "passing_named_tests": [
+            "auto_dimension_probe_and_invalid_batch_do_not_fix_corpus",
+            "body_only_orphan_preserves_unknown_no_automatic_resend",
+            "cache_deletion_retains_receipts_and_explicit_sync_replaces_missing",
+            "cached_graph_query_withdrawn_support_cannot_seed_stale_assertion",
+            "corrupted_settled_receipt_cannot_publish_staged_vectors",
+            "dense_filters_before_limit_hybrid_context_verified_source_citations",
+            "descriptor_swap_preserves_paid_response_then_restores_without_send",
+            "equal_dimensions_different_model_no_mixed_spaces",
+            "exact_cosine_known_order_corrupt_blob_unavailable",
+            "explicit_sync_receipts_settlement_query_cache_and_no_index_embedding",
+            "later_dimension_mismatch_charged_partial_cache_retained",
+            "native_http_fixture_corpus_and_query_accounted_end_to_end",
+            "offline_missing_query_vector_no_remote",
+            "paid_response_blob_receipt_settlement_recovery_no_repeat_send",
+            "partial_replacement_queries_old_reproducible_space",
+            "render_qualifiers_rename_and_description_dependency_invalidation",
+            "rrf_owner_collapse_no_duplicate_votes",
+            "runtime_dry_run_mismatch_rejected_before_index_or_cache",
+            "settled_cache_loss_explicit_sync_replaces_without_faking_old_completion",
+            "short_whole_long_unicode_split_header_limit",
+            "source_edit_inflight_vector_membership_rejected"
+          ],
+          "log": "/private/tmp/lwiki-p21-final/tests.log",
+          "log_sha256": "e229ccaf0bc0c2b19557fb5f10a5da5d185ac253d99bb86bee56ae8c75c057b7"
+        },
+        {
+          "selector": "graph_review",
+          "result": {
+            "target": "tests/graph_review.rs",
+            "passed": 19,
+            "failed": 0,
+            "ignored_explicit_children": 0,
+            "seconds": 79.94,
+            "log": "/private/tmp/lwiki-p21-final/tests.log",
+            "log_sha256": "e229ccaf0bc0c2b19557fb5f10a5da5d185ac253d99bb86bee56ae8c75c057b7",
+            "observed_source_fingerprint": "325e425accaad00f69d658c68121d46469cac5e69d7fc3c2ef44d6b07912678a"
+          },
+          "passing_named_tests": [
+            "accept_requires_post_review_current_support",
+            "already_accepted_files_applied_recovery_rechecks_current_support",
+            "authentic_review_inverse_refuses_author_edits_extra_writes_and_missing_parent",
+            "canonical_review_reack_preserves_author_prose_and_later_decisions",
+            "changed_stance_keeps_crlf_quotation_author_body_and_ordinary_null_metadata",
+            "changed_stance_successor_and_insufficient_retraction_atomic",
+            "cleared_review_or_alias_origin_cannot_borrow_unsealed_receipt_authority",
+            "forged_extra_decision_or_mismatched_review_origin_cannot_apply",
+            "partial_review_actual_scan_and_new_evidence_guard",
+            "review_apply_bounds_non_markdown_enumeration_before_publication",
+            "review_cannot_restore_withdrawn_or_old_revision_support",
+            "review_forward_admission_bounds_actual_files_before_publication",
+            "review_inverse_sparse_source_bound_prevents_accepted_restoration_and_recovery",
+            "review_inverse_undo_partial_and_stale_accepted_restoration",
+            "review_omitted_or_new_active_evidence_conflicts",
+            "review_strict_schema_limits_and_read_only_plan",
+            "sparse_oversized_source_payload_after_stage_refuses_before_publication",
+            "unchanged_accepted_reviews_use_complete_guard_generations",
+            "unrelated_active_review_cannot_replace_explicit_history_chain"
+          ],
+          "log": "/private/tmp/lwiki-p21-final/tests.log",
+          "log_sha256": "e229ccaf0bc0c2b19557fb5f10a5da5d185ac253d99bb86bee56ae8c75c057b7"
+        },
+        {
+          "selector": "entity_decisions_inverse",
+          "result": {
+            "target": "tests/entity_decisions_inverse.rs",
+            "passed": 10,
+            "failed": 0,
+            "ignored_explicit_children": 0,
+            "seconds": 66.16,
+            "log": "/private/tmp/lwiki-p21-final-second-failed/tests.log",
+            "log_sha256": "6bad232e1d90bcd0d63e410a2f7ad1f1f547a50fccbb31353e101605527a5cf3",
+            "observed_source_fingerprint": "ea627f8d6e0cad300f8f29398ab771d61ec32397f97544f0171862edc43d24ab",
+            "reuse": "product, Cargo, shared fixtures and this target source byte-equal to final tree"
+          },
+          "passing_named_tests": [
+            "accepted_inverse_restoration_requires_current_support_before_any_write",
+            "alias_noop_inverse_uses_committed_proof_after_target_superseded",
+            "applying_inverse_recovery_rechecks_partially_restored_acceptance",
+            "committed_anchor_skips_obsolete_unmodified_guards_and_preserves_source_lifecycle",
+            "engine_apply_refuses_extra_inverse_write_and_forged_lineage",
+            "files_applied_inverse_recovery_rechecks_already_restored_acceptance",
+            "inverse_preserves_author_edits_and_rejects_missing_corrupt_noncommitted_parent",
+            "merge_and_split_inverse_restore_exact_bytes_and_undo_inverse",
+            "partial_inverse_recovers_without_current_forward_receipt_and_refuses_new_refs",
+            "split_inverse_refuses_added_assertion_and_resolved_mention_references"
+          ],
+          "log": "/private/tmp/lwiki-p21-final-second-failed/tests.log",
+          "log_sha256": "6bad232e1d90bcd0d63e410a2f7ad1f1f547a50fccbb31353e101605527a5cf3"
+        },
+        {
+          "selector": "research_workflow",
+          "result": {
+            "target": "tests/research_workflow.rs",
+            "passed": 23,
+            "failed": 0,
+            "ignored_explicit_children": 0,
+            "seconds": 112.42,
+            "log": "/private/tmp/lwiki-p21-final/tests.log",
+            "log_sha256": "e229ccaf0bc0c2b19557fb5f10a5da5d185ac253d99bb86bee56ae8c75c057b7",
+            "observed_source_fingerprint": "325e425accaad00f69d658c68121d46469cac5e69d7fc3c2ef44d6b07912678a"
+          },
+          "passing_named_tests": [
+            "admitted_pending_report_recovers_after_clock_advance_without_new_paid_calls",
+            "captured_source_refresh_rebinds_current_proofs_without_refetch_or_stale_extraction",
+            "completed_synthesis_cancelled_before_local_reporting_resumes_without_paid_work",
+            "completed_workflow_and_reports_survive_cache_deletion",
+            "dry_run_and_offline_do_not_resolve_credentials_or_dispatch",
+            "entered_cancellation_retains_paid_outcome_and_local_partial_report",
+            "explicit_model_rebind_preserves_genesis_lifetime_caps_and_original_tasks",
+            "explicit_url_research_uses_one_ledger_and_exact_paid_receipts_without_search",
+            "final_assessed_round_resumes_pending_synthesis_without_new_round_or_budget_reset",
+            "gap_response_after_source_edit_is_unknown_with_protected_spool",
+            "invented_evidence_id_is_rejected_with_paid_receipt_and_partial_report",
+            "later_capture_wave_reaches_actual_lifetime_cap_without_synthesis",
+            "nonmatching_capture_refresh_rebinds_stale_extract_with_equal_lexical_inputs",
+            "offline_limit_amendment_resume_preserves_the_full_tree_and_counters",
+            "own_first_page_update_resumes_second_without_rebinding_or_new_paid_work",
+            "proven_not_sent_capture_failure_preserves_origin_and_independent_source_work",
+            "request_budget_stop_keeps_partial_report_and_skips_final_model_call",
+            "source_changed_during_paid_response_is_withheld_in_partial_report",
+            "stopped_assessment_resumes_synthesis_at_the_same_round_when_rounds_remain",
+            "synthesis_response_after_source_edit_is_unknown_with_protected_spool",
+            "three_sources_use_later_concurrency_waves_without_mirrored_support_inflation",
+            "two_rounds_without_new_support_stop_at_lifetime_round_history",
+            "unavailable_capture_keeps_its_origin_and_explicit_gap_with_an_independent_source"
+          ],
+          "log": "/private/tmp/lwiki-p21-final/tests.log",
+          "log_sha256": "e229ccaf0bc0c2b19557fb5f10a5da5d185ac253d99bb86bee56ae8c75c057b7"
+        }
+      ]
+    },
+    "V08": {
+      "test_targets_or_checks": [
+        "extraction_import",
+        "extraction_cli",
+        "resolution_cli",
+        "graph_resolution",
+        "entity_decisions",
+        "graph_review",
+        "m2_workflow",
+        "release_workflows"
+      ],
+      "status": "passed on available native platform; external qualification pending",
+      "actual_evidence": [
+        {
+          "selector": "extraction_import",
+          "result": {
+            "target": "tests/extraction_import.rs",
+            "passed": 13,
+            "failed": 0,
+            "ignored_explicit_children": 0,
+            "seconds": 14.86,
+            "log": "/private/tmp/lwiki-p21-final/tests.log",
+            "log_sha256": "e229ccaf0bc0c2b19557fb5f10a5da5d185ac253d99bb86bee56ae8c75c057b7",
+            "observed_source_fingerprint": "325e425accaad00f69d658c68121d46469cac5e69d7fc3c2ef44d6b07912678a"
+          },
+          "passing_named_tests": [
+            "artifact_raw_proof_map_and_decision_tampering_is_refused",
+            "bounded_unicode_crlf_windows_and_explicit_quote_spans",
+            "candidate_context_is_canonical_bounded_and_unknown_nested_fields_refuse",
+            "canonical_matching_response_cannot_reuse_another_retained_allocation",
+            "canonical_only_restore_reuses_resolved_rejected_maps_and_exact_raw_response",
+            "conflicting_response_requires_new_extraction",
+            "guarded_import_refuses_changed_authorizing_source_without_allocations",
+            "identical_staged_import_reuses_ids_before_apply",
+            "model_accepted_flag_cannot_activate",
+            "output_item_depth_metadata_and_sparse_snapshot_bounds_are_enforced",
+            "packet_exact_window_fingerprint_and_markdown_restore",
+            "restoration_keeps_original_allocations_after_review_and_successor_revalidation",
+            "wire_duplicate_unknown_reference_qualifier_and_quote_rejections"
+          ],
+          "log": "/private/tmp/lwiki-p21-final/tests.log",
+          "log_sha256": "e229ccaf0bc0c2b19557fb5f10a5da5d185ac253d99bb86bee56ae8c75c057b7"
+        },
+        {
+          "selector": "extraction_cli",
+          "result": {
+            "target": "tests/extraction_cli.rs",
+            "passed": 3,
+            "failed": 0,
+            "ignored_explicit_children": 0,
+            "seconds": 4.11,
+            "log": "/private/tmp/lwiki-p21-final/tests.log",
+            "log_sha256": "e229ccaf0bc0c2b19557fb5f10a5da5d185ac253d99bb86bee56ae8c75c057b7",
+            "observed_source_fingerprint": "325e425accaad00f69d658c68121d46469cac5e69d7fc3c2ef44d6b07912678a"
+          },
+          "passing_named_tests": [
+            "cli_dry_export_and_import_preserve_membership_bytes_and_mtimes",
+            "cli_invalid_response_stages_nothing_and_conflicting_new_is_explicit",
+            "cli_packet_persists_then_import_stages_apply_and_markdown_restore_reuses"
+          ],
+          "log": "/private/tmp/lwiki-p21-final/tests.log",
+          "log_sha256": "e229ccaf0bc0c2b19557fb5f10a5da5d185ac253d99bb86bee56ae8c75c057b7"
+        },
+        {
+          "selector": "resolution_cli",
+          "result": {
+            "target": "tests/resolution_cli.rs",
+            "passed": 4,
+            "failed": 0,
+            "ignored_explicit_children": 0,
+            "seconds": 4.39,
+            "log": "/private/tmp/lwiki-p21-final/tests.log",
+            "log_sha256": "e229ccaf0bc0c2b19557fb5f10a5da5d185ac253d99bb86bee56ae8c75c057b7",
+            "observed_source_fingerprint": "325e425accaad00f69d658c68121d46469cac5e69d7fc3c2ef44d6b07912678a"
+          },
+          "passing_named_tests": [
+            "invalid_resolution_shape_fails_before_normal_writer_or_recovery",
+            "resolve_apply_rechecks_selected_payload_and_preserves_conflicting_bytes",
+            "resolve_cli_stages_apply_reuses_and_publishes_valid_schemas",
+            "resolve_dry_run_after_cache_deletion_preserves_every_byte_and_mtime"
+          ],
+          "log": "/private/tmp/lwiki-p21-final/tests.log",
+          "log_sha256": "e229ccaf0bc0c2b19557fb5f10a5da5d185ac253d99bb86bee56ae8c75c057b7"
+        },
+        {
+          "selector": "graph_resolution",
+          "result": {
+            "target": "tests/graph_resolution.rs",
+            "passed": 16,
+            "failed": 0,
+            "ignored_explicit_children": 0,
+            "seconds": 74.93,
+            "log": "/private/tmp/lwiki-p21-final/tests.log",
+            "log_sha256": "e229ccaf0bc0c2b19557fb5f10a5da5d185ac253d99bb86bee56ae8c75c057b7",
+            "observed_source_fingerprint": "325e425accaad00f69d658c68121d46469cac5e69d7fc3c2ef44d6b07912678a"
+          },
+          "passing_named_tests": [
+            "authorized_entity_extraction_renames_and_author_prose_preserve_resolution_acknowledgement",
+            "canonical_batch_b_cannot_pair_with_retained_batch_a_allocations",
+            "canonical_only_restore_keeps_ids_user_entity_title_and_review_status",
+            "catalog_apply_and_rebuild_refuse_forged_or_incomplete_mention_maps",
+            "explicit_shared_entity_mentions_commute_and_partial_batches_materialize_once",
+            "homonym_and_pronoun_require_explicit_binding",
+            "pure_plan_dry_run_preserves_membership_bytes_and_mtime",
+            "rejected_mentions_never_activate_endpoints",
+            "resolution_expected_hash_and_complete_mapping",
+            "resolve_apply_preserves_raw_source_local_output",
+            "restoration_rejects_tampered_receipts_maps_operation_proofs_and_fences",
+            "selected_source_payload_cap_refuses_before_allocation",
+            "source_entity_and_extraction_drift_conflict_before_stage_and_apply",
+            "staged_and_applied_retries_allocate_once_and_same_base_conflicts",
+            "strict_wire_bounds_duplicate_null_unknown_and_remapping_reject",
+            "unrelated_decision_rationale_is_not_a_receipt_and_relevant_malformed_fences_refuse"
+          ],
+          "log": "/private/tmp/lwiki-p21-final/tests.log",
+          "log_sha256": "e229ccaf0bc0c2b19557fb5f10a5da5d185ac253d99bb86bee56ae8c75c057b7"
+        },
+        {
+          "selector": "entity_decisions",
+          "result": {
+            "target": "tests/entity_decisions.rs",
+            "passed": 19,
+            "failed": 0,
+            "ignored_explicit_children": 0,
+            "seconds": 52.91,
+            "log": "/private/tmp/lwiki-p21-final-second-failed/tests.log",
+            "log_sha256": "6bad232e1d90bcd0d63e410a2f7ad1f1f547a50fccbb31353e101605527a5cf3",
+            "observed_source_fingerprint": "ea627f8d6e0cad300f8f29398ab771d61ec32397f97544f0171862edc43d24ab",
+            "reuse": "product, Cargo, shared fixtures and this target source byte-equal to final tree"
+          },
+          "passing_named_tests": [
+            "alias_explicit_no_remap",
+            "canonical_only_restore_preserves_renames_prose_and_later_review",
+            "entity_decisions_rebuild_exact_ids",
+            "merge_requires_complete_hashed_remaps",
+            "new_referring_note_after_stage_cannot_hide_in_overlay",
+            "no_silent_assertion_redirect_retarget",
+            "obsolete_acceptance_entire_scope_resets_or_refuses",
+            "partial_recovery_uses_real_retained_original_witness",
+            "published_wire_and_receipt_schemas_match_real_strict_data",
+            "retained_alias_apply_requires_exact_origin_receipt_match",
+            "retained_apply_rejects_unlisted_decision_write",
+            "retained_retry_allocates_once_and_stale_inputs_refuse",
+            "reversed_sort_receipt_chain_enforces_64_hop_ceiling",
+            "sealed_overlay_rejects_hidden_object_even_with_forged_matching_hash_claims",
+            "sequential_merges_same_target_and_original_import_resolution_acknowledge",
+            "shared_predecessor_partition_is_explicit_and_complete",
+            "split_exhaustive_partition_or_conflict",
+            "strict_bounds_unknown_null_duplicate_and_dry_plan",
+            "supersession_cycles_and_conflicting_decisions_invalid"
+          ],
+          "log": "/private/tmp/lwiki-p21-final-second-failed/tests.log",
+          "log_sha256": "6bad232e1d90bcd0d63e410a2f7ad1f1f547a50fccbb31353e101605527a5cf3"
+        },
+        {
+          "selector": "graph_review",
+          "result": {
+            "target": "tests/graph_review.rs",
+            "passed": 19,
+            "failed": 0,
+            "ignored_explicit_children": 0,
+            "seconds": 79.94,
+            "log": "/private/tmp/lwiki-p21-final/tests.log",
+            "log_sha256": "e229ccaf0bc0c2b19557fb5f10a5da5d185ac253d99bb86bee56ae8c75c057b7",
+            "observed_source_fingerprint": "325e425accaad00f69d658c68121d46469cac5e69d7fc3c2ef44d6b07912678a"
+          },
+          "passing_named_tests": [
+            "accept_requires_post_review_current_support",
+            "already_accepted_files_applied_recovery_rechecks_current_support",
+            "authentic_review_inverse_refuses_author_edits_extra_writes_and_missing_parent",
+            "canonical_review_reack_preserves_author_prose_and_later_decisions",
+            "changed_stance_keeps_crlf_quotation_author_body_and_ordinary_null_metadata",
+            "changed_stance_successor_and_insufficient_retraction_atomic",
+            "cleared_review_or_alias_origin_cannot_borrow_unsealed_receipt_authority",
+            "forged_extra_decision_or_mismatched_review_origin_cannot_apply",
+            "partial_review_actual_scan_and_new_evidence_guard",
+            "review_apply_bounds_non_markdown_enumeration_before_publication",
+            "review_cannot_restore_withdrawn_or_old_revision_support",
+            "review_forward_admission_bounds_actual_files_before_publication",
+            "review_inverse_sparse_source_bound_prevents_accepted_restoration_and_recovery",
+            "review_inverse_undo_partial_and_stale_accepted_restoration",
+            "review_omitted_or_new_active_evidence_conflicts",
+            "review_strict_schema_limits_and_read_only_plan",
+            "sparse_oversized_source_payload_after_stage_refuses_before_publication",
+            "unchanged_accepted_reviews_use_complete_guard_generations",
+            "unrelated_active_review_cannot_replace_explicit_history_chain"
+          ],
+          "log": "/private/tmp/lwiki-p21-final/tests.log",
+          "log_sha256": "e229ccaf0bc0c2b19557fb5f10a5da5d185ac253d99bb86bee56ae8c75c057b7"
+        },
+        {
+          "selector": "m2_workflow",
+          "result": {
+            "target": "tests/m2_workflow.rs",
+            "passed": 1,
+            "failed": 0,
+            "ignored_explicit_children": 0,
+            "seconds": 12.91,
+            "log": "/private/tmp/lwiki-p21-final/tests.log",
+            "log_sha256": "e229ccaf0bc0c2b19557fb5f10a5da5d185ac253d99bb86bee56ae8c75c057b7",
+            "observed_source_fingerprint": "325e425accaad00f69d658c68121d46469cac5e69d7fc3c2ef44d6b07912678a"
+          },
+          "passing_named_tests": [
+            "m2_packet_import_apply_resolve_apply_decide_apply_review_apply"
+          ],
+          "log": "/private/tmp/lwiki-p21-final/tests.log",
+          "log_sha256": "e229ccaf0bc0c2b19557fb5f10a5da5d185ac253d99bb86bee56ae8c75c057b7"
+        },
+        {
+          "selector": "release_workflows",
+          "result": {
+            "target": "tests/release_workflows.rs",
+            "passed": 1,
+            "failed": 0,
+            "ignored_explicit_children": 0,
+            "seconds": 55.15,
+            "log": "/private/tmp/lwiki-p21-final/tests.log",
+            "log_sha256": "e229ccaf0bc0c2b19557fb5f10a5da5d185ac253d99bb86bee56ae8c75c057b7",
+            "observed_source_fingerprint": "325e425accaad00f69d658c68121d46469cac5e69d7fc3c2ef44d6b07912678a"
+          },
+          "passing_named_tests": [
+            "m0_m4_full_local_acceptance"
+          ],
+          "log": "/private/tmp/lwiki-p21-final/tests.log",
+          "log_sha256": "e229ccaf0bc0c2b19557fb5f10a5da5d185ac253d99bb86bee56ae8c75c057b7"
+        }
+      ]
+    },
+    "V09": {
+      "test_targets_or_checks": [
+        "machine_contract",
+        "skill_export",
+        "offline_cli",
+        "research_cli",
+        "release_workflows"
+      ],
+      "status": "passed on available native platform; external qualification pending",
+      "actual_evidence": [
+        {
+          "selector": "machine_contract",
+          "result": {
+            "target": "tests/machine_contract.rs",
+            "passed": 6,
+            "failed": 0,
+            "ignored_explicit_children": 0,
+            "seconds": 0.07,
+            "log": "/private/tmp/lwiki-p21-final/tests.log",
+            "log_sha256": "e229ccaf0bc0c2b19557fb5f10a5da5d185ac253d99bb86bee56ae8c75c057b7",
+            "observed_source_fingerprint": "325e425accaad00f69d658c68121d46469cac5e69d7fc3c2ef44d6b07912678a"
+          },
+          "passing_named_tests": [
+            "canonical_fixture_schema_hashes_and_utf8_spans_agree",
+            "capabilities_only_implemented_commands",
+            "evidence_link_schema_rejects_plain_strings",
+            "invalid_utf8_arguments_return_clean_usage_envelope",
+            "output_envelope_matches_published_schema",
+            "published_record_schema_validates_types_and_qualifiers"
+          ],
+          "log": "/private/tmp/lwiki-p21-final/tests.log",
+          "log_sha256": "e229ccaf0bc0c2b19557fb5f10a5da5d185ac253d99bb86bee56ae8c75c057b7"
+        },
+        {
+          "selector": "skill_export",
+          "result": {
+            "target": "tests/skill_export.rs",
+            "passed": 4,
+            "failed": 0,
+            "ignored_explicit_children": 0,
+            "seconds": 7.35,
+            "log": "/private/tmp/lwiki-p21-final/tests.log",
+            "log_sha256": "e229ccaf0bc0c2b19557fb5f10a5da5d185ac253d99bb86bee56ae8c75c057b7",
+            "observed_source_fingerprint": "325e425accaad00f69d658c68121d46469cac5e69d7fc3c2ef44d6b07912678a"
+          },
+          "passing_named_tests": [
+            "skill_capabilities_do_not_advertise_missing_commands",
+            "skill_examples_execute_against_release_binary",
+            "skill_exports_correct_single_discovery_layout",
+            "skill_refuses_host_instruction_overwrite"
+          ],
+          "log": "/private/tmp/lwiki-p21-final/tests.log",
+          "log_sha256": "e229ccaf0bc0c2b19557fb5f10a5da5d185ac253d99bb86bee56ae8c75c057b7"
+        },
+        {
+          "selector": "offline_cli",
+          "result": {
+            "target": "tests/offline_cli.rs",
+            "passed": 10,
+            "failed": 0,
+            "ignored_explicit_children": 0,
+            "seconds": 3.49,
+            "log": "/private/tmp/lwiki-p21-final/tests.log",
+            "log_sha256": "e229ccaf0bc0c2b19557fb5f10a5da5d185ac253d99bb86bee56ae8c75c057b7",
+            "observed_source_fingerprint": "325e425accaad00f69d658c68121d46469cac5e69d7fc3c2ef44d6b07912678a"
+          },
+          "passing_named_tests": [
+            "dry_run_cli_leaves_existing_vault_cache_changes_and_directories_exactly_unchanged",
+            "executable_put_read_rename_stage_apply_rollback_abort_workflow",
+            "init_subprocess_and_bounded_file_input_are_guarded",
+            "jsonl_started_and_terminal_events_share_invocation_and_sequence",
+            "machine_envelope_error_exit_and_no_ansi",
+            "migration_is_lossless_staged_guarded_and_future_versions_remain_readable",
+            "no_sync_reads_cached_bytes_and_search_reports_freshness_and_channel",
+            "normal_cli_search_recovers_committed_sql_with_incomplete_change_journal",
+            "retained_apply_failure_returns_inspectable_change_and_human_snapshot_is_labelled",
+            "source_cli_capture_refresh_reuse_and_withdraw_preserve_immutable_bytes"
+          ],
+          "log": "/private/tmp/lwiki-p21-final/tests.log",
+          "log_sha256": "e229ccaf0bc0c2b19557fb5f10a5da5d185ac253d99bb86bee56ae8c75c057b7"
+        },
+        {
+          "selector": "research_cli",
+          "result": {
+            "target": "tests/research_cli.rs",
+            "passed": 11,
+            "failed": 0,
+            "ignored_explicit_children": 0,
+            "seconds": 13.11,
+            "log": "/private/tmp/lwiki-p21-final/tests.log",
+            "log_sha256": "e229ccaf0bc0c2b19557fb5f10a5da5d185ac253d99bb86bee56ae8c75c057b7",
+            "observed_source_fingerprint": "325e425accaad00f69d658c68121d46469cac5e69d7fc3c2ef44d6b07912678a"
+          },
+          "passing_named_tests": [
+            "doctor_each_role_uses_native_sealed_wire_and_completed_probe_receipt",
+            "doctor_malformed_paid_response_reports_network_and_retains_unknown_hold",
+            "doctor_offline_refuses_without_native_requests_or_tree_changes",
+            "doctor_without_probe_preserves_compatibility_and_explicit_role_requires_probe",
+            "explicit_native_limit_amendment_only_pays_synthesis_and_preserves_lifetime_history",
+            "native_research_budget_partial_resume_and_cache_loss_never_trigger_final_generation",
+            "native_research_local_sources_complete_receipts_unassessed_report_and_staged_proposals",
+            "native_sigint_after_paid_entry_emits_terminal_130_and_retains_unknown_partial_report",
+            "research_and_doctor_dry_runs_preserve_complete_tree_without_provider_access",
+            "research_cli_rejects_excessive_scope_and_caller_exclusions_without_writes",
+            "research_commands_and_four_exact_schemas_are_concrete_capabilities"
+          ],
+          "log": "/private/tmp/lwiki-p21-final/tests.log",
+          "log_sha256": "e229ccaf0bc0c2b19557fb5f10a5da5d185ac253d99bb86bee56ae8c75c057b7"
+        },
+        {
+          "selector": "release_workflows",
+          "result": {
+            "target": "tests/release_workflows.rs",
+            "passed": 1,
+            "failed": 0,
+            "ignored_explicit_children": 0,
+            "seconds": 55.15,
+            "log": "/private/tmp/lwiki-p21-final/tests.log",
+            "log_sha256": "e229ccaf0bc0c2b19557fb5f10a5da5d185ac253d99bb86bee56ae8c75c057b7",
+            "observed_source_fingerprint": "325e425accaad00f69d658c68121d46469cac5e69d7fc3c2ef44d6b07912678a"
+          },
+          "passing_named_tests": [
+            "m0_m4_full_local_acceptance"
+          ],
+          "log": "/private/tmp/lwiki-p21-final/tests.log",
+          "log_sha256": "e229ccaf0bc0c2b19557fb5f10a5da5d185ac253d99bb86bee56ae8c75c057b7"
+        }
+      ]
+    },
+    "V10": {
+      "test_targets_or_checks": [
+        "provider_trust",
+        "provider_dispatch",
+        "provider_wire",
+        "lib::providers"
+      ],
+      "status": "passed on available native platform; external qualification pending",
+      "actual_evidence": [
+        {
+          "selector": "provider_trust",
+          "result": {
+            "target": "tests/provider_trust.rs",
+            "passed": 6,
+            "failed": 0,
+            "ignored_explicit_children": 0,
+            "seconds": 0.02,
+            "log": "/private/tmp/lwiki-p21-final/tests.log",
+            "log_sha256": "e229ccaf0bc0c2b19557fb5f10a5da5d185ac253d99bb86bee56ae8c75c057b7",
+            "observed_source_fingerprint": "325e425accaad00f69d658c68121d46469cac5e69d7fc3c2ef44d6b07912678a"
+          },
+          "passing_named_tests": [
+            "cloned_profile_no_auth_or_helper",
+            "configured_private_ca_content_is_part_of_endpoint_trust",
+            "credential_rotation_does_not_export_secret_hash_or_change_endpoint_identity",
+            "full_url_tls_managed_headers_and_capability_policies_are_exact",
+            "private_config_symlink_sparse_size_and_permissions_refuse",
+            "strict_private_toml_rejects_duplicate_unknown_and_conflicting_sources"
+          ],
+          "log": "/private/tmp/lwiki-p21-final/tests.log",
+          "log_sha256": "e229ccaf0bc0c2b19557fb5f10a5da5d185ac253d99bb86bee56ae8c75c057b7"
+        },
+        {
+          "selector": "provider_dispatch",
+          "result": {
+            "target": "tests/provider_dispatch.rs",
+            "passed": 4,
+            "failed": 0,
+            "ignored_explicit_children": 0,
+            "seconds": 1.67,
+            "log": "/private/tmp/lwiki-p21-final/tests.log",
+            "log_sha256": "e229ccaf0bc0c2b19557fb5f10a5da5d185ac253d99bb86bee56ae8c75c057b7",
+            "observed_source_fingerprint": "325e425accaad00f69d658c68121d46469cac5e69d7fc3c2ef44d6b07912678a"
+          },
+          "passing_named_tests": [
+            "bounded_mock_reply_constructor_and_errors_do_not_echo_body",
+            "malformed_retained_input_never_uses_caller_hash_or_transport",
+            "noncanonical_retained_descriptor_refuses_before_auth_or_reservation",
+            "offline_dry_run_before_secret_resolution_zero_dns_http_helpers"
+          ],
+          "log": "/private/tmp/lwiki-p21-final/tests.log",
+          "log_sha256": "e229ccaf0bc0c2b19557fb5f10a5da5d185ac253d99bb86bee56ae8c75c057b7"
+        },
+        {
+          "selector": "provider_wire",
+          "result": {
+            "target": "tests/provider_wire.rs",
+            "passed": 10,
+            "failed": 0,
+            "ignored_explicit_children": 0,
+            "seconds": 13.53,
+            "log": "/private/tmp/lwiki-p21-final/tests.log",
+            "log_sha256": "e229ccaf0bc0c2b19557fb5f10a5da5d185ac253d99bb86bee56ae8c75c057b7",
+            "observed_source_fingerprint": "325e425accaad00f69d658c68121d46469cac5e69d7fc3c2ef44d6b07912678a"
+          },
+          "passing_named_tests": [
+            "production_embedding_dispatch_validates_repeated_positions_and_accounts_probe_role",
+            "production_generation_failures_keep_actual_paid_receipts_without_repair",
+            "production_generation_probe_accounts_generation_usage_and_validates_before_reducing_output",
+            "production_missing_usage_remains_unknown_and_curated_model_breach_stops_guarantee",
+            "production_noncanonical_descriptor_and_invalid_schema_options_refuse_before_authority",
+            "production_official_complete_prices_admit_hard_money_and_charge_partitioned_usage_once",
+            "production_official_embedding_total_only_breach_and_absent_usage_control",
+            "production_official_missing_partitions_keeps_the_complete_money_reservation",
+            "production_official_total_overruns_without_partitions_survive_reopen_as_breaches",
+            "production_wire_mutations_and_unprovable_hard_money_refuse_before_secret_or_transport"
+          ],
+          "log": "/private/tmp/lwiki-p21-final/tests.log",
+          "log_sha256": "e229ccaf0bc0c2b19557fb5f10a5da5d185ac253d99bb86bee56ae8c75c057b7"
+        },
+        {
+          "selector": "lib::providers",
+          "passing_named_tests": [
+            "providers::credential_tests::bounded_static_env_file_missing_empty_and_control_tokens",
+            "providers::credential_tests::cached_command_still_resolves_rotated_extra_secret_headers",
+            "providers::credential_tests::cancellation_clock_and_trust_changes_after_helper_return_no_lease_or_cache",
+            "providers::credential_tests::cloned_or_changed_trust_refuses_before_input_or_helper",
+            "providers::credential_tests::exact_service_url_is_preserved_without_inferred_path",
+            "providers::credential_tests::expired_or_regressed_cache_and_offline_warm_cache_cannot_bypass_policy",
+            "providers::credential_tests::fresh_command_header_lookup_cannot_return_expired_or_regressed_credentials",
+            "providers::credential_tests::helper_expiry_size_control_stderr_redaction_and_one_401_refresh",
+            "providers::credential_tests::helper_limits_ttl_args_and_private_prefixes_are_validated_without_secret_hashes",
+            "providers::credential_tests::native_broker_helper_json_cache_and_offline_warm_cache_do_not_leak_or_relaunch",
+            "providers::credential_tests::native_helper_descendant_held_stdout_returns_bounded_and_kills_group",
+            "providers::credential_tests::native_helper_executes_explicit_interpreter_with_closed_stdin_and_exact_argv",
+            "providers::credential_tests::native_helper_output_ceiling_timeout_cancel_and_stderr_are_bounded",
+            "providers::credential_tests::offline_dry_run_before_secret_resolution_zero_dns_http_helpers",
+            "providers::credential_tests::post_resolve_command_lease_checks_both_clocks_trust_and_cached_acquisition",
+            "providers::credential_tests::process_refreshes_serialize_and_waiters_reuse_fresh_epoch",
+            "providers::credential_tests::static_401_does_not_refresh_and_text_removes_only_one_terminal_newline",
+            "providers::credential_tests::static_lease_has_a_monotonic_deadline_and_cannot_cross_services",
+            "providers::dispatch_tests::cancel_retry_wait_keeps_committed_receipt_and_stops_without_next_reservation",
+            "providers::dispatch_tests::command_401_refreshes_once_with_new_reservation_and_never_on_403",
+            "providers::dispatch_tests::concurrent_dispatchers_share_the_last_request_slot_without_extra_credentials_or_send",
+            "providers::dispatch_tests::enormous_valid_retry_after_pauses_instead_of_retrying_early",
+            "providers::dispatch_tests::error_body_scrub_and_secret_echo_in_metadata_never_escape_receipt",
+            "providers::dispatch_tests::failed_receipt_apply_keeps_actual_prepared_identity_and_never_retries",
+            "providers::dispatch_tests::full_url_no_appended_path_and_no_auth_redirect",
+            "providers::dispatch_tests::later_retry_refusal_keeps_prior_paid_attempt_spool_and_receipt_plan",
+            "providers::dispatch_tests::modified_semantic_input_or_settings_cannot_forge_prepared_wire",
+            "providers::dispatch_tests::native_ambient_proxy_variables_are_ignored_in_disposable_subprocess",
+            "providers::dispatch_tests::native_cancel_during_headers_or_body_retains_possible_charge_without_retry",
+            "providers::dispatch_tests::native_compression_header_and_body_caps_never_decompress_or_activate",
+            "providers::dispatch_tests::native_custom_ca_verifies_certificate_and_untrusted_tls_never_receives_auth",
+            "providers::dispatch_tests::native_final_guard_rejects_expired_lease_changed_config_and_cancel_before_first_poll",
+            "providers::dispatch_tests::native_http_has_no_automatic_retry_after_reset",
+            "providers::dispatch_tests::native_live_timer_floor_refuses_owned_sample_regression_in_either_component",
+            "providers::dispatch_tests::native_repeated_informational_headers_preserve_final_response_and_one_send",
+            "providers::dispatch_tests::native_sealed_closing_clock_and_rate_quote_refuse_late_entry_and_survive_reopen",
+            "providers::dispatch_tests::native_sigkill_after_authorization_body_spool_and_receipt_replays_without_resend",
+            "providers::dispatch_tests::native_slow_headers_body_and_parser_excess_return_within_deadline",
+            "providers::dispatch_tests::native_validity_change_after_actual_entry_keeps_paid_exposure_without_refund",
+            "providers::dispatch_tests::observed_response_over_bound_stops_and_keeps_actual_bytes_without_large_spool",
+            "providers::dispatch_tests::pinned_hyper_buffer_growth_reclaims_informational_prefixes_with_bounded_overshoot",
+            "providers::dispatch_tests::probe_requires_underlying_authorized_role_and_separate_probe_task",
+            "providers::dispatch_tests::response_and_receipt_fault_boundaries_replay_without_transport_or_refund",
+            "providers::dispatch_tests::retries_have_distinct_authorizations_and_commit_each_failure_receipt",
+            "providers::dispatch_tests::retry_after_valid_minimum_dates_invalid_values_and_deadline_are_bounded",
+            "providers::dispatch_tests::source_change_during_helper_is_definitely_unentered_and_releases_only_that_attempt",
+            "providers::dispatch_tests::static_401_403_and_successful_malformed_response_never_retry_or_refresh",
+            "providers::dispatch_tests::status_retry_unknown_billing_does_not_imply_zero_or_uncertain_network_outcome",
+            "providers::dispatch_tests::unknown_hard_billable_bound_is_rejected_before_auth_or_reservation",
+            "providers::dispatch_tests::unknown_send_timeout_reserves_charge_and_explicit_uncertain_retry_needs_new_attempt",
+            "providers::history_tests::historical_codec_rejects_unknown_version_fields_noncanonical_and_cross_run_paths",
+            "providers::history_tests::historical_codec_retain_is_idempotent_and_does_not_change_wire_hash",
+            "providers::history_tests::historical_embedding_preserves_positions_dimensions_and_original_model_basis",
+            "providers::history_tests::historical_generation_decodes_original_model_after_config_source_and_cache_change",
+            "providers::history_tests::historical_restore_rejects_missing_codec_descriptor_and_changed_complete_task_or_bound",
+            "providers::history_tests::historical_retain_rejects_cache_or_unowned_descriptor_paths",
+            "providers::history_tests::historical_search_preserves_original_page_count_and_has_no_credentials",
+            "providers::transport::tests::final_reading_advances_live_timer_before_poll_and_is_retained_after_poll",
+            "providers::wire_tests::curated_identity_bounds_and_options_cannot_be_inferred_or_forged",
+            "providers::wire_tests::local_schema_offline_constraints_regex_and_reference_work_are_preserved",
+            "providers::wire_tests::refusal_truncation_tools_malformed_generation_receipt_no_repair",
+            "providers::wire_tests::reordered_vectors_valid_missing_nan_dimension_batch_rejected",
+            "providers::wire_tests::usage_partitions_missing_details_and_model_violation_preserve_paid_counts"
+          ],
+          "count": 63,
+          "log": "/private/tmp/lwiki-p21-final-second-failed/tests.log",
+          "log_sha256": "6bad232e1d90bcd0d63e410a2f7ad1f1f547a50fccbb31353e101605527a5cf3"
+        }
+      ]
+    },
+    "V11": {
+      "test_targets_or_checks": [
+        "job_accounting",
+        "lib::jobs::accounting_tests",
+        "lib::jobs::research_tests",
+        "research_dispatch",
+        "research_workflow",
+        "research_cli",
+        "release_workflows"
+      ],
+      "status": "passed on available native platform; external qualification pending",
+      "actual_evidence": [
+        {
+          "selector": "job_accounting",
+          "result": {
+            "target": "tests/job_accounting.rs",
+            "passed": 13,
+            "failed": 0,
+            "ignored_explicit_children": 1,
+            "seconds": 5.97,
+            "log": "/private/tmp/lwiki-p21-final/tests.log",
+            "log_sha256": "e229ccaf0bc0c2b19557fb5f10a5da5d185ac253d99bb86bee56ae8c75c057b7",
+            "observed_source_fingerprint": "325e425accaad00f69d658c68121d46469cac5e69d7fc3c2ef44d6b07912678a"
+          },
+          "passing_named_tests": [
+            "amendments_do_not_invent_historical_class_or_rate_guarantees",
+            "checked_money_round_up_and_unknown_cost_ceiling_rejected",
+            "checked_rate_snapshot_versions_classes_validity_and_overflow",
+            "complete_prior_history_with_possible_paid_charge_requires_unknown_disclosure",
+            "deleted_canonical_prior_run_does_not_hide_operational_unknown_spend",
+            "dispatch_intent_crash_keeps_unknown_charge",
+            "expired_deadline_requires_explicit_extension_without_lifetime_reset",
+            "malformed_or_future_owned_run_restore_requires_explicit_unknown_accounting",
+            "markdown_restore_cannot_resume_old_hard_budget_without_accounting",
+            "offline_dry_cancel_deadline_and_clock_keep_tree_and_allowances",
+            "truncated_prior_head_requires_explicit_unknown_disclosure",
+            "two_processes_final_slot_only_one_admitted",
+            "valid_suffix_truncation_is_not_complete_history"
+          ],
+          "log": "/private/tmp/lwiki-p21-final/tests.log",
+          "log_sha256": "e229ccaf0bc0c2b19557fb5f10a5da5d185ac253d99bb86bee56ae8c75c057b7"
+        },
+        {
+          "selector": "lib::jobs::accounting_tests",
+          "passing_named_tests": [
+            "jobs::accounting_tests::after_received_and_orphan_overrun_stop_before_another_admission",
+            "jobs::accounting_tests::begin_send_rejects_utc_regression_below_unpersisted_before_flush_sample",
+            "jobs::accounting_tests::bounded_checkpoint_batches_advance_exact_prefix_without_resetting_lifetime_counts",
+            "jobs::accounting_tests::canonical_run_drift_after_send_preserves_operational_paid_cost_without_overwrite",
+            "jobs::accounting_tests::checkpoint_requires_actual_committed_exact_run_and_events",
+            "jobs::accounting_tests::delayed_reservations_cannot_burst_actual_send_rate",
+            "jobs::accounting_tests::dispatch_authority_is_one_use_and_replay_never_mints_it",
+            "jobs::accounting_tests::every_actual_ledger_io_boundary_replays_without_duplicate_charge",
+            "jobs::accounting_tests::every_bootstrap_genesis_head_and_canonical_create_io_boundary_is_retryable",
+            "jobs::accounting_tests::final_durable_authority_gate_retains_accounting_without_returning_capsules",
+            "jobs::accounting_tests::full_task_checkpoint_summary_is_bounded_and_exact",
+            "jobs::accounting_tests::historical_checkpoint_proof_loss_cannot_block_post_send_paid_retention",
+            "jobs::accounting_tests::interrupted_validated_output_ack_repairs_task_and_dependency_without_new_request",
+            "jobs::accounting_tests::native_sigkill_each_ledger_lifecycle_boundary",
+            "jobs::accounting_tests::optional_corrections_do_not_spend_receipt_slots_and_work_after_cleanup",
+            "jobs::accounting_tests::oversized_paid_body_records_actual_cost_and_breach_without_spooling",
+            "jobs::accounting_tests::produced_canonical_run_events_and_receipts_obey_authoritative_strict_schemas",
+            "jobs::accounting_tests::proven_not_sent_refunds_once_but_old_authorization_and_attempt_number_cannot_reset",
+            "jobs::accounting_tests::replay_each_spool_output_receipt_settlement_boundary",
+            "jobs::accounting_tests::retry_gets_new_reservation_no_double_settlement",
+            "jobs::accounting_tests::source_drift_keeps_paid_accounting_but_blocks_derived_activation_and_resume",
+            "jobs::accounting_tests::stopped_control_headroom_stays_released_for_mandatory_receipt_lifecycle",
+            "jobs::accounting_tests::stopped_run_finishes_only_already_planned_ready_local_partial_work",
+            "jobs::accounting_tests::terminal_http_default_retry_refuses_invalid_status_or_missing_corrupt_proof",
+            "jobs::accounting_tests::terminal_http_retry_does_not_hide_an_older_possible_send",
+            "jobs::accounting_tests::terminal_http_retry_requires_received_status_not_public_reconciliation",
+            "jobs::accounting_tests::terminal_http_third_retry_needs_every_prior_status_spool",
+            "jobs::accounting_tests::terminal_http_unknown_billing_retries_keep_full_charges_after_reopen",
+            "jobs::accounting_tests::undeclared_unknown_billable_class_breaks_completeness",
+            "jobs::accounting_tests::unknown_retains_money_and_remote_exposure_until_reconciled",
+            "jobs::accounting_tests::unknown_usage_known_cost_overrun_and_currency_are_independent_violations",
+            "jobs::accounting_tests::wire_contract_ordinary_paid_output_failures_do_not_invalidate_bounds",
+            "jobs::accounting_tests::wire_contract_violation_survives_received_interrupt_and_cannot_resume"
+          ],
+          "count": 33,
+          "log": "/private/tmp/lwiki-p21-final-second-failed/tests.log",
+          "log_sha256": "6bad232e1d90bcd0d63e410a2f7ad1f1f547a50fccbb31353e101605527a5cf3"
+        },
+        {
+          "selector": "lib::jobs::research_tests",
+          "passing_named_tests": [
+            "jobs::research_tests::published_research_schemas_match_durable_plan_and_event_encodings",
+            "jobs::research_tests::research_batch_flush_deadline_returns_already_reserved_authority",
+            "jobs::research_tests::research_changed_source_retires_only_dependent_work",
+            "jobs::research_tests::research_completion_requires_terminal_history_and_preserves_unknown_holds",
+            "jobs::research_tests::research_dual_role_profile_proofs_do_not_collide",
+            "jobs::research_tests::research_duplicate_task_requires_priority_and_dependencies_equality",
+            "jobs::research_tests::research_failed_gap_requires_terminal_settlement_without_refunding_hold",
+            "jobs::research_tests::research_fetch_admission_verifies_actual_descriptor_origin",
+            "jobs::research_tests::research_frontier_is_exactly_idempotent_and_cas_guarded",
+            "jobs::research_tests::research_genesis_versions_and_legacy_absence_are_strict",
+            "jobs::research_tests::research_individual_reserve_enforces_prefix_and_retains_postflush_token",
+            "jobs::research_tests::research_last_source_and_round_race_admits_one_revision",
+            "jobs::research_tests::research_live_rebind_is_idempotent_and_replay_preserves_retired_specs",
+            "jobs::research_tests::research_no_progress_and_mirrored_support_survive_epochs",
+            "jobs::research_tests::research_origins_preserve_queries_and_reject_fragment_aliases",
+            "jobs::research_tests::research_rebind_blocks_reserved_and_unknown_authority",
+            "jobs::research_tests::research_rebind_cannot_admit_new_acquisition_outside_rounds",
+            "jobs::research_tests::research_retirement_keeps_genesis_task_definitions_and_counters",
+            "jobs::research_tests::research_retry_not_before_is_durable_and_cannot_skip_priority",
+            "jobs::research_tests::research_scope_bytes_are_checked_and_dry_run_has_no_journal_write",
+            "jobs::research_tests::research_stable_batch_preserves_the_final_request_prefix"
+          ],
+          "count": 21,
+          "log": "/private/tmp/lwiki-p21-final-second-failed/tests.log",
+          "log_sha256": "6bad232e1d90bcd0d63e410a2f7ad1f1f547a50fccbb31353e101605527a5cf3"
+        },
+        {
+          "selector": "research_dispatch",
+          "result": {
+            "target": "tests/research_dispatch.rs",
+            "passed": 7,
+            "failed": 0,
+            "ignored_explicit_children": 0,
+            "seconds": 3.66,
+            "log": "/private/tmp/lwiki-p21-final/tests.log",
+            "log_sha256": "e229ccaf0bc0c2b19557fb5f10a5da5d185ac253d99bb86bee56ae8c75c057b7",
+            "observed_source_fingerprint": "325e425accaad00f69d658c68121d46469cac5e69d7fc3c2ef44d6b07912678a"
+          },
+          "passing_named_tests": [
+            "competing_dispatchers_cannot_race_the_final_request_slot",
+            "dual_role_profile_runs_concurrently_and_returns_reservation_order",
+            "final_request_uses_stable_priority_and_key_before_network",
+            "public_fetch_reports_actual_entry_and_uses_effective_research_binding",
+            "retry_after_is_durable_and_joins_a_later_wave",
+            "sibling_failure_preserves_every_paid_result_and_hold",
+            "wrong_role_fails_before_any_reservation_or_network"
+          ],
+          "log": "/private/tmp/lwiki-p21-final/tests.log",
+          "log_sha256": "e229ccaf0bc0c2b19557fb5f10a5da5d185ac253d99bb86bee56ae8c75c057b7"
+        },
+        {
+          "selector": "research_workflow",
+          "result": {
+            "target": "tests/research_workflow.rs",
+            "passed": 23,
+            "failed": 0,
+            "ignored_explicit_children": 0,
+            "seconds": 112.42,
+            "log": "/private/tmp/lwiki-p21-final/tests.log",
+            "log_sha256": "e229ccaf0bc0c2b19557fb5f10a5da5d185ac253d99bb86bee56ae8c75c057b7",
+            "observed_source_fingerprint": "325e425accaad00f69d658c68121d46469cac5e69d7fc3c2ef44d6b07912678a"
+          },
+          "passing_named_tests": [
+            "admitted_pending_report_recovers_after_clock_advance_without_new_paid_calls",
+            "captured_source_refresh_rebinds_current_proofs_without_refetch_or_stale_extraction",
+            "completed_synthesis_cancelled_before_local_reporting_resumes_without_paid_work",
+            "completed_workflow_and_reports_survive_cache_deletion",
+            "dry_run_and_offline_do_not_resolve_credentials_or_dispatch",
+            "entered_cancellation_retains_paid_outcome_and_local_partial_report",
+            "explicit_model_rebind_preserves_genesis_lifetime_caps_and_original_tasks",
+            "explicit_url_research_uses_one_ledger_and_exact_paid_receipts_without_search",
+            "final_assessed_round_resumes_pending_synthesis_without_new_round_or_budget_reset",
+            "gap_response_after_source_edit_is_unknown_with_protected_spool",
+            "invented_evidence_id_is_rejected_with_paid_receipt_and_partial_report",
+            "later_capture_wave_reaches_actual_lifetime_cap_without_synthesis",
+            "nonmatching_capture_refresh_rebinds_stale_extract_with_equal_lexical_inputs",
+            "offline_limit_amendment_resume_preserves_the_full_tree_and_counters",
+            "own_first_page_update_resumes_second_without_rebinding_or_new_paid_work",
+            "proven_not_sent_capture_failure_preserves_origin_and_independent_source_work",
+            "request_budget_stop_keeps_partial_report_and_skips_final_model_call",
+            "source_changed_during_paid_response_is_withheld_in_partial_report",
+            "stopped_assessment_resumes_synthesis_at_the_same_round_when_rounds_remain",
+            "synthesis_response_after_source_edit_is_unknown_with_protected_spool",
+            "three_sources_use_later_concurrency_waves_without_mirrored_support_inflation",
+            "two_rounds_without_new_support_stop_at_lifetime_round_history",
+            "unavailable_capture_keeps_its_origin_and_explicit_gap_with_an_independent_source"
+          ],
+          "log": "/private/tmp/lwiki-p21-final/tests.log",
+          "log_sha256": "e229ccaf0bc0c2b19557fb5f10a5da5d185ac253d99bb86bee56ae8c75c057b7"
+        },
+        {
+          "selector": "research_cli",
+          "result": {
+            "target": "tests/research_cli.rs",
+            "passed": 11,
+            "failed": 0,
+            "ignored_explicit_children": 0,
+            "seconds": 13.11,
+            "log": "/private/tmp/lwiki-p21-final/tests.log",
+            "log_sha256": "e229ccaf0bc0c2b19557fb5f10a5da5d185ac253d99bb86bee56ae8c75c057b7",
+            "observed_source_fingerprint": "325e425accaad00f69d658c68121d46469cac5e69d7fc3c2ef44d6b07912678a"
+          },
+          "passing_named_tests": [
+            "doctor_each_role_uses_native_sealed_wire_and_completed_probe_receipt",
+            "doctor_malformed_paid_response_reports_network_and_retains_unknown_hold",
+            "doctor_offline_refuses_without_native_requests_or_tree_changes",
+            "doctor_without_probe_preserves_compatibility_and_explicit_role_requires_probe",
+            "explicit_native_limit_amendment_only_pays_synthesis_and_preserves_lifetime_history",
+            "native_research_budget_partial_resume_and_cache_loss_never_trigger_final_generation",
+            "native_research_local_sources_complete_receipts_unassessed_report_and_staged_proposals",
+            "native_sigint_after_paid_entry_emits_terminal_130_and_retains_unknown_partial_report",
+            "research_and_doctor_dry_runs_preserve_complete_tree_without_provider_access",
+            "research_cli_rejects_excessive_scope_and_caller_exclusions_without_writes",
+            "research_commands_and_four_exact_schemas_are_concrete_capabilities"
+          ],
+          "log": "/private/tmp/lwiki-p21-final/tests.log",
+          "log_sha256": "e229ccaf0bc0c2b19557fb5f10a5da5d185ac253d99bb86bee56ae8c75c057b7"
+        },
+        {
+          "selector": "release_workflows",
+          "result": {
+            "target": "tests/release_workflows.rs",
+            "passed": 1,
+            "failed": 0,
+            "ignored_explicit_children": 0,
+            "seconds": 55.15,
+            "log": "/private/tmp/lwiki-p21-final/tests.log",
+            "log_sha256": "e229ccaf0bc0c2b19557fb5f10a5da5d185ac253d99bb86bee56ae8c75c057b7",
+            "observed_source_fingerprint": "325e425accaad00f69d658c68121d46469cac5e69d7fc3c2ef44d6b07912678a"
+          },
+          "passing_named_tests": [
+            "m0_m4_full_local_acceptance"
+          ],
+          "log": "/private/tmp/lwiki-p21-final/tests.log",
+          "log_sha256": "e229ccaf0bc0c2b19557fb5f10a5da5d185ac253d99bb86bee56ae8c75c057b7"
+        }
+      ]
+    },
+    "V12": {
+      "test_targets_or_checks": [
+        "semantic_retrieval",
+        "remote_cli",
+        "provider_wire",
+        "lib::providers::wire_tests",
+        "retrieval_baseline"
+      ],
+      "status": "passed on available native platform; external qualification pending",
+      "actual_evidence": [
+        {
+          "selector": "semantic_retrieval",
+          "result": {
+            "target": "tests/semantic_retrieval.rs",
+            "passed": 21,
+            "failed": 0,
+            "ignored_explicit_children": 0,
+            "seconds": 17.4,
+            "log": "/private/tmp/lwiki-p21-final/tests.log",
+            "log_sha256": "e229ccaf0bc0c2b19557fb5f10a5da5d185ac253d99bb86bee56ae8c75c057b7",
+            "observed_source_fingerprint": "325e425accaad00f69d658c68121d46469cac5e69d7fc3c2ef44d6b07912678a"
+          },
+          "passing_named_tests": [
+            "auto_dimension_probe_and_invalid_batch_do_not_fix_corpus",
+            "body_only_orphan_preserves_unknown_no_automatic_resend",
+            "cache_deletion_retains_receipts_and_explicit_sync_replaces_missing",
+            "cached_graph_query_withdrawn_support_cannot_seed_stale_assertion",
+            "corrupted_settled_receipt_cannot_publish_staged_vectors",
+            "dense_filters_before_limit_hybrid_context_verified_source_citations",
+            "descriptor_swap_preserves_paid_response_then_restores_without_send",
+            "equal_dimensions_different_model_no_mixed_spaces",
+            "exact_cosine_known_order_corrupt_blob_unavailable",
+            "explicit_sync_receipts_settlement_query_cache_and_no_index_embedding",
+            "later_dimension_mismatch_charged_partial_cache_retained",
+            "native_http_fixture_corpus_and_query_accounted_end_to_end",
+            "offline_missing_query_vector_no_remote",
+            "paid_response_blob_receipt_settlement_recovery_no_repeat_send",
+            "partial_replacement_queries_old_reproducible_space",
+            "render_qualifiers_rename_and_description_dependency_invalidation",
+            "rrf_owner_collapse_no_duplicate_votes",
+            "runtime_dry_run_mismatch_rejected_before_index_or_cache",
+            "settled_cache_loss_explicit_sync_replaces_without_faking_old_completion",
+            "short_whole_long_unicode_split_header_limit",
+            "source_edit_inflight_vector_membership_rejected"
+          ],
+          "log": "/private/tmp/lwiki-p21-final/tests.log",
+          "log_sha256": "e229ccaf0bc0c2b19557fb5f10a5da5d185ac253d99bb86bee56ae8c75c057b7"
+        },
+        {
+          "selector": "remote_cli",
+          "result": {
+            "target": "tests/remote_cli.rs",
+            "passed": 5,
+            "failed": 0,
+            "ignored_explicit_children": 0,
+            "seconds": 7.11,
+            "log": "/private/tmp/lwiki-p21-final/tests.log",
+            "log_sha256": "e229ccaf0bc0c2b19557fb5f10a5da5d185ac253d99bb86bee56ae8c75c057b7",
+            "observed_source_fingerprint": "325e425accaad00f69d658c68121d46469cac5e69d7fc3c2ef44d6b07912678a"
+          },
+          "passing_named_tests": [
+            "native_api_cli_failed_paid_response_reports_actual_network_activity",
+            "native_api_cli_stages_proposals_and_offline_reuses_paid_output",
+            "native_cli_successful_fallback_keeps_prior_paid_network_activity",
+            "native_embedding_cli_sync_query_graph_context_and_cached_offline_reuse",
+            "remote_cli_dry_run_needs_no_provider_and_preserves_vault_bytes"
+          ],
+          "log": "/private/tmp/lwiki-p21-final/tests.log",
+          "log_sha256": "e229ccaf0bc0c2b19557fb5f10a5da5d185ac253d99bb86bee56ae8c75c057b7"
+        },
+        {
+          "selector": "provider_wire",
+          "result": {
+            "target": "tests/provider_wire.rs",
+            "passed": 10,
+            "failed": 0,
+            "ignored_explicit_children": 0,
+            "seconds": 13.53,
+            "log": "/private/tmp/lwiki-p21-final/tests.log",
+            "log_sha256": "e229ccaf0bc0c2b19557fb5f10a5da5d185ac253d99bb86bee56ae8c75c057b7",
+            "observed_source_fingerprint": "325e425accaad00f69d658c68121d46469cac5e69d7fc3c2ef44d6b07912678a"
+          },
+          "passing_named_tests": [
+            "production_embedding_dispatch_validates_repeated_positions_and_accounts_probe_role",
+            "production_generation_failures_keep_actual_paid_receipts_without_repair",
+            "production_generation_probe_accounts_generation_usage_and_validates_before_reducing_output",
+            "production_missing_usage_remains_unknown_and_curated_model_breach_stops_guarantee",
+            "production_noncanonical_descriptor_and_invalid_schema_options_refuse_before_authority",
+            "production_official_complete_prices_admit_hard_money_and_charge_partitioned_usage_once",
+            "production_official_embedding_total_only_breach_and_absent_usage_control",
+            "production_official_missing_partitions_keeps_the_complete_money_reservation",
+            "production_official_total_overruns_without_partitions_survive_reopen_as_breaches",
+            "production_wire_mutations_and_unprovable_hard_money_refuse_before_secret_or_transport"
+          ],
+          "log": "/private/tmp/lwiki-p21-final/tests.log",
+          "log_sha256": "e229ccaf0bc0c2b19557fb5f10a5da5d185ac253d99bb86bee56ae8c75c057b7"
+        },
+        {
+          "selector": "lib::providers::wire_tests",
+          "passing_named_tests": [
+            "providers::wire_tests::curated_identity_bounds_and_options_cannot_be_inferred_or_forged",
+            "providers::wire_tests::local_schema_offline_constraints_regex_and_reference_work_are_preserved",
+            "providers::wire_tests::refusal_truncation_tools_malformed_generation_receipt_no_repair",
+            "providers::wire_tests::reordered_vectors_valid_missing_nan_dimension_batch_rejected",
+            "providers::wire_tests::usage_partitions_missing_details_and_model_violation_preserve_paid_counts"
+          ],
+          "count": 5,
+          "log": "/private/tmp/lwiki-p21-final-second-failed/tests.log",
+          "log_sha256": "6bad232e1d90bcd0d63e410a2f7ad1f1f547a50fccbb31353e101605527a5cf3"
+        },
+        {
+          "selector": "retrieval_baseline",
+          "result": {
+            "target": "tests/retrieval_baseline.rs",
+            "passed": 2,
+            "failed": 0,
+            "ignored_explicit_children": 1,
+            "seconds": 12.25,
+            "log": "/private/tmp/lwiki-p21-final/tests.log",
+            "log_sha256": "e229ccaf0bc0c2b19557fb5f10a5da5d185ac253d99bb86bee56ae8c75c057b7",
+            "observed_source_fingerprint": "325e425accaad00f69d658c68121d46469cac5e69d7fc3c2ef44d6b07912678a"
+          },
+          "passing_named_tests": [
+            "fixed_corpus_current_evidence_withdrawal_homonyms_and_isolated_spaces",
+            "heldout_fixed_corpus_equal_budget_baseline"
+          ],
+          "log": "/private/tmp/lwiki-p21-final/tests.log",
+          "log_sha256": "e229ccaf0bc0c2b19557fb5f10a5da5d185ac253d99bb86bee56ae8c75c057b7"
+        }
+      ]
+    },
+    "V13": {
+      "test_targets_or_checks": [
+        "api_extraction",
+        "research_extraction",
+        "remote_cli",
+        "release_workflows"
+      ],
+      "status": "passed on available native platform; external qualification pending",
+      "actual_evidence": [
+        {
+          "selector": "api_extraction",
+          "result": {
+            "target": "tests/api_extraction.rs",
+            "passed": 12,
+            "failed": 0,
+            "ignored_explicit_children": 0,
+            "seconds": 33.94,
+            "log": "/private/tmp/lwiki-p21-final-second-failed/tests.log",
+            "log_sha256": "6bad232e1d90bcd0d63e410a2f7ad1f1f547a50fccbb31353e101605527a5cf3",
+            "observed_source_fingerprint": "ea627f8d6e0cad300f8f29398ab771d61ec32397f97544f0171862edc43d24ab",
+            "reuse": "product, Cargo, shared fixtures and this target source byte-equal to final tree"
+          },
+          "passing_named_tests": [
+            "acknowledged_generation_receipt_resumes_without_rewriting_output_or_resending",
+            "api_and_agent_same_packet_import_semantics",
+            "cached_resume_preserves_reject_accept_and_resolution",
+            "cancel_after_dispatch_retains_completed_output_unknown_attempt",
+            "changed_source_prompt_model_creates_new_task",
+            "default_run_identity_is_pure_stable_and_binds_source_model_revision_context",
+            "local_retained_recovery_failures_never_reject_paid_output_and_restore_without_send",
+            "malformed_response_charged_no_partial_activation_or_repair",
+            "offline_miss_and_dry_run_make_no_packet_or_job_writes",
+            "retained_decode_survives_source_change_but_materialization_requires_freshness",
+            "retained_response_resumes_without_transport_and_rejects_tampered_body",
+            "retained_response_wrong_model_contract_never_reuses_or_resends"
+          ],
+          "log": "/private/tmp/lwiki-p21-final-second-failed/tests.log",
+          "log_sha256": "6bad232e1d90bcd0d63e410a2f7ad1f1f547a50fccbb31353e101605527a5cf3"
+        },
+        {
+          "selector": "research_extraction",
+          "result": {
+            "target": "tests/research_extraction.rs",
+            "passed": 7,
+            "failed": 0,
+            "ignored_explicit_children": 0,
+            "seconds": 24.07,
+            "log": "/private/tmp/lwiki-p21-final/tests.log",
+            "log_sha256": "e229ccaf0bc0c2b19557fb5f10a5da5d185ac253d99bb86bee56ae8c75c057b7",
+            "observed_source_fingerprint": "325e425accaad00f69d658c68121d46469cac5e69d7fc3c2ef44d6b07912678a"
+          },
+          "passing_named_tests": [
+            "admitted_descriptor_and_staged_output_survive_cache_deletion",
+            "changed_source_cannot_activate_retained_paid_output",
+            "containing_options_cannot_weaken_app_offline_or_dry_run",
+            "extraction_uses_containing_accounting_and_never_completes_run",
+            "paid_local_repair_survives_cache_loss_with_zero_resend",
+            "retained_extraction_preserves_resolution_and_explicit_proposal_decisions",
+            "source_change_during_dispatch_preserves_paid_response_for_local_repair"
+          ],
+          "log": "/private/tmp/lwiki-p21-final/tests.log",
+          "log_sha256": "e229ccaf0bc0c2b19557fb5f10a5da5d185ac253d99bb86bee56ae8c75c057b7"
+        },
+        {
+          "selector": "remote_cli",
+          "result": {
+            "target": "tests/remote_cli.rs",
+            "passed": 5,
+            "failed": 0,
+            "ignored_explicit_children": 0,
+            "seconds": 7.11,
+            "log": "/private/tmp/lwiki-p21-final/tests.log",
+            "log_sha256": "e229ccaf0bc0c2b19557fb5f10a5da5d185ac253d99bb86bee56ae8c75c057b7",
+            "observed_source_fingerprint": "325e425accaad00f69d658c68121d46469cac5e69d7fc3c2ef44d6b07912678a"
+          },
+          "passing_named_tests": [
+            "native_api_cli_failed_paid_response_reports_actual_network_activity",
+            "native_api_cli_stages_proposals_and_offline_reuses_paid_output",
+            "native_cli_successful_fallback_keeps_prior_paid_network_activity",
+            "native_embedding_cli_sync_query_graph_context_and_cached_offline_reuse",
+            "remote_cli_dry_run_needs_no_provider_and_preserves_vault_bytes"
+          ],
+          "log": "/private/tmp/lwiki-p21-final/tests.log",
+          "log_sha256": "e229ccaf0bc0c2b19557fb5f10a5da5d185ac253d99bb86bee56ae8c75c057b7"
+        },
+        {
+          "selector": "release_workflows",
+          "result": {
+            "target": "tests/release_workflows.rs",
+            "passed": 1,
+            "failed": 0,
+            "ignored_explicit_children": 0,
+            "seconds": 55.15,
+            "log": "/private/tmp/lwiki-p21-final/tests.log",
+            "log_sha256": "e229ccaf0bc0c2b19557fb5f10a5da5d185ac253d99bb86bee56ae8c75c057b7",
+            "observed_source_fingerprint": "325e425accaad00f69d658c68121d46469cac5e69d7fc3c2ef44d6b07912678a"
+          },
+          "passing_named_tests": [
+            "m0_m4_full_local_acceptance"
+          ],
+          "log": "/private/tmp/lwiki-p21-final/tests.log",
+          "log_sha256": "e229ccaf0bc0c2b19557fb5f10a5da5d185ac253d99bb86bee56ae8c75c057b7"
+        }
+      ]
+    },
+    "V14": {
+      "test_targets_or_checks": [
+        "research_acquisition",
+        "research_dispatch"
+      ],
+      "status": "passed on available native platform; external qualification pending",
+      "actual_evidence": [
+        {
+          "selector": "research_acquisition",
+          "result": {
+            "target": "tests/research_acquisition.rs",
+            "passed": 18,
+            "failed": 0,
+            "ignored_explicit_children": 0,
+            "seconds": 17.94,
+            "log": "/private/tmp/lwiki-p21-final/tests.log",
+            "log_sha256": "e229ccaf0bc0c2b19557fb5f10a5da5d185ac253d99bb86bee56ae8c75c057b7",
+            "observed_source_fingerprint": "325e425accaad00f69d658c68121d46469cac5e69d7fc3c2ef44d6b07912678a"
+          },
+          "passing_named_tests": [
+            "ambient_proxy_auth_downgrade_credentials_rejected",
+            "ampersand_heavy_html_has_bounded_entity_lookahead",
+            "capture_raw_before_normalize_and_unsupported_gap",
+            "deadline_preserves_observed_bytes_and_never_resends",
+            "dns_rebind_private_redirect_ipv4_mapped_ipv6_rejected",
+            "explicit_url_without_search_capability",
+            "final_entry_proof_runs_after_connection_preparation",
+            "forged_capture_metadata_cannot_reinterpret_durable_raw_response",
+            "high_level_dry_run_and_offline_leave_full_vault_tree_unchanged",
+            "local_materialization_failure_retains_paid_raw_spool_for_recovery",
+            "malformed_search_is_paid_rejection_and_count_breach_invalidates_guarantee",
+            "offline_and_dry_run_do_not_resolve_or_connect",
+            "protected_fetch_replay_recovers_headers_time_bytes_without_resend",
+            "protected_metadata_before_received_replays_without_resend",
+            "redirect_and_decompression_caps_accounted",
+            "robots_auth_and_distinct_content_origins_remain_explicit",
+            "search_limits_pages_dedup_snippets_are_not_evidence",
+            "two_hop_capture_completes_redirect_and_retains_bound_origin_chain"
+          ],
+          "log": "/private/tmp/lwiki-p21-final/tests.log",
+          "log_sha256": "e229ccaf0bc0c2b19557fb5f10a5da5d185ac253d99bb86bee56ae8c75c057b7"
+        },
+        {
+          "selector": "research_dispatch",
+          "result": {
+            "target": "tests/research_dispatch.rs",
+            "passed": 7,
+            "failed": 0,
+            "ignored_explicit_children": 0,
+            "seconds": 3.66,
+            "log": "/private/tmp/lwiki-p21-final/tests.log",
+            "log_sha256": "e229ccaf0bc0c2b19557fb5f10a5da5d185ac253d99bb86bee56ae8c75c057b7",
+            "observed_source_fingerprint": "325e425accaad00f69d658c68121d46469cac5e69d7fc3c2ef44d6b07912678a"
+          },
+          "passing_named_tests": [
+            "competing_dispatchers_cannot_race_the_final_request_slot",
+            "dual_role_profile_runs_concurrently_and_returns_reservation_order",
+            "final_request_uses_stable_priority_and_key_before_network",
+            "public_fetch_reports_actual_entry_and_uses_effective_research_binding",
+            "retry_after_is_durable_and_joins_a_later_wave",
+            "sibling_failure_preserves_every_paid_result_and_hold",
+            "wrong_role_fails_before_any_reservation_or_network"
+          ],
+          "log": "/private/tmp/lwiki-p21-final/tests.log",
+          "log_sha256": "e229ccaf0bc0c2b19557fb5f10a5da5d185ac253d99bb86bee56ae8c75c057b7"
+        }
+      ]
+    },
+    "V15": {
+      "test_targets_or_checks": [
+        "research_planning",
+        "research_stage_contracts",
+        "research_dispatch",
+        "research_extraction",
+        "research_reports",
+        "research_stages",
+        "research_workflow",
+        "research_cli",
+        "release_workflows",
+        "lib::jobs::research_tests",
+        "lib::jobs::capture_history",
+        "lib::research::runner"
+      ],
+      "status": "passed on available native platform; external qualification pending",
+      "actual_evidence": [
+        {
+          "selector": "research_planning",
+          "result": {
+            "target": "tests/research_planning.rs",
+            "passed": 8,
+            "failed": 0,
+            "ignored_explicit_children": 0,
+            "seconds": 0.04,
+            "log": "/private/tmp/lwiki-p21-final/tests.log",
+            "log_sha256": "e229ccaf0bc0c2b19557fb5f10a5da5d185ac253d99bb86bee56ae8c75c057b7",
+            "observed_source_fingerprint": "325e425accaad00f69d658c68121d46469cac5e69d7fc3c2ef44d6b07912678a"
+          },
+          "passing_named_tests": [
+            "caller_scope_and_stage_ceilings_reject_oversize_or_implicit_remote_retrieval",
+            "explicit_url_plan_needs_no_search_binding_and_capture_is_pure",
+            "generation_stage_schema_and_proof_changes_change_identity",
+            "initial_descriptors_match_production_fingerprints_and_durable_paths",
+            "oversized_combined_generation_data_and_invalid_initial_bindings_fail",
+            "pure_plan_preserves_complete_fixture_tree_and_lifetime_genesis",
+            "same_profile_binds_generation_and_search_by_exact_role",
+            "source_and_parent_proofs_are_preserved_and_invalid_quotes_fail"
+          ],
+          "log": "/private/tmp/lwiki-p21-final/tests.log",
+          "log_sha256": "e229ccaf0bc0c2b19557fb5f10a5da5d185ac253d99bb86bee56ae8c75c057b7"
+        },
+        {
+          "selector": "research_stage_contracts",
+          "result": {
+            "target": "tests/research_stage_contracts.rs",
+            "passed": 7,
+            "failed": 0,
+            "ignored_explicit_children": 0,
+            "seconds": 0.03,
+            "log": "/private/tmp/lwiki-p21-final/tests.log",
+            "log_sha256": "e229ccaf0bc0c2b19557fb5f10a5da5d185ac253d99bb86bee56ae8c75c057b7",
+            "observed_source_fingerprint": "325e425accaad00f69d658c68121d46469cac5e69d7fc3c2ef44d6b07912678a"
+          },
+          "passing_named_tests": [
+            "canonical_stage_schemas_match_shapes_and_reject_unknown_nested_fields",
+            "frontier_public_urls_brave_bounds_and_caller_exclusions",
+            "research_stage_schemas_limits_unknown_refs_and_invented_paths",
+            "synthesis_citation_bytes_verified_unsupported_claims_not_accepted",
+            "synthesis_nested_reference_keys_and_authorized_page_proposals",
+            "synthesis_rechecks_utf8_hash_ownership_and_withdrawn_source",
+            "synthesis_total_claim_citation_item_caps_and_gap_continuation"
+          ],
+          "log": "/private/tmp/lwiki-p21-final/tests.log",
+          "log_sha256": "e229ccaf0bc0c2b19557fb5f10a5da5d185ac253d99bb86bee56ae8c75c057b7"
+        },
+        {
+          "selector": "research_dispatch",
+          "result": {
+            "target": "tests/research_dispatch.rs",
+            "passed": 7,
+            "failed": 0,
+            "ignored_explicit_children": 0,
+            "seconds": 3.66,
+            "log": "/private/tmp/lwiki-p21-final/tests.log",
+            "log_sha256": "e229ccaf0bc0c2b19557fb5f10a5da5d185ac253d99bb86bee56ae8c75c057b7",
+            "observed_source_fingerprint": "325e425accaad00f69d658c68121d46469cac5e69d7fc3c2ef44d6b07912678a"
+          },
+          "passing_named_tests": [
+            "competing_dispatchers_cannot_race_the_final_request_slot",
+            "dual_role_profile_runs_concurrently_and_returns_reservation_order",
+            "final_request_uses_stable_priority_and_key_before_network",
+            "public_fetch_reports_actual_entry_and_uses_effective_research_binding",
+            "retry_after_is_durable_and_joins_a_later_wave",
+            "sibling_failure_preserves_every_paid_result_and_hold",
+            "wrong_role_fails_before_any_reservation_or_network"
+          ],
+          "log": "/private/tmp/lwiki-p21-final/tests.log",
+          "log_sha256": "e229ccaf0bc0c2b19557fb5f10a5da5d185ac253d99bb86bee56ae8c75c057b7"
+        },
+        {
+          "selector": "research_extraction",
+          "result": {
+            "target": "tests/research_extraction.rs",
+            "passed": 7,
+            "failed": 0,
+            "ignored_explicit_children": 0,
+            "seconds": 24.07,
+            "log": "/private/tmp/lwiki-p21-final/tests.log",
+            "log_sha256": "e229ccaf0bc0c2b19557fb5f10a5da5d185ac253d99bb86bee56ae8c75c057b7",
+            "observed_source_fingerprint": "325e425accaad00f69d658c68121d46469cac5e69d7fc3c2ef44d6b07912678a"
+          },
+          "passing_named_tests": [
+            "admitted_descriptor_and_staged_output_survive_cache_deletion",
+            "changed_source_cannot_activate_retained_paid_output",
+            "containing_options_cannot_weaken_app_offline_or_dry_run",
+            "extraction_uses_containing_accounting_and_never_completes_run",
+            "paid_local_repair_survives_cache_loss_with_zero_resend",
+            "retained_extraction_preserves_resolution_and_explicit_proposal_decisions",
+            "source_change_during_dispatch_preserves_paid_response_for_local_repair"
+          ],
+          "log": "/private/tmp/lwiki-p21-final/tests.log",
+          "log_sha256": "e229ccaf0bc0c2b19557fb5f10a5da5d185ac253d99bb86bee56ae8c75c057b7"
+        },
+        {
+          "selector": "research_reports",
+          "result": {
+            "target": "tests/research_reports.rs",
+            "passed": 13,
+            "failed": 0,
+            "ignored_explicit_children": 0,
+            "seconds": 15.27,
+            "log": "/private/tmp/lwiki-p21-final/tests.log",
+            "log_sha256": "e229ccaf0bc0c2b19557fb5f10a5da5d185ac253d99bb86bee56ae8c75c057b7",
+            "observed_source_fingerprint": "325e425accaad00f69d658c68121d46469cac5e69d7fc3c2ef44d6b07912678a"
+          },
+          "passing_named_tests": [
+            "changed_page_keeps_original_expected_hash_and_refuses_apply",
+            "concurrent_epoch_retirement_after_authentication_prevents_page_apply",
+            "dry_run_is_read_only_and_offline_partial_publication_needs_no_model",
+            "edit_after_paid_synthesis_before_first_apply_build_is_preserved",
+            "explicit_apply_creates_page_once_without_accepting_assertions",
+            "interrupted_update_publication_resumes_original_drafts_and_refuses_external_edits",
+            "newest_report_uses_actual_admission_order_and_checks_output_ownership",
+            "page_proposals_are_unassessed_staged_idempotently_and_survive_cache_loss",
+            "retired_epoch_cannot_continue_an_interrupted_authorized_update",
+            "stale_citations_are_omitted_and_claims_move_to_unassessed_gaps",
+            "stale_epoch_partial_report_preserves_paid_hold_and_cannot_authorize_new_send",
+            "two_authorized_updates_apply_and_report_without_refreshing_paid_authority",
+            "unknown_records_invented_paths_and_forged_retained_hashes_fail_closed"
+          ],
+          "log": "/private/tmp/lwiki-p21-final/tests.log",
+          "log_sha256": "e229ccaf0bc0c2b19557fb5f10a5da5d185ac253d99bb86bee56ae8c75c057b7"
+        },
+        {
+          "selector": "research_stages",
+          "result": {
+            "target": "tests/research_stages.rs",
+            "passed": 1,
+            "failed": 0,
+            "ignored_explicit_children": 0,
+            "seconds": 0.73,
+            "log": "/private/tmp/lwiki-p21-final/tests.log",
+            "log_sha256": "e229ccaf0bc0c2b19557fb5f10a5da5d185ac253d99bb86bee56ae8c75c057b7",
+            "observed_source_fingerprint": "325e425accaad00f69d658c68121d46469cac5e69d7fc3c2ef44d6b07912678a"
+          },
+          "passing_named_tests": [
+            "applied_local_output_without_finished_task_is_reused_after_clock_advances"
+          ],
+          "log": "/private/tmp/lwiki-p21-final/tests.log",
+          "log_sha256": "e229ccaf0bc0c2b19557fb5f10a5da5d185ac253d99bb86bee56ae8c75c057b7"
+        },
+        {
+          "selector": "research_workflow",
+          "result": {
+            "target": "tests/research_workflow.rs",
+            "passed": 23,
+            "failed": 0,
+            "ignored_explicit_children": 0,
+            "seconds": 112.42,
+            "log": "/private/tmp/lwiki-p21-final/tests.log",
+            "log_sha256": "e229ccaf0bc0c2b19557fb5f10a5da5d185ac253d99bb86bee56ae8c75c057b7",
+            "observed_source_fingerprint": "325e425accaad00f69d658c68121d46469cac5e69d7fc3c2ef44d6b07912678a"
+          },
+          "passing_named_tests": [
+            "admitted_pending_report_recovers_after_clock_advance_without_new_paid_calls",
+            "captured_source_refresh_rebinds_current_proofs_without_refetch_or_stale_extraction",
+            "completed_synthesis_cancelled_before_local_reporting_resumes_without_paid_work",
+            "completed_workflow_and_reports_survive_cache_deletion",
+            "dry_run_and_offline_do_not_resolve_credentials_or_dispatch",
+            "entered_cancellation_retains_paid_outcome_and_local_partial_report",
+            "explicit_model_rebind_preserves_genesis_lifetime_caps_and_original_tasks",
+            "explicit_url_research_uses_one_ledger_and_exact_paid_receipts_without_search",
+            "final_assessed_round_resumes_pending_synthesis_without_new_round_or_budget_reset",
+            "gap_response_after_source_edit_is_unknown_with_protected_spool",
+            "invented_evidence_id_is_rejected_with_paid_receipt_and_partial_report",
+            "later_capture_wave_reaches_actual_lifetime_cap_without_synthesis",
+            "nonmatching_capture_refresh_rebinds_stale_extract_with_equal_lexical_inputs",
+            "offline_limit_amendment_resume_preserves_the_full_tree_and_counters",
+            "own_first_page_update_resumes_second_without_rebinding_or_new_paid_work",
+            "proven_not_sent_capture_failure_preserves_origin_and_independent_source_work",
+            "request_budget_stop_keeps_partial_report_and_skips_final_model_call",
+            "source_changed_during_paid_response_is_withheld_in_partial_report",
+            "stopped_assessment_resumes_synthesis_at_the_same_round_when_rounds_remain",
+            "synthesis_response_after_source_edit_is_unknown_with_protected_spool",
+            "three_sources_use_later_concurrency_waves_without_mirrored_support_inflation",
+            "two_rounds_without_new_support_stop_at_lifetime_round_history",
+            "unavailable_capture_keeps_its_origin_and_explicit_gap_with_an_independent_source"
+          ],
+          "log": "/private/tmp/lwiki-p21-final/tests.log",
+          "log_sha256": "e229ccaf0bc0c2b19557fb5f10a5da5d185ac253d99bb86bee56ae8c75c057b7"
+        },
+        {
+          "selector": "research_cli",
+          "result": {
+            "target": "tests/research_cli.rs",
+            "passed": 11,
+            "failed": 0,
+            "ignored_explicit_children": 0,
+            "seconds": 13.11,
+            "log": "/private/tmp/lwiki-p21-final/tests.log",
+            "log_sha256": "e229ccaf0bc0c2b19557fb5f10a5da5d185ac253d99bb86bee56ae8c75c057b7",
+            "observed_source_fingerprint": "325e425accaad00f69d658c68121d46469cac5e69d7fc3c2ef44d6b07912678a"
+          },
+          "passing_named_tests": [
+            "doctor_each_role_uses_native_sealed_wire_and_completed_probe_receipt",
+            "doctor_malformed_paid_response_reports_network_and_retains_unknown_hold",
+            "doctor_offline_refuses_without_native_requests_or_tree_changes",
+            "doctor_without_probe_preserves_compatibility_and_explicit_role_requires_probe",
+            "explicit_native_limit_amendment_only_pays_synthesis_and_preserves_lifetime_history",
+            "native_research_budget_partial_resume_and_cache_loss_never_trigger_final_generation",
+            "native_research_local_sources_complete_receipts_unassessed_report_and_staged_proposals",
+            "native_sigint_after_paid_entry_emits_terminal_130_and_retains_unknown_partial_report",
+            "research_and_doctor_dry_runs_preserve_complete_tree_without_provider_access",
+            "research_cli_rejects_excessive_scope_and_caller_exclusions_without_writes",
+            "research_commands_and_four_exact_schemas_are_concrete_capabilities"
+          ],
+          "log": "/private/tmp/lwiki-p21-final/tests.log",
+          "log_sha256": "e229ccaf0bc0c2b19557fb5f10a5da5d185ac253d99bb86bee56ae8c75c057b7"
+        },
+        {
+          "selector": "release_workflows",
+          "result": {
+            "target": "tests/release_workflows.rs",
+            "passed": 1,
+            "failed": 0,
+            "ignored_explicit_children": 0,
+            "seconds": 55.15,
+            "log": "/private/tmp/lwiki-p21-final/tests.log",
+            "log_sha256": "e229ccaf0bc0c2b19557fb5f10a5da5d185ac253d99bb86bee56ae8c75c057b7",
+            "observed_source_fingerprint": "325e425accaad00f69d658c68121d46469cac5e69d7fc3c2ef44d6b07912678a"
+          },
+          "passing_named_tests": [
+            "m0_m4_full_local_acceptance"
+          ],
+          "log": "/private/tmp/lwiki-p21-final/tests.log",
+          "log_sha256": "e229ccaf0bc0c2b19557fb5f10a5da5d185ac253d99bb86bee56ae8c75c057b7"
+        },
+        {
+          "selector": "lib::jobs::research_tests",
+          "passing_named_tests": [
+            "jobs::research_tests::published_research_schemas_match_durable_plan_and_event_encodings",
+            "jobs::research_tests::research_batch_flush_deadline_returns_already_reserved_authority",
+            "jobs::research_tests::research_changed_source_retires_only_dependent_work",
+            "jobs::research_tests::research_completion_requires_terminal_history_and_preserves_unknown_holds",
+            "jobs::research_tests::research_dual_role_profile_proofs_do_not_collide",
+            "jobs::research_tests::research_duplicate_task_requires_priority_and_dependencies_equality",
+            "jobs::research_tests::research_failed_gap_requires_terminal_settlement_without_refunding_hold",
+            "jobs::research_tests::research_fetch_admission_verifies_actual_descriptor_origin",
+            "jobs::research_tests::research_frontier_is_exactly_idempotent_and_cas_guarded",
+            "jobs::research_tests::research_genesis_versions_and_legacy_absence_are_strict",
+            "jobs::research_tests::research_individual_reserve_enforces_prefix_and_retains_postflush_token",
+            "jobs::research_tests::research_last_source_and_round_race_admits_one_revision",
+            "jobs::research_tests::research_live_rebind_is_idempotent_and_replay_preserves_retired_specs",
+            "jobs::research_tests::research_no_progress_and_mirrored_support_survive_epochs",
+            "jobs::research_tests::research_origins_preserve_queries_and_reject_fragment_aliases",
+            "jobs::research_tests::research_rebind_blocks_reserved_and_unknown_authority",
+            "jobs::research_tests::research_rebind_cannot_admit_new_acquisition_outside_rounds",
+            "jobs::research_tests::research_retirement_keeps_genesis_task_definitions_and_counters",
+            "jobs::research_tests::research_retry_not_before_is_durable_and_cannot_skip_priority",
+            "jobs::research_tests::research_scope_bytes_are_checked_and_dry_run_has_no_journal_write",
+            "jobs::research_tests::research_stable_batch_preserves_the_final_request_prefix"
+          ],
+          "count": 21,
+          "log": "/private/tmp/lwiki-p21-final-second-failed/tests.log",
+          "log_sha256": "6bad232e1d90bcd0d63e410a2f7ad1f1f547a50fccbb31353e101605527a5cf3"
+        },
+        {
+          "selector": "lib::jobs::capture_history",
+          "passing_named_tests": [
+            "jobs::capture_history::tests::acknowledged_capture_before_task_finish_survives_source_refresh",
+            "jobs::capture_history::tests::current_source_deletion_does_not_restore_or_authorize_current_content",
+            "jobs::capture_history::tests::immutable_revision_and_receipt_tampering_remain_errors",
+            "jobs::capture_history::tests::refreshed_source_retains_original_capture_and_unknown_hold",
+            "jobs::capture_history::tests::retained_payload_or_recorded_manifest_tampering_cannot_prove_history",
+            "jobs::capture_history::tests::unrelated_stage_foreign_owner_or_missing_acknowledgment_cannot_use_fallback"
+          ],
+          "count": 6,
+          "log": "/private/tmp/lwiki-p21-final-second-failed/tests.log",
+          "log_sha256": "6bad232e1d90bcd0d63e410a2f7ad1f1f547a50fccbb31353e101605527a5cf3"
+        },
+        {
+          "selector": "lib::research::runner",
+          "passing_named_tests": [
+            "research::runner::tests::post_export_gate_withholds_historical_packet_with_fresh_header_dependencies"
+          ],
+          "count": 1,
+          "log": "/private/tmp/lwiki-p21-final-second-failed/tests.log",
+          "log_sha256": "6bad232e1d90bcd0d63e410a2f7ad1f1f547a50fccbb31353e101605527a5cf3"
+        }
+      ]
+    },
+    "V16": {
+      "test_targets_or_checks": [
+        "offline_application",
+        "offline_cli",
+        "provider_trust",
+        "lib::providers::credential_tests",
+        "research_acquisition",
+        "research_cli",
+        "research_workflow",
+        "release_workflows",
+        "provider_dispatch"
+      ],
+      "status": "passed on available native platform; external qualification pending",
+      "actual_evidence": [
+        {
+          "selector": "offline_application",
+          "result": {
+            "target": "tests/offline_application.rs",
+            "passed": 14,
+            "failed": 0,
+            "ignored_explicit_children": 0,
+            "seconds": 9.13,
+            "log": "/private/tmp/lwiki-p21-final/tests.log",
+            "log_sha256": "e229ccaf0bc0c2b19557fb5f10a5da5d185ac253d99bb86bee56ae8c75c057b7",
+            "observed_source_fingerprint": "325e425accaad00f69d658c68121d46469cac5e69d7fc3c2ef44d6b07912678a"
+          },
+          "passing_named_tests": [
+            "changes_show_exact_payloads_detect_corruption_and_bound_aggregate",
+            "cli_discovery_precedence_and_exact_ids",
+            "dry_run_missing_cache_does_not_create_lock_or_cache",
+            "dry_run_zero_writes_refresh_helpers_dns_http",
+            "expected_hash_page_put_rename_and_incoming_links",
+            "init_refuses_overwrite_and_preserves_existing_excludes",
+            "local_config_precedence_and_portable_trust_boundaries",
+            "read_limits_utf8_duplicate_identity_and_captured_frontmatter",
+            "read_refuses_private_generated_and_original_payload_paths",
+            "rename_refuses_companion_identity_conflict_without_writes",
+            "rename_updates_known_typed_companions_and_refuses_immutable_incoming",
+            "schema_migration_is_explicit_and_guarded",
+            "source_refresh_withdrawal_and_revalidation_stage_only",
+            "staged_changes_show_apply_abort_and_guarded_inverse"
+          ],
+          "log": "/private/tmp/lwiki-p21-final/tests.log",
+          "log_sha256": "e229ccaf0bc0c2b19557fb5f10a5da5d185ac253d99bb86bee56ae8c75c057b7"
+        },
+        {
+          "selector": "offline_cli",
+          "result": {
+            "target": "tests/offline_cli.rs",
+            "passed": 10,
+            "failed": 0,
+            "ignored_explicit_children": 0,
+            "seconds": 3.49,
+            "log": "/private/tmp/lwiki-p21-final/tests.log",
+            "log_sha256": "e229ccaf0bc0c2b19557fb5f10a5da5d185ac253d99bb86bee56ae8c75c057b7",
+            "observed_source_fingerprint": "325e425accaad00f69d658c68121d46469cac5e69d7fc3c2ef44d6b07912678a"
+          },
+          "passing_named_tests": [
+            "dry_run_cli_leaves_existing_vault_cache_changes_and_directories_exactly_unchanged",
+            "executable_put_read_rename_stage_apply_rollback_abort_workflow",
+            "init_subprocess_and_bounded_file_input_are_guarded",
+            "jsonl_started_and_terminal_events_share_invocation_and_sequence",
+            "machine_envelope_error_exit_and_no_ansi",
+            "migration_is_lossless_staged_guarded_and_future_versions_remain_readable",
+            "no_sync_reads_cached_bytes_and_search_reports_freshness_and_channel",
+            "normal_cli_search_recovers_committed_sql_with_incomplete_change_journal",
+            "retained_apply_failure_returns_inspectable_change_and_human_snapshot_is_labelled",
+            "source_cli_capture_refresh_reuse_and_withdraw_preserve_immutable_bytes"
+          ],
+          "log": "/private/tmp/lwiki-p21-final/tests.log",
+          "log_sha256": "e229ccaf0bc0c2b19557fb5f10a5da5d185ac253d99bb86bee56ae8c75c057b7"
+        },
+        {
+          "selector": "provider_trust",
+          "result": {
+            "target": "tests/provider_trust.rs",
+            "passed": 6,
+            "failed": 0,
+            "ignored_explicit_children": 0,
+            "seconds": 0.02,
+            "log": "/private/tmp/lwiki-p21-final/tests.log",
+            "log_sha256": "e229ccaf0bc0c2b19557fb5f10a5da5d185ac253d99bb86bee56ae8c75c057b7",
+            "observed_source_fingerprint": "325e425accaad00f69d658c68121d46469cac5e69d7fc3c2ef44d6b07912678a"
+          },
+          "passing_named_tests": [
+            "cloned_profile_no_auth_or_helper",
+            "configured_private_ca_content_is_part_of_endpoint_trust",
+            "credential_rotation_does_not_export_secret_hash_or_change_endpoint_identity",
+            "full_url_tls_managed_headers_and_capability_policies_are_exact",
+            "private_config_symlink_sparse_size_and_permissions_refuse",
+            "strict_private_toml_rejects_duplicate_unknown_and_conflicting_sources"
+          ],
+          "log": "/private/tmp/lwiki-p21-final/tests.log",
+          "log_sha256": "e229ccaf0bc0c2b19557fb5f10a5da5d185ac253d99bb86bee56ae8c75c057b7"
+        },
+        {
+          "selector": "lib::providers::credential_tests",
+          "passing_named_tests": [
+            "providers::credential_tests::bounded_static_env_file_missing_empty_and_control_tokens",
+            "providers::credential_tests::cached_command_still_resolves_rotated_extra_secret_headers",
+            "providers::credential_tests::cancellation_clock_and_trust_changes_after_helper_return_no_lease_or_cache",
+            "providers::credential_tests::cloned_or_changed_trust_refuses_before_input_or_helper",
+            "providers::credential_tests::exact_service_url_is_preserved_without_inferred_path",
+            "providers::credential_tests::expired_or_regressed_cache_and_offline_warm_cache_cannot_bypass_policy",
+            "providers::credential_tests::fresh_command_header_lookup_cannot_return_expired_or_regressed_credentials",
+            "providers::credential_tests::helper_expiry_size_control_stderr_redaction_and_one_401_refresh",
+            "providers::credential_tests::helper_limits_ttl_args_and_private_prefixes_are_validated_without_secret_hashes",
+            "providers::credential_tests::native_broker_helper_json_cache_and_offline_warm_cache_do_not_leak_or_relaunch",
+            "providers::credential_tests::native_helper_descendant_held_stdout_returns_bounded_and_kills_group",
+            "providers::credential_tests::native_helper_executes_explicit_interpreter_with_closed_stdin_and_exact_argv",
+            "providers::credential_tests::native_helper_output_ceiling_timeout_cancel_and_stderr_are_bounded",
+            "providers::credential_tests::offline_dry_run_before_secret_resolution_zero_dns_http_helpers",
+            "providers::credential_tests::post_resolve_command_lease_checks_both_clocks_trust_and_cached_acquisition",
+            "providers::credential_tests::process_refreshes_serialize_and_waiters_reuse_fresh_epoch",
+            "providers::credential_tests::static_401_does_not_refresh_and_text_removes_only_one_terminal_newline",
+            "providers::credential_tests::static_lease_has_a_monotonic_deadline_and_cannot_cross_services"
+          ],
+          "count": 18,
+          "log": "/private/tmp/lwiki-p21-final-second-failed/tests.log",
+          "log_sha256": "6bad232e1d90bcd0d63e410a2f7ad1f1f547a50fccbb31353e101605527a5cf3"
+        },
+        {
+          "selector": "research_acquisition",
+          "result": {
+            "target": "tests/research_acquisition.rs",
+            "passed": 18,
+            "failed": 0,
+            "ignored_explicit_children": 0,
+            "seconds": 17.94,
+            "log": "/private/tmp/lwiki-p21-final/tests.log",
+            "log_sha256": "e229ccaf0bc0c2b19557fb5f10a5da5d185ac253d99bb86bee56ae8c75c057b7",
+            "observed_source_fingerprint": "325e425accaad00f69d658c68121d46469cac5e69d7fc3c2ef44d6b07912678a"
+          },
+          "passing_named_tests": [
+            "ambient_proxy_auth_downgrade_credentials_rejected",
+            "ampersand_heavy_html_has_bounded_entity_lookahead",
+            "capture_raw_before_normalize_and_unsupported_gap",
+            "deadline_preserves_observed_bytes_and_never_resends",
+            "dns_rebind_private_redirect_ipv4_mapped_ipv6_rejected",
+            "explicit_url_without_search_capability",
+            "final_entry_proof_runs_after_connection_preparation",
+            "forged_capture_metadata_cannot_reinterpret_durable_raw_response",
+            "high_level_dry_run_and_offline_leave_full_vault_tree_unchanged",
+            "local_materialization_failure_retains_paid_raw_spool_for_recovery",
+            "malformed_search_is_paid_rejection_and_count_breach_invalidates_guarantee",
+            "offline_and_dry_run_do_not_resolve_or_connect",
+            "protected_fetch_replay_recovers_headers_time_bytes_without_resend",
+            "protected_metadata_before_received_replays_without_resend",
+            "redirect_and_decompression_caps_accounted",
+            "robots_auth_and_distinct_content_origins_remain_explicit",
+            "search_limits_pages_dedup_snippets_are_not_evidence",
+            "two_hop_capture_completes_redirect_and_retains_bound_origin_chain"
+          ],
+          "log": "/private/tmp/lwiki-p21-final/tests.log",
+          "log_sha256": "e229ccaf0bc0c2b19557fb5f10a5da5d185ac253d99bb86bee56ae8c75c057b7"
+        },
+        {
+          "selector": "research_cli",
+          "result": {
+            "target": "tests/research_cli.rs",
+            "passed": 11,
+            "failed": 0,
+            "ignored_explicit_children": 0,
+            "seconds": 13.11,
+            "log": "/private/tmp/lwiki-p21-final/tests.log",
+            "log_sha256": "e229ccaf0bc0c2b19557fb5f10a5da5d185ac253d99bb86bee56ae8c75c057b7",
+            "observed_source_fingerprint": "325e425accaad00f69d658c68121d46469cac5e69d7fc3c2ef44d6b07912678a"
+          },
+          "passing_named_tests": [
+            "doctor_each_role_uses_native_sealed_wire_and_completed_probe_receipt",
+            "doctor_malformed_paid_response_reports_network_and_retains_unknown_hold",
+            "doctor_offline_refuses_without_native_requests_or_tree_changes",
+            "doctor_without_probe_preserves_compatibility_and_explicit_role_requires_probe",
+            "explicit_native_limit_amendment_only_pays_synthesis_and_preserves_lifetime_history",
+            "native_research_budget_partial_resume_and_cache_loss_never_trigger_final_generation",
+            "native_research_local_sources_complete_receipts_unassessed_report_and_staged_proposals",
+            "native_sigint_after_paid_entry_emits_terminal_130_and_retains_unknown_partial_report",
+            "research_and_doctor_dry_runs_preserve_complete_tree_without_provider_access",
+            "research_cli_rejects_excessive_scope_and_caller_exclusions_without_writes",
+            "research_commands_and_four_exact_schemas_are_concrete_capabilities"
+          ],
+          "log": "/private/tmp/lwiki-p21-final/tests.log",
+          "log_sha256": "e229ccaf0bc0c2b19557fb5f10a5da5d185ac253d99bb86bee56ae8c75c057b7"
+        },
+        {
+          "selector": "research_workflow",
+          "result": {
+            "target": "tests/research_workflow.rs",
+            "passed": 23,
+            "failed": 0,
+            "ignored_explicit_children": 0,
+            "seconds": 112.42,
+            "log": "/private/tmp/lwiki-p21-final/tests.log",
+            "log_sha256": "e229ccaf0bc0c2b19557fb5f10a5da5d185ac253d99bb86bee56ae8c75c057b7",
+            "observed_source_fingerprint": "325e425accaad00f69d658c68121d46469cac5e69d7fc3c2ef44d6b07912678a"
+          },
+          "passing_named_tests": [
+            "admitted_pending_report_recovers_after_clock_advance_without_new_paid_calls",
+            "captured_source_refresh_rebinds_current_proofs_without_refetch_or_stale_extraction",
+            "completed_synthesis_cancelled_before_local_reporting_resumes_without_paid_work",
+            "completed_workflow_and_reports_survive_cache_deletion",
+            "dry_run_and_offline_do_not_resolve_credentials_or_dispatch",
+            "entered_cancellation_retains_paid_outcome_and_local_partial_report",
+            "explicit_model_rebind_preserves_genesis_lifetime_caps_and_original_tasks",
+            "explicit_url_research_uses_one_ledger_and_exact_paid_receipts_without_search",
+            "final_assessed_round_resumes_pending_synthesis_without_new_round_or_budget_reset",
+            "gap_response_after_source_edit_is_unknown_with_protected_spool",
+            "invented_evidence_id_is_rejected_with_paid_receipt_and_partial_report",
+            "later_capture_wave_reaches_actual_lifetime_cap_without_synthesis",
+            "nonmatching_capture_refresh_rebinds_stale_extract_with_equal_lexical_inputs",
+            "offline_limit_amendment_resume_preserves_the_full_tree_and_counters",
+            "own_first_page_update_resumes_second_without_rebinding_or_new_paid_work",
+            "proven_not_sent_capture_failure_preserves_origin_and_independent_source_work",
+            "request_budget_stop_keeps_partial_report_and_skips_final_model_call",
+            "source_changed_during_paid_response_is_withheld_in_partial_report",
+            "stopped_assessment_resumes_synthesis_at_the_same_round_when_rounds_remain",
+            "synthesis_response_after_source_edit_is_unknown_with_protected_spool",
+            "three_sources_use_later_concurrency_waves_without_mirrored_support_inflation",
+            "two_rounds_without_new_support_stop_at_lifetime_round_history",
+            "unavailable_capture_keeps_its_origin_and_explicit_gap_with_an_independent_source"
+          ],
+          "log": "/private/tmp/lwiki-p21-final/tests.log",
+          "log_sha256": "e229ccaf0bc0c2b19557fb5f10a5da5d185ac253d99bb86bee56ae8c75c057b7"
+        },
+        {
+          "selector": "release_workflows",
+          "result": {
+            "target": "tests/release_workflows.rs",
+            "passed": 1,
+            "failed": 0,
+            "ignored_explicit_children": 0,
+            "seconds": 55.15,
+            "log": "/private/tmp/lwiki-p21-final/tests.log",
+            "log_sha256": "e229ccaf0bc0c2b19557fb5f10a5da5d185ac253d99bb86bee56ae8c75c057b7",
+            "observed_source_fingerprint": "325e425accaad00f69d658c68121d46469cac5e69d7fc3c2ef44d6b07912678a"
+          },
+          "passing_named_tests": [
+            "m0_m4_full_local_acceptance"
+          ],
+          "log": "/private/tmp/lwiki-p21-final/tests.log",
+          "log_sha256": "e229ccaf0bc0c2b19557fb5f10a5da5d185ac253d99bb86bee56ae8c75c057b7"
+        },
+        {
+          "selector": "provider_dispatch",
+          "result": {
+            "target": "tests/provider_dispatch.rs",
+            "passed": 4,
+            "failed": 0,
+            "ignored_explicit_children": 0,
+            "seconds": 1.67,
+            "log": "/private/tmp/lwiki-p21-final/tests.log",
+            "log_sha256": "e229ccaf0bc0c2b19557fb5f10a5da5d185ac253d99bb86bee56ae8c75c057b7",
+            "observed_source_fingerprint": "325e425accaad00f69d658c68121d46469cac5e69d7fc3c2ef44d6b07912678a"
+          },
+          "passing_named_tests": [
+            "bounded_mock_reply_constructor_and_errors_do_not_echo_body",
+            "malformed_retained_input_never_uses_caller_hash_or_transport",
+            "noncanonical_retained_descriptor_refuses_before_auth_or_reservation",
+            "offline_dry_run_before_secret_resolution_zero_dns_http_helpers"
+          ],
+          "log": "/private/tmp/lwiki-p21-final/tests.log",
+          "log_sha256": "e229ccaf0bc0c2b19557fb5f10a5da5d185ac253d99bb86bee56ae8c75c057b7"
+        }
+      ]
+    },
+    "V17": {
+      "test_targets_or_checks": [
+        "all current targets",
+        "doctests",
+        "strict format/lint",
+        "release skill recipe",
+        "copied release artifact minimal PATH",
+        "native linkage",
+        "locked license inventory",
+        "Astra-P21-review",
+        "final completion audit"
+      ],
+      "status": "passed on available native platform; external qualification pending",
+      "actual_evidence": [
+        {
+          "selector": "all current targets",
+          "evidence": "P21-checks.json; Astra-P21-review.md; FINAL.md"
+        },
+        {
+          "selector": "doctests",
+          "evidence": "P21-checks.json; Astra-P21-review.md; FINAL.md"
+        },
+        {
+          "selector": "strict format/lint",
+          "evidence": "P21-checks.json; Astra-P21-review.md; FINAL.md"
+        },
+        {
+          "selector": "release skill recipe",
+          "evidence": "P21-checks.json; Astra-P21-review.md; FINAL.md"
+        },
+        {
+          "selector": "copied release artifact minimal PATH",
+          "evidence": "P21-checks.json; Astra-P21-review.md; FINAL.md"
+        },
+        {
+          "selector": "native linkage",
+          "evidence": "P21-checks.json; Astra-P21-review.md; FINAL.md"
+        },
+        {
+          "selector": "locked license inventory",
+          "evidence": "P21-checks.json; Astra-P21-review.md; FINAL.md"
+        },
+        {
+          "selector": "Astra-P21-review",
+          "evidence": "P21-checks.json; Astra-P21-review.md; FINAL.md"
+        },
+        {
+          "selector": "final completion audit",
+          "evidence": "P21-checks.json; Astra-P21-review.md; FINAL.md"
+        }
+      ]
+    }
+  },
+  "source_fingerprint": "325e425accaad00f69d658c68121d46469cac5e69d7fc3c2ef44d6b07912678a",
+  "checks": "P21-checks.json",
+  "independent_review": "Astra-P21-review.md final audit closed"
+}

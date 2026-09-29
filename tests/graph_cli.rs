@@ -156,7 +156,7 @@ fn graph_cli_dry_run_is_pure_and_invalid_limits_are_usage() {
     }
     for args in [
         vec!["--dry-run", "graph", "query", "uses", "--depth", "3"],
-        vec!["graph", "query", "uses", "--seed", "semantic"],
+        vec!["graph", "query", "uses", "--seed", "unknown"],
         vec!["graph", "query", "uses", "--seeds", "13"],
         vec!["graph", "query", "uses", "--limit", "51"],
     ] {

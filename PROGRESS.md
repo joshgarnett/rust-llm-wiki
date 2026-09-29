@@ -1,6 +1,6 @@
 # Research and planning progress
 
-Started: 2026-09-28. Status: authorized M0–M4 implementation; P00–P19 locally accepted; M0–M3 complete and bounded M4 acquisition implemented; P20/P21 remain required.
+Started: 2026-09-28. Status: local M0–M4 implementation complete; P00–P21 and V01–V17 locally accepted; external E01–E05 qualification pending.
 
 ## Scope
 
@@ -151,3 +151,9 @@ Next: P20 bounded resumable research under one lifetime ledger, then P21 complet
 Bounded plan/run/resume/status/report and accounted role probes are locally accepted. 273 current integration parents plus 4 skill parents / 32 recipe steps passed, including all 23 research workflows. Formatting and strict all-target Clippy pass; 278 source/schema/skill/test/Cargo hashes match before/after. Independent Astra authority/publication/final-delta reviews close R1–R15; the historical capture helper author and final reviewer are distinct agents. P20-checks.json records exact commands, logs, hashes, artifact and limits. There are 37 concrete commands and 19 schemas. No live provider or other native platform is qualified.
 
 P21 remains required: full current fault/all-target/doctest suite, actual release recipe/copied artifact/linkage, fixed-corpus baseline, and final review/completion audit. The targeted same-vault parent and 48 fixed baseline pairs already pass; those targeted results are not final acceptance.
+
+## P21 final local acceptance
+
+All 22 packages and 17 local gates are accepted. Independent Astra final audit closes R1–R4 and reconciles319 source hashes,51 Cargo target identities,618 enabled passing parents/7 explicitly invoked helper children, actual release skill4/32recipe steps, copied release/schema/default physical-temp smokes,48 fixed baseline pairs and246 locked registry manifests. Complete aggregate evidence reuses only byte-equal earlier passing targets and executes all corrected/unexecuted targets; both whole all-target attempts remain FAILED. No required test or implementation was deferred. Final source fingerprint325e425accaad00f69d658c68121d46469cac5e69d7fc3c2ef44d6b07912678a; releaseSHA55fc573b9c7c302b653249f4c5998cec874a3ff08d3dc2db1ed6528acc0bceba.
+
+[FINAL](docs/execution/reports/FINAL.md), P21-checks.json and the current gate map retain exact commands/log hashes/failed batches/limits. Prepared CI is not run; live provider/host/other native platform/real-model quality and owner name/license/signing/distribution/publication remain E01–E05 pending. No push, publish, host install, real vault or live API work occurred.

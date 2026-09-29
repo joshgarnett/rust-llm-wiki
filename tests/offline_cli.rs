@@ -416,16 +416,17 @@ fn machine_envelope_error_exit_and_no_ansi() {
         vec!["--jsonl", "capabilities"],
         vec!["read", "--id", "a", "--path", "a.md"],
         vec!["search", "q", "--limit", "51"],
-        vec!["search", "q", "--mode", "semantic"],
+        vec!["search", "q", "--mode", "unknown"],
     ] {
         let (exit, envelope) = invoke(Some(root), &args, None);
         assert_eq!(exit, 2, "{args:?}: {envelope}");
         assert_eq!(envelope["error"]["code"], "USAGE");
     }
-    assert_eq!(
-        invoke(Some(root), &["--dry-run", "doctor", "--probe"], None).0,
-        6
-    );
+    let before = tree(root);
+    let preview = ok(root, &["--dry-run", "doctor", "--probe"], None);
+    assert_eq!(preview["data"]["probe"]["dry_run"], true);
+    assert_eq!(preview["meta"]["network_used"], false);
+    assert_eq!(tree(root), before);
     assert_eq!(
         invoke(Some(root), &["read", "--path", ".wiki/private.json"], None).0,
         3

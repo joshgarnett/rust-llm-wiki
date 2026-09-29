@@ -12,7 +12,7 @@ Then exercise embeddings sync/query/cache reuse, API packet extraction/import/re
 
 ## E02–E05: hosts, platforms, corpus and publication
 
-- **E02:** export to a new disposable project for each selected host; check discovery, packet/import/apply/resolve/review commands, author-edit conflicts, and Markdown links in an isolated Obsidian vault. Do not overwrite real host instruction files.
+- **E02:** export to a new disposable project for each selected host; check discovery, packet/import/apply/resolve/review commands, author-edit conflicts, and Markdown links in an isolated Obsidian vault. Include an unrelated-task negative control: the host must not load or invoke the wiki skill for a task outside its stated scope. Do not overwrite real host instruction files.
 - **E03:** run the opt-in native CI or local script on each intended supported platform, retain its logs/artifacts, and repeat the native fault/kill/concurrency and minimal-runtime checks there. Windows currently reports unsupported directory durability before paid work; a successful Windows build does not qualify writes or recovery. Process kill/restart does not establish power-loss safety.
 - **E04:** select an authorized representative corpus, pin labels and equal context budgets before evaluation, and measure real embedding/model quality, latency, memory, disk and actual billed usage on named hardware. The included synthetic vectors establish retrieval mechanics, not semantic ranking gains.
 - **E05:** choose the final name, owner license and distribution channel; inspect the locked transitive license inventory and required notices, signing and packaging. No publication, push, host installation or licensing choice is performed by the local implementation run.

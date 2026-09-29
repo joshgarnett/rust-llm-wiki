@@ -1,0 +1,4170 @@
+{
+  "by_method_and_class": {
+    "entity/exact_identifiers": {
+      "citation_validity": {
+        "applicable_questions": 0,
+        "mean": null
+      },
+      "complete_evidence_set_recall": {
+        "applicable_questions": 0,
+        "mean": null
+      },
+      "ndcg_at_k": {
+        "applicable_questions": 0,
+        "mean": null
+      },
+      "recall_at_k": {
+        "applicable_questions": 0,
+        "mean": null
+      },
+      "supported_assertion_precision": {
+        "applicable_questions": 0,
+        "mean": null
+      }
+    },
+    "entity/homonyms": {
+      "citation_validity": {
+        "applicable_questions": 1,
+        "mean": 1.0
+      },
+      "complete_evidence_set_recall": {
+        "applicable_questions": 0,
+        "mean": null
+      },
+      "ndcg_at_k": {
+        "applicable_questions": 1,
+        "mean": 0.6131471927654584
+      },
+      "recall_at_k": {
+        "applicable_questions": 1,
+        "mean": 0.5
+      },
+      "supported_assertion_precision": {
+        "applicable_questions": 1,
+        "mean": 1.0
+      }
+    },
+    "entity/multi_document_evidence": {
+      "citation_validity": {
+        "applicable_questions": 0,
+        "mean": null
+      },
+      "complete_evidence_set_recall": {
+        "applicable_questions": 1,
+        "mean": 0.0
+      },
+      "ndcg_at_k": {
+        "applicable_questions": 1,
+        "mean": -0.0
+      },
+      "recall_at_k": {
+        "applicable_questions": 1,
+        "mean": 0.0
+      },
+      "supported_assertion_precision": {
+        "applicable_questions": 0,
+        "mean": null
+      }
+    },
+    "entity/paraphrases": {
+      "citation_validity": {
+        "applicable_questions": 0,
+        "mean": null
+      },
+      "complete_evidence_set_recall": {
+        "applicable_questions": 0,
+        "mean": null
+      },
+      "ndcg_at_k": {
+        "applicable_questions": 1,
+        "mean": -0.0
+      },
+      "recall_at_k": {
+        "applicable_questions": 1,
+        "mean": 0.0
+      },
+      "supported_assertion_precision": {
+        "applicable_questions": 0,
+        "mean": null
+      }
+    },
+    "entity/stale_knowledge": {
+      "citation_validity": {
+        "applicable_questions": 0,
+        "mean": null
+      },
+      "complete_evidence_set_recall": {
+        "applicable_questions": 0,
+        "mean": null
+      },
+      "ndcg_at_k": {
+        "applicable_questions": 0,
+        "mean": null
+      },
+      "recall_at_k": {
+        "applicable_questions": 0,
+        "mean": null
+      },
+      "supported_assertion_precision": {
+        "applicable_questions": 0,
+        "mean": null
+      }
+    },
+    "entity/unanswerable": {
+      "citation_validity": {
+        "applicable_questions": 0,
+        "mean": null
+      },
+      "complete_evidence_set_recall": {
+        "applicable_questions": 0,
+        "mean": null
+      },
+      "ndcg_at_k": {
+        "applicable_questions": 0,
+        "mean": null
+      },
+      "recall_at_k": {
+        "applicable_questions": 0,
+        "mean": null
+      },
+      "supported_assertion_precision": {
+        "applicable_questions": 0,
+        "mean": null
+      }
+    },
+    "exact_dense/exact_identifiers": {
+      "citation_validity": {
+        "applicable_questions": 3,
+        "mean": 1.0
+      },
+      "complete_evidence_set_recall": {
+        "applicable_questions": 0,
+        "mean": null
+      },
+      "ndcg_at_k": {
+        "applicable_questions": 3,
+        "mean": 0.5872865023809717
+      },
+      "recall_at_k": {
+        "applicable_questions": 3,
+        "mean": 1.0
+      },
+      "supported_assertion_precision": {
+        "applicable_questions": 0,
+        "mean": null
+      }
+    },
+    "exact_dense/homonyms": {
+      "citation_validity": {
+        "applicable_questions": 1,
+        "mean": 1.0
+      },
+      "complete_evidence_set_recall": {
+        "applicable_questions": 0,
+        "mean": null
+      },
+      "ndcg_at_k": {
+        "applicable_questions": 1,
+        "mean": -0.0
+      },
+      "recall_at_k": {
+        "applicable_questions": 1,
+        "mean": 0.0
+      },
+      "supported_assertion_precision": {
+        "applicable_questions": 0,
+        "mean": null
+      }
+    },
+    "exact_dense/multi_document_evidence": {
+      "citation_validity": {
+        "applicable_questions": 1,
+        "mean": 1.0
+      },
+      "complete_evidence_set_recall": {
+        "applicable_questions": 1,
+        "mean": 1.0
+      },
+      "ndcg_at_k": {
+        "applicable_questions": 1,
+        "mean": 0.9060254355346823
+      },
+      "recall_at_k": {
+        "applicable_questions": 1,
+        "mean": 1.0
+      },
+      "supported_assertion_precision": {
+        "applicable_questions": 0,
+        "mean": null
+      }
+    },
+    "exact_dense/paraphrases": {
+      "citation_validity": {
+        "applicable_questions": 1,
+        "mean": 1.0
+      },
+      "complete_evidence_set_recall": {
+        "applicable_questions": 0,
+        "mean": null
+      },
+      "ndcg_at_k": {
+        "applicable_questions": 1,
+        "mean": 0.7328286204777911
+      },
+      "recall_at_k": {
+        "applicable_questions": 1,
+        "mean": 1.0
+      },
+      "supported_assertion_precision": {
+        "applicable_questions": 0,
+        "mean": null
+      }
+    },
+    "exact_dense/stale_knowledge": {
+      "citation_validity": {
+        "applicable_questions": 1,
+        "mean": 1.0
+      },
+      "complete_evidence_set_recall": {
+        "applicable_questions": 0,
+        "mean": null
+      },
+      "ndcg_at_k": {
+        "applicable_questions": 0,
+        "mean": null
+      },
+      "recall_at_k": {
+        "applicable_questions": 0,
+        "mean": null
+      },
+      "supported_assertion_precision": {
+        "applicable_questions": 0,
+        "mean": null
+      }
+    },
+    "exact_dense/unanswerable": {
+      "citation_validity": {
+        "applicable_questions": 1,
+        "mean": 1.0
+      },
+      "complete_evidence_set_recall": {
+        "applicable_questions": 0,
+        "mean": null
+      },
+      "ndcg_at_k": {
+        "applicable_questions": 0,
+        "mean": null
+      },
+      "recall_at_k": {
+        "applicable_questions": 0,
+        "mean": null
+      },
+      "supported_assertion_precision": {
+        "applicable_questions": 0,
+        "mean": null
+      }
+    },
+    "hybrid/exact_identifiers": {
+      "citation_validity": {
+        "applicable_questions": 3,
+        "mean": 1.0
+      },
+      "complete_evidence_set_recall": {
+        "applicable_questions": 0,
+        "mean": null
+      },
+      "ndcg_at_k": {
+        "applicable_questions": 3,
+        "mean": 0.5
+      },
+      "recall_at_k": {
+        "applicable_questions": 3,
+        "mean": 1.0
+      },
+      "supported_assertion_precision": {
+        "applicable_questions": 0,
+        "mean": null
+      }
+    },
+    "hybrid/homonyms": {
+      "citation_validity": {
+        "applicable_questions": 1,
+        "mean": 1.0
+      },
+      "complete_evidence_set_recall": {
+        "applicable_questions": 0,
+        "mean": null
+      },
+      "ndcg_at_k": {
+        "applicable_questions": 1,
+        "mean": -0.0
+      },
+      "recall_at_k": {
+        "applicable_questions": 1,
+        "mean": 0.0
+      },
+      "supported_assertion_precision": {
+        "applicable_questions": 0,
+        "mean": null
+      }
+    },
+    "hybrid/multi_document_evidence": {
+      "citation_validity": {
+        "applicable_questions": 1,
+        "mean": 1.0
+      },
+      "complete_evidence_set_recall": {
+        "applicable_questions": 1,
+        "mean": 1.0
+      },
+      "ndcg_at_k": {
+        "applicable_questions": 1,
+        "mean": 0.644824486427155
+      },
+      "recall_at_k": {
+        "applicable_questions": 1,
+        "mean": 0.5
+      },
+      "supported_assertion_precision": {
+        "applicable_questions": 0,
+        "mean": null
+      }
+    },
+    "hybrid/paraphrases": {
+      "citation_validity": {
+        "applicable_questions": 1,
+        "mean": 1.0
+      },
+      "complete_evidence_set_recall": {
+        "applicable_questions": 0,
+        "mean": null
+      },
+      "ndcg_at_k": {
+        "applicable_questions": 1,
+        "mean": 0.8048099750039491
+      },
+      "recall_at_k": {
+        "applicable_questions": 1,
+        "mean": 0.75
+      },
+      "supported_assertion_precision": {
+        "applicable_questions": 0,
+        "mean": null
+      }
+    },
+    "hybrid/stale_knowledge": {
+      "citation_validity": {
+        "applicable_questions": 1,
+        "mean": 1.0
+      },
+      "complete_evidence_set_recall": {
+        "applicable_questions": 0,
+        "mean": null
+      },
+      "ndcg_at_k": {
+        "applicable_questions": 0,
+        "mean": null
+      },
+      "recall_at_k": {
+        "applicable_questions": 0,
+        "mean": null
+      },
+      "supported_assertion_precision": {
+        "applicable_questions": 0,
+        "mean": null
+      }
+    },
+    "hybrid/unanswerable": {
+      "citation_validity": {
+        "applicable_questions": 1,
+        "mean": 1.0
+      },
+      "complete_evidence_set_recall": {
+        "applicable_questions": 0,
+        "mean": null
+      },
+      "ndcg_at_k": {
+        "applicable_questions": 0,
+        "mean": null
+      },
+      "recall_at_k": {
+        "applicable_questions": 0,
+        "mean": null
+      },
+      "supported_assertion_precision": {
+        "applicable_questions": 0,
+        "mean": null
+      }
+    },
+    "lexical/exact_identifiers": {
+      "citation_validity": {
+        "applicable_questions": 0,
+        "mean": null
+      },
+      "complete_evidence_set_recall": {
+        "applicable_questions": 0,
+        "mean": null
+      },
+      "ndcg_at_k": {
+        "applicable_questions": 3,
+        "mean": 0.6666666666666666
+      },
+      "recall_at_k": {
+        "applicable_questions": 3,
+        "mean": 0.6666666666666666
+      },
+      "supported_assertion_precision": {
+        "applicable_questions": 0,
+        "mean": null
+      }
+    },
+    "lexical/homonyms": {
+      "citation_validity": {
+        "applicable_questions": 1,
+        "mean": 1.0
+      },
+      "complete_evidence_set_recall": {
+        "applicable_questions": 0,
+        "mean": null
+      },
+      "ndcg_at_k": {
+        "applicable_questions": 1,
+        "mean": -0.0
+      },
+      "recall_at_k": {
+        "applicable_questions": 1,
+        "mean": 0.0
+      },
+      "supported_assertion_precision": {
+        "applicable_questions": 0,
+        "mean": null
+      }
+    },
+    "lexical/multi_document_evidence": {
+      "citation_validity": {
+        "applicable_questions": 1,
+        "mean": 1.0
+      },
+      "complete_evidence_set_recall": {
+        "applicable_questions": 1,
+        "mean": 1.0
+      },
+      "ndcg_at_k": {
+        "applicable_questions": 1,
+        "mean": 1.0
+      },
+      "recall_at_k": {
+        "applicable_questions": 1,
+        "mean": 1.0
+      },
+      "supported_assertion_precision": {
+        "applicable_questions": 0,
+        "mean": null
+      }
+    },
+    "lexical/paraphrases": {
+      "citation_validity": {
+        "applicable_questions": 0,
+        "mean": null
+      },
+      "complete_evidence_set_recall": {
+        "applicable_questions": 0,
+        "mean": null
+      },
+      "ndcg_at_k": {
+        "applicable_questions": 1,
+        "mean": -0.0
+      },
+      "recall_at_k": {
+        "applicable_questions": 1,
+        "mean": 0.0
+      },
+      "supported_assertion_precision": {
+        "applicable_questions": 0,
+        "mean": null
+      }
+    },
+    "lexical/stale_knowledge": {
+      "citation_validity": {
+        "applicable_questions": 0,
+        "mean": null
+      },
+      "complete_evidence_set_recall": {
+        "applicable_questions": 0,
+        "mean": null
+      },
+      "ndcg_at_k": {
+        "applicable_questions": 0,
+        "mean": null
+      },
+      "recall_at_k": {
+        "applicable_questions": 0,
+        "mean": null
+      },
+      "supported_assertion_precision": {
+        "applicable_questions": 0,
+        "mean": null
+      }
+    },
+    "lexical/unanswerable": {
+      "citation_validity": {
+        "applicable_questions": 0,
+        "mean": null
+      },
+      "complete_evidence_set_recall": {
+        "applicable_questions": 0,
+        "mean": null
+      },
+      "ndcg_at_k": {
+        "applicable_questions": 0,
+        "mean": null
+      },
+      "recall_at_k": {
+        "applicable_questions": 0,
+        "mean": null
+      },
+      "supported_assertion_precision": {
+        "applicable_questions": 0,
+        "mean": null
+      }
+    },
+    "literal/exact_identifiers": {
+      "citation_validity": {
+        "applicable_questions": 0,
+        "mean": null
+      },
+      "complete_evidence_set_recall": {
+        "applicable_questions": 0,
+        "mean": null
+      },
+      "ndcg_at_k": {
+        "applicable_questions": 3,
+        "mean": 1.0
+      },
+      "recall_at_k": {
+        "applicable_questions": 3,
+        "mean": 1.0
+      },
+      "supported_assertion_precision": {
+        "applicable_questions": 0,
+        "mean": null
+      }
+    },
+    "literal/homonyms": {
+      "citation_validity": {
+        "applicable_questions": 1,
+        "mean": 1.0
+      },
+      "complete_evidence_set_recall": {
+        "applicable_questions": 0,
+        "mean": null
+      },
+      "ndcg_at_k": {
+        "applicable_questions": 1,
+        "mean": -0.0
+      },
+      "recall_at_k": {
+        "applicable_questions": 1,
+        "mean": 0.0
+      },
+      "supported_assertion_precision": {
+        "applicable_questions": 0,
+        "mean": null
+      }
+    },
+    "literal/multi_document_evidence": {
+      "citation_validity": {
+        "applicable_questions": 1,
+        "mean": 1.0
+      },
+      "complete_evidence_set_recall": {
+        "applicable_questions": 1,
+        "mean": 1.0
+      },
+      "ndcg_at_k": {
+        "applicable_questions": 1,
+        "mean": 1.0
+      },
+      "recall_at_k": {
+        "applicable_questions": 1,
+        "mean": 1.0
+      },
+      "supported_assertion_precision": {
+        "applicable_questions": 0,
+        "mean": null
+      }
+    },
+    "literal/paraphrases": {
+      "citation_validity": {
+        "applicable_questions": 0,
+        "mean": null
+      },
+      "complete_evidence_set_recall": {
+        "applicable_questions": 0,
+        "mean": null
+      },
+      "ndcg_at_k": {
+        "applicable_questions": 1,
+        "mean": -0.0
+      },
+      "recall_at_k": {
+        "applicable_questions": 1,
+        "mean": 0.0
+      },
+      "supported_assertion_precision": {
+        "applicable_questions": 0,
+        "mean": null
+      }
+    },
+    "literal/stale_knowledge": {
+      "citation_validity": {
+        "applicable_questions": 0,
+        "mean": null
+      },
+      "complete_evidence_set_recall": {
+        "applicable_questions": 0,
+        "mean": null
+      },
+      "ndcg_at_k": {
+        "applicable_questions": 0,
+        "mean": null
+      },
+      "recall_at_k": {
+        "applicable_questions": 0,
+        "mean": null
+      },
+      "supported_assertion_precision": {
+        "applicable_questions": 0,
+        "mean": null
+      }
+    },
+    "literal/unanswerable": {
+      "citation_validity": {
+        "applicable_questions": 0,
+        "mean": null
+      },
+      "complete_evidence_set_recall": {
+        "applicable_questions": 0,
+        "mean": null
+      },
+      "ndcg_at_k": {
+        "applicable_questions": 0,
+        "mean": null
+      },
+      "recall_at_k": {
+        "applicable_questions": 0,
+        "mean": null
+      },
+      "supported_assertion_precision": {
+        "applicable_questions": 0,
+        "mean": null
+      }
+    },
+    "relationship/exact_identifiers": {
+      "citation_validity": {
+        "applicable_questions": 0,
+        "mean": null
+      },
+      "complete_evidence_set_recall": {
+        "applicable_questions": 0,
+        "mean": null
+      },
+      "ndcg_at_k": {
+        "applicable_questions": 0,
+        "mean": null
+      },
+      "recall_at_k": {
+        "applicable_questions": 0,
+        "mean": null
+      },
+      "supported_assertion_precision": {
+        "applicable_questions": 0,
+        "mean": null
+      }
+    },
+    "relationship/homonyms": {
+      "citation_validity": {
+        "applicable_questions": 1,
+        "mean": 1.0
+      },
+      "complete_evidence_set_recall": {
+        "applicable_questions": 0,
+        "mean": null
+      },
+      "ndcg_at_k": {
+        "applicable_questions": 1,
+        "mean": 0.6131471927654584
+      },
+      "recall_at_k": {
+        "applicable_questions": 1,
+        "mean": 0.5
+      },
+      "supported_assertion_precision": {
+        "applicable_questions": 1,
+        "mean": 1.0
+      }
+    },
+    "relationship/multi_document_evidence": {
+      "citation_validity": {
+        "applicable_questions": 1,
+        "mean": 1.0
+      },
+      "complete_evidence_set_recall": {
+        "applicable_questions": 1,
+        "mean": 0.0
+      },
+      "ndcg_at_k": {
+        "applicable_questions": 1,
+        "mean": 0.46927872602275644
+      },
+      "recall_at_k": {
+        "applicable_questions": 1,
+        "mean": 0.3333333333333333
+      },
+      "supported_assertion_precision": {
+        "applicable_questions": 1,
+        "mean": 1.0
+      }
+    },
+    "relationship/paraphrases": {
+      "citation_validity": {
+        "applicable_questions": 0,
+        "mean": null
+      },
+      "complete_evidence_set_recall": {
+        "applicable_questions": 0,
+        "mean": null
+      },
+      "ndcg_at_k": {
+        "applicable_questions": 1,
+        "mean": -0.0
+      },
+      "recall_at_k": {
+        "applicable_questions": 1,
+        "mean": 0.0
+      },
+      "supported_assertion_precision": {
+        "applicable_questions": 0,
+        "mean": null
+      }
+    },
+    "relationship/stale_knowledge": {
+      "citation_validity": {
+        "applicable_questions": 0,
+        "mean": null
+      },
+      "complete_evidence_set_recall": {
+        "applicable_questions": 0,
+        "mean": null
+      },
+      "ndcg_at_k": {
+        "applicable_questions": 0,
+        "mean": null
+      },
+      "recall_at_k": {
+        "applicable_questions": 0,
+        "mean": null
+      },
+      "supported_assertion_precision": {
+        "applicable_questions": 0,
+        "mean": null
+      }
+    },
+    "relationship/unanswerable": {
+      "citation_validity": {
+        "applicable_questions": 0,
+        "mean": null
+      },
+      "complete_evidence_set_recall": {
+        "applicable_questions": 0,
+        "mean": null
+      },
+      "ndcg_at_k": {
+        "applicable_questions": 0,
+        "mean": null
+      },
+      "recall_at_k": {
+        "applicable_questions": 0,
+        "mean": null
+      },
+      "supported_assertion_precision": {
+        "applicable_questions": 0,
+        "mean": null
+      }
+    }
+  },
+  "context_budget": {
+    "accounting": "ceil(rendered_utf8_bytes/4)",
+    "max_bytes": 6000,
+    "max_estimated_tokens": 1000
+  },
+  "corpus": {
+    "blake3": "blake3:76e9b46977321f65a547019d062e864e731dbbe06bc1be6bba6995eb410c9e1b",
+    "files": [
+      {
+        "blake3": "blake3:1d4f6ea76c8be9080860c5e3a49b5427198772c33cf305d89fee2ab7cb192897",
+        "bytes": 236,
+        "path": "WIKI.md"
+      },
+      {
+        "blake3": "blake3:6de80820d52b8563f3a28292858ce6fc148917c9ccc8659373d06fef38963b43",
+        "bytes": 410,
+        "path": "knowledge/assertions/dated.md"
+      },
+      {
+        "blake3": "blake3:78e951d879c1dc8ce71c0ec968d7b737970e14f34bdaac33c9a967c6eca8f01a",
+        "bytes": 341,
+        "path": "knowledge/assertions/forward.md"
+      },
+      {
+        "blake3": "blake3:502ffe957dd6ef2d20d899f889f5f537a9f4fa28d2e3c99f8f434067d2169746",
+        "bytes": 378,
+        "path": "knowledge/assertions/homonym_negated.md"
+      },
+      {
+        "blake3": "blake3:fc1ec1a6cb939300a036f588d339fd101022e15218b81108d6b2012e5b6e7638",
+        "bytes": 360,
+        "path": "knowledge/assertions/negated.md"
+      },
+      {
+        "blake3": "blake3:d790ad68f9c987849567e9e3078ec892dc17434dfc92ddbd4b5b6e38e950969d",
+        "bytes": 341,
+        "path": "knowledge/assertions/reverse.md"
+      },
+      {
+        "blake3": "blake3:59700a6b8fb3cd1432d8e7c6ea98e02792a51c04c79e7837a2b129391d8ba835",
+        "bytes": 349,
+        "path": "knowledge/assertions/stale.md"
+      },
+      {
+        "blake3": "blake3:caa19d21f588eb0f953863184e9f7ac133d02e20a73caa4dee81b51c186e3f77",
+        "bytes": 442,
+        "path": "knowledge/assertions/unicode_property.md"
+      },
+      {
+        "blake3": "blake3:e675f9a433324eda142d52426fd8a547195a896d6d5833bba512ab104610f612",
+        "bytes": 203,
+        "path": "knowledge/entities/alex_north.md"
+      },
+      {
+        "blake3": "blake3:9f316016dd95bbd6b02e5529981b194df16e98aedc42f986750a9132dbc5e8a1",
+        "bytes": 223,
+        "path": "knowledge/entities/alex_south.md"
+      },
+      {
+        "blake3": "blake3:12480cf76fdf8c9e3d167417490cec96693cd306748a1d21c004ecbd76a2bc27",
+        "bytes": 220,
+        "path": "knowledge/entities/north_lab.md"
+      },
+      {
+        "blake3": "blake3:19a5b48812281204e1cdd46fab0d648cc4d7743e9de1e9f19244fbdde31bf442",
+        "bytes": 220,
+        "path": "knowledge/entities/south_lab.md"
+      },
+      {
+        "blake3": "blake3:e5c40f952d07b06799131ef5b8bcc7a69b0b72232ce2c76d61b40bf696d6da2e",
+        "bytes": 649,
+        "path": "knowledge/evidence/dated_support.md"
+      },
+      {
+        "blake3": "blake3:74f787f2eef6ecbae67811bb1b191b93057acc8d93ff72596988d92c24c1290d",
+        "bytes": 624,
+        "path": "knowledge/evidence/forward_contradiction.md"
+      },
+      {
+        "blake3": "blake3:8be9d3560dbe651acdbf5b1db769edff56eac5fcfc34b14e05e842196b18ab62",
+        "bytes": 605,
+        "path": "knowledge/evidence/forward_long.md"
+      },
+      {
+        "blake3": "blake3:8684006fc8bcbf8b5cee5784ccaadce58cc643a9ca6ac5c471d94d97e440044c",
+        "bytes": 604,
+        "path": "knowledge/evidence/forward_short.md"
+      },
+      {
+        "blake3": "blake3:c9c5adbcf89e481e86bfc3bb54db88e68b31994521adb4f2d66511bd9ba67578",
+        "bytes": 627,
+        "path": "knowledge/evidence/homonym_support.md"
+      },
+      {
+        "blake3": "blake3:23e5ce4012bad1255b219d0c9490b152528eb5ab7e28288467f37041ddf98923",
+        "bytes": 615,
+        "path": "knowledge/evidence/negated_support.md"
+      },
+      {
+        "blake3": "blake3:ee48cf4419c03cea4b807b87f83c3dbeaec8b6bbc4749e67cde8941409b31312",
+        "bytes": 606,
+        "path": "knowledge/evidence/reverse_support.md"
+      },
+      {
+        "blake3": "blake3:4b1f5fcf9affef53a1810d6e688864f2198d73807227522560e839c53d41186b",
+        "bytes": 616,
+        "path": "knowledge/evidence/stale_support.md"
+      },
+      {
+        "blake3": "blake3:c135848b06e7d98f7526ed109ce911cc309fa85140d53aa09111bdf41ba60e6a",
+        "bytes": 648,
+        "path": "knowledge/evidence/unicode_support.md"
+      },
+      {
+        "blake3": "blake3:9ae15b866ce08025e909a50742e82fb36bd5dc32c0b540fd2231c6dae27a1b8d",
+        "bytes": 312,
+        "path": "knowledge/pages/architecture.md"
+      },
+      {
+        "blake3": "blake3:5c2876b596798f3be5bb96a2a30030c662edb19eb7b1583863cd4df8ef42862a",
+        "bytes": 307,
+        "path": "knowledge/pages/rust_identifiers.md"
+      },
+      {
+        "blake3": "blake3:fc6ede8435c4f863bb80e3a519e4404a25c407949f56cc16871cf33d7196a377",
+        "bytes": 93,
+        "path": "sources/source_00000000-0000-7000-8000-000000000005/revisions/revision_00000000-0000-7000-8000-000000000007/content.md"
+      },
+      {
+        "blake3": "blake3:fc6ede8435c4f863bb80e3a519e4404a25c407949f56cc16871cf33d7196a377",
+        "bytes": 93,
+        "path": "sources/source_00000000-0000-7000-8000-000000000005/revisions/revision_00000000-0000-7000-8000-000000000007/original.md"
+      },
+      {
+        "blake3": "blake3:6577f52de73ff1e33bfd7af0956824c149b1644e3a4f0374202ffd2ef79c0f82",
+        "bytes": 719,
+        "path": "sources/source_00000000-0000-7000-8000-000000000005/revisions/revision_00000000-0000-7000-8000-000000000007/revision.md"
+      },
+      {
+        "blake3": "blake3:c35d665a873789989333b21313e71940a044311bc72adabfbe06ea953d193a20",
+        "bytes": 178,
+        "path": "sources/source_00000000-0000-7000-8000-000000000005/revisions/revision_00000000-0000-7000-8000-000000000008/content.md"
+      },
+      {
+        "blake3": "blake3:c35d665a873789989333b21313e71940a044311bc72adabfbe06ea953d193a20",
+        "bytes": 178,
+        "path": "sources/source_00000000-0000-7000-8000-000000000005/revisions/revision_00000000-0000-7000-8000-000000000008/original.md"
+      },
+      {
+        "blake3": "blake3:f67109dde228c31855509d8089cc23f84a49f9a406cbdb205dffe078df36c748",
+        "bytes": 719,
+        "path": "sources/source_00000000-0000-7000-8000-000000000005/revisions/revision_00000000-0000-7000-8000-000000000008/revision.md"
+      },
+      {
+        "blake3": "blake3:fb48f6ad8dcefd474b44ea9a5a6fbdcfc62cf833df593a9ddee40aeb1f671517",
+        "bytes": 449,
+        "path": "sources/source_00000000-0000-7000-8000-000000000005/source.md"
+      },
+      {
+        "blake3": "blake3:28e1d8935272f707e1be4ce2c58bd142cea69fe4b51bb48de508679119509fb6",
+        "bytes": 15591,
+        "path": "sources/source_00000000-0000-7000-8000-000000000006/revisions/revision_00000000-0000-7000-8000-000000000009/content.md"
+      },
+      {
+        "blake3": "blake3:28e1d8935272f707e1be4ce2c58bd142cea69fe4b51bb48de508679119509fb6",
+        "bytes": 15591,
+        "path": "sources/source_00000000-0000-7000-8000-000000000006/revisions/revision_00000000-0000-7000-8000-000000000009/original.md"
+      },
+      {
+        "blake3": "blake3:edd30581bba6217038de57b8d6c6b2082b93cd7eb8f2794a6ae77d557a320aef",
+        "bytes": 713,
+        "path": "sources/source_00000000-0000-7000-8000-000000000006/revisions/revision_00000000-0000-7000-8000-000000000009/revision.md"
+      },
+      {
+        "blake3": "blake3:a28a5ef039faf90eaa09c4bb3970743ea602ba689f07b2723b8dcb13f0c308a6",
+        "bytes": 388,
+        "path": "sources/source_00000000-0000-7000-8000-000000000006/source.md"
+      }
+    ],
+    "hash_encoding": "sorted relative path UTF-8 length u64le, path, bytes length u64le, bytes",
+    "queries_blake3": "blake3:83195b7948fde8d74a6be01e6472ba861afab7c0d3ac69824f8caf60dac6c57c",
+    "revision": "p21-fixed-v1"
+  },
+  "hardware": {
+    "cpu": "Apple M1 Max",
+    "model": "MacBookPro18,2",
+    "os_arch": "macos aarch64",
+    "physical_memory_bytes": "34359738368",
+    "uname": "Darwin jgmac.local 25.5.0 Darwin Kernel Version 25.5.0: Tue Jun  9 22:18:58 PDT 2026; root:xnu-12377.121.10~1/RELEASE_ARM64_T6000 arm64"
+  },
+  "k": 10,
+  "limits": {
+    "dense": "deterministic synthetic hash vectors; no semantic-model quality or ranking-gain claim",
+    "disk": "logical file bytes including transient SQLite files",
+    "latency": "fresh process with prebuilt on-disk caches; OS caches not flushed; warm repeats same query/process",
+    "memory": "per-child process peak RSS, includes setup/retrieval/validation",
+    "quality": "target-specific binary relevance; exported passage paths followed by bundle IDs in rendered output order, deduplicated k=10; held-out labels, no tuning; no generated answer precision"
+  },
+  "measurement_build": {
+    "cargo_lock_blake3": "blake3:4de8964489ed15aae09d3e52d54c709c5202c5aad2e2da51bae681a505797dbc",
+    "debug_assertions": true,
+    "rustc": "rustc 1.98.0 (88d9e12ae 2026-08-18)",
+    "test_executable_blake3": "blake3:21109e47dce1225aa62a640e21dd12bd17bcb49c2aac0b9cc2f00f54be3969be"
+  },
+  "measurements": [
+    {
+      "cold_ns": "96687875",
+      "disk_after": {
+        "cache_logical_bytes": 782336,
+        "file_count": 39,
+        "logical_bytes": 826994
+      },
+      "disk_before": {
+        "cache_logical_bytes": 782336,
+        "file_count": 39,
+        "logical_bytes": 826994
+      },
+      "method": "literal",
+      "process_peak_rss_bytes": 27312128,
+      "provider_usage": {
+        "basis": "cached synthetic vectors; no provider runtime/dispatcher constructed",
+        "charged_nanos": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "requests": 0
+      },
+      "quality": {
+        "citation_count": 0,
+        "citation_resolution_errors": 0,
+        "citation_validity": null,
+        "complete_evidence_set_recall": null,
+        "estimated_tokens": 88,
+        "ndcg_at_k": 1.0,
+        "network_used": false,
+        "omissions": [],
+        "ranked_keys": [
+          "knowledge/pages/rust_identifiers.md"
+        ],
+        "recall_at_k": 1.0,
+        "relevant_count": 1,
+        "rendered_bytes": 350,
+        "supported_assertion_count": 0,
+        "supported_assertion_precision": null,
+        "truncated": false,
+        "warnings": [
+          "tokens are UTF-8 byte estimates (ceil(bytes/4)); no exact tokenizer accounting",
+          "proof bytes/files meter canonical notes and source/dependency payloads only; directory/component/entry counts are logical operations; operational journals/SQLite/recovery/index maintenance are separate local safety work; elapsed checks do not interrupt blocking syscalls"
+        ]
+      },
+      "question": {
+        "documents": [
+          "knowledge/pages/rust_identifiers.md"
+        ],
+        "evidence_set": [],
+        "graph": [],
+        "id": "generic",
+        "query_class": "exact_identifiers",
+        "text": "Vec<T>"
+      },
+      "warm_ns": "91183958"
+    },
+    {
+      "cold_ns": "94286500",
+      "disk_after": {
+        "cache_logical_bytes": 782336,
+        "file_count": 39,
+        "logical_bytes": 826994
+      },
+      "disk_before": {
+        "cache_logical_bytes": 782336,
+        "file_count": 39,
+        "logical_bytes": 826994
+      },
+      "method": "literal",
+      "process_peak_rss_bytes": 27115520,
+      "provider_usage": {
+        "basis": "cached synthetic vectors; no provider runtime/dispatcher constructed",
+        "charged_nanos": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "requests": 0
+      },
+      "quality": {
+        "citation_count": 0,
+        "citation_resolution_errors": 0,
+        "citation_validity": null,
+        "complete_evidence_set_recall": null,
+        "estimated_tokens": 78,
+        "ndcg_at_k": 1.0,
+        "network_used": false,
+        "omissions": [],
+        "ranked_keys": [
+          "knowledge/pages/rust_identifiers.md"
+        ],
+        "recall_at_k": 1.0,
+        "relevant_count": 1,
+        "rendered_bytes": 312,
+        "supported_assertion_count": 0,
+        "supported_assertion_precision": null,
+        "truncated": false,
+        "warnings": [
+          "tokens are UTF-8 byte estimates (ceil(bytes/4)); no exact tokenizer accounting",
+          "proof bytes/files meter canonical notes and source/dependency payloads only; directory/component/entry counts are logical operations; operational journals/SQLite/recovery/index maintenance are separate local safety work; elapsed checks do not interrupt blocking syscalls"
+        ]
+      },
+      "question": {
+        "documents": [
+          "knowledge/pages/rust_identifiers.md"
+        ],
+        "evidence_set": [],
+        "graph": [],
+        "id": "error",
+        "query_class": "exact_identifiers",
+        "text": "E0308"
+      },
+      "warm_ns": "91645458"
+    },
+    {
+      "cold_ns": "95193833",
+      "disk_after": {
+        "cache_logical_bytes": 782336,
+        "file_count": 39,
+        "logical_bytes": 826994
+      },
+      "disk_before": {
+        "cache_logical_bytes": 782336,
+        "file_count": 39,
+        "logical_bytes": 826994
+      },
+      "method": "literal",
+      "process_peak_rss_bytes": 27475968,
+      "provider_usage": {
+        "basis": "cached synthetic vectors; no provider runtime/dispatcher constructed",
+        "charged_nanos": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "requests": 0
+      },
+      "quality": {
+        "citation_count": 0,
+        "citation_resolution_errors": 0,
+        "citation_validity": null,
+        "complete_evidence_set_recall": null,
+        "estimated_tokens": 66,
+        "ndcg_at_k": 1.0,
+        "network_used": false,
+        "omissions": [],
+        "ranked_keys": [
+          "knowledge/pages/rust_identifiers.md"
+        ],
+        "recall_at_k": 1.0,
+        "relevant_count": 1,
+        "rendered_bytes": 261,
+        "supported_assertion_count": 0,
+        "supported_assertion_precision": null,
+        "truncated": false,
+        "warnings": [
+          "tokens are UTF-8 byte estimates (ceil(bytes/4)); no exact tokenizer accounting",
+          "proof bytes/files meter canonical notes and source/dependency payloads only; directory/component/entry counts are logical operations; operational journals/SQLite/recovery/index maintenance are separate local safety work; elapsed checks do not interrupt blocking syscalls"
+        ]
+      },
+      "question": {
+        "documents": [
+          "knowledge/pages/rust_identifiers.md"
+        ],
+        "evidence_set": [],
+        "graph": [],
+        "id": "operator",
+        "query_class": "exact_identifiers",
+        "text": "\"OR\""
+      },
+      "warm_ns": "90456333"
+    },
+    {
+      "cold_ns": "93649667",
+      "disk_after": {
+        "cache_logical_bytes": 782336,
+        "file_count": 39,
+        "logical_bytes": 826994
+      },
+      "disk_before": {
+        "cache_logical_bytes": 782336,
+        "file_count": 39,
+        "logical_bytes": 826994
+      },
+      "method": "literal",
+      "process_peak_rss_bytes": 27246592,
+      "provider_usage": {
+        "basis": "cached synthetic vectors; no provider runtime/dispatcher constructed",
+        "charged_nanos": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "requests": 0
+      },
+      "quality": {
+        "citation_count": 0,
+        "citation_resolution_errors": 0,
+        "citation_validity": null,
+        "complete_evidence_set_recall": null,
+        "estimated_tokens": 0,
+        "ndcg_at_k": -0.0,
+        "network_used": false,
+        "omissions": [],
+        "ranked_keys": [],
+        "recall_at_k": 0.0,
+        "relevant_count": 3,
+        "rendered_bytes": 0,
+        "supported_assertion_count": 0,
+        "supported_assertion_precision": null,
+        "truncated": false,
+        "warnings": [
+          "tokens are UTF-8 byte estimates (ceil(bytes/4)); no exact tokenizer accounting",
+          "proof bytes/files meter canonical notes and source/dependency payloads only; directory/component/entry counts are logical operations; operational journals/SQLite/recovery/index maintenance are separate local safety work; elapsed checks do not interrupt blocking syscalls"
+        ]
+      },
+      "question": {
+        "documents": [
+          "knowledge/pages/architecture.md",
+          "sources/source_00000000-0000-7000-8000-000000000005/revisions/revision_00000000-0000-7000-8000-000000000008/content.md",
+          "sources/source_00000000-0000-7000-8000-000000000006/revisions/revision_00000000-0000-7000-8000-000000000009/content.md"
+        ],
+        "evidence_set": [],
+        "graph": [
+          "assertion:assertion_00000000-0000-7000-8000-00000000000a"
+        ],
+        "id": "phrase",
+        "query_class": "paraphrases",
+        "text": "northern organization relies on southern organization"
+      },
+      "warm_ns": "89864250"
+    },
+    {
+      "cold_ns": "93927167",
+      "disk_after": {
+        "cache_logical_bytes": 782336,
+        "file_count": 39,
+        "logical_bytes": 826994
+      },
+      "disk_before": {
+        "cache_logical_bytes": 782336,
+        "file_count": 39,
+        "logical_bytes": 826994
+      },
+      "method": "literal",
+      "process_peak_rss_bytes": 27017216,
+      "provider_usage": {
+        "basis": "cached synthetic vectors; no provider runtime/dispatcher constructed",
+        "charged_nanos": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "requests": 0
+      },
+      "quality": {
+        "citation_count": 1,
+        "citation_resolution_errors": 0,
+        "citation_validity": 1.0,
+        "complete_evidence_set_recall": null,
+        "estimated_tokens": 194,
+        "ndcg_at_k": -0.0,
+        "network_used": false,
+        "omissions": [],
+        "ranked_keys": [
+          "sources/source_00000000-0000-7000-8000-000000000006/revisions/revision_00000000-0000-7000-8000-000000000009/content.md"
+        ],
+        "recall_at_k": 0.0,
+        "relevant_count": 2,
+        "rendered_bytes": 775,
+        "supported_assertion_count": 0,
+        "supported_assertion_precision": null,
+        "truncated": false,
+        "warnings": [
+          "tokens are UTF-8 byte estimates (ceil(bytes/4)); no exact tokenizer accounting",
+          "proof bytes/files meter canonical notes and source/dependency payloads only; directory/component/entry counts are logical operations; operational journals/SQLite/recovery/index maintenance are separate local safety work; elapsed checks do not interrupt blocking syscalls"
+        ]
+      },
+      "question": {
+        "documents": [
+          "knowledge/entities/alex_north.md",
+          "knowledge/entities/alex_south.md"
+        ],
+        "evidence_set": [],
+        "graph": [
+          "assertion:assertion_00000000-0000-7000-8000-00000000000d",
+          "assertion:assertion_00000000-0000-7000-8000-00000000000e"
+        ],
+        "id": "homonym",
+        "query_class": "homonyms",
+        "text": "Alex Kim"
+      },
+      "warm_ns": "91563541"
+    },
+    {
+      "cold_ns": "95611916",
+      "disk_after": {
+        "cache_logical_bytes": 782336,
+        "file_count": 39,
+        "logical_bytes": 826994
+      },
+      "disk_before": {
+        "cache_logical_bytes": 782336,
+        "file_count": 39,
+        "logical_bytes": 826994
+      },
+      "method": "literal",
+      "process_peak_rss_bytes": 27508736,
+      "provider_usage": {
+        "basis": "cached synthetic vectors; no provider runtime/dispatcher constructed",
+        "charged_nanos": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "requests": 0
+      },
+      "quality": {
+        "citation_count": 2,
+        "citation_resolution_errors": 0,
+        "citation_validity": 1.0,
+        "complete_evidence_set_recall": 1,
+        "estimated_tokens": 443,
+        "ndcg_at_k": 1.0,
+        "network_used": false,
+        "omissions": [],
+        "ranked_keys": [
+          "knowledge/pages/architecture.md",
+          "sources/source_00000000-0000-7000-8000-000000000005/revisions/revision_00000000-0000-7000-8000-000000000008/content.md",
+          "sources/source_00000000-0000-7000-8000-000000000006/revisions/revision_00000000-0000-7000-8000-000000000009/content.md"
+        ],
+        "recall_at_k": 1.0,
+        "relevant_count": 3,
+        "rendered_bytes": 1769,
+        "supported_assertion_count": 0,
+        "supported_assertion_precision": null,
+        "truncated": false,
+        "warnings": [
+          "tokens are UTF-8 byte estimates (ceil(bytes/4)); no exact tokenizer accounting",
+          "proof bytes/files meter canonical notes and source/dependency payloads only; directory/component/entry counts are logical operations; operational journals/SQLite/recovery/index maintenance are separate local safety work; elapsed checks do not interrupt blocking syscalls"
+        ]
+      },
+      "question": {
+        "documents": [
+          "sources/source_00000000-0000-7000-8000-000000000005/revisions/revision_00000000-0000-7000-8000-000000000008/content.md",
+          "sources/source_00000000-0000-7000-8000-000000000006/revisions/revision_00000000-0000-7000-8000-000000000009/content.md",
+          "knowledge/pages/architecture.md"
+        ],
+        "evidence_set": [
+          "evidence_00000000-0000-7000-8000-000000000012",
+          "evidence_00000000-0000-7000-8000-000000000013"
+        ],
+        "graph": [
+          "assertion:assertion_00000000-0000-7000-8000-00000000000a",
+          "assertion:assertion_00000000-0000-7000-8000-00000000000b",
+          "assertion:assertion_00000000-0000-7000-8000-00000000000c"
+        ],
+        "id": "multi",
+        "query_class": "multi_document_evidence",
+        "text": "uses"
+      },
+      "warm_ns": "91352542"
+    },
+    {
+      "cold_ns": "94457209",
+      "disk_after": {
+        "cache_logical_bytes": 782336,
+        "file_count": 39,
+        "logical_bytes": 826994
+      },
+      "disk_before": {
+        "cache_logical_bytes": 782336,
+        "file_count": 39,
+        "logical_bytes": 826994
+      },
+      "method": "literal",
+      "process_peak_rss_bytes": 27377664,
+      "provider_usage": {
+        "basis": "cached synthetic vectors; no provider runtime/dispatcher constructed",
+        "charged_nanos": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "requests": 0
+      },
+      "quality": {
+        "citation_count": 0,
+        "citation_resolution_errors": 0,
+        "citation_validity": null,
+        "complete_evidence_set_recall": null,
+        "estimated_tokens": 0,
+        "ndcg_at_k": null,
+        "network_used": false,
+        "omissions": [],
+        "ranked_keys": [],
+        "recall_at_k": null,
+        "relevant_count": 0,
+        "rendered_bytes": 0,
+        "supported_assertion_count": 0,
+        "supported_assertion_precision": null,
+        "truncated": false,
+        "warnings": [
+          "tokens are UTF-8 byte estimates (ceil(bytes/4)); no exact tokenizer accounting",
+          "proof bytes/files meter canonical notes and source/dependency payloads only; directory/component/entry counts are logical operations; operational journals/SQLite/recovery/index maintenance are separate local safety work; elapsed checks do not interrupt blocking syscalls"
+        ]
+      },
+      "question": {
+        "documents": [],
+        "evidence_set": [],
+        "graph": [],
+        "id": "stale",
+        "query_class": "stale_knowledge",
+        "text": "maintains"
+      },
+      "warm_ns": "91220083"
+    },
+    {
+      "cold_ns": "96147250",
+      "disk_after": {
+        "cache_logical_bytes": 782336,
+        "file_count": 39,
+        "logical_bytes": 826994
+      },
+      "disk_before": {
+        "cache_logical_bytes": 782336,
+        "file_count": 39,
+        "logical_bytes": 826994
+      },
+      "method": "literal",
+      "process_peak_rss_bytes": 27181056,
+      "provider_usage": {
+        "basis": "cached synthetic vectors; no provider runtime/dispatcher constructed",
+        "charged_nanos": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "requests": 0
+      },
+      "quality": {
+        "citation_count": 0,
+        "citation_resolution_errors": 0,
+        "citation_validity": null,
+        "complete_evidence_set_recall": null,
+        "estimated_tokens": 0,
+        "ndcg_at_k": null,
+        "network_used": false,
+        "omissions": [],
+        "ranked_keys": [],
+        "recall_at_k": null,
+        "relevant_count": 0,
+        "rendered_bytes": 0,
+        "supported_assertion_count": 0,
+        "supported_assertion_precision": null,
+        "truncated": false,
+        "warnings": [
+          "tokens are UTF-8 byte estimates (ceil(bytes/4)); no exact tokenizer accounting",
+          "proof bytes/files meter canonical notes and source/dependency payloads only; directory/component/entry counts are logical operations; operational journals/SQLite/recovery/index maintenance are separate local safety work; elapsed checks do not interrupt blocking syscalls"
+        ]
+      },
+      "question": {
+        "documents": [],
+        "evidence_set": [],
+        "graph": [],
+        "id": "missing",
+        "query_class": "unanswerable",
+        "text": "lunar greenhouse payroll"
+      },
+      "warm_ns": "90561334"
+    },
+    {
+      "cold_ns": "93139125",
+      "disk_after": {
+        "cache_logical_bytes": 782336,
+        "file_count": 39,
+        "logical_bytes": 826994
+      },
+      "disk_before": {
+        "cache_logical_bytes": 782336,
+        "file_count": 39,
+        "logical_bytes": 826994
+      },
+      "method": "lexical",
+      "process_peak_rss_bytes": 27017216,
+      "provider_usage": {
+        "basis": "cached synthetic vectors; no provider runtime/dispatcher constructed",
+        "charged_nanos": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "requests": 0
+      },
+      "quality": {
+        "citation_count": 0,
+        "citation_resolution_errors": 0,
+        "citation_validity": null,
+        "complete_evidence_set_recall": null,
+        "estimated_tokens": 0,
+        "ndcg_at_k": -0.0,
+        "network_used": false,
+        "omissions": [],
+        "ranked_keys": [],
+        "recall_at_k": 0.0,
+        "relevant_count": 1,
+        "rendered_bytes": 0,
+        "supported_assertion_count": 0,
+        "supported_assertion_precision": null,
+        "truncated": false,
+        "warnings": [
+          "tokens are UTF-8 byte estimates (ceil(bytes/4)); no exact tokenizer accounting",
+          "proof bytes/files meter canonical notes and source/dependency payloads only; directory/component/entry counts are logical operations; operational journals/SQLite/recovery/index maintenance are separate local safety work; elapsed checks do not interrupt blocking syscalls"
+        ]
+      },
+      "question": {
+        "documents": [
+          "knowledge/pages/rust_identifiers.md"
+        ],
+        "evidence_set": [],
+        "graph": [],
+        "id": "generic",
+        "query_class": "exact_identifiers",
+        "text": "Vec<T>"
+      },
+      "warm_ns": "90684167"
+    },
+    {
+      "cold_ns": "95924834",
+      "disk_after": {
+        "cache_logical_bytes": 782336,
+        "file_count": 39,
+        "logical_bytes": 826994
+      },
+      "disk_before": {
+        "cache_logical_bytes": 782336,
+        "file_count": 39,
+        "logical_bytes": 826994
+      },
+      "method": "lexical",
+      "process_peak_rss_bytes": 27541504,
+      "provider_usage": {
+        "basis": "cached synthetic vectors; no provider runtime/dispatcher constructed",
+        "charged_nanos": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "requests": 0
+      },
+      "quality": {
+        "citation_count": 0,
+        "citation_resolution_errors": 0,
+        "citation_validity": null,
+        "complete_evidence_set_recall": null,
+        "estimated_tokens": 75,
+        "ndcg_at_k": 1.0,
+        "network_used": false,
+        "omissions": [],
+        "ranked_keys": [
+          "knowledge/pages/rust_identifiers.md"
+        ],
+        "recall_at_k": 1.0,
+        "relevant_count": 1,
+        "rendered_bytes": 300,
+        "supported_assertion_count": 0,
+        "supported_assertion_precision": null,
+        "truncated": false,
+        "warnings": [
+          "tokens are UTF-8 byte estimates (ceil(bytes/4)); no exact tokenizer accounting",
+          "proof bytes/files meter canonical notes and source/dependency payloads only; directory/component/entry counts are logical operations; operational journals/SQLite/recovery/index maintenance are separate local safety work; elapsed checks do not interrupt blocking syscalls"
+        ]
+      },
+      "question": {
+        "documents": [
+          "knowledge/pages/rust_identifiers.md"
+        ],
+        "evidence_set": [],
+        "graph": [],
+        "id": "error",
+        "query_class": "exact_identifiers",
+        "text": "E0308"
+      },
+      "warm_ns": "90639667"
+    },
+    {
+      "cold_ns": "95346208",
+      "disk_after": {
+        "cache_logical_bytes": 782336,
+        "file_count": 39,
+        "logical_bytes": 826994
+      },
+      "disk_before": {
+        "cache_logical_bytes": 782336,
+        "file_count": 39,
+        "logical_bytes": 826994
+      },
+      "method": "lexical",
+      "process_peak_rss_bytes": 27590656,
+      "provider_usage": {
+        "basis": "cached synthetic vectors; no provider runtime/dispatcher constructed",
+        "charged_nanos": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "requests": 0
+      },
+      "quality": {
+        "citation_count": 0,
+        "citation_resolution_errors": 0,
+        "citation_validity": null,
+        "complete_evidence_set_recall": null,
+        "estimated_tokens": 65,
+        "ndcg_at_k": 1.0,
+        "network_used": false,
+        "omissions": [],
+        "ranked_keys": [
+          "knowledge/pages/rust_identifiers.md"
+        ],
+        "recall_at_k": 1.0,
+        "relevant_count": 1,
+        "rendered_bytes": 260,
+        "supported_assertion_count": 0,
+        "supported_assertion_precision": null,
+        "truncated": false,
+        "warnings": [
+          "tokens are UTF-8 byte estimates (ceil(bytes/4)); no exact tokenizer accounting",
+          "proof bytes/files meter canonical notes and source/dependency payloads only; directory/component/entry counts are logical operations; operational journals/SQLite/recovery/index maintenance are separate local safety work; elapsed checks do not interrupt blocking syscalls"
+        ]
+      },
+      "question": {
+        "documents": [
+          "knowledge/pages/rust_identifiers.md"
+        ],
+        "evidence_set": [],
+        "graph": [],
+        "id": "operator",
+        "query_class": "exact_identifiers",
+        "text": "\"OR\""
+      },
+      "warm_ns": "90579000"
+    },
+    {
+      "cold_ns": "93874917",
+      "disk_after": {
+        "cache_logical_bytes": 782336,
+        "file_count": 39,
+        "logical_bytes": 826994
+      },
+      "disk_before": {
+        "cache_logical_bytes": 782336,
+        "file_count": 39,
+        "logical_bytes": 826994
+      },
+      "method": "lexical",
+      "process_peak_rss_bytes": 27115520,
+      "provider_usage": {
+        "basis": "cached synthetic vectors; no provider runtime/dispatcher constructed",
+        "charged_nanos": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "requests": 0
+      },
+      "quality": {
+        "citation_count": 0,
+        "citation_resolution_errors": 0,
+        "citation_validity": null,
+        "complete_evidence_set_recall": null,
+        "estimated_tokens": 0,
+        "ndcg_at_k": -0.0,
+        "network_used": false,
+        "omissions": [],
+        "ranked_keys": [],
+        "recall_at_k": 0.0,
+        "relevant_count": 3,
+        "rendered_bytes": 0,
+        "supported_assertion_count": 0,
+        "supported_assertion_precision": null,
+        "truncated": false,
+        "warnings": [
+          "tokens are UTF-8 byte estimates (ceil(bytes/4)); no exact tokenizer accounting",
+          "proof bytes/files meter canonical notes and source/dependency payloads only; directory/component/entry counts are logical operations; operational journals/SQLite/recovery/index maintenance are separate local safety work; elapsed checks do not interrupt blocking syscalls"
+        ]
+      },
+      "question": {
+        "documents": [
+          "knowledge/pages/architecture.md",
+          "sources/source_00000000-0000-7000-8000-000000000005/revisions/revision_00000000-0000-7000-8000-000000000008/content.md",
+          "sources/source_00000000-0000-7000-8000-000000000006/revisions/revision_00000000-0000-7000-8000-000000000009/content.md"
+        ],
+        "evidence_set": [],
+        "graph": [
+          "assertion:assertion_00000000-0000-7000-8000-00000000000a"
+        ],
+        "id": "phrase",
+        "query_class": "paraphrases",
+        "text": "northern organization relies on southern organization"
+      },
+      "warm_ns": "90552250"
+    },
+    {
+      "cold_ns": "96629250",
+      "disk_after": {
+        "cache_logical_bytes": 782336,
+        "file_count": 39,
+        "logical_bytes": 826994
+      },
+      "disk_before": {
+        "cache_logical_bytes": 782336,
+        "file_count": 39,
+        "logical_bytes": 826994
+      },
+      "method": "lexical",
+      "process_peak_rss_bytes": 27541504,
+      "provider_usage": {
+        "basis": "cached synthetic vectors; no provider runtime/dispatcher constructed",
+        "charged_nanos": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "requests": 0
+      },
+      "quality": {
+        "citation_count": 1,
+        "citation_resolution_errors": 0,
+        "citation_validity": 1.0,
+        "complete_evidence_set_recall": null,
+        "estimated_tokens": 194,
+        "ndcg_at_k": -0.0,
+        "network_used": false,
+        "omissions": [],
+        "ranked_keys": [
+          "sources/source_00000000-0000-7000-8000-000000000006/revisions/revision_00000000-0000-7000-8000-000000000009/content.md"
+        ],
+        "recall_at_k": 0.0,
+        "relevant_count": 2,
+        "rendered_bytes": 775,
+        "supported_assertion_count": 0,
+        "supported_assertion_precision": null,
+        "truncated": false,
+        "warnings": [
+          "tokens are UTF-8 byte estimates (ceil(bytes/4)); no exact tokenizer accounting",
+          "proof bytes/files meter canonical notes and source/dependency payloads only; directory/component/entry counts are logical operations; operational journals/SQLite/recovery/index maintenance are separate local safety work; elapsed checks do not interrupt blocking syscalls"
+        ]
+      },
+      "question": {
+        "documents": [
+          "knowledge/entities/alex_north.md",
+          "knowledge/entities/alex_south.md"
+        ],
+        "evidence_set": [],
+        "graph": [
+          "assertion:assertion_00000000-0000-7000-8000-00000000000d",
+          "assertion:assertion_00000000-0000-7000-8000-00000000000e"
+        ],
+        "id": "homonym",
+        "query_class": "homonyms",
+        "text": "Alex Kim"
+      },
+      "warm_ns": "93041250"
+    },
+    {
+      "cold_ns": "97500917",
+      "disk_after": {
+        "cache_logical_bytes": 782336,
+        "file_count": 39,
+        "logical_bytes": 826994
+      },
+      "disk_before": {
+        "cache_logical_bytes": 782336,
+        "file_count": 39,
+        "logical_bytes": 826994
+      },
+      "method": "lexical",
+      "process_peak_rss_bytes": 27656192,
+      "provider_usage": {
+        "basis": "cached synthetic vectors; no provider runtime/dispatcher constructed",
+        "charged_nanos": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "requests": 0
+      },
+      "quality": {
+        "citation_count": 2,
+        "citation_resolution_errors": 0,
+        "citation_validity": 1.0,
+        "complete_evidence_set_recall": 1,
+        "estimated_tokens": 431,
+        "ndcg_at_k": 1.0,
+        "network_used": false,
+        "omissions": [],
+        "ranked_keys": [
+          "sources/source_00000000-0000-7000-8000-000000000005/revisions/revision_00000000-0000-7000-8000-000000000008/content.md",
+          "knowledge/pages/architecture.md",
+          "sources/source_00000000-0000-7000-8000-000000000006/revisions/revision_00000000-0000-7000-8000-000000000009/content.md"
+        ],
+        "recall_at_k": 1.0,
+        "relevant_count": 3,
+        "rendered_bytes": 1723,
+        "supported_assertion_count": 0,
+        "supported_assertion_precision": null,
+        "truncated": false,
+        "warnings": [
+          "tokens are UTF-8 byte estimates (ceil(bytes/4)); no exact tokenizer accounting",
+          "proof bytes/files meter canonical notes and source/dependency payloads only; directory/component/entry counts are logical operations; operational journals/SQLite/recovery/index maintenance are separate local safety work; elapsed checks do not interrupt blocking syscalls"
+        ]
+      },
+      "question": {
+        "documents": [
+          "sources/source_00000000-0000-7000-8000-000000000005/revisions/revision_00000000-0000-7000-8000-000000000008/content.md",
+          "sources/source_00000000-0000-7000-8000-000000000006/revisions/revision_00000000-0000-7000-8000-000000000009/content.md",
+          "knowledge/pages/architecture.md"
+        ],
+        "evidence_set": [
+          "evidence_00000000-0000-7000-8000-000000000012",
+          "evidence_00000000-0000-7000-8000-000000000013"
+        ],
+        "graph": [
+          "assertion:assertion_00000000-0000-7000-8000-00000000000a",
+          "assertion:assertion_00000000-0000-7000-8000-00000000000b",
+          "assertion:assertion_00000000-0000-7000-8000-00000000000c"
+        ],
+        "id": "multi",
+        "query_class": "multi_document_evidence",
+        "text": "uses"
+      },
+      "warm_ns": "100057083"
+    },
+    {
+      "cold_ns": "101699792",
+      "disk_after": {
+        "cache_logical_bytes": 782336,
+        "file_count": 39,
+        "logical_bytes": 826994
+      },
+      "disk_before": {
+        "cache_logical_bytes": 782336,
+        "file_count": 39,
+        "logical_bytes": 826994
+      },
+      "method": "lexical",
+      "process_peak_rss_bytes": 27295744,
+      "provider_usage": {
+        "basis": "cached synthetic vectors; no provider runtime/dispatcher constructed",
+        "charged_nanos": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "requests": 0
+      },
+      "quality": {
+        "citation_count": 0,
+        "citation_resolution_errors": 0,
+        "citation_validity": null,
+        "complete_evidence_set_recall": null,
+        "estimated_tokens": 0,
+        "ndcg_at_k": null,
+        "network_used": false,
+        "omissions": [],
+        "ranked_keys": [],
+        "recall_at_k": null,
+        "relevant_count": 0,
+        "rendered_bytes": 0,
+        "supported_assertion_count": 0,
+        "supported_assertion_precision": null,
+        "truncated": false,
+        "warnings": [
+          "tokens are UTF-8 byte estimates (ceil(bytes/4)); no exact tokenizer accounting",
+          "proof bytes/files meter canonical notes and source/dependency payloads only; directory/component/entry counts are logical operations; operational journals/SQLite/recovery/index maintenance are separate local safety work; elapsed checks do not interrupt blocking syscalls"
+        ]
+      },
+      "question": {
+        "documents": [],
+        "evidence_set": [],
+        "graph": [],
+        "id": "stale",
+        "query_class": "stale_knowledge",
+        "text": "maintains"
+      },
+      "warm_ns": "99764792"
+    },
+    {
+      "cold_ns": "104302750",
+      "disk_after": {
+        "cache_logical_bytes": 782336,
+        "file_count": 39,
+        "logical_bytes": 826994
+      },
+      "disk_before": {
+        "cache_logical_bytes": 782336,
+        "file_count": 39,
+        "logical_bytes": 826994
+      },
+      "method": "lexical",
+      "process_peak_rss_bytes": 28082176,
+      "provider_usage": {
+        "basis": "cached synthetic vectors; no provider runtime/dispatcher constructed",
+        "charged_nanos": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "requests": 0
+      },
+      "quality": {
+        "citation_count": 0,
+        "citation_resolution_errors": 0,
+        "citation_validity": null,
+        "complete_evidence_set_recall": null,
+        "estimated_tokens": 0,
+        "ndcg_at_k": null,
+        "network_used": false,
+        "omissions": [],
+        "ranked_keys": [],
+        "recall_at_k": null,
+        "relevant_count": 0,
+        "rendered_bytes": 0,
+        "supported_assertion_count": 0,
+        "supported_assertion_precision": null,
+        "truncated": false,
+        "warnings": [
+          "tokens are UTF-8 byte estimates (ceil(bytes/4)); no exact tokenizer accounting",
+          "proof bytes/files meter canonical notes and source/dependency payloads only; directory/component/entry counts are logical operations; operational journals/SQLite/recovery/index maintenance are separate local safety work; elapsed checks do not interrupt blocking syscalls"
+        ]
+      },
+      "question": {
+        "documents": [],
+        "evidence_set": [],
+        "graph": [],
+        "id": "missing",
+        "query_class": "unanswerable",
+        "text": "lunar greenhouse payroll"
+      },
+      "warm_ns": "98421875"
+    },
+    {
+      "cold_ns": "112296541",
+      "disk_after": {
+        "cache_logical_bytes": 815104,
+        "file_count": 41,
+        "logical_bytes": 859762
+      },
+      "disk_before": {
+        "cache_logical_bytes": 782336,
+        "file_count": 39,
+        "logical_bytes": 826994
+      },
+      "method": "exact_dense",
+      "process_peak_rss_bytes": 27426816,
+      "provider_usage": {
+        "basis": "cached synthetic vectors; no provider runtime/dispatcher constructed",
+        "charged_nanos": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "requests": 0
+      },
+      "quality": {
+        "citation_count": 2,
+        "citation_resolution_errors": 0,
+        "citation_validity": 1.0,
+        "complete_evidence_set_recall": null,
+        "estimated_tokens": 506,
+        "ndcg_at_k": 0.6309297535714575,
+        "network_used": false,
+        "omissions": [],
+        "ranked_keys": [
+          "sources/source_00000000-0000-7000-8000-000000000006/revisions/revision_00000000-0000-7000-8000-000000000009/content.md",
+          "knowledge/pages/rust_identifiers.md",
+          "sources/source_00000000-0000-7000-8000-000000000005/revisions/revision_00000000-0000-7000-8000-000000000008/content.md",
+          "knowledge/pages/architecture.md"
+        ],
+        "recall_at_k": 1.0,
+        "relevant_count": 1,
+        "rendered_bytes": 2022,
+        "supported_assertion_count": 0,
+        "supported_assertion_precision": null,
+        "truncated": false,
+        "warnings": [
+          "tokens are UTF-8 byte estimates (ceil(bytes/4)); no exact tokenizer accounting",
+          "proof bytes/files meter canonical notes and source/dependency payloads only; directory/component/entry counts are logical operations; operational journals/SQLite/recovery/index maintenance are separate local safety work; elapsed checks do not interrupt blocking syscalls"
+        ]
+      },
+      "question": {
+        "documents": [
+          "knowledge/pages/rust_identifiers.md"
+        ],
+        "evidence_set": [],
+        "graph": [],
+        "id": "generic",
+        "query_class": "exact_identifiers",
+        "text": "Vec<T>"
+      },
+      "warm_ns": "104930000"
+    },
+    {
+      "cold_ns": "105197541",
+      "disk_after": {
+        "cache_logical_bytes": 815104,
+        "file_count": 41,
+        "logical_bytes": 859762
+      },
+      "disk_before": {
+        "cache_logical_bytes": 782336,
+        "file_count": 39,
+        "logical_bytes": 826994
+      },
+      "method": "exact_dense",
+      "process_peak_rss_bytes": 27557888,
+      "provider_usage": {
+        "basis": "cached synthetic vectors; no provider runtime/dispatcher constructed",
+        "charged_nanos": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "requests": 0
+      },
+      "quality": {
+        "citation_count": 2,
+        "citation_resolution_errors": 0,
+        "citation_validity": 1.0,
+        "complete_evidence_set_recall": null,
+        "estimated_tokens": 506,
+        "ndcg_at_k": 0.5,
+        "network_used": false,
+        "omissions": [],
+        "ranked_keys": [
+          "sources/source_00000000-0000-7000-8000-000000000006/revisions/revision_00000000-0000-7000-8000-000000000009/content.md",
+          "sources/source_00000000-0000-7000-8000-000000000005/revisions/revision_00000000-0000-7000-8000-000000000008/content.md",
+          "knowledge/pages/rust_identifiers.md",
+          "knowledge/pages/architecture.md"
+        ],
+        "recall_at_k": 1.0,
+        "relevant_count": 1,
+        "rendered_bytes": 2022,
+        "supported_assertion_count": 0,
+        "supported_assertion_precision": null,
+        "truncated": false,
+        "warnings": [
+          "tokens are UTF-8 byte estimates (ceil(bytes/4)); no exact tokenizer accounting",
+          "proof bytes/files meter canonical notes and source/dependency payloads only; directory/component/entry counts are logical operations; operational journals/SQLite/recovery/index maintenance are separate local safety work; elapsed checks do not interrupt blocking syscalls"
+        ]
+      },
+      "question": {
+        "documents": [
+          "knowledge/pages/rust_identifiers.md"
+        ],
+        "evidence_set": [],
+        "graph": [],
+        "id": "error",
+        "query_class": "exact_identifiers",
+        "text": "E0308"
+      },
+      "warm_ns": "106926583"
+    },
+    {
+      "cold_ns": "111170958",
+      "disk_after": {
+        "cache_logical_bytes": 815104,
+        "file_count": 41,
+        "logical_bytes": 859762
+      },
+      "disk_before": {
+        "cache_logical_bytes": 782336,
+        "file_count": 39,
+        "logical_bytes": 826994
+      },
+      "method": "exact_dense",
+      "process_peak_rss_bytes": 28082176,
+      "provider_usage": {
+        "basis": "cached synthetic vectors; no provider runtime/dispatcher constructed",
+        "charged_nanos": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "requests": 0
+      },
+      "quality": {
+        "citation_count": 2,
+        "citation_resolution_errors": 0,
+        "citation_validity": 1.0,
+        "complete_evidence_set_recall": null,
+        "estimated_tokens": 506,
+        "ndcg_at_k": 0.6309297535714575,
+        "network_used": false,
+        "omissions": [],
+        "ranked_keys": [
+          "knowledge/pages/architecture.md",
+          "knowledge/pages/rust_identifiers.md",
+          "sources/source_00000000-0000-7000-8000-000000000006/revisions/revision_00000000-0000-7000-8000-000000000009/content.md",
+          "sources/source_00000000-0000-7000-8000-000000000005/revisions/revision_00000000-0000-7000-8000-000000000008/content.md"
+        ],
+        "recall_at_k": 1.0,
+        "relevant_count": 1,
+        "rendered_bytes": 2022,
+        "supported_assertion_count": 0,
+        "supported_assertion_precision": null,
+        "truncated": false,
+        "warnings": [
+          "tokens are UTF-8 byte estimates (ceil(bytes/4)); no exact tokenizer accounting",
+          "proof bytes/files meter canonical notes and source/dependency payloads only; directory/component/entry counts are logical operations; operational journals/SQLite/recovery/index maintenance are separate local safety work; elapsed checks do not interrupt blocking syscalls"
+        ]
+      },
+      "question": {
+        "documents": [
+          "knowledge/pages/rust_identifiers.md"
+        ],
+        "evidence_set": [],
+        "graph": [],
+        "id": "operator",
+        "query_class": "exact_identifiers",
+        "text": "\"OR\""
+      },
+      "warm_ns": "104896625"
+    },
+    {
+      "cold_ns": "109664666",
+      "disk_after": {
+        "cache_logical_bytes": 815104,
+        "file_count": 41,
+        "logical_bytes": 859762
+      },
+      "disk_before": {
+        "cache_logical_bytes": 782336,
+        "file_count": 39,
+        "logical_bytes": 826994
+      },
+      "method": "exact_dense",
+      "process_peak_rss_bytes": 27869184,
+      "provider_usage": {
+        "basis": "cached synthetic vectors; no provider runtime/dispatcher constructed",
+        "charged_nanos": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "requests": 0
+      },
+      "quality": {
+        "citation_count": 2,
+        "citation_resolution_errors": 0,
+        "citation_validity": 1.0,
+        "complete_evidence_set_recall": null,
+        "estimated_tokens": 509,
+        "ndcg_at_k": 0.7328286204777911,
+        "network_used": false,
+        "omissions": [],
+        "ranked_keys": [
+          "knowledge/pages/rust_identifiers.md",
+          "sources/source_00000000-0000-7000-8000-000000000006/revisions/revision_00000000-0000-7000-8000-000000000009/content.md",
+          "knowledge/pages/architecture.md",
+          "sources/source_00000000-0000-7000-8000-000000000005/revisions/revision_00000000-0000-7000-8000-000000000008/content.md"
+        ],
+        "recall_at_k": 1.0,
+        "relevant_count": 3,
+        "rendered_bytes": 2034,
+        "supported_assertion_count": 0,
+        "supported_assertion_precision": null,
+        "truncated": false,
+        "warnings": [
+          "tokens are UTF-8 byte estimates (ceil(bytes/4)); no exact tokenizer accounting",
+          "proof bytes/files meter canonical notes and source/dependency payloads only; directory/component/entry counts are logical operations; operational journals/SQLite/recovery/index maintenance are separate local safety work; elapsed checks do not interrupt blocking syscalls"
+        ]
+      },
+      "question": {
+        "documents": [
+          "knowledge/pages/architecture.md",
+          "sources/source_00000000-0000-7000-8000-000000000005/revisions/revision_00000000-0000-7000-8000-000000000008/content.md",
+          "sources/source_00000000-0000-7000-8000-000000000006/revisions/revision_00000000-0000-7000-8000-000000000009/content.md"
+        ],
+        "evidence_set": [],
+        "graph": [
+          "assertion:assertion_00000000-0000-7000-8000-00000000000a"
+        ],
+        "id": "phrase",
+        "query_class": "paraphrases",
+        "text": "northern organization relies on southern organization"
+      },
+      "warm_ns": "106056583"
+    },
+    {
+      "cold_ns": "110566167",
+      "disk_after": {
+        "cache_logical_bytes": 815104,
+        "file_count": 41,
+        "logical_bytes": 859762
+      },
+      "disk_before": {
+        "cache_logical_bytes": 782336,
+        "file_count": 39,
+        "logical_bytes": 826994
+      },
+      "method": "exact_dense",
+      "process_peak_rss_bytes": 27459584,
+      "provider_usage": {
+        "basis": "cached synthetic vectors; no provider runtime/dispatcher constructed",
+        "charged_nanos": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "requests": 0
+      },
+      "quality": {
+        "citation_count": 2,
+        "citation_resolution_errors": 0,
+        "citation_validity": 1.0,
+        "complete_evidence_set_recall": null,
+        "estimated_tokens": 506,
+        "ndcg_at_k": -0.0,
+        "network_used": false,
+        "omissions": [],
+        "ranked_keys": [
+          "sources/source_00000000-0000-7000-8000-000000000005/revisions/revision_00000000-0000-7000-8000-000000000008/content.md",
+          "sources/source_00000000-0000-7000-8000-000000000006/revisions/revision_00000000-0000-7000-8000-000000000009/content.md",
+          "knowledge/pages/rust_identifiers.md",
+          "knowledge/pages/architecture.md"
+        ],
+        "recall_at_k": 0.0,
+        "relevant_count": 2,
+        "rendered_bytes": 2022,
+        "supported_assertion_count": 0,
+        "supported_assertion_precision": null,
+        "truncated": false,
+        "warnings": [
+          "tokens are UTF-8 byte estimates (ceil(bytes/4)); no exact tokenizer accounting",
+          "proof bytes/files meter canonical notes and source/dependency payloads only; directory/component/entry counts are logical operations; operational journals/SQLite/recovery/index maintenance are separate local safety work; elapsed checks do not interrupt blocking syscalls"
+        ]
+      },
+      "question": {
+        "documents": [
+          "knowledge/entities/alex_north.md",
+          "knowledge/entities/alex_south.md"
+        ],
+        "evidence_set": [],
+        "graph": [
+          "assertion:assertion_00000000-0000-7000-8000-00000000000d",
+          "assertion:assertion_00000000-0000-7000-8000-00000000000e"
+        ],
+        "id": "homonym",
+        "query_class": "homonyms",
+        "text": "Alex Kim"
+      },
+      "warm_ns": "102772458"
+    },
+    {
+      "cold_ns": "106197958",
+      "disk_after": {
+        "cache_logical_bytes": 815104,
+        "file_count": 41,
+        "logical_bytes": 859762
+      },
+      "disk_before": {
+        "cache_logical_bytes": 782336,
+        "file_count": 39,
+        "logical_bytes": 826994
+      },
+      "method": "exact_dense",
+      "process_peak_rss_bytes": 27820032,
+      "provider_usage": {
+        "basis": "cached synthetic vectors; no provider runtime/dispatcher constructed",
+        "charged_nanos": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "requests": 0
+      },
+      "quality": {
+        "citation_count": 2,
+        "citation_resolution_errors": 0,
+        "citation_validity": 1.0,
+        "complete_evidence_set_recall": 1,
+        "estimated_tokens": 506,
+        "ndcg_at_k": 0.9060254355346823,
+        "network_used": false,
+        "omissions": [],
+        "ranked_keys": [
+          "sources/source_00000000-0000-7000-8000-000000000005/revisions/revision_00000000-0000-7000-8000-000000000008/content.md",
+          "knowledge/pages/rust_identifiers.md",
+          "sources/source_00000000-0000-7000-8000-000000000006/revisions/revision_00000000-0000-7000-8000-000000000009/content.md",
+          "knowledge/pages/architecture.md"
+        ],
+        "recall_at_k": 1.0,
+        "relevant_count": 3,
+        "rendered_bytes": 2022,
+        "supported_assertion_count": 0,
+        "supported_assertion_precision": null,
+        "truncated": false,
+        "warnings": [
+          "tokens are UTF-8 byte estimates (ceil(bytes/4)); no exact tokenizer accounting",
+          "proof bytes/files meter canonical notes and source/dependency payloads only; directory/component/entry counts are logical operations; operational journals/SQLite/recovery/index maintenance are separate local safety work; elapsed checks do not interrupt blocking syscalls"
+        ]
+      },
+      "question": {
+        "documents": [
+          "sources/source_00000000-0000-7000-8000-000000000005/revisions/revision_00000000-0000-7000-8000-000000000008/content.md",
+          "sources/source_00000000-0000-7000-8000-000000000006/revisions/revision_00000000-0000-7000-8000-000000000009/content.md",
+          "knowledge/pages/architecture.md"
+        ],
+        "evidence_set": [
+          "evidence_00000000-0000-7000-8000-000000000012",
+          "evidence_00000000-0000-7000-8000-000000000013"
+        ],
+        "graph": [
+          "assertion:assertion_00000000-0000-7000-8000-00000000000a",
+          "assertion:assertion_00000000-0000-7000-8000-00000000000b",
+          "assertion:assertion_00000000-0000-7000-8000-00000000000c"
+        ],
+        "id": "multi",
+        "query_class": "multi_document_evidence",
+        "text": "uses"
+      },
+      "warm_ns": "98188500"
+    },
+    {
+      "cold_ns": "103231583",
+      "disk_after": {
+        "cache_logical_bytes": 815104,
+        "file_count": 41,
+        "logical_bytes": 859762
+      },
+      "disk_before": {
+        "cache_logical_bytes": 782336,
+        "file_count": 39,
+        "logical_bytes": 826994
+      },
+      "method": "exact_dense",
+      "process_peak_rss_bytes": 27738112,
+      "provider_usage": {
+        "basis": "cached synthetic vectors; no provider runtime/dispatcher constructed",
+        "charged_nanos": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "requests": 0
+      },
+      "quality": {
+        "citation_count": 2,
+        "citation_resolution_errors": 0,
+        "citation_validity": 1.0,
+        "complete_evidence_set_recall": null,
+        "estimated_tokens": 506,
+        "ndcg_at_k": null,
+        "network_used": false,
+        "omissions": [],
+        "ranked_keys": [
+          "knowledge/pages/architecture.md",
+          "sources/source_00000000-0000-7000-8000-000000000005/revisions/revision_00000000-0000-7000-8000-000000000008/content.md",
+          "sources/source_00000000-0000-7000-8000-000000000006/revisions/revision_00000000-0000-7000-8000-000000000009/content.md",
+          "knowledge/pages/rust_identifiers.md"
+        ],
+        "recall_at_k": null,
+        "relevant_count": 0,
+        "rendered_bytes": 2022,
+        "supported_assertion_count": 0,
+        "supported_assertion_precision": null,
+        "truncated": false,
+        "warnings": [
+          "tokens are UTF-8 byte estimates (ceil(bytes/4)); no exact tokenizer accounting",
+          "proof bytes/files meter canonical notes and source/dependency payloads only; directory/component/entry counts are logical operations; operational journals/SQLite/recovery/index maintenance are separate local safety work; elapsed checks do not interrupt blocking syscalls"
+        ]
+      },
+      "question": {
+        "documents": [],
+        "evidence_set": [],
+        "graph": [],
+        "id": "stale",
+        "query_class": "stale_knowledge",
+        "text": "maintains"
+      },
+      "warm_ns": "100711292"
+    },
+    {
+      "cold_ns": "103191166",
+      "disk_after": {
+        "cache_logical_bytes": 815104,
+        "file_count": 41,
+        "logical_bytes": 859762
+      },
+      "disk_before": {
+        "cache_logical_bytes": 782336,
+        "file_count": 39,
+        "logical_bytes": 826994
+      },
+      "method": "exact_dense",
+      "process_peak_rss_bytes": 27410432,
+      "provider_usage": {
+        "basis": "cached synthetic vectors; no provider runtime/dispatcher constructed",
+        "charged_nanos": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "requests": 0
+      },
+      "quality": {
+        "citation_count": 2,
+        "citation_resolution_errors": 0,
+        "citation_validity": 1.0,
+        "complete_evidence_set_recall": null,
+        "estimated_tokens": 509,
+        "ndcg_at_k": null,
+        "network_used": false,
+        "omissions": [],
+        "ranked_keys": [
+          "sources/source_00000000-0000-7000-8000-000000000006/revisions/revision_00000000-0000-7000-8000-000000000009/content.md",
+          "knowledge/pages/rust_identifiers.md",
+          "sources/source_00000000-0000-7000-8000-000000000005/revisions/revision_00000000-0000-7000-8000-000000000008/content.md",
+          "knowledge/pages/architecture.md"
+        ],
+        "recall_at_k": null,
+        "relevant_count": 0,
+        "rendered_bytes": 2034,
+        "supported_assertion_count": 0,
+        "supported_assertion_precision": null,
+        "truncated": false,
+        "warnings": [
+          "tokens are UTF-8 byte estimates (ceil(bytes/4)); no exact tokenizer accounting",
+          "proof bytes/files meter canonical notes and source/dependency payloads only; directory/component/entry counts are logical operations; operational journals/SQLite/recovery/index maintenance are separate local safety work; elapsed checks do not interrupt blocking syscalls"
+        ]
+      },
+      "question": {
+        "documents": [],
+        "evidence_set": [],
+        "graph": [],
+        "id": "missing",
+        "query_class": "unanswerable",
+        "text": "lunar greenhouse payroll"
+      },
+      "warm_ns": "99526958"
+    },
+    {
+      "cold_ns": "95105208",
+      "disk_after": {
+        "cache_logical_bytes": 782336,
+        "file_count": 39,
+        "logical_bytes": 826994
+      },
+      "disk_before": {
+        "cache_logical_bytes": 782336,
+        "file_count": 39,
+        "logical_bytes": 826994
+      },
+      "method": "entity",
+      "process_peak_rss_bytes": 27492352,
+      "provider_usage": {
+        "basis": "cached synthetic vectors; no provider runtime/dispatcher constructed",
+        "charged_nanos": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "requests": 0
+      },
+      "quality": {
+        "citation_count": 0,
+        "citation_resolution_errors": 0,
+        "citation_validity": null,
+        "complete_evidence_set_recall": null,
+        "estimated_tokens": 0,
+        "ndcg_at_k": null,
+        "network_used": false,
+        "omissions": [],
+        "ranked_keys": [],
+        "recall_at_k": null,
+        "relevant_count": 0,
+        "rendered_bytes": 0,
+        "supported_assertion_count": 0,
+        "supported_assertion_precision": null,
+        "truncated": false,
+        "warnings": [
+          "tokens are UTF-8 byte estimates (ceil(bytes/4)); no exact tokenizer accounting",
+          "proof bytes/files meter canonical notes and source/dependency payloads only; directory/component/entry counts are logical operations; operational journals/SQLite/recovery/index maintenance are separate local safety work; elapsed checks do not interrupt blocking syscalls"
+        ]
+      },
+      "question": {
+        "documents": [
+          "knowledge/pages/rust_identifiers.md"
+        ],
+        "evidence_set": [],
+        "graph": [],
+        "id": "generic",
+        "query_class": "exact_identifiers",
+        "text": "Vec<T>"
+      },
+      "warm_ns": "91141750"
+    },
+    {
+      "cold_ns": "95683625",
+      "disk_after": {
+        "cache_logical_bytes": 782336,
+        "file_count": 39,
+        "logical_bytes": 826994
+      },
+      "disk_before": {
+        "cache_logical_bytes": 782336,
+        "file_count": 39,
+        "logical_bytes": 826994
+      },
+      "method": "entity",
+      "process_peak_rss_bytes": 27246592,
+      "provider_usage": {
+        "basis": "cached synthetic vectors; no provider runtime/dispatcher constructed",
+        "charged_nanos": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "requests": 0
+      },
+      "quality": {
+        "citation_count": 0,
+        "citation_resolution_errors": 0,
+        "citation_validity": null,
+        "complete_evidence_set_recall": null,
+        "estimated_tokens": 0,
+        "ndcg_at_k": null,
+        "network_used": false,
+        "omissions": [],
+        "ranked_keys": [],
+        "recall_at_k": null,
+        "relevant_count": 0,
+        "rendered_bytes": 0,
+        "supported_assertion_count": 0,
+        "supported_assertion_precision": null,
+        "truncated": false,
+        "warnings": [
+          "tokens are UTF-8 byte estimates (ceil(bytes/4)); no exact tokenizer accounting",
+          "proof bytes/files meter canonical notes and source/dependency payloads only; directory/component/entry counts are logical operations; operational journals/SQLite/recovery/index maintenance are separate local safety work; elapsed checks do not interrupt blocking syscalls"
+        ]
+      },
+      "question": {
+        "documents": [
+          "knowledge/pages/rust_identifiers.md"
+        ],
+        "evidence_set": [],
+        "graph": [],
+        "id": "error",
+        "query_class": "exact_identifiers",
+        "text": "E0308"
+      },
+      "warm_ns": "91149625"
+    },
+    {
+      "cold_ns": "100512083",
+      "disk_after": {
+        "cache_logical_bytes": 782336,
+        "file_count": 39,
+        "logical_bytes": 826994
+      },
+      "disk_before": {
+        "cache_logical_bytes": 782336,
+        "file_count": 39,
+        "logical_bytes": 826994
+      },
+      "method": "entity",
+      "process_peak_rss_bytes": 27426816,
+      "provider_usage": {
+        "basis": "cached synthetic vectors; no provider runtime/dispatcher constructed",
+        "charged_nanos": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "requests": 0
+      },
+      "quality": {
+        "citation_count": 0,
+        "citation_resolution_errors": 0,
+        "citation_validity": null,
+        "complete_evidence_set_recall": null,
+        "estimated_tokens": 0,
+        "ndcg_at_k": null,
+        "network_used": false,
+        "omissions": [],
+        "ranked_keys": [],
+        "recall_at_k": null,
+        "relevant_count": 0,
+        "rendered_bytes": 0,
+        "supported_assertion_count": 0,
+        "supported_assertion_precision": null,
+        "truncated": false,
+        "warnings": [
+          "tokens are UTF-8 byte estimates (ceil(bytes/4)); no exact tokenizer accounting",
+          "proof bytes/files meter canonical notes and source/dependency payloads only; directory/component/entry counts are logical operations; operational journals/SQLite/recovery/index maintenance are separate local safety work; elapsed checks do not interrupt blocking syscalls"
+        ]
+      },
+      "question": {
+        "documents": [
+          "knowledge/pages/rust_identifiers.md"
+        ],
+        "evidence_set": [],
+        "graph": [],
+        "id": "operator",
+        "query_class": "exact_identifiers",
+        "text": "\"OR\""
+      },
+      "warm_ns": "98979291"
+    },
+    {
+      "cold_ns": "97582250",
+      "disk_after": {
+        "cache_logical_bytes": 782336,
+        "file_count": 39,
+        "logical_bytes": 826994
+      },
+      "disk_before": {
+        "cache_logical_bytes": 782336,
+        "file_count": 39,
+        "logical_bytes": 826994
+      },
+      "method": "entity",
+      "process_peak_rss_bytes": 27852800,
+      "provider_usage": {
+        "basis": "cached synthetic vectors; no provider runtime/dispatcher constructed",
+        "charged_nanos": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "requests": 0
+      },
+      "quality": {
+        "citation_count": 0,
+        "citation_resolution_errors": 0,
+        "citation_validity": null,
+        "complete_evidence_set_recall": null,
+        "estimated_tokens": 0,
+        "ndcg_at_k": -0.0,
+        "network_used": false,
+        "omissions": [],
+        "ranked_keys": [],
+        "recall_at_k": 0.0,
+        "relevant_count": 1,
+        "rendered_bytes": 0,
+        "supported_assertion_count": 0,
+        "supported_assertion_precision": null,
+        "truncated": false,
+        "warnings": [
+          "tokens are UTF-8 byte estimates (ceil(bytes/4)); no exact tokenizer accounting",
+          "proof bytes/files meter canonical notes and source/dependency payloads only; directory/component/entry counts are logical operations; operational journals/SQLite/recovery/index maintenance are separate local safety work; elapsed checks do not interrupt blocking syscalls"
+        ]
+      },
+      "question": {
+        "documents": [
+          "knowledge/pages/architecture.md",
+          "sources/source_00000000-0000-7000-8000-000000000005/revisions/revision_00000000-0000-7000-8000-000000000008/content.md",
+          "sources/source_00000000-0000-7000-8000-000000000006/revisions/revision_00000000-0000-7000-8000-000000000009/content.md"
+        ],
+        "evidence_set": [],
+        "graph": [
+          "assertion:assertion_00000000-0000-7000-8000-00000000000a"
+        ],
+        "id": "phrase",
+        "query_class": "paraphrases",
+        "text": "northern organization relies on southern organization"
+      },
+      "warm_ns": "93319209"
+    },
+    {
+      "cold_ns": "98515333",
+      "disk_after": {
+        "cache_logical_bytes": 782336,
+        "file_count": 39,
+        "logical_bytes": 826994
+      },
+      "disk_before": {
+        "cache_logical_bytes": 782336,
+        "file_count": 39,
+        "logical_bytes": 826994
+      },
+      "method": "entity",
+      "process_peak_rss_bytes": 27590656,
+      "provider_usage": {
+        "basis": "cached synthetic vectors; no provider runtime/dispatcher constructed",
+        "charged_nanos": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "requests": 0
+      },
+      "quality": {
+        "citation_count": 1,
+        "citation_resolution_errors": 0,
+        "citation_validity": 1.0,
+        "complete_evidence_set_recall": null,
+        "estimated_tokens": 626,
+        "ndcg_at_k": 0.6131471927654584,
+        "network_used": false,
+        "omissions": [
+          {
+            "count": 1,
+            "path": null,
+            "reason": "required_bundle_or_passage_does_not_fit",
+            "record_id": "assertion_00000000-0000-7000-8000-00000000000a"
+          },
+          {
+            "count": 1,
+            "path": null,
+            "reason": "required_bundle_or_passage_does_not_fit",
+            "record_id": "assertion_00000000-0000-7000-8000-00000000000e"
+          },
+          {
+            "count": 1,
+            "path": null,
+            "reason": "required_bundle_or_passage_does_not_fit",
+            "record_id": "assertion_00000000-0000-7000-8000-00000000000b"
+          },
+          {
+            "count": 1,
+            "path": null,
+            "reason": "required_bundle_or_passage_does_not_fit",
+            "record_id": "assertion_00000000-0000-7000-8000-00000000000c"
+          },
+          {
+            "count": 1,
+            "path": null,
+            "reason": "required_bundle_or_passage_does_not_fit",
+            "record_id": "assertion_00000000-0000-7000-8000-000000000010"
+          }
+        ],
+        "ranked_keys": [
+          "assertion:assertion_00000000-0000-7000-8000-00000000000d"
+        ],
+        "recall_at_k": 0.5,
+        "relevant_count": 2,
+        "rendered_bytes": 2504,
+        "supported_assertion_count": 1,
+        "supported_assertion_precision": 1.0,
+        "truncated": true,
+        "warnings": [
+          "tokens are UTF-8 byte estimates (ceil(bytes/4)); no exact tokenizer accounting",
+          "proof bytes/files meter canonical notes and source/dependency payloads only; directory/component/entry counts are logical operations; operational journals/SQLite/recovery/index maintenance are separate local safety work; elapsed checks do not interrupt blocking syscalls"
+        ]
+      },
+      "question": {
+        "documents": [
+          "knowledge/entities/alex_north.md",
+          "knowledge/entities/alex_south.md"
+        ],
+        "evidence_set": [],
+        "graph": [
+          "assertion:assertion_00000000-0000-7000-8000-00000000000d",
+          "assertion:assertion_00000000-0000-7000-8000-00000000000e"
+        ],
+        "id": "homonym",
+        "query_class": "homonyms",
+        "text": "Alex Kim"
+      },
+      "warm_ns": "94903083"
+    },
+    {
+      "cold_ns": "98559791",
+      "disk_after": {
+        "cache_logical_bytes": 782336,
+        "file_count": 39,
+        "logical_bytes": 826994
+      },
+      "disk_before": {
+        "cache_logical_bytes": 782336,
+        "file_count": 39,
+        "logical_bytes": 826994
+      },
+      "method": "entity",
+      "process_peak_rss_bytes": 27312128,
+      "provider_usage": {
+        "basis": "cached synthetic vectors; no provider runtime/dispatcher constructed",
+        "charged_nanos": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "requests": 0
+      },
+      "quality": {
+        "citation_count": 0,
+        "citation_resolution_errors": 0,
+        "citation_validity": null,
+        "complete_evidence_set_recall": 0,
+        "estimated_tokens": 0,
+        "ndcg_at_k": -0.0,
+        "network_used": false,
+        "omissions": [],
+        "ranked_keys": [],
+        "recall_at_k": 0.0,
+        "relevant_count": 3,
+        "rendered_bytes": 0,
+        "supported_assertion_count": 0,
+        "supported_assertion_precision": null,
+        "truncated": false,
+        "warnings": [
+          "tokens are UTF-8 byte estimates (ceil(bytes/4)); no exact tokenizer accounting",
+          "proof bytes/files meter canonical notes and source/dependency payloads only; directory/component/entry counts are logical operations; operational journals/SQLite/recovery/index maintenance are separate local safety work; elapsed checks do not interrupt blocking syscalls"
+        ]
+      },
+      "question": {
+        "documents": [
+          "sources/source_00000000-0000-7000-8000-000000000005/revisions/revision_00000000-0000-7000-8000-000000000008/content.md",
+          "sources/source_00000000-0000-7000-8000-000000000006/revisions/revision_00000000-0000-7000-8000-000000000009/content.md",
+          "knowledge/pages/architecture.md"
+        ],
+        "evidence_set": [
+          "evidence_00000000-0000-7000-8000-000000000012",
+          "evidence_00000000-0000-7000-8000-000000000013"
+        ],
+        "graph": [
+          "assertion:assertion_00000000-0000-7000-8000-00000000000a",
+          "assertion:assertion_00000000-0000-7000-8000-00000000000b",
+          "assertion:assertion_00000000-0000-7000-8000-00000000000c"
+        ],
+        "id": "multi",
+        "query_class": "multi_document_evidence",
+        "text": "uses"
+      },
+      "warm_ns": "94212084"
+    },
+    {
+      "cold_ns": "97805583",
+      "disk_after": {
+        "cache_logical_bytes": 782336,
+        "file_count": 39,
+        "logical_bytes": 826994
+      },
+      "disk_before": {
+        "cache_logical_bytes": 782336,
+        "file_count": 39,
+        "logical_bytes": 826994
+      },
+      "method": "entity",
+      "process_peak_rss_bytes": 27148288,
+      "provider_usage": {
+        "basis": "cached synthetic vectors; no provider runtime/dispatcher constructed",
+        "charged_nanos": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "requests": 0
+      },
+      "quality": {
+        "citation_count": 0,
+        "citation_resolution_errors": 0,
+        "citation_validity": null,
+        "complete_evidence_set_recall": null,
+        "estimated_tokens": 0,
+        "ndcg_at_k": null,
+        "network_used": false,
+        "omissions": [],
+        "ranked_keys": [],
+        "recall_at_k": null,
+        "relevant_count": 0,
+        "rendered_bytes": 0,
+        "supported_assertion_count": 0,
+        "supported_assertion_precision": null,
+        "truncated": false,
+        "warnings": [
+          "tokens are UTF-8 byte estimates (ceil(bytes/4)); no exact tokenizer accounting",
+          "proof bytes/files meter canonical notes and source/dependency payloads only; directory/component/entry counts are logical operations; operational journals/SQLite/recovery/index maintenance are separate local safety work; elapsed checks do not interrupt blocking syscalls"
+        ]
+      },
+      "question": {
+        "documents": [],
+        "evidence_set": [],
+        "graph": [],
+        "id": "stale",
+        "query_class": "stale_knowledge",
+        "text": "maintains"
+      },
+      "warm_ns": "99674750"
+    },
+    {
+      "cold_ns": "100663417",
+      "disk_after": {
+        "cache_logical_bytes": 782336,
+        "file_count": 39,
+        "logical_bytes": 826994
+      },
+      "disk_before": {
+        "cache_logical_bytes": 782336,
+        "file_count": 39,
+        "logical_bytes": 826994
+      },
+      "method": "entity",
+      "process_peak_rss_bytes": 27557888,
+      "provider_usage": {
+        "basis": "cached synthetic vectors; no provider runtime/dispatcher constructed",
+        "charged_nanos": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "requests": 0
+      },
+      "quality": {
+        "citation_count": 0,
+        "citation_resolution_errors": 0,
+        "citation_validity": null,
+        "complete_evidence_set_recall": null,
+        "estimated_tokens": 0,
+        "ndcg_at_k": null,
+        "network_used": false,
+        "omissions": [],
+        "ranked_keys": [],
+        "recall_at_k": null,
+        "relevant_count": 0,
+        "rendered_bytes": 0,
+        "supported_assertion_count": 0,
+        "supported_assertion_precision": null,
+        "truncated": false,
+        "warnings": [
+          "tokens are UTF-8 byte estimates (ceil(bytes/4)); no exact tokenizer accounting",
+          "proof bytes/files meter canonical notes and source/dependency payloads only; directory/component/entry counts are logical operations; operational journals/SQLite/recovery/index maintenance are separate local safety work; elapsed checks do not interrupt blocking syscalls"
+        ]
+      },
+      "question": {
+        "documents": [],
+        "evidence_set": [],
+        "graph": [],
+        "id": "missing",
+        "query_class": "unanswerable",
+        "text": "lunar greenhouse payroll"
+      },
+      "warm_ns": "100312375"
+    },
+    {
+      "cold_ns": "98090583",
+      "disk_after": {
+        "cache_logical_bytes": 782336,
+        "file_count": 39,
+        "logical_bytes": 826994
+      },
+      "disk_before": {
+        "cache_logical_bytes": 782336,
+        "file_count": 39,
+        "logical_bytes": 826994
+      },
+      "method": "relationship",
+      "process_peak_rss_bytes": 27344896,
+      "provider_usage": {
+        "basis": "cached synthetic vectors; no provider runtime/dispatcher constructed",
+        "charged_nanos": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "requests": 0
+      },
+      "quality": {
+        "citation_count": 0,
+        "citation_resolution_errors": 0,
+        "citation_validity": null,
+        "complete_evidence_set_recall": null,
+        "estimated_tokens": 0,
+        "ndcg_at_k": null,
+        "network_used": false,
+        "omissions": [],
+        "ranked_keys": [],
+        "recall_at_k": null,
+        "relevant_count": 0,
+        "rendered_bytes": 0,
+        "supported_assertion_count": 0,
+        "supported_assertion_precision": null,
+        "truncated": false,
+        "warnings": [
+          "tokens are UTF-8 byte estimates (ceil(bytes/4)); no exact tokenizer accounting",
+          "proof bytes/files meter canonical notes and source/dependency payloads only; directory/component/entry counts are logical operations; operational journals/SQLite/recovery/index maintenance are separate local safety work; elapsed checks do not interrupt blocking syscalls"
+        ]
+      },
+      "question": {
+        "documents": [
+          "knowledge/pages/rust_identifiers.md"
+        ],
+        "evidence_set": [],
+        "graph": [],
+        "id": "generic",
+        "query_class": "exact_identifiers",
+        "text": "Vec<T>"
+      },
+      "warm_ns": "91879125"
+    },
+    {
+      "cold_ns": "97685541",
+      "disk_after": {
+        "cache_logical_bytes": 782336,
+        "file_count": 39,
+        "logical_bytes": 826994
+      },
+      "disk_before": {
+        "cache_logical_bytes": 782336,
+        "file_count": 39,
+        "logical_bytes": 826994
+      },
+      "method": "relationship",
+      "process_peak_rss_bytes": 27148288,
+      "provider_usage": {
+        "basis": "cached synthetic vectors; no provider runtime/dispatcher constructed",
+        "charged_nanos": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "requests": 0
+      },
+      "quality": {
+        "citation_count": 0,
+        "citation_resolution_errors": 0,
+        "citation_validity": null,
+        "complete_evidence_set_recall": null,
+        "estimated_tokens": 0,
+        "ndcg_at_k": null,
+        "network_used": false,
+        "omissions": [],
+        "ranked_keys": [],
+        "recall_at_k": null,
+        "relevant_count": 0,
+        "rendered_bytes": 0,
+        "supported_assertion_count": 0,
+        "supported_assertion_precision": null,
+        "truncated": false,
+        "warnings": [
+          "tokens are UTF-8 byte estimates (ceil(bytes/4)); no exact tokenizer accounting",
+          "proof bytes/files meter canonical notes and source/dependency payloads only; directory/component/entry counts are logical operations; operational journals/SQLite/recovery/index maintenance are separate local safety work; elapsed checks do not interrupt blocking syscalls"
+        ]
+      },
+      "question": {
+        "documents": [
+          "knowledge/pages/rust_identifiers.md"
+        ],
+        "evidence_set": [],
+        "graph": [],
+        "id": "error",
+        "query_class": "exact_identifiers",
+        "text": "E0308"
+      },
+      "warm_ns": "91070500"
+    },
+    {
+      "cold_ns": "95629916",
+      "disk_after": {
+        "cache_logical_bytes": 782336,
+        "file_count": 39,
+        "logical_bytes": 826994
+      },
+      "disk_before": {
+        "cache_logical_bytes": 782336,
+        "file_count": 39,
+        "logical_bytes": 826994
+      },
+      "method": "relationship",
+      "process_peak_rss_bytes": 27639808,
+      "provider_usage": {
+        "basis": "cached synthetic vectors; no provider runtime/dispatcher constructed",
+        "charged_nanos": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "requests": 0
+      },
+      "quality": {
+        "citation_count": 0,
+        "citation_resolution_errors": 0,
+        "citation_validity": null,
+        "complete_evidence_set_recall": null,
+        "estimated_tokens": 0,
+        "ndcg_at_k": null,
+        "network_used": false,
+        "omissions": [],
+        "ranked_keys": [],
+        "recall_at_k": null,
+        "relevant_count": 0,
+        "rendered_bytes": 0,
+        "supported_assertion_count": 0,
+        "supported_assertion_precision": null,
+        "truncated": false,
+        "warnings": [
+          "tokens are UTF-8 byte estimates (ceil(bytes/4)); no exact tokenizer accounting",
+          "proof bytes/files meter canonical notes and source/dependency payloads only; directory/component/entry counts are logical operations; operational journals/SQLite/recovery/index maintenance are separate local safety work; elapsed checks do not interrupt blocking syscalls"
+        ]
+      },
+      "question": {
+        "documents": [
+          "knowledge/pages/rust_identifiers.md"
+        ],
+        "evidence_set": [],
+        "graph": [],
+        "id": "operator",
+        "query_class": "exact_identifiers",
+        "text": "\"OR\""
+      },
+      "warm_ns": "91795667"
+    },
+    {
+      "cold_ns": "94282750",
+      "disk_after": {
+        "cache_logical_bytes": 782336,
+        "file_count": 39,
+        "logical_bytes": 826994
+      },
+      "disk_before": {
+        "cache_logical_bytes": 782336,
+        "file_count": 39,
+        "logical_bytes": 826994
+      },
+      "method": "relationship",
+      "process_peak_rss_bytes": 27181056,
+      "provider_usage": {
+        "basis": "cached synthetic vectors; no provider runtime/dispatcher constructed",
+        "charged_nanos": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "requests": 0
+      },
+      "quality": {
+        "citation_count": 0,
+        "citation_resolution_errors": 0,
+        "citation_validity": null,
+        "complete_evidence_set_recall": null,
+        "estimated_tokens": 0,
+        "ndcg_at_k": -0.0,
+        "network_used": false,
+        "omissions": [],
+        "ranked_keys": [],
+        "recall_at_k": 0.0,
+        "relevant_count": 1,
+        "rendered_bytes": 0,
+        "supported_assertion_count": 0,
+        "supported_assertion_precision": null,
+        "truncated": false,
+        "warnings": [
+          "tokens are UTF-8 byte estimates (ceil(bytes/4)); no exact tokenizer accounting",
+          "proof bytes/files meter canonical notes and source/dependency payloads only; directory/component/entry counts are logical operations; operational journals/SQLite/recovery/index maintenance are separate local safety work; elapsed checks do not interrupt blocking syscalls"
+        ]
+      },
+      "question": {
+        "documents": [
+          "knowledge/pages/architecture.md",
+          "sources/source_00000000-0000-7000-8000-000000000005/revisions/revision_00000000-0000-7000-8000-000000000008/content.md",
+          "sources/source_00000000-0000-7000-8000-000000000006/revisions/revision_00000000-0000-7000-8000-000000000009/content.md"
+        ],
+        "evidence_set": [],
+        "graph": [
+          "assertion:assertion_00000000-0000-7000-8000-00000000000a"
+        ],
+        "id": "phrase",
+        "query_class": "paraphrases",
+        "text": "northern organization relies on southern organization"
+      },
+      "warm_ns": "91500375"
+    },
+    {
+      "cold_ns": "99075167",
+      "disk_after": {
+        "cache_logical_bytes": 782336,
+        "file_count": 39,
+        "logical_bytes": 826994
+      },
+      "disk_before": {
+        "cache_logical_bytes": 782336,
+        "file_count": 39,
+        "logical_bytes": 826994
+      },
+      "method": "relationship",
+      "process_peak_rss_bytes": 27623424,
+      "provider_usage": {
+        "basis": "cached synthetic vectors; no provider runtime/dispatcher constructed",
+        "charged_nanos": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "requests": 0
+      },
+      "quality": {
+        "citation_count": 1,
+        "citation_resolution_errors": 0,
+        "citation_validity": 1.0,
+        "complete_evidence_set_recall": null,
+        "estimated_tokens": 626,
+        "ndcg_at_k": 0.6131471927654584,
+        "network_used": false,
+        "omissions": [
+          {
+            "count": 1,
+            "path": null,
+            "reason": "required_bundle_or_passage_does_not_fit",
+            "record_id": "assertion_00000000-0000-7000-8000-00000000000a"
+          },
+          {
+            "count": 1,
+            "path": null,
+            "reason": "required_bundle_or_passage_does_not_fit",
+            "record_id": "assertion_00000000-0000-7000-8000-00000000000e"
+          },
+          {
+            "count": 1,
+            "path": null,
+            "reason": "required_bundle_or_passage_does_not_fit",
+            "record_id": "assertion_00000000-0000-7000-8000-00000000000b"
+          },
+          {
+            "count": 1,
+            "path": null,
+            "reason": "required_bundle_or_passage_does_not_fit",
+            "record_id": "assertion_00000000-0000-7000-8000-00000000000c"
+          },
+          {
+            "count": 1,
+            "path": null,
+            "reason": "required_bundle_or_passage_does_not_fit",
+            "record_id": "assertion_00000000-0000-7000-8000-000000000010"
+          }
+        ],
+        "ranked_keys": [
+          "assertion:assertion_00000000-0000-7000-8000-00000000000d"
+        ],
+        "recall_at_k": 0.5,
+        "relevant_count": 2,
+        "rendered_bytes": 2504,
+        "supported_assertion_count": 1,
+        "supported_assertion_precision": 1.0,
+        "truncated": true,
+        "warnings": [
+          "tokens are UTF-8 byte estimates (ceil(bytes/4)); no exact tokenizer accounting",
+          "proof bytes/files meter canonical notes and source/dependency payloads only; directory/component/entry counts are logical operations; operational journals/SQLite/recovery/index maintenance are separate local safety work; elapsed checks do not interrupt blocking syscalls"
+        ]
+      },
+      "question": {
+        "documents": [
+          "knowledge/entities/alex_north.md",
+          "knowledge/entities/alex_south.md"
+        ],
+        "evidence_set": [],
+        "graph": [
+          "assertion:assertion_00000000-0000-7000-8000-00000000000d",
+          "assertion:assertion_00000000-0000-7000-8000-00000000000e"
+        ],
+        "id": "homonym",
+        "query_class": "homonyms",
+        "text": "Alex Kim"
+      },
+      "warm_ns": "95793125"
+    },
+    {
+      "cold_ns": "100803000",
+      "disk_after": {
+        "cache_logical_bytes": 782336,
+        "file_count": 39,
+        "logical_bytes": 826994
+      },
+      "disk_before": {
+        "cache_logical_bytes": 782336,
+        "file_count": 39,
+        "logical_bytes": 826994
+      },
+      "method": "relationship",
+      "process_peak_rss_bytes": 27639808,
+      "provider_usage": {
+        "basis": "cached synthetic vectors; no provider runtime/dispatcher constructed",
+        "charged_nanos": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "requests": 0
+      },
+      "quality": {
+        "citation_count": 1,
+        "citation_resolution_errors": 0,
+        "citation_validity": 1.0,
+        "complete_evidence_set_recall": 0,
+        "estimated_tokens": 605,
+        "ndcg_at_k": 0.46927872602275644,
+        "network_used": false,
+        "omissions": [
+          {
+            "count": 1,
+            "path": null,
+            "reason": "required_bundle_or_passage_does_not_fit",
+            "record_id": "assertion_00000000-0000-7000-8000-00000000000a"
+          },
+          {
+            "count": 1,
+            "path": null,
+            "reason": "required_bundle_or_passage_does_not_fit",
+            "record_id": "assertion_00000000-0000-7000-8000-00000000000c"
+          },
+          {
+            "count": 1,
+            "path": null,
+            "reason": "required_bundle_or_passage_does_not_fit",
+            "record_id": "assertion_00000000-0000-7000-8000-00000000000d"
+          },
+          {
+            "count": 1,
+            "path": null,
+            "reason": "required_bundle_or_passage_does_not_fit",
+            "record_id": "assertion_00000000-0000-7000-8000-00000000000e"
+          },
+          {
+            "count": 1,
+            "path": null,
+            "reason": "required_bundle_or_passage_does_not_fit",
+            "record_id": "assertion_00000000-0000-7000-8000-000000000010"
+          }
+        ],
+        "ranked_keys": [
+          "assertion:assertion_00000000-0000-7000-8000-00000000000b"
+        ],
+        "recall_at_k": 0.3333333333333333,
+        "relevant_count": 3,
+        "rendered_bytes": 2417,
+        "supported_assertion_count": 1,
+        "supported_assertion_precision": 1.0,
+        "truncated": true,
+        "warnings": [
+          "tokens are UTF-8 byte estimates (ceil(bytes/4)); no exact tokenizer accounting",
+          "proof bytes/files meter canonical notes and source/dependency payloads only; directory/component/entry counts are logical operations; operational journals/SQLite/recovery/index maintenance are separate local safety work; elapsed checks do not interrupt blocking syscalls"
+        ]
+      },
+      "question": {
+        "documents": [
+          "sources/source_00000000-0000-7000-8000-000000000005/revisions/revision_00000000-0000-7000-8000-000000000008/content.md",
+          "sources/source_00000000-0000-7000-8000-000000000006/revisions/revision_00000000-0000-7000-8000-000000000009/content.md",
+          "knowledge/pages/architecture.md"
+        ],
+        "evidence_set": [
+          "evidence_00000000-0000-7000-8000-000000000012",
+          "evidence_00000000-0000-7000-8000-000000000013"
+        ],
+        "graph": [
+          "assertion:assertion_00000000-0000-7000-8000-00000000000a",
+          "assertion:assertion_00000000-0000-7000-8000-00000000000b",
+          "assertion:assertion_00000000-0000-7000-8000-00000000000c"
+        ],
+        "id": "multi",
+        "query_class": "multi_document_evidence",
+        "text": "uses"
+      },
+      "warm_ns": "95232541"
+    },
+    {
+      "cold_ns": "97029750",
+      "disk_after": {
+        "cache_logical_bytes": 782336,
+        "file_count": 39,
+        "logical_bytes": 826994
+      },
+      "disk_before": {
+        "cache_logical_bytes": 782336,
+        "file_count": 39,
+        "logical_bytes": 826994
+      },
+      "method": "relationship",
+      "process_peak_rss_bytes": 27295744,
+      "provider_usage": {
+        "basis": "cached synthetic vectors; no provider runtime/dispatcher constructed",
+        "charged_nanos": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "requests": 0
+      },
+      "quality": {
+        "citation_count": 0,
+        "citation_resolution_errors": 0,
+        "citation_validity": null,
+        "complete_evidence_set_recall": null,
+        "estimated_tokens": 0,
+        "ndcg_at_k": null,
+        "network_used": false,
+        "omissions": [],
+        "ranked_keys": [],
+        "recall_at_k": null,
+        "relevant_count": 0,
+        "rendered_bytes": 0,
+        "supported_assertion_count": 0,
+        "supported_assertion_precision": null,
+        "truncated": false,
+        "warnings": [
+          "tokens are UTF-8 byte estimates (ceil(bytes/4)); no exact tokenizer accounting",
+          "proof bytes/files meter canonical notes and source/dependency payloads only; directory/component/entry counts are logical operations; operational journals/SQLite/recovery/index maintenance are separate local safety work; elapsed checks do not interrupt blocking syscalls"
+        ]
+      },
+      "question": {
+        "documents": [],
+        "evidence_set": [],
+        "graph": [],
+        "id": "stale",
+        "query_class": "stale_knowledge",
+        "text": "maintains"
+      },
+      "warm_ns": "91680209"
+    },
+    {
+      "cold_ns": "94604167",
+      "disk_after": {
+        "cache_logical_bytes": 782336,
+        "file_count": 39,
+        "logical_bytes": 826994
+      },
+      "disk_before": {
+        "cache_logical_bytes": 782336,
+        "file_count": 39,
+        "logical_bytes": 826994
+      },
+      "method": "relationship",
+      "process_peak_rss_bytes": 27492352,
+      "provider_usage": {
+        "basis": "cached synthetic vectors; no provider runtime/dispatcher constructed",
+        "charged_nanos": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "requests": 0
+      },
+      "quality": {
+        "citation_count": 0,
+        "citation_resolution_errors": 0,
+        "citation_validity": null,
+        "complete_evidence_set_recall": null,
+        "estimated_tokens": 0,
+        "ndcg_at_k": null,
+        "network_used": false,
+        "omissions": [],
+        "ranked_keys": [],
+        "recall_at_k": null,
+        "relevant_count": 0,
+        "rendered_bytes": 0,
+        "supported_assertion_count": 0,
+        "supported_assertion_precision": null,
+        "truncated": false,
+        "warnings": [
+          "tokens are UTF-8 byte estimates (ceil(bytes/4)); no exact tokenizer accounting",
+          "proof bytes/files meter canonical notes and source/dependency payloads only; directory/component/entry counts are logical operations; operational journals/SQLite/recovery/index maintenance are separate local safety work; elapsed checks do not interrupt blocking syscalls"
+        ]
+      },
+      "question": {
+        "documents": [],
+        "evidence_set": [],
+        "graph": [],
+        "id": "missing",
+        "query_class": "unanswerable",
+        "text": "lunar greenhouse payroll"
+      },
+      "warm_ns": "92110667"
+    },
+    {
+      "cold_ns": "111989958",
+      "disk_after": {
+        "cache_logical_bytes": 815104,
+        "file_count": 41,
+        "logical_bytes": 859762
+      },
+      "disk_before": {
+        "cache_logical_bytes": 782336,
+        "file_count": 39,
+        "logical_bytes": 826994
+      },
+      "method": "hybrid",
+      "process_peak_rss_bytes": 28295168,
+      "provider_usage": {
+        "basis": "cached synthetic vectors; no provider runtime/dispatcher constructed",
+        "charged_nanos": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "requests": 0
+      },
+      "quality": {
+        "citation_count": 2,
+        "citation_resolution_errors": 0,
+        "citation_validity": 1.0,
+        "complete_evidence_set_recall": null,
+        "estimated_tokens": 506,
+        "ndcg_at_k": 0.5,
+        "network_used": false,
+        "omissions": [
+          {
+            "count": 1,
+            "path": null,
+            "reason": "required_bundle_or_passage_does_not_fit",
+            "record_id": "assertion_00000000-0000-7000-8000-00000000000a"
+          },
+          {
+            "count": 1,
+            "path": null,
+            "reason": "combined_graph_share_cap",
+            "record_id": "assertion_00000000-0000-7000-8000-00000000000b"
+          },
+          {
+            "count": 1,
+            "path": null,
+            "reason": "combined_graph_share_cap",
+            "record_id": "assertion_00000000-0000-7000-8000-00000000000c"
+          },
+          {
+            "count": 1,
+            "path": null,
+            "reason": "combined_graph_share_cap",
+            "record_id": "assertion_00000000-0000-7000-8000-000000000010"
+          },
+          {
+            "count": 1,
+            "path": null,
+            "reason": "combined_graph_share_cap",
+            "record_id": "assertion_00000000-0000-7000-8000-00000000000d"
+          },
+          {
+            "count": 1,
+            "path": null,
+            "reason": "combined_graph_share_cap",
+            "record_id": "assertion_00000000-0000-7000-8000-00000000000e"
+          }
+        ],
+        "ranked_keys": [
+          "sources/source_00000000-0000-7000-8000-000000000005/revisions/revision_00000000-0000-7000-8000-000000000008/content.md",
+          "sources/source_00000000-0000-7000-8000-000000000006/revisions/revision_00000000-0000-7000-8000-000000000009/content.md",
+          "knowledge/pages/rust_identifiers.md",
+          "knowledge/pages/architecture.md"
+        ],
+        "recall_at_k": 1.0,
+        "relevant_count": 1,
+        "rendered_bytes": 2022,
+        "supported_assertion_count": 0,
+        "supported_assertion_precision": null,
+        "truncated": true,
+        "warnings": [
+          "tokens are UTF-8 byte estimates (ceil(bytes/4)); no exact tokenizer accounting",
+          "proof bytes/files meter canonical notes and source/dependency payloads only; directory/component/entry counts are logical operations; operational journals/SQLite/recovery/index maintenance are separate local safety work; elapsed checks do not interrupt blocking syscalls"
+        ]
+      },
+      "question": {
+        "documents": [
+          "knowledge/pages/rust_identifiers.md"
+        ],
+        "evidence_set": [],
+        "graph": [],
+        "id": "generic",
+        "query_class": "exact_identifiers",
+        "text": "Vec<T>"
+      },
+      "warm_ns": "109097084"
+    },
+    {
+      "cold_ns": "112407042",
+      "disk_after": {
+        "cache_logical_bytes": 815104,
+        "file_count": 41,
+        "logical_bytes": 859762
+      },
+      "disk_before": {
+        "cache_logical_bytes": 782336,
+        "file_count": 39,
+        "logical_bytes": 826994
+      },
+      "method": "hybrid",
+      "process_peak_rss_bytes": 27852800,
+      "provider_usage": {
+        "basis": "cached synthetic vectors; no provider runtime/dispatcher constructed",
+        "charged_nanos": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "requests": 0
+      },
+      "quality": {
+        "citation_count": 2,
+        "citation_resolution_errors": 0,
+        "citation_validity": 1.0,
+        "complete_evidence_set_recall": null,
+        "estimated_tokens": 506,
+        "ndcg_at_k": 0.5,
+        "network_used": false,
+        "omissions": [
+          {
+            "count": 1,
+            "path": null,
+            "reason": "required_bundle_or_passage_does_not_fit",
+            "record_id": "assertion_00000000-0000-7000-8000-00000000000a"
+          },
+          {
+            "count": 1,
+            "path": null,
+            "reason": "combined_graph_share_cap",
+            "record_id": "assertion_00000000-0000-7000-8000-00000000000d"
+          },
+          {
+            "count": 1,
+            "path": null,
+            "reason": "combined_graph_share_cap",
+            "record_id": "assertion_00000000-0000-7000-8000-00000000000e"
+          },
+          {
+            "count": 1,
+            "path": null,
+            "reason": "combined_graph_share_cap",
+            "record_id": "assertion_00000000-0000-7000-8000-00000000000b"
+          },
+          {
+            "count": 1,
+            "path": null,
+            "reason": "combined_graph_share_cap",
+            "record_id": "assertion_00000000-0000-7000-8000-00000000000c"
+          },
+          {
+            "count": 1,
+            "path": null,
+            "reason": "combined_graph_share_cap",
+            "record_id": "assertion_00000000-0000-7000-8000-000000000010"
+          }
+        ],
+        "ranked_keys": [
+          "sources/source_00000000-0000-7000-8000-000000000006/revisions/revision_00000000-0000-7000-8000-000000000009/content.md",
+          "sources/source_00000000-0000-7000-8000-000000000005/revisions/revision_00000000-0000-7000-8000-000000000008/content.md",
+          "knowledge/pages/rust_identifiers.md",
+          "knowledge/pages/architecture.md"
+        ],
+        "recall_at_k": 1.0,
+        "relevant_count": 1,
+        "rendered_bytes": 2022,
+        "supported_assertion_count": 0,
+        "supported_assertion_precision": null,
+        "truncated": true,
+        "warnings": [
+          "tokens are UTF-8 byte estimates (ceil(bytes/4)); no exact tokenizer accounting",
+          "proof bytes/files meter canonical notes and source/dependency payloads only; directory/component/entry counts are logical operations; operational journals/SQLite/recovery/index maintenance are separate local safety work; elapsed checks do not interrupt blocking syscalls"
+        ]
+      },
+      "question": {
+        "documents": [
+          "knowledge/pages/rust_identifiers.md"
+        ],
+        "evidence_set": [],
+        "graph": [],
+        "id": "error",
+        "query_class": "exact_identifiers",
+        "text": "E0308"
+      },
+      "warm_ns": "107823709"
+    },
+    {
+      "cold_ns": "113647375",
+      "disk_after": {
+        "cache_logical_bytes": 815104,
+        "file_count": 41,
+        "logical_bytes": 859762
+      },
+      "disk_before": {
+        "cache_logical_bytes": 782336,
+        "file_count": 39,
+        "logical_bytes": 826994
+      },
+      "method": "hybrid",
+      "process_peak_rss_bytes": 28524544,
+      "provider_usage": {
+        "basis": "cached synthetic vectors; no provider runtime/dispatcher constructed",
+        "charged_nanos": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "requests": 0
+      },
+      "quality": {
+        "citation_count": 2,
+        "citation_resolution_errors": 0,
+        "citation_validity": 1.0,
+        "complete_evidence_set_recall": null,
+        "estimated_tokens": 506,
+        "ndcg_at_k": 0.5,
+        "network_used": false,
+        "omissions": [
+          {
+            "count": 1,
+            "path": null,
+            "reason": "required_bundle_or_passage_does_not_fit",
+            "record_id": "assertion_00000000-0000-7000-8000-00000000000a"
+          },
+          {
+            "count": 1,
+            "path": null,
+            "reason": "combined_graph_share_cap",
+            "record_id": "assertion_00000000-0000-7000-8000-00000000000d"
+          },
+          {
+            "count": 1,
+            "path": null,
+            "reason": "combined_graph_share_cap",
+            "record_id": "assertion_00000000-0000-7000-8000-00000000000e"
+          },
+          {
+            "count": 1,
+            "path": null,
+            "reason": "combined_graph_share_cap",
+            "record_id": "assertion_00000000-0000-7000-8000-00000000000b"
+          },
+          {
+            "count": 1,
+            "path": null,
+            "reason": "combined_graph_share_cap",
+            "record_id": "assertion_00000000-0000-7000-8000-00000000000c"
+          },
+          {
+            "count": 1,
+            "path": null,
+            "reason": "combined_graph_share_cap",
+            "record_id": "assertion_00000000-0000-7000-8000-000000000010"
+          }
+        ],
+        "ranked_keys": [
+          "sources/source_00000000-0000-7000-8000-000000000006/revisions/revision_00000000-0000-7000-8000-000000000009/content.md",
+          "sources/source_00000000-0000-7000-8000-000000000005/revisions/revision_00000000-0000-7000-8000-000000000008/content.md",
+          "knowledge/pages/rust_identifiers.md",
+          "knowledge/pages/architecture.md"
+        ],
+        "recall_at_k": 1.0,
+        "relevant_count": 1,
+        "rendered_bytes": 2022,
+        "supported_assertion_count": 0,
+        "supported_assertion_precision": null,
+        "truncated": true,
+        "warnings": [
+          "tokens are UTF-8 byte estimates (ceil(bytes/4)); no exact tokenizer accounting",
+          "proof bytes/files meter canonical notes and source/dependency payloads only; directory/component/entry counts are logical operations; operational journals/SQLite/recovery/index maintenance are separate local safety work; elapsed checks do not interrupt blocking syscalls"
+        ]
+      },
+      "question": {
+        "documents": [
+          "knowledge/pages/rust_identifiers.md"
+        ],
+        "evidence_set": [],
+        "graph": [],
+        "id": "operator",
+        "query_class": "exact_identifiers",
+        "text": "\"OR\""
+      },
+      "warm_ns": "108456958"
+    },
+    {
+      "cold_ns": "114024167",
+      "disk_after": {
+        "cache_logical_bytes": 815104,
+        "file_count": 41,
+        "logical_bytes": 859762
+      },
+      "disk_before": {
+        "cache_logical_bytes": 782336,
+        "file_count": 39,
+        "logical_bytes": 826994
+      },
+      "method": "hybrid",
+      "process_peak_rss_bytes": 28246016,
+      "provider_usage": {
+        "basis": "cached synthetic vectors; no provider runtime/dispatcher constructed",
+        "charged_nanos": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "requests": 0
+      },
+      "quality": {
+        "citation_count": 2,
+        "citation_resolution_errors": 0,
+        "citation_validity": 1.0,
+        "complete_evidence_set_recall": null,
+        "estimated_tokens": 509,
+        "ndcg_at_k": 0.8048099750039491,
+        "network_used": false,
+        "omissions": [
+          {
+            "count": 1,
+            "path": null,
+            "reason": "required_bundle_or_passage_does_not_fit",
+            "record_id": "assertion_00000000-0000-7000-8000-00000000000a"
+          },
+          {
+            "count": 1,
+            "path": null,
+            "reason": "combined_graph_share_cap",
+            "record_id": "assertion_00000000-0000-7000-8000-00000000000b"
+          },
+          {
+            "count": 1,
+            "path": null,
+            "reason": "combined_graph_share_cap",
+            "record_id": "assertion_00000000-0000-7000-8000-00000000000c"
+          },
+          {
+            "count": 1,
+            "path": null,
+            "reason": "combined_graph_share_cap",
+            "record_id": "assertion_00000000-0000-7000-8000-000000000010"
+          },
+          {
+            "count": 1,
+            "path": null,
+            "reason": "combined_graph_share_cap",
+            "record_id": "assertion_00000000-0000-7000-8000-00000000000d"
+          },
+          {
+            "count": 1,
+            "path": null,
+            "reason": "combined_graph_share_cap",
+            "record_id": "assertion_00000000-0000-7000-8000-00000000000e"
+          }
+        ],
+        "ranked_keys": [
+          "sources/source_00000000-0000-7000-8000-000000000005/revisions/revision_00000000-0000-7000-8000-000000000008/content.md",
+          "sources/source_00000000-0000-7000-8000-000000000006/revisions/revision_00000000-0000-7000-8000-000000000009/content.md",
+          "knowledge/pages/rust_identifiers.md",
+          "knowledge/pages/architecture.md"
+        ],
+        "recall_at_k": 0.75,
+        "relevant_count": 4,
+        "rendered_bytes": 2034,
+        "supported_assertion_count": 0,
+        "supported_assertion_precision": null,
+        "truncated": true,
+        "warnings": [
+          "tokens are UTF-8 byte estimates (ceil(bytes/4)); no exact tokenizer accounting",
+          "proof bytes/files meter canonical notes and source/dependency payloads only; directory/component/entry counts are logical operations; operational journals/SQLite/recovery/index maintenance are separate local safety work; elapsed checks do not interrupt blocking syscalls"
+        ]
+      },
+      "question": {
+        "documents": [
+          "knowledge/pages/architecture.md",
+          "sources/source_00000000-0000-7000-8000-000000000005/revisions/revision_00000000-0000-7000-8000-000000000008/content.md",
+          "sources/source_00000000-0000-7000-8000-000000000006/revisions/revision_00000000-0000-7000-8000-000000000009/content.md"
+        ],
+        "evidence_set": [],
+        "graph": [
+          "assertion:assertion_00000000-0000-7000-8000-00000000000a"
+        ],
+        "id": "phrase",
+        "query_class": "paraphrases",
+        "text": "northern organization relies on southern organization"
+      },
+      "warm_ns": "108400291"
+    },
+    {
+      "cold_ns": "113184625",
+      "disk_after": {
+        "cache_logical_bytes": 815104,
+        "file_count": 41,
+        "logical_bytes": 859762
+      },
+      "disk_before": {
+        "cache_logical_bytes": 782336,
+        "file_count": 39,
+        "logical_bytes": 826994
+      },
+      "method": "hybrid",
+      "process_peak_rss_bytes": 28524544,
+      "provider_usage": {
+        "basis": "cached synthetic vectors; no provider runtime/dispatcher constructed",
+        "charged_nanos": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "requests": 0
+      },
+      "quality": {
+        "citation_count": 2,
+        "citation_resolution_errors": 0,
+        "citation_validity": 1.0,
+        "complete_evidence_set_recall": null,
+        "estimated_tokens": 506,
+        "ndcg_at_k": -0.0,
+        "network_used": false,
+        "omissions": [
+          {
+            "count": 1,
+            "path": null,
+            "reason": "required_bundle_or_passage_does_not_fit",
+            "record_id": "assertion_00000000-0000-7000-8000-00000000000a"
+          },
+          {
+            "count": 1,
+            "path": null,
+            "reason": "combined_graph_share_cap",
+            "record_id": "assertion_00000000-0000-7000-8000-00000000000b"
+          },
+          {
+            "count": 1,
+            "path": null,
+            "reason": "combined_graph_share_cap",
+            "record_id": "assertion_00000000-0000-7000-8000-00000000000c"
+          },
+          {
+            "count": 1,
+            "path": null,
+            "reason": "combined_graph_share_cap",
+            "record_id": "assertion_00000000-0000-7000-8000-000000000010"
+          },
+          {
+            "count": 1,
+            "path": null,
+            "reason": "combined_graph_share_cap",
+            "record_id": "assertion_00000000-0000-7000-8000-00000000000d"
+          },
+          {
+            "count": 1,
+            "path": null,
+            "reason": "combined_graph_share_cap",
+            "record_id": "assertion_00000000-0000-7000-8000-00000000000e"
+          }
+        ],
+        "ranked_keys": [
+          "sources/source_00000000-0000-7000-8000-000000000005/revisions/revision_00000000-0000-7000-8000-000000000008/content.md",
+          "sources/source_00000000-0000-7000-8000-000000000006/revisions/revision_00000000-0000-7000-8000-000000000009/content.md",
+          "knowledge/pages/rust_identifiers.md",
+          "knowledge/pages/architecture.md"
+        ],
+        "recall_at_k": 0.0,
+        "relevant_count": 4,
+        "rendered_bytes": 2022,
+        "supported_assertion_count": 0,
+        "supported_assertion_precision": null,
+        "truncated": true,
+        "warnings": [
+          "tokens are UTF-8 byte estimates (ceil(bytes/4)); no exact tokenizer accounting",
+          "proof bytes/files meter canonical notes and source/dependency payloads only; directory/component/entry counts are logical operations; operational journals/SQLite/recovery/index maintenance are separate local safety work; elapsed checks do not interrupt blocking syscalls"
+        ]
+      },
+      "question": {
+        "documents": [
+          "knowledge/entities/alex_north.md",
+          "knowledge/entities/alex_south.md"
+        ],
+        "evidence_set": [],
+        "graph": [
+          "assertion:assertion_00000000-0000-7000-8000-00000000000d",
+          "assertion:assertion_00000000-0000-7000-8000-00000000000e"
+        ],
+        "id": "homonym",
+        "query_class": "homonyms",
+        "text": "Alex Kim"
+      },
+      "warm_ns": "110888000"
+    },
+    {
+      "cold_ns": "114173083",
+      "disk_after": {
+        "cache_logical_bytes": 815104,
+        "file_count": 41,
+        "logical_bytes": 859762
+      },
+      "disk_before": {
+        "cache_logical_bytes": 782336,
+        "file_count": 39,
+        "logical_bytes": 826994
+      },
+      "method": "hybrid",
+      "process_peak_rss_bytes": 28000256,
+      "provider_usage": {
+        "basis": "cached synthetic vectors; no provider runtime/dispatcher constructed",
+        "charged_nanos": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "requests": 0
+      },
+      "quality": {
+        "citation_count": 2,
+        "citation_resolution_errors": 0,
+        "citation_validity": 1.0,
+        "complete_evidence_set_recall": 1,
+        "estimated_tokens": 506,
+        "ndcg_at_k": 0.644824486427155,
+        "network_used": false,
+        "omissions": [
+          {
+            "count": 1,
+            "path": null,
+            "reason": "required_bundle_or_passage_does_not_fit",
+            "record_id": "assertion_00000000-0000-7000-8000-00000000000a"
+          },
+          {
+            "count": 1,
+            "path": null,
+            "reason": "combined_graph_share_cap",
+            "record_id": "assertion_00000000-0000-7000-8000-00000000000b"
+          },
+          {
+            "count": 1,
+            "path": null,
+            "reason": "combined_graph_share_cap",
+            "record_id": "assertion_00000000-0000-7000-8000-00000000000c"
+          },
+          {
+            "count": 1,
+            "path": null,
+            "reason": "combined_graph_share_cap",
+            "record_id": "assertion_00000000-0000-7000-8000-00000000000d"
+          },
+          {
+            "count": 1,
+            "path": null,
+            "reason": "combined_graph_share_cap",
+            "record_id": "assertion_00000000-0000-7000-8000-00000000000e"
+          },
+          {
+            "count": 1,
+            "path": null,
+            "reason": "combined_graph_share_cap",
+            "record_id": "assertion_00000000-0000-7000-8000-000000000010"
+          }
+        ],
+        "ranked_keys": [
+          "sources/source_00000000-0000-7000-8000-000000000005/revisions/revision_00000000-0000-7000-8000-000000000008/content.md",
+          "sources/source_00000000-0000-7000-8000-000000000006/revisions/revision_00000000-0000-7000-8000-000000000009/content.md",
+          "knowledge/pages/architecture.md",
+          "knowledge/pages/rust_identifiers.md"
+        ],
+        "recall_at_k": 0.5,
+        "relevant_count": 6,
+        "rendered_bytes": 2022,
+        "supported_assertion_count": 0,
+        "supported_assertion_precision": null,
+        "truncated": true,
+        "warnings": [
+          "tokens are UTF-8 byte estimates (ceil(bytes/4)); no exact tokenizer accounting",
+          "proof bytes/files meter canonical notes and source/dependency payloads only; directory/component/entry counts are logical operations; operational journals/SQLite/recovery/index maintenance are separate local safety work; elapsed checks do not interrupt blocking syscalls"
+        ]
+      },
+      "question": {
+        "documents": [
+          "sources/source_00000000-0000-7000-8000-000000000005/revisions/revision_00000000-0000-7000-8000-000000000008/content.md",
+          "sources/source_00000000-0000-7000-8000-000000000006/revisions/revision_00000000-0000-7000-8000-000000000009/content.md",
+          "knowledge/pages/architecture.md"
+        ],
+        "evidence_set": [
+          "evidence_00000000-0000-7000-8000-000000000012",
+          "evidence_00000000-0000-7000-8000-000000000013"
+        ],
+        "graph": [
+          "assertion:assertion_00000000-0000-7000-8000-00000000000a",
+          "assertion:assertion_00000000-0000-7000-8000-00000000000b",
+          "assertion:assertion_00000000-0000-7000-8000-00000000000c"
+        ],
+        "id": "multi",
+        "query_class": "multi_document_evidence",
+        "text": "uses"
+      },
+      "warm_ns": "110043334"
+    },
+    {
+      "cold_ns": "113154291",
+      "disk_after": {
+        "cache_logical_bytes": 815104,
+        "file_count": 41,
+        "logical_bytes": 859762
+      },
+      "disk_before": {
+        "cache_logical_bytes": 782336,
+        "file_count": 39,
+        "logical_bytes": 826994
+      },
+      "method": "hybrid",
+      "process_peak_rss_bytes": 28000256,
+      "provider_usage": {
+        "basis": "cached synthetic vectors; no provider runtime/dispatcher constructed",
+        "charged_nanos": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "requests": 0
+      },
+      "quality": {
+        "citation_count": 2,
+        "citation_resolution_errors": 0,
+        "citation_validity": 1.0,
+        "complete_evidence_set_recall": null,
+        "estimated_tokens": 506,
+        "ndcg_at_k": null,
+        "network_used": false,
+        "omissions": [
+          {
+            "count": 1,
+            "path": null,
+            "reason": "required_bundle_or_passage_does_not_fit",
+            "record_id": "assertion_00000000-0000-7000-8000-00000000000a"
+          },
+          {
+            "count": 1,
+            "path": null,
+            "reason": "combined_graph_share_cap",
+            "record_id": "assertion_00000000-0000-7000-8000-00000000000d"
+          },
+          {
+            "count": 1,
+            "path": null,
+            "reason": "combined_graph_share_cap",
+            "record_id": "assertion_00000000-0000-7000-8000-00000000000e"
+          },
+          {
+            "count": 1,
+            "path": null,
+            "reason": "combined_graph_share_cap",
+            "record_id": "assertion_00000000-0000-7000-8000-00000000000b"
+          },
+          {
+            "count": 1,
+            "path": null,
+            "reason": "combined_graph_share_cap",
+            "record_id": "assertion_00000000-0000-7000-8000-00000000000c"
+          },
+          {
+            "count": 1,
+            "path": null,
+            "reason": "combined_graph_share_cap",
+            "record_id": "assertion_00000000-0000-7000-8000-000000000010"
+          }
+        ],
+        "ranked_keys": [
+          "sources/source_00000000-0000-7000-8000-000000000006/revisions/revision_00000000-0000-7000-8000-000000000009/content.md",
+          "sources/source_00000000-0000-7000-8000-000000000005/revisions/revision_00000000-0000-7000-8000-000000000008/content.md",
+          "knowledge/pages/architecture.md",
+          "knowledge/pages/rust_identifiers.md"
+        ],
+        "recall_at_k": null,
+        "relevant_count": 0,
+        "rendered_bytes": 2022,
+        "supported_assertion_count": 0,
+        "supported_assertion_precision": null,
+        "truncated": true,
+        "warnings": [
+          "tokens are UTF-8 byte estimates (ceil(bytes/4)); no exact tokenizer accounting",
+          "proof bytes/files meter canonical notes and source/dependency payloads only; directory/component/entry counts are logical operations; operational journals/SQLite/recovery/index maintenance are separate local safety work; elapsed checks do not interrupt blocking syscalls"
+        ]
+      },
+      "question": {
+        "documents": [],
+        "evidence_set": [],
+        "graph": [],
+        "id": "stale",
+        "query_class": "stale_knowledge",
+        "text": "maintains"
+      },
+      "warm_ns": "108875750"
+    },
+    {
+      "cold_ns": "113214416",
+      "disk_after": {
+        "cache_logical_bytes": 815104,
+        "file_count": 41,
+        "logical_bytes": 859762
+      },
+      "disk_before": {
+        "cache_logical_bytes": 782336,
+        "file_count": 39,
+        "logical_bytes": 826994
+      },
+      "method": "hybrid",
+      "process_peak_rss_bytes": 28147712,
+      "provider_usage": {
+        "basis": "cached synthetic vectors; no provider runtime/dispatcher constructed",
+        "charged_nanos": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "requests": 0
+      },
+      "quality": {
+        "citation_count": 2,
+        "citation_resolution_errors": 0,
+        "citation_validity": 1.0,
+        "complete_evidence_set_recall": null,
+        "estimated_tokens": 509,
+        "ndcg_at_k": null,
+        "network_used": false,
+        "omissions": [
+          {
+            "count": 1,
+            "path": null,
+            "reason": "required_bundle_or_passage_does_not_fit",
+            "record_id": "assertion_00000000-0000-7000-8000-00000000000a"
+          },
+          {
+            "count": 1,
+            "path": null,
+            "reason": "combined_graph_share_cap",
+            "record_id": "assertion_00000000-0000-7000-8000-00000000000b"
+          },
+          {
+            "count": 1,
+            "path": null,
+            "reason": "combined_graph_share_cap",
+            "record_id": "assertion_00000000-0000-7000-8000-00000000000c"
+          },
+          {
+            "count": 1,
+            "path": null,
+            "reason": "combined_graph_share_cap",
+            "record_id": "assertion_00000000-0000-7000-8000-00000000000d"
+          },
+          {
+            "count": 1,
+            "path": null,
+            "reason": "combined_graph_share_cap",
+            "record_id": "assertion_00000000-0000-7000-8000-00000000000e"
+          },
+          {
+            "count": 1,
+            "path": null,
+            "reason": "combined_graph_share_cap",
+            "record_id": "assertion_00000000-0000-7000-8000-000000000010"
+          }
+        ],
+        "ranked_keys": [
+          "sources/source_00000000-0000-7000-8000-000000000005/revisions/revision_00000000-0000-7000-8000-000000000008/content.md",
+          "sources/source_00000000-0000-7000-8000-000000000006/revisions/revision_00000000-0000-7000-8000-000000000009/content.md",
+          "knowledge/pages/rust_identifiers.md",
+          "knowledge/pages/architecture.md"
+        ],
+        "recall_at_k": null,
+        "relevant_count": 0,
+        "rendered_bytes": 2034,
+        "supported_assertion_count": 0,
+        "supported_assertion_precision": null,
+        "truncated": true,
+        "warnings": [
+          "tokens are UTF-8 byte estimates (ceil(bytes/4)); no exact tokenizer accounting",
+          "proof bytes/files meter canonical notes and source/dependency payloads only; directory/component/entry counts are logical operations; operational journals/SQLite/recovery/index maintenance are separate local safety work; elapsed checks do not interrupt blocking syscalls"
+        ]
+      },
+      "question": {
+        "documents": [],
+        "evidence_set": [],
+        "graph": [],
+        "id": "missing",
+        "query_class": "unanswerable",
+        "text": "lunar greenhouse payroll"
+      },
+      "warm_ns": "111206666"
+    }
+  ],
+  "version": 1
+}

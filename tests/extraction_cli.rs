@@ -231,6 +231,7 @@ fn cli_invalid_response_stages_nothing_and_conflicting_new_is_explicit() {
     );
     assert_ne!(first["extraction"], second["extraction"]);
     assert_eq!(second["coverage"]["unresolved"], 1);
+    let before = tree(root);
     let (exit, error) = invoke(
         root,
         &[
@@ -243,5 +244,7 @@ fn cli_invalid_response_stages_nothing_and_conflicting_new_is_explicit() {
         ],
         None,
     );
-    assert_eq!(exit, 6, "{error}");
+    assert_eq!(exit, 2, "{error}");
+    assert_eq!(error["error"]["code"], "CONFIG_INVALID");
+    assert_eq!(tree(root), before);
 }

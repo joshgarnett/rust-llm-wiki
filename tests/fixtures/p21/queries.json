@@ -1,0 +1,95 @@
+[
+  {
+    "id": "generic",
+    "query_class": "exact_identifiers",
+    "text": "Vec<T>",
+    "documents": [
+      "knowledge/pages/rust_identifiers.md"
+    ],
+    "graph": [],
+    "evidence_set": []
+  },
+  {
+    "id": "error",
+    "query_class": "exact_identifiers",
+    "text": "E0308",
+    "documents": [
+      "knowledge/pages/rust_identifiers.md"
+    ],
+    "graph": [],
+    "evidence_set": []
+  },
+  {
+    "id": "operator",
+    "query_class": "exact_identifiers",
+    "text": "\"OR\"",
+    "documents": [
+      "knowledge/pages/rust_identifiers.md"
+    ],
+    "graph": [],
+    "evidence_set": []
+  },
+  {
+    "id": "phrase",
+    "query_class": "paraphrases",
+    "text": "northern organization relies on southern organization",
+    "documents": [
+      "knowledge/pages/architecture.md",
+      "sources/source_00000000-0000-7000-8000-000000000005/revisions/revision_00000000-0000-7000-8000-000000000008/content.md",
+      "sources/source_00000000-0000-7000-8000-000000000006/revisions/revision_00000000-0000-7000-8000-000000000009/content.md"
+    ],
+    "graph": [
+      "assertion:assertion_00000000-0000-7000-8000-00000000000a"
+    ],
+    "evidence_set": []
+  },
+  {
+    "id": "homonym",
+    "query_class": "homonyms",
+    "text": "Alex Kim",
+    "documents": [
+      "knowledge/entities/alex_north.md",
+      "knowledge/entities/alex_south.md"
+    ],
+    "graph": [
+      "assertion:assertion_00000000-0000-7000-8000-00000000000d",
+      "assertion:assertion_00000000-0000-7000-8000-00000000000e"
+    ],
+    "evidence_set": []
+  },
+  {
+    "id": "multi",
+    "query_class": "multi_document_evidence",
+    "text": "uses",
+    "documents": [
+      "sources/source_00000000-0000-7000-8000-000000000005/revisions/revision_00000000-0000-7000-8000-000000000008/content.md",
+      "sources/source_00000000-0000-7000-8000-000000000006/revisions/revision_00000000-0000-7000-8000-000000000009/content.md",
+      "knowledge/pages/architecture.md"
+    ],
+    "graph": [
+      "assertion:assertion_00000000-0000-7000-8000-00000000000a",
+      "assertion:assertion_00000000-0000-7000-8000-00000000000b",
+      "assertion:assertion_00000000-0000-7000-8000-00000000000c"
+    ],
+    "evidence_set": [
+      "evidence_00000000-0000-7000-8000-000000000012",
+      "evidence_00000000-0000-7000-8000-000000000013"
+    ]
+  },
+  {
+    "id": "stale",
+    "query_class": "stale_knowledge",
+    "text": "maintains",
+    "documents": [],
+    "graph": [],
+    "evidence_set": []
+  },
+  {
+    "id": "missing",
+    "query_class": "unanswerable",
+    "text": "lunar greenhouse payroll",
+    "documents": [],
+    "graph": [],
+    "evidence_set": []
+  }
+]

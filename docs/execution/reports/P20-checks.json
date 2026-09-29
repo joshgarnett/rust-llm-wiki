@@ -2,7 +2,7 @@
   "package": "P20",
   "status": "locally accepted; external qualification pending",
   "base_commit": "809e119aefa781ad7737c575d43acbaae104ad2b",
-  "accepted_commit": null,
+  "accepted_commit": "f4dcf084b75e38d54637dc05b347127f9e7603a4",
   "source_hashes": {
     "Cargo.lock": "e1b6f04e0fd93af2c758fb1210d90627033f20df4b66b0a3c0eba9a968f72def",
     "Cargo.toml": "63f9dc7c4a3073d388258e93351bb802a6ef2d5e70aceff3b6e2915f7c2757fb",
