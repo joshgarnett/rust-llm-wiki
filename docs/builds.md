@@ -94,7 +94,8 @@ decisions remain in [external qualification](qualification.md).
 - `CI` runs on pull requests, pushes to `main`, and manual dispatch. Linux and
   macOS run the short gate and build candidate archives. Windows checks all
   targets and produces a build/capability candidate; it does not qualify
-  durable writes or crash recovery.
+  durable writes or crash recovery. Windows has a 60-minute job allowance for
+  setup, full source compilation and an optimized candidate; Unix jobs use 30 minutes.
 - `Opt-in native qualification` remains manual. It runs full Unix qualification
   and retains its logs and candidate archive. Windows remains build-only.
 - `Release build` manually builds six native targets from one workflow commit:
@@ -110,21 +111,29 @@ decisions remain in [external qualification](qualification.md).
   Compiled targets are not cached across hosted runs.
 - Actions are pinned to full commit IDs, checkout credentials are not persisted,
   and workflows have read-only repository permissions. Candidate artifacts
-  expire after 7 days; full qualification evidence after 14 days.
+  from regular CI expire after 7 days; release-build and full qualification
+  evidence after 14 days. Draft release assets are separate from that retention.
 - Dependabot groups weekly Cargo and GitHub Actions updates, with at most one
   open update per ecosystem. Updates still require review; no automatic merge
   or extensive dependency-audit process is configured.
 
-The repository is [joshgarnett/rust-llm-wiki](https://github.com/joshgarnett/rust-llm-wiki);
-the owner has pushed its initial `main`. There is no observed hosted Bazel result
-yet. Workflow configuration alone does not establish a passing native-platform
-result. Publishing, signing and branch-protection settings remain owner decisions.
+The repository is [joshgarnett/rust-llm-wiki](https://github.com/joshgarnett/rust-llm-wiki).
+All six native jobs passed in [release run 36564578331](https://github.com/joshgarnett/rust-llm-wiki/actions/runs/36564578331)
+at commit `7f1c03d829d587763a82e7f660cc7b19f2a40d57`. The
+[draft v0.1.0 release](https://github.com/joshgarnett/rust-llm-wiki/releases/tag/untagged-1fb57f8f77dbb46a0898)
+targets that commit and contains six archives plus six SHA-256 sidecars.
+Uploaded GitHub digests and downloaded copies match the verified build files.
+The [build report](execution/reports/BUILD-RELEASE.md) and
+[machine-readable checks](execution/reports/BUILD-RELEASE-checks.json) record
+the jobs, hashes and limits. These hosted gates do not run the full recovery
+suite; Windows vault writes remain unsupported. Publishing, signing and
+branch-protection settings remain owner decisions.
 
-The first delivery is a **draft** GitHub Release for the current `v0.1.0`.
-Create it only after all six release jobs pass and the downloaded archives match
+For subsequent releases, create a **draft** only after all six release jobs pass and the downloaded archives match
 their checksums, embedded binary hashes, target, version and workflow commit.
 Artifacts retained from failed jobs are diagnostics, not accepted releases.
-The Windows draft assets must state that vault writes remain unsupported.
+Keep the current Windows write limitation explicit in release notes until it is
+implemented and qualified.
 
 Download a successful release run with `gh run download RUN_ID --dir NEW_DIR`.
 The directory must contain the six separate job artifact directories. Run

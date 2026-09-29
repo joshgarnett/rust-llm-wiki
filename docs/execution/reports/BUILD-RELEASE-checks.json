@@ -1,0 +1,179 @@
+{
+  "schema_version": 1,
+  "verified_at": "2026-09-29T12:22:53.076756+00:00",
+  "source_commit": "7f1c03d829d587763a82e7f660cc7b19f2a40d57",
+  "version": "0.1.0",
+  "release_run": {
+    "id": 36564578331,
+    "url": "https://github.com/joshgarnett/rust-llm-wiki/actions/runs/36564578331",
+    "conclusion": "success"
+  },
+  "draft_release": {
+    "id": 399120335,
+    "url": "https://github.com/joshgarnett/rust-llm-wiki/releases/tag/untagged-1fb57f8f77dbb46a0898",
+    "tag": "v0.1.0",
+    "is_draft": true,
+    "target_commit": "7f1c03d829d587763a82e7f660cc7b19f2a40d57",
+    "asset_count": 12
+  },
+  "platforms": [
+    {
+      "target": "x86_64-unknown-linux-gnu",
+      "job_id": 109393285085,
+      "job_url": "https://github.com/joshgarnett/rust-llm-wiki/actions/runs/36564578331/job/109393285085",
+      "conclusion": "success",
+      "started_at": "2026-09-29T11:53:45Z",
+      "completed_at": "2026-09-29T12:05:42Z",
+      "binary_sha256": "fc9240a6436b43a9c8a5ed91653388d63231c3a68c00b23b03ba23a03b9fba7c",
+      "archive": "lwiki-0.1.0-x86_64-unknown-linux-gnu.tar.gz",
+      "checks": "checksum, exact regular members, clean source SHA, native host/target, version, binary hash, capabilities, Unix execute bit, executable architecture"
+    },
+    {
+      "target": "aarch64-unknown-linux-gnu",
+      "job_id": 109393285453,
+      "job_url": "https://github.com/joshgarnett/rust-llm-wiki/actions/runs/36564578331/job/109393285453",
+      "conclusion": "success",
+      "started_at": "2026-09-29T11:53:48Z",
+      "completed_at": "2026-09-29T12:04:20Z",
+      "binary_sha256": "02401962b10d7bab48ece120a9ff0ff027082dc0b5152876655fcd760cf8a62a",
+      "archive": "lwiki-0.1.0-aarch64-unknown-linux-gnu.tar.gz",
+      "checks": "checksum, exact regular members, clean source SHA, native host/target, version, binary hash, capabilities, Unix execute bit, executable architecture"
+    },
+    {
+      "target": "x86_64-apple-darwin",
+      "job_id": 109393285425,
+      "job_url": "https://github.com/joshgarnett/rust-llm-wiki/actions/runs/36564578331/job/109393285425",
+      "conclusion": "success",
+      "started_at": "2026-09-29T11:53:47Z",
+      "completed_at": "2026-09-29T12:06:08Z",
+      "binary_sha256": "f4fec63f7ab449efa77ed523d6e9b17ad6b8a8a03b48f9ad142ea8155c5b953f",
+      "archive": "lwiki-0.1.0-x86_64-apple-darwin.tar.gz",
+      "checks": "checksum, exact regular members, clean source SHA, native host/target, version, binary hash, capabilities, Unix execute bit, executable architecture"
+    },
+    {
+      "target": "aarch64-apple-darwin",
+      "job_id": 109393285695,
+      "job_url": "https://github.com/joshgarnett/rust-llm-wiki/actions/runs/36564578331/job/109393285695",
+      "conclusion": "success",
+      "started_at": "2026-09-29T11:53:49Z",
+      "completed_at": "2026-09-29T11:58:16Z",
+      "binary_sha256": "538a5bd2baddf069531f6edf059b7401458639a07c75065ac8190665fd3728fe",
+      "archive": "lwiki-0.1.0-aarch64-apple-darwin.tar.gz",
+      "checks": "checksum, exact regular members, clean source SHA, native host/target, version, binary hash, capabilities, Unix execute bit, executable architecture"
+    },
+    {
+      "target": "x86_64-pc-windows-msvc",
+      "job_id": 109393285421,
+      "job_url": "https://github.com/joshgarnett/rust-llm-wiki/actions/runs/36564578331/job/109393285421",
+      "conclusion": "success",
+      "started_at": "2026-09-29T11:53:46Z",
+      "completed_at": "2026-09-29T12:21:00Z",
+      "binary_sha256": "4a1aa56776a9c8e377c12cca8f0c124e1e7bd8b6bf9bc22889388f30e3a41ddf",
+      "archive": "lwiki-0.1.0-x86_64-pc-windows-msvc.tar.gz",
+      "checks": "checksum, exact regular members, clean source SHA, native host/target, version, binary hash, capabilities, Unix execute bit, executable architecture"
+    },
+    {
+      "target": "aarch64-pc-windows-msvc",
+      "job_id": 109393285403,
+      "job_url": "https://github.com/joshgarnett/rust-llm-wiki/actions/runs/36564578331/job/109393285403",
+      "conclusion": "success",
+      "started_at": "2026-09-29T11:53:46Z",
+      "completed_at": "2026-09-29T12:18:40Z",
+      "binary_sha256": "02735e7aee4106ce7532a8ca4e2f5a1dc36eb18d6957fafa972c8320b132b4b7",
+      "archive": "lwiki-0.1.0-aarch64-pc-windows-msvc.tar.gz",
+      "checks": "checksum, exact regular members, clean source SHA, native host/target, version, binary hash, capabilities, Unix execute bit, executable architecture"
+    }
+  ],
+  "assets": [
+    {
+      "name": "lwiki-0.1.0-x86_64-unknown-linux-gnu.tar.gz",
+      "size_bytes": 9985202,
+      "sha256": "881d03689c1255241311463b31bbf92126c95c6e31f830a31333b217d1f3402f",
+      "github_digest_matches": true,
+      "downloaded_copy_matches": true
+    },
+    {
+      "name": "lwiki-0.1.0-x86_64-unknown-linux-gnu.tar.gz.sha256",
+      "size_bytes": 110,
+      "sha256": "fb95f579573c85c9e3da1832152115fc4ad06da38615772740a2aa7cc6220cac",
+      "github_digest_matches": true,
+      "downloaded_copy_matches": true
+    },
+    {
+      "name": "lwiki-0.1.0-aarch64-unknown-linux-gnu.tar.gz",
+      "size_bytes": 9457646,
+      "sha256": "6455fed0383ae31db41212936bad5b1dc9f120de5ce7ec0f0f4da55d5d113f9e",
+      "github_digest_matches": true,
+      "downloaded_copy_matches": true
+    },
+    {
+      "name": "lwiki-0.1.0-aarch64-unknown-linux-gnu.tar.gz.sha256",
+      "size_bytes": 111,
+      "sha256": "bd1540982e65100c172adffd2200ab67c5a3bd0583ca02dd9b676d9d02b9b23f",
+      "github_digest_matches": true,
+      "downloaded_copy_matches": true
+    },
+    {
+      "name": "lwiki-0.1.0-x86_64-apple-darwin.tar.gz",
+      "size_bytes": 9669562,
+      "sha256": "b2552d97b4a7b7ac013258a9015123df8ebd17402dbf97e0c2133c450e7c0cfc",
+      "github_digest_matches": true,
+      "downloaded_copy_matches": true
+    },
+    {
+      "name": "lwiki-0.1.0-x86_64-apple-darwin.tar.gz.sha256",
+      "size_bytes": 105,
+      "sha256": "bcdcc2983da9f22e8be06e7f5ba128541e9c760311eeadaf889126f95d3b2678",
+      "github_digest_matches": true,
+      "downloaded_copy_matches": true
+    },
+    {
+      "name": "lwiki-0.1.0-aarch64-apple-darwin.tar.gz",
+      "size_bytes": 9091005,
+      "sha256": "efa9e6e228d8378e8d6da290d10a5dae839dd43ee21e292c33f63a30729283ca",
+      "github_digest_matches": true,
+      "downloaded_copy_matches": true
+    },
+    {
+      "name": "lwiki-0.1.0-aarch64-apple-darwin.tar.gz.sha256",
+      "size_bytes": 106,
+      "sha256": "80c8e3f4460e398b35193916a57bad9a8d77c7d1b3720241bbe707958e9ac958",
+      "github_digest_matches": true,
+      "downloaded_copy_matches": true
+    },
+    {
+      "name": "lwiki-0.1.0-x86_64-pc-windows-msvc.tar.gz",
+      "size_bytes": 9216618,
+      "sha256": "6f36b2841d74d52bdf246f903573bab956505c74b7999d8df985e1154d3009cc",
+      "github_digest_matches": true,
+      "downloaded_copy_matches": true
+    },
+    {
+      "name": "lwiki-0.1.0-x86_64-pc-windows-msvc.tar.gz.sha256",
+      "size_bytes": 109,
+      "sha256": "9f7e7768b9901b5f27fd99d9236e6b74418dec30a102dc9ed1ab64f78bb06889",
+      "github_digest_matches": true,
+      "downloaded_copy_matches": true
+    },
+    {
+      "name": "lwiki-0.1.0-aarch64-pc-windows-msvc.tar.gz",
+      "size_bytes": 8521272,
+      "sha256": "e9d7bdfc8fb65edeb437aa5886415884ec1f9ee9f38e87709d9facd74d7e8ae1",
+      "github_digest_matches": true,
+      "downloaded_copy_matches": true
+    },
+    {
+      "name": "lwiki-0.1.0-aarch64-pc-windows-msvc.tar.gz.sha256",
+      "size_bytes": 110,
+      "sha256": "f5857a5846aaaac21ef5d8cfa86d565324534da5f681f206d62ae646338466b7",
+      "github_digest_matches": true,
+      "downloaded_copy_matches": true
+    }
+  ],
+  "limits": [
+    "Full 53-target local qualification was on macOS ARM64 at 06aa1a9526dc59569f637001d59493ebaebd213c; subsequent changes are documented in BUILD-RELEASE.md.",
+    "Hosted Unix jobs run short CI and optimized skill recipes, not the full recovery suite.",
+    "Windows compiles all test sources and smokes binary version/capabilities; vault writes remain unsupported.",
+    "No musl artifacts; builds unsigned; live-provider and installed host integration qualification remain separate."
+  ]
+}
