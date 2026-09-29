@@ -15,6 +15,7 @@ pub enum ErrorCode {
     VaultNotFound,
     RecordNotFound,
     ContentConflict,
+    LockTimeout,
     CursorStale,
     FreshnessConflict,
     RecoveryRequired,
@@ -40,7 +41,10 @@ impl ErrorCode {
             Self::Internal => 1,
             Self::Usage | Self::ConfigInvalid => 2,
             Self::VaultNotFound | Self::RecordNotFound => 3,
-            Self::ContentConflict | Self::CursorStale | Self::FreshnessConflict => 4,
+            Self::ContentConflict
+            | Self::LockTimeout
+            | Self::CursorStale
+            | Self::FreshnessConflict => 4,
             Self::RecoveryRequired | Self::IndexCorrupt | Self::SourceIntegrity => 5,
             Self::CapabilityUnavailable | Self::OfflineUnavailable | Self::ProfileUntrusted => 6,
             Self::BudgetExceeded => 7,

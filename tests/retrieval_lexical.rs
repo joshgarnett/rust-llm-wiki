@@ -114,6 +114,27 @@ fn literal_vec_t_e0308_symbols() {
 }
 
 #[test]
+fn lexical_excerpt_prefers_full_name_after_many_partial_matches() {
+    let (temp, root, catalog) = fixture();
+    let body = format!(
+        "{}\n## Hungry Howie's Pizza\nPizza for the whole family.\n",
+        "Show up hungry at another restaurant.\n".repeat(100)
+    );
+    write(temp.path(), "restaurants.md", body.as_bytes());
+    let r = reader(&root, &catalog);
+    let hits = search(&r, "Hungry Howie", &QueryPlan::default()).unwrap();
+    assert_eq!(hits.hits.len(), 1);
+    let excerpt = &hits.hits[0].excerpt;
+    assert!(excerpt.text.contains("Hungry Howie's Pizza"));
+    assert_eq!(excerpt.span.slice(&body).unwrap(), excerpt.text);
+    assert_eq!(excerpt.matched_spans.len(), 1);
+    assert_eq!(
+        excerpt.matched_spans[0].slice(&body).unwrap(),
+        "Hungry Howie"
+    );
+}
+
+#[test]
 fn lexical_or_colon_star_quotes_are_data() {
     let (temp, root, catalog) = fixture();
     write(

@@ -7,11 +7,15 @@ use std::collections::BTreeSet;
 pub(crate) fn invalid(message: impl Into<String>) -> WikiError {
     WikiError::new(ErrorCode::RecordInvalid, message)
 }
-pub(crate) fn bound(text: &str, cap: usize, required: bool) -> Result<()> {
-    if text.len() > cap || (required && text.trim().is_empty()) || text.contains('\0') {
-        return Err(invalid(
-            "research text is empty or exceeds its byte/content limit",
-        ));
+pub(crate) fn bound(field: &str, text: &str, cap: usize, required: bool) -> Result<()> {
+    if required && text.trim().is_empty() {
+        return Err(invalid(format!("{field} is empty")));
+    }
+    if text.contains('\0') {
+        return Err(invalid(format!("{field} contains a NUL character")));
+    }
+    if text.len() > cap {
+        return Err(invalid(format!("{field} exceeds {cap} UTF-8 bytes")));
     }
     Ok(())
 }
@@ -43,7 +47,7 @@ pub(crate) fn encode<T: Serialize>(value: &T) -> Result<Vec<u8>> {
     Ok(bytes)
 }
 pub(crate) fn scope(scope: &ResearchScope) -> Result<()> {
-    bound(&scope.question, 4096, true)?;
+    bound("research question", &scope.question, 4096, true)?;
     if scope.urls.len() > 32
         || scope.exclusions.len() > 32
         || scope.source_ids.len() > MAX_PASSAGES
@@ -54,7 +58,7 @@ pub(crate) fn scope(scope: &ResearchScope) -> Result<()> {
         return Err(invalid("research scope exceeds its limits"));
     }
     for text in scope.urls.iter().chain(&scope.exclusions) {
-        bound(text, 2048, true)?;
+        bound("research scope text", text, 2048, true)?;
     }
     let unique: BTreeSet<_> = scope.source_ids.iter().collect();
     if unique.len() != scope.source_ids.len() {
@@ -87,11 +91,21 @@ pub fn parse_submission(bytes: &[u8]) -> Result<ResearchSubmission> {
                 if !keys.insert(&source.key) {
                     return Err(invalid("duplicate submitted source key"));
                 }
-                bound(&source.title, 256, true)?;
-                bound(&source.origin, 2048, true)?;
-                bound(&source.content, MAX_PASSAGE_BYTES, true)?;
+                bound("source title", &source.title, 256, true)?;
+                bound("source origin", &source.origin, 2048, true)?;
+                bound("source content", &source.content, MAX_PASSAGE_BYTES, true)?;
                 if let Some(provenance) = &source.provenance {
-                    bound(provenance, 2048, false)?;
+                    bound("source provenance", provenance, 2048, false)?;
+                }
+                if let Some(retrieved_at) = &source.retrieved_at {
+                    bound("source retrieved_at", retrieved_at, 64, true)?;
+                    time::OffsetDateTime::parse(
+                        retrieved_at,
+                        &time::format_description::well_known::Rfc3339,
+                    )
+                    .map_err(|_| {
+                        invalid("source retrieved_at must be an RFC3339 timestamp with a timezone")
+                    })?;
                 }
                 total = total
                     .checked_add(source.content.len())
@@ -112,7 +126,7 @@ pub fn parse_submission(bytes: &[u8]) -> Result<ResearchSubmission> {
             }
             let mut total = 0;
             for claim in claims {
-                bound(&claim.text, 4096, true)?;
+                bound("claim text", &claim.text, 4096, true)?;
                 total += claim.text.len();
                 let unique: BTreeSet<_> = claim.passage_ids.iter().collect();
                 if unique.len() != claim.passage_ids.len() || unique.is_empty() || unique.len() > 16
@@ -120,14 +134,26 @@ pub fn parse_submission(bytes: &[u8]) -> Result<ResearchSubmission> {
                     return Err(invalid("claims require 1–16 distinct packet passage IDs"));
                 }
                 for id in &claim.passage_ids {
-                    bound(id, 16, true)?;
+                    let digits = id.strip_prefix('p').unwrap_or_default();
+                    if digits.is_empty()
+                        || digits.starts_with('0')
+                        || !digits.bytes().all(|b| b.is_ascii_digit())
+                        || digits
+                            .parse::<usize>()
+                            .ok()
+                            .is_none_or(|n| n > MAX_PASSAGES)
+                    {
+                        return Err(invalid(
+                            "passage_id must be a packet passage ID such as p1; source IDs and quote hashes are not passage IDs",
+                        ));
+                    }
                 }
             }
             if total > MAX_PASSAGE_BYTES {
                 return Err(invalid("research claim text exceeds 64 KiB"));
             }
             if let Some(follow_up) = follow_up {
-                bound(follow_up, 4096, true)?;
+                bound("follow_up", follow_up, 4096, true)?;
             }
             gaps
         }
@@ -136,7 +162,7 @@ pub fn parse_submission(bytes: &[u8]) -> Result<ResearchSubmission> {
         return Err(invalid("too many research gaps"));
     }
     for gap in gaps {
-        bound(gap, 2048, true)?;
+        bound("gap", gap, 2048, true)?;
     }
     Ok(submission)
 }

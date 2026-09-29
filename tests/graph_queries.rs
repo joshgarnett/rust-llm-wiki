@@ -248,6 +248,182 @@ fn opposite_negated_dated_literal_disputed_edges() {
         }
     }
 }
+
+#[test]
+fn opposing_accepted_assertions_are_bounded_and_match_exact_qualifiers() {
+    let f = Fixture::new();
+    for name in ["a", "b", "c"] {
+        f.entity(name, name);
+    }
+    f.assertion(
+        "base",
+        "a",
+        "b",
+        json!({"wiki_valid_from":"2020-01-01","wiki_modality":"asserted"}),
+    );
+    for name in ["opposite_1", "opposite_2", "opposite_3"] {
+        f.assertion(
+            name,
+            "a",
+            "b",
+            json!({"wiki_valid_from":"2020-01-01","wiki_negated":true}),
+        );
+    }
+    f.assertion(
+        "other_object",
+        "a",
+        "c",
+        json!({"wiki_valid_from":"2020-01-01","wiki_negated":true}),
+    );
+    f.assertion(
+        "other_date",
+        "a",
+        "b",
+        json!({"wiki_valid_from":"2021-01-01","wiki_negated":true}),
+    );
+    f.assertion(
+        "other_modality",
+        "a",
+        "b",
+        json!({"wiki_valid_from":"2020-01-01","wiki_modality":"possible","wiki_negated":true}),
+    );
+    f.assertion(
+        "rejected",
+        "a",
+        "b",
+        json!({"wiki_valid_from":"2020-01-01","wiki_negated":true,"wiki_status":"rejected"}),
+    );
+    f.assertion(
+        "proposed",
+        "a",
+        "b",
+        json!({"wiki_valid_from":"2020-01-01","wiki_negated":true,"wiki_status":"proposed"}),
+    );
+    for (name, property, negated) in [
+        ("literal_base", "cost", false),
+        ("other_property", "sector", true),
+    ] {
+        write(
+            f.temp.path(),
+            &format!("assertions/{name}.md"),
+            &note(
+                "assertion",
+                name,
+                name,
+                json!({"wiki_status":"accepted","wiki_subject_id":"a","wiki_predicate":"has_property",
+                "wiki_property":property,"wiki_literal_type":"decimal","wiki_literal_value":"2.50",
+                "wiki_unit":"USD","wiki_negated":negated}),
+                "Literal property assertion",
+            ),
+        );
+        f.evidence(&format!("ev_{name}"), name, true);
+    }
+    let r = f.reader();
+    let row = &r.projection().records[&id("base")];
+    assert!(row.disputed);
+    assert!(
+        row.reasons
+            .iter()
+            .any(|reason| reason == "opposing_accepted_assertion")
+    );
+    let out = neighbors(&r, &id("a"), &GraphPlan::default()).unwrap();
+    let base = out
+        .assertions
+        .iter()
+        .find(|edge| edge.record_ref.record_id == id("base"))
+        .unwrap();
+    assert!(base.disputed);
+    assert!(base.contradictions.is_empty());
+    assert_eq!(
+        base.opposing_assertions
+            .iter()
+            .map(|r| r.record_id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["opposite_1"]
+    );
+    assert_eq!(base.omitted_opposing_assertions, 2);
+    assert!(out.truncated);
+    assert!(
+        out.warnings
+            .iter()
+            .any(|warning| warning.contains("opposing assertion links were capped"))
+    );
+    let opposite = out
+        .assertions
+        .iter()
+        .find(|edge| edge.record_ref.record_id == id("opposite_1"))
+        .unwrap();
+    assert!(opposite.disputed);
+    assert_eq!(opposite.opposing_assertions[0].record_id, id("base"));
+    for name in [
+        "other_object",
+        "other_date",
+        "other_modality",
+        "other_property",
+        "literal_base",
+    ] {
+        let edge = out
+            .assertions
+            .iter()
+            .find(|edge| edge.record_ref.record_id == id(name))
+            .unwrap();
+        assert!(!edge.disputed);
+        assert!(edge.opposing_assertions.is_empty());
+    }
+    let mut plan = GraphPlan::default();
+    plan.limits.contradictions_per_assertion = 0;
+    let capped = neighbors(&r, &id("a"), &plan).unwrap();
+    let base = capped
+        .assertions
+        .iter()
+        .find(|edge| edge.record_ref.record_id == id("base"))
+        .unwrap();
+    assert!(base.opposing_assertions.is_empty());
+    assert_eq!(base.omitted_opposing_assertions, 3);
+    assert!(capped.truncated);
+    let queried = query(&r, "base", &GraphPlan::default()).unwrap();
+    let base = queried
+        .assertions
+        .iter()
+        .find(|edge| edge.record_ref.record_id == id("base"))
+        .unwrap();
+    assert!(base.disputed);
+    assert_eq!(base.omitted_opposing_assertions, 2);
+}
+
+#[test]
+fn withdrawn_support_clears_opposing_assertion_dispute() {
+    let f = Fixture::new();
+    f.entity("a", "A");
+    f.entity("b", "B");
+    f.assertion("positive", "a", "b", json!({}));
+    f.assertion("negative", "a", "b", json!({"wiki_negated":true}));
+    assert!(f.reader().projection().records[&id("positive")].disputed);
+    let writer = WriterPermit::acquire(&f.root, Duration::from_millis(1000)).unwrap();
+    let engine = ChangeEngine::new(VaultFs::new(f.root.clone())).unwrap();
+    let draft = SourceStore::new(VaultFs::new(f.root.clone()))
+        .plan_withdraw(&f.source.source_id, "test")
+        .unwrap()
+        .draft
+        .unwrap();
+    let change = engine.prepare(&writer, draft).unwrap().prepared;
+    engine
+        .apply(&writer, &change, &CatalogGraphValidator, &f.catalog)
+        .unwrap();
+    drop(writer);
+    let r = f.catalog.verified_snapshot(None).unwrap();
+    assert!(!r.projection().records[&id("positive")].disputed);
+    let mut history = GraphPlan::default();
+    history.filters.include_historical = true;
+    let out = neighbors(&r, &id("a"), &history).unwrap();
+    let edge = out
+        .assertions
+        .iter()
+        .find(|edge| edge.record_ref.record_id == id("positive"))
+        .unwrap();
+    assert!(!edge.disputed);
+    assert!(edge.opposing_assertions.is_empty());
+}
 #[test]
 fn homonym_labels_never_merge() {
     let f = Fixture::new();

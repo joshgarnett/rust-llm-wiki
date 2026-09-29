@@ -198,7 +198,7 @@ fn execute_inner(args: &Arguments) -> Result<Envelope> {
             let outcome = crate::app::offline::init(
                 path,
                 title,
-                operation_options(args, args.offline, args.lock_timeout_ms.unwrap_or(1000)),
+                operation_options(args, args.offline, args.lock_timeout_ms.unwrap_or(5000)),
             )?;
             let mut envelope = Envelope::success(command, value(&outcome)?);
             envelope.meta.wiki_id = Some(outcome.id.to_string());
@@ -341,9 +341,10 @@ fn execute_inner(args: &Arguments) -> Result<Envelope> {
                 },
         } => mutation(
             &mut envelope,
-            app.source_refresh(
+            app.source_refresh_with_title(
                 id.clone(),
                 capture(file, title.as_deref(), media_type.clone())?,
+                title.as_deref(),
             )?,
         )?,
         Command::Source {
@@ -822,7 +823,17 @@ fn error_output(error: WikiError) -> ErrorOutput {
 }
 fn mutation(envelope: &mut Envelope, outcome: MutationOutcome) -> Result<()> {
     envelope.meta.index_generation = outcome.snapshot.as_ref().map(|s| s.generation);
+    let capture = outcome.source_capture;
     envelope.data = value(outcome)?;
+    if let Some(capture) = capture {
+        envelope.data["extraction_status"] = capture.extraction_status().into();
+        envelope.data["citable"] = capture.citable().into();
+        match capture {
+            crate::sources::SourceCaptureState::Unsupported => envelope.warnings.push("Original bytes captured only; text extraction is unsupported for this format or invalid UTF-8. The content cannot be searched, embedded or cited. Supply extracted UTF-8 .txt/.md text when needed.".into()),
+            crate::sources::SourceCaptureState::Empty => envelope.warnings.push("Empty source captured; no text is available to search, embed or cite.".into()),
+            crate::sources::SourceCaptureState::Complete => {},
+        }
+    }
     Ok(())
 }
 fn reader(app: &OfflineApp, no_sync: bool) -> Result<(Option<WriterPermit>, ReaderSnapshot)> {

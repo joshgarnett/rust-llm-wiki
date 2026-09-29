@@ -58,6 +58,14 @@
                         "type": "null"
                       }
                     ]
+                  },
+                  "retrieved_at": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "format": "date-time",
+                    "maxLength": 64
                   }
                 },
                 "required": [

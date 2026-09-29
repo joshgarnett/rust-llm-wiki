@@ -1,4 +1,4 @@
-# Implemented lwiki 0.1.1 commands
+# Implemented lwiki 0.1.2 commands
 
 Generated from the release command registry and argument parser. Run `lwiki --json capabilities` before use.
 
@@ -40,7 +40,7 @@ Options:
           Trusted provider profile name from the private provider configuration
 
       --lock-timeout-ms <LOCK_TIMEOUT_MS>
-          Maximum time in milliseconds to wait for the vault writer lock
+          Maximum writer-lock wait in milliseconds (default: 5000; preferences may override)
 
   -h, --help
           Print help
@@ -93,7 +93,7 @@ Options:
           Trusted provider profile name from the private provider configuration
 
       --lock-timeout-ms <LOCK_TIMEOUT_MS>
-          Maximum time in milliseconds to wait for the vault writer lock
+          Maximum writer-lock wait in milliseconds (default: 5000; preferences may override)
 
   -h, --help
           Print help
@@ -142,7 +142,7 @@ Options:
           Trusted provider profile name from the private provider configuration
 
       --lock-timeout-ms <LOCK_TIMEOUT_MS>
-          Maximum time in milliseconds to wait for the vault writer lock
+          Maximum writer-lock wait in milliseconds (default: 5000; preferences may override)
 
   -h, --help
           Print help
@@ -196,7 +196,7 @@ Options:
           Trusted provider profile name from the private provider configuration
 
       --lock-timeout-ms <LOCK_TIMEOUT_MS>
-          Maximum time in milliseconds to wait for the vault writer lock
+          Maximum writer-lock wait in milliseconds (default: 5000; preferences may override)
 
   -h, --help
           Print help
@@ -259,7 +259,7 @@ Options:
           Trusted provider profile name from the private provider configuration
 
       --lock-timeout-ms <LOCK_TIMEOUT_MS>
-          Maximum time in milliseconds to wait for the vault writer lock
+          Maximum writer-lock wait in milliseconds (default: 5000; preferences may override)
 
   -h, --help
           Print help
@@ -313,7 +313,7 @@ Options:
           Trusted provider profile name from the private provider configuration
 
       --lock-timeout-ms <LOCK_TIMEOUT_MS>
-          Maximum time in milliseconds to wait for the vault writer lock
+          Maximum writer-lock wait in milliseconds (default: 5000; preferences may override)
 
   -h, --help
           Print help
@@ -368,7 +368,7 @@ Options:
           Trusted provider profile name from the private provider configuration
 
       --lock-timeout-ms <LOCK_TIMEOUT_MS>
-          Maximum time in milliseconds to wait for the vault writer lock
+          Maximum writer-lock wait in milliseconds (default: 5000; preferences may override)
 
   -h, --help
           Print help
@@ -423,7 +423,7 @@ Options:
           Trusted provider profile name from the private provider configuration
 
       --lock-timeout-ms <LOCK_TIMEOUT_MS>
-          Maximum time in milliseconds to wait for the vault writer lock
+          Maximum writer-lock wait in milliseconds (default: 5000; preferences may override)
 
   -h, --help
           Print help
@@ -481,7 +481,7 @@ Options:
           Trusted provider profile name from the private provider configuration
 
       --lock-timeout-ms <LOCK_TIMEOUT_MS>
-          Maximum time in milliseconds to wait for the vault writer lock
+          Maximum writer-lock wait in milliseconds (default: 5000; preferences may override)
 
   -h, --help
           Print help
@@ -533,7 +533,7 @@ Options:
           Trusted provider profile name from the private provider configuration
 
       --lock-timeout-ms <LOCK_TIMEOUT_MS>
-          Maximum time in milliseconds to wait for the vault writer lock
+          Maximum writer-lock wait in milliseconds (default: 5000; preferences may override)
 
   -h, --help
           Print help
@@ -588,7 +588,7 @@ Options:
           Trusted provider profile name from the private provider configuration
 
       --lock-timeout-ms <LOCK_TIMEOUT_MS>
-          Maximum time in milliseconds to wait for the vault writer lock
+          Maximum writer-lock wait in milliseconds (default: 5000; preferences may override)
 
   -h, --help
           Print help
@@ -633,7 +633,7 @@ Options:
           Trusted provider profile name from the private provider configuration
 
       --lock-timeout-ms <LOCK_TIMEOUT_MS>
-          Maximum time in milliseconds to wait for the vault writer lock
+          Maximum writer-lock wait in milliseconds (default: 5000; preferences may override)
 
   -h, --help
           Print help
@@ -678,7 +678,7 @@ Options:
           Trusted provider profile name from the private provider configuration
 
       --lock-timeout-ms <LOCK_TIMEOUT_MS>
-          Maximum time in milliseconds to wait for the vault writer lock
+          Maximum writer-lock wait in milliseconds (default: 5000; preferences may override)
 
   -h, --help
           Print help
@@ -764,7 +764,7 @@ Options:
           Trusted provider profile name from the private provider configuration
 
       --lock-timeout-ms <LOCK_TIMEOUT_MS>
-          Maximum time in milliseconds to wait for the vault writer lock
+          Maximum writer-lock wait in milliseconds (default: 5000; preferences may override)
 
       --max-request-bytes <MAX_REQUEST_BYTES>
           Lifetime ceiling on outgoing request bytes
@@ -882,7 +882,7 @@ Options:
           Trusted provider profile name from the private provider configuration
 
       --lock-timeout-ms <LOCK_TIMEOUT_MS>
-          Maximum time in milliseconds to wait for the vault writer lock
+          Maximum writer-lock wait in milliseconds (default: 5000; preferences may override)
 
       --max-request-bytes <MAX_REQUEST_BYTES>
           Lifetime ceiling on outgoing request bytes
@@ -997,7 +997,7 @@ Options:
           Trusted provider profile name from the private provider configuration
 
       --lock-timeout-ms <LOCK_TIMEOUT_MS>
-          Maximum time in milliseconds to wait for the vault writer lock
+          Maximum writer-lock wait in milliseconds (default: 5000; preferences may override)
 
       --max-output-units <MAX_OUTPUT_UNITS>
           Lifetime ceiling for each output and reasoning billable class
@@ -1154,7 +1154,7 @@ Options:
           Trusted provider profile name from the private provider configuration
 
       --lock-timeout-ms <LOCK_TIMEOUT_MS>
-          Maximum time in milliseconds to wait for the vault writer lock
+          Maximum writer-lock wait in milliseconds (default: 5000; preferences may override)
 
       --max-output-units <MAX_OUTPUT_UNITS>
           Lifetime ceiling for each output and reasoning billable class
@@ -1402,7 +1402,7 @@ Options:
           Trusted provider profile name from the private provider configuration
 
       --lock-timeout-ms <LOCK_TIMEOUT_MS>
-          Maximum time in milliseconds to wait for the vault writer lock
+          Maximum writer-lock wait in milliseconds (default: 5000; preferences may override)
 
       --max-cost <MAX_COST>
           Checked decimal ceiling; requires a complete provable provider bound
@@ -1514,7 +1514,7 @@ Options:
           Trusted provider profile name from the private provider configuration
 
       --lock-timeout-ms <LOCK_TIMEOUT_MS>
-          Maximum time in milliseconds to wait for the vault writer lock
+          Maximum writer-lock wait in milliseconds (default: 5000; preferences may override)
 
   -h, --help
           Print help
@@ -1562,7 +1562,7 @@ Options:
           Trusted provider profile name from the private provider configuration
 
       --lock-timeout-ms <LOCK_TIMEOUT_MS>
-          Maximum time in milliseconds to wait for the vault writer lock
+          Maximum writer-lock wait in milliseconds (default: 5000; preferences may override)
 
   -h, --help
           Print help
@@ -1610,7 +1610,7 @@ Options:
           Trusted provider profile name from the private provider configuration
 
       --lock-timeout-ms <LOCK_TIMEOUT_MS>
-          Maximum time in milliseconds to wait for the vault writer lock
+          Maximum writer-lock wait in milliseconds (default: 5000; preferences may override)
 
   -h, --help
           Print help
@@ -1658,7 +1658,7 @@ Options:
           Trusted provider profile name from the private provider configuration
 
       --lock-timeout-ms <LOCK_TIMEOUT_MS>
-          Maximum time in milliseconds to wait for the vault writer lock
+          Maximum writer-lock wait in milliseconds (default: 5000; preferences may override)
 
   -h, --help
           Print help
@@ -1742,7 +1742,7 @@ Options:
           Trusted provider profile name from the private provider configuration
 
       --lock-timeout-ms <LOCK_TIMEOUT_MS>
-          Maximum time in milliseconds to wait for the vault writer lock
+          Maximum writer-lock wait in milliseconds (default: 5000; preferences may override)
 
       --max-cost <MAX_COST>
           Checked decimal ceiling; requires a complete provable provider bound
@@ -1933,7 +1933,7 @@ Options:
           Trusted provider profile name from the private provider configuration
 
       --lock-timeout-ms <LOCK_TIMEOUT_MS>
-          Maximum time in milliseconds to wait for the vault writer lock
+          Maximum writer-lock wait in milliseconds (default: 5000; preferences may override)
 
       --max-cost <MAX_COST>
           Checked decimal ceiling; requires a complete provable provider bound
@@ -2085,7 +2085,7 @@ Options:
           Trusted provider profile name from the private provider configuration
 
       --lock-timeout-ms <LOCK_TIMEOUT_MS>
-          Maximum time in milliseconds to wait for the vault writer lock
+          Maximum writer-lock wait in milliseconds (default: 5000; preferences may override)
 
   -h, --help
           Print help
@@ -2168,7 +2168,7 @@ Options:
           Trusted provider profile name from the private provider configuration
 
       --lock-timeout-ms <LOCK_TIMEOUT_MS>
-          Maximum time in milliseconds to wait for the vault writer lock
+          Maximum writer-lock wait in milliseconds (default: 5000; preferences may override)
 
       --max-input-units <MAX_INPUT_UNITS>
           Lifetime ceiling for each input and cached-input billable class
@@ -2267,7 +2267,7 @@ Options:
           Trusted provider profile name from the private provider configuration
 
       --lock-timeout-ms <LOCK_TIMEOUT_MS>
-          Maximum time in milliseconds to wait for the vault writer lock
+          Maximum writer-lock wait in milliseconds (default: 5000; preferences may override)
 
   -h, --help
           Print help
@@ -2343,7 +2343,7 @@ Options:
           Trusted provider profile name from the private provider configuration
 
       --lock-timeout-ms <LOCK_TIMEOUT_MS>
-          Maximum time in milliseconds to wait for the vault writer lock
+          Maximum writer-lock wait in milliseconds (default: 5000; preferences may override)
 
   -h, --help
           Print help
@@ -2395,7 +2395,7 @@ Options:
           Trusted provider profile name from the private provider configuration
 
       --lock-timeout-ms <LOCK_TIMEOUT_MS>
-          Maximum time in milliseconds to wait for the vault writer lock
+          Maximum writer-lock wait in milliseconds (default: 5000; preferences may override)
 
   -h, --help
           Print help
@@ -2443,7 +2443,7 @@ Options:
           Trusted provider profile name from the private provider configuration
 
       --lock-timeout-ms <LOCK_TIMEOUT_MS>
-          Maximum time in milliseconds to wait for the vault writer lock
+          Maximum writer-lock wait in milliseconds (default: 5000; preferences may override)
 
   -h, --help
           Print help
@@ -2492,7 +2492,7 @@ Options:
           Trusted provider profile name from the private provider configuration
 
       --lock-timeout-ms <LOCK_TIMEOUT_MS>
-          Maximum time in milliseconds to wait for the vault writer lock
+          Maximum writer-lock wait in milliseconds (default: 5000; preferences may override)
 
   -h, --help
           Print help
@@ -2541,7 +2541,7 @@ Options:
           Trusted provider profile name from the private provider configuration
 
       --lock-timeout-ms <LOCK_TIMEOUT_MS>
-          Maximum time in milliseconds to wait for the vault writer lock
+          Maximum writer-lock wait in milliseconds (default: 5000; preferences may override)
 
   -h, --help
           Print help
@@ -2593,7 +2593,7 @@ Options:
           Trusted provider profile name from the private provider configuration
 
       --lock-timeout-ms <LOCK_TIMEOUT_MS>
-          Maximum time in milliseconds to wait for the vault writer lock
+          Maximum writer-lock wait in milliseconds (default: 5000; preferences may override)
 
   -h, --help
           Print help
@@ -2642,7 +2642,7 @@ Options:
           Trusted provider profile name from the private provider configuration
 
       --lock-timeout-ms <LOCK_TIMEOUT_MS>
-          Maximum time in milliseconds to wait for the vault writer lock
+          Maximum writer-lock wait in milliseconds (default: 5000; preferences may override)
 
   -h, --help
           Print help
@@ -2691,7 +2691,7 @@ Options:
           Trusted provider profile name from the private provider configuration
 
       --lock-timeout-ms <LOCK_TIMEOUT_MS>
-          Maximum time in milliseconds to wait for the vault writer lock
+          Maximum writer-lock wait in milliseconds (default: 5000; preferences may override)
 
   -h, --help
           Print help
@@ -2740,7 +2740,7 @@ Options:
           Trusted provider profile name from the private provider configuration
 
       --lock-timeout-ms <LOCK_TIMEOUT_MS>
-          Maximum time in milliseconds to wait for the vault writer lock
+          Maximum writer-lock wait in milliseconds (default: 5000; preferences may override)
 
   -h, --help
           Print help
@@ -2785,7 +2785,7 @@ Options:
           Trusted provider profile name from the private provider configuration
 
       --lock-timeout-ms <LOCK_TIMEOUT_MS>
-          Maximum time in milliseconds to wait for the vault writer lock
+          Maximum writer-lock wait in milliseconds (default: 5000; preferences may override)
 
   -h, --help
           Print help
@@ -2844,7 +2844,7 @@ Options:
           Trusted provider profile name from the private provider configuration
 
       --lock-timeout-ms <LOCK_TIMEOUT_MS>
-          Maximum time in milliseconds to wait for the vault writer lock
+          Maximum writer-lock wait in milliseconds (default: 5000; preferences may override)
 
   -h, --help
           Print help

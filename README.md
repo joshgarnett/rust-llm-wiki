@@ -40,7 +40,7 @@ The [six native GitHub release jobs](https://github.com/joshgarnett/rust-llm-wik
 - [Agent integration and skill plan](docs/agent-integration.md): Codex, Claude Code, and Cursor.
 - [Progress](PROGRESS.md): completed work, user decisions, and verification limits.
 
-For the 0.1.1 release, use the [download and test-agent guide](docs/testing-0.1.1.md), including the offline regression script and live gateway checks.
+For the 0.1.2 release, use the [download and test-agent guide](docs/testing-0.1.2.md), including the offline regression script and live gateway checks.
 
 ## Research
 

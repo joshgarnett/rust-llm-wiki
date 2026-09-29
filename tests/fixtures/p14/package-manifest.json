@@ -43,11 +43,11 @@
   "files": {
     "SKILL.md": "95cbd50213a59caac21855199ff9c7283c5440d3e740063eab557c4099bc75c5",
     "agents/openai.yaml": "307ad222dc5d27d563d54b0a0466264fd035378ce2d103bcbf8de4ed2ea1b144",
-    "references/commands.md": "5b203f546360ae3ab68a845b5723c0c725064e56ccdb3b7bc10446e7fe5a414b",
+    "references/commands.md": "3a0fadaf74e1bec6158f4909747405b564f495b8e0eac7466a92cfbb1eeaef8b",
     "references/examples.json": "45f32655c4a25a0b9059299580a496ffa8a53efe1a2a89676dbd81dd9888eabb",
-    "references/workflows.md": "674bbb37b620b41f4ee9dd91ae0fc03432b9fcc60df2e8502f16ab6e5dac0e47"
+    "references/workflows.md": "6a2ca38057ea186d77005f1f1e669d8386d13e0ad8b7fd96b6f13a2cd5f68bd9"
   },
-  "package_checksum": "015658df9295bbc4d5d3bcfbc44d1fc2cf130ccb3b3bae3c2132c6e33f0490a7",
+  "package_checksum": "89762332aecaf58b24676aee73bea9172e04ce80a0ef2ab4ba92b2e6b1e86540",
   "schema": "lwiki.skill-manifest.v1",
   "schemas": [
     "output",
@@ -69,5 +69,5 @@
     "research-submission"
   ],
   "target": "codex",
-  "version": "0.1.1"
+  "version": "0.1.2"
 }

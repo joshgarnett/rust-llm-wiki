@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Exercise lwiki's offline 0.1.1 regressions in a new disposable vault.
+"""Exercise lwiki's offline regressions in a new disposable vault.
 
 No credentials, provider requests, host installation, or cleanup of existing data.
 The retained JSON log and vault make any failure inspectable.
@@ -21,7 +21,7 @@ def main():
         root = args.output.expanduser().resolve()
         root.mkdir(parents=True, exist_ok=False)
     else:
-        root = Path(tempfile.mkdtemp(prefix="lwiki-0.1.1-manual-"))
+        root = Path(tempfile.mkdtemp(prefix="lwiki-manual-"))
     vault = root / "vault"
     log = root / "commands.jsonl"
     count = 0

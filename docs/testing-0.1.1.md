@@ -2,6 +2,8 @@
 
 Use this guide against the **0.1.1 release binary** in disposable vaults. Do not reuse the old 0.1.0 research commands or run directories. Keep the downloaded archive, `build-info.json`, command output, and test vaults until findings are reviewed. A successful local mock test is not evidence of live gateway compatibility.
 
+See [deep follow-up checks](testing-0.1.2.md) for changes after the tagged 0.1.1 build.
+
 ## What changed
 
 Compared with the tested `196da5f` build:
@@ -167,7 +169,7 @@ lw schema research-submission
 
 Limits: defaults are 3 rounds, 15 imported sources and 524288 lifetime source bytes. A submission is capped at 256 KiB JSON and 64 KiB aggregate inline source content. An answer packet has at most 32 passages / 64 KiB quotations; newly imported sources take priority and omissions are explicit warnings. Each newly imported source and explicit `--source-id` contributes at most its first **4096 UTF-8 bytes** to a packet, ending at a character boundary. Full captures remain stored, but claims may cite only text in the supplied packet passages. For relevant material later in a long document, submit an explicitly labeled relevant excerpt as a separate agent-report source, retaining its claimed origin and excerpt provenance. Captured sources remain stored even if omitted from the bounded packet. `imported_sources` lists their IDs. The host's tool costs and token usage are **unobserved**; these local limits do not cap external spend.
 
-Additional negatives: unknown/duplicate passage IDs; quote hashes as IDs; duplicate JSON keys; wrong packet/run/vault; unknown fields; excessive source bytes; stale packets after source refresh or withdrawal. All must fail clearly without importing new data. `research resume RUN_ID --refresh` explicitly replaces a stale packet. An offline answer import cannot request a new online collection task; finish with gaps or use the online run without `--offline`. An identical retry of an already committed import can return `import_already_committed`, `freshness: "stale"`, and no ready packet when later source changes invalidated the outstanding task. Refresh then use the new fingerprint. Completed reports remain historical records.
+Additional negatives: unknown/duplicate passage IDs; quote hashes as IDs; duplicate JSON keys; wrong packet/run/vault; unknown fields; excessive source bytes; stale packets after source refresh or withdrawal. All must fail clearly without importing new data. `research resume RUN_ID --refresh` explicitly replaces a stale packet. An offline run may request a follow-up, but the next packet remains local-only even if its free text asks to go online. An answer import under `--offline` for an online-scoped run cannot publish a new online collection task; finish with gaps or resume the online run without `--offline`. An identical retry of an already committed import can return `import_already_committed`, `freshness: "stale"`, and no ready packet when later source changes invalidated the outstanding task. Refresh then use the new fingerprint. Completed reports remain historical records.
 
 Compare the vault's file bytes and modification times around `research plan` and `--dry-run` run/import/resume. They must not persist packets, captures, receipts, caches or prepared changes. New offline research runs are real local handoffs, unlike the old offline preview behavior.
 

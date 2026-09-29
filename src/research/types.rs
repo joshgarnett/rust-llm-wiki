@@ -64,6 +64,9 @@ pub struct SubmittedSource {
     pub content: String,
     #[serde(default)]
     pub provenance: Option<String>,
+    /// Optional host-claimed retrieval time; not a fetch observed by lwiki.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retrieved_at: Option<String>,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -109,6 +112,8 @@ pub struct ResearchReport {
     pub claims: Vec<ResearchClaim>,
     pub gaps: Vec<String>,
     pub partial: bool,
+    #[serde(default)]
+    pub completion_reason: Option<String>,
     pub external_tool_usage: String,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]

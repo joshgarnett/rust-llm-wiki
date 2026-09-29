@@ -32,16 +32,11 @@ pub(crate) fn inspect(
     );
     let mut seen = BTreeSet::new();
     let mut passages = vec![];
-    let mut total = 0;
     for citation in citations {
         if !seen.insert(crate::graph::packet::canonical_json(&citation)?) {
             continue;
         }
         let verified = view.verify(&citation, CitationScope::Current)?;
-        if passages.len() == MAX_PASSAGES || total + verified.quote.len() > MAX_PASSAGE_BYTES {
-            break;
-        }
-        total += verified.quote.len();
         passages.push(ResearchPassage {
             passage_id: format!("p{}", passages.len() + 1),
             citation,

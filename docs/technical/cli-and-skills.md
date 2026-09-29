@@ -55,7 +55,7 @@ Commands appear in `capabilities` only when implemented. The following is the im
 
 ## Search and evidence controls
 
-`search --mode literal|lexical|semantic|hybrid` uses lexical by default. Literal v1 is a case-sensitive exact UTF-8 substring scan; regex is deferred. `graph query --strategy entity|relationship|combined --seed lexical|semantic` defaults to combined plus lexical. `search --mode hybrid --graph entities` enables the included entity/assertion candidate path. Entity extraction and LLM query expansion never run implicitly during these commands.
+`search --mode literal|lexical|semantic|hybrid` uses lexical by default. Literal v1 is a case-sensitive exact UTF-8 substring scan, including straight versus typographic quotes; use lexical search for names with punctuation variants. Regex is deferred. `graph query --strategy entity|relationship|combined --seed lexical|semantic` defaults to combined plus lexical. `search --mode hybrid --graph entities` enables the included entity/assertion candidate path. Entity extraction and LLM query expansion never run implicitly during these commands.
 
 Common filters include record kind, tag, source ID, and path prefix. Initial defaults are proposed product settings: ten displayed hits, maximum fifty per page; graph depth one, maximum two; context target 3,000 tokens with a 12,000-byte ceiling. Retrieval defines the larger candidate budgets behind these output limits. User limits can lower defaults; higher ceilings require a later explicit contract change. Results show truncation; the system never implies that a bounded graph search exhaustively found all relevant facts.
 
@@ -104,13 +104,15 @@ Stderr is for concise diagnostics/progress. With JSON/JSONL, it never carries a 
 | `1` | `INTERNAL`, unexpected I/O failure | Preserve run/change IDs and inspect diagnostics |
 | `2` | `USAGE`, `CONFIG_INVALID` | Correct arguments/local profile |
 | `3` | `VAULT_NOT_FOUND`, `RECORD_NOT_FOUND` | Correct root or reference |
-| `4` | `CONTENT_CONFLICT`, `CURSOR_STALE`, `FRESHNESS_CONFLICT` | Reread/sync and decide using new state |
+| `4` | `CONTENT_CONFLICT`, `CURSOR_STALE`, `FRESHNESS_CONFLICT`; `LOCK_TIMEOUT` | Reread/sync for state conflicts; retry a lock timeout after the active writer finishes |
 | `5` | `RECOVERY_REQUIRED`, `INDEX_CORRUPT`, `SOURCE_INTEGRITY` | Recover/rebuild projections or repair source evidence |
 | `6` | `CAPABILITY_UNAVAILABLE`, `OFFLINE_UNAVAILABLE`, `PROFILE_UNTRUSTED` | Configure explicitly or choose supported offline behavior |
 | `7` | `BUDGET_EXCEEDED` | Read preserved partial result; resume only under a new applicable budget |
 | `8` | `PROVIDER_AUTH`, `PROVIDER_RATE_LIMIT`, `PROVIDER_RESPONSE`, `PROVIDER_UNAVAILABLE` | Follow retryability and provider-specific hint |
 | `9` | `RECORD_INVALID`, `REFERENCE_AMBIGUOUS`, `EXTRACTION_INVALID` | Repair source/record/packet, not blind retry |
 | `130` | `CANCELLED` | Inspect durable job state; in-flight billing may remain unknown |
+
+`LOCK_TIMEOUT` is retryable and distinct from a stale content hash. Writer-lock waiting defaults to 5000 ms, configurable with local preferences or `--lock-timeout-ms`.
 
 Limit truncation during ordinary discovery is a successful bounded query, with `partial: true`. A requested complete operation that stops at its budget returns exit 7 with its durable partial result. `check` reports diagnostics as data and returns 9 for error-level invalid records; warnings alone do not fail it. `doctor` does not probe providers unless `--probe` is explicit.
 

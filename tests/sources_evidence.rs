@@ -260,6 +260,71 @@ fn capture_preserves_exact_original_and_content() {
     );
 }
 #[test]
+fn agent_capture_keeps_claimed_retrieval_time_on_new_revision_only() {
+    let (_temp, root) = fixture();
+    let bytes = b"Agent report\r\nExact evidence";
+    let mut req = request(bytes);
+    req.origin_kind = SourceOrigin::AgentReport;
+    req.origin = "agent-report:test".into();
+    let plan = store(&root)
+        .plan_agent_capture(req.clone(), Some("2025-04-03T12:34:56+02:00"))
+        .unwrap();
+    let revision = plan
+        .draft
+        .as_ref()
+        .unwrap()
+        .operations
+        .iter()
+        .find(|op| op.target.as_str().ends_with("/revision.md"))
+        .unwrap();
+    let metadata = parse_note(revision.proposed.as_ref().unwrap())
+        .canonical
+        .unwrap();
+    assert_eq!(
+        metadata.string("origin_retrieved_at"),
+        Some("2025-04-03T12:34:56+02:00")
+    );
+    assert_eq!(
+        metadata.string("origin_retrieved_at_kind"),
+        Some("agent-claimed")
+    );
+    assert_ne!(
+        metadata.string("wiki_captured_at"),
+        metadata.string("origin_retrieved_at")
+    );
+    apply(&root, plan.draft.unwrap());
+    let parent = root.path().join(format!(
+        "sources/{}/revisions/{}",
+        plan.source_id, plan.revision_id
+    ));
+    assert_eq!(fs::read(parent.join("original.bin")).unwrap(), bytes);
+    assert_eq!(fs::read(parent.join("content.md")).unwrap(), bytes);
+
+    let plain = store(&root).plan_agent_capture(req.clone(), None).unwrap();
+    let revision = plain
+        .draft
+        .as_ref()
+        .unwrap()
+        .operations
+        .iter()
+        .find(|op| op.target.as_str().ends_with("/revision.md"))
+        .unwrap();
+    assert!(
+        parse_note(revision.proposed.as_ref().unwrap())
+            .canonical
+            .unwrap()
+            .field("origin_retrieved_at")
+            .is_none()
+    );
+    assert!(
+        store(&root)
+            .plan_agent_capture(req.clone(), Some("yesterday"))
+            .is_err()
+    );
+    req.origin_kind = SourceOrigin::LocalFile;
+    assert!(store(&root).plan_agent_capture(req, None).is_err());
+}
+#[test]
 fn nested_markdown_text_quotation_is_rejected_by_writer_and_verifier() {
     for explanation in [
         "> ```text\n> second quote\n> ```",
@@ -555,6 +620,7 @@ fn binary_unsupported_and_explicit_extraction() {
     let (_t, root) = fixture();
     let bytes = [0, 255, 128, 0];
     let source = capture(&root, &bytes);
+    assert_eq!(source.capture_state, Some(SourceCaptureState::Unsupported));
     let p = root.path().join(format!(
         "sources/{}/revisions/{}/revision.md",
         source.source_id, source.revision_id
@@ -589,6 +655,126 @@ fn binary_unsupported_and_explicit_extraction() {
             .unwrap()
             .quote,
         b"Extracted text"
+    );
+}
+#[test]
+fn unsupported_local_formats_and_empty_text_report_citation_availability() {
+    let (_t, root) = fixture();
+    for original in [
+        b"<html><body>Evidence</body></html>".as_slice(),
+        &[0, 255, 0],
+        &[255],
+    ] {
+        let mut req = request(original);
+        req.extraction = ExtractionInput::Unsupported {
+            extractor: "unsupported-local-format-v1".into(),
+            fingerprint: Blake3Hash::digest(b"unsupported-local-format-v1"),
+        };
+        let plan = store(&root).plan_capture(req).unwrap();
+        assert_eq!(plan.capture_state, Some(SourceCaptureState::Unsupported));
+        assert!(!plan.capture_state.unwrap().citable());
+        apply(&root, plan.draft.unwrap());
+        let parent = root.path().join(format!(
+            "sources/{}/revisions/{}",
+            plan.source_id, plan.revision_id
+        ));
+        assert_eq!(fs::read(parent.join("original.bin")).unwrap(), original);
+        assert!(!parent.join("content.md").exists());
+        let revision = parse_note(&fs::read(parent.join("revision.md")).unwrap());
+        assert_eq!(
+            revision.canonical.unwrap().string("wiki_extraction_status"),
+            Some("unsupported")
+        );
+    }
+    let empty = store(&root).plan_capture(request(b"")).unwrap();
+    assert_eq!(empty.capture_state, Some(SourceCaptureState::Empty));
+    assert_eq!(empty.capture_state.unwrap().extraction_status(), "complete");
+    assert!(!empty.capture_state.unwrap().citable());
+    apply(&root, empty.draft.unwrap());
+    let parent = root.path().join(format!(
+        "sources/{}/revisions/{}",
+        empty.source_id, empty.revision_id
+    ));
+    assert_eq!(fs::read(parent.join("original.bin")).unwrap(), b"");
+    assert_eq!(fs::read(parent.join("content.md")).unwrap(), b"");
+}
+#[test]
+fn refresh_filename_does_not_replace_canonical_title() {
+    let (_t, root) = fixture();
+    let first = capture(&root, b"before");
+    let mut renamed_file = request(b"after");
+    renamed_file.title = "renamed-file.txt".into();
+    let refreshed = store(&root)
+        .plan_refresh(&first.source_id, renamed_file.clone())
+        .unwrap();
+    let revision_write = refreshed
+        .draft
+        .as_ref()
+        .unwrap()
+        .operations
+        .iter()
+        .find(|op| op.target.as_str().ends_with("revision.md"))
+        .unwrap();
+    assert_eq!(
+        parse_note(revision_write.proposed.as_ref().unwrap())
+            .canonical
+            .unwrap()
+            .title(),
+        "Exact source"
+    );
+    apply(&root, refreshed.draft.unwrap());
+    let source_path = root
+        .path()
+        .join(format!("sources/{}/source.md", first.source_id));
+    assert_eq!(
+        parse_note(&fs::read(&source_path).unwrap())
+            .canonical
+            .unwrap()
+            .title(),
+        "Exact source"
+    );
+    let retitled = store(&root)
+        .plan_refresh_with_title(&first.source_id, renamed_file, Some("Chosen title"))
+        .unwrap();
+    assert!(retitled.reused);
+    assert_eq!(retitled.revision_id, refreshed.revision_id);
+    assert_eq!(retitled.draft.as_ref().unwrap().operations.len(), 1);
+    apply(&root, retitled.draft.unwrap());
+    assert_eq!(
+        parse_note(&fs::read(&source_path).unwrap())
+            .canonical
+            .unwrap()
+            .title(),
+        "Chosen title"
+    );
+    let mut changed = request(b"new revision");
+    changed.title = "another-name.md".into();
+    let explicit = store(&root)
+        .plan_refresh_with_title(&first.source_id, changed, Some("Final title"))
+        .unwrap();
+    assert!(!explicit.reused);
+    let revision_write = explicit
+        .draft
+        .as_ref()
+        .unwrap()
+        .operations
+        .iter()
+        .find(|op| op.target.as_str().ends_with("revision.md"))
+        .unwrap();
+    assert_eq!(
+        parse_note(revision_write.proposed.as_ref().unwrap())
+            .canonical
+            .unwrap()
+            .title(),
+        "Final title"
+    );
+    apply(&root, explicit.draft.unwrap());
+    assert_eq!(
+        parse_note(&fs::read(&source_path).unwrap())
+            .canonical
+            .unwrap()
+            .title(),
+        "Final title"
     );
 }
 #[test]

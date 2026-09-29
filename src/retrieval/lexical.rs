@@ -396,6 +396,7 @@ fn search_inner(
             query,
             plan.mode,
             candidate.identity,
+            plan.limits.excerpt_bytes,
         )?;
         let excerpt = excerpt(
             reader,
@@ -460,6 +461,7 @@ fn match_ranges(
     query: &str,
     mode: SearchMode,
     identity: bool,
+    excerpt_bytes: usize,
 ) -> Result<Vec<Range<usize>>> {
     if mode == SearchMode::Literal {
         return Ok(literal_matches(&document.raw_text, query));
@@ -478,6 +480,29 @@ fn match_ranges(
     let map = SourceMap::markdown(&document.raw_text, offset);
     let tokens = tokenizer.tokens(&map.text)?;
     let mut matches = Vec::new();
+    // Prefer the complete query over an early isolated word. Search the full
+    // document before the per-term match cap, so roundup pages lead to the
+    // named section even when an earlier query word occurs many times.
+    let phrase = tokenizer.tokens(query)?;
+    if phrase.len() > 1 {
+        for window in tokens.windows(phrase.len()) {
+            if window.iter().zip(&phrase).all(|(a, b)| a.text == b.text) {
+                let normalized = window[0].span.start..window[window.len() - 1].span.end;
+                if let Some(original) = map.original_span(normalized.clone())
+                    && original.len() <= excerpt_bytes.saturating_mul(2) / 3
+                    && document.raw_text.get(original.clone()) == map.text.get(normalized)
+                {
+                    matches.push(original);
+                    if matches.len() == 64 {
+                        break;
+                    }
+                }
+            }
+        }
+        if !matches.is_empty() {
+            return Ok(matches);
+        }
+    }
     for term in query.split_whitespace() {
         let phrase = tokenizer.tokens(term)?;
         if phrase.is_empty() {

@@ -6,7 +6,7 @@ use crate::{
 use serde::{Deserialize, Serialize};
 
 pub const RENDER_VERSION: &str = "render-v1";
-pub const SEGMENT_VERSION: &str = "segment-v1";
+pub const SEGMENT_VERSION: &str = "segment-v2";
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct EmbeddingSettings {

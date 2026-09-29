@@ -458,7 +458,12 @@ fn result(
                 .into(),
         );
     }
-    let truncated = end < total
+    let opposing_omitted = assertions.iter().any(|a| a.omitted_opposing_assertions > 0);
+    if opposing_omitted {
+        warnings.push("opposing assertion links were capped; omitted_opposing_assertions counts the remaining current matches".into());
+    }
+    let truncated = opposing_omitted
+        || end < total
         || walked.coverage.omitted_candidates > 0
         || walked.coverage.omitted_seeds > 0
         || walked.coverage.omitted_assertions > 0

@@ -646,6 +646,19 @@ fn cache_deletion_retains_receipts_and_explicit_sync_replaces_missing() {
         .embeddings_sync(&EmbeddingSettings::default(), &runtime)
         .unwrap();
     assert!(initial.published);
+    let active_check = f
+        .app
+        .embeddings_check(
+            &EmbeddingSettings {
+                max_input_bytes: 20_000,
+                ..Default::default()
+            },
+            None,
+            false,
+        )
+        .unwrap();
+    // A local check uses the active generation, not this invocation's defaults.
+    assert_eq!(active_check.settings.unwrap().max_input_bytes, 12_000);
     let run = initial.run_id.unwrap();
     let before = responses.calls.load(Ordering::SeqCst);
     let writer = f.writer();

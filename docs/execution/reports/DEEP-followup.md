@@ -1,0 +1,26 @@
+# Deep manual-test follow-up
+
+Baseline: clean main/origin `c320da59d7784dee5159bab13f5f778959377583`. The owner's report tested `258689d90d301f3b1ed4f7e12cf8b4f71a296141` / 0.1.1. The user requested0.1.2 after local fixes: this follow-up prepares a new draft release, preserving existing tags and draft assets.
+
+## Changes and disposition
+
+- B1/B2: packet selection owns the 32-passage/64-KiB caps, names omitted candidates, removes contained same-revision source passages regardless of ordering when the larger passage fits, and reconstructs current candidates from hash-verified receipts. Newly captured sources lead. Refresh/import retain omitted captures as candidates, exclude withdrawn sources, and bind newly selected existing source proofs before atomic publication.
+- B3/B7: source envelopes expose extraction status/citability and warn for unsupported or empty text. HTML remains original-only; no new extractor dependency. Refresh preserves the canonical source title unless explicitly changed; immutable revisions remain unchanged on title-only updates. Unique current-body-token tests do not reproduce duplicate payload hits; title-only manifest hits are distinct documents.
+- B4/B8: lexical excerpts prefer a full tokenized query phrase even after more than64 earlier partial matches. Literal mode remains case-sensitive exact UTF-8, with documentation recommending lexical mode for punctuation/name variants.
+- B5/B6/B9: normal completion with gaps is not partial. Completion reason distinguishes agent-finished, pending follow-up, and round limit. Offline follow-ups remain valid local-only tasks; free text never enables a tool executor. Field-specific validation explains source byte/NUL/time failures, empty claims and invalid passage selectors.
+- B10: retryable `LOCK_TIMEOUT` uses exit4 and a specific retry hint; the default writer wait is5000ms and documented. Stale-hash `CONTENT_CONFLICT` behavior is unchanged.
+- B11: accepted/current assertions with identical canonical endpoints and qualifiers except negation are disputed and have bounded opposing record links. Explicit contradiction evidence stays separate. Omitted links are counted/warned and mark truncation. Semantic catalog fingerprint changed to reject/rebuild old projections. Property remains `qualifiers.property`, rather than a duplicate top-level field.
+- B12: owner corrected six units to five sources/no pages/default12000, consistent with a two-unit article, and downgraded the observation to a heading-granularity suggestion. Independently, Astra fixed false mid-line heading recognition and sibling-H2 ancestry, with final formatted-input bounds and complete byte-coverage regressions. Segment identity isv2; compatible retained space specs remain readable. `embeddings check` exposes effective settings. Existing quality target supports finer explicit segmentation.
+- B13: optional RFC3339 host `retrieved_at` is retained exactly on the new immutable revision as `origin_retrieved_at`, marked `agent-claimed`. Absent timestamps stay absent; original payload bytes and replay identity are preserved. Reports already retain the research question.
+
+## Review and checks
+
+Sol performed bounded implementation and tests; Astra independently reviewed research publication/context retention and graph opposition. R1–R6 in DEEP-independent-review.md are statically closed. The root integrated public types/schemas, CLI, settings, lexical selection, cache versions and documentation. No dependency versions changed.
+
+Initial focused batch:11/13targets passed; failures were an invalid new property fixture and an obsolete finished-with-gaps partial assertion. Both corrected. The next gate found a graph fixture requesting an unsupported two-link bound, corrected to valid zero/one limits, and strict Clippy required the unit module after production items. No product validation was relaxed. The corrected continuation passed:230 integration parent cases across18 targets, plus the focused packet unit case, format and strict all-source Clippy. DEEP-checks.json records exact scope and logs. The final0.1.2 gate passed all7 packaging/CLI/skill/lint targets in33.798s;41 Python build-tool cases and a fresh30-command offline smoke passed. Dependency pins did not change.
+
+The30-command offline manual smoke passed with no network use. The generated command reference and package manifest were regenerated, and the maintained36-step skill recipe passed. Skill-creator instructions were used for the narrow reference update; quick_validate.py could not run because system Python lacks PyYAML. Existing frontmatter/links were inspected and packaging/behavior checks provide independent validation.
+
+All local tests use disposable vaults and mock providers. No live gateway/auth helper/paid calls/real vaults/host installation. Native cross-platform build and candidate verification results will be stamped separately. Windows vault writes and installed-copy macOS SIGKILL remain unqualified; unchanged unrelated full recovery matrices are not claimed rerun.
+
+Test-agent handoff: ../../testing-0.1.2.md, with full provider/lifecycle guidance in ../../testing-0.1.1.md.

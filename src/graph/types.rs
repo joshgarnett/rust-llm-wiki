@@ -145,6 +145,9 @@ pub struct GraphAssertion {
     pub rrf_score: f64,
     pub support: Vec<GraphEvidence>,
     pub contradictions: Vec<GraphEvidence>,
+    /// Current accepted assertions with matching qualifiers and opposite negation.
+    pub opposing_assertions: Vec<RecordRef>,
+    pub omitted_opposing_assertions: usize,
     pub omitted_support: usize,
     pub omitted_contradictions: usize,
 }

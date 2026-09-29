@@ -677,7 +677,8 @@ fn cooperating_writers_serialize() {
     }
     let started = Instant::now();
     let error = WriterPermit::acquire(&root, Duration::from_millis(30)).unwrap_err();
-    assert_eq!(error.code, ErrorCode::ContentConflict);
+    assert_eq!(error.code, ErrorCode::LockTimeout);
+    assert!(error.hint.as_deref().unwrap().contains("--lock-timeout-ms"));
     assert!(error.retryable);
     assert!(started.elapsed() >= Duration::from_millis(30));
     let permit = WriterPermit::acquire(&root, Duration::from_secs(2)).unwrap();

@@ -29,7 +29,7 @@ impl Default for OperationOptions {
             dry_run: false,
             stage_only: false,
             offline: false,
-            lock_timeout_ms: 1000,
+            lock_timeout_ms: 5000,
         }
     }
 }
@@ -71,6 +71,8 @@ pub struct PlanSummary {
 }
 #[derive(Debug, Clone, Serialize)]
 pub struct MutationOutcome {
+    #[serde(skip)]
+    pub source_capture: Option<crate::sources::SourceCaptureState>,
     pub plan: PlanSummary,
     pub change: Option<PreparedChange>,
     pub status: Option<ChangeStatus>,

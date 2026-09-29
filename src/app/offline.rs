@@ -433,6 +433,7 @@ impl OfflineApp {
         let allocated_ids = draft.allocated_ids.clone();
         if self.options.dry_run || plan.operations.is_empty() {
             return Ok(MutationOutcome {
+                source_capture: None,
                 plan: summary,
                 allocated_ids,
                 change: None,
@@ -445,6 +446,7 @@ impl OfflineApp {
         let retained = engine.prepare(&w, draft)?;
         if force_stage || self.options.stage_only {
             return Ok(MutationOutcome {
+                source_capture: None,
                 plan: summary,
                 allocated_ids,
                 change: Some(retained.prepared),
@@ -462,6 +464,7 @@ impl OfflineApp {
             )
             .map_err(|error| retained_error(error, &retained.prepared))?;
         Ok(MutationOutcome {
+            source_capture: None,
             plan: summary,
             allocated_ids,
             change: Some(applied.change),
@@ -678,6 +681,7 @@ impl OfflineApp {
             .entry("revision".into())
             .or_insert(plan.revision_id);
         outcome.reused |= plan.reused;
+        outcome.source_capture = plan.capture_state;
         Ok(outcome)
     }
     pub fn source_add(&self, request: CaptureRequest) -> Result<MutationOutcome> {
@@ -685,10 +689,20 @@ impl OfflineApp {
         self.source_plan(SourceStore::new(self.fs.clone()).plan_capture(request)?)
     }
     pub fn source_refresh(&self, id: RecordId, request: CaptureRequest) -> Result<MutationOutcome> {
+        self.source_refresh_with_title(id, request, None)
+    }
+    pub fn source_refresh_with_title(
+        &self,
+        id: RecordId,
+        request: CaptureRequest,
+        title: Option<&str>,
+    ) -> Result<MutationOutcome> {
         capture_bounds(&request)?;
         let p = self.current_projection()?;
         self.resolve_path(&RecordSelector::Id(id.clone()), &p)?;
-        self.source_plan(SourceStore::new(self.fs.clone()).plan_refresh(&id, request)?)
+        self.source_plan(
+            SourceStore::new(self.fs.clone()).plan_refresh_with_title(&id, request, title)?,
+        )
     }
     pub fn source_withdraw(&self, id: RecordId, reason: &str) -> Result<MutationOutcome> {
         let p = self.current_projection()?;
@@ -846,6 +860,7 @@ impl OfflineApp {
             }
             engine.validate_prepared_graph(&i.prepared, &CatalogGraphValidator)?;
             return Ok(MutationOutcome {
+                source_capture: None,
                 plan: summary,
                 allocated_ids,
                 change: Some(i.prepared),
@@ -859,6 +874,7 @@ impl OfflineApp {
             .apply(&w, &i.prepared, &CatalogGraphValidator, &self.catalog())
             .map_err(|error| retained_error(error, &i.prepared))?;
         Ok(MutationOutcome {
+            source_capture: None,
             plan: summary,
             allocated_ids,
             change: Some(report.change),
@@ -881,6 +897,7 @@ impl OfflineApp {
                 ));
             }
             return Ok(MutationOutcome {
+                source_capture: None,
                 plan: summary,
                 allocated_ids,
                 change: Some(i.prepared),
@@ -892,6 +909,7 @@ impl OfflineApp {
         let w = self.writer()?;
         let report = engine.abort(&w, &i.prepared)?;
         Ok(MutationOutcome {
+            source_capture: None,
             plan: summary,
             allocated_ids,
             change: Some(report.change),

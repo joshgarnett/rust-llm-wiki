@@ -8,7 +8,7 @@ use crate::{
     domain::{
         Blake3Hash, CanonicalRecord, RecordId, RecordKind, Result, VaultRelativePath, WikiError,
     },
-    records::edit_note,
+    records::{edit_note, parse_note},
     vault::ExpectedState,
 };
 use std::collections::BTreeMap;
@@ -17,6 +17,15 @@ pub(crate) struct Extraction {
     pub extractor: String,
     pub fingerprint: Blake3Hash,
     pub content: Option<Vec<u8>>,
+}
+impl Extraction {
+    fn capture_state(&self) -> SourceCaptureState {
+        match self.content.as_deref() {
+            None => SourceCaptureState::Unsupported,
+            Some([]) => SourceCaptureState::Empty,
+            Some(_) => SourceCaptureState::Complete,
+        }
+    }
 }
 fn extract(request: &CaptureRequest) -> Result<Extraction> {
     let (extractor, fingerprint, content) = match &request.extraction {
@@ -136,6 +145,47 @@ fn revision_writes(
     Ok(operations)
 }
 impl SourceStore {
+    /// Capture an agent report with its optional, agent-claimed retrieval time.
+    /// The timestamp is provenance on the immutable revision, separate from
+    /// the local `wiki_captured_at` clock.
+    pub fn plan_agent_capture(
+        &self,
+        request: CaptureRequest,
+        retrieved_at: Option<&str>,
+    ) -> Result<SourcePlan> {
+        if request.origin_kind != SourceOrigin::AgentReport {
+            return Err(WikiError::invalid(
+                "agent capture requires agent-report origin",
+            ));
+        }
+        if let Some(value) = retrieved_at {
+            time::OffsetDateTime::parse(value, &time::format_description::well_known::Rfc3339)
+                .map_err(|_| WikiError::invalid("retrieved_at must be RFC3339"))?;
+        }
+        let mut plan = self.plan_capture(request)?;
+        if let Some(value) = retrieved_at {
+            let revision = plan
+                .draft
+                .as_mut()
+                .expect("capture has a draft")
+                .operations
+                .iter_mut()
+                .find(|op| op.target.as_str().ends_with("/revision.md"))
+                .expect("capture has a revision");
+            let parsed = parse_note(revision.proposed.as_ref().expect("revision has bytes"));
+            let mut fields = parsed
+                .canonical
+                .as_ref()
+                .expect("generated revision is valid")
+                .fields()
+                .clone();
+            fields.insert("origin_retrieved_at".into(), value.into());
+            fields.insert("origin_retrieved_at_kind".into(), "agent-claimed".into());
+            revision.proposed = Some(record_bytes(CanonicalRecord::new(fields)?, parsed.body())?);
+        }
+        Ok(plan)
+    }
+
     pub fn plan_capture(&self, request: CaptureRequest) -> Result<SourcePlan> {
         let extraction = extract(&request)?;
         let source_id = RecordId::generate(RecordKind::Source)?;
@@ -186,6 +236,7 @@ impl SourceStore {
             reused: false,
             invalidation: InvalidationInputs::default(),
             dependencies: vec![],
+            capture_state: Some(extraction.capture_state()),
         })
     }
     pub fn plan_refresh(
@@ -193,10 +244,30 @@ impl SourceStore {
         source_id: &RecordId,
         request: CaptureRequest,
     ) -> Result<SourcePlan> {
+        self.plan_refresh_with_title(source_id, request, None)
+    }
+
+    /// Only an explicit title changes the canonical source display title.
+    /// A file name supplied as the default capture title cannot rename a source.
+    pub fn plan_refresh_with_title(
+        &self,
+        source_id: &RecordId,
+        mut request: CaptureRequest,
+        explicit_title: Option<&str>,
+    ) -> Result<SourcePlan> {
         let extraction = extract(&request)?;
         let view = self.view()?;
         let (source_path, source_note) = view.resolve(source_id, RecordKind::Source, None)?;
         let source = source_note.canonical.as_ref().expect("resolved");
+        let title = match explicit_title {
+            Some(title) if title.trim().is_empty() => {
+                return Err(WikiError::invalid("source title must not be empty"));
+            }
+            Some(title) => title,
+            None => source.title(),
+        };
+        request.title = title.to_owned();
+        let title_changed = title != source.title();
         let old_head = RecordId::new(
             source
                 .string("wiki_current_revision")
@@ -283,7 +354,7 @@ impl SourceStore {
             Some(id) => id,
             None => RecordId::generate(RecordKind::Revision)?,
         };
-        if is_reused && revision_id == old_head {
+        if is_reused && revision_id == old_head && !title_changed {
             return Ok(SourcePlan {
                 draft: None,
                 source_id: source_id.clone(),
@@ -291,6 +362,7 @@ impl SourceStore {
                 reused: true,
                 invalidation: InvalidationInputs::default(),
                 dependencies: dependencies(deps),
+                capture_state: Some(extraction.capture_state()),
             });
         }
         let mut operations = if is_reused {
@@ -311,7 +383,7 @@ impl SourceStore {
                 "sources/{source_id}/revisions/{revision_id}/revision.md"
             ))?
         };
-        let changes = BTreeMap::from([
+        let mut changes = BTreeMap::from([
             ("wiki_current_revision".into(), revision_id.as_str().into()),
             (
                 "wiki_revision".into(),
@@ -319,6 +391,9 @@ impl SourceStore {
             ),
             ("wiki_revisions".into(), serde_json::Value::Array(revisions)),
         ]);
+        if title_changed {
+            changes.insert("title".into(), title.into());
+        }
         let head = ExpectedWrite {
             target: source_path.clone(),
             expected: ExpectedState::Hash(source_note.source_hash.clone()),
@@ -350,6 +425,7 @@ impl SourceStore {
             reused: is_reused,
             invalidation,
             dependencies: read_preconditions,
+            capture_state: Some(extraction.capture_state()),
         })
     }
 }

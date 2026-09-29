@@ -34,7 +34,7 @@ pub fn split_iter(
     let capacity = quality_limit - header_bytes;
     let mut cursor = start;
     let mut empty_pending = start == raw.len();
-    let mut headings: Vec<String> = Vec::new();
+    let mut headings: Vec<(usize, String)> = Vec::new();
     // Prefer heading then paragraph boundaries within each capacity. Preserve raw bytes.
     Ok(std::iter::from_fn(move || {
         if cursor == raw.len() {
@@ -46,7 +46,7 @@ pub fn split_iter(
                 ByteSpan::new(start as u64, start as u64).map(|span| BodySegment {
                     span,
                     text: String::new(),
-                    headings: headings.clone(),
+                    headings: labels(&headings),
                 }),
             );
         }
@@ -66,7 +66,7 @@ pub fn split_iter(
         let mut offset = cursor;
         for line in raw[cursor..ceiling].split_inclusive('\n') {
             let clean = line.trim_end_matches(['\r', '\n']);
-            if offset > cursor && heading(clean).is_some() {
+            if offset > cursor && heading_at(raw, offset).is_some() {
                 heading_boundary = Some(offset);
             }
             if clean.is_empty() && offset + line.len() > cursor {
@@ -83,20 +83,22 @@ pub fn split_iter(
                 .unwrap_or(ceiling)
         };
         // Context at the segment's first line; heading ancestry is presentation only.
-        if let Some((level, label)) = raw[cursor..end].lines().next().and_then(heading) {
-            headings.truncate(level.saturating_sub(1));
-            headings.push(label);
+        if let Some((level, label)) = heading_at(raw, cursor) {
+            push_heading(&mut headings, level, label);
         }
         let result = ByteSpan::new(cursor as u64, end as u64).map(|span| BodySegment {
             span,
             text: raw[cursor..end].into(),
-            headings: headings.clone(),
+            headings: labels(&headings),
         });
-        for line in raw[cursor..end].lines().skip(1) {
-            if let Some((level, label)) = heading(line) {
-                headings.truncate(level.saturating_sub(1));
-                headings.push(label);
+        let mut offset = cursor;
+        for line in raw[cursor..end].split_inclusive('\n') {
+            if offset > cursor
+                && let Some((level, label)) = heading_at(raw, offset)
+            {
+                push_heading(&mut headings, level, label);
             }
+            offset += line.len();
         }
         cursor = end;
         Some(result)
@@ -112,13 +114,31 @@ pub fn split(
     split_iter(raw, start, header_bytes, max_bytes, quality)?.collect()
 }
 
-fn heading(line: &str) -> Option<(usize, String)> {
+pub(crate) fn heading(line: &str) -> Option<(usize, &str)> {
     let count = line.bytes().take_while(|b| *b == b'#').count();
     if count == 0 || count > 6 || !line[count..].starts_with(' ') {
         return None;
     }
-    Some((
-        count,
-        line[count..].trim().trim_end_matches('#').trim().into(),
-    ))
+    Some((count, line[count..].trim().trim_end_matches('#').trim()))
+}
+
+// A capacity split is not a Markdown line boundary. Parse the full original
+// line so a split inside a heading cannot invent a different ancestry label.
+fn heading_at(raw: &str, offset: usize) -> Option<(usize, &str)> {
+    if offset != 0 && raw.as_bytes().get(offset - 1) != Some(&b'\n') {
+        return None;
+    }
+    raw.get(offset..)?.lines().next().and_then(heading)
+}
+pub(crate) fn push_heading(headings: &mut Vec<(usize, String)>, level: usize, label: &str) {
+    while headings
+        .last()
+        .is_some_and(|(previous, _)| *previous >= level)
+    {
+        headings.pop();
+    }
+    headings.push((level, label.to_owned()));
+}
+pub(crate) fn labels(headings: &[(usize, String)]) -> Vec<String> {
+    headings.iter().map(|(_, label)| label.clone()).collect()
 }

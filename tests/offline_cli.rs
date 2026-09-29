@@ -354,6 +354,183 @@ fn source_cli_capture_refresh_reuse_and_withdraw_preserve_immutable_bytes() {
     );
 }
 #[test]
+fn source_cli_reports_original_only_and_empty_capture() {
+    let temp = fixture();
+    let root = temp.path();
+    for (name, bytes) in [
+        ("page.html", b"<html>HTML-only-token</html>".as_slice()),
+        ("bytes.bin", &[0, 255, 0][..]),
+        ("invalid.txt", &[255, 254][..]),
+    ] {
+        let input = root.join(name);
+        fs::write(&input, bytes).unwrap();
+        let before = tree(root);
+        let preview = ok(
+            root,
+            &["--dry-run", "source", "add", input.to_str().unwrap()],
+            None,
+        );
+        assert_eq!(preview["data"]["extraction_status"], "unsupported");
+        assert_eq!(preview["data"]["citable"], false);
+        assert_eq!(before, tree(root), "dry-run wrote canonical state");
+        let added = ok(root, &["source", "add", input.to_str().unwrap()], None);
+        assert_eq!(added["data"]["extraction_status"], "unsupported");
+        assert_eq!(added["data"]["citable"], false);
+        assert!(
+            added["warnings"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|w| w.as_str().unwrap().contains("cannot be searched"))
+        );
+        let source = added["data"]["allocated_ids"]["source"].as_str().unwrap();
+        let revision = added["data"]["allocated_ids"]["revision"].as_str().unwrap();
+        let parent = root.join(format!("sources/{source}/revisions/{revision}"));
+        assert_eq!(fs::read(parent.join("original.bin")).unwrap(), bytes);
+        assert!(!parent.join("content.md").exists());
+        let record = ok(root, &["read", "--id", revision], None);
+        assert_eq!(
+            record["data"]["record"]["wiki_extraction_status"],
+            "unsupported"
+        );
+    }
+    let empty = root.join("empty.txt");
+    fs::write(&empty, b"").unwrap();
+    let added = ok(root, &["source", "add", empty.to_str().unwrap()], None);
+    assert_eq!(added["data"]["extraction_status"], "complete");
+    assert_eq!(added["data"]["citable"], false);
+    assert!(
+        added["warnings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|w| w.as_str().unwrap().contains("Empty source"))
+    );
+    let source = added["data"]["allocated_ids"]["source"].as_str().unwrap();
+    let revision = added["data"]["allocated_ids"]["revision"].as_str().unwrap();
+    let parent = root.join(format!("sources/{source}/revisions/{revision}"));
+    assert_eq!(fs::read(parent.join("original.bin")).unwrap(), b"");
+    assert_eq!(fs::read(parent.join("content.md")).unwrap(), b"");
+
+    let supported = root.join("supported.txt");
+    fs::write(&supported, b"Ordinary source text").unwrap();
+    let added = ok(root, &["source", "add", supported.to_str().unwrap()], None);
+    assert_eq!(added["data"]["extraction_status"], "complete");
+    assert_eq!(added["data"]["citable"], true);
+    assert!(added["warnings"].as_array().unwrap().is_empty());
+}
+#[test]
+fn source_cli_refresh_preserves_title_and_searches_only_current_payload() {
+    let temp = fixture();
+    let root = temp.path();
+    let original = root.join("original.txt");
+    fs::write(&original, b"OLD-UNIQUE-CAPTURE-TOKEN").unwrap();
+    let added = ok(
+        root,
+        &[
+            "source",
+            "add",
+            original.to_str().unwrap(),
+            "--title",
+            "Stable source title",
+        ],
+        None,
+    );
+    let source = added["data"]["allocated_ids"]["source"].as_str().unwrap();
+    let old_revision = added["data"]["allocated_ids"]["revision"].as_str().unwrap();
+    let replacement = root.join("renamed-file.txt");
+    fs::write(&replacement, b"NEW-UNIQUE-CAPTURE-TOKEN").unwrap();
+    let refreshed = ok(
+        root,
+        &[
+            "source",
+            "refresh",
+            source,
+            "--file",
+            replacement.to_str().unwrap(),
+        ],
+        None,
+    );
+    let current_revision = refreshed["data"]["allocated_ids"]["revision"]
+        .as_str()
+        .unwrap();
+    assert_ne!(current_revision, old_revision);
+    assert_eq!(
+        ok(root, &["read", "--id", source], None)["data"]["record"]["title"],
+        "Stable source title"
+    );
+    assert_eq!(
+        ok(root, &["read", "--id", current_revision], None)["data"]["record"]["title"],
+        "Stable source title"
+    );
+    let current = ok(
+        root,
+        &["search", "NEW-UNIQUE-CAPTURE-TOKEN", "--mode", "literal"],
+        None,
+    );
+    let hits = current["data"]["hits"].as_array().unwrap();
+    assert_eq!(hits.len(), 1, "{hits:?}");
+    assert!(
+        hits[0]["path"]
+            .as_str()
+            .unwrap()
+            .ends_with(&format!("revisions/{current_revision}/content.md"))
+    );
+    assert!(
+        ok(
+            root,
+            &["search", "OLD-UNIQUE-CAPTURE-TOKEN", "--mode", "literal"],
+            None
+        )["data"]["hits"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    let titled = ok(
+        root,
+        &["search", "Stable source title", "--mode", "literal"],
+        None,
+    );
+    let paths: Vec<_> = titled["data"]["hits"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|hit| hit["path"].as_str())
+        .collect();
+    assert!(paths.iter().any(|path| path.ends_with("/source.md")));
+    assert!(
+        paths
+            .iter()
+            .any(|path| path.ends_with(&format!("revisions/{current_revision}/revision.md")))
+    );
+    let explicit = ok(
+        root,
+        &[
+            "source",
+            "refresh",
+            source,
+            "--file",
+            replacement.to_str().unwrap(),
+            "--title",
+            "Explicit source title",
+        ],
+        None,
+    );
+    assert_eq!(explicit["data"]["reused"], true);
+    assert_eq!(
+        explicit["data"]["allocated_ids"]["revision"],
+        current_revision
+    );
+    assert_eq!(
+        ok(root, &["read", "--id", source], None)["data"]["record"]["title"],
+        "Explicit source title"
+    );
+    assert_eq!(
+        ok(root, &["read", "--id", current_revision], None)["data"]["record"]["title"],
+        "Stable source title"
+    );
+}
+#[test]
 fn migration_is_lossless_staged_guarded_and_future_versions_remain_readable() {
     let temp = fixture();
     let root = temp.path();

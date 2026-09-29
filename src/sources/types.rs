@@ -78,6 +78,29 @@ pub struct SourcePlan {
     pub reused: bool,
     pub invalidation: InvalidationInputs,
     pub dependencies: Vec<ReadDependency>,
+    /// The capture's text availability; withdrawal has no capture state.
+    pub capture_state: Option<SourceCaptureState>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SourceCaptureState {
+    Complete,
+    Empty,
+    Unsupported,
+}
+
+impl SourceCaptureState {
+    pub const fn extraction_status(self) -> &'static str {
+        match self {
+            Self::Complete | Self::Empty => "complete",
+            Self::Unsupported => "unsupported",
+        }
+    }
+
+    pub const fn citable(self) -> bool {
+        matches!(self, Self::Complete)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

@@ -226,19 +226,17 @@ fn render_document_iter<'a>(
     let mut ancestry = Vec::new();
     let mut max_header = whole_header.len();
     for line in raw[start..].lines() {
-        let level = line.bytes().take_while(|b| *b == b'#').count();
-        if (1..=6).contains(&level) && line[level..].starts_with(' ') {
-            let label = line[level..].trim().trim_end_matches('#').trim();
+        if let Some((level, label)) = segment::heading(line) {
             if label.len() > settings.max_input_bytes {
                 return Err(WikiError::new(
                     ErrorCode::BudgetExceeded,
                     "unsplittable heading exceeds bound",
                 ));
             }
-            ancestry.truncate(level - 1);
-            ancestry.push(label.to_owned());
-            max_header =
-                max_header.max(prefix.len() + "Headings: \n\n".len() + quoted(&ancestry)?.len());
+            segment::push_heading(&mut ancestry, level, label);
+            max_header = max_header.max(
+                prefix.len() + "Headings: \n\n".len() + quoted(&segment::labels(&ancestry))?.len(),
+            );
         }
     }
     Ok(Box::new(
@@ -256,6 +254,12 @@ fn render_document_iter<'a>(
                 quoted(&slice.headings)?,
                 slice.text
             );
+            if utf8.len() > quality.min(settings.max_input_bytes) {
+                return Err(WikiError::new(
+                    ErrorCode::BudgetExceeded,
+                    "formatted document embedding exceeds input bound",
+                ));
+            }
             unit(
                 document,
                 TargetKind::Document,

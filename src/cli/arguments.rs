@@ -43,7 +43,7 @@ pub struct Arguments {
     /// Trusted provider profile name from the private provider configuration.
     #[arg(long, global = true)]
     pub profile: Option<String>,
-    /// Maximum time in milliseconds to wait for the vault writer lock.
+    /// Maximum writer-lock wait in milliseconds (default: 5000; preferences may override).
     #[arg(long, global = true)]
     pub lock_timeout_ms: Option<u64>,
     #[command(subcommand)]

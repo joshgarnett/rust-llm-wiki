@@ -45,6 +45,8 @@ pub struct EmbeddingRuntime<'a> {
 pub struct EmbeddingReport {
     pub space: Option<Blake3Hash>,
     pub active_space: Option<Blake3Hash>,
+    /// Effective candidate or active-space settings used to calculate coverage.
+    pub settings: Option<EmbeddingSettings>,
     pub coverage: Coverage,
     pub generated_inputs: usize,
     pub reused_inputs: usize,
@@ -168,7 +170,7 @@ impl OfflineApp {
                 ..Default::default()
             }
         };
-        let mut report=EmbeddingReport {space:space.clone(),active_space:active.map(|s|s.id),coverage,generated_inputs:0,reused_inputs:0,published:false,dry_run:self.options.dry_run,network_used:false,run_id:None,warnings:vec!["local check does not establish provider compatibility; missing/corrupt cache is missing coverage".into()]};
+        let mut report=EmbeddingReport {space:space.clone(),active_space:active.map(|s|s.id),settings:spec.as_ref().map(|s|s.settings.clone()),coverage,generated_inputs:0,reused_inputs:0,published:false,dry_run:self.options.dry_run,network_used:false,run_id:None,warnings:vec!["local check does not establish provider compatibility; missing/corrupt cache is missing coverage".into()]};
         if probe && !self.options.dry_run {
             let runtime = runtime.ok_or_else(|| {
                 fail(
@@ -261,6 +263,7 @@ impl OfflineApp {
         let mut report = EmbeddingReport {
             space: Some(space.clone()),
             active_space: old_active.as_ref().map(|s| s.id.clone()),
+            settings: Some(spec.settings.clone()),
             coverage: Coverage {
                 eligible_units: units.len(),
                 missing_units: units.len(),

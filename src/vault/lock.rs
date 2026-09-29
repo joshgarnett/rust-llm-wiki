@@ -62,10 +62,13 @@ impl WriterPermit {
                     let remaining = timeout.saturating_sub(started.elapsed());
                     if remaining.is_zero() {
                         let mut error = WikiError::new(
-                            ErrorCode::ContentConflict,
+                            ErrorCode::LockTimeout,
                             "writer lock contention timeout",
                         );
                         error.retryable = true;
+                        error.hint = Some(
+                            "Retry after the writer finishes, or increase --lock-timeout-ms".into(),
+                        );
                         return Err(error);
                     }
                     thread::sleep(remaining.min(Duration::from_millis(10)));

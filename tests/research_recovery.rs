@@ -89,6 +89,9 @@ impl Fixture {
             .count()
     }
     fn capture_many(&self, count: usize) -> Vec<RecordId> {
+        self.capture_many_with(count, |n| format!("Cedar backup source number {n}."))
+    }
+    fn capture_many_with(&self, count: usize, content: impl Fn(usize) -> String) -> Vec<RecordId> {
         let store = SourceStore::new(self.fs.clone());
         let mut ids = vec![];
         let mut combined: Option<lwiki::changes::ChangeDraft> = None;
@@ -98,7 +101,7 @@ impl Fixture {
                     title: format!("Existing Cedar source {n}"),
                     origin_kind: SourceOrigin::LocalFile,
                     origin: format!("fixture-{n}.txt"),
-                    original: format!("Cedar backup source number {n}.").into_bytes(),
+                    original: content(n).into_bytes(),
                     extraction: ExtractionInput::Utf8Preserve,
                     media_type: Some("text/plain".into()),
                 })
@@ -124,6 +127,61 @@ impl Fixture {
             )
             .unwrap();
         ids
+    }
+}
+
+#[test]
+fn exact_byte_limit_names_every_omitted_explicit_source_on_start_and_import() {
+    let f = Fixture::new(None);
+    let sources = f.capture_many_with(20, |n| {
+        let prefix = format!("Cedar backup source number {n}. ");
+        format!("{prefix}{}", "x".repeat(4096 - prefix.len()))
+    });
+    let app = f.app();
+    let started = research::start(
+        &app,
+        scope(sources.clone()),
+        Some(id("run_research_exact_byte_limit")),
+        false,
+    )
+    .unwrap();
+    let initial = started.packet.as_ref().unwrap();
+    assert_eq!(initial.passages.len(), 16);
+    assert_eq!(
+        initial
+            .passages
+            .iter()
+            .map(|p| p.quote.len())
+            .sum::<usize>(),
+        65536
+    );
+    assert_eq!(initial.warnings.len(), 1);
+    assert!(initial.warnings[0].contains("4 candidate passages omitted"));
+    for source in &sources[16..] {
+        assert!(initial.warnings[0].contains(&source.to_string()));
+    }
+
+    let imported = research::import(
+        &app,
+        &serde_json::to_vec(&json!({
+            "schema":"lwiki.research-submission.v1",
+            "run_id":initial.run_id,
+            "packet_fingerprint":initial.packet_fingerprint,
+            "response":{"stage":"collect_sources","sources":[
+                {"key":"new_1","title":"New one","origin":"local fixture","content":"New Cedar source one.","provenance":"fixture"},
+                {"key":"new_2","title":"New two","origin":"local fixture","content":"New Cedar source two.","provenance":"fixture"}
+            ],"gaps":[]}
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let next = imported.packet.as_ref().unwrap();
+    assert_eq!(next.passages.len(), 17);
+    assert_eq!(next.passages[0].quote, "New Cedar source one.");
+    assert_eq!(next.passages[1].quote, "New Cedar source two.");
+    assert!(next.warnings[0].contains("5 candidate passages omitted"));
+    for source in &sources[15..] {
+        assert!(next.warnings[0].contains(&source.to_string()));
     }
 }
 

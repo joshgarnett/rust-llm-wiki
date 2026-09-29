@@ -294,6 +294,52 @@ fn proposition(record: &CanonicalRecord) -> BTreeMap<String, serde_json::Value> 
     fields
 }
 
+/// The exact authored proposition apart from polarity. This is deliberately
+/// narrower than a semantic contradiction: dates and modality must be equal.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) struct OppositionKey {
+    subject: String,
+    predicate: String,
+    object_id: Option<String>,
+    literal_type: Option<String>,
+    literal_value: Option<String>,
+    property: Option<String>,
+    unit: Option<String>,
+    modality: String,
+    valid_from: Option<String>,
+    valid_until: Option<String>,
+}
+
+pub(crate) fn opposition_key(record: &CanonicalRecord) -> Option<(OppositionKey, bool)> {
+    if record.kind() != RecordKind::Assertion {
+        return None;
+    }
+    Some((
+        OppositionKey {
+            subject: record.string("wiki_subject_id")?.into(),
+            predicate: record.string("wiki_predicate")?.into(),
+            object_id: record.string("wiki_object_id").map(str::to_owned),
+            literal_type: record.string("wiki_literal_type").map(str::to_owned),
+            literal_value: record.string("wiki_literal_value").map(str::to_owned),
+            property: record.string("wiki_property").map(str::to_owned),
+            unit: record.string("wiki_unit").map(str::to_owned),
+            modality: record.string("wiki_modality").unwrap_or("asserted").into(),
+            valid_from: record.string("wiki_valid_from").map(str::to_owned),
+            valid_until: record.string("wiki_valid_until").map(str::to_owned),
+        },
+        record
+            .field("wiki_negated")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false),
+    ))
+}
+
+pub(crate) fn eligible_opposition(row: &RecordRow) -> bool {
+    row.record.kind() == RecordKind::Assertion
+        && row.record.string("wiki_status") == Some("accepted")
+        && row.eligibility == Eligibility::Current
+}
+
 fn mark_invalid(
     row: &mut RecordRow,
     reason: impl Into<String>,
@@ -980,6 +1026,23 @@ pub(crate) fn compute(
         }
     }
     apply_dependency_eligibility(records, &declared);
+    let mut opposing: BTreeMap<OppositionKey, [Vec<RecordId>; 2]> = BTreeMap::new();
+    for row in records.values().filter(|row| eligible_opposition(row)) {
+        if let Some((key, negated)) = opposition_key(&row.record) {
+            opposing.entry(key).or_default()[usize::from(negated)].push(row.record.id().clone());
+        }
+    }
+    for sides in opposing
+        .values()
+        .filter(|sides| !sides[0].is_empty() && !sides[1].is_empty())
+    {
+        for id in sides[0].iter().chain(&sides[1]) {
+            let row = records.get_mut(id).expect("grouped assertion");
+            row.disputed = true;
+            row.reasons.push("opposing_accepted_assertion".into());
+            row.reasons.push("disputed".into());
+        }
+    }
     // All related bytes form an over-approximated closure. This intentionally
     // includes complete decisions and all evidence membership for a reviewed claim.
     let decision_deps: Vec<_> = records

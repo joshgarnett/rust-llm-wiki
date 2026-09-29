@@ -178,6 +178,7 @@ fn id_hash_and_path_newtypes() {
         (ErrorCode::VaultNotFound, 3),
         (ErrorCode::RecordNotFound, 3),
         (ErrorCode::ContentConflict, 4),
+        (ErrorCode::LockTimeout, 4),
         (ErrorCode::CursorStale, 4),
         (ErrorCode::FreshnessConflict, 4),
         (ErrorCode::RecoveryRequired, 5),

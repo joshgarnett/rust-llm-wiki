@@ -62,6 +62,7 @@ impl SourceStore {
                 reused: true,
                 invalidation,
                 dependencies: dependencies(deps),
+                capture_state: None,
             });
         }
         let changes = BTreeMap::from([
@@ -92,6 +93,7 @@ impl SourceStore {
             reused: false,
             invalidation,
             dependencies: read_preconditions,
+            capture_state: None,
         })
     }
 }

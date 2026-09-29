@@ -109,7 +109,7 @@ pub fn resolve(
     let mut result = Preferences {
         offline: false,
         read_max_bytes: crate::app::offline::DEFAULT_READ_BYTES,
-        lock_timeout_ms: 1000,
+        lock_timeout_ms: 5000,
         profile: None,
         profile_permitted: false,
         warnings: vec![],

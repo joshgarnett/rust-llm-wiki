@@ -150,6 +150,149 @@ fn answer(packet: &ResearchPacket, passage_id: &str, follow_up: Option<&str>) ->
         "gaps":[],"follow_up":follow_up}),
     )
 }
+
+#[test]
+fn explicit_sources_cover_lexical_subsets_on_start_and_refresh() {
+    let f = Fixture::new();
+    let first = f.capture("Cedar backup is stored in the north vault every Friday. Extra context for the first source.");
+    let second = f.capture("Cedar backup is copied to the south vault every Saturday. Extra context for the second source.");
+    let app = f.app(false, false);
+    let started = research::start(
+        &app,
+        scope(false, vec![first.clone(), second.clone()]),
+        Some(id("run_research_subset_refresh")),
+        false,
+    )
+    .unwrap();
+    let initial = packet(&started);
+    assert_eq!(initial.passages.len(), 2);
+    assert!(initial.warnings.is_empty());
+    assert!(
+        matches!(&initial.passages[0].citation, CitationRef::Source(r) if r.source_id == first)
+    );
+    assert!(
+        matches!(&initial.passages[1].citation, CitationRef::Source(r) if r.source_id == second)
+    );
+
+    f.refresh(
+        &first,
+        "Cedar backup now stays in the east vault every Sunday. Updated first source context.",
+    );
+    let refreshed = research::resume(&app, &started.run_id, true).unwrap();
+    let fresh = packet(&refreshed);
+    assert_eq!(fresh.passages.len(), 2);
+    assert!(fresh.warnings.is_empty());
+    assert!(fresh.passages[0].quote.contains("east vault"));
+    assert!(matches!(&fresh.passages[0].citation, CitationRef::Source(r) if r.source_id == first));
+    assert!(matches!(&fresh.passages[1].citation, CitationRef::Source(r) if r.source_id == second));
+}
+
+#[test]
+fn refresh_recovers_captured_source_evicted_by_packet_limit() {
+    let f = Fixture::new();
+    let app = f.app(false, false);
+    let mut research_scope = scope(false, vec![]);
+    research_scope.max_sources = 20;
+    let started =
+        research::start(&app, research_scope, Some(id("run_evicted_capture")), false).unwrap();
+    let initial_sources: Vec<_> = (0..16)
+        .map(|n| {
+            let prefix = format!("Cedar backup source {n}. ");
+            json!({"key":format!("old_{n}"),"title":format!("Old {n}"),"origin":"local fixture",
+            "content":format!("{prefix}{}", "x".repeat(4096-prefix.len()))})
+        })
+        .collect();
+    let first = research::import(
+        &app,
+        &submission(
+            packet(&started),
+            json!({
+                "stage":"collect_sources","sources":initial_sources,"gaps":[]
+            }),
+        ),
+    )
+    .unwrap();
+    assert_eq!(packet(&first).passages.len(), 16);
+    let evicted = first.imported_sources[15].source_id.clone();
+    let continuation = research::import(
+        &app,
+        &submission(
+            packet(&first),
+            json!({
+                "stage":"answer","claims":[],"gaps":[],"follow_up":"Check one more local source."
+            }),
+        ),
+    )
+    .unwrap();
+    let prefix = "Newest Cedar backup source. ";
+    let newest = research::import(&app, &submission(packet(&continuation), json!({
+        "stage":"collect_sources","sources":[{"key":"newest","title":"Newest","origin":"local fixture",
+            "content":format!("{prefix}{}", "y".repeat(4096-prefix.len()))}],"gaps":[]
+    }))).unwrap();
+    let bounded = packet(&newest);
+    assert_eq!(bounded.passages.len(), 16);
+    assert!(bounded.warnings[0].contains(&evicted.to_string()));
+    assert!(
+        bounded
+            .passages
+            .iter()
+            .all(|passage| !matches!(&passage.citation,
+        CitationRef::Source(source) if source.source_id == evicted))
+    );
+    let newest_id = newest.imported_sources[0].source_id.clone();
+    let withdraw = SourceStore::new(f.fs.clone())
+        .plan_withdraw(&newest_id, "Fixture withdrawal")
+        .unwrap();
+    f.apply(withdraw.draft.unwrap());
+    let refreshed = research::resume(&app, &started.run_id, true).unwrap();
+    let fresh = packet(&refreshed);
+    assert_eq!(fresh.passages.len(), 16);
+    assert!(
+        fresh
+            .passages
+            .iter()
+            .any(|passage| matches!(&passage.citation,
+        CitationRef::Source(source) if source.source_id == evicted))
+    );
+    assert!(
+        fresh
+            .passages
+            .iter()
+            .all(|passage| !matches!(&passage.citation,
+        CitationRef::Source(source) if source.source_id == newest_id))
+    );
+}
+
+#[test]
+fn withdrawn_explicit_source_stays_out_of_refreshed_import() {
+    let f = Fixture::new();
+    let source = f.capture("Cedar backup source to withdraw.");
+    let app = f.app(false, false);
+    let started = research::start(
+        &app,
+        scope(false, vec![source.clone()]),
+        Some(id("run_withdraw_explicit")),
+        false,
+    )
+    .unwrap();
+    let withdraw = SourceStore::new(f.fs.clone())
+        .plan_withdraw(&source, "Fixture withdrawal")
+        .unwrap();
+    f.apply(withdraw.draft.unwrap());
+    let refreshed = research::resume(&app, &started.run_id, true).unwrap();
+    assert!(packet(&refreshed).passages.is_empty());
+    let imported = research::import(
+        &app,
+        &submission(
+            packet(&refreshed),
+            json!({
+                "stage":"collect_sources","sources":[],"gaps":[]
+            }),
+        ),
+    )
+    .unwrap();
+    assert!(packet(&imported).passages.is_empty());
+}
 fn tree(path: &Path) -> BTreeMap<PathBuf, (Blake3Hash, SystemTime)> {
     fn visit(root: &Path, at: &Path, out: &mut BTreeMap<PathBuf, (Blake3Hash, SystemTime)>) {
         for entry in fs::read_dir(at).unwrap() {
@@ -276,6 +419,69 @@ fn collect_answer_cites_agent_report_and_retry_preserves_ids_and_counters() {
     assert_eq!(completed_retry.status, "completed");
     assert_eq!(completed_retry.freshness, "retained");
     assert!(completed_retry.packet.is_none());
+}
+
+#[test]
+fn host_claimed_retrieval_time_and_exact_bytes_survive_capture_and_replay() {
+    let f = Fixture::new();
+    let app = f.app(false, false);
+    let started = research::start(
+        &app,
+        scope(false, vec![]),
+        Some(id("run_retrieved_at")),
+        false,
+    )
+    .unwrap();
+    let content = "Cedar café backup.\nExact UTF-8 bytes remain.\n";
+    let bytes = submission(
+        packet(&started),
+        json!({
+            "stage":"collect_sources","sources":[
+                {"key":"dated","title":"Dated","origin":"https://example.invalid/dated","content":content,
+                 "provenance":"Host supplied text","retrieved_at":"2026-09-29T10:11:12-04:00"},
+                {"key":"undated","title":"Undated","origin":"local notes","content":"Undated Cedar note.",
+                 "provenance":"Host supplied text"}
+            ],"gaps":[]
+        }),
+    );
+    let imported = research::import(&app, &bytes).unwrap();
+    assert_eq!(imported.imported_sources.len(), 2);
+    for (index, captured) in imported.imported_sources.iter().enumerate() {
+        let revision = parse_note(
+            &fs::read(f.temp.path().join(format!(
+                "sources/{}/revisions/{}/revision.md",
+                captured.source_id, captured.source_revision
+            )))
+            .unwrap(),
+        );
+        let fields = revision.canonical.as_ref().unwrap();
+        if index == 0 {
+            assert_eq!(
+                fields.string("origin_retrieved_at"),
+                Some("2026-09-29T10:11:12-04:00")
+            );
+            assert_eq!(
+                fields.string("origin_retrieved_at_kind"),
+                Some("agent-claimed")
+            );
+            assert_eq!(
+                fs::read(f.temp.path().join(format!(
+                    "sources/{}/revisions/{}/original.bin",
+                    captured.source_id, captured.source_revision
+                )))
+                .unwrap(),
+                content.as_bytes()
+            );
+        } else {
+            assert_eq!(fields.string("origin_retrieved_at"), None);
+            assert_eq!(fields.string("origin_retrieved_at_kind"), None);
+        }
+    }
+    let status = research::status(&app, &started.run_id).unwrap();
+    let replay = research::import(&app, &bytes).unwrap();
+    assert!(replay.reused);
+    assert_eq!(replay.imported_sources, imported.imported_sources);
+    assert_eq!(research::status(&app, &started.run_id).unwrap(), status);
 }
 
 #[test]
@@ -430,6 +636,69 @@ fn malformed_and_foreign_submissions_fail_without_writes() {
 }
 
 #[test]
+fn handoff_validation_names_invalid_field_or_selector_before_writes() {
+    let f = Fixture::new();
+    let app = f.app(false, false);
+    let started = research::start(
+        &app,
+        scope(false, vec![]),
+        Some(id("run_diagnostics")),
+        false,
+    )
+    .unwrap();
+    let invalid_collection = [
+        (
+            json!({"stage":"collect_sources","sources":[{"key":"dated","title":"Dated","origin":"host notes","content":"Cedar backup.","retrieved_at":"2026-09-29"}],"gaps":[]}),
+            "source retrieved_at must be an RFC3339 timestamp",
+        ),
+        (
+            json!({"stage":"collect_sources","sources":[{"key":"oversized","title":"Oversized","origin":"host notes","content":"x".repeat(65537)}],"gaps":[]}),
+            "source content exceeds 65536 UTF-8 bytes",
+        ),
+        (
+            json!({"stage":"collect_sources","sources":[{"key":"nul","title":"NUL","origin":"host notes","content":"Cedar\u{0}backup"}],"gaps":[]}),
+            "source content contains a NUL character",
+        ),
+    ];
+    let before = tree_except_writer_lock(f.temp.path());
+    for (response, diagnostic) in invalid_collection {
+        let error = research::import(&app, &submission(packet(&started), response)).unwrap_err();
+        assert!(error.message.contains(diagnostic), "{}", error.message);
+        assert_eq!(tree_except_writer_lock(f.temp.path()), before);
+    }
+
+    let imported = research::import(
+        &app,
+        &collect(packet(&started), "Cedar backup is on Friday."),
+    )
+    .unwrap();
+    let answer_packet = packet(&imported);
+    let CitationRef::Source(source) = &answer_packet.passages[0].citation else {
+        panic!("source passage")
+    };
+    let invalid_answers = [
+        (
+            json!({"stage":"answer","claims":[{"text":" ","passage_ids":["p1"]}],"gaps":[]}),
+            "claim text is empty",
+        ),
+        (
+            json!({"stage":"answer","claims":[{"text":"Cedar claim","passage_ids":[source.quote_hash.to_string()]}],"gaps":[]}),
+            "source IDs and quote hashes are not passage IDs",
+        ),
+        (
+            json!({"stage":"answer","claims":[{"text":"Cedar claim","passage_ids":[source.source_id.to_string()]}],"gaps":[]}),
+            "source IDs and quote hashes are not passage IDs",
+        ),
+    ];
+    let before = tree_except_writer_lock(f.temp.path());
+    for (response, diagnostic) in invalid_answers {
+        let error = research::import(&app, &submission(answer_packet, response)).unwrap_err();
+        assert!(error.message.contains(diagnostic), "{}", error.message);
+        assert_eq!(tree_except_writer_lock(f.temp.path()), before);
+    }
+}
+
+#[test]
 fn answered_collection_gap_is_resolved_in_final_report() {
     let f = Fixture::new();
     let app = f.app(false, false);
@@ -449,6 +718,46 @@ fn answered_collection_gap_is_resolved_in_final_report() {
     let report = research::report(&app, &started.run_id).unwrap();
     assert!(report.gaps.is_empty());
     assert!(!report.partial);
+    assert_eq!(report.completion_reason.as_deref(), Some("agent_finished"));
+}
+
+#[test]
+fn finished_answer_with_honest_gaps_is_not_marked_interrupted() {
+    let f = Fixture::new();
+    let app = f.app(false, false);
+    let started = research::start(
+        &app,
+        scope(false, vec![]),
+        Some(id("run_honest_gaps")),
+        false,
+    )
+    .unwrap();
+    let collected = research::import(
+        &app,
+        &collect(packet(&started), "Cedar backup is on Friday."),
+    )
+    .unwrap();
+    let cited = packet(&collected).passages[0].passage_id.clone();
+    let completed = research::import(
+        &app,
+        &submission(
+            packet(&collected),
+            json!({
+                "stage":"answer",
+                "claims":[{"text":"Cedar backup is on Friday.","passage_ids":[cited]}],
+                "gaps":["The destination remains unknown."]
+            }),
+        ),
+    )
+    .unwrap();
+    assert!(completed.packet.is_none());
+    let report = research::report(&app, &started.run_id).unwrap();
+    assert!(!report.partial);
+    assert_eq!(report.completion_reason.as_deref(), Some("agent_finished"));
+    assert_eq!(
+        report.gaps,
+        vec!["The destination remains unknown.".to_string()]
+    );
 }
 
 #[test]
@@ -499,6 +808,11 @@ fn preview_dry_run_offline_and_follow_up_survive_reopen() {
     )
     .unwrap();
     let first_report = research::report(&app, &run_id).unwrap();
+    assert!(first_report.partial);
+    assert_eq!(
+        first_report.completion_reason.as_deref(),
+        Some("follow_up_requested")
+    );
     assert_eq!(packet(&follow_up).stage, ResearchStage::CollectSources);
     assert_eq!(packet(&follow_up).round, 2);
     drop(app);
@@ -548,7 +862,8 @@ fn preview_dry_run_offline_and_follow_up_survive_reopen() {
     .unwrap();
     assert!(completed.packet.is_none());
     let report = research::report(&reopened, &run_id).unwrap();
-    assert!(report.partial);
+    assert!(!report.partial);
+    assert_eq!(report.completion_reason.as_deref(), Some("agent_finished"));
     assert!(report.gaps.iter().any(|gap| gap.contains("Destination")));
 }
 

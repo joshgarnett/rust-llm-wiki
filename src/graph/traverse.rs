@@ -1,7 +1,10 @@
 //! Bounded traversal of recorded propositions and separately labelled navigation.
 use super::{rank, types::*};
 use crate::{
-    catalog::{ReaderSnapshot, RecordRow, SnapshotVerification},
+    catalog::{
+        ReaderSnapshot, RecordRow, SnapshotVerification,
+        eligibility::{OppositionKey, eligible_opposition, opposition_key},
+    },
     domain::*,
     retrieval::{RankContribution, filters},
     sources::EvidenceStance,
@@ -325,6 +328,20 @@ pub(crate) fn walk(
     mut coverage: GraphCoverage,
 ) -> Result<Traversed> {
     let allowed = filtered_ids(reader, plan, Some(RecordKind::Assertion))?;
+    let mut opposing: BTreeMap<(OppositionKey, bool), Vec<RecordId>> = BTreeMap::new();
+    for row in reader
+        .projection()
+        .records
+        .values()
+        .filter(|row| eligible_opposition(row))
+    {
+        if let Some(key) = opposition_key(&row.record) {
+            opposing
+                .entry(key)
+                .or_default()
+                .push(row.record.id().clone());
+        }
+    }
     let navigation_allowed = if plan.include_navigation {
         filtered_ids(reader, plan, None)?
     } else {
@@ -385,6 +402,7 @@ pub(crate) fn walk(
                 true,
                 TraversalDirection::Outgoing,
                 seed.rank_contributions.clone(),
+                &opposing,
             )? {
                 let path = edge.path.clone();
                 let subject = edge.subject.record_id.clone();
@@ -532,6 +550,7 @@ pub(crate) fn walk(
                         false,
                         direction,
                         contribution,
+                        &opposing,
                     )?
                     else {
                         continue;
@@ -695,6 +714,7 @@ fn build(
     direct: bool,
     direction: TraversalDirection,
     contributions: Vec<RankContribution>,
+    opposing: &BTreeMap<(OppositionKey, bool), Vec<RecordId>>,
 ) -> Result<Option<GraphAssertion>> {
     let Some((subject, predicate, object, qualifiers)) = proposition(reader, row) else {
         return Ok(None);
@@ -709,6 +729,19 @@ fn build(
     });
     let (support, contradictions, omitted_support, omitted_contradictions) =
         evidence(reader, row, plan)?;
+    let opposing_ids = if eligible_opposition(row) {
+        opposition_key(&row.record).and_then(|(key, negated)| opposing.get(&(key, !negated)))
+    } else {
+        None
+    };
+    let opposing_total = opposing_ids.map_or(0, Vec::len);
+    let opposing_assertions = opposing_ids
+        .into_iter()
+        .flatten()
+        .take(plan.limits.contradictions_per_assertion)
+        .map(|id| reference(reader, &reader.projection().records[id]))
+        .collect::<Vec<_>>();
+    let omitted_opposing_assertions = opposing_total - opposing_assertions.len();
     Ok(Some(GraphAssertion {
         record_ref: reference(reader, row),
         locator: locator(reader, row),
@@ -729,8 +762,10 @@ fn build(
         rank_contributions: contributions,
         support,
         contradictions,
+        opposing_assertions,
         omitted_support,
         omitted_contradictions,
+        omitted_opposing_assertions,
     }))
 }
 fn navigation_edges(
