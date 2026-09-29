@@ -73,6 +73,15 @@ The following Windows CI run confirmed compiler discovery but exposed a
 264-character Rust standard-library linker input (`LNK1181`). Windows setup
 now uses a short output root on the runner's system drive, as recommended by
 the Bazel Windows guide. This changes orchestration, not Rust source/tests.
+Release run [36562096258](https://github.com/joshgarnett/rust-llm-wiki/actions/runs/36562096258)
+confirmed Windows ARM64 compiles past bootstrap, then exposed `ring` selecting
+Clang while receiving MSVC C flags. Sol and Astra identified a scoped fix:
+patch only ring 0.17.14's build script, guarded by Windows/ARM64/MSVC plus an
+explicit marker, to clear generic CFLAGS before compiler detection. SDK,
+librarian and linker settings remain intact. Bazel's mapping was regenerated;
+Cargo.toml/Cargo.lock and all dependency versions are unchanged. The updated
+native macOS `just ci` gate passed, including 41 tooling tests and all smoke
+targets. Native Windows ARM64 confirmation remains pending.
 A release is accepted only after all six jobs succeed, downloaded
 archives pass checksum/member/metadata/binary checks, and the draft targets
 that exact validated commit. No failed-job artifact is promoted. The draft

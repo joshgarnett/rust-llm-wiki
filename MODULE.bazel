@@ -35,4 +35,18 @@ crate.from_cargo(
         "x86_64-pc-windows-msvc",
     ],
 )
+crate.annotation(
+    crate = "ring",
+    version = "0.17.14",
+    repositories = ["crates"],
+    patches = ["//bazel:ring_windows_arm64_cflags.patch"],
+    patch_args = ["-p1"],
+)
+crate.annotation_select(
+    crate = "ring",
+    version = "0.17.14",
+    repositories = ["crates"],
+    triples = ["aarch64-pc-windows-msvc"],
+    build_script_env = {"LWIKI_RING_WINDOWS_ARM64_CLANG": "1"},
+)
 use_repo(crate, "crates")

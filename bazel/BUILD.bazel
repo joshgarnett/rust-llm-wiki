@@ -1,1 +1,1 @@
-exports_files(["rust.bzl"])
+exports_files(["rust.bzl", "ring_windows_arm64_cflags.patch"])

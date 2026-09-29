@@ -31,6 +31,10 @@ After intentional Cargo manifest/lock edits, use `just deps-repin` to regenerate
 the Bazel mapping, then commit the updated lockfiles. This is lock maintenance,
 without an additional dependency-audit process.
 Cargo updates proposed by Dependabot also need this mapping refresh.
+The Bazel graph carries one small `ring` 0.17.14 build-script patch for Windows
+ARM64: that crate selects Clang, so its build discards inherited MSVC C flags
+while preserving SDK/linker settings. The patch requires an explicit target
+marker and leaves other targets and ordinary Cargo dependency sources unchanged.
 
 | Command | Scope |
 | --- | --- |

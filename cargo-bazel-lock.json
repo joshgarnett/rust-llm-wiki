@@ -1,5 +1,5 @@
 {
-  "checksum": "a8cf5411faa017bc3f245470326019b2e6098ff270a55b13fcafa6bdcae7b49b",
+  "checksum": "06099a5704d8fbdf58232d227664e661ed52fe043f951d6519ae60bfe5e086e9",
   "crates": {
     "adler2 2.0.1": {
       "name": "adler2",
@@ -8262,7 +8262,13 @@
       "repository": {
         "Http": {
           "url": "https://static.crates.io/crates/ring/0.17.14/download",
-          "sha256": "a4689e6c2294d81e88dc6261c768b63bc4fcdb852be6d1352498b114f61383b7"
+          "sha256": "a4689e6c2294d81e88dc6261c768b63bc4fcdb852be6d1352498b114f61383b7",
+          "patch_args": [
+            "-p1"
+          ],
+          "patches": [
+            "@@//bazel:ring_windows_arm64_cflags.patch"
+          ]
         }
       },
       "targets": [
@@ -8367,6 +8373,14 @@
             }
           ],
           "selects": {}
+        },
+        "build_script_env": {
+          "common": {},
+          "selects": {
+            "aarch64-pc-windows-msvc": {
+              "LWIKI_RING_WINDOWS_ARM64_CLANG": "1"
+            }
+          }
         },
         "links": "ring_core_0_17_14_"
       },
