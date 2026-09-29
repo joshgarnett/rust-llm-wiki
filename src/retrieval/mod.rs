@@ -12,3 +12,8 @@ pub mod verification;
 pub use context_types::*;
 pub use lexical::search;
 pub use types::*;
+pub mod fusion;
+pub mod render;
+pub mod segment;
+pub mod spaces;
+pub mod vectors;

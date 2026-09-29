@@ -183,7 +183,7 @@ pub(super) fn output(fs: &VaultFs, r: &DurableOutputRef) -> Result<()> {
     }
     Ok(())
 }
-pub(super) fn receipt(fs: &VaultFs, r: &DurableOutputRef) -> Result<UsageReceipt> {
+pub(crate) fn receipt(fs: &VaultFs, r: &DurableOutputRef) -> Result<UsageReceipt> {
     output(fs, r)?;
     let b = ledger::read(fs, &r.path)?.ok_or_else(|| events::corrupt("receipt missing"))?;
     let body: ReceiptBody = decode_fence(&b, "lwiki.run-event.v1")?;

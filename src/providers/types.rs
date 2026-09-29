@@ -52,6 +52,15 @@ pub enum RemoteOperation {
         output_schema: serde_json::Value,
         max_output_tokens: u64,
     },
+    Search {
+        query: String,
+        count: u8,
+        page: u8,
+    },
+    Fetch {
+        url: String,
+        limits: super::public_fetch::FetchLimits,
+    },
 }
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -174,10 +183,14 @@ pub enum ValidatedOutput {
     },
     Generation {
         value: serde_json::Value,
+        text: String,
         returned_model: Option<String>,
     },
     Probe {
         role: ServiceRole,
+    },
+    Search {
+        leads: Vec<super::search_wire::SearchLead>,
     },
 }
 pub struct DispatchOutcome {
@@ -215,6 +228,7 @@ pub(super) enum WireContract {
     Fixture,
     Embedding(EmbeddingContract),
     Generation(GenerationContract),
+    Search(super::search_wire::SearchContract),
 }
 
 pub(super) struct EmbeddingItemContract {

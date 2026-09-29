@@ -7,6 +7,7 @@ use crate::{
     changes::ChangeEngine,
     config::{self, PreferenceOptions},
     domain::*,
+    jobs::Capability,
     output::{Envelope, ErrorOutput, Metadata},
     records::parse_note,
     retrieval,
@@ -36,6 +37,8 @@ pub const COMMANDS: &[&str] = &[
     "evidence revalidate",
     "index sync",
     "index rebuild",
+    "embeddings check",
+    "embeddings sync",
     "search",
     "context",
     "graph extract",
@@ -79,6 +82,7 @@ fn value<T: Serialize>(value: T) -> Result<Value> {
 }
 fn failure(command: &str, error: WikiError) -> Envelope {
     let mut envelope = Envelope::failure(command, &error.code.to_string(), error.message.clone());
+    envelope.meta.network_used = error.network_used;
     if let Some(change) = error.details.get("change") {
         envelope.data = json!({"change":change});
         envelope.meta.partial = true;
@@ -120,7 +124,7 @@ fn execute_inner(args: &Arguments) -> Result<Envelope> {
         Command::Capabilities => {
             return Ok(Envelope::success(
                 command,
-                json!({"version":env!("CARGO_PKG_VERSION"),"commands":COMMANDS,"schemas":SCHEMAS,"network":false,"search_modes":["literal","lexical"],"jsonl_commands":["index sync","index rebuild","recover","changes apply","source add","source refresh"]}),
+                json!({"version":env!("CARGO_PKG_VERSION"),"commands":COMMANDS,"schemas":SCHEMAS,"network":true,"search_modes":["literal","lexical","semantic","hybrid"],"graph_seed_modes":["lexical","semantic"],"extraction_executors":["agent","api"],"jsonl_commands":["index sync","index rebuild","recover","changes apply","source add","source refresh"]}),
             ));
         }
         Command::Schema { name } => {
@@ -361,8 +365,67 @@ fn execute_inner(args: &Arguments) -> Result<Envelope> {
             }
             envelope.data = value(outcome)?;
         }
+        Command::Embeddings(options) => {
+            use super::embeddings::EmbeddingCommand;
+            let (settings, remote, probe, sync) = match &options.command {
+                EmbeddingCommand::Check(o) => (o.settings.settings(), &o.remote, o.probe, false),
+                EmbeddingCommand::Sync(o) => (o.settings.settings(), &o.remote, false, true),
+            };
+            remote.limits()?;
+            if args.stage {
+                return Err(usage("embedding cache operations cannot be staged"));
+            }
+            let runtime = if !args.dry_run
+                && (sync || probe || !app.options().offline && args.profile.is_some())
+            {
+                Some(remote.runtime(&app, args.profile.as_deref(), Capability::Embed)?)
+            } else {
+                None
+            };
+            let embedding = runtime.as_ref().map(embedding_runtime);
+            if args.dry_run {
+                settings.validate()?;
+                envelope.data = json!({"settings":settings,"dry_run":true,"probe":probe,
+                    "sync":sync,"cache_state_unknown":true,"network_used":false});
+                envelope
+                    .warnings
+                    .push("embedding coverage is unknown during dry-run".into());
+                return Ok(envelope);
+            }
+            let mut report = with_network_activity(
+                runtime.as_ref().map(|r| &r.dispatcher),
+                (|| {
+                    if sync && !args.dry_run {
+                        app.embeddings_sync(
+                            &settings,
+                            embedding.as_ref().ok_or_else(|| {
+                                usage("embeddings sync requires a trusted provider profile")
+                            })?,
+                        )
+                    } else {
+                        app.embeddings_check(&settings, embedding.as_ref(), probe && !args.dry_run)
+                    }
+                })(),
+            )?;
+            report.network_used = runtime
+                .as_ref()
+                .is_some_and(|r| r.dispatcher.network_used());
+            envelope.meta.network_used = report.network_used;
+            envelope.meta.partial = report.coverage.missing_units > 0;
+            envelope.warnings.extend(report.warnings.iter().cloned());
+            envelope.data = value(report)?;
+        }
         Command::Search(search) => {
             let plan = retrieval::lexical::validate_plan(&search.query, &search.plan())?;
+            if matches!(
+                plan.mode,
+                retrieval::SearchMode::Semantic | retrieval::SearchMode::Hybrid
+            ) {
+                search.remote.limits()?;
+            }
+            if search.graph.is_some() && plan.mode != retrieval::SearchMode::Hybrid {
+                return Err(usage("--graph entities requires hybrid search"));
+            }
             if args.dry_run {
                 // Even a read-only WAL open can create sidecars. Use no SQLite path.
                 let projection = crate::catalog::scan::scan(app.fs(), app.vault_id())?;
@@ -371,9 +434,39 @@ fn execute_inner(args: &Arguments) -> Result<Envelope> {
                     .warnings
                     .push("search results and index freshness are unknown during dry-run".into());
             } else {
-                let (_writer, reader) = reader(&app, search.no_sync)?;
-                let hits = retrieval::search(&reader, &search.query, &plan)?;
-                snapshot_metadata(&mut envelope.meta, &reader);
+                let hits = if matches!(
+                    plan.mode,
+                    retrieval::SearchMode::Semantic | retrieval::SearchMode::Hybrid
+                ) {
+                    let graph = search.graph.is_some().then(|| crate::graph::GraphPlan {
+                        filters: plan.filters.clone(),
+                        ..Default::default()
+                    });
+                    with_embedding_runtime(
+                        &app,
+                        args,
+                        &search.remote,
+                        search.lexical_fallback,
+                        |runtime, fallback| {
+                            app.semantic_search(
+                                &search.query,
+                                &plan,
+                                runtime,
+                                search.no_sync,
+                                fallback,
+                                graph.as_ref(),
+                            )
+                        },
+                    )?
+                } else {
+                    if search.graph.is_some() {
+                        return Err(usage("--graph requires hybrid search"));
+                    }
+                    let (_writer, reader) = reader(&app, search.no_sync)?;
+                    retrieval::search(&reader, &search.query, &plan)?
+                };
+                result_metadata(&mut envelope.meta, &hits.snapshot, &hits.verification);
+                envelope.meta.network_used = hits.network_used;
                 envelope.meta.partial = hits.truncated;
                 envelope.warnings.extend(hits.warnings.iter().cloned());
                 envelope.data = value(hits)?;
@@ -383,14 +476,55 @@ fn execute_inner(args: &Arguments) -> Result<Envelope> {
             command: GraphCommand::Extract(options),
         } => {
             let request = options.request(&app)?;
-            let outcome = app.graph_extract_agent(&request)?;
-            envelope.meta.partial = outcome.coverage.omitted_source_bytes > 0;
-            if args.dry_run {
-                envelope
-                    .warnings
-                    .push("packet preview is unpersisted and cannot be imported".into());
+            if matches!(options.executor, super::extraction::Executor::Api) {
+                options.remote.limits()?;
+                if options.max_output_tokens == 0 {
+                    return Err(usage("max-output-tokens must be positive"));
+                }
             }
-            envelope.data = value(outcome)?;
+            if matches!(options.executor, super::extraction::Executor::Agent) || args.dry_run {
+                let outcome = app.graph_extract_agent(&request)?;
+                envelope.meta.partial = outcome.coverage.omitted_source_bytes > 0;
+                if args.dry_run {
+                    envelope
+                        .warnings
+                        .push("packet preview is unpersisted and cannot be imported".into());
+                }
+                envelope.data = value(outcome)?;
+            } else {
+                let runtime =
+                    options
+                        .remote
+                        .runtime(&app, args.profile.as_deref(), Capability::Generate)?;
+                let run_id = options.run.clone().map(Ok).unwrap_or_else(|| {
+                    app.default_api_extraction_run_id(
+                        &request,
+                        &runtime.service,
+                        options.max_output_tokens,
+                    )
+                })?;
+                let request = crate::graph::api_extract::ApiExtractionRequest {
+                    export: request,
+                    run_id,
+                    created_at_utc_ms: runtime.created_at_utc_ms,
+                    deadline_utc_ms: runtime.deadline_utc_ms,
+                    limits: runtime.limits,
+                    max_output_tokens: options.max_output_tokens,
+                    new_extraction: options.new_extraction,
+                };
+                let outcome = with_network_activity(
+                    Some(&runtime.dispatcher),
+                    app.graph_extract_api(
+                        &request,
+                        &runtime.service,
+                        &runtime.dispatcher,
+                        runtime.job_options,
+                    ),
+                )?;
+                envelope.meta.network_used = runtime.dispatcher.network_used();
+                envelope.meta.partial = outcome.coverage.omitted_source_bytes > 0;
+                envelope.data = value(outcome)?;
+            }
         }
         Command::Graph {
             command: GraphCommand::Import(options),
@@ -432,7 +566,12 @@ fn execute_inner(args: &Arguments) -> Result<Envelope> {
                 _ => unreachable!("extraction handled above"),
             };
             let plan = query::validate_plan(&options.plan(neighbors))?;
-            if let GraphCommand::Query { query, .. } = command {
+            if plan.seed_mode == crate::graph::GraphSeedMode::Semantic && !neighbors {
+                options.remote.limits()?;
+            }
+            if let GraphCommand::Query { query, .. } = command
+                && plan.seed_mode == crate::graph::GraphSeedMode::Lexical
+            {
                 retrieval::lexical::lexical_expression(query)?;
             }
             if args.dry_run {
@@ -458,13 +597,31 @@ fn execute_inner(args: &Arguments) -> Result<Envelope> {
                     .warnings
                     .push("graph results and index freshness are unknown during dry-run".into());
             } else {
-                let (_writer, reader) = reader(&app, options.no_sync)?;
-                let result = match command {
-                    GraphCommand::Query { query, .. } => query::query(&reader, query, &plan)?,
-                    GraphCommand::Neighbors { id, .. } => query::neighbors(&reader, id, &plan)?,
-                    _ => unreachable!("extraction handled above"),
+                let result = if plan.seed_mode == crate::graph::GraphSeedMode::Semantic
+                    && !neighbors
+                {
+                    let GraphCommand::Query { query, .. } = command else {
+                        unreachable!()
+                    };
+                    with_embedding_runtime(
+                        &app,
+                        args,
+                        &options.remote,
+                        options.lexical_fallback,
+                        |runtime, fallback| {
+                            app.semantic_graph(query, &plan, runtime, options.no_sync, fallback)
+                        },
+                    )?
+                } else {
+                    let (_writer, reader) = reader(&app, options.no_sync)?;
+                    match command {
+                        GraphCommand::Query { query, .. } => query::query(&reader, query, &plan)?,
+                        GraphCommand::Neighbors { id, .. } => query::neighbors(&reader, id, &plan)?,
+                        _ => unreachable!("extraction handled above"),
+                    }
                 };
-                snapshot_metadata(&mut envelope.meta, &reader);
+                result_metadata(&mut envelope.meta, &result.snapshot, &result.verification);
+                envelope.meta.network_used = result.network_used;
                 envelope.meta.partial = result.truncated;
                 envelope.warnings.extend(result.warnings.iter().cloned());
                 envelope.data = value(result)?;
@@ -472,6 +629,16 @@ fn execute_inner(args: &Arguments) -> Result<Envelope> {
         }
         Command::Context(context) => {
             let request = context.request();
+            if matches!(
+                request.documents.mode,
+                retrieval::SearchMode::Semantic | retrieval::SearchMode::Hybrid
+            ) || request
+                .graph
+                .as_ref()
+                .is_some_and(|g| g.seed_mode == crate::graph::GraphSeedMode::Semantic)
+            {
+                context.search.remote.limits()?;
+            }
             if context.search.no_sync && request.scope != retrieval::ContextScope::Snapshot {
                 return Err(WikiError::new(
                     ErrorCode::FreshnessConflict,
@@ -485,28 +652,54 @@ fn execute_inner(args: &Arguments) -> Result<Envelope> {
                     .warnings
                     .push("context and freshness are unknown during dry-run".into());
             } else {
-                let catalog = Catalog::with_options(
-                    app.fs().clone(),
-                    app.vault_id().clone(),
-                    CatalogOptions {
-                        busy_timeout_ms: app.options().lock_timeout_ms,
-                        fault: None,
-                    },
-                );
-                let writer = if request.scope == retrieval::ContextScope::Snapshot {
-                    None
+                let result = if matches!(
+                    request.documents.mode,
+                    retrieval::SearchMode::Semantic | retrieval::SearchMode::Hybrid
+                ) || request
+                    .graph
+                    .as_ref()
+                    .is_some_and(|g| g.seed_mode == crate::graph::GraphSeedMode::Semantic)
+                {
+                    with_embedding_runtime(
+                        &app,
+                        args,
+                        &context.search.remote,
+                        context.search.lexical_fallback,
+                        |runtime, fallback| {
+                            app.semantic_context(
+                                &context.search.query,
+                                &request,
+                                runtime,
+                                context.search.no_sync,
+                                fallback,
+                            )
+                        },
+                    )?
                 } else {
-                    Some(WriterPermit::acquire(
-                        app.fs().root(),
-                        Duration::from_millis(app.options().lock_timeout_ms),
-                    )?)
+                    let catalog = Catalog::with_options(
+                        app.fs().clone(),
+                        app.vault_id().clone(),
+                        CatalogOptions {
+                            busy_timeout_ms: app.options().lock_timeout_ms,
+                            fault: None,
+                        },
+                    );
+                    let writer = if request.scope == retrieval::ContextScope::Snapshot {
+                        None
+                    } else {
+                        Some(WriterPermit::acquire(
+                            app.fs().root(),
+                            Duration::from_millis(app.options().lock_timeout_ms),
+                        )?)
+                    };
+                    retrieval::verification::context(
+                        &catalog,
+                        writer.as_ref(),
+                        &context.search.query,
+                        &request,
+                    )?
                 };
-                let result = retrieval::verification::context(
-                    &catalog,
-                    writer.as_ref(),
-                    &context.search.query,
-                    &request,
-                )?;
+                envelope.meta.network_used = result.network_used;
                 envelope.meta.index_generation = Some(result.snapshot().generation);
                 match result.verification() {
                     SnapshotVerification::IndexSnapshot => {
@@ -907,4 +1100,98 @@ pub fn present(
             writeln!(output)
         }
     }
+}
+
+fn embedding_runtime(
+    runtime: &crate::app::remote::RemoteRuntime,
+) -> crate::app::embeddings::EmbeddingRuntime<'_> {
+    crate::app::embeddings::EmbeddingRuntime {
+        service: &runtime.service,
+        dispatcher: &runtime.dispatcher,
+        job_options: runtime.job_options.clone(),
+        limits: runtime.limits.clone(),
+        deadline_ms: u64::try_from(runtime.deadline_utc_ms - runtime.created_at_utc_ms)
+            .unwrap_or(0),
+    }
+}
+// Fallback is allowed to return a local result after a remote failure. Keep
+// invocation activity on that successful result, including its nested graph.
+trait EmbeddingNetworkResult {
+    fn record_network_activity(&mut self, used: bool);
+}
+impl EmbeddingNetworkResult for crate::retrieval::HitSet {
+    fn record_network_activity(&mut self, used: bool) {
+        self.network_used |= used;
+        if let Some(graph) = &mut self.graph {
+            graph.network_used |= used;
+        }
+    }
+}
+impl EmbeddingNetworkResult for crate::graph::GraphResult {
+    fn record_network_activity(&mut self, used: bool) {
+        self.network_used |= used;
+    }
+}
+impl EmbeddingNetworkResult for crate::retrieval::ContextResult {
+    fn record_network_activity(&mut self, used: bool) {
+        self.network_used |= used;
+    }
+}
+fn with_embedding_runtime<T: EmbeddingNetworkResult>(
+    app: &OfflineApp,
+    args: &Arguments,
+    remote: &super::remote::RemoteArguments,
+    fallback: bool,
+    mut operation: impl FnMut(Option<&crate::app::embeddings::EmbeddingRuntime<'_>>, bool) -> Result<T>,
+) -> Result<T> {
+    match operation(None, false) {
+        Ok(result) => Ok(result),
+        Err(error)
+            if matches!(
+                error.code,
+                ErrorCode::CapabilityUnavailable | ErrorCode::OfflineUnavailable
+            ) =>
+        {
+            if !app.options().offline && args.profile.is_some() {
+                let runtime = remote.runtime(app, args.profile.as_deref(), Capability::Embed)?;
+                let embedding = embedding_runtime(&runtime);
+                let mut result = with_network_activity(
+                    Some(&runtime.dispatcher),
+                    operation(Some(&embedding), fallback),
+                )?;
+                result.record_network_activity(runtime.dispatcher.network_used());
+                Ok(result)
+            } else if fallback {
+                operation(None, true)
+            } else {
+                Err(error)
+            }
+        }
+        Err(error) => Err(error),
+    }
+}
+
+fn result_metadata(
+    meta: &mut Metadata,
+    snapshot: &crate::domain::ReadSnapshot,
+    verification: &SnapshotVerification,
+) {
+    meta.index_generation = Some(snapshot.generation);
+    match verification {
+        SnapshotVerification::IndexSnapshot => meta.freshness = Some("index_snapshot".into()),
+        SnapshotVerification::VerifiedSnapshot { verified_at } => {
+            meta.freshness = Some("verified_snapshot".into());
+            meta.verified_at = Some(verified_at.clone());
+        }
+    }
+}
+
+fn with_network_activity<T>(
+    dispatcher: Option<&crate::providers::dispatcher::Dispatcher>,
+    result: Result<T>,
+) -> Result<T> {
+    result.map_err(|mut error| {
+        error.network_used |= dispatcher.is_some_and(|d| d.network_used());
+        error
+    })
 }

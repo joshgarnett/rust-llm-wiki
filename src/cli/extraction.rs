@@ -16,6 +16,14 @@ pub enum Executor {
 }
 #[derive(Debug, Args)]
 pub struct ExtractArguments {
+    #[command(flatten)]
+    pub remote: super::remote::RemoteArguments,
+    #[arg(long)]
+    pub run: Option<RecordId>,
+    #[arg(long, default_value_t = 4096)]
+    pub max_output_tokens: u64,
+    #[arg(long)]
+    pub new_extraction: bool,
     #[arg(long)]
     pub source_id: RecordId,
     #[arg(long)]
@@ -36,12 +44,6 @@ pub struct ExtractArguments {
 }
 impl ExtractArguments {
     pub fn request(&self, app: &OfflineApp) -> Result<ExportRequest> {
-        if !matches!(self.executor, Executor::Agent) {
-            return Err(WikiError::new(
-                ErrorCode::CapabilityUnavailable,
-                "API extraction is unavailable until accounted generation is implemented",
-            ));
-        }
         if self.windows.len() > MAX_WINDOWS {
             return Err(WikiError::new(
                 ErrorCode::Usage,

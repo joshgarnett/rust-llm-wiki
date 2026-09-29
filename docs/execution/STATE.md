@@ -1,6 +1,6 @@
 # Execution checkpoint
 
-Updated: 2026-09-28. Root owns checkpoint. **17 of22 packages locally accepted: P00–P16. M0–M2 complete; P17/P18/P19 next, then P20/P21 required.**
+Updated: 2026-09-28. Root owns checkpoint. **20 of22 packages locally accepted: P00–P19. M0–M3 complete; P20/P21 required.**
 
 ## Objective and authorization
 
@@ -10,7 +10,7 @@ No real vault/live paid calls/host installation/publishing/push/license choice. 
 
 ## Accepted baseline and evidence
 
-- Branch `impl/autonomous-v1`; HEAD f1cef3b1affff8cafa82e10ba3b9682b1491d91a accepts P14; coherent P16 local commit is immediate next. Earlier exact commits/evidence live in PROGRESS/reports, not chat history.
+- Branch `impl/autonomous-v1`; HEAD cbaf990bfbc35f8e12ffe0396d3e65c814eab34b accepts P16. Earlier exact commits/evidence live in PROGRESS/reports, not chat history.
 - Rust/Cargo1.98.0 edition2024/macOS26.5.2arm64. P16 Cargo241 external/242 total retains all165 earlier P16.a package/version pairs; audit /tmp/lwiki-p16b-dependency-audit.log. P14 minimal132-package Cargo was committed separately, never contaminated by P16.
 - Canonical Markdown, immutable revisions/originals, rebuildable SQLite, independent IDs/headings, exact evidence/hash/span/ownership, Current freshness, conservative unknown accounting/refunds. D36–D43 record decisions. Hostile concurrent symlink replacement is excluded from initial storage model; P14 output authority separately anchored.
 - P00–P13/P15 checks/reviews accepted. P13-checks.json: graph19, real M2workflow1, P12 regressions32, shared145/native28, strict lint/build/schema/seed. P15-checks.json:43 targeted/131 integrated, six races/13 SIGKILL,1148 durable fault positions. Earlier scopes are historical, not automatic qualification of new code.
@@ -18,7 +18,7 @@ No real vault/live paid calls/host installation/publishing/push/license choice. 
 
 ## P16 whole integration closure
 
-- All implementation/review leases returned; agents completed, no Cargo active. Root owns source/reports/shared target. P16 local gates passed; commit pending. Source frozen until commit.
+- All implementation/review leases returned; P16 agents completed, no Cargo active. Root owns shared target; P16 locally committed.
 - Isolated snapshot /var/folders/g0/jdy1y8615k30fs6sbf4x1wt40000gn/T/lwiki-p16-integration-n10pjymt = accepted P14 plus38 overlays; pointer/list /private/tmp/lwiki-p16-integration-{path.txt,files.json}. Authoritative P16-checks.json:228 exact workspace/snapshot hashes, fp0896305598129df5fa78c076a0f6b6b698fdb5a407fc7d9c1f168b5fead03d32.
 - First combined batch exit101 solely stale public expectation of unavailable encoder. Library100 passed/3 ignored explicit helpers757.69s; job_accounting13 passed/one ignored explicit helper6.06s. Log /private/tmp/lwiki-p16-integrated-native-first.log. Bootstrap241+ledger266+operational67 actual durable calls/1148 before-after fault positions passed; dispatcher seven SIGKILL boundaries/replay included. Do not call whole first batch passing.
 - Root changed ONLY tests/provider_dispatch.rs to require RecordInvalid for noncanonical retained descriptor before helper/auth/reservation/transport. Corrected public batch exit0 dispatch4/1.38s, trust6/.02s, wire10/13.91s, vault_fs15/.99s; /private/tmp/lwiki-p16-integrated-public-final.log. All production/private fixtures unchanged from100-test inventory fde6f800d63d3d7824c3180e895a8fefa7b02a29aecf14b0912176eeb288dfed. Final inventory /private/tmp/lwiki-p16-integrated-final-hashes.json verifies exactly one external-test delta.
@@ -28,9 +28,13 @@ No real vault/live paid calls/host installation/publishing/push/license choice. 
 - Windows-callers-review.md source-closed guard/private-creation/sharing/defaultUnsupported findings. Native Unix0600/0700 creation before payload and private fault forwarding tested. Helper/export tiny Windows GNU/MSVC API/cfg checks are not full production cross-build/native qualification. Windows directory durability explicitly Unsupported before paid send. No power-loss/native other-OS/live-provider claims.
 - Header threshold/capacity bounds are conditional backing/exposed-buffer analyses, not RSS or complete header allocation ceiling. Successful library dispatcher materialization currently OutputsCommitted; high-level settlement belongs to P17/P18. Search codec belongs to P19.
 
-## Immediate next actions
+## Current M3/acquisition acceptance and next actions
 
-1. Commit exact38 P16 overlays and owned reports/checks/progress/coverage/state plus P14 accepted-commit pointer. Reconcile resulting HEAD/accepted pointer without rerunning Rust for docs-only changes.
-2. Read P17 selected retrieval/provider/CLI contracts and current shared interfaces. Assign bounded Sol implementation packets for rendering/math/cache/high-level embeddings; root owns registry/Cargo/schema/shared APIs. P18/P19 ready after accepted P16, may use disjoint leases; no shared-file writers or concurrent Cargo.
-3. Use bounded Astra spaces/freshness review and API/acquisition/accounting gates as needed; continue P17–P21 through M4 without routine confirmation. Run final full local qualification only on final coherent revision.
-4. Keep commentary within60s; checkpoint before compaction/stopping. Goal active/unlimited; no partial final response or completion until full objective met.
+- All leases returned; root owns source/Cargo/Git. No active Cargo. Astra-M3-telemetry-review.md R1 source/evidence closed with native503/config-change/successful fallback. No nested delegation.
+- Joint P17/P18/P19-checks.json authoritative:227source/test/Cargo/toolchain hashes, before/after/snapshot/workspace bytes equal. Locally accepted; coherent local commit next. Current HEAD still P16 cbaf990, update pointer after commit.
+- Snapshot /var/folders/g0/jdy1y8615k30fs6sbf4x1wt40000gn/T/lwiki-m3-integration-2i0lbu2c; /private/tmp/lwiki-m3-regression-{before,final}-hashes.json. Git archive group-writable fixture modes restored to actual workspace modes /private/tmp/lwiki-m3-snapshot-permission-reconciliation.json; no production rule changed.
+- Final public104parents PASS:API12/job13/dispatch4/trust6/wire10/CLI5/acquisition18/semantic21/vault15; /private/tmp/lwiki-m3-integrated-public-final.log. Earlier exit101 native API fixture inherited nonblocking socket fixed; acquisition/semantic/vault NOT RUN then. Private providers56PASS/2explicit ignored subprocess helpers28.85s /private/tmp/lwiki-m3-private-providers-final-second.log. Earlier54PASS/2fixture-mode failures not passing. Acknowledged actual API helper1PASS3.33s /private/tmp/lwiki-m3-private-api-helper-final.log.161current parents total; not whole all-target test claim.
+- Fmt/strict alltargetClippy9.85s/build19.76s PASS. Saved /private/tmp/lwiki-m3-root-artifact/lwiki SHAfc476fb60ca5994f4daa00c89dc107e80fcce4193e5c94a89a7e954c108e19bf:32commands/15exact schemas/five disposable offline CLI operations passed. Native CLI embedding sync/query/cache/API/offline reuse, paid malformed failure/offline refusal and successful lexical fallback actual-network metadata passed. Private serde-skipped error telemetry cannot be supplied by model JSON.
+- Cargo246external247total retains241prior pairs; flate2 rust_backend +4transitives only. D44/D45 typed protected provenance/unmetered unauthenticated publicGET fees only. Mock/injected public DNS/connector/native loopback is not live-provider/public-native-TLS/model-quality/native-other-OS/power-loss qualification.
+- P20-plan.md and Astra-P20-invariants.md architecture only. Next root freezes typed role bindings/versioned effective binding epochs/active retired-task history preserving immutable genesis/spend/holds; paused rebind barrier; atomic bounded source/round/frontier journal; stable prefix reservations before bounded parallel sends; authenticated historical decoder; existing-ledger extraction adapter; concrete research plan/run/resume/status/report. Assign bounded Sol implementation and Astra difficult leaf/review after interface freeze.
+- Exposed legacy doctor --probe stub must be implemented before final; not external deferral. Public-fetch actual-network telemetry must join P20 CLI. Then P21 full local qualification/release artifact/maintained examples/docs/fixed corpus/FINAL external register. Goal active/unlimited20/22accepted; never stop at intermediate slice/shrink objective. Checkpoint before compaction/stopping; updates <=60s.

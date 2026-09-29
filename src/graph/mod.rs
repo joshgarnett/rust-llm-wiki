@@ -19,4 +19,6 @@ pub mod decisions;
 pub mod remap;
 pub mod review_types;
 pub use review_types::*;
+pub mod api_extract;
+pub mod generation_cache;
 pub mod review;

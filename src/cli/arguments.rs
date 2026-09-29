@@ -115,6 +115,7 @@ pub enum Command {
         #[command(subcommand)]
         command: IndexCommand,
     },
+    Embeddings(super::embeddings::EmbeddingArguments),
     Search(SearchArguments),
     Context(Box<super::context::ContextArguments>),
     Graph {
@@ -219,6 +220,8 @@ pub enum ChangesCommand {
 pub enum Mode {
     Literal,
     Lexical,
+    Semantic,
+    Hybrid,
 }
 #[derive(Debug, Clone, Copy, ValueEnum)]
 pub enum Strategy {
@@ -229,6 +232,7 @@ pub enum Strategy {
 #[derive(Debug, Clone, Copy, ValueEnum)]
 pub enum Seed {
     Lexical,
+    Semantic,
 }
 #[derive(Debug, Subcommand)]
 pub enum GraphCommand {
@@ -250,6 +254,12 @@ pub enum GraphCommand {
 }
 #[derive(Debug, Args)]
 pub struct GraphOptions {
+    #[command(flatten)]
+    pub remote: super::remote::RemoteArguments,
+    /// Use lexical results when compatible embeddings are unavailable.
+    #[arg(long)]
+    pub lexical_fallback: bool,
+
     #[arg(long, value_enum, default_value = "combined")]
     pub strategy: Strategy,
     #[arg(long, value_enum, default_value = "lexical")]
@@ -302,7 +312,10 @@ impl GraphOptions {
                 Strategy::Relationship => GraphStrategy::Relationship,
                 Strategy::Combined => GraphStrategy::Combined,
             },
-            seed_mode: GraphSeedMode::Lexical,
+            seed_mode: match self.seed {
+                Seed::Lexical => GraphSeedMode::Lexical,
+                Seed::Semantic => GraphSeedMode::Semantic,
+            },
             filters: SearchFilters {
                 kinds: self.kinds.clone(),
                 tags: self.tags.clone(),
@@ -330,6 +343,15 @@ impl GraphOptions {
 }
 #[derive(Debug, Args)]
 pub struct SearchArguments {
+    /// Include graph evidence ranks in hybrid search.
+    #[arg(long, value_parser = ["entities"])]
+    pub graph: Option<String>,
+    #[command(flatten)]
+    pub remote: super::remote::RemoteArguments,
+    /// Use lexical results when compatible embeddings are unavailable.
+    #[arg(long)]
+    pub lexical_fallback: bool,
+
     pub query: String,
     #[arg(long, value_enum, default_value = "lexical")]
     pub mode: Mode,
@@ -364,6 +386,8 @@ impl SearchArguments {
             mode: match self.mode {
                 Mode::Literal => SearchMode::Literal,
                 Mode::Lexical => SearchMode::Lexical,
+                Mode::Semantic => SearchMode::Semantic,
+                Mode::Hybrid => SearchMode::Hybrid,
             },
             filters: SearchFilters {
                 kinds: self.kinds.clone(),
@@ -422,6 +446,10 @@ impl Command {
             Self::Index {
                 command: IndexCommand::Rebuild,
             } => "index rebuild",
+            Self::Embeddings(options) => match options.command {
+                super::embeddings::EmbeddingCommand::Check(_) => "embeddings check",
+                super::embeddings::EmbeddingCommand::Sync(_) => "embeddings sync",
+            },
             Self::Search(_) => "search",
             Self::Context(_) => "context",
             Self::Graph {

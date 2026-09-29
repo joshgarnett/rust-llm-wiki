@@ -33,7 +33,11 @@ impl ContextDraft {
 }
 pub fn validate_request(query: &str, request: &ContextRequest) -> Result<ContextRequest> {
     super::lexical::validate_plan(query, &request.documents)?;
-    if request.graph.is_some() {
+    if request
+        .graph
+        .as_ref()
+        .is_some_and(|g| g.seed_mode == crate::graph::GraphSeedMode::Lexical)
+    {
         super::lexical::lexical_expression(query)?;
     }
     normalize_request(request)

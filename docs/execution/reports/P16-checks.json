@@ -2,7 +2,7 @@
   "package": "P16",
   "status": "locally accepted; external qualification pending",
   "base_commit": "f1cef3b1affff8cafa82e10ba3b9682b1491d91a",
-  "accepted_commit": null,
+  "accepted_commit": "cbaf990bfbc35f8e12ffe0396d3e65c814eab34b",
   "coherent_checkout": "/var/folders/g0/jdy1y8615k30fs6sbf4x1wt40000gn/T/lwiki-p16-integration-n10pjymt",
   "overlay_paths": [
     "Cargo.lock",

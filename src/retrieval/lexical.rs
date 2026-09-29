@@ -120,6 +120,12 @@ fn search_inner(
     plan: &QueryPlan,
     context_scope: Option<bool>,
 ) -> Result<HitSet> {
+    if !matches!(plan.mode, SearchMode::Literal | SearchMode::Lexical) {
+        return Err(WikiError::new(
+            ErrorCode::Usage,
+            "semantic and hybrid retrieval require the embedding application",
+        ));
+    }
     let plan = validate_plan(query, plan)?;
     let base_fingerprint = cursor::fingerprint(query, &plan)?;
     let fingerprint = if let Some(historical) = context_scope {
@@ -431,6 +437,8 @@ fn search_inner(
             .map_err(|e| WikiError::new(ErrorCode::Internal, e.to_string()))?,
     );
     Ok(HitSet {
+        network_used: false,
+        graph: None,
         hits,
         next_cursor,
         truncated: end < candidates.len() || omitted_candidates > 0,
@@ -501,7 +509,7 @@ fn match_ranges(
     matches.dedup();
     Ok(matches)
 }
-fn excerpt(
+pub(crate) fn excerpt(
     reader: &ReaderSnapshot,
     document: &DocumentRow,
     matches: &[Range<usize>],

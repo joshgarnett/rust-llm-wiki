@@ -68,7 +68,164 @@ fn attempt<'a>(loaded: &'a Loaded, r: &AttemptRef) -> Result<&'a AttemptInspecti
         .ok_or_else(|| events::corrupt("attempt identity differs from stored history"))
 }
 impl JobLedger {
-    /// Read-only dispatcher context; dispatch policy remains the ledger's policy.
+    /// Complete a run only after its concrete tasks ended and all possibly sent
+    /// attempts have durable settlement. Unknown charges remain reserved forever.
+    pub fn complete_run(&self) -> Result<EventRef> {
+        self.local_write()?;
+        self.with(true, |g, loaded| {
+            let i = &loaded.state.inspection;
+            if i.state == RunState::Completed {
+                return loaded
+                    .frames
+                    .iter()
+                    .rev()
+                    .find_map(|f| match &f.event.payload {
+                        EventPayload::RunTransition {
+                            to: RunState::Completed,
+                            ..
+                        } => Some(events::event_ref(f)),
+                        _ => None,
+                    })
+                    .ok_or_else(|| events::corrupt("completed run event missing"));
+            }
+            if i.state != RunState::Running
+                || i.tasks.values().any(|t| t.state != TaskState::Completed)
+                || i.attempts.iter().any(|a| a.phase != AttemptPhase::Settled)
+            {
+                return Err(fail(
+                    ErrorCode::RecoveryRequired,
+                    "unfinished tasks or attempts cannot complete run",
+                ));
+            }
+            self.append(
+                g,
+                loaded,
+                EventPayload::RunTransition {
+                    from: RunState::Running,
+                    to: RunState::Completed,
+                    reason: StopReason::Completed,
+                },
+            )
+        })
+    }
+    /// Crate adapters prove exact cache bytes; canonical outputs/receipt and paid
+    /// settlement are authenticated here. This method cannot finish from counts.
+    pub(crate) fn finish_remote_task<F>(
+        &self,
+        key: &Blake3Hash,
+        outputs: Vec<DurableOutputRef>,
+        cache_outputs: Vec<VectorCacheRef>,
+        verify_cache: F,
+    ) -> Result<EventRef>
+    where
+        F: Fn(&VectorCacheRef) -> Result<bool>,
+    {
+        self.local_write()?;
+        self.with(true, |g, loaded| {
+            let task = loaded
+                .state
+                .inspection
+                .tasks
+                .get(key)
+                .ok_or_else(|| WikiError::invalid("unknown remote task"))?;
+            if task.spec.capability.is_none()
+                || task.spec.dependencies.iter().any(|k| {
+                    loaded
+                        .state
+                        .inspection
+                        .tasks
+                        .get(k)
+                        .is_none_or(|t| t.state != TaskState::Completed)
+                })
+                || !(matches!(
+                    loaded.state.inspection.state,
+                    RunState::Running | RunState::Paused | RunState::Stopped
+                ) || loaded.state.inspection.state == RunState::Completed
+                    && task.state == TaskState::Completed)
+            {
+                return Err(WikiError::invalid("remote task cannot complete"));
+            }
+            tasks::bind(&self.fs, &task.spec)?;
+            let paid = loaded
+                .state
+                .inspection
+                .attempts
+                .iter()
+                .rev()
+                .find(|a| {
+                    a.attempt.task_key == *key
+                        && a.phase == AttemptPhase::Settled
+                        && a.outputs == outputs
+                        && a.cache_outputs == cache_outputs
+                })
+                .ok_or_else(|| {
+                    fail(
+                        ErrorCode::RecoveryRequired,
+                        "no settled response owns task outputs",
+                    )
+                })?;
+            let receipt_ref = paid
+                .receipt
+                .as_ref()
+                .ok_or_else(|| events::corrupt("settled receipt missing"))?;
+            let receipt = checkpoint::receipt(&self.fs, receipt_ref)?;
+            if receipt.attempt != paid.attempt
+                || receipt.output_disposition != OutputDisposition::Validated
+                || receipt.outputs != outputs
+                || receipt.cache_outputs != cache_outputs
+            {
+                return Err(events::corrupt(
+                    "remote completion requires validated receipt",
+                ));
+            }
+            for output in &outputs {
+                if output.record.vault_id != self.vault_id {
+                    return Err(WikiError::invalid("task output vault differs"));
+                }
+                checkpoint::output(&self.fs, output)?;
+            }
+            for cached in &cache_outputs {
+                if !verify_cache(cached)? {
+                    return Err(fail(
+                        ErrorCode::OfflineUnavailable,
+                        "validated vector output unavailable",
+                    ));
+                }
+            }
+            if task.state == TaskState::Completed
+                && task.outputs == outputs
+                && task.cache_outputs == cache_outputs
+            {
+                return loaded
+                    .frames
+                    .iter()
+                    .rev()
+                    .find_map(|f| match &f.event.payload {
+                        EventPayload::TaskFinished {
+                            task_key,
+                            state: TaskState::Completed,
+                            ..
+                        } if task_key == key => Some(events::event_ref(f)),
+                        _ => None,
+                    })
+                    .ok_or_else(|| events::corrupt("completed task event missing"));
+            }
+            if !matches!(task.state, TaskState::Pending | TaskState::Running) {
+                return Err(WikiError::invalid("remote task already ended"));
+            }
+            self.append(
+                g,
+                loaded,
+                EventPayload::TaskFinished {
+                    task_key: key.clone(),
+                    state: TaskState::Completed,
+                    outputs,
+                    cache_outputs,
+                    reason: None,
+                },
+            )
+        })
+    }
     pub(crate) fn dispatcher_bindings(&self) -> (VaultFs, RecordId, RecordId, JobOptions) {
         (
             self.fs.clone(),
@@ -610,6 +767,12 @@ impl JobLedger {
     }
 }
 fn validate_metadata(m: &ResponseMetadata) -> Result<()> {
+    if let Some(acquisition) = &m.acquisition {
+        acquisition.validate()?;
+        if m.status_code != Some(acquisition.status) {
+            return Err(WikiError::invalid("acquisition metadata status differs"));
+        }
+    }
     for value in [&m.provider_request_id, &m.returned_model, &m.failure_code]
         .into_iter()
         .flatten()
@@ -859,7 +1022,7 @@ impl JobLedgerApi for JobLedger {
                     )?;
                     let m: ResponseMetadata = json(&metadata.bytes)?;
                     validate_metadata(&m)?;
-                    if a.spool.is_none() && a.phase == AttemptPhase::DispatchIntent {
+                    if a.spool.is_none() && a.phase == AttemptPhase::DispatchIntent && l.state.sent.contains(&a.attempt.attempt_id) {
                         report.orphan_spools.push(spool.clone());
                         if !self.options.policy.dry_run {
                             l.state
@@ -1929,6 +2092,7 @@ impl DispatcherLedgerApi for JobLedger {
                 return Err(WikiError::invalid("reconciliation requires possible-send attempt"));
             }
             let metadata = ResponseMetadata {
+            acquisition: None,
                 provider_request_id: None,
                 returned_model: None,
                 status_code: None,

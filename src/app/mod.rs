@@ -5,4 +5,6 @@ pub mod resolution;
 pub mod types;
 pub use types::*;
 pub mod decisions;
+pub mod embeddings;
+pub mod remote;
 mod review;

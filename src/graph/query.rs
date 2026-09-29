@@ -37,6 +37,25 @@ pub fn validate_plan(plan: &GraphPlan) -> Result<GraphPlan> {
     Ok(normalized)
 }
 pub fn query(reader: &ReaderSnapshot, text: &str, plan: &GraphPlan) -> Result<GraphResult> {
+    if plan.seed_mode != GraphSeedMode::Lexical {
+        return Err(WikiError::new(
+            ErrorCode::Usage,
+            "semantic seeds require the embedding application",
+        ));
+    }
+    let plan = validate_plan(plan)?;
+    let (mut seeds, mut coverage) = lexical_seed_lists(reader, text, &plan)?;
+    seeds.sort_by(rank::seed_order);
+    coverage.omitted_seeds = seeds.len().saturating_sub(plan.limits.seeds);
+    seeds.truncate(plan.limits.seeds);
+    result(reader, seeds, coverage, &plan, &format!("query:{text}"))
+}
+/// Return bounded lexical candidates before the shared cross-channel seed cap.
+pub fn lexical_seed_lists(
+    reader: &ReaderSnapshot,
+    text: &str,
+    plan: &GraphPlan,
+) -> Result<(Vec<GraphSeed>, GraphCoverage)> {
     let plan = validate_plan(plan)?;
     let expression = lexical_expression(text)?;
     if Tokenizer::new(reader.connection())?
@@ -66,10 +85,74 @@ pub fn query(reader: &ReaderSnapshot, text: &str, plan: &GraphPlan) -> Result<Gr
         coverage.omitted_candidates += overflow;
         seeds.append(&mut found);
     }
+    Ok((seeds, coverage))
+}
+/// Traversal uses canonical rows and the ordinary eligibility/filter policy.
+/// Candidate ranks carry no identity, evidence, or currentness authority.
+pub fn from_seeds(
+    reader: &ReaderSnapshot,
+    seeds: Vec<GraphSeed>,
+    mut coverage: GraphCoverage,
+    plan: &GraphPlan,
+    key: &str,
+) -> Result<GraphResult> {
+    let plan = validate_plan(plan)?;
+    if seeds.len() > 160 || key.len() > 8192 {
+        return Err(WikiError::new(
+            ErrorCode::BudgetExceeded,
+            "graph seed input exceeds bound",
+        ));
+    }
+    let allowed = traverse::filtered_ids(reader, &plan, None)?;
+    let mut canonical = BTreeMap::new();
+    for candidate in seeds {
+        let id = &candidate.record_ref.record_id;
+        let row = reader.projection().records.get(id).ok_or_else(|| {
+            WikiError::new(
+                ErrorCode::FreshnessConflict,
+                "seed absent from pinned projection",
+            )
+        })?;
+        if candidate.record_ref != traverse::reference(reader, row)
+            || candidate.locator != traverse::locator(reader, row)
+            || candidate.rank_contributions.len() > 8
+            || candidate.rank_contributions.iter().any(|r| {
+                r.rank == 0
+                    || r.rank > 80
+                    || r.channel.len() > 128
+                    || r.score.is_some_and(|s| !s.is_finite())
+            })
+        {
+            return Err(WikiError::invalid("graph seed identity or rank differs"));
+        }
+        let selected_kind = match plan.strategy {
+            GraphStrategy::Entity => row.record.kind() == RecordKind::Entity,
+            GraphStrategy::Relationship => row.record.kind() == RecordKind::Assertion,
+            GraphStrategy::Combined => matches!(
+                row.record.kind(),
+                RecordKind::Entity | RecordKind::Assertion
+            ),
+        };
+        if !selected_kind
+            || !allowed.contains(id)
+            || row.record.kind() == RecordKind::Assertion
+                && traverse::proposition(reader, row).is_none()
+        {
+            coverage.omitted_candidates += 1;
+            continue;
+        }
+        if canonical
+            .insert(id.clone(), seed(reader, row, candidate.rank_contributions))
+            .is_some()
+        {
+            return Err(WikiError::invalid("duplicate graph seed"));
+        }
+    }
+    let mut seeds: Vec<_> = canonical.into_values().collect();
     seeds.sort_by(rank::seed_order);
-    coverage.omitted_seeds = seeds.len().saturating_sub(plan.limits.seeds);
+    coverage.omitted_seeds += seeds.len().saturating_sub(plan.limits.seeds);
     seeds.truncate(plan.limits.seeds);
-    result(reader, seeds, coverage, &plan, &format!("query:{text}"))
+    result(reader, seeds, coverage, &plan, key)
 }
 pub fn neighbors(reader: &ReaderSnapshot, id: &RecordId, plan: &GraphPlan) -> Result<GraphResult> {
     let plan = validate_plan(plan)?;
@@ -386,6 +469,7 @@ fn result(
             .map_err(|e| WikiError::new(ErrorCode::Internal, e.to_string()))?,
     );
     Ok(GraphResult {
+        network_used: false,
         seeds,
         entities,
         assertions,

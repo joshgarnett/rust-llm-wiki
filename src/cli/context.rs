@@ -75,7 +75,10 @@ impl ContextArguments {
                     Strategy::Relationship => GraphStrategy::Relationship,
                     Strategy::Combined => GraphStrategy::Combined,
                 },
-                seed_mode: GraphSeedMode::Lexical,
+                seed_mode: match self.seed {
+                    Seed::Lexical => GraphSeedMode::Lexical,
+                    Seed::Semantic => GraphSeedMode::Semantic,
+                },
                 filters: documents.filters.clone(),
                 limits: GraphLimits {
                     candidates: documents.limits.candidates,

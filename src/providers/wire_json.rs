@@ -127,6 +127,7 @@ pub(super) fn expected_model(p: &PreparedWire) -> Option<&'static str> {
     let basis = match &p.contract {
         WireContract::Embedding(c) => &c.basis,
         WireContract::Generation(c) => &c.basis,
+        WireContract::Search(_) => return None,
         #[cfg(test)]
         WireContract::Fixture => return None,
     };

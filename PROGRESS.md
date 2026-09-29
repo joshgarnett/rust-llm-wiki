@@ -1,6 +1,6 @@
 # Research and planning progress
 
-Started: 2026-09-28. Status: authorized M0–M4 implementation; P00–P16 locally accepted; M0–M2 complete and M3 provider foundation qualified; P17–P21 remain required.
+Started: 2026-09-28. Status: authorized M0–M4 implementation; P00–P19 locally accepted; M0–M3 complete and bounded M4 acquisition implemented; P20/P21 remain required.
 
 ## Scope
 
@@ -137,3 +137,11 @@ Start a new `gpt-6-sol` session with the [implementation goal](docs/execution/ST
 - P14 portable skill locally accepted: release-matched three host layouts, exact no-overwrite/reuse/dry-run,32 executed recipe steps, six deterministic anchored filesystem race/control parents, seven portable ACL policy parents, full strict lint/fmt/build. Independent Sol skill forward task and bounded Astra anchored/Windows reviews retained with exact artifact limits. P14-checks.json records final source. Native Windows and installed-host qualification remain external.
 
 - P16 private trust/accounted HTTP/strict wire adapters locally accepted: current integrated library100 and accounting13 passed, public dispatch4/trust6/wire10/vault_fs15 passed after one explicitly recorded stale-test correction;1148 current durable fault positions, dispatcher crash/replay, fmt/strict lint/build and saved-artifact/schema checks passed. Bounded Astra invariants and final delta review closed. P17–P21 and final V01–V17 qualification remain required.
+
+## P17–P19 joint local acceptance
+
+Explicit embeddings/check/sync, isolated-space exact semantic/hybrid retrieval, resumable API proposal extraction, and bounded search/public acquisition are locally accepted. Astra space/recovery/acquisition and invocation telemetry review findings closed.227 current source/test/Cargo/toolchain bytes match before/after/snapshot/workspace.104public +56private provider +1acknowledged API helper parents passed; fmt/strict alltargetClippy/build passed. Earlier failed fixture batches are explicitly recorded, never called passes.
+
+Saved native debug artifact `/private/tmp/lwiki-m3-root-artifact/lwiki`, SHA256 fc476fb60ca5994f4daa00c89dc107e80fcce4193e5c94a89a7e954c108e19bf:32commands/15exact schemas/five disposable offline CLI operations passed. Native CLI actually exercises embeddings and API, paid-failure and successful-fallback telemetry. Authoritative scopes/hashes/logs live in P17/P18/P19-checks.json. No live-provider/model-quality/power-loss/native-other-OS qualification.
+
+Next: P20 bounded resumable research under one lifetime ledger, then P21 complete local exit. Exposed legacy doctor --probe must also become concrete. Astra P20 architecture is guidance, not runtime evidence.

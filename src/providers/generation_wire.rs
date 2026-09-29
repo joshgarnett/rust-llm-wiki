@@ -501,6 +501,7 @@ pub(super) fn decode(p: &PreparedWire, r: &TransportReply) -> Result<ValidatedOu
     } else {
         Ok(ValidatedOutput::Generation {
             value,
+            text: content.to_owned(),
             returned_model: Some(model),
         })
     }

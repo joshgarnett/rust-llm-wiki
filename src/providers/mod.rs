@@ -11,7 +11,9 @@ pub mod types;
 
 mod embedding_wire;
 mod generation_wire;
+pub mod public_fetch;
+pub mod search_wire;
 pub mod wire;
 mod wire_json;
 #[cfg(test)]
-mod wire_tests;
+pub(crate) mod wire_tests;

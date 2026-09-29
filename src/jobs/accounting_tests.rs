@@ -23,6 +23,7 @@ fn response() -> ResponseSpoolInput {
     ResponseSpoolInput {
         bytes: b"invalid paid JSON response".to_vec(),
         metadata: ResponseMetadata {
+            acquisition: None,
             provider_request_id: Some("request-1".into()),
             returned_model: Some("mock-model".into()),
             status_code: Some(200),

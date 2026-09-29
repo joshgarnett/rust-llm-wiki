@@ -211,11 +211,11 @@ fn maintain(catalog: &Catalog, writer: &WriterPermit, meter: &Meter) -> Result<(
     catalog.sync(writer)?;
     meter.check()
 }
-fn draft(
+fn candidates(
     reader: &ReaderSnapshot,
     query: &str,
     request: &ContextRequest,
-) -> Result<context::ContextDraft> {
+) -> Result<(super::HitSet, Option<crate::graph::GraphResult>)> {
     let hits = super::lexical::search_context(
         reader,
         query,
@@ -231,7 +231,7 @@ fn draft(
             request.graph.as_ref().expect("validated graph plan"),
         )?)
     };
-    context::assemble(reader, request, &hits, graph.as_ref())
+    Ok((hits, graph))
 }
 fn seal(
     mut draft: context::ContextDraft,
@@ -245,6 +245,7 @@ fn seal(
     draft.usage.verification_entries = meter.entries;
     draft.warnings.push("proof bytes/files meter canonical notes and source/dependency payloads only; directory/component/entry counts are logical operations; operational journals/SQLite/recovery/index maintenance are separate local safety work; elapsed checks do not interrupt blocking syscalls".into());
     ContextResult {
+        network_used: false,
         text: draft.text,
         passages: draft.passages,
         bundles: draft.bundles,
@@ -264,6 +265,32 @@ pub fn context_with_options(
     request: &ContextRequest,
     options: &ContextOptions,
 ) -> Result<ContextResult> {
+    context_with_retrieval(
+        catalog,
+        writer,
+        query,
+        request,
+        options,
+        |reader, normalized| candidates(reader, query, normalized),
+    )
+}
+/// Supply bounded local candidates for each pinned snapshot. Paid query preparation
+/// occurs before this proof; retries retain the same total verification meter.
+/// Assembly authenticates candidate locators/closure and final proof verifies bytes.
+pub fn context_with_retrieval<F>(
+    catalog: &Catalog,
+    writer: Option<&WriterPermit>,
+    query: &str,
+    request: &ContextRequest,
+    options: &ContextOptions,
+    mut retrieve: F,
+) -> Result<ContextResult>
+where
+    F: FnMut(
+        &ReaderSnapshot,
+        &ContextRequest,
+    ) -> Result<(super::HitSet, Option<crate::graph::GraphResult>)>,
+{
     // The caller's held-writer acquisition is outside this function. The deadline
     // starts before validation, reader opens, operational guards and maintenance.
     let mut meter = Meter::new(&request.verification_budget);
@@ -272,7 +299,8 @@ pub fn context_with_options(
     if request.scope == ContextScope::Snapshot {
         let reader = catalog.index_snapshot()?;
         meter.check()?;
-        let draft = draft(&reader, query, &request)?;
+        let (hits, graph) = retrieve(&reader, &request)?;
+        let draft = context::assemble(&reader, &request, &hits, graph.as_ref())?;
         meter.check()?;
         return Ok(seal(draft, SnapshotVerification::IndexSnapshot, &meter));
     }
@@ -328,7 +356,8 @@ pub fn context_with_options(
                     "initial control membership or dependency bytes differ from pinned index",
                 ));
             }
-            let assembled = draft(&reader, query, &request)?;
+            let (hits, graph) = retrieve(&reader, &request)?;
+            let assembled = context::assemble(&reader, &request, &hits, graph.as_ref())?;
             meter.check()?;
             let view = SourceView::from_closed_input(catalog.fs(), &captured.input)?;
             let scope = if request.scope == ContextScope::Current {

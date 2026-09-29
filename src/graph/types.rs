@@ -19,6 +19,7 @@ pub enum GraphStrategy {
 pub enum GraphSeedMode {
     #[default]
     Lexical,
+    Semantic,
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -174,6 +175,7 @@ pub struct GraphCoverage {
 }
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct GraphResult {
+    pub network_used: bool,
     pub seeds: Vec<GraphSeed>,
     /// Seeds and endpoints of displayed assertions only; auxiliary identity data.
     pub entities: Vec<GraphEntity>,

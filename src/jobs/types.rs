@@ -416,10 +416,13 @@ pub struct UsageReceipt {
     pub cache_outputs: Vec<VectorCacheRef>,
     pub failure_code: Option<String>,
 }
-/// Allowlists only; no headers, URL, free-form error body, auth/helper output.
+/// Safe provider identifiers; public acquisition provenance is separately typed
+/// and protected by the spool metadata hash. No auth/helper/error-body contents.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ResponseMetadata {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub acquisition: Option<crate::providers::public_fetch::PublicCaptureMetadata>,
     pub provider_request_id: Option<String>,
     pub returned_model: Option<String>,
     pub status_code: Option<u16>,
@@ -922,12 +925,5 @@ pub(crate) trait DispatcherLedgerApi {
         cost: KnownOrUnknown<Money>,
         reason: &str,
     ) -> Result<EventRef>;
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "verified spool cleanup contract exercised by accounting tests"
-        )
-    )]
     fn remove_spool_after_verified_commit(&self, attempt: &AttemptRef) -> Result<EventRef>;
 }

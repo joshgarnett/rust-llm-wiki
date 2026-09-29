@@ -8,6 +8,8 @@ pub enum SearchMode {
     Literal,
     #[default]
     Lexical,
+    Semantic,
+    Hybrid,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -72,6 +74,7 @@ pub enum RetrievalReason {
     Lexical,
     Literal,
     Identity,
+    Semantic,
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RankContribution {
@@ -115,6 +118,9 @@ impl Serialize for SearchHit {
 }
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct HitSet {
+    pub network_used: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub graph: Option<crate::graph::GraphResult>,
     pub hits: Vec<SearchHit>,
     pub next_cursor: Option<String>,
     pub truncated: bool,

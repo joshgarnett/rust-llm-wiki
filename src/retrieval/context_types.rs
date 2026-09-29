@@ -135,6 +135,7 @@ pub struct ContextUsage {
 }
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct ContextResult {
+    pub network_used: bool,
     /// Complete budgeted text authority, including headers, references and qualifiers.
     pub(crate) text: String,
     pub(crate) passages: Vec<ContextPassage>,

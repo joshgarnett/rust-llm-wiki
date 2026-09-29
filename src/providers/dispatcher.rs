@@ -20,13 +20,40 @@ use std::{
     time::{Duration, Instant},
 };
 
+pub(crate) enum RetainedDecodeFailure {
+    Recovery(WikiError),
+    InvalidResponse(WikiError),
+}
+impl From<WikiError> for RetainedDecodeFailure {
+    fn from(error: WikiError) -> Self {
+        Self::Recovery(error)
+    }
+}
+impl RetainedDecodeFailure {
+    pub(crate) fn error(self) -> WikiError {
+        match self {
+            Self::Recovery(e) | Self::InvalidResponse(e) => e,
+        }
+    }
+}
+
 pub struct Dispatcher {
     fs: VaultFs,
     options: DispatchOptions,
+    network_used: std::sync::atomic::AtomicBool,
 }
 impl Dispatcher {
     pub fn new(fs: VaultFs, options: DispatchOptions) -> Self {
-        Self { fs, options }
+        Self {
+            fs,
+            options,
+            network_used: std::sync::atomic::AtomicBool::new(false),
+        }
+    }
+    /// Monotone activity for this dispatcher instance. CLI runtimes scope one
+    /// dispatcher to one invocation; retained response reads do not set it.
+    pub fn network_used(&self) -> bool {
+        self.network_used.load(std::sync::atomic::Ordering::Relaxed)
     }
     pub fn native(fs: VaultFs, broker: Arc<CredentialBroker>) -> Self {
         Self::new(
@@ -38,6 +65,225 @@ impl Dispatcher {
             },
         )
     }
+    pub fn execute_public(
+        &self,
+        ledger: &JobLedger,
+        key: &Blake3Hash,
+        options: &super::public_fetch::PublicFetchOptions,
+    ) -> std::result::Result<super::public_fetch::PublicFetchOutcome, Box<DispatchFailure>> {
+        super::public_fetch::dispatch(&self.fs, ledger, key, options)
+    }
+    /// Decode a hash-bound response already retained by this ledger. This grants
+    /// no send authority and does not require live source freshness: callers must
+    /// independently revalidate dependencies before activating derived output.
+    pub fn decode_retained(
+        &self,
+        ledger: &JobLedger,
+        service: &TrustedService,
+        task_key: &Blake3Hash,
+        purpose: DispatchPurpose,
+        attempt: &AttemptRef,
+    ) -> Result<ValidatedOutput> {
+        self.decode_retained_classified(ledger, service, task_key, purpose, attempt)
+            .map_err(RetainedDecodeFailure::error)
+    }
+    pub(crate) fn decode_retained_classified(
+        &self,
+        ledger: &JobLedger,
+        service: &TrustedService,
+        task_key: &Blake3Hash,
+        purpose: DispatchPurpose,
+        attempt: &AttemptRef,
+    ) -> std::result::Result<ValidatedOutput, RetainedDecodeFailure> {
+        let (fs, vault_id, run_id, options) = ledger.dispatcher_bindings();
+        if fs.root().path() != self.fs.root().path()
+            || attempt.run_id != run_id
+            || attempt.task_key != *task_key
+        {
+            return Err(RetainedDecodeFailure::Recovery(WikiError::new(
+                ErrorCode::RecoveryRequired,
+                "retained attempt binding differs",
+            )));
+        }
+        let inspection = ledger.inspect()?;
+        let task = inspection
+            .tasks
+            .get(task_key)
+            .ok_or_else(|| WikiError::new(ErrorCode::RecordNotFound, "retained task missing"))?;
+        let recorded = inspection
+            .attempts
+            .iter()
+            .find(|a| &a.attempt == attempt)
+            .ok_or_else(|| WikiError::new(ErrorCode::RecordNotFound, "retained attempt missing"))?;
+        let spool = recorded.spool.as_ref().ok_or_else(|| {
+            WikiError::new(ErrorCode::RecoveryRequired, "retained response missing")
+        })?;
+        let prepared = prepare_descriptor(&fs, service, &task.spec, purpose)?;
+        if prepared.bound != recorded.bound || spool.attempt != *attempt {
+            return Err(RetainedDecodeFailure::Recovery(WikiError::new(
+                ErrorCode::FreshnessConflict,
+                "retained wire contract differs",
+            )));
+        }
+        let store = crate::vault::operational::RunStore::open_existing(&fs, &vault_id, &run_id)?;
+        let guard = store.lock(Duration::from_millis(options.lock_timeout_ms), &mut || {
+            Ok(())
+        })?;
+        let body = guard
+            .read_spool(
+                attempt,
+                crate::vault::operational::SpoolPart::Body,
+                recorded.bound.response_bytes,
+            )?
+            .ok_or_else(|| WikiError::new(ErrorCode::RecoveryRequired, "retained body missing"))?;
+        let meta = guard
+            .read_spool(
+                attempt,
+                crate::vault::operational::SpoolPart::Metadata,
+                METADATA_MAX_BYTES as u64,
+            )?
+            .ok_or_else(|| {
+                WikiError::new(ErrorCode::RecoveryRequired, "retained metadata missing")
+            })?;
+        if body.hash != spool.response.hash
+            || body.bytes.len() as u64 != spool.response.byte_len
+            || meta.hash != spool.metadata.hash
+            || meta.bytes.len() as u64 != spool.metadata.byte_len
+        {
+            return Err(RetainedDecodeFailure::Recovery(WikiError::new(
+                ErrorCode::RecoveryRequired,
+                "retained response bytes differ",
+            )));
+        }
+        let metadata: ResponseMetadata = crate::changes::prepare::strict_json(&meta.bytes)?;
+        let status = metadata.status_code.ok_or_else(|| {
+            WikiError::new(
+                ErrorCode::ProviderResponse,
+                "retained response is incomplete",
+            )
+        })?;
+        if !metadata.terminal_response {
+            return Err(RetainedDecodeFailure::Recovery(WikiError::new(
+                ErrorCode::RecoveryRequired,
+                "retained response is incomplete",
+            )));
+        }
+        if !(200..300).contains(&status) || metadata.failure_code.is_some() {
+            return Err(RetainedDecodeFailure::InvalidResponse(WikiError::new(
+                ErrorCode::ProviderResponse,
+                "retained response is rejected",
+            )));
+        }
+        let reply = TransportReply {
+            status,
+            headers: Vec::new(),
+            observed_body_bytes: body.bytes.len() as u64,
+            body: body.bytes,
+            body_exceeded: false,
+            headers_exceeded: false,
+            terminal: true,
+        };
+        if observe(&prepared, &reply).contract_violation.is_some() {
+            return Err(RetainedDecodeFailure::InvalidResponse(WikiError::new(
+                ErrorCode::ProviderResponse,
+                "retained response violates sealed contract",
+            )));
+        }
+        decode(&prepared, &reply).map_err(RetainedDecodeFailure::InvalidResponse)
+    }
+    /// Resume a generation response without authentication, DNS, HTTP or a new
+    /// attempt. Rejected spools remain paid; caller materializes their receipt.
+    pub fn recover_response(
+        &self,
+        ledger: &JobLedger,
+        service: &TrustedService,
+        task_key: &Blake3Hash,
+        attempt: &AttemptRef,
+    ) -> std::result::Result<DispatchOutcome, Box<DispatchFailure>> {
+        let recovery = |error: WikiError, spool: Option<SpoolRef>| {
+            let mut out = failure(error, Some(attempt.clone()));
+            out.disposition = DispatchDisposition::OutcomeUnknown;
+            out.spool = spool;
+            out
+        };
+        let inspection = ledger.inspect().map_err(|e| recovery(e, None))?;
+        let recorded = inspection
+            .attempts
+            .iter()
+            .find(|a| &a.attempt == attempt)
+            .ok_or_else(|| {
+                recovery(
+                    WikiError::new(ErrorCode::RecoveryRequired, "retained attempt missing"),
+                    None,
+                )
+            })?;
+        let spool = recorded.spool.clone().ok_or_else(|| {
+            recovery(
+                WikiError::new(ErrorCode::RecoveryRequired, "retained response missing"),
+                None,
+            )
+        })?;
+        match self.decode_retained_classified(
+            ledger,
+            service,
+            task_key,
+            DispatchPurpose::Task,
+            attempt,
+        ) {
+            Ok(output) => {
+                let materialization = if let Some(receipt_ref) = &recorded.receipt {
+                    let receipt = jobs::checkpoint::receipt(&self.fs, receipt_ref)
+                        .map_err(|e| recovery(e, Some(spool.clone())))?;
+                    if receipt.output_disposition != OutputDisposition::Validated {
+                        return Err(recovery(
+                            WikiError::new(
+                                ErrorCode::RecoveryRequired,
+                                "retained receipt does not validate output",
+                            ),
+                            Some(spool),
+                        ));
+                    }
+                    jobs::checkpoint::receipt_plan(
+                        ledger,
+                        attempt,
+                        OutputDisposition::Validated,
+                        recorded.outputs.clone(),
+                        recorded.cache_outputs.clone(),
+                        Vec::new(),
+                    )
+                } else {
+                    ledger.materialization_plan(attempt)
+                }
+                .map_err(|e| recovery(e, Some(spool.clone())))?;
+                Ok(DispatchOutcome {
+                    attempt: attempt.clone(),
+                    spool,
+                    materialization,
+                    output,
+                })
+            }
+            Err(RetainedDecodeFailure::InvalidResponse(error)) => {
+                if recorded.receipt.is_some() {
+                    return Err(recovery(error, Some(spool)));
+                }
+                let mut out = failure(error, Some(attempt.clone()));
+                out.disposition = DispatchDisposition::Rejected;
+                out.spool = Some(spool);
+                out.materialization = jobs::checkpoint::receipt_plan(
+                    ledger,
+                    attempt,
+                    OutputDisposition::Rejected,
+                    Vec::new(),
+                    Vec::new(),
+                    Vec::new(),
+                )
+                .ok();
+                Err(out)
+            }
+            Err(RetainedDecodeFailure::Recovery(error)) => Err(recovery(error, Some(spool))),
+        }
+    }
+
     pub fn execute(
         &self,
         ledger: &JobLedger,
@@ -267,8 +513,14 @@ impl Dispatcher {
                     .execute(request, transport_context)
                     .await
                 {
-                    Ok(reply) => reply,
+                    Ok(reply) => {
+                        self.network_used.store(true, std::sync::atomic::Ordering::Relaxed);
+                        reply
+                    },
                     Err(error) => {
+                        if !error.not_entered || error.observed_body_bytes > 0 {
+                            self.network_used.store(true, std::sync::atomic::Ordering::Relaxed);
+                        }
                         if error.not_entered
                             && error.observed_body_bytes == 0
                             && ledger
@@ -291,6 +543,7 @@ impl Dispatcher {
                             let response = ResponseSpoolInput {
                                 bytes: Vec::new(),
                                 metadata: ResponseMetadata {
+            acquisition: None,
                                     provider_request_id: None,
                                     returned_model: None,
                                     status_code: None,
@@ -374,6 +627,7 @@ impl Dispatcher {
                     reply.body.clone()
                 };
                 let metadata = ResponseMetadata {
+            acquisition: None,
                     provider_request_id,
                     returned_model,
                     status_code: Some(status),
@@ -726,17 +980,6 @@ fn prepare(
     purpose: DispatchPurpose,
 ) -> Result<PreparedWire> {
     service.recheck(fs)?;
-    if task.key != jobs::tasks::task_key(task)? {
-        return Err(WikiError::invalid("task identity differs"));
-    }
-    let bytes = read_bounded(fs, &task.input.path, 256 * 1024)?
-        .ok_or_else(|| WikiError::new(ErrorCode::FreshnessConflict, "task input missing"))?;
-    if bytes.len() as u64 != task.input.byte_len || Blake3Hash::digest(&bytes) != task.input.hash {
-        return Err(WikiError::new(
-            ErrorCode::FreshnessConflict,
-            "task input changed",
-        ));
-    }
     for dep in &task.source_bindings {
         let actual = read_bounded(fs, &dep.path, crate::changes::prepare::MAX_PAYLOAD_BYTES)?
             .map_or(ExpectedState::Absent, |b| {
@@ -748,6 +991,25 @@ fn prepare(
                 "task source changed",
             ));
         }
+    }
+    prepare_descriptor(fs, service, task, purpose)
+}
+fn prepare_descriptor(
+    fs: &VaultFs,
+    service: &TrustedService,
+    task: &TaskSpec,
+    purpose: DispatchPurpose,
+) -> Result<PreparedWire> {
+    if task.key != jobs::tasks::task_key(task)? {
+        return Err(WikiError::invalid("task identity differs"));
+    }
+    let bytes = read_bounded(fs, &task.input.path, 256 * 1024)?
+        .ok_or_else(|| WikiError::new(ErrorCode::FreshnessConflict, "task input missing"))?;
+    if bytes.len() as u64 != task.input.byte_len || Blake3Hash::digest(&bytes) != task.input.hash {
+        return Err(WikiError::new(
+            ErrorCode::FreshnessConflict,
+            "task input changed",
+        ));
     }
     let value = super::wire_json::parse(&bytes, 256 * 1024, 8192, 40)?;
     let input: RemoteInput =
@@ -764,6 +1026,13 @@ fn prepare(
     let role = match input.operation {
         RemoteOperation::Embed { .. } => ServiceRole::Embed,
         RemoteOperation::Generate { .. } => ServiceRole::Generate,
+        RemoteOperation::Search { .. } => ServiceRole::Search,
+        RemoteOperation::Fetch { .. } => {
+            return Err(WikiError::new(
+                ErrorCode::Usage,
+                "public fetch uses execute_public",
+            ));
+        }
     };
     let capability = match purpose {
         DispatchPurpose::Task => role.capability(),
@@ -788,14 +1057,36 @@ fn prepare(
             ServiceRole::Generate => {
                 super::generation_wire::prepare(service, task, &input, purpose)
             }
-            ServiceRole::Search => Err(WikiError::new(
-                ErrorCode::CapabilityUnavailable,
-                "search wire adapter is not part of this task codec",
-            )),
+            ServiceRole::Search => super::search_wire::prepare(service, task, &input, purpose),
         }
     }
     #[cfg(test)]
     {
+        if role == ServiceRole::Search {
+            return super::search_wire::prepare(service, task, &input, purpose);
+        }
+        let fingerprints = super::wire::task_fingerprints(service, &input)?;
+        if task.input_hash == fingerprints.input
+            && task.prompt_hash == fingerprints.prompt
+            && task.schema_hash == fingerprints.schema
+            && task.model_hash.as_ref() == Some(&fingerprints.model)
+            && task.settings_hash == fingerprints.settings
+        {
+            if crate::graph::packet::canonical_json(&input)? != bytes {
+                return Err(WikiError::invalid(
+                    "remote input descriptor must use canonical JSON",
+                ));
+            }
+            return match role {
+                ServiceRole::Embed => {
+                    super::embedding_wire::prepare(service, task, &input, purpose)
+                }
+                ServiceRole::Generate => {
+                    super::generation_wire::prepare(service, task, &input, purpose)
+                }
+                ServiceRole::Search => unreachable!("handled above"),
+            };
+        }
         fixture_prepare(service, task, input, role, purpose, capability)
     }
 }
@@ -856,6 +1147,9 @@ pub(super) fn fixture_prepare(
             serde_json::to_vec(&serde_json::json!({"model":service.service().model,"input":inputs.iter().map(|i|&i.utf8).collect::<Vec<_>>(),"encoding_format":"float"})).unwrap()
         }
         RemoteOperation::Generate {instructions,data,max_output_tokens,..}=>serde_json::to_vec(&serde_json::json!({"model":service.service().model,"messages":[{"role":"system","content":instructions},{"role":"user","content":data}],"stream":false,"n":1,"max_completion_tokens":max_output_tokens})).unwrap(),
+        RemoteOperation::Search { .. } | RemoteOperation::Fetch { .. } => {
+            return Err(WikiError::new(ErrorCode::Usage, "fixture encoder only supports model operations"));
+        }
     };
     if body.len() as u64 > service.service().max_batch_bytes.unwrap_or(256 * 1024) {
         return Err(WikiError::new(
@@ -935,6 +1229,7 @@ fn observe(prepared: &PreparedWire, reply: &TransportReply) -> ObservedUsage {
     match &prepared.contract {
         WireContract::Embedding(_) => super::embedding_wire::observe(prepared, reply),
         WireContract::Generation(_) => super::generation_wire::observe(prepared, reply),
+        WireContract::Search(_) => super::search_wire::observe(prepared, reply),
         #[cfg(test)]
         WireContract::Fixture => fixture_observe(&prepared.bound, reply),
     }
@@ -993,6 +1288,7 @@ fn decode(prepared: &PreparedWire, reply: &TransportReply) -> Result<ValidatedOu
     let result = match &prepared.contract {
         WireContract::Embedding(_) => super::embedding_wire::decode(prepared, reply),
         WireContract::Generation(_) => super::generation_wire::decode(prepared, reply),
+        WireContract::Search(_) => super::search_wire::decode(prepared, reply),
         #[cfg(test)]
         WireContract::Fixture => fixture_decode(prepared.purpose, &reply.body),
     };

@@ -9,4 +9,6 @@ pub use dispatch::{execute, present};
 mod decisions;
 mod review;
 
+pub mod embeddings;
+pub mod remote;
 pub mod skill_export;

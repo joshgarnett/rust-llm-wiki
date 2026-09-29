@@ -833,13 +833,6 @@ impl RunLedgerGuard<'_> {
             ),
         }
     }
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "verified spool cleanup contract exercised by accounting tests"
-        )
-    )]
     pub(crate) fn remove_spool_file(
         &self,
         attempt: &AttemptRef,
@@ -870,13 +863,6 @@ impl RunLedgerGuard<'_> {
             .map_err(|e| io_error("remove verified spool", e))?;
         self.store.sync_dir(path.parent().expect("spool parent"))
     }
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "verified spool cleanup contract exercised by accounting tests"
-        )
-    )]
     pub(crate) fn remove_empty_attempt_dir(&self, attempt: &AttemptRef) -> Result<()> {
         self.check()?;
         let path = self.attempt_dir(attempt)?;

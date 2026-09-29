@@ -199,10 +199,16 @@ impl Transport for NativeTransport {
                     ))
                     .map_err(|_| TransportFailure::new(TransportFailureCode::InvalidResponse))?,
                 );
+                let expected_url = if request.prepared.role == ServiceRole::Search {
+                    super::search_wire::request_url(request.service, &request.prepared.input)
+                        .map_err(|_| TransportFailure::new(TransportFailureCode::InvalidResponse))?
+                } else {
+                    request.service.service().url.clone()
+                };
                 if computed != request.authorization.bound().wire_hash
                     || request.prepared.body.len() as u64
                         != request.authorization.bound().request_bytes
-                    || request.prepared.url != request.service.service().url
+                    || request.prepared.url != expected_url
                 {
                     return Err(TransportFailure::new(TransportFailureCode::InvalidResponse));
                 }

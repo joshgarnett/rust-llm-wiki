@@ -64,6 +64,9 @@ impl fmt::Display for ErrorCode {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct WikiError {
+    /// Local execution telemetry; untrusted serialized errors cannot supply it.
+    #[serde(skip)]
+    pub(crate) network_used: bool,
     pub code: ErrorCode,
     pub message: String,
     pub retryable: bool,
@@ -74,6 +77,7 @@ pub struct WikiError {
 impl WikiError {
     pub fn new(code: ErrorCode, message: impl Into<String>) -> Self {
         Self {
+            network_used: false,
             code,
             message: message.into(),
             retryable: false,

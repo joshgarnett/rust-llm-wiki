@@ -1,7 +1,7 @@
 use crate as library;
 #[allow(dead_code)]
 #[path = "../../tests/fixtures/p16c/common.rs"]
-mod common;
+pub(crate) mod common;
 use super::{embedding_wire as embed, generation_wire as genwire, types::*, wire_json};
 use crate::jobs::*;
 use common::*;
