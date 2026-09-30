@@ -2,6 +2,12 @@
 
 Updated 2026-09-29. Root owns this checkpoint. **The end-to-end 0.1.2 audit reopens correctness and workflow work despite historical acceptance of P00–P21 and V01–V17.** Historical implementation/release evidence remains below; current open work is in [the audit](reports/AUDIT-0.1.2.md).
 
+## Next session: cleanup and product completion
+
+- **Start with [CLEANUP.md](CLEANUP.md).** The owner requested tracking every finding and feature proposal before a fresh implementation session. This single active register maps C01–C23 to the audit, adds S01–S05 for storage amplification/layout/compaction/retention/growth budgets, F01–F09 feature candidates, and E01–E07 qualification/owner decisions. All implementation work remains open; this handoff changes documentation only.
+- Product requirement: useful shared Markdown knowledge for humans and agents, readable pages/reports/navigation, focused retrieval and reliable maintenance after source changes. The owner's 451-file tree was dominated by changes/run bookkeeping. Moving internal files alone is insufficient; compact history and safe retention need design. Historical checkpoint/receipt proofs currently depend on committed changes, so no manual deletion or relocation is authorized.
+- Audit documentation is on main at `14a26a7`; released product remains `d8a82a5`/v0.1.2. Next: inspect current Git state, read the cleanup brief, assign bounded Sol work and Astra invariant review, baseline storage growth, and begin recovery/source-authority/provider fixes coordinated with the retention design. Preserve host-agent-only research, exact evidence, author edits and paid accounting. No new release version selected; no active worker/build or product edits in this planning handoff.
+
 ## End-to-end reference and implementation audit (complete; fixes open)
 
 - User requests a full audit against reference examples/documentation while testing 0.1.2, with subagents and a prioritized gap/work list. Baseline clean main `63b2439f5cd57211e2a2bc5587ac5bace3d03ea2`; released product source remains `d8a82a5a345549fada06987dec986801c6842252`. This pass changes audit reports/state only, not product code or releases.

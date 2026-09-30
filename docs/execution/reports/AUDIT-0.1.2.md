@@ -1,5 +1,7 @@
 # End-to-end audit of lwiki 0.1.2
 
+The active implementation work register and next-session entrypoint is [CLEANUP.md](../CLEANUP.md). It preserves the 23 findings below and adds subsequent owner feedback on storage growth, human/agent usefulness, feature candidates and qualification. This report remains the historical audit evidence.
+
 Date: 2026-09-29. Audited checkout: `63b2439f5cd57211e2a2bc5587ac5bace3d03ea2`. Released product: `d8a82a5a345549fada06987dec986801c6842252`, tag `v0.1.2`. Source, schemas, maintained skill, Cargo manifest and lockfile are unchanged between the tag and audited checkout. Behavioral reproductions used the downloaded macOS ARM64 release executable.
 
 **The audit found open correctness and workflow gaps. Historical M0–M4 acceptance does not close these new findings.** The highest priorities are a conflict state with no supported resolution, a source-identity inconsistency that can cause API extraction to dispatch and then panic, and failed embedding probes that block subsequent embedding work. This is an audit and work list: no product fixes, release changes or new built-in research executor are included.
