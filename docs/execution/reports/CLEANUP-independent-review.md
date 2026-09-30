@@ -1,6 +1,6 @@
 # Cleanup provider and retrieval independent review
 
-Root execution update: corrected routine CI passed all 23 targets plus 41 Python tooling tests; both final acceptance gap regressions passed (API21/research16). Final source is `be95af79f0b352bda3b3a1efc5e6d6a46d53bf367b1197e2405b19d0c1e7dfa1`; full native qualification remains pending. This actual execution update supersedes the dated pending notes below.
+Root execution update: corrected routine CI passed all 23 targets plus 41 Python tooling tests; both final acceptance gap regressions passed (API21/research16). Prior acceptance snapshot is `be95af79f0b352bda3b3a1efc5e6d6a46d53bf367b1197e2405b19d0c1e7dfa1`; full native qualification remains pending. This actual execution update supersedes the dated pending notes below.
 
 
 2026-09-29 local / 2026-09-30 UTC; Astra. Read-only review of the uncommitted C02–C08/C17–C20 slice over root-reported baseline `0660cb5`. Only this report was edited. No builds, test execution, Git commands, provider requests, credentials or real vault access. Root and other workers were integrating concurrently; this is not an atomic tree snapshot or whole-diff approval. Storage implementation, migrations/GC and new page/research features require their separate review. Line references identify the reviewed versions.
@@ -107,6 +107,22 @@ Both required acceptance gaps are now closed **in test source coverage**, follow
 
 No further source-coverage blocker remains from this bounded acceptance audit. Final readiness still depends on the affected gate, final source freeze and full native qualification, with current register/state evidence and external limitations retained.
 
+## Full-native failure correction review — pending rerun
+
+Root reported the first full-native attempt compiled all targets and passed uncached format/Clippy and six targets (including full changes recovery), then was interrupted after unit tests exposed two failures. That attempt is incomplete and cannot support full qualification. This follow-up review was limited to `RunStoreGuard::remove_empty_attempt_dir`, its three new operational negatives and the research packet-warning assertion correction. No build/test/Git operation was performed by the reviewer.
+
+**Spool cleanup correction is source-closed.** After a legitimate interruption between owner-file unlink and directory removal, the ownerless path is admitted only after an immediate directory listing proves it empty. Any ownerless content—including response bytes/metadata, either diagnostic pair, private staging or unfamiliar files—refuses before deletion. Owner-authenticated diagnostic reads are conditional on the owner being present; existing owner-bearing diagnostics remain retained. Run/lock and pending-storage checks precede this branch; ordinary checked path resolution and Windows directory pinning remain in place. The final operation removes only an empty directory and syncs its parent, so content appearing after the empty check is not recursively deleted. No replacement owner or ledger authority is fabricated.
+
+The existing `operational_cleanup_interruption_and_missing_authority_preserve_history` covers successful owner-unlink recovery and idempotent repeat. New `operational_ownerless_cleanup_refuses_every_retained_payload`, `operational_ownerless_cleanup_keeps_pending_epoch_and_run_barriers` and Unix `operational_ownerless_cleanup_keeps_symlink_and_lock_inode_guards` assert retained content, pending marker/journal preservation, wrong-run refusal and symlink/replaced-lock refusal. These are appropriate focused assertions; execution is root-owned and was pending at this review.
+
+The research unit change correctly expects two independently applicable warnings and asserts their distinct reasons: omitted candidate identity and later-source excerpt selection. Existing exact selected-passage/quote assertions remain. No production research selection change is included in that delta. No new blocker found in this narrow correction review; affected unit filters, format/Clippy and a fresh full native qualification remain required.
+
+```text
+d9a1b3793004449ead9e2a36c6be84be3d164c28b425c9efdcb46981bc76a083  src/vault/operational.rs
+bed1d71fbf096cf457032c66364bd52471d085f0d358f3a0e9fa88f0a690eefb  src/vault/operational_tests.rs
+0e7df433f1a9a8ee3c468da7b32b9f1a4f6b0a7df43fa066e86b110e28de867a  src/research/engine.rs
+```
+
 ## Source fingerprints
 
 SHA-256 read at `2026-09-30T01:06:45Z`; files may change after this stamp. No Git diff was taken under the read-only/no-Git lease. Other inspected source/tests are named above; fingerprints identify the principal reviewed slice, not the whole dirty tree.
@@ -126,3 +142,5 @@ cf23afda90e3d9734e125259bd9ae36a6c909c0b2789ab1ad8664b0d03740da3  src/jobs/diagn
 8bd941d1e52cd666513c7dff9452e82ed4e144c0393563d45740f5bbdde74005  src/retrieval/context.rs
 8511823e81ee210627f957e23d747031d760c2e53f941e401e1a98cdcc4b141c  src/retrieval/bundles.rs
 ```
+
+Root actual correction gate: all16 filtered library parent cases pass, including both observed full-native failures and the three new ownerless-directory negatives. Format/strict Clippy pass after recompiling affected dependencies; final wrappers cached. Fresh343file source is `2a59b29d22dc607b8c18ac0bb150bcc43b8d5e2e70c46db596037714d3d11a01`; new full native qualification remains pending.

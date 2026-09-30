@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "baseline_commit": "0660cb5",
-  "status": "local integration accepted; full native qualification pending",
+  "status": "correction locally accepted; fresh full native qualification starting",
   "scope": "Local cleanup implementation with disposable vaults and mock providers only",
   "attempts": [
     {
@@ -71,7 +71,7 @@
     "log": ".artifacts/cleanup-build-tools.log"
   },
   "source_manifest": {
-    "source_sha256": "be95af79f0b352bda3b3a1efc5e6d6a46d53bf367b1197e2405b19d0c1e7dfa1",
+    "source_sha256": "2a59b29d22dc607b8c18ac0bb150bcc43b8d5e2e70c46db596037714d3d11a01",
     "file_count": 343,
     "files": {
       ".bazelrc": "cb1b3f8a089ca7fb6804c5029a602ae660ff25fb8081fa520b67474d434e38cc",
@@ -232,7 +232,7 @@
       "src/records/mod.rs": "087dcbc747b2604de3b1b72cddf8a989409c34b163b13e5002e05cf8e648618b",
       "src/records/parse.rs": "5bbccdf81fa011f791ab5c3c9eb57a3b26a89cd78bf3e78de1576d043d0987dc",
       "src/research/codec.rs": "cf4de2c59593e1feaec73b6cb440058f118d8e0bcc7b28fda4a1c21b46964042",
-      "src/research/engine.rs": "5e94cf6c52ceca9a44949f941fed9353c920d6cda844bf48e5871ef167be24c4",
+      "src/research/engine.rs": "0e7df433f1a9a8ee3c468da7b32b9f1a4f6b0a7df43fa066e86b110e28de867a",
       "src/research/inspection.rs": "870b6e1b413a97c022c4fc0b1a7fa3338e99e6a4cde6fed269951c5453025f69",
       "src/research/maintenance.rs": "1d68a381974c115b9b9a0bdfc4a05eb3496e9a6eed3256462f5d2720dc0bf825",
       "src/research/mod.rs": "dc4f73140f35b06225e192e414a5a5f35bf8e5206d899d2944dbc09e8aa63568",
@@ -271,8 +271,8 @@
       "src/vault/fs.rs": "9abc67789ffcba87203d02bed28211b5da63a1a2dcab62b58f524c29996b03c6",
       "src/vault/lock.rs": "daf202ec85c0197d130c98ad7b6c277dde43ff1d21ae146430fee58444718eca",
       "src/vault/mod.rs": "ba1846714c4ca3d8b098451c1e4c0d86ead82117464f0ee4195d38fb8cc3b4dc",
-      "src/vault/operational.rs": "7f69eb1dab1bfd5e08d47596adf239344568fe52e80e39234e995c3ff0648044",
-      "src/vault/operational_tests.rs": "c30df33b4079ed2ab557c55920cecc859ecb35af42ac3ce42d5d89eac6aa1c57",
+      "src/vault/operational.rs": "d9a1b3793004449ead9e2a36c6be84be3d164c28b425c9efdcb46981bc76a083",
+      "src/vault/operational_tests.rs": "bed1d71fbf096cf457032c66364bd52471d085f0d358f3a0e9fa88f0a690eefb",
       "src/vault/paths.rs": "476352c0f830b7f4be977a80a276abfb09773869eed2afe79bba099514c37b1f",
       "src/vault/windows_security.rs": "785baab120bf4b89594231f73b9fb0da458a061bd093d563e948291efb36f274",
       "test_support/paths.rs": "7f4788e35296d04645622c565b235a938faf6df798a7113b621c48950e7e1aa0",
@@ -418,7 +418,15 @@
       "tests/vault_fs.rs": "20ceb70824ab3d887b65a069456307b349e06d9054bf6d49dbf2cb4cf2491c00",
       "tests/windows_acl_policy.rs": "dbbae84d4bebf5f9d8ef8b8ef1cafc830c55d7604723b4956b1be48b7646399e"
     },
+    "changed_since_first_native": [
+      "src/research/engine.rs",
+      "src/vault/operational.rs",
+      "src/vault/operational_tests.rs"
+    ],
     "changed_since_routine_ci": [
+      "src/research/engine.rs",
+      "src/vault/operational.rs",
+      "src/vault/operational_tests.rs",
       "tests/api_extraction.rs",
       "tests/research_handoff.rs"
     ]
@@ -1170,11 +1178,146 @@
     "notes": "Format/Clippy test results cached after dependency checking; API/research executed. No product change after passing routine CI, only these two test files."
   },
   "integration_commit": "0288ac75d5f87248e368e133642aaf07d7b4b518",
+  "native_qualification_attempts": [
+    {
+      "status": "interrupted after two observed library test failures",
+      "command": "LWIKI_BAZEL_OUTPUT_ROOT=/private/tmp/lwiki-bazel scripts/qualify-local.sh .artifacts/cleanup-qualification-001",
+      "outer_log": ".artifacts/cleanup-qualification.log",
+      "evidence_directory": ".artifacts/cleanup-qualification-001",
+      "source_sha256": "be95af79f0b352bda3b3a1efc5e6d6a46d53bf367b1197e2405b19d0c1e7dfa1",
+      "compiled_source_commit": "81d67ef",
+      "passed_targets": 6,
+      "incomplete_or_skipped_targets": 43,
+      "targets": [
+        {
+          "target": "//:change_read_preconditions_test",
+          "status": "passed",
+          "files": {
+            "test.log": {
+              "path": ".artifacts/cleanup-native-first-snapshot/change_read_preconditions_test/test.log",
+              "sha256": "7b58b4018ebdeca42e68d1e3f9443c5f856b5e45e544e913bfa3f8c42956ca87"
+            },
+            "test.xml": {
+              "path": ".artifacts/cleanup-native-first-snapshot/change_read_preconditions_test/test.xml",
+              "sha256": "b73b56b9c36ad05e77bb508e76a840d091672870eb11c31c5bc3252bc5c03125"
+            }
+          }
+        },
+        {
+          "target": "//:changes_recovery_test",
+          "status": "passed",
+          "files": {
+            "test.log": {
+              "path": ".artifacts/cleanup-native-first-snapshot/changes_recovery_test/test.log",
+              "sha256": "7850a4c9260e3be019fdbbaf45a558a4a35eb5b9be94652b4e157f3c948eccfd"
+            },
+            "test.xml": {
+              "path": ".artifacts/cleanup-native-first-snapshot/changes_recovery_test/test.xml",
+              "sha256": "12c49f25e05e55fb3888f066a0ffd95812454853afe5383bc1d9a150163ac94f"
+            }
+          }
+        },
+        {
+          "target": "//:graph_resolution_test",
+          "status": "passed",
+          "files": {
+            "test.log": {
+              "path": ".artifacts/cleanup-native-first-snapshot/graph_resolution_test/test.log",
+              "sha256": "f3a452142d4484c3c7d9a9e3366c4ec4255b72b53156d00213d8f95855a6ba8e"
+            },
+            "test.xml": {
+              "path": ".artifacts/cleanup-native-first-snapshot/graph_resolution_test/test.xml",
+              "sha256": "d70e7f5a84b40a19b6c345a058c3338fa1243b0deb20c44d1fb926c99c54ca58"
+            }
+          }
+        },
+        {
+          "target": "//:job_accounting_test",
+          "status": "passed",
+          "files": {
+            "test.log": {
+              "path": ".artifacts/cleanup-native-first-snapshot/job_accounting_test/test.log",
+              "sha256": "13445750923f2dda60fc7258a0e144250e9c6a4affa2e1bdb8143c1d3e38265d"
+            },
+            "test.xml": {
+              "path": ".artifacts/cleanup-native-first-snapshot/job_accounting_test/test.xml",
+              "sha256": "514dfb9b06811c8b7f520abb6085575994a6d5b8e63bd9426c02c8fc2e864e51"
+            }
+          }
+        },
+        {
+          "target": "//:resolution_cli_test",
+          "status": "passed",
+          "files": {
+            "test.log": {
+              "path": ".artifacts/cleanup-native-first-snapshot/resolution_cli_test/test.log",
+              "sha256": "3f32da668b48194478360c2b5e7ed2156e91a0f79c6b7b6efbd2f73d734b66d0"
+            },
+            "test.xml": {
+              "path": ".artifacts/cleanup-native-first-snapshot/resolution_cli_test/test.xml",
+              "sha256": "140dc53ca45053dd1da25237f19b5851eb1a218b4e58024c24e2175b7d80e2ad"
+            }
+          }
+        },
+        {
+          "target": "//:retrieval_lexical_test",
+          "status": "passed",
+          "files": {
+            "test.log": {
+              "path": ".artifacts/cleanup-native-first-snapshot/retrieval_lexical_test/test.log",
+              "sha256": "d040c4032c8f4e309b7b4b3d17f805ce2c791c3a2f35c11d91e1eb76e3dccfbc"
+            },
+            "test.xml": {
+              "path": ".artifacts/cleanup-native-first-snapshot/retrieval_lexical_test/test.xml",
+              "sha256": "1528641b94dcef232752ee0b78326bcd0273eae65984783441c09c4e41895c7d"
+            }
+          }
+        },
+        {
+          "target": "//:unit_tests",
+          "status": "interrupted with two observed failures",
+          "files": {
+            "test.log": {
+              "path": ".artifacts/cleanup-native-first-snapshot/unit_tests/test.log",
+              "sha256": "e750346dfe124bc397faa0ca24543e98ad6332a0895676aec9c363767a094d35"
+            }
+          }
+        }
+      ],
+      "failures": [
+        {
+          "test": "research::engine::packet_tests::later_full_span_replaces_earlier_subset_only_when_it_fits",
+          "cause": "Stale warning-count assertion: useful later-span warning now accompanies bounded omission notice",
+          "correction": "Test checks both warning reasons explicitly, selection unchanged"
+        },
+        {
+          "test": "vault::operational_tests::operational_cleanup_interruption_and_missing_authority_preserve_history",
+          "cause": "Diagnostic lookup rechecks an already-removed owner before safe empty-directory recovery",
+          "correction": "Astra implementing safe proven-empty retry and ownerless-payload negatives; pending barrier retained"
+        }
+      ],
+      "log_sha256": "a37700ef4575f769f1a37b4020cd403412093cfd5a95dadd45b350a7d5e37271",
+      "repro_log": ".artifacts/cleanup-native-unit-repro.log",
+      "repro_log_sha256": "e757c683ced63a3d5627f6c57fb3874a38371117227a8a58e392d47ba705fcbf"
+    }
+  ],
+  "spool_recovery_correction": {
+    "status": "passed",
+    "source_sha256": "2a59b29d22dc607b8c18ac0bb150bcc43b8d5e2e70c46db596037714d3d11a01",
+    "unit_parent_cases": 16,
+    "unit_log": ".artifacts/cleanup-spool-correction-test.log",
+    "unit_log_sha256": "c260b06a81fbc0b723db7e095feebec336c21fa35bf81e92d2d0275d918be72f",
+    "check_log": ".artifacts/cleanup-spool-correction-check.log",
+    "check_log_sha256": "85196a558e8ee09b02dc5c6fe5e9a48d1c9291e806a17253e19e9c398f6e5a70",
+    "copied_logs": ".artifacts/cleanup-spool-correction-snapshot",
+    "review": "CLEANUP-independent-review.md",
+    "scope": "empty ownerless cleanup retry; ownerless payload/pending/run/inode/symlink refusals; packet warning reasons; compact/legacy checkpoints and no-resend dispatch recovery"
+  },
   "native_qualification": {
     "status": "starting",
-    "command": "LWIKI_BAZEL_OUTPUT_ROOT=/private/tmp/lwiki-bazel scripts/qualify-local.sh .artifacts/cleanup-qualification-001",
-    "outer_log": ".artifacts/cleanup-qualification.log",
-    "evidence_directory": ".artifacts/cleanup-qualification-001",
-    "source_sha256": "be95af79f0b352bda3b3a1efc5e6d6a46d53bf367b1197e2405b19d0c1e7dfa1"
+    "command": "LWIKI_BAZEL_OUTPUT_ROOT=/private/tmp/lwiki-bazel scripts/qualify-local.sh .artifacts/cleanup-qualification-002",
+    "outer_log": ".artifacts/cleanup-qualification-002.log",
+    "evidence_directory": ".artifacts/cleanup-qualification-002",
+    "source_sha256": "2a59b29d22dc607b8c18ac0bb150bcc43b8d5e2e70c46db596037714d3d11a01"
   }
 }

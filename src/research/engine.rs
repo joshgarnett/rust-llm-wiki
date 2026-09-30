@@ -1042,6 +1042,16 @@ mod packet_tests {
         .unwrap();
         assert_eq!(result.passages.len(), 2);
         assert_eq!(result.passages[1].citation, narrow.citation);
-        assert_eq!(result.warnings.len(), 1);
+        assert_eq!(result.warnings.len(), 2);
+        assert!(result.warnings.iter().any(|warning| {
+            warning.contains("1 candidate passages omitted")
+                && warning.contains("source_subset_fixture")
+        }));
+        assert!(
+            result
+                .warnings
+                .iter()
+                .any(|warning| warning.contains("Relevant later-source excerpts"))
+        );
     }
 }

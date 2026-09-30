@@ -135,6 +135,13 @@ fn operational_cleanup_interruption_and_missing_authority_preserve_history() {
             .is_empty()
     );
     guard.remove_empty_attempt_dir(&a).unwrap();
+    assert!(
+        !temp
+            .path()
+            .join(".wiki/state/requests/attempt_private")
+            .exists()
+    );
+    guard.remove_empty_attempt_dir(&a).unwrap();
     fs::remove_file(temp.path().join(".wiki/state/jobs/run_private/journal.bin")).unwrap();
     assert!(guard.read_journal().unwrap().is_none());
     assert!(guard.append_journal(0, b"new false history").is_err());
@@ -148,6 +155,104 @@ fn operational_cleanup_interruption_and_missing_authority_preserve_history() {
     let open = RunStore::open_existing(&vault, &vault_id(), &id("missing_run")).unwrap();
     assert!(open.lock(Duration::ZERO, &mut || Ok(())).is_err());
     assert!(!temp.path().join(".wiki/state/jobs/missing_run").exists());
+}
+#[test]
+fn operational_ownerless_cleanup_refuses_every_retained_payload() {
+    for name in [
+        "response.bin",
+        "metadata.json",
+        "semantic-rejection.bin",
+        "semantic-rejection.json",
+        "http-error.bin",
+        "http-error.json",
+        ".lwiki-private-interrupted.tmp",
+        "unfamiliar.bin",
+    ] {
+        let (temp, vault, writer) = fixture();
+        let a = attempt();
+        let store = RunStore::bootstrap(&vault, &writer, &vault_id(), &a.run_id).unwrap();
+        let guard = store.lock(Duration::ZERO, &mut || Ok(())).unwrap();
+        guard.ensure_attempt_dir(&a).unwrap();
+        let directory = temp.path().join(".wiki/state/requests/attempt_private");
+        fs::remove_file(directory.join("owner.json")).unwrap();
+        fs::write(directory.join(name), b"retained private bytes").unwrap();
+        assert_eq!(
+            guard.remove_empty_attempt_dir(&a).unwrap_err().code,
+            ErrorCode::ContentConflict,
+            "{name}"
+        );
+        assert_eq!(
+            fs::read(directory.join(name)).unwrap(),
+            b"retained private bytes",
+            "{name}"
+        );
+        assert!(!directory.join("owner.json").exists());
+        assert_eq!(fs::read_dir(&directory).unwrap().count(), 1);
+    }
+}
+#[test]
+fn operational_ownerless_cleanup_keeps_pending_epoch_and_run_barriers() {
+    let (temp, vault, writer) = fixture();
+    let a = attempt();
+    let store = RunStore::bootstrap(&vault, &writer, &vault_id(), &a.run_id).unwrap();
+    let guard = store.lock(Duration::ZERO, &mut || Ok(())).unwrap();
+    guard.append_journal(0, b"retained history").unwrap();
+    guard.ensure_attempt_dir(&a).unwrap();
+    let directory = temp.path().join(".wiki/state/requests/attempt_private");
+    fs::remove_file(directory.join("owner.json")).unwrap();
+    let mut wrong = a.clone();
+    wrong.run_id = id("another_run");
+    assert_eq!(
+        guard.remove_empty_attempt_dir(&wrong).unwrap_err().code,
+        ErrorCode::ContentConflict
+    );
+    assert!(directory.is_dir());
+    let pending = temp.path().join(".wiki/state/storage/cleanup.json");
+    fs::create_dir_all(pending.parent().unwrap()).unwrap();
+    // Ordinary mutations refuse the pending marker before decoding its contents.
+    fs::write(&pending, b"pending cleanup authority").unwrap();
+    assert_eq!(
+        guard.remove_empty_attempt_dir(&a).unwrap_err().code,
+        ErrorCode::RecoveryRequired
+    );
+    assert!(directory.is_dir());
+    assert!(fs::read_dir(&directory).unwrap().next().is_none());
+    assert_eq!(fs::read(&pending).unwrap(), b"pending cleanup authority");
+    assert_eq!(
+        guard.read_journal().unwrap().unwrap().bytes,
+        b"retained history"
+    );
+    fs::remove_file(pending).unwrap();
+    guard.remove_empty_attempt_dir(&a).unwrap();
+    assert!(!directory.exists());
+}
+#[cfg(unix)]
+#[test]
+fn operational_ownerless_cleanup_keeps_symlink_and_lock_inode_guards() {
+    let (temp, vault, writer) = fixture();
+    let a = attempt();
+    let store = RunStore::bootstrap(&vault, &writer, &vault_id(), &a.run_id).unwrap();
+    let guard = store.lock(Duration::ZERO, &mut || Ok(())).unwrap();
+    guard.ensure_attempt_dir(&a).unwrap();
+    let directory = temp.path().join(".wiki/state/requests/attempt_private");
+    fs::remove_file(directory.join("owner.json")).unwrap();
+    let retained = directory.with_file_name("retained_empty_directory");
+    fs::rename(&directory, &retained).unwrap();
+    std::os::unix::fs::symlink(&retained, &directory).unwrap();
+    assert!(guard.remove_empty_attempt_dir(&a).is_err());
+    assert!(fs::symlink_metadata(&directory).unwrap().is_symlink());
+    assert!(retained.is_dir());
+    fs::remove_file(&directory).unwrap();
+    fs::rename(&retained, &directory).unwrap();
+    let lock = temp.path().join(".wiki/state/jobs/run_private/ledger.lock");
+    fs::rename(&lock, lock.with_extension("old")).unwrap();
+    fs::write(&lock, b"").unwrap();
+    assert_eq!(
+        guard.remove_empty_attempt_dir(&a).unwrap_err().code,
+        ErrorCode::ContentConflict
+    );
+    assert!(directory.is_dir());
+    assert!(fs::read_dir(&directory).unwrap().next().is_none());
 }
 #[test]
 fn operational_symlink_changed_inode_and_sparse_spool_refuse() {

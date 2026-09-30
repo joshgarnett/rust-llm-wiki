@@ -965,6 +965,12 @@ impl RunLedgerGuard<'_> {
         let owner_present = read(&owner_path, OWNER_LIMIT)?.is_some();
         if owner_present {
             self.owner(attempt)?;
+        } else if fs::read_dir(&path)
+            .map_err(|e| io_error("inspect cleaned spool", e))?
+            .next()
+            .is_some()
+        {
+            return Err(conflict("unbound nonempty spool retained"));
         }
         for part in [SpoolPart::Body, SpoolPart::Metadata] {
             if read(&self.spool_path(attempt, part)?, Self::limit(part))?.is_some() {
@@ -978,7 +984,9 @@ impl RunLedgerGuard<'_> {
             DiagnosticPart::HttpBody,
             DiagnosticPart::HttpMetadata,
         ] {
-            if self.read_diagnostic(attempt, part)?.is_some() {
+            // After owner unlink, only a proven-empty directory can be retried.
+            // Diagnostic reads require the owner even when their file is absent.
+            if owner_present && self.read_diagnostic(attempt, part)?.is_some() {
                 retained_diagnostic = true;
             }
         }
