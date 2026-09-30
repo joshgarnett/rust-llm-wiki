@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "baseline_commit": "0660cb5",
-  "status": "aggregate native tests passed; artifact stages pending",
+  "status": "Required local cleanup complete; external E01\u2013E05/E07 qualification and owner decisions retained",
   "scope": "Local cleanup implementation with disposable vaults and mock providers only",
   "attempts": [
     {
@@ -2551,7 +2551,7 @@
     "scope": "empty ownerless cleanup retry; ownerless payload/pending/run/inode/symlink refusals; packet warning reasons; compact/legacy checkpoints and no-resend dispatch recovery"
   },
   "native_qualification": {
-    "status": "aggregate native tests passed; artifact stages pending",
+    "status": "passed as aggregate",
     "source_sha256": "78cc134d94ad7f1e271312f2414ba8a6ba9280fb7e13172ac11f9e25c3f2f97c",
     "changed_since_second_native": [
       "scripts/shared_wiki_recipe.py",
@@ -3973,6 +3973,278 @@
         }
       ]
     },
-    "note": "Neither initial full-script invocation passed. All49 native targets pass in an explicitly recorded aggregate with final checks; remaining artifact stages run separately."
+    "note": "Neither initial full-script invocation passed. All49 native targets pass in an explicitly recorded aggregate with final checks; artifact stages completed separately.",
+    "qualified_commit": "9e20065db7e4bf8f4830dc4d0ed45fd01ded5884",
+    "source_sha256_before_and_after": "78cc134d94ad7f1e271312f2414ba8a6ba9280fb7e13172ac11f9e25c3f2f97c",
+    "source_file_count_before_and_after": 343,
+    "source_unchanged_after_artifact_stages": true,
+    "source_delta": {
+      "scripts/shared_wiki_recipe.py": {
+        "before": "eae79235da7a4dd9116702ef9a4d6f6565ee5d5377c3910ccb1347613498d3c1",
+        "after": "ee92cd4793de9ddbaa2ae812407c5e0d5e90795857afc856120918540c8bdcfe"
+      },
+      "tests/release_workflows.rs": {
+        "before": "19a5cabfa0feae4be3e5dfd69fa69eab21d27cc212f2b0f6cca2b171860ddb93",
+        "after": "b755fc3b299194399b404b32f0c91a465e549d3e2d5f39db973795d337a40461"
+      },
+      "tests/shared_wiki_workflow.rs": {
+        "before": "d56e3339f05bc47ae4a8a444cb7e59c89d8f696c1b308f911901155f7fe60bc6",
+        "after": "3e5c8c08e3352296ff56f3271f8ef7df9a4d17362269897f8e31bcb140bd6ac5"
+      },
+      "tests/vault_fs.rs": {
+        "before": "20ceb70824ab3d887b65a069456307b349e06d9054bf6d49dbf2cb4cf2491c00",
+        "after": "fa1befae1a951f05700caa81cad34e69824afd0e47ced8ca8dbeb4ede5a9b95a"
+      }
+    },
+    "source_delta_proof": "Replace exactly four current source_manifest.files hashes with source_delta.before and hash the sorted compact JSON map: this reconstructs native002 source2a59; all other343-map entries are unchanged."
+  },
+  "artifact_qualification": {
+    "status": "passed",
+    "evidence_directory": ".artifacts/cleanup-qualification-final",
+    "qualified_source_commit": "9e20065db7e4bf8f4830dc4d0ed45fd01ded5884",
+    "source_sha256": "78cc134d94ad7f1e271312f2414ba8a6ba9280fb7e13172ac11f9e25c3f2f97c",
+    "build_info": {
+      "schema_version": 1,
+      "scope": "native release build and copied-binary version/capabilities smoke only; not full qualification",
+      "source": {
+        "commit": "9e20065db7e4bf8f4830dc4d0ed45fd01ded5884",
+        "dirty": false,
+        "note": "Informational, not qualified provenance. HEAD/status and build contract digests were compared before/after; unchanged status does not prove dirty file contents stayed unchanged."
+      },
+      "bazel": "Bazelisk 1.29.0\nbazel 9.2.0",
+      "host": "aarch64-apple-darwin",
+      "target": "aarch64-apple-darwin",
+      "package_version": "0.1.2",
+      "build_command": [
+        "/Library/Developer/CommandLineTools/usr/bin/python3",
+        "/Users/jgarnett/Devleopment/rust-llm-wiki/scripts/bazel.py",
+        "--",
+        "build",
+        "--config=release",
+        "--nofetch",
+        "//:lwiki"
+      ],
+      "rust_toolchain": "[toolchain]\nchannel = \"1.98.0\"\nprofile = \"minimal\"\ncomponents = [\"clippy\", \"rustfmt\"]\n",
+      "bazel_module": "module(name = \"rust_llm_wiki\", version = \"0.1.2\")\n\nbazel_dep(name = \"platforms\", version = \"1.1.0\")\nbazel_dep(name = \"rules_rust\", version = \"0.72.0\")\n\nrust = use_extension(\"@rules_rust//rust:extensions.bzl\", \"rust\")\nrust.toolchain(\n    edition = \"2024\",\n    versions = [\"1.98.0\"],\n    extra_target_triples = [\n        \"aarch64-apple-darwin\",\n        \"x86_64-apple-darwin\",\n        \"aarch64-unknown-linux-gnu\",\n        \"x86_64-unknown-linux-gnu\",\n        \"aarch64-pc-windows-msvc\",\n        \"x86_64-pc-windows-msvc\",\n    ],\n)\nuse_repo(rust, \"rust_toolchains\")\nregister_toolchains(\"@rust_toolchains//:all\")\n\ncrate = use_extension(\"@rules_rust//crate_universe:extensions.bzl\", \"crate\")\ncrate.from_cargo(\n    name = \"crates\",\n    cargo_lockfile = \"//:Cargo.lock\",\n    lockfile = \"//:cargo-bazel-lock.json\",\n    manifests = [\"//:Cargo.toml\"],\n    isolated = True,\n    supported_platform_triples = [\n        \"aarch64-apple-darwin\",\n        \"x86_64-apple-darwin\",\n        \"aarch64-unknown-linux-gnu\",\n        \"x86_64-unknown-linux-gnu\",\n        \"aarch64-pc-windows-msvc\",\n        \"x86_64-pc-windows-msvc\",\n    ],\n)\ncrate.annotation(\n    crate = \"ring\",\n    version = \"0.17.14\",\n    repositories = [\"crates\"],\n    patches = [\"//bazel:ring_windows_arm64_cflags.patch\"],\n    patch_args = [\"-p1\"],\n)\ncrate.annotation_select(\n    crate = \"ring\",\n    version = \"0.17.14\",\n    repositories = [\"crates\"],\n    triples = [\"aarch64-pc-windows-msvc\"],\n    build_script_env = {\"LWIKI_RING_WINDOWS_ARM64_CLANG\": \"1\"},\n)\nuse_repo(crate, \"crates\")\n",
+      "bazel_version_pin": "9.2.0",
+      "build_contract_sha256": {
+        "Cargo.toml": "28724e6fdb44d8240fc191fcd109f75dff1060d5ee1322a4c1acd9d72bd4e1b8",
+        "Cargo.lock": "a8e7099a610d83c22f008d5965697537dff4bfb33f795b52578b4ae51cc52553",
+        "MODULE.bazel": "5e30396c3690405686b88266b812d3b5f34fda7c863e697cd03dc3917f8720d8",
+        "MODULE.bazel.lock": "7879b81486d299d61ae622a561203785d4a7b91e8f0382e3c614d472d9244efa",
+        "cargo-bazel-lock.json": "deffe5b0d95f4f0210aea19b19f52e22444f57b6734a40667f0ee2cc4f1cf9bf",
+        ".bazelversion": "1b9487d55bea47fea50d226cc9c53bc548877ad2a318bac8fbc8b320f429e5c5",
+        ".bazelrc": "cb1b3f8a089ca7fb6804c5029a602ae660ff25fb8081fa520b67474d434e38cc",
+        "rust-toolchain.toml": "495c69d1db93f25f53e3d0d2d40d812313366cc368de317871c2ace6c6ffafa4",
+        "scripts/bazel.py": "f727e423befd2ac156a94f482cf02da966cfa5d80e8665f4348245f14d1a2811"
+      },
+      "cargo_lock_sha256": "a8e7099a610d83c22f008d5965697537dff4bfb33f795b52578b4ae51cc52553",
+      "binary": "lwiki",
+      "binary_sha256": "21797e63d6e8a8d9bb58382678769da6221f2cde78f6829e29388800be9e5c57"
+    },
+    "binary_bytes": 25184496,
+    "binary_sha256": "21797e63d6e8a8d9bb58382678769da6221f2cde78f6829e29388800be9e5c57",
+    "files": {
+      ".artifacts/cleanup-qualification-final/artifact/build-info.json": "1cfa546efd3de5ec81f1ce5d3bb09364bf5b87eec0c84733bafaef691b6633a2",
+      ".artifacts/cleanup-qualification-final/artifact/lwiki-0.1.2-aarch64-apple-darwin.tar.gz": "38061ab089f674cc84d5ed6492e8c4a813815f440c9985657204f62db95dbb88",
+      ".artifacts/cleanup-qualification-final/package.json": "0d1ca515f3a81cb9dcbdc507b9a42ff272be7d65d593da1a590a7e4e46f23a56",
+      ".artifacts/cleanup-qualification-final/version.txt": "fe0dc525d110673f38411ece92cd5793d9b7c0b2b98b0683f7159932867ecd16",
+      ".artifacts/cleanup-qualification-final/linkage.txt": "d8debf31507ea45174ae4a764898e86ee863e569613c7c8ad5f45e5be5bb36ec",
+      ".artifacts/cleanup-qualification-final/release-skill.log": "301354969a40005c36f915335d4eac76122e07b30621be072a74d90f343b1c30",
+      ".artifacts/cleanup-release-skill-snapshot/test.log": "5c2320ecf2a1108ea8ba7fc662a8920c4917cfd37436bbf87f22ef6053dc3bb1",
+      ".artifacts/cleanup-release-skill-snapshot/test.xml": "24d5effc2d78d835dde3e6d447f7abb1ce3a29aa4eea084e8e90b2f5f6e6906f",
+      ".artifacts/cleanup-qualification-final/shared-metrics.json": "d13966729afdc6522f8dd8b0b49706f2ba0ed0bf480960b81786d6029768cf4f",
+      ".artifacts/cleanup-qualification-final/shared-workflow.stderr.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      ".artifacts/cleanup-qualification-final/qualification.txt": "1916298d24d64a968fdba0396508d71468e1d954e38d942429b5de2d22601d20",
+      ".artifacts/cleanup-qualification-002/retrieval-baseline.zip": "7500c263d1cedb10b3d8284e8a4310e0b32d679d5fdc7e936b00c6ab34581243",
+      ".artifacts/cleanup-qualification-final/capabilities.json": "56c03ca43157a4e56013721c17a335d3a2a976949fa6dfcb123c3ef4cd444172",
+      ".artifacts/cleanup-qualification-final/init.json": "4d55c9452c04747ef5ecd1585c8e883b08256ebc092766e33743d90d4b54c202",
+      ".artifacts/cleanup-qualification-final/capture.json": "8b47f60e8f434e61cdd486583345d288065df1964e0bc0901fb7c9abd25c8af0",
+      ".artifacts/cleanup-qualification-final/search.json": "801255b53caabc0d5f83d050e79dcf68ec8b3aa4868d42dcac1b2e4b13697d4d",
+      ".artifacts/cleanup-qualification-final/context.json": "91625d4a9780dea22369bf88a639f98853eb41e0839e674e807459522e71896b",
+      ".artifacts/cleanup-qualification-final/rebuild.json": "b467e573b897e65f116988909d6ef4adf874b0c940c179cdda6ac13e9dbd521a",
+      ".artifacts/cleanup-qualification-final/check.json": "69145b54e3038c7c2391a3a8d8475c6dc7ad0214c35289f568017c42b21597ed",
+      ".artifacts/cleanup-qualification-final/skill-export.json": "773afffbac4337b70f9e4d2b06b3f00fcf865622daa2699f344bb5a5386e5051"
+    },
+    "release_skill": {
+      "status": "passed",
+      "parent_cases": 4,
+      "recipe_steps": 42,
+      "cached_test_results": false
+    },
+    "minimal_path": {
+      "value": "/usr/bin:/bin",
+      "environment_cleared": true,
+      "version": "lwiki 0.1.2",
+      "successful_json_checks": 8,
+      "network_used": false,
+      "literal_identifier": "QUAL-731",
+      "context_citations_present": true,
+      "vault_check_errors": 0
+    },
+    "linkage_native_system_libraries": 5,
+    "archive_members": [
+      "build-info.json",
+      "capabilities.json",
+      "lwiki",
+      "version.txt"
+    ],
+    "tooling_tests_reuse": "41Python tooling tests from routine CI; tooling implementation and tests unchanged. No fresh Python suite claim."
+  },
+  "shared_workflow": {
+    "status": "passed",
+    "command": "python3 scripts/shared_wiki_recipe.py --binary .artifacts/cleanup-qualification-final/lwiki --baseline-binary .artifacts/012-macos/lwiki --keep .artifacts/cleanup-shared-vault-final",
+    "metrics": {
+      "source": "source_01a0f056-6b7d-7800-9bd4-f0bfab838dc7",
+      "research_run": "run_research_01a0f056-706d-7630-bba4-0981ff79af8f",
+      "later_recommendation_offset": 8515,
+      "stale_report": "retained",
+      "maintenance_tasks": 2,
+      "files_before": 124,
+      "files_after": 123,
+      "bytes_before": 1332559,
+      "bytes_after": 1426278,
+      "cleanup_deleted_files": 91,
+      "backup_complete": true,
+      "restored_authority": true,
+      "post_cleanup_undo": true,
+      "human_report_readable": true,
+      "source_link_endpoints_verified": 28,
+      "source_revision_navigation_edges": 11,
+      "source_record_navigation_verified": true,
+      "physical": {
+        "empty": {
+          "files": 1,
+          "bytes": 93,
+          "unique_content_bytes": 93,
+          "duplicate_bytes": 0,
+          "visible_markdown": 1
+        },
+        "before_cleanup": {
+          "files": 124,
+          "bytes": 1332559,
+          "unique_content_bytes": 1235347,
+          "duplicate_bytes": 97212,
+          "visible_markdown": 69
+        },
+        "after_cleanup": {
+          "files": 123,
+          "bytes": 1426278,
+          "unique_content_bytes": 1354686,
+          "duplicate_bytes": 71592,
+          "visible_markdown": 13
+        }
+      },
+      "baseline_012": {
+        "empty": {
+          "files": 1,
+          "bytes": 100,
+          "unique_content_bytes": 100,
+          "duplicate_bytes": 0,
+          "visible_markdown": 1
+        },
+        "after_capture": {
+          "files": 43,
+          "bytes": 566824,
+          "unique_content_bytes": 537173,
+          "duplicate_bytes": 29651,
+          "visible_markdown": 21
+        },
+        "after_updates": {
+          "files": 86,
+          "bytes": 859910,
+          "unique_content_bytes": 799644,
+          "duplicate_bytes": 60266,
+          "visible_markdown": 43
+        },
+        "source_link_endpoints_verified": 10
+      }
+    },
+    "retained_vault": ".artifacts/cleanup-shared-vault-final",
+    "complete_before_cleanup_copy": ".artifacts/cleanup-shared-vault-final-before-cleanup",
+    "baseline_binary_sha256": "b3eb83e82603811cb8040b0c4a7435bb85cab43a0566635048aadf421172ca0e",
+    "limits": "Packaged0.1.2 runs overlapping operations only; current workflow also includes research/batches/reports/cleanup. Small current vault total bytes grow93719 through migration metadata, while duplicate bytes decrease25620 and visibleMarkdown69\u219213. No universal byte-shrink or real-provider/Obsidian claim.",
+    "measurement_boundary": "physical.after_cleanup is measured immediately after cleanup, before subsequent read/navigation verification",
+    "kept_fixture_observation": {
+      "files": 123,
+      "bytes": 1446758,
+      "duplicate_bytes": 71592,
+      "visible_markdown": 13,
+      "cache_bytes": 995328,
+      "before_cache_bytes": 974848,
+      "post_measurement_cache_growth_bytes": 20480,
+      "noncache_after_bytes": 451430
+    }
+  },
+  "work_dispositions": {
+    "required": {
+      "C01": "done",
+      "C02": "done",
+      "C03": "done",
+      "C04": "done",
+      "C05": "done",
+      "C06": "done",
+      "C07": "done",
+      "C08": "done",
+      "C09": "done",
+      "C10": "done",
+      "C11": "done",
+      "C12": "done",
+      "C13": "done",
+      "C14": "done",
+      "C15": "done",
+      "C16": "done",
+      "C17": "done",
+      "C18": "done",
+      "C19": "done",
+      "C20": "done",
+      "C21": "done",
+      "C22": "done",
+      "C23": "done",
+      "S01": "done",
+      "S02": "done",
+      "S03": "done",
+      "S04": "done",
+      "S05": "done"
+    },
+    "features": {
+      "F01": "done",
+      "F02": "retain existing heading/paragraph defaults; E05 evidence prerequisite",
+      "F03": "done",
+      "F04": "done",
+      "F05": "deferred; owner examples/type semantics/versioned schema prerequisite",
+      "F06": "deferred; representative HTML corpus/security/normalization/fingerprint prerequisite",
+      "F07": "done",
+      "F08": "strict rejection and explicit host repair implemented; partial salvage/paid repair design/quality/spend prerequisite",
+      "F09": "done"
+    },
+    "E06": "local guide and qualification complete; original unavailable-vault rollback symptom unassigned",
+    "external": [
+      "E01",
+      "E02",
+      "E03",
+      "E04",
+      "E05",
+      "E07"
+    ]
+  },
+  "independent_evidence_review": {
+    "model": "gpt-6-astra",
+    "status": "closed; no consequential local blocker",
+    "report": "docs/execution/reports/CLEANUP-independent-review.md",
+    "verified": [
+      "archived native/continuation hashes and last-parent counts",
+      "343source hashes and exact4file delta",
+      "declared runtime asset versus consumed input reuse",
+      "clean-source artifact source/binary/archive hashes",
+      "release skill4cases/42steps and8offline checks",
+      "shared lifecycle/restore/undo and immediate versus kept storage metrics"
+    ],
+    "reporting_correction": "later read/navigation verification grows rebuildable index.sqlite by20480B; kept fixture total1446758B, immediate cleanup boundary1426278B"
+  },
+  "documentation_stamp": {
+    "scope": "Current prose/register/reports only; all343qualified source hashes unchanged",
+    "qualified_source_commit": "9e20065db7e4bf8f4830dc4d0ed45fd01ded5884",
+    "git_head_after_commit": "Identifies the final evidence stamp; no push or release promotion"
   }
 }

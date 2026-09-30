@@ -1,6 +1,6 @@
 # CLEANUP C09/C22/F01/F07 research handoff
 
-Current integration status: root has integrated this work and closed actionable source-review findings. Focused functional, format, strict Clippy and maintained workflow gates pass; corrected routine CI and the final API/research acceptance regressions pass. Full native qualification remains pending. Dated progress and failed attempts below are historical observations, not the current acceptance verdict. Final evidence will be recorded in [CLEANUP-checks.json](CLEANUP-checks.json).
+Current root acceptance: required local cleanup is complete at source `9e20065db7e4bf8f4830dc4d0ed45fd01ded5884`, frozen 343-file SHA256 `78cc134d94ad7f1e271312f2414ba8a6ba9280fb7e13172ac11f9e25c3f2f97c`. The native aggregate passes49 targets / 642 Rust parents / 7 ignored helpers; final format/strict Clippy, optimized release skill4 tests / 42 steps, copied-binary offline checks and linked-wiki backup/restore/undo pass. Routine41 Python tooling results are explicitly reused on unchanged tooling. Astra source findings are closed; actual logs, failures, input-reuse scope and artifact fingerprints are in [CLEANUP-checks.json](CLEANUP-checks.json). Dated pending/failed notes below are historical and are superseded by this verdict. External provider/billing/host/platform/quality/publication limits remain in [the register](../CLEANUP.md).
 
 Status: implementation submitted for root integration. Root owns the shared `ResearchSourceRange` DTO, CLI/schema wiring, and builds. No live provider, production vault, or credential was used.
 

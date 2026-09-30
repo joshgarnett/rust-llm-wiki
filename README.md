@@ -2,7 +2,7 @@
 
 A Rust CLI for a local wiki that people and coding agents can read, maintain, and search.
 
-**Status: cleanup implementation and local qualification active, September 29, 2026.** The [current contract and coverage map](docs/current-contracts.md) routes implemented behavior and its validation limits; [the cleanup register](docs/execution/CLEANUP.md) tracks outstanding work. Earlier M0–M4 acceptance and 0.1.2 release evidence remain historical. `lwiki` is a provisional name. Live providers, other-host recovery, host discovery, real-model quality, licensing and publication need separate qualification or owner decisions.
+**Status: required cleanup and local qualification complete, September 29, 2026.** The [current contract and coverage map](docs/current-contracts.md) routes implemented behavior and its validation limits; [the cleanup register](docs/execution/CLEANUP.md) records completed work and external follow-up. Earlier M0–M4 acceptance and 0.1.2 release evidence remain historical. `lwiki` is a provisional name. Live providers, other-host recovery, host discovery, real-model quality, licensing and publication need separate qualification or owner decisions.
 
 Canonical records and captured sources live in Obsidian-compatible Markdown. Bundled SQLite provides rebuildable full-text search, metadata, graphs and vector caches. Extraction uses an existing agent or a configured generation API; semantic search uses a remote embeddings API and stores vectors locally. Short notes stay whole by default; long inputs split only when needed. The core does not require a model runtime, database server, Python, Node, or a background service.
 
