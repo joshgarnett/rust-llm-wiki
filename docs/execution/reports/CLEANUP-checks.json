@@ -1168,5 +1168,13 @@
     ],
     "rust_parent_cases": 37,
     "notes": "Format/Clippy test results cached after dependency checking; API/research executed. No product change after passing routine CI, only these two test files."
+  },
+  "integration_commit": "0288ac75d5f87248e368e133642aaf07d7b4b518",
+  "native_qualification": {
+    "status": "starting",
+    "command": "LWIKI_BAZEL_OUTPUT_ROOT=/private/tmp/lwiki-bazel scripts/qualify-local.sh .artifacts/cleanup-qualification-001",
+    "outer_log": ".artifacts/cleanup-qualification.log",
+    "evidence_directory": ".artifacts/cleanup-qualification-001",
+    "source_sha256": "be95af79f0b352bda3b3a1efc5e6d6a46d53bf367b1197e2405b19d0c1e7dfa1"
   }
 }
