@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "baseline_commit": "0660cb5",
-  "status": "correction locally accepted; fresh full native qualification starting",
+  "status": "aggregate native tests passed; artifact stages pending",
   "scope": "Local cleanup implementation with disposable vaults and mock providers only",
   "attempts": [
     {
@@ -71,7 +71,7 @@
     "log": ".artifacts/cleanup-build-tools.log"
   },
   "source_manifest": {
-    "source_sha256": "2a59b29d22dc607b8c18ac0bb150bcc43b8d5e2e70c46db596037714d3d11a01",
+    "source_sha256": "78cc134d94ad7f1e271312f2414ba8a6ba9280fb7e13172ac11f9e25c3f2f97c",
     "file_count": 343,
     "files": {
       ".bazelrc": "cb1b3f8a089ca7fb6804c5029a602ae660ff25fb8081fa520b67474d434e38cc",
@@ -115,7 +115,7 @@
       "scripts/manual_smoke.py": "20d60cb8529da747f740daf8a8bf8c9b91de40c10fb039bfe1b482165c15cc7a",
       "scripts/qualify-local.sh": "811271a3c3991df13ee780befbc97c7b1808f8db04817d455802ebf671c8bd4f",
       "scripts/seed-fixture.py": "d7ca31788ddce468747f935126575b58045309c18e172b7c63d7de387fd884b3",
-      "scripts/shared_wiki_recipe.py": "eae79235da7a4dd9116702ef9a4d6f6565ee5d5377c3910ccb1347613498d3c1",
+      "scripts/shared_wiki_recipe.py": "ee92cd4793de9ddbaa2ae812407c5e0d5e90795857afc856120918540c8bdcfe",
       "scripts/test_bazel.py": "3dd11b6371f81d087dc603e8ce1693fc6f8f894f1a5ced8e6cbf521df2e4e2ef",
       "scripts/test_build_artifact.py": "88b167ead8da6f8ba22d9eab72a47cf0a4977615817762efaa352c308270ffd3",
       "scripts/test_qualify_local.py": "964403d264a18262b2ac072a1c794054d0917e68420d1e16384440f33895c5d1",
@@ -403,7 +403,7 @@
       "tests/provider_trust.rs": "ea1487d678a98fc495dc7f0a6baaea4db1f395cea667e45b9a6139b93458dacd",
       "tests/provider_wire.rs": "4270b5c17b92ca165b38432990c71178fa53fed9eaa95a8f6059f2fbf45ee470",
       "tests/records_lossless.rs": "cce7e4d188139c4f3e0b45395539ccfa798f36aa3c9024df6159d83be1d842b0",
-      "tests/release_workflows.rs": "19a5cabfa0feae4be3e5dfd69fa69eab21d27cc212f2b0f6cca2b171860ddb93",
+      "tests/release_workflows.rs": "b755fc3b299194399b404b32f0c91a465e549d3e2d5f39db973795d337a40461",
       "tests/remote_cli.rs": "0e5566798ff9e14a2b53cdea5200c2b05d8b40f3df53ce2f790a9dff42e94e49",
       "tests/research_handoff.rs": "d9577c9728b843c7eef7d4590c555f267c4311bf217a238f69ebded8d7fdf31d",
       "tests/research_recovery.rs": "d2c624162b78d0e905f86610083a9cb48e1229dfad666c48de72e94574ce0fb4",
@@ -411,25 +411,13 @@
       "tests/retrieval_baseline.rs": "16b6534afa823eb4b9c33af5088a1eabc400be58a25069b9d0f981ec249e2738",
       "tests/retrieval_lexical.rs": "93069e920fdf69050c6288202c6025ce289b287e13eb90b753a0bfb7df11e239",
       "tests/semantic_retrieval.rs": "c8c4c5723bd3c4f15db741076487e3bed5df52de1650002007c0bcac02d79219",
-      "tests/shared_wiki_workflow.rs": "d56e3339f05bc47ae4a8a444cb7e59c89d8f696c1b308f911901155f7fe60bc6",
+      "tests/shared_wiki_workflow.rs": "3e5c8c08e3352296ff56f3271f8ef7df9a4d17362269897f8e31bcb140bd6ac5",
       "tests/skill_export.rs": "8c42a52a51c4e28b6eb05625da02765515bd3f3045232ff2891627a91d435820",
       "tests/sources_evidence.rs": "3abecd01308f2fc1c61c9a96f06792623e9680823191602971f7a7ce00f58884",
       "tests/storage_cleanup.rs": "219c1f5994afb8a0d36270ea0bd7a4d3b4111f7ee26b1f84e78933259d86e460",
-      "tests/vault_fs.rs": "20ceb70824ab3d887b65a069456307b349e06d9054bf6d49dbf2cb4cf2491c00",
+      "tests/vault_fs.rs": "fa1befae1a951f05700caa81cad34e69824afd0e47ced8ca8dbeb4ede5a9b95a",
       "tests/windows_acl_policy.rs": "dbbae84d4bebf5f9d8ef8b8ef1cafc830c55d7604723b4956b1be48b7646399e"
-    },
-    "changed_since_first_native": [
-      "src/research/engine.rs",
-      "src/vault/operational.rs",
-      "src/vault/operational_tests.rs"
-    ],
-    "changed_since_routine_ci": [
-      "src/research/engine.rs",
-      "src/vault/operational.rs",
-      "src/vault/operational_tests.rs",
-      "tests/api_extraction.rs",
-      "tests/research_handoff.rs"
-    ]
+    }
   },
   "routine_ci": {
     "command": "LWIKI_BAZEL_OUTPUT_ROOT=/private/tmp/lwiki-bazel just ci",
@@ -1299,6 +1287,1255 @@
       "log_sha256": "a37700ef4575f769f1a37b4020cd403412093cfd5a95dadd45b350a7d5e37271",
       "repro_log": ".artifacts/cleanup-native-unit-repro.log",
       "repro_log_sha256": "e757c683ced63a3d5627f6c57fb3874a38371117227a8a58e392d47ba705fcbf"
+    },
+    {
+      "status": "failed",
+      "script_exit": 3,
+      "completed_targets": 49,
+      "passed_targets": 47,
+      "failed_targets": 2,
+      "source_sha256": "2a59b29d22dc607b8c18ac0bb150bcc43b8d5e2e70c46db596037714d3d11a01",
+      "command": "LWIKI_BAZEL_OUTPUT_ROOT=/private/tmp/lwiki-bazel scripts/qualify-local.sh .artifacts/cleanup-qualification-002",
+      "outer_log": ".artifacts/cleanup-qualification-002.log",
+      "tests_log": ".artifacts/cleanup-qualification-002/tests.log",
+      "tests_log_sha256": "1eb1ec76063a2d440f43c567d7a48fc1da540dbfbc0b4f278df6e8762a245121",
+      "targets": [
+        {
+          "target": "//:api_extraction_test",
+          "status": "passed",
+          "files": {
+            "test.cache_status": {
+              "path": ".artifacts/cleanup-native-second-snapshot/api_extraction_test/test.cache_status",
+              "sha256": "353b423d5a79e03e803f6e922cf24e818b1e9e3efc074472515e77a3b830f76f"
+            },
+            "test.log": {
+              "path": ".artifacts/cleanup-native-second-snapshot/api_extraction_test/test.log",
+              "sha256": "2ec01e51c3f66393348661e64b356cfe7983e275030fb78dc099085b2ff90789"
+            },
+            "test.xml": {
+              "path": ".artifacts/cleanup-native-second-snapshot/api_extraction_test/test.xml",
+              "sha256": "7d87b1d3f526c34e054f5a0a8da8df01c3dab0f3202b36cb5666d6286f4df3ed"
+            }
+          },
+          "rust_parent_summary": {
+            "passed": 21,
+            "failed": 0,
+            "ignored": 0,
+            "measured": 0,
+            "filtered_out": 0
+          }
+        },
+        {
+          "target": "//:binary_tests",
+          "status": "passed",
+          "files": {
+            "test.cache_status": {
+              "path": ".artifacts/cleanup-native-second-snapshot/binary_tests/test.cache_status",
+              "sha256": "da0b0edae87cfbb0a94be49fb9f04b3ca8d6f903eee5d6f4a324388829f62279"
+            },
+            "test.log": {
+              "path": ".artifacts/cleanup-native-second-snapshot/binary_tests/test.log",
+              "sha256": "dda8498500a24c6f25bdd976de84df36843784769c98341dcb7a01c45a090b34"
+            },
+            "test.xml": {
+              "path": ".artifacts/cleanup-native-second-snapshot/binary_tests/test.xml",
+              "sha256": "4fe63089911d5af2685a0b3966c906f494ba46eb1adad1959dd1d5a91a76d49e"
+            }
+          },
+          "rust_parent_summary": {
+            "passed": 0,
+            "failed": 0,
+            "ignored": 0,
+            "measured": 0,
+            "filtered_out": 0
+          }
+        },
+        {
+          "target": "//:build_paths_test",
+          "status": "passed",
+          "files": {
+            "test.cache_status": {
+              "path": ".artifacts/cleanup-native-second-snapshot/build_paths_test/test.cache_status",
+              "sha256": "8cf5adc752aee0ac6bb79f2db44f2eb8191e85286c921cfb35207e45ae9439be"
+            },
+            "test.log": {
+              "path": ".artifacts/cleanup-native-second-snapshot/build_paths_test/test.log",
+              "sha256": "ea4f14e0e00d95054a1541f4a246aafc8f3d3ce99294e2a19b9288b452517439"
+            },
+            "test.xml": {
+              "path": ".artifacts/cleanup-native-second-snapshot/build_paths_test/test.xml",
+              "sha256": "ca1f52b725e68bd93ec7aa4c1ceb129d66ef2b136d48d413323d3f0e23cf85a0"
+            }
+          },
+          "rust_parent_summary": {
+            "passed": 8,
+            "failed": 0,
+            "ignored": 0,
+            "measured": 0,
+            "filtered_out": 0
+          }
+        },
+        {
+          "target": "//:catalog_crash_recovery_test",
+          "status": "passed",
+          "files": {
+            "test.cache_status": {
+              "path": ".artifacts/cleanup-native-second-snapshot/catalog_crash_recovery_test/test.cache_status",
+              "sha256": "b410814aaa31ebee7fabb1dcd420b4f73a427e68f1ee0d87d929f9fecd9ad12b"
+            },
+            "test.log": {
+              "path": ".artifacts/cleanup-native-second-snapshot/catalog_crash_recovery_test/test.log",
+              "sha256": "6ae237c58653f00ced2af94183f74f38bcf76d6bc7fda7c23eac918e33ae5f22"
+            },
+            "test.xml": {
+              "path": ".artifacts/cleanup-native-second-snapshot/catalog_crash_recovery_test/test.xml",
+              "sha256": "8f13bc1f16e9261688c417406fd9d7c9d1b84f26de9bfda458788ab11d2248ad"
+            }
+          },
+          "rust_parent_summary": {
+            "passed": 2,
+            "failed": 0,
+            "ignored": 1,
+            "measured": 0,
+            "filtered_out": 0
+          }
+        },
+        {
+          "target": "//:catalog_generations_test",
+          "status": "passed",
+          "files": {
+            "test.cache_status": {
+              "path": ".artifacts/cleanup-native-second-snapshot/catalog_generations_test/test.cache_status",
+              "sha256": "ff7e24658941886f37559609b01a736165af1f0f787028b39787006bffd55631"
+            },
+            "test.log": {
+              "path": ".artifacts/cleanup-native-second-snapshot/catalog_generations_test/test.log",
+              "sha256": "c0c6fbdcf7cb92611b6a727f651ed98f181930c961dddf050da042431001ba4d"
+            },
+            "test.xml": {
+              "path": ".artifacts/cleanup-native-second-snapshot/catalog_generations_test/test.xml",
+              "sha256": "d07627ae57e941d9e0d940351644cdcfc82096f758f17ef345fee8bf193bc38c"
+            }
+          },
+          "rust_parent_summary": {
+            "passed": 15,
+            "failed": 0,
+            "ignored": 0,
+            "measured": 0,
+            "filtered_out": 0
+          }
+        },
+        {
+          "target": "//:catalog_scan_eligibility_test",
+          "status": "passed",
+          "files": {
+            "test.cache_status": {
+              "path": ".artifacts/cleanup-native-second-snapshot/catalog_scan_eligibility_test/test.cache_status",
+              "sha256": "df5e5ceca5a6bc964a07de61f4a054f0e65e9ff1a9904d116e9b28a1833bfa9c"
+            },
+            "test.log": {
+              "path": ".artifacts/cleanup-native-second-snapshot/catalog_scan_eligibility_test/test.log",
+              "sha256": "8ef4b5d53e4a5ac6863f014bc64a27b7e901373592c40a4747b456f55813612c"
+            },
+            "test.xml": {
+              "path": ".artifacts/cleanup-native-second-snapshot/catalog_scan_eligibility_test/test.xml",
+              "sha256": "455e682cf7bde564b14e605a6c930913dd24466fdffd7cc330d73d54e3e897b3"
+            }
+          },
+          "rust_parent_summary": {
+            "passed": 16,
+            "failed": 0,
+            "ignored": 0,
+            "measured": 0,
+            "filtered_out": 0
+          }
+        },
+        {
+          "target": "//:change_read_preconditions_test",
+          "status": "passed",
+          "files": {
+            "test.cache_status": {
+              "path": ".artifacts/cleanup-native-second-snapshot/change_read_preconditions_test/test.cache_status",
+              "sha256": "f79a4aa1f400dd3d07ac06e3980a14eae3b444786c9089d3b3ac8acf219a3ed0"
+            },
+            "test.log": {
+              "path": ".artifacts/cleanup-native-second-snapshot/change_read_preconditions_test/test.log",
+              "sha256": "6f5d515a5d5d1a5eca5eaf0aa0e16059ebabc842a3fcc377b3e83d769063c82f"
+            },
+            "test.xml": {
+              "path": ".artifacts/cleanup-native-second-snapshot/change_read_preconditions_test/test.xml",
+              "sha256": "fd161a5d45fd6603845df818500b39cf7fdcb11f7421b5d01e8eac8326522202"
+            }
+          },
+          "rust_parent_summary": {
+            "passed": 8,
+            "failed": 0,
+            "ignored": 0,
+            "measured": 0,
+            "filtered_out": 0
+          }
+        },
+        {
+          "target": "//:changes_prepare_journal_test",
+          "status": "passed",
+          "files": {
+            "test.cache_status": {
+              "path": ".artifacts/cleanup-native-second-snapshot/changes_prepare_journal_test/test.cache_status",
+              "sha256": "3e848190200a8150956e975231f0ceeb9c9377fd8d09f853d54dafbdb64a3a30"
+            },
+            "test.log": {
+              "path": ".artifacts/cleanup-native-second-snapshot/changes_prepare_journal_test/test.log",
+              "sha256": "f31668e5b9fe4e801c450dc37672bb05483d9b202f635378ea6686085bc6cc3a"
+            },
+            "test.xml": {
+              "path": ".artifacts/cleanup-native-second-snapshot/changes_prepare_journal_test/test.xml",
+              "sha256": "d506513befa6854543e69513d8655ec557b36b17568bede70dfe521f74b60bcc"
+            }
+          },
+          "rust_parent_summary": {
+            "passed": 17,
+            "failed": 0,
+            "ignored": 0,
+            "measured": 0,
+            "filtered_out": 0
+          }
+        },
+        {
+          "target": "//:changes_recovery_test",
+          "status": "passed",
+          "files": {
+            "test.cache_status": {
+              "path": ".artifacts/cleanup-native-second-snapshot/changes_recovery_test/test.cache_status",
+              "sha256": "c0e6387bccd3ee452b3064c24ab4777e0b42de48828fc3d748ebc555655e29d3"
+            },
+            "test.log": {
+              "path": ".artifacts/cleanup-native-second-snapshot/changes_recovery_test/test.log",
+              "sha256": "1d57d73cac2a3e34e1e180c972547e246428d5967a8fbf1534641abff63f68df"
+            },
+            "test.xml": {
+              "path": ".artifacts/cleanup-native-second-snapshot/changes_recovery_test/test.xml",
+              "sha256": "d30506c107258edf5cea41e4f480ef4a3b0143a9586e28e9e5c04829859a3d05"
+            }
+          },
+          "rust_parent_summary": {
+            "passed": 35,
+            "failed": 0,
+            "ignored": 1,
+            "measured": 0,
+            "filtered_out": 0
+          }
+        },
+        {
+          "target": "//:context_cli_test",
+          "status": "passed",
+          "files": {
+            "test.cache_status": {
+              "path": ".artifacts/cleanup-native-second-snapshot/context_cli_test/test.cache_status",
+              "sha256": "e0841bafe7bc5a8318b7697686eba7900bc49cad145a34a7ac559e8f4191ccdc"
+            },
+            "test.log": {
+              "path": ".artifacts/cleanup-native-second-snapshot/context_cli_test/test.log",
+              "sha256": "306f0d8fee34a201678daeb5c9d4ec24ca1b4986ecb5d646f04cd3976982a898"
+            },
+            "test.xml": {
+              "path": ".artifacts/cleanup-native-second-snapshot/context_cli_test/test.xml",
+              "sha256": "f7c10d2084caa297375136b020c4a077ffd6ddc56bec79ce272736602ff3292e"
+            }
+          },
+          "rust_parent_summary": {
+            "passed": 7,
+            "failed": 0,
+            "ignored": 0,
+            "measured": 0,
+            "filtered_out": 0
+          }
+        },
+        {
+          "target": "//:context_freshness_test",
+          "status": "passed",
+          "files": {
+            "test.cache_status": {
+              "path": ".artifacts/cleanup-native-second-snapshot/context_freshness_test/test.cache_status",
+              "sha256": "9cdf021c529308bfef04aae4419cfa0d91cbade8cba85e4f68f37782db1bfabc"
+            },
+            "test.log": {
+              "path": ".artifacts/cleanup-native-second-snapshot/context_freshness_test/test.log",
+              "sha256": "b1eb126da74451beda24a48e3c983eaba0fafc9bd70c6f82daae46f1c7d73c64"
+            },
+            "test.xml": {
+              "path": ".artifacts/cleanup-native-second-snapshot/context_freshness_test/test.xml",
+              "sha256": "51c3e9abb179c0c014f1faf3fb80c5ec7f9fffc43d9542490488c8d9d3b1c5e2"
+            }
+          },
+          "rust_parent_summary": {
+            "passed": 19,
+            "failed": 0,
+            "ignored": 0,
+            "measured": 0,
+            "filtered_out": 0
+          }
+        },
+        {
+          "target": "//:contracts_test",
+          "status": "passed",
+          "files": {
+            "test.cache_status": {
+              "path": ".artifacts/cleanup-native-second-snapshot/contracts_test/test.cache_status",
+              "sha256": "1f6ceb13401b8b95628923b8abaa19ddb9c2075c7421505af82502d1e1bac9dd"
+            },
+            "test.log": {
+              "path": ".artifacts/cleanup-native-second-snapshot/contracts_test/test.log",
+              "sha256": "e5220f5da37bc9539b80587ff65fada4e42413c2f1ff42cc1675bec6c054a021"
+            },
+            "test.xml": {
+              "path": ".artifacts/cleanup-native-second-snapshot/contracts_test/test.xml",
+              "sha256": "5c0ce241dd636a5a5adab7bb81024f8702e0dfd492029120f8bcad55cb2416b9"
+            }
+          },
+          "rust_parent_summary": {
+            "passed": 5,
+            "failed": 0,
+            "ignored": 0,
+            "measured": 0,
+            "filtered_out": 0
+          }
+        },
+        {
+          "target": "//:doc_tests",
+          "status": "passed",
+          "files": {
+            "test.cache_status": {
+              "path": ".artifacts/cleanup-native-second-snapshot/doc_tests/test.cache_status",
+              "sha256": "7196ab8e00a2ac8d300f7b3f6955b2ed00a31db83232f4c7e1657c63e36fe842"
+            },
+            "test.log": {
+              "path": ".artifacts/cleanup-native-second-snapshot/doc_tests/test.log",
+              "sha256": "2561be9ff343002bc37722f94ec521c410d1e76340f34b6842a04f8ab587f371"
+            },
+            "test.xml": {
+              "path": ".artifacts/cleanup-native-second-snapshot/doc_tests/test.xml",
+              "sha256": "4df46bc0e46e21daffd52da4cb9dfb6a338fc833e9fb4faf9154db276f14ba27"
+            }
+          },
+          "rust_parent_summary": {
+            "passed": 0,
+            "failed": 0,
+            "ignored": 0,
+            "measured": 0,
+            "filtered_out": 0
+          }
+        },
+        {
+          "target": "//:embedding_bounds_test",
+          "status": "passed",
+          "files": {
+            "test.cache_status": {
+              "path": ".artifacts/cleanup-native-second-snapshot/embedding_bounds_test/test.cache_status",
+              "sha256": "e9ebf06e8c1193f46c6990a55a5f1f4e6f24f6de2325b16820adfb47b1da57aa"
+            },
+            "test.log": {
+              "path": ".artifacts/cleanup-native-second-snapshot/embedding_bounds_test/test.log",
+              "sha256": "7cf7f946235167947c60118e9bdac0c391f583e810d00d6971831e272580aef0"
+            },
+            "test.xml": {
+              "path": ".artifacts/cleanup-native-second-snapshot/embedding_bounds_test/test.xml",
+              "sha256": "e2b619aa5134f070ecb9653de122023dc733483f85600a13cb53b5a1abc8dffc"
+            }
+          },
+          "rust_parent_summary": {
+            "passed": 4,
+            "failed": 0,
+            "ignored": 0,
+            "measured": 0,
+            "filtered_out": 0
+          }
+        },
+        {
+          "target": "//:entity_decisions_cli_test",
+          "status": "passed",
+          "files": {
+            "test.cache_status": {
+              "path": ".artifacts/cleanup-native-second-snapshot/entity_decisions_cli_test/test.cache_status",
+              "sha256": "5d4901cbbaea2269a874a1078500906bab3f4853cb06d058637465572c7b6cb9"
+            },
+            "test.log": {
+              "path": ".artifacts/cleanup-native-second-snapshot/entity_decisions_cli_test/test.log",
+              "sha256": "44ff9b92f7fcee4309d37479fef5e73406cf382144f08f1ef4e40dc598aa10af"
+            },
+            "test.xml": {
+              "path": ".artifacts/cleanup-native-second-snapshot/entity_decisions_cli_test/test.xml",
+              "sha256": "dc393fab9757a49e20a861f2c4affad50ac0a8943ef6534ed0d95d140da11272"
+            }
+          },
+          "rust_parent_summary": {
+            "passed": 3,
+            "failed": 0,
+            "ignored": 0,
+            "measured": 0,
+            "filtered_out": 0
+          }
+        },
+        {
+          "target": "//:entity_decisions_inverse_test",
+          "status": "passed",
+          "files": {
+            "test.cache_status": {
+              "path": ".artifacts/cleanup-native-second-snapshot/entity_decisions_inverse_test/test.cache_status",
+              "sha256": "b4079e30d25fcccbe0fdb5969cf57d94a3ea0e7ca5c1cc1c9a43e1513118636a"
+            },
+            "test.log": {
+              "path": ".artifacts/cleanup-native-second-snapshot/entity_decisions_inverse_test/test.log",
+              "sha256": "04e0d7591b5ffa7b17791408f9b5c39b64be2eadf08fdc2669dd2c2d40ffacf3"
+            },
+            "test.xml": {
+              "path": ".artifacts/cleanup-native-second-snapshot/entity_decisions_inverse_test/test.xml",
+              "sha256": "1eab0cc7dbaa5c2853bd3b4f8b60c526bcfe4aa453f80e4ce9dcbb3d16affc49"
+            }
+          },
+          "rust_parent_summary": {
+            "passed": 10,
+            "failed": 0,
+            "ignored": 0,
+            "measured": 0,
+            "filtered_out": 0
+          }
+        },
+        {
+          "target": "//:entity_decisions_test",
+          "status": "passed",
+          "files": {
+            "test.cache_status": {
+              "path": ".artifacts/cleanup-native-second-snapshot/entity_decisions_test/test.cache_status",
+              "sha256": "79f5c68c4e6d4bad50eb94a50ac5eedef14308c261a19aa2ca64bf44b6fbb462"
+            },
+            "test.log": {
+              "path": ".artifacts/cleanup-native-second-snapshot/entity_decisions_test/test.log",
+              "sha256": "b0fc69cabb016f753f35d327a9739288dfd0637cb2c5f7f18a3be1113623134f"
+            },
+            "test.xml": {
+              "path": ".artifacts/cleanup-native-second-snapshot/entity_decisions_test/test.xml",
+              "sha256": "6b08f99dd4221115869e298a6743f5300ab1b40d775fa77566a8250591e767f8"
+            }
+          },
+          "rust_parent_summary": {
+            "passed": 19,
+            "failed": 0,
+            "ignored": 0,
+            "measured": 0,
+            "filtered_out": 0
+          }
+        },
+        {
+          "target": "//:extraction_cli_test",
+          "status": "passed",
+          "files": {
+            "test.cache_status": {
+              "path": ".artifacts/cleanup-native-second-snapshot/extraction_cli_test/test.cache_status",
+              "sha256": "33536545c774120671d0686838a167a58b5dff2e2d755e54067e531ea805fe2f"
+            },
+            "test.log": {
+              "path": ".artifacts/cleanup-native-second-snapshot/extraction_cli_test/test.log",
+              "sha256": "7ecf3eb1a7fa4d64931a9bc2e20a601d9d2c61e2ff3623239d320df04c2467fb"
+            },
+            "test.xml": {
+              "path": ".artifacts/cleanup-native-second-snapshot/extraction_cli_test/test.xml",
+              "sha256": "8e603998be035d7df04f1db7c37cd56d7518d21b664f906b436da35b468c8d23"
+            }
+          },
+          "rust_parent_summary": {
+            "passed": 3,
+            "failed": 0,
+            "ignored": 0,
+            "measured": 0,
+            "filtered_out": 0
+          }
+        },
+        {
+          "target": "//:extraction_import_test",
+          "status": "passed",
+          "files": {
+            "test.cache_status": {
+              "path": ".artifacts/cleanup-native-second-snapshot/extraction_import_test/test.cache_status",
+              "sha256": "8a25de4a1aae38685e300f7a162b175068e13e07381f1d74fd0d6602f152483a"
+            },
+            "test.log": {
+              "path": ".artifacts/cleanup-native-second-snapshot/extraction_import_test/test.log",
+              "sha256": "e4cf31fc15025864879d9949dfc7758409523728bfb3c37c536c3125b845dd9c"
+            },
+            "test.xml": {
+              "path": ".artifacts/cleanup-native-second-snapshot/extraction_import_test/test.xml",
+              "sha256": "d16f5ebbd7e239682549342933719ec633d5358583a0d8f09367914c77209ae2"
+            }
+          },
+          "rust_parent_summary": {
+            "passed": 13,
+            "failed": 0,
+            "ignored": 0,
+            "measured": 0,
+            "filtered_out": 0
+          }
+        },
+        {
+          "target": "//:fixture_hash_tests",
+          "status": "passed",
+          "files": {
+            "test.cache_status": {
+              "path": ".artifacts/cleanup-native-second-snapshot/fixture_hash_tests/test.cache_status",
+              "sha256": "8c2af9d69ca3bc315720ce86027b4669276bcbe9738663fa06af13cf949def95"
+            },
+            "test.log": {
+              "path": ".artifacts/cleanup-native-second-snapshot/fixture_hash_tests/test.log",
+              "sha256": "6b696c33c2173bed8bd541e1aa33f087afddc3b34299b3b8bcc724d619099682"
+            },
+            "test.xml": {
+              "path": ".artifacts/cleanup-native-second-snapshot/fixture_hash_tests/test.xml",
+              "sha256": "105072c79d964284afbd1a27f9c342bc3d6fc846e774c744e589dd6928fdac4b"
+            }
+          },
+          "rust_parent_summary": {
+            "passed": 0,
+            "failed": 0,
+            "ignored": 0,
+            "measured": 0,
+            "filtered_out": 0
+          }
+        },
+        {
+          "target": "//:graph_cli_test",
+          "status": "passed",
+          "files": {
+            "test.cache_status": {
+              "path": ".artifacts/cleanup-native-second-snapshot/graph_cli_test/test.cache_status",
+              "sha256": "e29665e84b2e54d081eacfe25ad3b86eee1c3051bd73870ad0d8b0b716b30792"
+            },
+            "test.log": {
+              "path": ".artifacts/cleanup-native-second-snapshot/graph_cli_test/test.log",
+              "sha256": "38af2af3f7b53fd37a7337711d767b6265019548b4e8294a8f75e0b7dc2c8078"
+            },
+            "test.xml": {
+              "path": ".artifacts/cleanup-native-second-snapshot/graph_cli_test/test.xml",
+              "sha256": "0979ef07e9695b6ec7dd91208d16a40647462645b866cb68d2a6f3f090e4594a"
+            }
+          },
+          "rust_parent_summary": {
+            "passed": 4,
+            "failed": 0,
+            "ignored": 0,
+            "measured": 0,
+            "filtered_out": 0
+          }
+        },
+        {
+          "target": "//:graph_queries_test",
+          "status": "passed",
+          "files": {
+            "test.cache_status": {
+              "path": ".artifacts/cleanup-native-second-snapshot/graph_queries_test/test.cache_status",
+              "sha256": "6a6b72daa73eceae50acc0c11c64a6b838dbfdbe1963599170c4ca79ae5b5f54"
+            },
+            "test.log": {
+              "path": ".artifacts/cleanup-native-second-snapshot/graph_queries_test/test.log",
+              "sha256": "d212b0de533b6f6b1682338498a190b514e256b24c60f8e02a483e3530307c55"
+            },
+            "test.xml": {
+              "path": ".artifacts/cleanup-native-second-snapshot/graph_queries_test/test.xml",
+              "sha256": "bf2d89d2b46f2ebcf395db91ac6556c45e2e7f195e7397cb0582df292528e55c"
+            }
+          },
+          "rust_parent_summary": {
+            "passed": 19,
+            "failed": 0,
+            "ignored": 0,
+            "measured": 0,
+            "filtered_out": 0
+          }
+        },
+        {
+          "target": "//:graph_resolution_test",
+          "status": "passed",
+          "files": {
+            "test.cache_status": {
+              "path": ".artifacts/cleanup-native-second-snapshot/graph_resolution_test/test.cache_status",
+              "sha256": "4b6a43f5c49851f70bff893bb559c20f7f7703261c0ea59e7b194ff97e5abea1"
+            },
+            "test.log": {
+              "path": ".artifacts/cleanup-native-second-snapshot/graph_resolution_test/test.log",
+              "sha256": "38a4cc52494a3f9b4a51eb7f60c3441c6ce49c87064a40985c19f2cccb2b958d"
+            },
+            "test.xml": {
+              "path": ".artifacts/cleanup-native-second-snapshot/graph_resolution_test/test.xml",
+              "sha256": "734b8b8a229d9f44bd8f7309aabc285d287b7340a50778d2c808bbf93e8d57bb"
+            }
+          },
+          "rust_parent_summary": {
+            "passed": 20,
+            "failed": 0,
+            "ignored": 0,
+            "measured": 0,
+            "filtered_out": 0
+          }
+        },
+        {
+          "target": "//:graph_review_test",
+          "status": "passed",
+          "files": {
+            "test.cache_status": {
+              "path": ".artifacts/cleanup-native-second-snapshot/graph_review_test/test.cache_status",
+              "sha256": "922a0c13e7d1d6017b405beef612be92746234850c0a4fc9dbdf4504905f1f12"
+            },
+            "test.log": {
+              "path": ".artifacts/cleanup-native-second-snapshot/graph_review_test/test.log",
+              "sha256": "a1e11f293a82e44a91aadbe9441fab1b96cf5755694822f73221a2c874b88679"
+            },
+            "test.xml": {
+              "path": ".artifacts/cleanup-native-second-snapshot/graph_review_test/test.xml",
+              "sha256": "cd86012d661d0b312f4a3f6f38dfd7e6a33f4a084c8a0b446550fd57aa6f7844"
+            }
+          },
+          "rust_parent_summary": {
+            "passed": 21,
+            "failed": 0,
+            "ignored": 0,
+            "measured": 0,
+            "filtered_out": 0
+          }
+        },
+        {
+          "target": "//:job_accounting_test",
+          "status": "passed",
+          "files": {
+            "test.cache_status": {
+              "path": ".artifacts/cleanup-native-second-snapshot/job_accounting_test/test.cache_status",
+              "sha256": "5d1048a2837c032bbd718efbb5ee08bac31627de04d6ae507df71e0eb9558f89"
+            },
+            "test.log": {
+              "path": ".artifacts/cleanup-native-second-snapshot/job_accounting_test/test.log",
+              "sha256": "00e36d00ff8a61c79e6d07f5486cd40e656de5fd9eff4ca32cd43455598a928e"
+            },
+            "test.xml": {
+              "path": ".artifacts/cleanup-native-second-snapshot/job_accounting_test/test.xml",
+              "sha256": "d2e0fb14155d4ef4448ec20b931ac561a42b24e322abdb671790ee9ef39700d0"
+            }
+          },
+          "rust_parent_summary": {
+            "passed": 13,
+            "failed": 0,
+            "ignored": 1,
+            "measured": 0,
+            "filtered_out": 0
+          }
+        },
+        {
+          "target": "//:m1_workflow_test",
+          "status": "passed",
+          "files": {
+            "test.cache_status": {
+              "path": ".artifacts/cleanup-native-second-snapshot/m1_workflow_test/test.cache_status",
+              "sha256": "0e91873ad4658694b5436067b6464076cd97126ed0edb9dae63357285d310463"
+            },
+            "test.log": {
+              "path": ".artifacts/cleanup-native-second-snapshot/m1_workflow_test/test.log",
+              "sha256": "9aa3768ffea616faeb874519634d92b5dae2d1ac5079845358e0eefb3cc86057"
+            },
+            "test.xml": {
+              "path": ".artifacts/cleanup-native-second-snapshot/m1_workflow_test/test.xml",
+              "sha256": "723380b38d04b9adf18a3efeac782609715b26099ffc5a766da5bf63e3a4543a"
+            }
+          },
+          "rust_parent_summary": {
+            "passed": 1,
+            "failed": 0,
+            "ignored": 0,
+            "measured": 0,
+            "filtered_out": 0
+          }
+        },
+        {
+          "target": "//:m2_workflow_test",
+          "status": "passed",
+          "files": {
+            "test.cache_status": {
+              "path": ".artifacts/cleanup-native-second-snapshot/m2_workflow_test/test.cache_status",
+              "sha256": "20782f46dc0be3ef62cd0228abb5d056bef01fc6e6be061374b85375f6265a38"
+            },
+            "test.log": {
+              "path": ".artifacts/cleanup-native-second-snapshot/m2_workflow_test/test.log",
+              "sha256": "aa03c8913f973f757b23017171fbd43c41c47c3fcb6dec4af36aea04078fe157"
+            },
+            "test.xml": {
+              "path": ".artifacts/cleanup-native-second-snapshot/m2_workflow_test/test.xml",
+              "sha256": "6d8d169dad1ed13c7b9790f3f20dcacb6a8483dc18c0522d4004fb1177c7ac93"
+            }
+          },
+          "rust_parent_summary": {
+            "passed": 1,
+            "failed": 0,
+            "ignored": 0,
+            "measured": 0,
+            "filtered_out": 0
+          }
+        },
+        {
+          "target": "//:machine_contract_test",
+          "status": "passed",
+          "files": {
+            "test.cache_status": {
+              "path": ".artifacts/cleanup-native-second-snapshot/machine_contract_test/test.cache_status",
+              "sha256": "b67af9cebbfee76ed3c50fd792e8b7b371f8efa8a3024d197558d321f1db788e"
+            },
+            "test.log": {
+              "path": ".artifacts/cleanup-native-second-snapshot/machine_contract_test/test.log",
+              "sha256": "56537330791706467386660aa361ea0a699ef2e088d24d620c18ec90f28ff24a"
+            },
+            "test.xml": {
+              "path": ".artifacts/cleanup-native-second-snapshot/machine_contract_test/test.xml",
+              "sha256": "24ed765298b50a707f6f4420a8cc3b01e04b9d8eca736cfeab22d609b695c7b8"
+            }
+          },
+          "rust_parent_summary": {
+            "passed": 7,
+            "failed": 0,
+            "ignored": 0,
+            "measured": 0,
+            "filtered_out": 0
+          }
+        },
+        {
+          "target": "//:offline_application_test",
+          "status": "passed",
+          "files": {
+            "test.cache_status": {
+              "path": ".artifacts/cleanup-native-second-snapshot/offline_application_test/test.cache_status",
+              "sha256": "abbf2a26be7e1a7b22942c51627604fec3bd3eba408d192726847e4b872e63f4"
+            },
+            "test.log": {
+              "path": ".artifacts/cleanup-native-second-snapshot/offline_application_test/test.log",
+              "sha256": "86e900f956179532ae48b129e79737af9f65e8b8e372e1af5840984a769f303a"
+            },
+            "test.xml": {
+              "path": ".artifacts/cleanup-native-second-snapshot/offline_application_test/test.xml",
+              "sha256": "1879fe93ab00dab1aec414849acdc4a889c64d48baf900a7f19012095122cf83"
+            }
+          },
+          "rust_parent_summary": {
+            "passed": 19,
+            "failed": 0,
+            "ignored": 0,
+            "measured": 0,
+            "filtered_out": 0
+          }
+        },
+        {
+          "target": "//:offline_cli_test",
+          "status": "passed",
+          "files": {
+            "test.cache_status": {
+              "path": ".artifacts/cleanup-native-second-snapshot/offline_cli_test/test.cache_status",
+              "sha256": "8517a10e6d2c50dedfe94a0272f4b46c4c369c5a57d83c1b64069a611fae6c3b"
+            },
+            "test.log": {
+              "path": ".artifacts/cleanup-native-second-snapshot/offline_cli_test/test.log",
+              "sha256": "c2d14245018c372c7f2c81325cfd2d2c6a6a8fa8e7b1cddac26e490783fd3627"
+            },
+            "test.xml": {
+              "path": ".artifacts/cleanup-native-second-snapshot/offline_cli_test/test.xml",
+              "sha256": "3ad5e7f2a5023008cc410de6bfc8d7c3b036b8fec270dadcf4961d02398500ca"
+            }
+          },
+          "rust_parent_summary": {
+            "passed": 13,
+            "failed": 0,
+            "ignored": 0,
+            "measured": 0,
+            "filtered_out": 0
+          }
+        },
+        {
+          "target": "//:provider_dispatch_test",
+          "status": "passed",
+          "files": {
+            "test.cache_status": {
+              "path": ".artifacts/cleanup-native-second-snapshot/provider_dispatch_test/test.cache_status",
+              "sha256": "4e48e955fc014407328a676331d6902b46aeb46dd8b4fd6cc089f7aaa5357e43"
+            },
+            "test.log": {
+              "path": ".artifacts/cleanup-native-second-snapshot/provider_dispatch_test/test.log",
+              "sha256": "560f398d58082167a9aebe1fab909f87ee376081928c59f8e50a7066d9f89c1f"
+            },
+            "test.xml": {
+              "path": ".artifacts/cleanup-native-second-snapshot/provider_dispatch_test/test.xml",
+              "sha256": "500648defb1d95538d7b200b66e5f100dac0800a40e2089b55afb6fd0580ed6b"
+            }
+          },
+          "rust_parent_summary": {
+            "passed": 7,
+            "failed": 0,
+            "ignored": 0,
+            "measured": 0,
+            "filtered_out": 0
+          }
+        },
+        {
+          "target": "//:provider_trust_test",
+          "status": "passed",
+          "files": {
+            "test.cache_status": {
+              "path": ".artifacts/cleanup-native-second-snapshot/provider_trust_test/test.cache_status",
+              "sha256": "9bb89ca9bbe74caa505151ac7b3c041aca701a2adbce989b34784e020d3d6ef3"
+            },
+            "test.log": {
+              "path": ".artifacts/cleanup-native-second-snapshot/provider_trust_test/test.log",
+              "sha256": "95a5ab6f13b9aa36880262fe6e767dea860958ad4c26a037cc5d4990de5065e0"
+            },
+            "test.xml": {
+              "path": ".artifacts/cleanup-native-second-snapshot/provider_trust_test/test.xml",
+              "sha256": "0e0b4eb5b3dc04e40f4a7700e8037451ad43d74f10adf48a6c6e3e80f3fcbeda"
+            }
+          },
+          "rust_parent_summary": {
+            "passed": 7,
+            "failed": 0,
+            "ignored": 0,
+            "measured": 0,
+            "filtered_out": 0
+          }
+        },
+        {
+          "target": "//:provider_wire_test",
+          "status": "passed",
+          "files": {
+            "test.cache_status": {
+              "path": ".artifacts/cleanup-native-second-snapshot/provider_wire_test/test.cache_status",
+              "sha256": "9b292fe016e7fda8ece31e7eef50f0becb105ede16ec1a3d0de5588d9f75fe6d"
+            },
+            "test.log": {
+              "path": ".artifacts/cleanup-native-second-snapshot/provider_wire_test/test.log",
+              "sha256": "abd0fb7a851febecb33e57534c862f83e7602f959204ba7926980fc14106ae0f"
+            },
+            "test.xml": {
+              "path": ".artifacts/cleanup-native-second-snapshot/provider_wire_test/test.xml",
+              "sha256": "ccda64ce4da937138cd315c90819fdaf0cfa381267486392d67dcdd4eabb12f8"
+            }
+          },
+          "rust_parent_summary": {
+            "passed": 10,
+            "failed": 0,
+            "ignored": 0,
+            "measured": 0,
+            "filtered_out": 0
+          }
+        },
+        {
+          "target": "//:records_lossless_test",
+          "status": "passed",
+          "files": {
+            "test.cache_status": {
+              "path": ".artifacts/cleanup-native-second-snapshot/records_lossless_test/test.cache_status",
+              "sha256": "1f28c0b790d10405cf415f1b1235290393b75f10f38c9b492aa3de76e7ddd9a8"
+            },
+            "test.log": {
+              "path": ".artifacts/cleanup-native-second-snapshot/records_lossless_test/test.log",
+              "sha256": "b00ceb4fc4a9d7e04b98f873831c86048c073d588f9f0c6fbdfe761c3c59738d"
+            },
+            "test.xml": {
+              "path": ".artifacts/cleanup-native-second-snapshot/records_lossless_test/test.xml",
+              "sha256": "772fb119b2e056e3866b8468b98dca3290f27fa236da916da4f767c394dce2fa"
+            }
+          },
+          "rust_parent_summary": {
+            "passed": 8,
+            "failed": 0,
+            "ignored": 0,
+            "measured": 0,
+            "filtered_out": 0
+          }
+        },
+        {
+          "target": "//:remote_cli_test",
+          "status": "passed",
+          "files": {
+            "test.cache_status": {
+              "path": ".artifacts/cleanup-native-second-snapshot/remote_cli_test/test.cache_status",
+              "sha256": "b88d9eb5719326973d4f2ecb97a21f926285aaaff5d9e37e41639b4fe380fd06"
+            },
+            "test.log": {
+              "path": ".artifacts/cleanup-native-second-snapshot/remote_cli_test/test.log",
+              "sha256": "52b64eacce912275e8ad82be741a34556acfeffc60d232b9d06a92cd34225ed0"
+            },
+            "test.xml": {
+              "path": ".artifacts/cleanup-native-second-snapshot/remote_cli_test/test.xml",
+              "sha256": "df8ee1d370b966dfeba489b8568f92ff24835058ba70bbf295e9049865f1fd3c"
+            }
+          },
+          "rust_parent_summary": {
+            "passed": 14,
+            "failed": 0,
+            "ignored": 0,
+            "measured": 0,
+            "filtered_out": 0
+          }
+        },
+        {
+          "target": "//:research_handoff_test",
+          "status": "passed",
+          "files": {
+            "test.cache_status": {
+              "path": ".artifacts/cleanup-native-second-snapshot/research_handoff_test/test.cache_status",
+              "sha256": "93640a7b587ec9450716ac3025b17de12e5d5159ad4097f41f45e4519ab66ccb"
+            },
+            "test.log": {
+              "path": ".artifacts/cleanup-native-second-snapshot/research_handoff_test/test.log",
+              "sha256": "a538d95d184e7c186b8d83c263996f387d17ac2e0c06b5dc4bb6fc0d00125c7c"
+            },
+            "test.xml": {
+              "path": ".artifacts/cleanup-native-second-snapshot/research_handoff_test/test.xml",
+              "sha256": "e27ba6a22f8585c86e01c46640a40eae52a09e1de0762eb612fb477825d068ac"
+            }
+          },
+          "rust_parent_summary": {
+            "passed": 16,
+            "failed": 0,
+            "ignored": 0,
+            "measured": 0,
+            "filtered_out": 0
+          }
+        },
+        {
+          "target": "//:research_recovery_test",
+          "status": "passed",
+          "files": {
+            "test.cache_status": {
+              "path": ".artifacts/cleanup-native-second-snapshot/research_recovery_test/test.cache_status",
+              "sha256": "af07610cf647c6afeeb54f4ffff6df4d6ce716068248fb61d7d14e42b8f0b024"
+            },
+            "test.log": {
+              "path": ".artifacts/cleanup-native-second-snapshot/research_recovery_test/test.log",
+              "sha256": "0639b296aad844f16e0961e68174b83f2648713b921c357adcf71f9e23623d0f"
+            },
+            "test.xml": {
+              "path": ".artifacts/cleanup-native-second-snapshot/research_recovery_test/test.xml",
+              "sha256": "bfe01d79fb36776035fe02dab4486e62c8ba154cd5d4e23e26008c10688d884f"
+            }
+          },
+          "rust_parent_summary": {
+            "passed": 5,
+            "failed": 0,
+            "ignored": 0,
+            "measured": 0,
+            "filtered_out": 0
+          }
+        },
+        {
+          "target": "//:resolution_cli_test",
+          "status": "passed",
+          "files": {
+            "test.cache_status": {
+              "path": ".artifacts/cleanup-native-second-snapshot/resolution_cli_test/test.cache_status",
+              "sha256": "4c46ad52890592ba92304c8c822bf9f5847c1440e61ea9a0c3df0306af908cbe"
+            },
+            "test.log": {
+              "path": ".artifacts/cleanup-native-second-snapshot/resolution_cli_test/test.log",
+              "sha256": "cb99d45077f6eb8a617ebfe750a792a9169dbc3d26184adfc31a6a98eb4ffb1d"
+            },
+            "test.xml": {
+              "path": ".artifacts/cleanup-native-second-snapshot/resolution_cli_test/test.xml",
+              "sha256": "b57f432aa1ad4f8d8e45bc71de4f75aaf71559b9a60524252ae4c771ef3e6a7b"
+            }
+          },
+          "rust_parent_summary": {
+            "passed": 4,
+            "failed": 0,
+            "ignored": 0,
+            "measured": 0,
+            "filtered_out": 0
+          }
+        },
+        {
+          "target": "//:retrieval_baseline_test",
+          "status": "passed",
+          "files": {
+            "test.cache_status": {
+              "path": ".artifacts/cleanup-native-second-snapshot/retrieval_baseline_test/test.cache_status",
+              "sha256": "e79ca418a0ee6c826119dd9664a266a205ad27816172937e0b2e38d153237087"
+            },
+            "test.log": {
+              "path": ".artifacts/cleanup-native-second-snapshot/retrieval_baseline_test/test.log",
+              "sha256": "6e28d6b1316913775465837040ab8e7525d7af7b2d25d792f1c60fc30eb26b84"
+            },
+            "test.xml": {
+              "path": ".artifacts/cleanup-native-second-snapshot/retrieval_baseline_test/test.xml",
+              "sha256": "cee64b9443ad6f69b024f16cd3bcfe376c9e559168f28fb5419636852cfff61a"
+            },
+            "test.outputs/outputs.zip": {
+              "path": ".artifacts/cleanup-native-second-snapshot/retrieval_baseline_test/test.outputs/outputs.zip",
+              "sha256": "7500c263d1cedb10b3d8284e8a4310e0b32d679d5fdc7e936b00c6ab34581243"
+            },
+            "test.outputs_manifest/MANIFEST": {
+              "path": ".artifacts/cleanup-native-second-snapshot/retrieval_baseline_test/test.outputs_manifest/MANIFEST",
+              "sha256": "04160382081b8c39c32af3b704daf1a0fa0de55f96a44b91e362c9c0dab48744"
+            }
+          },
+          "rust_parent_summary": {
+            "passed": 2,
+            "failed": 0,
+            "ignored": 1,
+            "measured": 0,
+            "filtered_out": 0
+          }
+        },
+        {
+          "target": "//:retrieval_lexical_test",
+          "status": "passed",
+          "files": {
+            "test.cache_status": {
+              "path": ".artifacts/cleanup-native-second-snapshot/retrieval_lexical_test/test.cache_status",
+              "sha256": "f5f8e9a4d4427fd6b4dc24ce24ef741be85a96a2a03e7d423ac24e678971c247"
+            },
+            "test.log": {
+              "path": ".artifacts/cleanup-native-second-snapshot/retrieval_lexical_test/test.log",
+              "sha256": "90c43d5879b53b853abba68ff127c33eda00d3e9bc7435550b6732b573b39af7"
+            },
+            "test.xml": {
+              "path": ".artifacts/cleanup-native-second-snapshot/retrieval_lexical_test/test.xml",
+              "sha256": "e1c404c19207b817113004480c8152dd034e98173cb0dae82b773c4234406f10"
+            }
+          },
+          "rust_parent_summary": {
+            "passed": 22,
+            "failed": 0,
+            "ignored": 0,
+            "measured": 0,
+            "filtered_out": 0
+          }
+        },
+        {
+          "target": "//:semantic_retrieval_test",
+          "status": "passed",
+          "files": {
+            "test.cache_status": {
+              "path": ".artifacts/cleanup-native-second-snapshot/semantic_retrieval_test/test.cache_status",
+              "sha256": "7f962a1b4bc7662dfb9ad716e5b5434d817f711fafb412909f4ae85bb7773346"
+            },
+            "test.log": {
+              "path": ".artifacts/cleanup-native-second-snapshot/semantic_retrieval_test/test.log",
+              "sha256": "d525fdfe40bfe0ad2cad864b55882a02f35deb1741ef3eb5fb08f0d3df4706fb"
+            },
+            "test.xml": {
+              "path": ".artifacts/cleanup-native-second-snapshot/semantic_retrieval_test/test.xml",
+              "sha256": "491801968a775b69c55fa6bdd9efcca1e03aae44d342a813ea1fd4c4a329a445"
+            }
+          },
+          "rust_parent_summary": {
+            "passed": 25,
+            "failed": 0,
+            "ignored": 0,
+            "measured": 0,
+            "filtered_out": 0
+          }
+        },
+        {
+          "target": "//:shared_wiki_workflow_test",
+          "status": "passed",
+          "files": {
+            "test.cache_status": {
+              "path": ".artifacts/cleanup-native-second-snapshot/shared_wiki_workflow_test/test.cache_status",
+              "sha256": "7f4cdbcb5c0b073414f70a9f9dfc810cff76ed8740067fb8665ac39a67dfe293"
+            },
+            "test.log": {
+              "path": ".artifacts/cleanup-native-second-snapshot/shared_wiki_workflow_test/test.log",
+              "sha256": "cbcb40b39d7a2f4d9454b958ea41f4cea7f19fba924ead4fca86f426ea800da1"
+            },
+            "test.xml": {
+              "path": ".artifacts/cleanup-native-second-snapshot/shared_wiki_workflow_test/test.xml",
+              "sha256": "e7bc688533c381cd2145e31737509d41f5547d4e49f6627b345fd829bfe1bb6f"
+            }
+          },
+          "rust_parent_summary": {
+            "passed": 1,
+            "failed": 0,
+            "ignored": 0,
+            "measured": 0,
+            "filtered_out": 0
+          }
+        },
+        {
+          "target": "//:skill_export_test",
+          "status": "passed",
+          "files": {
+            "test.cache_status": {
+              "path": ".artifacts/cleanup-native-second-snapshot/skill_export_test/test.cache_status",
+              "sha256": "c53a9eaab53f92ab28e4079989980b144254ff517143dd2374b3fb22760f56c3"
+            },
+            "test.log": {
+              "path": ".artifacts/cleanup-native-second-snapshot/skill_export_test/test.log",
+              "sha256": "4b648167142a855f2239071f6b4a3ff1bdfaffb912ee4fc2f19c614510c8065f"
+            },
+            "test.xml": {
+              "path": ".artifacts/cleanup-native-second-snapshot/skill_export_test/test.xml",
+              "sha256": "1371af2964d51c084d06eb2b42be05d35ab6a37bc16288c18770526118ae271d"
+            }
+          },
+          "rust_parent_summary": {
+            "passed": 4,
+            "failed": 0,
+            "ignored": 0,
+            "measured": 0,
+            "filtered_out": 0
+          }
+        },
+        {
+          "target": "//:sources_evidence_test",
+          "status": "passed",
+          "files": {
+            "test.cache_status": {
+              "path": ".artifacts/cleanup-native-second-snapshot/sources_evidence_test/test.cache_status",
+              "sha256": "8087a3fa1b748f6d3588743322fd93a13a58ed81b21f61e66205b878a1201db5"
+            },
+            "test.log": {
+              "path": ".artifacts/cleanup-native-second-snapshot/sources_evidence_test/test.log",
+              "sha256": "38a6e3f9782e59a84244c2b1e5589f9fc56d7f2096892a389c0865a535b5f200"
+            },
+            "test.xml": {
+              "path": ".artifacts/cleanup-native-second-snapshot/sources_evidence_test/test.xml",
+              "sha256": "aac0a04a3194a6c5d396abdd0c107d22be69800be3e8653e020acf5c66e20ccc"
+            }
+          },
+          "rust_parent_summary": {
+            "passed": 19,
+            "failed": 0,
+            "ignored": 0,
+            "measured": 0,
+            "filtered_out": 0
+          }
+        },
+        {
+          "target": "//:storage_cleanup_test",
+          "status": "passed",
+          "files": {
+            "test.cache_status": {
+              "path": ".artifacts/cleanup-native-second-snapshot/storage_cleanup_test/test.cache_status",
+              "sha256": "931485952148cde9127b9a668b5d0111d12ad371afadc93217a1b40ef39dee3a"
+            },
+            "test.log": {
+              "path": ".artifacts/cleanup-native-second-snapshot/storage_cleanup_test/test.log",
+              "sha256": "724bb2719ab7b21f18516150c1ab66ca7722083da5449af5574aa97a56c388bd"
+            },
+            "test.xml": {
+              "path": ".artifacts/cleanup-native-second-snapshot/storage_cleanup_test/test.xml",
+              "sha256": "36d35dd4bc8bf3639cd676d338b85357293ce1e332d150a365a310d168957aa0"
+            }
+          },
+          "rust_parent_summary": {
+            "passed": 13,
+            "failed": 0,
+            "ignored": 0,
+            "measured": 0,
+            "filtered_out": 0
+          }
+        },
+        {
+          "target": "//:unit_tests",
+          "status": "passed",
+          "files": {
+            "test.cache_status": {
+              "path": ".artifacts/cleanup-native-second-snapshot/unit_tests/test.cache_status",
+              "sha256": "aea6c29e72a0ba755155d445b404863e29b7d40c216b5b936644000396a3c56b"
+            },
+            "test.log": {
+              "path": ".artifacts/cleanup-native-second-snapshot/unit_tests/test.log",
+              "sha256": "2abde9ed7a01bcfefcafd93ec84ba6ece9aa3f9a87b8950ae425ad39e1f8306c"
+            },
+            "test.xml": {
+              "path": ".artifacts/cleanup-native-second-snapshot/unit_tests/test.xml",
+              "sha256": "52968844cc49e5374e69d277c196ef2a0529e77dffff110992276e1342f129e7"
+            }
+          },
+          "rust_parent_summary": {
+            "passed": 139,
+            "failed": 0,
+            "ignored": 3,
+            "measured": 0,
+            "filtered_out": 0
+          }
+        },
+        {
+          "target": "//:windows_acl_policy_test",
+          "status": "passed",
+          "files": {
+            "test.cache_status": {
+              "path": ".artifacts/cleanup-native-second-snapshot/windows_acl_policy_test/test.cache_status",
+              "sha256": "fd56dafe34bff10f21e8cc118bd749ad16765a078bfeaa640165f87477a2c2e8"
+            },
+            "test.log": {
+              "path": ".artifacts/cleanup-native-second-snapshot/windows_acl_policy_test/test.log",
+              "sha256": "524a4f62e4897d584aff5f997fbadcba1e4ca7cb89f40d72c6468d810969928c"
+            },
+            "test.xml": {
+              "path": ".artifacts/cleanup-native-second-snapshot/windows_acl_policy_test/test.xml",
+              "sha256": "850c016960ad4e6c3ad2872b457779782cbe7184af7d108b2aa44dc4de96239d"
+            }
+          },
+          "rust_parent_summary": {
+            "passed": 7,
+            "failed": 0,
+            "ignored": 0,
+            "measured": 0,
+            "filtered_out": 0
+          }
+        },
+        {
+          "target": "//:release_workflows_test",
+          "status": "failed",
+          "files": {
+            "test.cache_status": {
+              "path": ".artifacts/cleanup-native-second-snapshot/release_workflows_test/test.cache_status",
+              "sha256": "dfbb884d27314cce4d635efba270d693de1e2243b46a566ec655d7c9025e4e38"
+            },
+            "test.log": {
+              "path": ".artifacts/cleanup-native-second-snapshot/release_workflows_test/test.log",
+              "sha256": "9e9896c21626fed600045d650f4eef98e4620e08aed73a76febea87bf07449cd"
+            },
+            "test.xml": {
+              "path": ".artifacts/cleanup-native-second-snapshot/release_workflows_test/test.xml",
+              "sha256": "758bc4f3ba7b225d1bb4353d17fdb518e000d8272c011b6e2e462e5f22d05b77"
+            }
+          },
+          "rust_parent_summary": {
+            "passed": 0,
+            "failed": 1,
+            "ignored": 0,
+            "measured": 0,
+            "filtered_out": 0
+          }
+        },
+        {
+          "target": "//:vault_fs_test",
+          "status": "failed",
+          "files": {
+            "test.cache_status": {
+              "path": ".artifacts/cleanup-native-second-snapshot/vault_fs_test/test.cache_status",
+              "sha256": "a8b1d5c64a8a1576b17a8e718978916bfc1eed0ad41968e64d998aaada4f0ac8"
+            },
+            "test.log": {
+              "path": ".artifacts/cleanup-native-second-snapshot/vault_fs_test/test.log",
+              "sha256": "bcf8ddb25660f2bee86d4ba8e5dfe36b6b70918bb709adcfd29a612c7ba81c61"
+            },
+            "test.xml": {
+              "path": ".artifacts/cleanup-native-second-snapshot/vault_fs_test/test.xml",
+              "sha256": "39078e9f6fa7f8088a4e6d8f330395e531513c59a980655a2fc753377a6d31df"
+            }
+          },
+          "rust_parent_summary": {
+            "passed": 6,
+            "failed": 9,
+            "ignored": 0,
+            "measured": 0,
+            "filtered_out": 0
+          }
+        }
+      ],
+      "artifact_stages": "not run: script exited at tests",
+      "note": "Corrected filesystem/report fixtures and linked walkthrough are rerun separately; original failed script remains failed."
     }
   ],
   "spool_recovery_correction": {
@@ -1314,10 +2551,1428 @@
     "scope": "empty ownerless cleanup retry; ownerless payload/pending/run/inode/symlink refusals; packet warning reasons; compact/legacy checkpoints and no-resend dispatch recovery"
   },
   "native_qualification": {
-    "status": "starting",
-    "command": "LWIKI_BAZEL_OUTPUT_ROOT=/private/tmp/lwiki-bazel scripts/qualify-local.sh .artifacts/cleanup-qualification-002",
-    "outer_log": ".artifacts/cleanup-qualification-002.log",
-    "evidence_directory": ".artifacts/cleanup-qualification-002",
-    "source_sha256": "2a59b29d22dc607b8c18ac0bb150bcc43b8d5e2e70c46db596037714d3d11a01"
+    "status": "aggregate native tests passed; artifact stages pending",
+    "source_sha256": "78cc134d94ad7f1e271312f2414ba8a6ba9280fb7e13172ac11f9e25c3f2f97c",
+    "changed_since_second_native": [
+      "scripts/shared_wiki_recipe.py",
+      "tests/release_workflows.rs",
+      "tests/shared_wiki_workflow.rs",
+      "tests/vault_fs.rs"
+    ],
+    "reuse_scope": "Compiled and consumed inputs unchanged for46 targets. Runtime shared_wiki_recipe.py is declared test data for all, consumed only by shared workflow; changed unused runfile is explicitly disclosed.",
+    "target_count": 49,
+    "reused_targets": 46,
+    "corrected_targets": 3,
+    "parent_cases": {
+      "passed": 642,
+      "failed": 0,
+      "ignored": 7
+    },
+    "targets": [
+      {
+        "target": "//:api_extraction_test",
+        "status": "passed",
+        "files": {
+          "test.cache_status": {
+            "path": ".artifacts/cleanup-native-second-snapshot/api_extraction_test/test.cache_status",
+            "sha256": "353b423d5a79e03e803f6e922cf24e818b1e9e3efc074472515e77a3b830f76f"
+          },
+          "test.log": {
+            "path": ".artifacts/cleanup-native-second-snapshot/api_extraction_test/test.log",
+            "sha256": "2ec01e51c3f66393348661e64b356cfe7983e275030fb78dc099085b2ff90789"
+          },
+          "test.xml": {
+            "path": ".artifacts/cleanup-native-second-snapshot/api_extraction_test/test.xml",
+            "sha256": "7d87b1d3f526c34e054f5a0a8da8df01c3dab0f3202b36cb5666d6286f4df3ed"
+          }
+        },
+        "rust_parent_summary": {
+          "passed": 21,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered_out": 0
+        },
+        "evidence_origin": "unchanged compiled and consumed inputs from native attempt002"
+      },
+      {
+        "target": "//:binary_tests",
+        "status": "passed",
+        "files": {
+          "test.cache_status": {
+            "path": ".artifacts/cleanup-native-second-snapshot/binary_tests/test.cache_status",
+            "sha256": "da0b0edae87cfbb0a94be49fb9f04b3ca8d6f903eee5d6f4a324388829f62279"
+          },
+          "test.log": {
+            "path": ".artifacts/cleanup-native-second-snapshot/binary_tests/test.log",
+            "sha256": "dda8498500a24c6f25bdd976de84df36843784769c98341dcb7a01c45a090b34"
+          },
+          "test.xml": {
+            "path": ".artifacts/cleanup-native-second-snapshot/binary_tests/test.xml",
+            "sha256": "4fe63089911d5af2685a0b3966c906f494ba46eb1adad1959dd1d5a91a76d49e"
+          }
+        },
+        "rust_parent_summary": {
+          "passed": 0,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered_out": 0
+        },
+        "evidence_origin": "unchanged compiled and consumed inputs from native attempt002"
+      },
+      {
+        "target": "//:build_paths_test",
+        "status": "passed",
+        "files": {
+          "test.cache_status": {
+            "path": ".artifacts/cleanup-native-second-snapshot/build_paths_test/test.cache_status",
+            "sha256": "8cf5adc752aee0ac6bb79f2db44f2eb8191e85286c921cfb35207e45ae9439be"
+          },
+          "test.log": {
+            "path": ".artifacts/cleanup-native-second-snapshot/build_paths_test/test.log",
+            "sha256": "ea4f14e0e00d95054a1541f4a246aafc8f3d3ce99294e2a19b9288b452517439"
+          },
+          "test.xml": {
+            "path": ".artifacts/cleanup-native-second-snapshot/build_paths_test/test.xml",
+            "sha256": "ca1f52b725e68bd93ec7aa4c1ceb129d66ef2b136d48d413323d3f0e23cf85a0"
+          }
+        },
+        "rust_parent_summary": {
+          "passed": 8,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered_out": 0
+        },
+        "evidence_origin": "unchanged compiled and consumed inputs from native attempt002"
+      },
+      {
+        "target": "//:catalog_crash_recovery_test",
+        "status": "passed",
+        "files": {
+          "test.cache_status": {
+            "path": ".artifacts/cleanup-native-second-snapshot/catalog_crash_recovery_test/test.cache_status",
+            "sha256": "b410814aaa31ebee7fabb1dcd420b4f73a427e68f1ee0d87d929f9fecd9ad12b"
+          },
+          "test.log": {
+            "path": ".artifacts/cleanup-native-second-snapshot/catalog_crash_recovery_test/test.log",
+            "sha256": "6ae237c58653f00ced2af94183f74f38bcf76d6bc7fda7c23eac918e33ae5f22"
+          },
+          "test.xml": {
+            "path": ".artifacts/cleanup-native-second-snapshot/catalog_crash_recovery_test/test.xml",
+            "sha256": "8f13bc1f16e9261688c417406fd9d7c9d1b84f26de9bfda458788ab11d2248ad"
+          }
+        },
+        "rust_parent_summary": {
+          "passed": 2,
+          "failed": 0,
+          "ignored": 1,
+          "measured": 0,
+          "filtered_out": 0
+        },
+        "evidence_origin": "unchanged compiled and consumed inputs from native attempt002"
+      },
+      {
+        "target": "//:catalog_generations_test",
+        "status": "passed",
+        "files": {
+          "test.cache_status": {
+            "path": ".artifacts/cleanup-native-second-snapshot/catalog_generations_test/test.cache_status",
+            "sha256": "ff7e24658941886f37559609b01a736165af1f0f787028b39787006bffd55631"
+          },
+          "test.log": {
+            "path": ".artifacts/cleanup-native-second-snapshot/catalog_generations_test/test.log",
+            "sha256": "c0c6fbdcf7cb92611b6a727f651ed98f181930c961dddf050da042431001ba4d"
+          },
+          "test.xml": {
+            "path": ".artifacts/cleanup-native-second-snapshot/catalog_generations_test/test.xml",
+            "sha256": "d07627ae57e941d9e0d940351644cdcfc82096f758f17ef345fee8bf193bc38c"
+          }
+        },
+        "rust_parent_summary": {
+          "passed": 15,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered_out": 0
+        },
+        "evidence_origin": "unchanged compiled and consumed inputs from native attempt002"
+      },
+      {
+        "target": "//:catalog_scan_eligibility_test",
+        "status": "passed",
+        "files": {
+          "test.cache_status": {
+            "path": ".artifacts/cleanup-native-second-snapshot/catalog_scan_eligibility_test/test.cache_status",
+            "sha256": "df5e5ceca5a6bc964a07de61f4a054f0e65e9ff1a9904d116e9b28a1833bfa9c"
+          },
+          "test.log": {
+            "path": ".artifacts/cleanup-native-second-snapshot/catalog_scan_eligibility_test/test.log",
+            "sha256": "8ef4b5d53e4a5ac6863f014bc64a27b7e901373592c40a4747b456f55813612c"
+          },
+          "test.xml": {
+            "path": ".artifacts/cleanup-native-second-snapshot/catalog_scan_eligibility_test/test.xml",
+            "sha256": "455e682cf7bde564b14e605a6c930913dd24466fdffd7cc330d73d54e3e897b3"
+          }
+        },
+        "rust_parent_summary": {
+          "passed": 16,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered_out": 0
+        },
+        "evidence_origin": "unchanged compiled and consumed inputs from native attempt002"
+      },
+      {
+        "target": "//:change_read_preconditions_test",
+        "status": "passed",
+        "files": {
+          "test.cache_status": {
+            "path": ".artifacts/cleanup-native-second-snapshot/change_read_preconditions_test/test.cache_status",
+            "sha256": "f79a4aa1f400dd3d07ac06e3980a14eae3b444786c9089d3b3ac8acf219a3ed0"
+          },
+          "test.log": {
+            "path": ".artifacts/cleanup-native-second-snapshot/change_read_preconditions_test/test.log",
+            "sha256": "6f5d515a5d5d1a5eca5eaf0aa0e16059ebabc842a3fcc377b3e83d769063c82f"
+          },
+          "test.xml": {
+            "path": ".artifacts/cleanup-native-second-snapshot/change_read_preconditions_test/test.xml",
+            "sha256": "fd161a5d45fd6603845df818500b39cf7fdcb11f7421b5d01e8eac8326522202"
+          }
+        },
+        "rust_parent_summary": {
+          "passed": 8,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered_out": 0
+        },
+        "evidence_origin": "unchanged compiled and consumed inputs from native attempt002"
+      },
+      {
+        "target": "//:changes_prepare_journal_test",
+        "status": "passed",
+        "files": {
+          "test.cache_status": {
+            "path": ".artifacts/cleanup-native-second-snapshot/changes_prepare_journal_test/test.cache_status",
+            "sha256": "3e848190200a8150956e975231f0ceeb9c9377fd8d09f853d54dafbdb64a3a30"
+          },
+          "test.log": {
+            "path": ".artifacts/cleanup-native-second-snapshot/changes_prepare_journal_test/test.log",
+            "sha256": "f31668e5b9fe4e801c450dc37672bb05483d9b202f635378ea6686085bc6cc3a"
+          },
+          "test.xml": {
+            "path": ".artifacts/cleanup-native-second-snapshot/changes_prepare_journal_test/test.xml",
+            "sha256": "d506513befa6854543e69513d8655ec557b36b17568bede70dfe521f74b60bcc"
+          }
+        },
+        "rust_parent_summary": {
+          "passed": 17,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered_out": 0
+        },
+        "evidence_origin": "unchanged compiled and consumed inputs from native attempt002"
+      },
+      {
+        "target": "//:changes_recovery_test",
+        "status": "passed",
+        "files": {
+          "test.cache_status": {
+            "path": ".artifacts/cleanup-native-second-snapshot/changes_recovery_test/test.cache_status",
+            "sha256": "c0e6387bccd3ee452b3064c24ab4777e0b42de48828fc3d748ebc555655e29d3"
+          },
+          "test.log": {
+            "path": ".artifacts/cleanup-native-second-snapshot/changes_recovery_test/test.log",
+            "sha256": "1d57d73cac2a3e34e1e180c972547e246428d5967a8fbf1534641abff63f68df"
+          },
+          "test.xml": {
+            "path": ".artifacts/cleanup-native-second-snapshot/changes_recovery_test/test.xml",
+            "sha256": "d30506c107258edf5cea41e4f480ef4a3b0143a9586e28e9e5c04829859a3d05"
+          }
+        },
+        "rust_parent_summary": {
+          "passed": 35,
+          "failed": 0,
+          "ignored": 1,
+          "measured": 0,
+          "filtered_out": 0
+        },
+        "evidence_origin": "unchanged compiled and consumed inputs from native attempt002"
+      },
+      {
+        "target": "//:context_cli_test",
+        "status": "passed",
+        "files": {
+          "test.cache_status": {
+            "path": ".artifacts/cleanup-native-second-snapshot/context_cli_test/test.cache_status",
+            "sha256": "e0841bafe7bc5a8318b7697686eba7900bc49cad145a34a7ac559e8f4191ccdc"
+          },
+          "test.log": {
+            "path": ".artifacts/cleanup-native-second-snapshot/context_cli_test/test.log",
+            "sha256": "306f0d8fee34a201678daeb5c9d4ec24ca1b4986ecb5d646f04cd3976982a898"
+          },
+          "test.xml": {
+            "path": ".artifacts/cleanup-native-second-snapshot/context_cli_test/test.xml",
+            "sha256": "f7c10d2084caa297375136b020c4a077ffd6ddc56bec79ce272736602ff3292e"
+          }
+        },
+        "rust_parent_summary": {
+          "passed": 7,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered_out": 0
+        },
+        "evidence_origin": "unchanged compiled and consumed inputs from native attempt002"
+      },
+      {
+        "target": "//:context_freshness_test",
+        "status": "passed",
+        "files": {
+          "test.cache_status": {
+            "path": ".artifacts/cleanup-native-second-snapshot/context_freshness_test/test.cache_status",
+            "sha256": "9cdf021c529308bfef04aae4419cfa0d91cbade8cba85e4f68f37782db1bfabc"
+          },
+          "test.log": {
+            "path": ".artifacts/cleanup-native-second-snapshot/context_freshness_test/test.log",
+            "sha256": "b1eb126da74451beda24a48e3c983eaba0fafc9bd70c6f82daae46f1c7d73c64"
+          },
+          "test.xml": {
+            "path": ".artifacts/cleanup-native-second-snapshot/context_freshness_test/test.xml",
+            "sha256": "51c3e9abb179c0c014f1faf3fb80c5ec7f9fffc43d9542490488c8d9d3b1c5e2"
+          }
+        },
+        "rust_parent_summary": {
+          "passed": 19,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered_out": 0
+        },
+        "evidence_origin": "unchanged compiled and consumed inputs from native attempt002"
+      },
+      {
+        "target": "//:contracts_test",
+        "status": "passed",
+        "files": {
+          "test.cache_status": {
+            "path": ".artifacts/cleanup-native-second-snapshot/contracts_test/test.cache_status",
+            "sha256": "1f6ceb13401b8b95628923b8abaa19ddb9c2075c7421505af82502d1e1bac9dd"
+          },
+          "test.log": {
+            "path": ".artifacts/cleanup-native-second-snapshot/contracts_test/test.log",
+            "sha256": "e5220f5da37bc9539b80587ff65fada4e42413c2f1ff42cc1675bec6c054a021"
+          },
+          "test.xml": {
+            "path": ".artifacts/cleanup-native-second-snapshot/contracts_test/test.xml",
+            "sha256": "5c0ce241dd636a5a5adab7bb81024f8702e0dfd492029120f8bcad55cb2416b9"
+          }
+        },
+        "rust_parent_summary": {
+          "passed": 5,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered_out": 0
+        },
+        "evidence_origin": "unchanged compiled and consumed inputs from native attempt002"
+      },
+      {
+        "target": "//:doc_tests",
+        "status": "passed",
+        "files": {
+          "test.cache_status": {
+            "path": ".artifacts/cleanup-native-second-snapshot/doc_tests/test.cache_status",
+            "sha256": "7196ab8e00a2ac8d300f7b3f6955b2ed00a31db83232f4c7e1657c63e36fe842"
+          },
+          "test.log": {
+            "path": ".artifacts/cleanup-native-second-snapshot/doc_tests/test.log",
+            "sha256": "2561be9ff343002bc37722f94ec521c410d1e76340f34b6842a04f8ab587f371"
+          },
+          "test.xml": {
+            "path": ".artifacts/cleanup-native-second-snapshot/doc_tests/test.xml",
+            "sha256": "4df46bc0e46e21daffd52da4cb9dfb6a338fc833e9fb4faf9154db276f14ba27"
+          }
+        },
+        "rust_parent_summary": {
+          "passed": 0,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered_out": 0
+        },
+        "evidence_origin": "unchanged compiled and consumed inputs from native attempt002"
+      },
+      {
+        "target": "//:embedding_bounds_test",
+        "status": "passed",
+        "files": {
+          "test.cache_status": {
+            "path": ".artifacts/cleanup-native-second-snapshot/embedding_bounds_test/test.cache_status",
+            "sha256": "e9ebf06e8c1193f46c6990a55a5f1f4e6f24f6de2325b16820adfb47b1da57aa"
+          },
+          "test.log": {
+            "path": ".artifacts/cleanup-native-second-snapshot/embedding_bounds_test/test.log",
+            "sha256": "7cf7f946235167947c60118e9bdac0c391f583e810d00d6971831e272580aef0"
+          },
+          "test.xml": {
+            "path": ".artifacts/cleanup-native-second-snapshot/embedding_bounds_test/test.xml",
+            "sha256": "e2b619aa5134f070ecb9653de122023dc733483f85600a13cb53b5a1abc8dffc"
+          }
+        },
+        "rust_parent_summary": {
+          "passed": 4,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered_out": 0
+        },
+        "evidence_origin": "unchanged compiled and consumed inputs from native attempt002"
+      },
+      {
+        "target": "//:entity_decisions_cli_test",
+        "status": "passed",
+        "files": {
+          "test.cache_status": {
+            "path": ".artifacts/cleanup-native-second-snapshot/entity_decisions_cli_test/test.cache_status",
+            "sha256": "5d4901cbbaea2269a874a1078500906bab3f4853cb06d058637465572c7b6cb9"
+          },
+          "test.log": {
+            "path": ".artifacts/cleanup-native-second-snapshot/entity_decisions_cli_test/test.log",
+            "sha256": "44ff9b92f7fcee4309d37479fef5e73406cf382144f08f1ef4e40dc598aa10af"
+          },
+          "test.xml": {
+            "path": ".artifacts/cleanup-native-second-snapshot/entity_decisions_cli_test/test.xml",
+            "sha256": "dc393fab9757a49e20a861f2c4affad50ac0a8943ef6534ed0d95d140da11272"
+          }
+        },
+        "rust_parent_summary": {
+          "passed": 3,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered_out": 0
+        },
+        "evidence_origin": "unchanged compiled and consumed inputs from native attempt002"
+      },
+      {
+        "target": "//:entity_decisions_inverse_test",
+        "status": "passed",
+        "files": {
+          "test.cache_status": {
+            "path": ".artifacts/cleanup-native-second-snapshot/entity_decisions_inverse_test/test.cache_status",
+            "sha256": "b4079e30d25fcccbe0fdb5969cf57d94a3ea0e7ca5c1cc1c9a43e1513118636a"
+          },
+          "test.log": {
+            "path": ".artifacts/cleanup-native-second-snapshot/entity_decisions_inverse_test/test.log",
+            "sha256": "04e0d7591b5ffa7b17791408f9b5c39b64be2eadf08fdc2669dd2c2d40ffacf3"
+          },
+          "test.xml": {
+            "path": ".artifacts/cleanup-native-second-snapshot/entity_decisions_inverse_test/test.xml",
+            "sha256": "1eab0cc7dbaa5c2853bd3b4f8b60c526bcfe4aa453f80e4ce9dcbb3d16affc49"
+          }
+        },
+        "rust_parent_summary": {
+          "passed": 10,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered_out": 0
+        },
+        "evidence_origin": "unchanged compiled and consumed inputs from native attempt002"
+      },
+      {
+        "target": "//:entity_decisions_test",
+        "status": "passed",
+        "files": {
+          "test.cache_status": {
+            "path": ".artifacts/cleanup-native-second-snapshot/entity_decisions_test/test.cache_status",
+            "sha256": "79f5c68c4e6d4bad50eb94a50ac5eedef14308c261a19aa2ca64bf44b6fbb462"
+          },
+          "test.log": {
+            "path": ".artifacts/cleanup-native-second-snapshot/entity_decisions_test/test.log",
+            "sha256": "b0fc69cabb016f753f35d327a9739288dfd0637cb2c5f7f18a3be1113623134f"
+          },
+          "test.xml": {
+            "path": ".artifacts/cleanup-native-second-snapshot/entity_decisions_test/test.xml",
+            "sha256": "6b08f99dd4221115869e298a6743f5300ab1b40d775fa77566a8250591e767f8"
+          }
+        },
+        "rust_parent_summary": {
+          "passed": 19,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered_out": 0
+        },
+        "evidence_origin": "unchanged compiled and consumed inputs from native attempt002"
+      },
+      {
+        "target": "//:extraction_cli_test",
+        "status": "passed",
+        "files": {
+          "test.cache_status": {
+            "path": ".artifacts/cleanup-native-second-snapshot/extraction_cli_test/test.cache_status",
+            "sha256": "33536545c774120671d0686838a167a58b5dff2e2d755e54067e531ea805fe2f"
+          },
+          "test.log": {
+            "path": ".artifacts/cleanup-native-second-snapshot/extraction_cli_test/test.log",
+            "sha256": "7ecf3eb1a7fa4d64931a9bc2e20a601d9d2c61e2ff3623239d320df04c2467fb"
+          },
+          "test.xml": {
+            "path": ".artifacts/cleanup-native-second-snapshot/extraction_cli_test/test.xml",
+            "sha256": "8e603998be035d7df04f1db7c37cd56d7518d21b664f906b436da35b468c8d23"
+          }
+        },
+        "rust_parent_summary": {
+          "passed": 3,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered_out": 0
+        },
+        "evidence_origin": "unchanged compiled and consumed inputs from native attempt002"
+      },
+      {
+        "target": "//:extraction_import_test",
+        "status": "passed",
+        "files": {
+          "test.cache_status": {
+            "path": ".artifacts/cleanup-native-second-snapshot/extraction_import_test/test.cache_status",
+            "sha256": "8a25de4a1aae38685e300f7a162b175068e13e07381f1d74fd0d6602f152483a"
+          },
+          "test.log": {
+            "path": ".artifacts/cleanup-native-second-snapshot/extraction_import_test/test.log",
+            "sha256": "e4cf31fc15025864879d9949dfc7758409523728bfb3c37c536c3125b845dd9c"
+          },
+          "test.xml": {
+            "path": ".artifacts/cleanup-native-second-snapshot/extraction_import_test/test.xml",
+            "sha256": "d16f5ebbd7e239682549342933719ec633d5358583a0d8f09367914c77209ae2"
+          }
+        },
+        "rust_parent_summary": {
+          "passed": 13,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered_out": 0
+        },
+        "evidence_origin": "unchanged compiled and consumed inputs from native attempt002"
+      },
+      {
+        "target": "//:fixture_hash_tests",
+        "status": "passed",
+        "files": {
+          "test.cache_status": {
+            "path": ".artifacts/cleanup-native-second-snapshot/fixture_hash_tests/test.cache_status",
+            "sha256": "8c2af9d69ca3bc315720ce86027b4669276bcbe9738663fa06af13cf949def95"
+          },
+          "test.log": {
+            "path": ".artifacts/cleanup-native-second-snapshot/fixture_hash_tests/test.log",
+            "sha256": "6b696c33c2173bed8bd541e1aa33f087afddc3b34299b3b8bcc724d619099682"
+          },
+          "test.xml": {
+            "path": ".artifacts/cleanup-native-second-snapshot/fixture_hash_tests/test.xml",
+            "sha256": "105072c79d964284afbd1a27f9c342bc3d6fc846e774c744e589dd6928fdac4b"
+          }
+        },
+        "rust_parent_summary": {
+          "passed": 0,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered_out": 0
+        },
+        "evidence_origin": "unchanged compiled and consumed inputs from native attempt002"
+      },
+      {
+        "target": "//:graph_cli_test",
+        "status": "passed",
+        "files": {
+          "test.cache_status": {
+            "path": ".artifacts/cleanup-native-second-snapshot/graph_cli_test/test.cache_status",
+            "sha256": "e29665e84b2e54d081eacfe25ad3b86eee1c3051bd73870ad0d8b0b716b30792"
+          },
+          "test.log": {
+            "path": ".artifacts/cleanup-native-second-snapshot/graph_cli_test/test.log",
+            "sha256": "38af2af3f7b53fd37a7337711d767b6265019548b4e8294a8f75e0b7dc2c8078"
+          },
+          "test.xml": {
+            "path": ".artifacts/cleanup-native-second-snapshot/graph_cli_test/test.xml",
+            "sha256": "0979ef07e9695b6ec7dd91208d16a40647462645b866cb68d2a6f3f090e4594a"
+          }
+        },
+        "rust_parent_summary": {
+          "passed": 4,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered_out": 0
+        },
+        "evidence_origin": "unchanged compiled and consumed inputs from native attempt002"
+      },
+      {
+        "target": "//:graph_queries_test",
+        "status": "passed",
+        "files": {
+          "test.cache_status": {
+            "path": ".artifacts/cleanup-native-second-snapshot/graph_queries_test/test.cache_status",
+            "sha256": "6a6b72daa73eceae50acc0c11c64a6b838dbfdbe1963599170c4ca79ae5b5f54"
+          },
+          "test.log": {
+            "path": ".artifacts/cleanup-native-second-snapshot/graph_queries_test/test.log",
+            "sha256": "d212b0de533b6f6b1682338498a190b514e256b24c60f8e02a483e3530307c55"
+          },
+          "test.xml": {
+            "path": ".artifacts/cleanup-native-second-snapshot/graph_queries_test/test.xml",
+            "sha256": "bf2d89d2b46f2ebcf395db91ac6556c45e2e7f195e7397cb0582df292528e55c"
+          }
+        },
+        "rust_parent_summary": {
+          "passed": 19,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered_out": 0
+        },
+        "evidence_origin": "unchanged compiled and consumed inputs from native attempt002"
+      },
+      {
+        "target": "//:graph_resolution_test",
+        "status": "passed",
+        "files": {
+          "test.cache_status": {
+            "path": ".artifacts/cleanup-native-second-snapshot/graph_resolution_test/test.cache_status",
+            "sha256": "4b6a43f5c49851f70bff893bb559c20f7f7703261c0ea59e7b194ff97e5abea1"
+          },
+          "test.log": {
+            "path": ".artifacts/cleanup-native-second-snapshot/graph_resolution_test/test.log",
+            "sha256": "38a4cc52494a3f9b4a51eb7f60c3441c6ce49c87064a40985c19f2cccb2b958d"
+          },
+          "test.xml": {
+            "path": ".artifacts/cleanup-native-second-snapshot/graph_resolution_test/test.xml",
+            "sha256": "734b8b8a229d9f44bd8f7309aabc285d287b7340a50778d2c808bbf93e8d57bb"
+          }
+        },
+        "rust_parent_summary": {
+          "passed": 20,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered_out": 0
+        },
+        "evidence_origin": "unchanged compiled and consumed inputs from native attempt002"
+      },
+      {
+        "target": "//:graph_review_test",
+        "status": "passed",
+        "files": {
+          "test.cache_status": {
+            "path": ".artifacts/cleanup-native-second-snapshot/graph_review_test/test.cache_status",
+            "sha256": "922a0c13e7d1d6017b405beef612be92746234850c0a4fc9dbdf4504905f1f12"
+          },
+          "test.log": {
+            "path": ".artifacts/cleanup-native-second-snapshot/graph_review_test/test.log",
+            "sha256": "a1e11f293a82e44a91aadbe9441fab1b96cf5755694822f73221a2c874b88679"
+          },
+          "test.xml": {
+            "path": ".artifacts/cleanup-native-second-snapshot/graph_review_test/test.xml",
+            "sha256": "cd86012d661d0b312f4a3f6f38dfd7e6a33f4a084c8a0b446550fd57aa6f7844"
+          }
+        },
+        "rust_parent_summary": {
+          "passed": 21,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered_out": 0
+        },
+        "evidence_origin": "unchanged compiled and consumed inputs from native attempt002"
+      },
+      {
+        "target": "//:job_accounting_test",
+        "status": "passed",
+        "files": {
+          "test.cache_status": {
+            "path": ".artifacts/cleanup-native-second-snapshot/job_accounting_test/test.cache_status",
+            "sha256": "5d1048a2837c032bbd718efbb5ee08bac31627de04d6ae507df71e0eb9558f89"
+          },
+          "test.log": {
+            "path": ".artifacts/cleanup-native-second-snapshot/job_accounting_test/test.log",
+            "sha256": "00e36d00ff8a61c79e6d07f5486cd40e656de5fd9eff4ca32cd43455598a928e"
+          },
+          "test.xml": {
+            "path": ".artifacts/cleanup-native-second-snapshot/job_accounting_test/test.xml",
+            "sha256": "d2e0fb14155d4ef4448ec20b931ac561a42b24e322abdb671790ee9ef39700d0"
+          }
+        },
+        "rust_parent_summary": {
+          "passed": 13,
+          "failed": 0,
+          "ignored": 1,
+          "measured": 0,
+          "filtered_out": 0
+        },
+        "evidence_origin": "unchanged compiled and consumed inputs from native attempt002"
+      },
+      {
+        "target": "//:m1_workflow_test",
+        "status": "passed",
+        "files": {
+          "test.cache_status": {
+            "path": ".artifacts/cleanup-native-second-snapshot/m1_workflow_test/test.cache_status",
+            "sha256": "0e91873ad4658694b5436067b6464076cd97126ed0edb9dae63357285d310463"
+          },
+          "test.log": {
+            "path": ".artifacts/cleanup-native-second-snapshot/m1_workflow_test/test.log",
+            "sha256": "9aa3768ffea616faeb874519634d92b5dae2d1ac5079845358e0eefb3cc86057"
+          },
+          "test.xml": {
+            "path": ".artifacts/cleanup-native-second-snapshot/m1_workflow_test/test.xml",
+            "sha256": "723380b38d04b9adf18a3efeac782609715b26099ffc5a766da5bf63e3a4543a"
+          }
+        },
+        "rust_parent_summary": {
+          "passed": 1,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered_out": 0
+        },
+        "evidence_origin": "unchanged compiled and consumed inputs from native attempt002"
+      },
+      {
+        "target": "//:m2_workflow_test",
+        "status": "passed",
+        "files": {
+          "test.cache_status": {
+            "path": ".artifacts/cleanup-native-second-snapshot/m2_workflow_test/test.cache_status",
+            "sha256": "20782f46dc0be3ef62cd0228abb5d056bef01fc6e6be061374b85375f6265a38"
+          },
+          "test.log": {
+            "path": ".artifacts/cleanup-native-second-snapshot/m2_workflow_test/test.log",
+            "sha256": "aa03c8913f973f757b23017171fbd43c41c47c3fcb6dec4af36aea04078fe157"
+          },
+          "test.xml": {
+            "path": ".artifacts/cleanup-native-second-snapshot/m2_workflow_test/test.xml",
+            "sha256": "6d8d169dad1ed13c7b9790f3f20dcacb6a8483dc18c0522d4004fb1177c7ac93"
+          }
+        },
+        "rust_parent_summary": {
+          "passed": 1,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered_out": 0
+        },
+        "evidence_origin": "unchanged compiled and consumed inputs from native attempt002"
+      },
+      {
+        "target": "//:machine_contract_test",
+        "status": "passed",
+        "files": {
+          "test.cache_status": {
+            "path": ".artifacts/cleanup-native-second-snapshot/machine_contract_test/test.cache_status",
+            "sha256": "b67af9cebbfee76ed3c50fd792e8b7b371f8efa8a3024d197558d321f1db788e"
+          },
+          "test.log": {
+            "path": ".artifacts/cleanup-native-second-snapshot/machine_contract_test/test.log",
+            "sha256": "56537330791706467386660aa361ea0a699ef2e088d24d620c18ec90f28ff24a"
+          },
+          "test.xml": {
+            "path": ".artifacts/cleanup-native-second-snapshot/machine_contract_test/test.xml",
+            "sha256": "24ed765298b50a707f6f4420a8cc3b01e04b9d8eca736cfeab22d609b695c7b8"
+          }
+        },
+        "rust_parent_summary": {
+          "passed": 7,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered_out": 0
+        },
+        "evidence_origin": "unchanged compiled and consumed inputs from native attempt002"
+      },
+      {
+        "target": "//:offline_application_test",
+        "status": "passed",
+        "files": {
+          "test.cache_status": {
+            "path": ".artifacts/cleanup-native-second-snapshot/offline_application_test/test.cache_status",
+            "sha256": "abbf2a26be7e1a7b22942c51627604fec3bd3eba408d192726847e4b872e63f4"
+          },
+          "test.log": {
+            "path": ".artifacts/cleanup-native-second-snapshot/offline_application_test/test.log",
+            "sha256": "86e900f956179532ae48b129e79737af9f65e8b8e372e1af5840984a769f303a"
+          },
+          "test.xml": {
+            "path": ".artifacts/cleanup-native-second-snapshot/offline_application_test/test.xml",
+            "sha256": "1879fe93ab00dab1aec414849acdc4a889c64d48baf900a7f19012095122cf83"
+          }
+        },
+        "rust_parent_summary": {
+          "passed": 19,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered_out": 0
+        },
+        "evidence_origin": "unchanged compiled and consumed inputs from native attempt002"
+      },
+      {
+        "target": "//:offline_cli_test",
+        "status": "passed",
+        "files": {
+          "test.cache_status": {
+            "path": ".artifacts/cleanup-native-second-snapshot/offline_cli_test/test.cache_status",
+            "sha256": "8517a10e6d2c50dedfe94a0272f4b46c4c369c5a57d83c1b64069a611fae6c3b"
+          },
+          "test.log": {
+            "path": ".artifacts/cleanup-native-second-snapshot/offline_cli_test/test.log",
+            "sha256": "c2d14245018c372c7f2c81325cfd2d2c6a6a8fa8e7b1cddac26e490783fd3627"
+          },
+          "test.xml": {
+            "path": ".artifacts/cleanup-native-second-snapshot/offline_cli_test/test.xml",
+            "sha256": "3ad5e7f2a5023008cc410de6bfc8d7c3b036b8fec270dadcf4961d02398500ca"
+          }
+        },
+        "rust_parent_summary": {
+          "passed": 13,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered_out": 0
+        },
+        "evidence_origin": "unchanged compiled and consumed inputs from native attempt002"
+      },
+      {
+        "target": "//:provider_dispatch_test",
+        "status": "passed",
+        "files": {
+          "test.cache_status": {
+            "path": ".artifacts/cleanup-native-second-snapshot/provider_dispatch_test/test.cache_status",
+            "sha256": "4e48e955fc014407328a676331d6902b46aeb46dd8b4fd6cc089f7aaa5357e43"
+          },
+          "test.log": {
+            "path": ".artifacts/cleanup-native-second-snapshot/provider_dispatch_test/test.log",
+            "sha256": "560f398d58082167a9aebe1fab909f87ee376081928c59f8e50a7066d9f89c1f"
+          },
+          "test.xml": {
+            "path": ".artifacts/cleanup-native-second-snapshot/provider_dispatch_test/test.xml",
+            "sha256": "500648defb1d95538d7b200b66e5f100dac0800a40e2089b55afb6fd0580ed6b"
+          }
+        },
+        "rust_parent_summary": {
+          "passed": 7,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered_out": 0
+        },
+        "evidence_origin": "unchanged compiled and consumed inputs from native attempt002"
+      },
+      {
+        "target": "//:provider_trust_test",
+        "status": "passed",
+        "files": {
+          "test.cache_status": {
+            "path": ".artifacts/cleanup-native-second-snapshot/provider_trust_test/test.cache_status",
+            "sha256": "9bb89ca9bbe74caa505151ac7b3c041aca701a2adbce989b34784e020d3d6ef3"
+          },
+          "test.log": {
+            "path": ".artifacts/cleanup-native-second-snapshot/provider_trust_test/test.log",
+            "sha256": "95a5ab6f13b9aa36880262fe6e767dea860958ad4c26a037cc5d4990de5065e0"
+          },
+          "test.xml": {
+            "path": ".artifacts/cleanup-native-second-snapshot/provider_trust_test/test.xml",
+            "sha256": "0e0b4eb5b3dc04e40f4a7700e8037451ad43d74f10adf48a6c6e3e80f3fcbeda"
+          }
+        },
+        "rust_parent_summary": {
+          "passed": 7,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered_out": 0
+        },
+        "evidence_origin": "unchanged compiled and consumed inputs from native attempt002"
+      },
+      {
+        "target": "//:provider_wire_test",
+        "status": "passed",
+        "files": {
+          "test.cache_status": {
+            "path": ".artifacts/cleanup-native-second-snapshot/provider_wire_test/test.cache_status",
+            "sha256": "9b292fe016e7fda8ece31e7eef50f0becb105ede16ec1a3d0de5588d9f75fe6d"
+          },
+          "test.log": {
+            "path": ".artifacts/cleanup-native-second-snapshot/provider_wire_test/test.log",
+            "sha256": "abd0fb7a851febecb33e57534c862f83e7602f959204ba7926980fc14106ae0f"
+          },
+          "test.xml": {
+            "path": ".artifacts/cleanup-native-second-snapshot/provider_wire_test/test.xml",
+            "sha256": "ccda64ce4da937138cd315c90819fdaf0cfa381267486392d67dcdd4eabb12f8"
+          }
+        },
+        "rust_parent_summary": {
+          "passed": 10,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered_out": 0
+        },
+        "evidence_origin": "unchanged compiled and consumed inputs from native attempt002"
+      },
+      {
+        "target": "//:records_lossless_test",
+        "status": "passed",
+        "files": {
+          "test.cache_status": {
+            "path": ".artifacts/cleanup-native-second-snapshot/records_lossless_test/test.cache_status",
+            "sha256": "1f28c0b790d10405cf415f1b1235290393b75f10f38c9b492aa3de76e7ddd9a8"
+          },
+          "test.log": {
+            "path": ".artifacts/cleanup-native-second-snapshot/records_lossless_test/test.log",
+            "sha256": "b00ceb4fc4a9d7e04b98f873831c86048c073d588f9f0c6fbdfe761c3c59738d"
+          },
+          "test.xml": {
+            "path": ".artifacts/cleanup-native-second-snapshot/records_lossless_test/test.xml",
+            "sha256": "772fb119b2e056e3866b8468b98dca3290f27fa236da916da4f767c394dce2fa"
+          }
+        },
+        "rust_parent_summary": {
+          "passed": 8,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered_out": 0
+        },
+        "evidence_origin": "unchanged compiled and consumed inputs from native attempt002"
+      },
+      {
+        "target": "//:remote_cli_test",
+        "status": "passed",
+        "files": {
+          "test.cache_status": {
+            "path": ".artifacts/cleanup-native-second-snapshot/remote_cli_test/test.cache_status",
+            "sha256": "b88d9eb5719326973d4f2ecb97a21f926285aaaff5d9e37e41639b4fe380fd06"
+          },
+          "test.log": {
+            "path": ".artifacts/cleanup-native-second-snapshot/remote_cli_test/test.log",
+            "sha256": "52b64eacce912275e8ad82be741a34556acfeffc60d232b9d06a92cd34225ed0"
+          },
+          "test.xml": {
+            "path": ".artifacts/cleanup-native-second-snapshot/remote_cli_test/test.xml",
+            "sha256": "df8ee1d370b966dfeba489b8568f92ff24835058ba70bbf295e9049865f1fd3c"
+          }
+        },
+        "rust_parent_summary": {
+          "passed": 14,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered_out": 0
+        },
+        "evidence_origin": "unchanged compiled and consumed inputs from native attempt002"
+      },
+      {
+        "target": "//:research_handoff_test",
+        "status": "passed",
+        "files": {
+          "test.cache_status": {
+            "path": ".artifacts/cleanup-native-second-snapshot/research_handoff_test/test.cache_status",
+            "sha256": "93640a7b587ec9450716ac3025b17de12e5d5159ad4097f41f45e4519ab66ccb"
+          },
+          "test.log": {
+            "path": ".artifacts/cleanup-native-second-snapshot/research_handoff_test/test.log",
+            "sha256": "a538d95d184e7c186b8d83c263996f387d17ac2e0c06b5dc4bb6fc0d00125c7c"
+          },
+          "test.xml": {
+            "path": ".artifacts/cleanup-native-second-snapshot/research_handoff_test/test.xml",
+            "sha256": "e27ba6a22f8585c86e01c46640a40eae52a09e1de0762eb612fb477825d068ac"
+          }
+        },
+        "rust_parent_summary": {
+          "passed": 16,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered_out": 0
+        },
+        "evidence_origin": "unchanged compiled and consumed inputs from native attempt002"
+      },
+      {
+        "target": "//:research_recovery_test",
+        "status": "passed",
+        "files": {
+          "test.cache_status": {
+            "path": ".artifacts/cleanup-native-second-snapshot/research_recovery_test/test.cache_status",
+            "sha256": "af07610cf647c6afeeb54f4ffff6df4d6ce716068248fb61d7d14e42b8f0b024"
+          },
+          "test.log": {
+            "path": ".artifacts/cleanup-native-second-snapshot/research_recovery_test/test.log",
+            "sha256": "0639b296aad844f16e0961e68174b83f2648713b921c357adcf71f9e23623d0f"
+          },
+          "test.xml": {
+            "path": ".artifacts/cleanup-native-second-snapshot/research_recovery_test/test.xml",
+            "sha256": "bfe01d79fb36776035fe02dab4486e62c8ba154cd5d4e23e26008c10688d884f"
+          }
+        },
+        "rust_parent_summary": {
+          "passed": 5,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered_out": 0
+        },
+        "evidence_origin": "unchanged compiled and consumed inputs from native attempt002"
+      },
+      {
+        "target": "//:resolution_cli_test",
+        "status": "passed",
+        "files": {
+          "test.cache_status": {
+            "path": ".artifacts/cleanup-native-second-snapshot/resolution_cli_test/test.cache_status",
+            "sha256": "4c46ad52890592ba92304c8c822bf9f5847c1440e61ea9a0c3df0306af908cbe"
+          },
+          "test.log": {
+            "path": ".artifacts/cleanup-native-second-snapshot/resolution_cli_test/test.log",
+            "sha256": "cb99d45077f6eb8a617ebfe750a792a9169dbc3d26184adfc31a6a98eb4ffb1d"
+          },
+          "test.xml": {
+            "path": ".artifacts/cleanup-native-second-snapshot/resolution_cli_test/test.xml",
+            "sha256": "b57f432aa1ad4f8d8e45bc71de4f75aaf71559b9a60524252ae4c771ef3e6a7b"
+          }
+        },
+        "rust_parent_summary": {
+          "passed": 4,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered_out": 0
+        },
+        "evidence_origin": "unchanged compiled and consumed inputs from native attempt002"
+      },
+      {
+        "target": "//:retrieval_baseline_test",
+        "status": "passed",
+        "files": {
+          "test.cache_status": {
+            "path": ".artifacts/cleanup-native-second-snapshot/retrieval_baseline_test/test.cache_status",
+            "sha256": "e79ca418a0ee6c826119dd9664a266a205ad27816172937e0b2e38d153237087"
+          },
+          "test.log": {
+            "path": ".artifacts/cleanup-native-second-snapshot/retrieval_baseline_test/test.log",
+            "sha256": "6e28d6b1316913775465837040ab8e7525d7af7b2d25d792f1c60fc30eb26b84"
+          },
+          "test.xml": {
+            "path": ".artifacts/cleanup-native-second-snapshot/retrieval_baseline_test/test.xml",
+            "sha256": "cee64b9443ad6f69b024f16cd3bcfe376c9e559168f28fb5419636852cfff61a"
+          },
+          "test.outputs/outputs.zip": {
+            "path": ".artifacts/cleanup-native-second-snapshot/retrieval_baseline_test/test.outputs/outputs.zip",
+            "sha256": "7500c263d1cedb10b3d8284e8a4310e0b32d679d5fdc7e936b00c6ab34581243"
+          },
+          "test.outputs_manifest/MANIFEST": {
+            "path": ".artifacts/cleanup-native-second-snapshot/retrieval_baseline_test/test.outputs_manifest/MANIFEST",
+            "sha256": "04160382081b8c39c32af3b704daf1a0fa0de55f96a44b91e362c9c0dab48744"
+          }
+        },
+        "rust_parent_summary": {
+          "passed": 2,
+          "failed": 0,
+          "ignored": 1,
+          "measured": 0,
+          "filtered_out": 0
+        },
+        "evidence_origin": "unchanged compiled and consumed inputs from native attempt002"
+      },
+      {
+        "target": "//:retrieval_lexical_test",
+        "status": "passed",
+        "files": {
+          "test.cache_status": {
+            "path": ".artifacts/cleanup-native-second-snapshot/retrieval_lexical_test/test.cache_status",
+            "sha256": "f5f8e9a4d4427fd6b4dc24ce24ef741be85a96a2a03e7d423ac24e678971c247"
+          },
+          "test.log": {
+            "path": ".artifacts/cleanup-native-second-snapshot/retrieval_lexical_test/test.log",
+            "sha256": "90c43d5879b53b853abba68ff127c33eda00d3e9bc7435550b6732b573b39af7"
+          },
+          "test.xml": {
+            "path": ".artifacts/cleanup-native-second-snapshot/retrieval_lexical_test/test.xml",
+            "sha256": "e1c404c19207b817113004480c8152dd034e98173cb0dae82b773c4234406f10"
+          }
+        },
+        "rust_parent_summary": {
+          "passed": 22,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered_out": 0
+        },
+        "evidence_origin": "unchanged compiled and consumed inputs from native attempt002"
+      },
+      {
+        "target": "//:semantic_retrieval_test",
+        "status": "passed",
+        "files": {
+          "test.cache_status": {
+            "path": ".artifacts/cleanup-native-second-snapshot/semantic_retrieval_test/test.cache_status",
+            "sha256": "7f962a1b4bc7662dfb9ad716e5b5434d817f711fafb412909f4ae85bb7773346"
+          },
+          "test.log": {
+            "path": ".artifacts/cleanup-native-second-snapshot/semantic_retrieval_test/test.log",
+            "sha256": "d525fdfe40bfe0ad2cad864b55882a02f35deb1741ef3eb5fb08f0d3df4706fb"
+          },
+          "test.xml": {
+            "path": ".artifacts/cleanup-native-second-snapshot/semantic_retrieval_test/test.xml",
+            "sha256": "491801968a775b69c55fa6bdd9efcca1e03aae44d342a813ea1fd4c4a329a445"
+          }
+        },
+        "rust_parent_summary": {
+          "passed": 25,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered_out": 0
+        },
+        "evidence_origin": "unchanged compiled and consumed inputs from native attempt002"
+      },
+      {
+        "target": "//:shared_wiki_workflow_test",
+        "status": "passed",
+        "files": {
+          "test.cache_status": {
+            "path": ".artifacts/cleanup-native-continuation-snapshot/shared_wiki_workflow_test/test.cache_status",
+            "sha256": "de72f6e24df0bb6d93e5ebc7ca0be74cfdafccd16081a47c0c78e2754d40e66b"
+          },
+          "test.log": {
+            "path": ".artifacts/cleanup-native-continuation-snapshot/shared_wiki_workflow_test/test.log",
+            "sha256": "487d3f2c04906fa6c1ae714b732ebd1ad1a2b4ac899c011bc25962097f5761b0"
+          },
+          "test.xml": {
+            "path": ".artifacts/cleanup-native-continuation-snapshot/shared_wiki_workflow_test/test.xml",
+            "sha256": "1dcb513b347d229defdd735ae1a61f23bacbdfb32d605ff17b701aaf4598b852"
+          }
+        },
+        "rust_parent_summary": {
+          "passed": 1,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered_out": 0
+        },
+        "evidence_origin": "affected continuation"
+      },
+      {
+        "target": "//:skill_export_test",
+        "status": "passed",
+        "files": {
+          "test.cache_status": {
+            "path": ".artifacts/cleanup-native-second-snapshot/skill_export_test/test.cache_status",
+            "sha256": "c53a9eaab53f92ab28e4079989980b144254ff517143dd2374b3fb22760f56c3"
+          },
+          "test.log": {
+            "path": ".artifacts/cleanup-native-second-snapshot/skill_export_test/test.log",
+            "sha256": "4b648167142a855f2239071f6b4a3ff1bdfaffb912ee4fc2f19c614510c8065f"
+          },
+          "test.xml": {
+            "path": ".artifacts/cleanup-native-second-snapshot/skill_export_test/test.xml",
+            "sha256": "1371af2964d51c084d06eb2b42be05d35ab6a37bc16288c18770526118ae271d"
+          }
+        },
+        "rust_parent_summary": {
+          "passed": 4,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered_out": 0
+        },
+        "evidence_origin": "unchanged compiled and consumed inputs from native attempt002"
+      },
+      {
+        "target": "//:sources_evidence_test",
+        "status": "passed",
+        "files": {
+          "test.cache_status": {
+            "path": ".artifacts/cleanup-native-second-snapshot/sources_evidence_test/test.cache_status",
+            "sha256": "8087a3fa1b748f6d3588743322fd93a13a58ed81b21f61e66205b878a1201db5"
+          },
+          "test.log": {
+            "path": ".artifacts/cleanup-native-second-snapshot/sources_evidence_test/test.log",
+            "sha256": "38a6e3f9782e59a84244c2b1e5589f9fc56d7f2096892a389c0865a535b5f200"
+          },
+          "test.xml": {
+            "path": ".artifacts/cleanup-native-second-snapshot/sources_evidence_test/test.xml",
+            "sha256": "aac0a04a3194a6c5d396abdd0c107d22be69800be3e8653e020acf5c66e20ccc"
+          }
+        },
+        "rust_parent_summary": {
+          "passed": 19,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered_out": 0
+        },
+        "evidence_origin": "unchanged compiled and consumed inputs from native attempt002"
+      },
+      {
+        "target": "//:storage_cleanup_test",
+        "status": "passed",
+        "files": {
+          "test.cache_status": {
+            "path": ".artifacts/cleanup-native-second-snapshot/storage_cleanup_test/test.cache_status",
+            "sha256": "931485952148cde9127b9a668b5d0111d12ad371afadc93217a1b40ef39dee3a"
+          },
+          "test.log": {
+            "path": ".artifacts/cleanup-native-second-snapshot/storage_cleanup_test/test.log",
+            "sha256": "724bb2719ab7b21f18516150c1ab66ca7722083da5449af5574aa97a56c388bd"
+          },
+          "test.xml": {
+            "path": ".artifacts/cleanup-native-second-snapshot/storage_cleanup_test/test.xml",
+            "sha256": "36d35dd4bc8bf3639cd676d338b85357293ce1e332d150a365a310d168957aa0"
+          }
+        },
+        "rust_parent_summary": {
+          "passed": 13,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered_out": 0
+        },
+        "evidence_origin": "unchanged compiled and consumed inputs from native attempt002"
+      },
+      {
+        "target": "//:unit_tests",
+        "status": "passed",
+        "files": {
+          "test.cache_status": {
+            "path": ".artifacts/cleanup-native-second-snapshot/unit_tests/test.cache_status",
+            "sha256": "aea6c29e72a0ba755155d445b404863e29b7d40c216b5b936644000396a3c56b"
+          },
+          "test.log": {
+            "path": ".artifacts/cleanup-native-second-snapshot/unit_tests/test.log",
+            "sha256": "2abde9ed7a01bcfefcafd93ec84ba6ece9aa3f9a87b8950ae425ad39e1f8306c"
+          },
+          "test.xml": {
+            "path": ".artifacts/cleanup-native-second-snapshot/unit_tests/test.xml",
+            "sha256": "52968844cc49e5374e69d277c196ef2a0529e77dffff110992276e1342f129e7"
+          }
+        },
+        "rust_parent_summary": {
+          "passed": 139,
+          "failed": 0,
+          "ignored": 3,
+          "measured": 0,
+          "filtered_out": 0
+        },
+        "evidence_origin": "unchanged compiled and consumed inputs from native attempt002"
+      },
+      {
+        "target": "//:windows_acl_policy_test",
+        "status": "passed",
+        "files": {
+          "test.cache_status": {
+            "path": ".artifacts/cleanup-native-second-snapshot/windows_acl_policy_test/test.cache_status",
+            "sha256": "fd56dafe34bff10f21e8cc118bd749ad16765a078bfeaa640165f87477a2c2e8"
+          },
+          "test.log": {
+            "path": ".artifacts/cleanup-native-second-snapshot/windows_acl_policy_test/test.log",
+            "sha256": "524a4f62e4897d584aff5f997fbadcba1e4ca7cb89f40d72c6468d810969928c"
+          },
+          "test.xml": {
+            "path": ".artifacts/cleanup-native-second-snapshot/windows_acl_policy_test/test.xml",
+            "sha256": "850c016960ad4e6c3ad2872b457779782cbe7184af7d108b2aa44dc4de96239d"
+          }
+        },
+        "rust_parent_summary": {
+          "passed": 7,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered_out": 0
+        },
+        "evidence_origin": "unchanged compiled and consumed inputs from native attempt002"
+      },
+      {
+        "target": "//:release_workflows_test",
+        "status": "passed",
+        "files": {
+          "test.cache_status": {
+            "path": ".artifacts/cleanup-native-continuation-snapshot/release_workflows_test/test.cache_status",
+            "sha256": "7ce0d14f022afdeee03f3652b782b5f2a892fd0b72c2f9c5ceb963de9d410c94"
+          },
+          "test.log": {
+            "path": ".artifacts/cleanup-native-continuation-snapshot/release_workflows_test/test.log",
+            "sha256": "e3c012db20e18ad1f11d9d6a3f0c656b880e2870f60db688e3b424f686ea82f9"
+          },
+          "test.xml": {
+            "path": ".artifacts/cleanup-native-continuation-snapshot/release_workflows_test/test.xml",
+            "sha256": "f4f19b777532aad4e791c7c39530474c08a4c8909590ccd22ccf7d4874a0ab46"
+          }
+        },
+        "rust_parent_summary": {
+          "passed": 1,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered_out": 0
+        },
+        "evidence_origin": "affected continuation"
+      },
+      {
+        "target": "//:vault_fs_test",
+        "status": "passed",
+        "files": {
+          "test.cache_status": {
+            "path": ".artifacts/cleanup-native-continuation-snapshot/vault_fs_test/test.cache_status",
+            "sha256": "ff84c19b3906b6feb2cd6f7c7df4f84657885f130b3b8321555ef4efe0d60578"
+          },
+          "test.log": {
+            "path": ".artifacts/cleanup-native-continuation-snapshot/vault_fs_test/test.log",
+            "sha256": "b871598d8a550557fdac86a7552d81fc22b536f384f161e370b8d739e27c782e"
+          },
+          "test.xml": {
+            "path": ".artifacts/cleanup-native-continuation-snapshot/vault_fs_test/test.xml",
+            "sha256": "17ed889b04483f49cf477e4b90e86828ff21f1feac554cff344b14c2012c4b69"
+          }
+        },
+        "rust_parent_summary": {
+          "passed": 15,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered_out": 0
+        },
+        "evidence_origin": "affected continuation"
+      }
+    ],
+    "continuation": {
+      "command": "LWIKI_BAZEL_OUTPUT_ROOT=/private/tmp/lwiki-bazel python3 scripts/bazel.py -- test --nofetch //:check //:vault_fs_test //:release_workflows_test //:shared_wiki_workflow_test",
+      "status": "passed",
+      "log": ".artifacts/cleanup-native-continuation.log",
+      "log_sha256": "08726cbaa1419873e988cd59648838eb59d11d3edd72b64c15902ec7bfd88878",
+      "targets": [
+        {
+          "target": "//:clippy",
+          "status": "passed",
+          "files": {
+            "test.cache_status": {
+              "path": ".artifacts/cleanup-native-continuation-snapshot/clippy/test.cache_status",
+              "sha256": "5c30183d7d7502821fae1a84ad77ba8e677982b6f0b4561ef682d1431f796124"
+            },
+            "test.log": {
+              "path": ".artifacts/cleanup-native-continuation-snapshot/clippy/test.log",
+              "sha256": "f1c8e0a2d9456582f4553b1f8c1c6aff8fed6c928c644d7874ebf7b547e372e1"
+            },
+            "test.xml": {
+              "path": ".artifacts/cleanup-native-continuation-snapshot/clippy/test.xml",
+              "sha256": "b3e4a430f6333d47e64f67543944f604ff7b313f263876ef94a33b0b5e276a7c"
+            }
+          },
+          "rust_parent_summary": null
+        },
+        {
+          "target": "//:format",
+          "status": "passed",
+          "files": {
+            "test.cache_status": {
+              "path": ".artifacts/cleanup-native-continuation-snapshot/format/test.cache_status",
+              "sha256": "e52f50240e5cafdd5db81b37320968ab5e50d918a8f362023bc0ac519467977e"
+            },
+            "test.log": {
+              "path": ".artifacts/cleanup-native-continuation-snapshot/format/test.log",
+              "sha256": "fef523748ea12c1fac9f6590106bcf318e47bdf698ae9797adbe971da6d59e04"
+            },
+            "test.xml": {
+              "path": ".artifacts/cleanup-native-continuation-snapshot/format/test.xml",
+              "sha256": "49f87a6d272cd2eb1ddb7a1f109e7bbedbcecc3d94e67289a689667ba0cadbf6"
+            }
+          },
+          "rust_parent_summary": null
+        },
+        {
+          "target": "//:release_workflows_test",
+          "status": "passed",
+          "files": {
+            "test.cache_status": {
+              "path": ".artifacts/cleanup-native-continuation-snapshot/release_workflows_test/test.cache_status",
+              "sha256": "7ce0d14f022afdeee03f3652b782b5f2a892fd0b72c2f9c5ceb963de9d410c94"
+            },
+            "test.log": {
+              "path": ".artifacts/cleanup-native-continuation-snapshot/release_workflows_test/test.log",
+              "sha256": "e3c012db20e18ad1f11d9d6a3f0c656b880e2870f60db688e3b424f686ea82f9"
+            },
+            "test.xml": {
+              "path": ".artifacts/cleanup-native-continuation-snapshot/release_workflows_test/test.xml",
+              "sha256": "f4f19b777532aad4e791c7c39530474c08a4c8909590ccd22ccf7d4874a0ab46"
+            }
+          },
+          "rust_parent_summary": {
+            "passed": 1,
+            "failed": 0,
+            "ignored": 0,
+            "measured": 0,
+            "filtered_out": 0
+          }
+        },
+        {
+          "target": "//:shared_wiki_workflow_test",
+          "status": "passed",
+          "files": {
+            "test.cache_status": {
+              "path": ".artifacts/cleanup-native-continuation-snapshot/shared_wiki_workflow_test/test.cache_status",
+              "sha256": "de72f6e24df0bb6d93e5ebc7ca0be74cfdafccd16081a47c0c78e2754d40e66b"
+            },
+            "test.log": {
+              "path": ".artifacts/cleanup-native-continuation-snapshot/shared_wiki_workflow_test/test.log",
+              "sha256": "487d3f2c04906fa6c1ae714b732ebd1ad1a2b4ac899c011bc25962097f5761b0"
+            },
+            "test.xml": {
+              "path": ".artifacts/cleanup-native-continuation-snapshot/shared_wiki_workflow_test/test.xml",
+              "sha256": "1dcb513b347d229defdd735ae1a61f23bacbdfb32d605ff17b701aaf4598b852"
+            }
+          },
+          "rust_parent_summary": {
+            "passed": 1,
+            "failed": 0,
+            "ignored": 0,
+            "measured": 0,
+            "filtered_out": 0
+          }
+        },
+        {
+          "target": "//:vault_fs_test",
+          "status": "passed",
+          "files": {
+            "test.cache_status": {
+              "path": ".artifacts/cleanup-native-continuation-snapshot/vault_fs_test/test.cache_status",
+              "sha256": "ff84c19b3906b6feb2cd6f7c7df4f84657885f130b3b8321555ef4efe0d60578"
+            },
+            "test.log": {
+              "path": ".artifacts/cleanup-native-continuation-snapshot/vault_fs_test/test.log",
+              "sha256": "b871598d8a550557fdac86a7552d81fc22b536f384f161e370b8d739e27c782e"
+            },
+            "test.xml": {
+              "path": ".artifacts/cleanup-native-continuation-snapshot/vault_fs_test/test.xml",
+              "sha256": "17ed889b04483f49cf477e4b90e86828ff21f1feac554cff344b14c2012c4b69"
+            }
+          },
+          "rust_parent_summary": {
+            "passed": 15,
+            "failed": 0,
+            "ignored": 0,
+            "measured": 0,
+            "filtered_out": 0
+          }
+        }
+      ]
+    },
+    "note": "Neither initial full-script invocation passed. All49 native targets pass in an explicitly recorded aggregate with final checks; remaining artifact stages run separately."
   }
 }

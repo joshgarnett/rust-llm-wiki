@@ -123,6 +123,40 @@ bed1d71fbf096cf457032c66364bd52471d085f0d358f3a0e9fa88f0a690eefb  src/vault/oper
 0e7df433f1a9a8ee3c468da7b32b9f1a4f6b0a7df43fa066e86b110e28de867a  src/research/engine.rs
 ```
 
+## Native002 fixture correction and qualification evidence boundary — pending
+
+Root reported native002 found `tests/vault_fs.rs` fixture failures caused by placeholder noncanonical `WIKI.md` bytes used before managed mutations. A separate worker owns a test-only fixture correction; independent inspection of that correction is pending. This does not yet close the failed target.
+
+The proposed aggregate qualification is consistent with the repository's current rules **if exact unchanged-input evidence is retained**. `docs/execution/VALIDATION.md` explicitly says, “If concurrent edits changed tested code, rerun the affected checks against the accepted tree.” V17 requires current full workflow/fault/format/lint/test/artifact evidence; neither it nor C14 requires every passing target to come from one uninterrupted script invocation. `BUILD.bazel` excludes top-level `tests/*.rs` from shared test sources, and compile/runtime fixture assets do not include `tests/vault_fs.rs`. Thus changing only that file need not invalidate other independently passing targets when product/library sources, other test bytes, shared fixtures, schemas/skills, build configuration and toolchain are proved unchanged.
+
+Root must retain the actual native002 failed exit and per-target logs, the before/after source manifest diff showing the isolated test change, successful rerun of the affected target plus format/Clippy, and completed release artifact, release skill, copied-binary smoke/linkage stages against the accepted snapshot. If the other 48 targets finish successfully, 48 unchanged-input passes plus the corrected target's pass may establish **49/49 aggregate target evidence**; that must not be described as a successful single `just qualify` script invocation. Any product/shared-input change or additional failure requires the corresponding checks to be rerun and may invalidate this narrow reuse argument. At this note all outcomes remain conditional, not claimed passes.
+
+### Vault filesystem fixture correction reinspected
+
+The returned `tests/vault_fs.rs` change is source-closed. Its common fixture and the actively scanned nested vault now use the existing valid schema1 bootstrap marker. Placeholder `child/WIKI.md = "nested"` in the discovery-only test, lowercase-marker behavior, nested boundary checks, symlink negatives and all other assertions remain unchanged. This supplies valid authority to tests whose intended subject is filesystem mutation/path behavior rather than malformed-marker acceptance; it does not weaken the product's new marker validation.
+
+The reviewer independently proved the exact delta without Git: replacing only the two new `include_bytes!("fixtures/bootstrap/vault/WIKI.md")` write blocks with the former common `"wiki"` string and nested `b"inner"` bytes reconstructs SHA-256 `20ceb70824ab3d887b65a069456307b349e06d9054bf6d49dbf2cb4cf2491c00`, matching the prior archived source manifest. The corrected file is `5d36b3ddcc243b30a08ad3680fdd98c27b2641d2613bdf2cb8f8b52e069bb19a`. All bytes outside those two fixture writes are therefore unchanged. Root still owns the whole-manifest unchanged-input proof, affected test/check run and remaining qualification stages; no passing execution is claimed by this source review.
+
+## C12 citation-link and release assertion correction review
+
+The late C12 finding was real: the prior shared recipe published `[[source_<id>]]`, while untyped navigation resolves paths/basenames/aliases rather than record IDs. Captured source records have physical `sources/<id>/source.md` paths, so the example's human links were missing. This was not deferred installed-host UI qualification.
+
+The returned script/wrapper correction is **source-closed, execution pending**. `captured_paths` obtains actual source/revision paths through CLI `read --id` and confirms the physical files. Initial and historical prose links retain original immutable revision paths; current review uses the new revision; the separate current source-record link remains usable. The counter-note keeps its original revision after withdrawal. The baseline branch receives the same correction. `verify_links` checks every authored wikilink in the topic, guide and source heads against physical files and CLI path reads, with required revision/head destinations asserted. Checks repeat after lifecycle mutation, repair, cleanup and complete restore. Graph navigation asserts source-head and guide→topic resolution; revision graph eligibility is not silently assumed. The wrapper requires at least 20 successful source endpoint checks and source-record navigation success. Those are repeated endpoint observations across lifecycle stages, not a count of unique sources. The script also binds the selected research quote to exact original UTF-8 bytes and preserves the original report revision after refresh.
+
+The narrow `release_workflows.rs` assertion correction is also appropriate. It checks all three intentional read-time decorators (`freshness=retained`, one current citation and the unassessed-review next action), removes exactly those fields, then compares the entire remaining object with the original import report. It preserves immutable payload equality rather than dropping that assertion or accepting arbitrary extra fields.
+
+### Updated qualification dependency analysis
+
+This script delta changes declared runtime inputs for every target carrying `:test_assets`; it is **not** identical declared Bazel action-input evidence. A bounded reference search found only `tests/shared_wiki_workflow.rs` executes/reads `scripts/shared_wiki_recipe.py`. The inspected generic runfile resolver resolves requested paths and does not hash/read unrelated file contents; inspected recursive snapshot/copy helpers operate on disposable test vaults/export directories or synthetic resolver fixtures, not the repository's script tree. The script is absent from compile assets. With unchanged product/build/schema/skill/shared-fixture inputs and other test bytes proved by root's source map, semantic reuse of other native002 target results remains consistent with the documented affected-check rule, while explicitly disclosing the changed unused runtime asset.
+
+This supersedes the earlier *vault_fs-only* continuation scope: rerun **vault_fs, shared_wiki_workflow and release_workflows** plus format/Clippy, then complete artifact/release-skill/copied-binary stages and the corrected recipe against the copied binary. In a 49-target suite that can combine 46 unaffected target passes with the three corrected targets, conditional on all succeeding and preserved input/exit/log evidence. Do not count the earlier shared recipe pass as validation of the repaired citations, and do not describe either failed native script as an uninterrupted full pass. No reviewer tests/builds/Git/product edits occurred.
+
+```text
+ee92cd4793de9ddbaa2ae812407c5e0d5e90795857afc856120918540c8bdcfe  scripts/shared_wiki_recipe.py
+3e5c8c08e3352296ff56f3271f8ef7df9a4d17362269897f8e31bcb140bd6ac5  tests/shared_wiki_workflow.rs
+b755fc3b299194399b404b32f0c91a465e549d3e2d5f39db973795d337a40461  tests/release_workflows.rs
+```
+
 ## Source fingerprints
 
 SHA-256 read at `2026-09-30T01:06:45Z`; files may change after this stamp. No Git diff was taken under the read-only/no-Git lease. Other inspected source/tests are named above; fingerprints identify the principal reviewed slice, not the whole dirty tree.

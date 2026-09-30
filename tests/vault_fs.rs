@@ -20,7 +20,11 @@ fn rel(s: &str) -> VaultRelativePath {
 }
 fn fixture() -> (tempfile::TempDir, VaultRoot) {
     let temp = tempfile::tempdir().unwrap();
-    fs::write(temp.path().join("WIKI.md"), "wiki").unwrap();
+    fs::write(
+        temp.path().join("WIKI.md"),
+        include_bytes!("fixtures/bootstrap/vault/WIKI.md"),
+    )
+    .unwrap();
     let root = VaultRoot::explicit(temp.path()).unwrap();
     (temp, root)
 }
@@ -221,7 +225,11 @@ fn nested_vaults_are_separate_scan_and_managed_path_scopes() {
         fs::create_dir(root.path().join(directory)).unwrap();
         fs::write(root.path().join(directory).join("page.md"), b"page").unwrap();
     }
-    fs::write(root.path().join("nested/WIKI.md"), b"inner").unwrap();
+    fs::write(
+        root.path().join("nested/WIKI.md"),
+        include_bytes!("fixtures/bootstrap/vault/WIKI.md"),
+    )
+    .unwrap();
     fs::write(root.path().join("lowercase/wiki.md"), b"lower").unwrap();
     #[cfg(unix)]
     std::os::unix::fs::symlink(

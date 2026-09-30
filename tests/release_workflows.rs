@@ -808,7 +808,24 @@ fn agent_research_handoff(f: &Vault, source: &str, server: &Server) {
         "unassessed"
     );
     let report = offline(f, &["research", "report", "run_p21_handoff"], None);
-    assert_eq!(report["data"], completed["data"]["report"]);
+    assert_eq!(report["data"]["freshness"], "retained");
+    assert_eq!(report["data"]["citation_freshness"]["state"], "current");
+    assert_eq!(report["data"]["citation_freshness"]["current"], 1);
+    assert_eq!(
+        report["data"]["next_action"],
+        "review_unassessed_claims_before_page_publication"
+    );
+    let mut retained_payload = report["data"].clone();
+    for field in ["freshness", "citation_freshness", "next_action"] {
+        assert!(
+            retained_payload
+                .as_object_mut()
+                .unwrap()
+                .remove(field)
+                .is_some()
+        );
+    }
+    assert_eq!(retained_payload, completed["data"]["report"]);
     let status = offline(f, &["research", "status", "run_p21_handoff"], None);
     assert_eq!(status["data"]["imports"], 2);
     assert_eq!(status["data"]["captured_sources"], 1);

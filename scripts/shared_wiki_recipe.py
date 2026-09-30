@@ -4,10 +4,14 @@
 import argparse
 import hashlib
 import json
+import re
 import shutil
 import subprocess
 import tempfile
 from pathlib import Path
+
+
+WIKI_LINK = re.compile(r"\[\[([^|#\]]+)(?:[|#][^\]]*)?\]\]")
 
 
 def run(binary, vault, *args, payload=None, error=None):
@@ -51,6 +55,49 @@ def physical_snapshot(vault):
     }
 
 
+def captured_paths(call, vault, source_id, revision_id):
+    """Use the CLI's observed physical paths, including immutable revision."""
+    source_path = call("read", "--id", source_id)["path"]
+    revision_path = call("read", "--id", revision_id)["path"]
+    assert source_path.endswith("/source.md") and revision_path.endswith("/revision.md")
+    assert (vault / source_path).is_file() and (vault / revision_path).is_file()
+    return source_path, revision_path
+
+
+def verify_links(call, vault, paths, required):
+    """Check every authored wiki-link target through disk and the CLI reader."""
+    verified_sources = 0
+    for origin in paths:
+        markdown = (vault / origin).read_text(encoding="utf-8")
+        targets = WIKI_LINK.findall(markdown)
+        assert set(required.get(origin, ())).issubset(targets), (origin, targets, required)
+        for target in targets:
+            assert not target.startswith("/") and ".." not in Path(target).parts, target
+            assert (vault / target).is_file(), (origin, target)
+            observed = call("read", "--path", target)
+            assert observed["path"] == target, (origin, target, observed)
+            if target.startswith("sources/"):
+                verified_sources += 1
+    return verified_sources
+
+
+def verify_navigation(call, topic_id, guide_id, source_head, topic_path):
+    """The current source record and guide page must resolve in graph navigation."""
+    def destinations(page_id):
+        result = call("graph", "neighbors", page_id, "--include-historical",
+                      "--assertions", "128", "--limit", "20")
+        return {edge["to"]["path"] for edge in result["navigation"]
+                if edge["reason"] == "page_link"}
+
+    topic_destinations = destinations(topic_id)
+    guide_destinations = destinations(guide_id)
+    assert source_head in topic_destinations, (source_head, topic_destinations)
+    assert topic_path in guide_destinations, (topic_path, guide_destinations)
+    # A SourceRevision may be outside graph navigation's eligible endpoint
+    # set. verify_links still proves its exact human and CLI read path.
+    return sum(path.endswith("/revision.md") for path in topic_destinations)
+
+
 def baseline(binary, root, long_text, correction):
     """Measure the overlapping 0.1.2 capture/page/refresh operations."""
     root.mkdir()
@@ -64,15 +111,29 @@ def baseline(binary, root, long_text, correction):
     other = call("source", "add", "-", "--title", "Wixom counter-note", payload=correction)
     source = first["allocated_ids"]["source"]
     revision = first["allocated_ids"]["revision"]
+    other_source = other["allocated_ids"]["source"]
+    other_revision = other["allocated_ids"]["revision"]
+    source_head, first_revision = captured_paths(call, root, source, revision)
+    other_head, counter_revision = captured_paths(call, root, other_source, other_revision)
     repeated = call("source", "refresh", source, "--file", "-", payload=long_text)
     assert repeated["allocated_ids"]["revision"] == revision
     topic = note("Page.WixomCedar", "Wixom Cedar backup",
-                 f"# Wixom Cedar backup\n\nSource [[{source}]] and counter-note "
-                 f"[[{other['allocated_ids']['source']}]] conflict.\n")
+                 f"# Wixom Cedar backup\n\nApril 12 roundup "
+                 f"[[{first_revision}|immutable source revision]] and April 13 "
+                 f"[[{counter_revision}|counter-note revision]] conflict. "
+                 f"[[{source_head}|Current roundup record]].\n")
     guide = note("Page.WixomGuide", "Wixom guide",
                  "# Wixom guide\n\n[[pages/wixom-cedar.md|Cedar backup]]\n")
     call("page", "put", "--file", "-", "--path", "pages/wixom-cedar.md", payload=topic)
     call("page", "put", "--file", "-", "--path", "pages/guide.md", payload=guide)
+    baseline_links = verify_links(
+        call, root,
+        ["pages/wixom-cedar.md", "pages/guide.md", source_head, other_head],
+        {"pages/wixom-cedar.md": [first_revision, counter_revision, source_head],
+         "pages/guide.md": ["pages/wixom-cedar.md"]},
+    )
+    verify_navigation(call, "Page.WixomCedar", "Page.WixomGuide",
+                      source_head, "pages/wixom-cedar.md")
     captured = physical_snapshot(root)
     for date, finding in [
         ("2025-04-14", "Gate hours require an independent check."),
@@ -84,11 +145,20 @@ def baseline(binary, root, long_text, correction):
         topic += f"\n{date}: {finding}\n"
         call("page", "put", "--file", "-", "--path", "pages/wixom-cedar.md",
              "--if-match", old_hash, payload=topic)
-    call("source", "refresh", source, "--file", "-",
-         payload=long_text.replace("east shelter", "north shelter"))
-    call("source", "withdraw", other["allocated_ids"]["source"],
+    refreshed = call("source", "refresh", source, "--file", "-",
+                     payload=long_text.replace("east shelter", "north shelter"))
+    newer_revision = captured_paths(call, root, source,
+                                    refreshed["allocated_ids"]["revision"])[1]
+    call("source", "withdraw", other_source,
          "--reason", "Counter-note withdrawn by fixture")
-    return {"empty": empty, "after_capture": captured, "after_updates": physical_snapshot(root)}
+    baseline_links += verify_links(
+        call, root,
+        ["pages/wixom-cedar.md", "pages/guide.md", source_head, other_head],
+        {source_head: [newer_revision], "pages/guide.md": ["pages/wixom-cedar.md"]},
+    )
+    return {"empty": empty, "after_capture": captured,
+            "after_updates": physical_snapshot(root),
+            "source_link_endpoints_verified": baseline_links}
 
 
 def main():
@@ -142,6 +212,9 @@ def main():
         source = first["allocated_ids"]["source"]
         other = second["allocated_ids"]["source"]
         revision = first["allocated_ids"]["revision"]
+        counter_revision_id = second["allocated_ids"]["revision"]
+        source_head, original_revision = captured_paths(call, vault, source, revision)
+        other_head, counter_revision = captured_paths(call, vault, other, counter_revision_id)
         repeated = call("source", "refresh", source, "--file", "-", payload=long_text)
         assert repeated["allocated_ids"]["revision"] == revision
 
@@ -159,6 +232,10 @@ def main():
         assert passages, packet
         recommendation = next((p for p in passages if "east shelter" in p["quote"]), None)
         assert recommendation is not None, passages
+        cited = recommendation["citation"]["reference"]
+        assert cited["source_revision"] == revision
+        span = cited["span"]
+        assert long_text.encode("utf-8")[span["start"]:span["end"]].decode("utf-8") == recommendation["quote"]
         response = {
             "schema": "lwiki.research-submission.v1", "run_id": run_id,
             "packet_fingerprint": packet["packet_fingerprint"],
@@ -173,11 +250,15 @@ def main():
         assert repeated_answer["reused"] is True, repeated_answer
         report = call("research", "report", run_id)
         assert report["claims"] and report["gaps"]
+        assert report["claims"][0]["citations"][0]["reference"]["source_revision"] == revision
 
         topic = note("Page.WixomCedar", "Wixom Cedar backup",
                      "# Wixom Cedar backup\n\n"
-                     f"The April 12 roundup recommends the east shelter [[{source}]]. "
-                     f"The April 13 account disputes access [[{other}]].\n\n"
+                     f"The April 12 roundup recommends the east shelter "
+                     f"[[{original_revision}|April 12 revision]]. "
+                     f"The April 13 account disputes access "
+                     f"[[{counter_revision}|April 13 counter-note]]. "
+                     f"[[{source_head}|Current roundup record]].\n\n"
                      "## Open question\nConfirm whether the shelter was open before routing backups.\n")
         guide = note("Page.WixomGuide", "Wixom guide",
                      "# Wixom guide\n\n[[pages/wixom-cedar.md|Cedar backup and open question]]\n")
@@ -192,6 +273,19 @@ def main():
         topic_path = vault / "pages/wixom-cedar.md"
         guide_path = vault / "pages/guide.md"
         assert "Open question" in topic_path.read_text() and "wixom-cedar.md" in guide_path.read_text()
+        required = {
+            "pages/wixom-cedar.md": [original_revision, counter_revision, source_head],
+            "pages/guide.md": ["pages/wixom-cedar.md"],
+        }
+        source_links_verified = verify_links(
+            call, vault,
+            ["pages/wixom-cedar.md", "pages/guide.md", source_head, other_head],
+            required,
+        )
+        revision_navigation_count = verify_navigation(
+            call, "Page.WixomCedar", "Page.WixomGuide",
+            source_head, "pages/wixom-cedar.md",
+        )
 
         old_hash = call("read", "--id", "Page.WixomCedar")["hash"]
         with topic_path.open("a", encoding="utf-8") as file:
@@ -220,25 +314,39 @@ def main():
         changed = long_text.replace("east shelter", "north shelter")
         newer = call("source", "refresh", source, "--file", "-", payload=changed)
         assert newer["allocated_ids"]["revision"] != revision
+        current_revision = captured_paths(
+            call, vault, source, newer["allocated_ids"]["revision"]
+        )[1]
         status = call("research", "status", run_id)
         report_after = call("research", "report", run_id)
         maintenance = call("research", "maintenance", run_id)
         assert status["report_freshness"] == "retained"
         assert report_after["freshness"] == "retained"
+        assert report_after["claims"][0]["citations"][0]["reference"]["source_revision"] == revision
         call("source", "withdraw", other, "--reason", "Counter-note withdrawn by fixture")
+        source_links_verified += verify_links(
+            call, vault,
+            ["pages/wixom-cedar.md", "pages/guide.md", source_head, other_head],
+            {**required, source_head: [current_revision]},
+        )
         # Reassess the authored prose after source lifecycle changes. The new
         # revision points north; the old report and closure claim stay historical.
         proposal["pages"][0]["if_match"] = call("read", "--id", "Page.WixomCedar")["hash"]
         proposal["pages"][1]["if_match"] = call("read", "--id", "Page.WixomGuide")["hash"]
         historical_text = topic_path.read_text().replace(
-            f"The April 12 roundup recommends the east shelter [[{source}]]. "
-            f"The April 13 account disputes access [[{other}]].",
-            f"Historical: the superseded April 12 roundup recommended the east shelter [[{source}]]. "
-            f"The withdrawn April 13 account disputed access [[{other}]].",
+            f"The April 12 roundup recommends the east shelter "
+            f"[[{original_revision}|April 12 revision]]. "
+            f"The April 13 account disputes access "
+            f"[[{counter_revision}|April 13 counter-note]].",
+            f"Historical: the superseded April 12 roundup recommended the east shelter "
+            f"[[{original_revision}|April 12 revision]]. "
+            f"The withdrawn April 13 account disputed access "
+            f"[[{counter_revision}|April 13 counter-note]].",
         )
         assert "Historical: the superseded" in historical_text
         proposal["pages"][0]["markdown"] = (
-            historical_text + f"\n## Current review\nThe newer roundup [[{source}]] "
+            historical_text + f"\n## Current review\nThe newer roundup "
+            f"[[{current_revision}|current source revision]] "
             "mentions north shelter. Verify availability before routing; "
             "the withdrawn counter-note no longer provides Current support.\n"
         )
@@ -247,6 +355,16 @@ def main():
         )
         last_page_change = call("page", "batch", "--file", "-", payload=proposal)["change"]["change_id"]
         assert "north shelter" in topic_path.read_text()
+        required["pages/wixom-cedar.md"].append(current_revision)
+        source_links_verified += verify_links(
+            call, vault,
+            ["pages/wixom-cedar.md", "pages/guide.md", source_head, other_head],
+            {**required, source_head: [current_revision]},
+        )
+        revision_navigation_count += verify_navigation(
+            call, "Page.WixomCedar", "Page.WixomGuide",
+            source_head, "pages/wixom-cedar.md",
+        )
         inventory_before = call("storage", "inventory")
         physical_before = physical_snapshot(vault)
         plan = call("storage", "plan", "--retain-undo-changes", "1")
@@ -261,6 +379,15 @@ def main():
         assert cleanup["after"]["logical_bytes"] == inventory_after["totals"]["logical_bytes"]
         assert (backup / "WIKI.md").exists() and (backup / ".wiki").exists()
         assert "Human observation" in topic_path.read_text()
+        source_links_verified += verify_links(
+            call, vault,
+            ["pages/wixom-cedar.md", "pages/guide.md", source_head, other_head],
+            {**required, source_head: [current_revision]},
+        )
+        revision_navigation_count += verify_navigation(
+            call, "Page.WixomCedar", "Page.WixomGuide",
+            source_head, "pages/wixom-cedar.md",
+        )
         reports = list((vault / "runs").glob("*/outputs/report_*.md"))
         assert len(reports) == 1
         report_text = reports[0].read_text(encoding="utf-8")
@@ -268,6 +395,16 @@ def main():
         assert report_text.index("## Claims") < report_text.index("```"), "report prose must be visible"
         restored = Path(scratch) / "complete-restore"
         shutil.copytree(backup, restored)
+        restored_call = lambda *argv: run(binary, restored, *argv)
+        source_links_verified += verify_links(
+            restored_call, restored,
+            ["pages/wixom-cedar.md", "pages/guide.md", source_head, other_head],
+            {**required, source_head: [current_revision]},
+        )
+        revision_navigation_count += verify_navigation(
+            restored_call, "Page.WixomCedar", "Page.WixomGuide",
+            source_head, "pages/wixom-cedar.md",
+        )
         restored_page = run(binary, restored, "read", "--id", "Page.WixomCedar")
         restored_report = run(binary, restored, "research", "report", run_id)
         assert "Human observation" in restored_page["body"] and restored_report["claims"]
@@ -290,6 +427,9 @@ def main():
             "restored_authority": True,
             "post_cleanup_undo": True,
             "human_report_readable": True,
+            "source_link_endpoints_verified": source_links_verified,
+            "source_revision_navigation_edges": revision_navigation_count,
+            "source_record_navigation_verified": True,
             "physical": {"empty": empty, "before_cleanup": physical_before,
                          "after_cleanup": physical_after},
             "baseline_012": baseline_measurements,

@@ -23,4 +23,6 @@ fn host_handoff_preserves_citations_and_author_edits_through_cleanup() {
     assert!(metrics["later_recommendation_offset"].as_u64().unwrap() > 4096);
     assert!(metrics["cleanup_deleted_files"].as_u64().unwrap() > 0);
     assert_eq!(metrics["backup_complete"], true);
+    assert!(metrics["source_link_endpoints_verified"].as_u64().unwrap() >= 20);
+    assert_eq!(metrics["source_record_navigation_verified"], true);
 }
