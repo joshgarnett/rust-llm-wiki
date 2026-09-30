@@ -134,7 +134,16 @@ impl ChangeEngine {
             let epoch = state
                 .frames
                 .iter()
-                .rposition(|f| matches!(f.event, ChangeEvent::Applying))
+                .rposition(|f| {
+                    matches!(
+                        f.event,
+                        ChangeEvent::Applying
+                            | ChangeEvent::ResolutionAccepted {
+                                mode: ConflictResolutionMode::Resume,
+                                ..
+                            }
+                    )
+                })
                 .expect("applying epoch");
             let completed: BTreeSet<_> = state.frames[epoch..]
                 .iter()
@@ -390,7 +399,7 @@ impl ChangeEngine {
         }
         Err(error)
     }
-    fn retain_validation(
+    pub(crate) fn retain_validation(
         &self,
         permit: &WriterPermit,
         change: &PreparedChange,
@@ -423,10 +432,13 @@ impl ChangeEngine {
                 ));
             }
             if retained.proof != proof {
-                if matches!(state.status, None | Some(ChangeStatus::Prepared)) {
+                if matches!(
+                    state.status,
+                    None | Some(ChangeStatus::Prepared | ChangeStatus::Conflict)
+                ) {
                     return Err(WikiError::new(
                         ErrorCode::ContentConflict,
-                        "staged whole-graph prevalidation became stale before applying",
+                        "retained whole-graph prevalidation is stale; restore its original scope before resuming",
                     ));
                 }
                 return self.conflict(
@@ -727,7 +739,7 @@ impl ChangeEngine {
             overlay,
         })
     }
-    fn verify_read_preconditions(
+    pub(crate) fn verify_read_preconditions(
         &self,
         permit: &WriterPermit,
         manifest: &ChangeManifest,
@@ -742,7 +754,10 @@ impl ChangeEngine {
             }
             let phase = format!("read precondition: {}", condition.path);
             let state = journal::load_journal(&self.fs, manifest, hash)?;
-            if matches!(state.status, None | Some(ChangeStatus::Prepared)) {
+            if matches!(
+                state.status,
+                None | Some(ChangeStatus::Prepared | ChangeStatus::Conflict)
+            ) {
                 return Err(WikiError::new(ErrorCode::ContentConflict, phase));
             }
             return self.conflict(permit, manifest, hash, &phase, Vec::new());
@@ -780,10 +795,11 @@ impl ChangeEngine {
             if id == current.change_id {
                 continue;
             }
-            let (manifest, hash) = self.load_manifest(&id)?;
+            let (manifest, hash) = self.load_manifest_structure(&id)?;
             if outcome::terminal_report(&self.fs, &manifest, &hash)?.is_some() {
                 continue;
             }
+            self.validate_manifest(&manifest, &id)?;
             let state = journal::load_journal(&self.fs, &manifest, &hash)?;
             match state.status {
                 Some(ChangeStatus::Committed | ChangeStatus::Aborted) => {}
@@ -822,7 +838,7 @@ fn document_map(input: &ValidationInput) -> BTreeMap<VaultRelativePath, Blake3Ha
         .map(|d| (d.path.clone(), d.hash.clone()))
         .collect()
 }
-fn projected_scan(input: &ValidationInput) -> BTreeMap<VaultRelativePath, Blake3Hash> {
+pub(crate) fn projected_scan(input: &ValidationInput) -> BTreeMap<VaultRelativePath, Blake3Hash> {
     let mut expected = document_map(input);
     for target in &input.overlay {
         if canonical_target(&target.path) {

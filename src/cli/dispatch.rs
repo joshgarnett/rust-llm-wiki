@@ -7,7 +7,7 @@ use crate::{
     changes::ChangeEngine,
     config::{self, PreferenceOptions},
     domain::*,
-    jobs::Capability,
+    jobs::{Capability, JobLedgerApi},
     output::{Envelope, ErrorOutput, Metadata},
     records::parse_note,
     retrieval,
@@ -30,6 +30,8 @@ pub const COMMANDS: &[&str] = &[
     "init",
     "read",
     "page put",
+    "page init",
+    "page batch",
     "page rename",
     "source add",
     "source refresh",
@@ -56,16 +58,27 @@ pub const COMMANDS: &[&str] = &[
     "research import",
     "research status",
     "research report",
+    "research maintenance",
+    "storage inventory",
+    "storage plan",
+    "storage cleanup",
     "changes show",
     "changes apply",
     "changes abort",
     "changes rollback",
+    "changes resolve",
+    "jobs amend",
+    "jobs status",
+    "jobs diagnostics inspect",
+    "jobs diagnostics prune",
     "recover",
     "migrate",
 ];
 pub const SCHEMAS: &[&str] = &[
     "output",
     "record",
+    "page",
+    "page-batch",
     "stream",
     "extraction",
     "extraction-packet",
@@ -91,6 +104,11 @@ fn value<T: Serialize>(value: T) -> Result<Value> {
 fn failure(command: &str, error: WikiError) -> Envelope {
     let mut envelope = Envelope::failure(command, &error.code.to_string(), error.message.clone());
     envelope.meta.network_used = error.network_used;
+    envelope.meta.wiki_id = error
+        .details
+        .get("wiki_id")
+        .and_then(Value::as_str)
+        .map(str::to_owned);
     if let Some(change) = error.details.get("change") {
         envelope.data = json!({"change":change});
         envelope.meta.partial = true;
@@ -107,7 +125,18 @@ pub fn execute(args: &Arguments) -> (Envelope, u8) {
             let exit = if envelope.ok { 0 } else { 9 };
             (envelope, exit)
         }
-        Err(error) => {
+        Err(mut error) => {
+            // Retain known local identity even when an operation fails after binding.
+            if let Ok(cwd) = std::env::current_dir()
+                && let Ok(root) =
+                    crate::vault::discovery::resolve(args.wiki.as_deref(), &cwd, false)
+                && let Ok(binding) = ChangeEngine::new(VaultFs::new(root))
+            {
+                if !error.details.is_object() {
+                    error.details = json!({"context":error.details});
+                }
+                error.details["wiki_id"] = binding.vault_id().as_str().into();
+            }
             let exit = error.exit_code();
             (failure(args.command.name(), error), exit)
         }
@@ -140,7 +169,8 @@ fn execute_inner(args: &Arguments) -> Result<Envelope> {
                 "output" => include_str!("../../schemas/output-v1.json"),
                 "research-packet" => include_str!("../../schemas/research-packet-v1.json"),
                 "research-submission" => include_str!("../../schemas/research-submission-v1.json"),
-                "record" => include_str!("../../schemas/record-v1.json"),
+                "record" | "page" => include_str!("../../schemas/record-v1.json"),
+                "page-batch" => include_str!("../../schemas/page-batch-v1.json"),
                 "stream" => include_str!("../../schemas/stream-v1.json"),
                 "extraction" => include_str!("../../schemas/extraction-v1.json"),
                 "extraction-packet" => include_str!("../../schemas/extraction-packet-v1.json"),
@@ -277,12 +307,49 @@ fn execute_inner(args: &Arguments) -> Result<Envelope> {
                 }
             };
             envelope.meta.partial = outcome.truncated;
+            if let Some(range) = &outcome.continuation {
+                let quoted_path = format!("'{}'", outcome.path.as_str().replace('\'', "'\\''"));
+                envelope.warnings.push(format!("Read is truncated; continue with: lwiki read --path {quoted_path} --start {} --end {} --max-bytes {}", range.start(), range.end(), preferences.read_max_bytes));
+            }
             envelope.data = value(outcome)?;
             if args.dry_run {
                 envelope
                     .warnings
                     .push("cache state and index freshness are unknown during dry-run".into());
             }
+        }
+        Command::Page {
+            command:
+                PageCommand::Init {
+                    file,
+                    title,
+                    id,
+                    path,
+                },
+        } => {
+            let body =
+                String::from_utf8(input(file)?).map_err(|_| usage("page body must be UTF-8"))?;
+            mutation(
+                &mut envelope,
+                app.page_initialize(path.clone(), id.clone(), title.clone(), body)?,
+            )?;
+        }
+        Command::Page {
+            command: PageCommand::Batch { file },
+        } => {
+            let request: PageBatchRequest = serde_json::from_slice(&input(file)?)
+                .map_err(|_| usage("invalid page batch JSON; inspect lwiki schema page-batch"))?;
+            mutation(&mut envelope, app.page_batch(request)?)?;
+        }
+        Command::Storage(options) => {
+            envelope.data = super::storage::execute(&options.command, &app)?;
+            if let Some(warnings) = envelope.data.get("warnings").and_then(Value::as_array) {
+                envelope
+                    .warnings
+                    .extend(warnings.iter().filter_map(Value::as_str).map(str::to_owned));
+            }
+            envelope.meta.partial =
+                envelope.data.get("complete").and_then(Value::as_bool) == Some(false);
         }
         Command::Page {
             command:
@@ -301,7 +368,7 @@ fn execute_inner(args: &Arguments) -> Result<Envelope> {
                     .canonical
                     .as_ref()
                     .filter(|r| r.kind() == RecordKind::Page)
-                    .ok_or_else(|| WikiError::invalid("page put requires a valid page envelope"))?;
+                    .ok_or_else(|| crate::app::offline::page_envelope_error(&note))?;
                 let projection = crate::catalog::scan::scan(app.fs(), app.vault_id())?;
                 projection
                     .records
@@ -500,6 +567,9 @@ fn execute_inner(args: &Arguments) -> Result<Envelope> {
                     envelope
                         .warnings
                         .push("packet preview is unpersisted and cannot be imported".into());
+                    if matches!(options.executor, super::extraction::Executor::Api) {
+                        envelope.warnings.push(format!("API preview did not check private service dimensions, including the effective max_output_tokens cap (default 4096); requested {}. No credentials were resolved.", options.max_output_tokens));
+                    }
                 }
                 envelope.data = value(outcome)?;
             } else {
@@ -515,6 +585,7 @@ fn execute_inner(args: &Arguments) -> Result<Envelope> {
                     )
                 })?;
                 let request = crate::graph::api_extract::ApiExtractionRequest {
+                    requested_limits: runtime.requested_limits,
                     export: request,
                     run_id,
                     created_at_utc_ms: runtime.created_at_utc_ms,
@@ -534,6 +605,7 @@ fn execute_inner(args: &Arguments) -> Result<Envelope> {
                 )?;
                 envelope.meta.network_used = runtime.dispatcher.network_used();
                 envelope.meta.partial = outcome.coverage.omitted_source_bytes > 0;
+                envelope.warnings.extend(outcome.warnings.clone());
                 envelope.data = value(outcome)?;
             }
         }
@@ -748,7 +820,13 @@ fn execute_inner(args: &Arguments) -> Result<Envelope> {
             probe,
             role,
             remote,
+            extraction_schema,
         } => {
+            if *extraction_schema && !matches!(role, super::remote::ProbeRole::Generate) {
+                return Err(usage(
+                    "--extraction-schema requires --probe --role generate",
+                ));
+            }
             if *probe && preferences.offline && !args.dry_run {
                 return Err(WikiError::new(
                     ErrorCode::OfflineUnavailable,
@@ -767,7 +845,11 @@ fn execute_inner(args: &Arguments) -> Result<Envelope> {
                         preferences.profile.as_deref(),
                         service_role.capability(),
                     )?;
-                    let result = app.probe_provider(&runtime, service_role)?;
+                    let result = if *extraction_schema {
+                        app.probe_extraction_schema(&runtime)?
+                    } else {
+                        app.probe_provider(&runtime, service_role)?
+                    };
                     doctor.provider_probe_performed = result.network_used;
                     envelope.meta.network_used = result.network_used;
                     envelope.data = json!({"doctor":doctor,"probe":result});
@@ -777,12 +859,49 @@ fn execute_inner(args: &Arguments) -> Result<Envelope> {
             }
         }
         Command::Changes { command } => match command {
+            ChangesCommand::Resolve { id, mode, file } => {
+                if args.stage {
+                    return Err(usage("conflict resolution cannot be staged"));
+                }
+                let engine = ChangeEngine::new(app.fs().clone())?;
+                if args.dry_run {
+                    let inspected = engine.inspect(id)?;
+                    envelope.data =
+                        value(engine.resolution_plan(&inspected.prepared, mode.mode())?)?;
+                } else {
+                    let file = file.as_ref().ok_or_else(|| usage("inspect with changes resolve ID --dry-run --mode resume|abandon, then pass the data object with --file REQUEST.json"))?;
+                    let request: crate::changes::ConflictResolutionRequest =
+                        crate::changes::prepare::strict_json(
+                            &super::extraction::bounded_json_input(
+                                file,
+                                "conflict resolution request",
+                            )?,
+                        )?;
+                    if &request.change.change_id != id {
+                        return Err(usage("resolution request change ID differs from command"));
+                    }
+                    let writer = WriterPermit::acquire(
+                        app.fs().root(),
+                        Duration::from_millis(app.options().lock_timeout_ms),
+                    )?;
+                    let catalog = Catalog::new(app.fs().clone(), app.vault_id().clone());
+                    envelope.data = value(engine.resolve(
+                        &writer,
+                        &request,
+                        &CatalogGraphValidator,
+                        &catalog,
+                    )?)?;
+                }
+            }
             ChangesCommand::Show { id, operation } => {
                 if let Some(operation) = operation {
                     envelope.data = value(app.changes_payload(id.clone(), *operation)?)?;
                 } else {
                     let details = app.changes_show(id.clone())?;
                     envelope.meta.partial = !details.omitted_payloads.is_empty();
+                    if !details.unavailable_payloads.is_empty() {
+                        envelope.warnings.push("Some retained payloads are unavailable; history remains inspectable, but these operations cannot be used for undo without restoring a full-vault backup.".into());
+                    }
                     envelope.data = value(details)?;
                 }
             }
@@ -796,6 +915,91 @@ fn execute_inner(args: &Arguments) -> Result<Envelope> {
                 mutation(&mut envelope, app.changes_rollback(id.clone())?)?
             }
         },
+        Command::Jobs {
+            command:
+                JobsCommand::Amend {
+                    run,
+                    reason,
+                    remote,
+                },
+        } => {
+            if args.stage {
+                return Err(usage("job limit amendments cannot be staged"));
+            }
+            envelope.data = value(app.amend_provider_job_overrides(
+                run,
+                &remote.requested_limits()?,
+                reason,
+            )?)?;
+        }
+        Command::Jobs {
+            command: JobsCommand::Status { run },
+        } => {
+            let options = crate::app::remote::native_job_options(
+                crate::jobs::ExecutionPolicy {
+                    offline: true,
+                    dry_run: args.dry_run,
+                    retry_uncertain: false,
+                },
+                app.options().lock_timeout_ms,
+            );
+            let ledger = crate::jobs::JobLedger::new(
+                app.fs().clone(),
+                app.vault_id().clone(),
+                run.clone(),
+                options,
+            )?;
+            envelope.data = value(ledger.inspect()?)?;
+        }
+        Command::Jobs {
+            command: JobsCommand::Diagnostics { command },
+        } => {
+            if args.stage {
+                return Err(usage("diagnostic operations cannot be staged"));
+            }
+            let (run, attempt_id, kind) = match command {
+                DiagnosticsCommand::Inspect {
+                    run, attempt, kind, ..
+                }
+                | DiagnosticsCommand::Prune { run, attempt, kind } => (run, attempt, kind.kind()),
+            };
+            let options = crate::app::remote::native_job_options(
+                crate::jobs::ExecutionPolicy {
+                    offline: true,
+                    dry_run: args.dry_run,
+                    retry_uncertain: false,
+                },
+                app.options().lock_timeout_ms,
+            );
+            let ledger = crate::jobs::JobLedger::new(
+                app.fs().clone(),
+                app.vault_id().clone(),
+                run.clone(),
+                options,
+            )?;
+            let inspection = ledger.inspect()?;
+            let recorded = inspection
+                .attempts
+                .iter()
+                .find(|item| &item.attempt.attempt_id == attempt_id)
+                .ok_or_else(|| {
+                    WikiError::new(
+                        ErrorCode::RecordNotFound,
+                        "attempt does not belong to retained job",
+                    )
+                })?;
+            envelope.data = match command {
+                DiagnosticsCommand::Inspect { raw, .. } => {
+                    value(ledger.inspect_diagnostic(&recorded.attempt, kind, *raw)?)?
+                }
+                DiagnosticsCommand::Prune { .. } if args.dry_run => {
+                    json!({"dry_run":true,"protected":recorded.phase != crate::jobs::AttemptPhase::Settled || recorded.billing == crate::jobs::BillingDisposition::UnknownReserved,"diagnostic":ledger.inspect_diagnostic(&recorded.attempt,kind,false)?})
+                }
+                DiagnosticsCommand::Prune { .. } => {
+                    json!({"pruned":ledger.prune_diagnostic(&recorded.attempt,kind)?})
+                }
+            };
+        }
         Command::Recover => envelope.data = value(app.recover()?)?,
         Command::Migrate {
             selector,
@@ -944,11 +1148,13 @@ fn cached_read(reader: &ReaderSnapshot, request: ReadRequest) -> Result<ReadOutc
     range.slice(body).map_err(|e| usage(e.message))?;
     let start = range.start() as usize;
     let wanted_end = range.end() as usize;
-    let mut end = wanted_end.min(start.saturating_add(request.max_bytes));
-    while !body.is_char_boundary(end) {
-        end -= 1;
-    }
+    let end = crate::app::offline::bounded_utf8_end(body, start, wanted_end, request.max_bytes)?;
     Ok(ReadOutcome {
+        continuation: if end < wanted_end {
+            Some(ByteSpan::new(end as u64, wanted_end as u64)?)
+        } else {
+            None
+        },
         path: path.clone(),
         hash: document.hash.clone(),
         record: document
@@ -1055,6 +1261,7 @@ pub fn present(
         OutputFormat::Human if !envelope.ok => {
             if let Some(error) = &envelope.error {
                 writeln!(output, "{}: {}", error.code, error.message)?;
+                human_error_guidance(output, &error.details)?;
             }
             if let Some(change) = envelope
                 .data
@@ -1133,9 +1340,6 @@ pub fn present(
                         "Results are truncated; use the continuation cursor for another page."
                     )?;
                 }
-                for warning in &envelope.warnings {
-                    writeln!(output, "Warning: {warning}")?;
-                }
                 Ok(())
             } else {
                 serde_json::to_writer_pretty(&mut *output, &envelope.data)?;
@@ -1149,6 +1353,29 @@ pub fn present(
     }
 }
 
+fn human_error_guidance(output: &mut impl Write, details: &Value) -> io::Result<()> {
+    if let Some(object) = details.as_object() {
+        for (key, item) in object {
+            if matches!(
+                key.as_str(),
+                "reason" | "failure_code" | "next_action" | "recovery_action"
+            ) && let Some(text) = item.as_str()
+            {
+                writeln!(output, "{key}: {text}")?;
+            }
+            if key == "template"
+                && let Some(template) = item.as_str()
+            {
+                writeln!(output, "Page template:\n{template}")?;
+            }
+            if item.is_object() {
+                human_error_guidance(output, item)?;
+            }
+        }
+    }
+    Ok(())
+}
+
 fn embedding_runtime(
     runtime: &crate::app::remote::RemoteRuntime,
 ) -> crate::app::embeddings::EmbeddingRuntime<'_> {
@@ -1156,6 +1383,7 @@ fn embedding_runtime(
         service: &runtime.service,
         dispatcher: &runtime.dispatcher,
         job_options: runtime.job_options.clone(),
+        requested_limits: runtime.requested_limits.clone(),
         limits: runtime.limits.clone(),
         deadline_ms: u64::try_from(runtime.deadline_utc_ms - runtime.created_at_utc_ms)
             .unwrap_or(0),

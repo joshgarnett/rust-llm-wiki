@@ -17,6 +17,53 @@ pub use super::types::{DEFAULT_READ_BYTES, MAX_INPUT_BYTES};
 fn usage(message: &str) -> WikiError {
     WikiError::new(ErrorCode::Usage, message)
 }
+pub(crate) fn bounded_utf8_end(
+    text: &str,
+    start: usize,
+    wanted_end: usize,
+    max_bytes: usize,
+) -> Result<usize> {
+    let mut end = wanted_end.min(start.saturating_add(max_bytes));
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    if end == start && wanted_end > start {
+        let minimum = text[start..wanted_end]
+            .chars()
+            .next()
+            .expect("nonempty UTF-8 range")
+            .len_utf8();
+        let mut error = usage(&format!(
+            "read byte allowance is too small for the next UTF-8 character; use --max-bytes {minimum} or larger"
+        ));
+        error.details = serde_json::json!({"minimum_max_bytes": minimum, "start": start});
+        return Err(error);
+    }
+    Ok(end)
+}
+pub(crate) fn page_envelope_error(note: &ParsedNote) -> WikiError {
+    let required = [
+        "wiki_schema",
+        "wiki_id",
+        "wiki_kind",
+        "title",
+        "wiki_status",
+    ];
+    let missing: Vec<_> = required
+        .into_iter()
+        .filter(|field| {
+            note.fields
+                .as_ref()
+                .is_none_or(|fields| !fields.contains_key(*field))
+        })
+        .collect();
+    let template = "---\nwiki_schema: \"1\"\nwiki_id: Page.Example\nwiki_kind: page\ntitle: Example\nwiki_status: draft\n---\n# Example\n\nWrite cited knowledge here.\n";
+    let mut error = WikiError::invalid(
+        "page put requires a valid page envelope; inspect `lwiki schema page` (also `schema record`) and add wiki_schema, wiki_id, wiki_kind: page, title, and wiki_status",
+    );
+    error.details = serde_json::json!({"missing_fields":missing,"validation":note.diagnostics,"next_action":"lwiki schema page","template":template});
+    error
+}
 fn bounded(bytes: &[u8]) -> Result<()> {
     if bytes.len() > MAX_INPUT_BYTES {
         return Err(WikiError::new(
@@ -397,10 +444,7 @@ impl OfflineApp {
                 "byte range must use valid UTF-8 boundaries within body",
             ));
         }
-        let mut end = wanted_end.min(start.saturating_add(request.max_bytes));
-        while !text.is_char_boundary(end) {
-            end -= 1;
-        }
+        let end = bounded_utf8_end(text, start, wanted_end, request.max_bytes)?;
         let record = if canonical {
             p.records
                 .values()
@@ -410,6 +454,11 @@ impl OfflineApp {
             None
         };
         Ok(ReadOutcome {
+            continuation: if end < wanted_end {
+                Some(ByteSpan::new(end as u64, wanted_end as u64)?)
+            } else {
+                None
+            },
             path: path.clone(),
             hash: Blake3Hash::digest(&bytes),
             record,
@@ -424,7 +473,11 @@ impl OfflineApp {
                 .collect(),
         })
     }
-    fn execute_draft(&self, draft: ChangeDraft, force_stage: bool) -> Result<MutationOutcome> {
+    pub(crate) fn execute_draft(
+        &self,
+        draft: ChangeDraft,
+        force_stage: bool,
+    ) -> Result<MutationOutcome> {
         self.catalog().guard_current(None)?;
         let engine = self.engine()?;
         let plan = engine.plan(&draft)?;
@@ -473,12 +526,12 @@ impl OfflineApp {
             reused: false,
         })
     }
-    pub fn page_put(
+    pub(crate) fn plan_page_write(
         &self,
         path: VaultRelativePath,
         bytes: Vec<u8>,
         if_match: Option<Blake3Hash>,
-    ) -> Result<MutationOutcome> {
+    ) -> Result<ExpectedWrite> {
         bounded(&bytes)?;
         if !crate::sources::revision::canonical_path(&path) {
             return Err(WikiError::invalid(
@@ -490,7 +543,7 @@ impl OfflineApp {
             .canonical
             .as_ref()
             .filter(|r| r.kind() == RecordKind::Page)
-            .ok_or_else(|| WikiError::invalid("page put requires a valid page envelope"))?;
+            .ok_or_else(|| page_envelope_error(&new))?;
         let before = crate::changes::prepare::read_bounded(&self.fs, &path, MAX_INPUT_BYTES)?;
         let expected = match (before, if_match) {
             (Some(old), Some(hash)) => {
@@ -521,18 +574,21 @@ impl OfflineApp {
             }
             (None, None) => ExpectedState::Absent,
         };
-        self.execute_draft(
-            empty_draft(
-                format!("Put {}", record.title()),
-                vec![ExpectedWrite {
-                    target: path,
-                    expected,
-                    proposed: Some(bytes),
-                    apply_after: vec![],
-                }],
-            ),
-            false,
-        )
+        Ok(ExpectedWrite {
+            target: path,
+            expected,
+            proposed: Some(bytes),
+            apply_after: vec![],
+        })
+    }
+    pub fn page_put(
+        &self,
+        path: VaultRelativePath,
+        bytes: Vec<u8>,
+        if_match: Option<Blake3Hash>,
+    ) -> Result<MutationOutcome> {
+        let operation = self.plan_page_write(path, bytes, if_match)?;
+        self.execute_draft(empty_draft("Put page".into(), vec![operation]), false)
     }
     pub fn page_rename(
         &self,
@@ -777,7 +833,8 @@ impl OfflineApp {
     }
     pub fn changes_show(&self, id: RecordId) -> Result<ChangeDetails> {
         let engine = self.engine()?;
-        let i = engine.inspect(&id)?;
+        let i = engine.inspect_history(&id)?;
+        let unavailable_payloads = engine.missing_retained_payloads(&id)?;
         let mut payloads = Vec::new();
         let mut omitted_payloads = Vec::new();
         let mut cumulative = 0u64;
@@ -788,7 +845,11 @@ impl OfflineApp {
                 .map_or(0, |p| p.byte_len)
                 .checked_add(op.after_payload.as_ref().map_or(0, |p| p.byte_len))
                 .ok_or_else(|| WikiError::invalid("retained payload length overflow"))?;
-            if cumulative.saturating_add(length) > MAX_INPUT_BYTES as u64 {
+            let unavailable = [op.before_payload.as_ref(), op.after_payload.as_ref()]
+                .into_iter()
+                .flatten()
+                .any(|payload| unavailable_payloads.contains(&payload.path));
+            if unavailable || cumulative.saturating_add(length) > MAX_INPUT_BYTES as u64 {
                 omitted_payloads.push(index);
                 continue;
             }
@@ -804,11 +865,12 @@ impl OfflineApp {
             observations: i.observations,
             payloads,
             omitted_payloads,
+            unavailable_payloads,
         })
     }
     pub fn changes_payload(&self, id: RecordId, operation: usize) -> Result<ChangePayload> {
         let engine = self.engine()?;
-        let i = engine.inspect(&id)?;
+        let i = engine.inspect_history(&id)?;
         verified_change_payload(&engine, &i, operation)
     }
 
@@ -969,6 +1031,19 @@ impl OfflineApp {
         let path = self.resolve_path(&selector, &p)?;
         let raw = read_bytes(&self.fs, &path)?;
         let note = parse_note(&raw);
+        if target_schema == "2"
+            && note
+                .canonical
+                .as_ref()
+                .is_some_and(|record| record.kind() == RecordKind::Vault)
+        {
+            let mut error = WikiError::new(
+                ErrorCode::Usage,
+                "vault schema 2 requires coordinated storage migration; use storage plan and storage cleanup",
+            );
+            error.details = serde_json::json!({"reason":"storage_migration_required","next_action":"lwiki storage plan"});
+            return Err(error);
+        }
         let proposed = crate::records::edit::migrate_schema(&note, target_schema, &hash)?;
         self.execute_draft(
             empty_draft(

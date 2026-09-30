@@ -1,9 +1,6 @@
 //! Strict bounded source-local proposals; validation does not accept factual assertions.
 use super::{extraction_types::*, packet::*};
-use crate::{
-    domain::*,
-    sources::{SourceView, evidence::unique_quote_span},
-};
+use crate::{domain::*, sources::SourceView};
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -64,22 +61,58 @@ fn trace(
     quote: &str,
     explicit: Option<ByteSpan>,
     content: &str,
+    item_kind: &str,
+    item_id: &str,
+    item_index: usize,
 ) -> Result<TraceSpan> {
     string_bound(quote, MAX_WINDOW_BYTES, true)?;
+    let selected = window.span.slice(content).map_err(|e| invalid(e.message))?;
+    let mut count = 0usize;
+    let mut candidates = Vec::new();
+    if quote.len() <= selected.len() {
+        for (offset, bytes) in selected.as_bytes().windows(quote.len()).enumerate() {
+            if bytes == quote.as_bytes() {
+                count += 1;
+                if candidates.len() < 3 {
+                    let start = window.span.start() + offset as u64;
+                    candidates.push(ByteSpan::new(start, start + quote.len() as u64)?);
+                }
+            }
+        }
+    }
+    let diagnostic = |reason: &str| {
+        let mut error =
+            invalid("quotation does not identify exact source bytes in its declared window");
+        error.details = serde_json::json!({
+            "reason": reason,
+            "item_kind": item_kind,
+            "item_id_hash": Blake3Hash::digest(item_id.as_bytes()),
+            "item_index": item_index,
+            "window_id": window.id,
+            "match_count": count,
+            "candidate_spans": candidates,
+            "candidate_spans_omitted": count.saturating_sub(candidates.len()),
+        });
+        error
+    };
     let span = if let Some(span) = explicit {
         if span.is_empty()
             || span.start() < window.span.start()
             || span.end() > window.span.end()
-            || span.slice(content).map_err(|e| invalid(e.message))? != quote
+            || span.slice(content).ok() != Some(quote)
         {
-            return Err(invalid(
-                "explicit quotation span differs from its window/source bytes",
-            ));
+            return Err(diagnostic("quotation_span_invalid"));
         }
         span
     } else {
-        unique_quote_span(content.as_bytes(), quote.as_bytes(), window.span)
-            .map_err(|e| invalid(e.message))?
+        if count != 1 {
+            return Err(diagnostic(if count == 0 {
+                "quotation_absent"
+            } else {
+                "quotation_ambiguous"
+            }));
+        }
+        candidates[0]
     };
     Ok(TraceSpan {
         window_id: window.id.clone(),
@@ -124,7 +157,7 @@ pub fn validate_response(
     let windows: BTreeMap<_, _> = packet.packet.windows.iter().map(|w| (&w.id, w)).collect();
     let mut ids = BTreeSet::new();
     let mut mention_spans = BTreeMap::new();
-    for mention in &response.mentions {
+    for (index, mention) in response.mentions.iter().enumerate() {
         if !ids.insert(&mention.id) {
             return Err(invalid("duplicate response local ID"));
         }
@@ -138,7 +171,15 @@ pub fn validate_response(
             .ok_or_else(|| invalid("mention references unknown window"))?;
         mention_spans.insert(
             mention.id.clone(),
-            trace(window, &mention.quote, mention.span, text)?,
+            trace(
+                window,
+                &mention.quote,
+                mention.span,
+                text,
+                "mention",
+                mention.id.as_str(),
+                index,
+            )?,
         );
     }
     let mentions: BTreeSet<_> = response.mentions.iter().map(|m| &m.id).collect();
@@ -170,11 +211,19 @@ pub fn validate_response(
             return Err(invalid("total evidence limit exceeded"));
         }
         let mut spans = vec![];
-        for evidence in &assertion.evidence {
+        for (index, evidence) in assertion.evidence.iter().enumerate() {
             let window = windows
                 .get(&evidence.window_id)
                 .ok_or_else(|| invalid("evidence references unknown window"))?;
-            spans.push(trace(window, &evidence.quote, evidence.span, text)?);
+            spans.push(trace(
+                window,
+                &evidence.quote,
+                evidence.span,
+                text,
+                "evidence",
+                assertion.id.as_str(),
+                index,
+            )?);
         }
         evidence_spans.insert(assertion.id.clone(), spans);
     }
@@ -286,4 +335,37 @@ pub(crate) fn array_has(record: &CanonicalRecord, key: &str, id: &str) -> bool {
         .field(key)
         .and_then(Value::as_array)
         .is_some_and(|values| values.iter().any(|v| v.as_str() == Some(id)))
+}
+
+#[cfg(test)]
+mod quote_diagnostic_tests {
+    use super::*;
+
+    #[test]
+    fn second_window_span_uses_absolute_utf8_offsets() {
+        let content = "é Lab then Lab";
+        let start = content.rfind("Lab").unwrap() as u64;
+        let window = PacketWindow {
+            id: PacketLocalId::new("w2").unwrap(),
+            span: ByteSpan::new(start, start + 3).unwrap(),
+            text: "Lab".into(),
+            headings: vec![],
+        };
+        let derived = trace(&window, "Lab", None, content, "mention", "m1", 0).unwrap();
+        assert_eq!(derived.span, ByteSpan::new(start, start + 3).unwrap());
+        let local_offset = ByteSpan::new(0, 3).unwrap();
+        let error = trace(
+            &window,
+            "Lab",
+            Some(local_offset),
+            content,
+            "mention",
+            "m1",
+            0,
+        )
+        .unwrap_err();
+        assert_eq!(error.details["reason"], "quotation_span_invalid");
+        assert_eq!(error.details["window_id"], "w2");
+        assert_eq!(error.details["match_count"], 1);
+    }
 }

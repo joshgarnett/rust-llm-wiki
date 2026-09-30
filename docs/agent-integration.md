@@ -1,6 +1,6 @@
 # Agent interface and usage skill
 
-Status: proposed, 2026-09-28. Create and ship the actual discoverable skill with the first working CLI release, once its examples can be run. This file is a design contract; no skill has been installed and no unsupported CLI commands should be advertised as available.
+Status: historical proposal, 2026-09-28. The [current contract and coverage map](current-contracts.md) and [cleanup register](execution/CLEANUP.md) describe implemented behavior and remaining gates. References below to a future CLI, standalone research executor or unshipped skill are preserved as original planning, not current capability claims. Research now uses host-agent handoffs; the maintained skill ships with the binary.
 
 ## Portable distribution
 

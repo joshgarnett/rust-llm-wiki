@@ -27,6 +27,7 @@ pub(super) fn allowed(reason: &str) -> bool {
             | "wire_contract_violation"
             | "incomplete_response"
             | "provider_output_invalid"
+            | "uncertain_retry_requires_opt_in"
     ) || reason.strip_prefix("http_").is_some_and(|s| {
         s.len() == 3
             && s.bytes().all(|c| c.is_ascii_digit())

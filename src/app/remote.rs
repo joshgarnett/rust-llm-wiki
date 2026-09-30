@@ -26,6 +26,7 @@ pub struct RemoteRuntime {
     pub limits: LifetimeLimits,
     pub created_at_utc_ms: i64,
     pub deadline_utc_ms: i64,
+    pub requested_limits: Option<RequestedJobLimits>,
 }
 
 /// Only this documented platform configuration path is consulted. Vault content
@@ -126,6 +127,7 @@ pub fn native_runtime(
         limits,
         created_at_utc_ms: now.utc_ms,
         deadline_utc_ms: deadline,
+        requested_limits: None,
     })
 }
 
@@ -137,4 +139,126 @@ pub fn native_job_options(policy: ExecutionPolicy, lock_timeout_ms: u64) -> JobO
         policy,
         lock_timeout_ms,
     }
+}
+
+/// Explicit CLI overrides are checked before retained work can dispatch.
+#[derive(Debug, Clone)]
+pub struct RequestedJobLimits {
+    pub limits: LifetimeLimits,
+    pub specified: std::collections::BTreeSet<&'static str>,
+    pub deadline_ms: Option<u64>,
+}
+pub(crate) fn validate_retained_arguments(
+    inspection: &LedgerInspection,
+    limits: &LifetimeLimits,
+    deadline_ms: u64,
+    requested: Option<&RequestedJobLimits>,
+) -> Result<()> {
+    let old = &inspection.effective_limits;
+    let mismatch = if let Some(r) = requested {
+        r.specified.iter().any(|field| match *field {
+            "requests" => r.limits.requests != old.requests,
+            "concurrency" => r.limits.concurrency != old.concurrency,
+            "attempts_per_task" => r.limits.attempts_per_task != old.attempts_per_task,
+            "request_bytes" => r.limits.request_bytes != old.request_bytes,
+            "response_bytes" => r.limits.response_bytes != old.response_bytes,
+            "input_units" => [BillableClass::Input, BillableClass::CachedInput]
+                .iter()
+                .any(|k| r.limits.billable_units.get(k) != old.billable_units.get(k)),
+            "output_units" => [BillableClass::Output, BillableClass::Reasoning]
+                .iter()
+                .any(|k| r.limits.billable_units.get(k) != old.billable_units.get(k)),
+            "max_cost" => r.limits.max_cost != old.max_cost,
+            "requests_per_minute" => r.limits.requests_per_minute != old.requests_per_minute,
+            "tokens_per_minute" => r.limits.tokens_per_minute != old.tokens_per_minute,
+            _ => true,
+        })
+    } else {
+        limits != old
+    };
+    let requested_deadline = requested.map_or(Some(deadline_ms), |r| r.deadline_ms);
+    let original = inspection
+        .spec
+        .deadline_utc_ms
+        .checked_sub(inspection.spec.created_at_utc_ms)
+        .and_then(|n| u64::try_from(n).ok());
+    if mismatch || requested_deadline.is_some_and(|n| original != Some(n)) {
+        let mut error = WikiError::new(
+            ErrorCode::Usage,
+            "retained jobs keep cumulative limits and the original deadline; use jobs amend --run ID --reason REASON to change them explicitly",
+        );
+        error.details = serde_json::json!({"reason":"retained_limits_require_amendment","run_id":inspection.spec.run_id,"effective_limits":old,"effective_deadline_utc_ms":inspection.effective_deadline_utc_ms,"next_action":format!("lwiki jobs amend --run {} --reason REASON",inspection.spec.run_id)});
+        return Err(error);
+    }
+    Ok(())
+}
+
+impl RequestedJobLimits {
+    pub fn merge_into(&self, retained: &LifetimeLimits) -> Result<LifetimeLimits> {
+        let mut result = retained.clone();
+        for field in &self.specified {
+            match *field {
+                "requests" => result.requests = self.limits.requests,
+                "concurrency" => result.concurrency = self.limits.concurrency,
+                "attempts_per_task" => result.attempts_per_task = self.limits.attempts_per_task,
+                "request_bytes" => result.request_bytes = self.limits.request_bytes,
+                "response_bytes" => result.response_bytes = self.limits.response_bytes,
+                "max_cost" => result.max_cost = self.limits.max_cost.clone(),
+                "requests_per_minute" => {
+                    result.requests_per_minute = self.limits.requests_per_minute
+                }
+                "tokens_per_minute" => result.tokens_per_minute = self.limits.tokens_per_minute,
+                "input_units" | "output_units" => {
+                    let classes = if *field == "input_units" {
+                        [BillableClass::Input, BillableClass::CachedInput]
+                    } else {
+                        [BillableClass::Output, BillableClass::Reasoning]
+                    };
+                    for class in classes {
+                        if let Some(value) = self.limits.billable_units.get(&class) {
+                            result.billable_units.insert(class, *value);
+                        }
+                    }
+                }
+                _ => {
+                    return Err(WikiError::new(
+                        ErrorCode::Usage,
+                        "unknown job amendment limit",
+                    ));
+                }
+            }
+        }
+        Ok(result)
+    }
+}
+
+/// Useful committed outputs can coexist with a still unknown earlier attempt.
+/// Keep its original billing/concurrency reservation and pause the job for inspection.
+pub(crate) fn finish_provider_job(ledger: &JobLedger) -> Result<Option<String>> {
+    let inspection = ledger.inspect()?;
+    if inspection
+        .tasks
+        .values()
+        .any(|task| task.state != TaskState::Completed)
+    {
+        return Ok(None);
+    }
+    if inspection
+        .attempts
+        .iter()
+        .any(|attempt| attempt.phase != AttemptPhase::Settled)
+    {
+        if inspection.state == RunState::Running {
+            ledger.pause(StopReason::OutcomeUnknown)?;
+        }
+        return Ok(Some(format!(
+            "Outputs are available; job {} retains an unsettled earlier attempt and its billing/concurrency holds. Inspect with jobs status --run {}.",
+            inspection.spec.run_id, inspection.spec.run_id
+        )));
+    }
+    if matches!(inspection.state, RunState::Paused | RunState::Stopped) {
+        ledger.resume(None)?;
+    }
+    ledger.complete_run()?;
+    Ok(None)
 }

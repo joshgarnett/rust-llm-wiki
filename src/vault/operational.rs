@@ -21,10 +21,21 @@ pub(crate) enum SpoolPart {
     Body,
     Metadata,
 }
+#[derive(Clone, Copy)]
+pub(crate) enum DiagnosticPart {
+    SemanticBody,
+    SemanticMetadata,
+    HttpBody,
+    HttpMetadata,
+}
 pub(crate) enum RunFile<'a> {
     Spool {
         attempt: &'a AttemptRef,
         part: SpoolPart,
+    },
+    Diagnostic {
+        attempt: &'a AttemptRef,
+        part: DiagnosticPart,
     },
     Checkpoint,
 }
@@ -327,6 +338,7 @@ impl RunStore {
         run_id: &RecordId,
     ) -> Result<Self> {
         writer.require_root(fs.root())?;
+        fs.require_storage_ready()?;
         let store = Self::new(fs, vault_id, run_id)?;
         for relative in [
             ".wiki".to_owned(),
@@ -536,6 +548,7 @@ impl RunLedgerGuard<'_> {
     }
     pub(crate) fn append_journal(&self, expected_length: u64, frame: &[u8]) -> Result<u64> {
         self.check()?;
+        self.store.fs.require_storage_ready()?;
         if frame.is_empty() || frame.len() > FRAME_LIMIT {
             return Err(budget("job frame exceeds ceiling"));
         }
@@ -584,6 +597,7 @@ impl RunLedgerGuard<'_> {
         verified_offset: u64,
     ) -> Result<()> {
         self.check()?;
+        self.store.fs.require_storage_ready()?;
         if verified_offset > expected_length {
             return Err(conflict("journal truncation cannot extend history"));
         }
@@ -636,6 +650,7 @@ impl RunLedgerGuard<'_> {
     }
     pub(crate) fn ensure_attempt_dir(&self, attempt: &AttemptRef) -> Result<()> {
         self.check()?;
+        self.store.fs.require_storage_ready()?;
         let path = self.attempt_dir(attempt)?;
         match self.store.io.create_private_directory(&path) {
             Ok(()) => {}
@@ -675,6 +690,59 @@ impl RunLedgerGuard<'_> {
             SpoolPart::Body => "response.bin",
             SpoolPart::Metadata => "metadata.json",
         }))
+    }
+    fn diagnostic_path(&self, attempt: &AttemptRef, part: DiagnosticPart) -> Result<PathBuf> {
+        Ok(self.attempt_dir(attempt)?.join(match part {
+            DiagnosticPart::SemanticBody => "semantic-rejection.bin",
+            DiagnosticPart::SemanticMetadata => "semantic-rejection.json",
+            DiagnosticPart::HttpBody => "http-error.bin",
+            DiagnosticPart::HttpMetadata => "http-error.json",
+        }))
+    }
+    fn diagnostic_limit(part: DiagnosticPart) -> u64 {
+        match part {
+            DiagnosticPart::SemanticBody => 256 * 1024,
+            DiagnosticPart::HttpBody => 16 * 1024,
+            DiagnosticPart::SemanticMetadata | DiagnosticPart::HttpMetadata => 4096,
+        }
+    }
+    pub(crate) fn read_diagnostic(
+        &self,
+        attempt: &AttemptRef,
+        part: DiagnosticPart,
+    ) -> Result<Option<BeforeImage>> {
+        self.check()?;
+        let directory = self.attempt_dir(attempt)?;
+        if !directory.exists() {
+            return Ok(None);
+        }
+        self.owner(attempt)?;
+        read(
+            &self.diagnostic_path(attempt, part)?,
+            Self::diagnostic_limit(part),
+        )
+    }
+    pub(crate) fn remove_diagnostic_file(
+        &self,
+        attempt: &AttemptRef,
+        part: DiagnosticPart,
+        expected: &Blake3Hash,
+    ) -> Result<()> {
+        self.check()?;
+        self.store.fs.require_storage_ready()?;
+        self.owner(attempt)?;
+        let path = self.diagnostic_path(attempt, part)?;
+        Self::guarded(
+            &path,
+            &ExpectedState::Hash(expected.clone()),
+            Self::diagnostic_limit(part),
+        )?;
+        self.store
+            .io
+            .remove(&path)
+            .map_err(|e| io_error("remove private diagnostic", e))?;
+        self.store
+            .sync_dir(path.parent().expect("diagnostic parent"))
     }
     fn limit(part: SpoolPart) -> u64 {
         match part {
@@ -813,6 +881,7 @@ impl RunLedgerGuard<'_> {
         bytes: &[u8],
     ) -> Result<Blake3Hash> {
         self.check()?;
+        self.store.fs.require_storage_ready()?;
         match file {
             RunFile::Spool { attempt, part } => {
                 self.owner(attempt)?;
@@ -821,6 +890,15 @@ impl RunLedgerGuard<'_> {
                     &expected,
                     bytes,
                     Self::limit(part),
+                )
+            }
+            RunFile::Diagnostic { attempt, part } => {
+                self.owner(attempt)?;
+                self.replace_path(
+                    &self.diagnostic_path(attempt, part)?,
+                    &expected,
+                    bytes,
+                    Self::diagnostic_limit(part),
                 )
             }
             RunFile::Checkpoint => self.replace_path(
@@ -840,6 +918,7 @@ impl RunLedgerGuard<'_> {
         expected: &Blake3Hash,
     ) -> Result<()> {
         self.check()?;
+        self.store.fs.require_storage_ready()?;
         if self.read_spool(attempt, part, Self::limit(part))?.is_none() {
             let directory = self.attempt_dir(attempt)?;
             if directory.exists() {
@@ -865,6 +944,7 @@ impl RunLedgerGuard<'_> {
     }
     pub(crate) fn remove_empty_attempt_dir(&self, attempt: &AttemptRef) -> Result<()> {
         self.check()?;
+        self.store.fs.require_storage_ready()?;
         let path = self.attempt_dir(attempt)?;
         if !path.exists() {
             return Ok(());
@@ -891,12 +971,32 @@ impl RunLedgerGuard<'_> {
                 return Err(conflict("cannot remove nonempty response spool"));
             }
         }
+        let mut retained_diagnostic = false;
+        for part in [
+            DiagnosticPart::SemanticBody,
+            DiagnosticPart::SemanticMetadata,
+            DiagnosticPart::HttpBody,
+            DiagnosticPart::HttpMetadata,
+        ] {
+            if self.read_diagnostic(attempt, part)?.is_some() {
+                retained_diagnostic = true;
+            }
+        }
         // No unfamiliar staging/other payload may be discarded during cleanup.
         for entry in fs::read_dir(&path).map_err(|e| io_error("inspect empty spool", e))? {
             let entry = entry.map_err(|e| io_error("inspect spool entry", e))?;
-            if entry.file_name() != "owner.json" {
+            if entry.file_name() != "owner.json"
+                && entry.file_name() != "semantic-rejection.bin"
+                && entry.file_name() != "semantic-rejection.json"
+                && entry.file_name() != "http-error.bin"
+                && entry.file_name() != "http-error.json"
+            {
                 return Err(conflict("unfamiliar spool entry retained"));
             }
+        }
+        if retained_diagnostic {
+            self.store.sync_dir(&path)?;
+            return Ok(());
         }
         if owner_present {
             self.store

@@ -1,6 +1,10 @@
 //! Pure context assembly; only the verification coordinator seals output.
 use super::{bundles, context_types::*, types::*};
-use crate::{catalog::ReaderSnapshot, domain::*, graph::GraphResult};
+use crate::{
+    catalog::ReaderSnapshot,
+    domain::*,
+    graph::{GraphResult, NavigationEdge},
+};
 use std::collections::BTreeMap;
 
 pub struct ContextDraft {
@@ -97,6 +101,7 @@ pub(super) fn dependencies(reader: &ReaderSnapshot) -> Result<Blake3Hash> {
 fn document_passage(
     reader: &ReaderSnapshot,
     hit: &SearchHit,
+    excerpt: &SearchExcerpt,
     request: &ContextRequest,
     rank: usize,
 ) -> Result<Option<ContextPassage>> {
@@ -118,6 +123,15 @@ fn document_passage(
         ));
     }
     if !matches_filters(reader, d, &request.documents.filters) {
+        return Ok(None);
+    }
+    if d.owner_revision.is_some()
+        && !request.documents.filters.source_ids.is_empty()
+        && !d
+            .source_id
+            .as_ref()
+            .is_some_and(|id| request.documents.filters.source_ids.contains(id))
+    {
         return Ok(None);
     }
     let canonical = d
@@ -147,10 +161,10 @@ fn document_passage(
             _ => false,
         })
     };
-    if !allowed || hit.excerpt.span.is_empty() {
+    if !allowed || excerpt.span.is_empty() {
         return Ok(None);
     }
-    let span = hit.excerpt.span;
+    let span = excerpt.span;
     let text = span.slice(&d.raw_text)?;
     if text.len() > request.documents.limits.excerpt_bytes {
         return Err(WikiError::new(
@@ -257,8 +271,40 @@ fn matches_filters(
 struct Packet {
     passages: Vec<ContextPassage>,
     bundle: Option<EvidenceBundle>,
+    navigation: Option<NavigationEdge>,
     key: String,
     score: f64,
+}
+fn navigation_end<'a>(
+    reader: &'a ReaderSnapshot,
+    locator: &DocumentLocator,
+) -> Result<&'a crate::catalog::DocumentRow> {
+    let reference = locator
+        .record
+        .as_ref()
+        .ok_or_else(|| WikiError::invalid("navigation endpoint has no record"))?;
+    let row = reader
+        .projection()
+        .records
+        .get(&reference.record_id)
+        .ok_or_else(|| {
+            WikiError::new(ErrorCode::FreshnessConflict, "navigation endpoint absent")
+        })?;
+    if reference != &bundles::reference(reader, row)
+        || locator.path != row.path
+        || locator.observed_hash != row.hash
+    {
+        return Err(WikiError::new(
+            ErrorCode::FreshnessConflict,
+            "navigation endpoint differs from pinned record",
+        ));
+    }
+    reader
+        .projection()
+        .documents
+        .iter()
+        .find(|d| d.path == locator.path && d.hash == locator.observed_hash)
+        .ok_or_else(|| WikiError::new(ErrorCode::FreshnessConflict, "navigation document absent"))
 }
 fn citation_state(
     reader: &ReaderSnapshot,
@@ -308,6 +354,7 @@ fn render(
     scope: ContextScope,
     passages: &[ContextPassage],
     bundles: &[EvidenceBundle],
+    navigation: &[NavigationEdge],
 ) -> Result<(String, usize)> {
     let mut text = if scope == ContextScope::Snapshot {
         "[context index_snapshot; unverified]\n\n".to_owned()
@@ -364,6 +411,26 @@ fn render(
         text.push_str(&format!("[assertion {}; {:?}; status {:?}; disputed {}]\n{} {} {}\nQualifiers: {}\nPath: {}\nPath states: {}\nPassages: {:?}; omitted support {}; omitted contradiction {}\n\n",b.assertion.record_id,b.eligibility,b.authored_status,b.disputed,b.subject.record_id,b.predicate,serde_json::to_string(&b.object).map_err(|e|WikiError::invalid(e.to_string()))?,serde_json::to_string(&b.qualifiers).map_err(|e|WikiError::invalid(e.to_string()))?,serde_json::to_string(&b.path).map_err(|e|WikiError::invalid(e.to_string()))?,path_labels,b.passage_indices,b.omitted_support,b.omitted_contradictions));
         graph_bytes += text.len() - start
     }
+    for edge in navigation {
+        let start = text.len();
+        text.push_str(&format!(
+            "[navigation; {:?}; no asserted relationship]\nFrom: {} ({})\nTo: {} ({})\n\n",
+            edge.reason,
+            edge.from.path,
+            edge.from
+                .record
+                .as_ref()
+                .expect("validated navigation")
+                .record_id,
+            edge.to.path,
+            edge.to
+                .record
+                .as_ref()
+                .expect("validated navigation")
+                .record_id,
+        ));
+        graph_bytes += text.len() - start;
+    }
     Ok((text, graph_bytes))
 }
 pub fn assemble(
@@ -403,24 +470,30 @@ pub fn assemble(
     let mut graph_ranks: BTreeMap<String, usize> = BTreeMap::new();
     if request.target != ContextTarget::Graph {
         for (i, hit) in hits.hits.iter().enumerate() {
-            if let Some(p) = document_passage(reader, hit, request, i + 1)? {
-                direct
-                    .entry(bundles::owner(&p))
-                    .and_modify(|r| *r = (*r).min(i + 1))
-                    .or_insert(i + 1);
-                packets.push(Packet {
-                    key: format!("document:{}", p.locator.path),
-                    passages: vec![p],
-                    bundle: None,
-                    score: 0.,
-                })
-            } else {
-                omissions.push(ContextOmission {
-                    record_id: hit.locator.record.as_ref().map(|r| r.record_id.clone()),
-                    path: Some(hit.locator.path.clone()),
-                    reason: "discovery_only_or_empty".into(),
-                    count: 1,
-                })
+            for (passage_index, excerpt) in std::iter::once(&hit.excerpt)
+                .chain(hit.secondary_excerpts.iter().take(1))
+                .enumerate()
+            {
+                if let Some(p) = document_passage(reader, hit, excerpt, request, i + 1)? {
+                    direct
+                        .entry(bundles::owner(&p))
+                        .and_modify(|r| *r = (*r).min(i + 1))
+                        .or_insert(i + 1);
+                    packets.push(Packet {
+                        key: format!("document:{}:{passage_index}", p.locator.path),
+                        passages: vec![p],
+                        bundle: None,
+                        navigation: None,
+                        score: 0.,
+                    })
+                } else {
+                    omissions.push(ContextOmission {
+                        record_id: hit.locator.record.as_ref().map(|r| r.record_id.clone()),
+                        path: Some(hit.locator.path.clone()),
+                        reason: "discovery_only_or_empty".into(),
+                        count: 1,
+                    })
+                }
             }
         }
     }
@@ -461,7 +534,13 @@ pub fn assemble(
             if edge.path.len() > request.graph.as_ref().map_or(1, |g| g.limits.depth.max(1)) {
                 return Err(WikiError::invalid("graph path exceeds requested depth"));
             }
-            if let Some(selected) = bundles::select(reader, edge, request.scope, i + 1)? {
+            if let Some(selected) = bundles::select(
+                reader,
+                edge,
+                request.scope,
+                i + 1,
+                &graph_filters.source_ids,
+            )? {
                 for p in &selected.passages {
                     graph_ranks
                         .entry(bundles::owner(p))
@@ -471,6 +550,7 @@ pub fn assemble(
                 packets.push(Packet {
                     passages: selected.passages,
                     bundle: Some(selected.bundle),
+                    navigation: None,
                     key: format!("assertion:{}", edge.record_ref.record_id),
                     score: 0.,
                 })
@@ -481,6 +561,64 @@ pub fn assemble(
                     reason: "no_eligible_original_support".into(),
                     count: 1,
                 })
+            }
+        }
+        if request.graph.as_ref().is_some_and(|g| g.include_navigation) {
+            let graph_filters = &request
+                .graph
+                .as_ref()
+                .expect("validated graph plan")
+                .filters;
+            for (rank, edge) in graph.navigation.iter().enumerate() {
+                let from = navigation_end(reader, &edge.from)?;
+                let to = navigation_end(reader, &edge.to)?;
+                if !crate::graph::traverse::navigation_is_canonical(reader, edge) {
+                    return Err(WikiError::invalid(
+                        "context navigation differs from canonical links or provenance",
+                    ));
+                }
+                if !matches_filters(reader, from, graph_filters)
+                    || !matches_filters(reader, to, graph_filters)
+                {
+                    omissions.push(ContextOmission {
+                        record_id: edge.to.record.as_ref().map(|r| r.record_id.clone()),
+                        path: Some(edge.to.path.clone()),
+                        reason: "navigation_outside_requested_filters".into(),
+                        count: 1,
+                    });
+                    continue;
+                }
+                packets.push(Packet {
+                    passages: vec![],
+                    bundle: None,
+                    navigation: Some(edge.clone()),
+                    key: format!("navigation:{rank}:{}:{}", edge.from.path, edge.to.path),
+                    score: 0.,
+                });
+            }
+            if graph.coverage.omitted_navigation > 0 {
+                omissions.push(ContextOmission {
+                    record_id: None,
+                    path: None,
+                    reason: "graph_navigation_traversal_cap".into(),
+                    count: graph.coverage.omitted_navigation,
+                });
+            }
+            if graph.coverage.depth_limited {
+                omissions.push(ContextOmission {
+                    record_id: None,
+                    path: None,
+                    reason: "graph_depth_limit_may_omit_navigation".into(),
+                    count: 1,
+                });
+            }
+            if graph.next_cursor.is_some() {
+                omissions.push(ContextOmission {
+                    record_id: None,
+                    path: None,
+                    reason: "graph_results_continue_on_next_page".into(),
+                    count: 1,
+                });
             }
         }
     }
@@ -521,7 +659,9 @@ pub fn assemble(
     let available_tokens = request.budget.max_tokens - reserved_tokens;
     let mut passages: Vec<ContextPassage> = Vec::new();
     let mut bundles: Vec<EvidenceBundle> = Vec::new();
-    let (mut text, mut graph_bytes) = render(reader, request.scope, &passages, &bundles)?;
+    let mut navigation: Vec<NavigationEdge> = Vec::new();
+    let (mut text, mut graph_bytes) =
+        render(reader, request.scope, &passages, &bundles, &navigation)?;
     if text.len() > available_bytes || text.len().div_ceil(4) > available_tokens {
         return Err(WikiError::new(
             ErrorCode::BudgetExceeded,
@@ -531,6 +671,10 @@ pub fn assemble(
     for packet in packets {
         let mut next = passages.clone();
         let mut next_bundles = bundles.clone();
+        let mut next_navigation = navigation.clone();
+        if let Some(edge) = &packet.navigation {
+            next_navigation.push(edge.clone());
+        }
         let mut indices = Vec::new();
         for p in packet.passages {
             let mut found = None;
@@ -574,7 +718,13 @@ pub fn assemble(
         for p in &next {
             *counts.entry(bundles::owner(p)).or_insert(0usize) += 1
         }
-        let (rendered, next_graph) = render(reader, request.scope, &next, &next_bundles)?;
+        let (rendered, next_graph) = render(
+            reader,
+            request.scope,
+            &next,
+            &next_bundles,
+            &next_navigation,
+        )?;
         let bytes = rendered.len();
         let tokens = bytes.div_ceil(4);
         let graph_tokens = next_graph.div_ceil(4);
@@ -591,15 +741,25 @@ pub fn assemble(
         };
         if let Some(reason) = reason {
             omissions.push(ContextOmission {
-                record_id: id,
-                path: None,
-                reason: reason.into(),
+                record_id: id.or_else(|| {
+                    packet
+                        .navigation
+                        .as_ref()
+                        .and_then(|n| n.to.record.as_ref().map(|r| r.record_id.clone()))
+                }),
+                path: packet.navigation.as_ref().map(|n| n.to.path.clone()),
+                reason: if packet.navigation.is_some() {
+                    format!("navigation_{reason}")
+                } else {
+                    reason.into()
+                },
                 count: 1,
             });
             continue;
         }
         passages = next;
         bundles = next_bundles;
+        navigation = next_navigation;
         text = rendered;
         graph_bytes = next_graph;
     }
@@ -609,7 +769,19 @@ pub fn assemble(
     if request.scope == ContextScope::Snapshot {
         warnings.push("unverified index snapshot; citations suppressed".into())
     }
-    let truncated = !omissions.is_empty() || hits.truncated || graph.is_some_and(|g| g.truncated);
+    if request
+        .graph
+        .as_ref()
+        .is_some_and(|g| !g.filters.source_ids.is_empty())
+    {
+        warnings.push("source filter scopes emitted graph evidence; omitted support and contradiction counts include evidence outside the selected sources".into());
+    }
+    let truncated = !omissions.is_empty()
+        || bundles
+            .iter()
+            .any(|b| b.omitted_support + b.omitted_contradictions > 0)
+        || hits.truncated
+        || graph.is_some_and(|g| g.truncated);
     let rendered_bytes = text.len();
     let estimated_tokens = rendered_bytes.div_ceil(4);
     Ok(ContextDraft {

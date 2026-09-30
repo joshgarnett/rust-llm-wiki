@@ -13,17 +13,17 @@ pub struct RemoteArguments {
     #[arg(long)]
     pub providers_config: Option<PathBuf>,
     /// Lifetime request-attempt ceiling, including retries.
-    #[arg(long, default_value_t = 60)]
-    pub max_requests: u64,
+    #[arg(long)]
+    pub max_requests: Option<u64>,
     /// Maximum simultaneous provider requests.
-    #[arg(long, default_value_t = 2)]
-    pub concurrency: u32,
+    #[arg(long)]
+    pub concurrency: Option<u32>,
     /// Maximum attempts for an individual provider task.
-    #[arg(long, default_value_t = 3)]
-    pub attempts_per_task: u32,
+    #[arg(long)]
+    pub attempts_per_task: Option<u32>,
     /// Overall remote operation deadline in milliseconds from startup.
-    #[arg(long, default_value_t = 900000)]
-    pub deadline_ms: u64,
+    #[arg(long)]
+    pub deadline_ms: Option<u64>,
     /// Lifetime ceiling on outgoing request bytes.
     #[arg(long)]
     pub max_request_bytes: Option<u64>,
@@ -51,15 +51,18 @@ pub struct RemoteArguments {
     /// Opt into retrying uncertain work under retained accounting; prior attempts may be billed.
     #[arg(long)]
     pub retry_uncertain: bool,
+    /// Retain a bounded private HTTP error-body diagnostic for explicit inspection.
+    #[arg(long)]
+    pub retain_http_error_body: bool,
 }
 impl Default for RemoteArguments {
     fn default() -> Self {
         Self {
             providers_config: None,
-            max_requests: 60,
-            concurrency: 2,
-            attempts_per_task: 3,
-            deadline_ms: 900000,
+            max_requests: None,
+            concurrency: None,
+            attempts_per_task: None,
+            deadline_ms: None,
             max_request_bytes: None,
             max_response_bytes: None,
             max_input_units: None,
@@ -69,16 +72,17 @@ impl Default for RemoteArguments {
             requests_per_minute: None,
             tokens_per_minute: None,
             retry_uncertain: false,
+            retain_http_error_body: false,
         }
     }
 }
 impl RemoteArguments {
     pub fn limits(&self) -> Result<LifetimeLimits> {
-        if self.max_requests == 0
-            || self.concurrency == 0
-            || self.attempts_per_task == 0
-            || self.deadline_ms == 0
-            || self.deadline_ms > 86_400_000
+        if self.max_requests == Some(0)
+            || self.concurrency == Some(0)
+            || self.attempts_per_task == Some(0)
+            || self.deadline_ms == Some(0)
+            || self.deadline_ms.is_some_and(|value| value > 86_400_000)
             || self.max_request_bytes == Some(0)
             || self.max_response_bytes == Some(0)
             || self.requests_per_minute == Some(0)
@@ -99,9 +103,9 @@ impl RemoteArguments {
             billable_units.insert(BillableClass::Reasoning, n);
         }
         Ok(LifetimeLimits {
-            requests: self.max_requests,
-            concurrency: self.concurrency,
-            attempts_per_task: self.attempts_per_task,
+            requests: self.max_requests.unwrap_or(60),
+            concurrency: self.concurrency.unwrap_or(2),
+            attempts_per_task: self.attempts_per_task.unwrap_or(3),
             request_bytes: self.max_request_bytes,
             response_bytes: self.max_response_bytes,
             billable_units,
@@ -112,6 +116,28 @@ impl RemoteArguments {
                 .transpose()?,
             requests_per_minute: self.requests_per_minute,
             tokens_per_minute: self.tokens_per_minute,
+        })
+    }
+    pub fn requested_limits(&self) -> Result<remote::RequestedJobLimits> {
+        let specified = [
+            ("requests", self.max_requests.is_some()),
+            ("concurrency", self.concurrency.is_some()),
+            ("attempts_per_task", self.attempts_per_task.is_some()),
+            ("request_bytes", self.max_request_bytes.is_some()),
+            ("response_bytes", self.max_response_bytes.is_some()),
+            ("input_units", self.max_input_units.is_some()),
+            ("output_units", self.max_output_units.is_some()),
+            ("max_cost", self.max_cost.is_some()),
+            ("requests_per_minute", self.requests_per_minute.is_some()),
+            ("tokens_per_minute", self.tokens_per_minute.is_some()),
+        ]
+        .into_iter()
+        .filter_map(|(name, yes)| yes.then_some(name))
+        .collect();
+        Ok(remote::RequestedJobLimits {
+            limits: self.limits()?,
+            specified,
+            deadline_ms: self.deadline_ms,
         })
     }
     pub fn runtime(
@@ -131,7 +157,7 @@ impl RemoteArguments {
             dry_run: app.options().dry_run,
             retry_uncertain: self.retry_uncertain,
         };
-        remote::native_runtime(
+        let mut runtime = remote::native_runtime(
             app.fs(),
             app.vault_id(),
             remote::NativeRuntimeRequest {
@@ -140,9 +166,14 @@ impl RemoteArguments {
                 capability,
                 options: remote::native_job_options(policy, app.options().lock_timeout_ms),
                 limits: self.limits()?,
-                deadline_ms: self.deadline_ms,
+                deadline_ms: self.deadline_ms.unwrap_or(900_000),
             },
-        )
+        )?;
+        runtime.requested_limits = Some(self.requested_limits()?);
+        runtime.dispatcher = runtime
+            .dispatcher
+            .with_http_error_diagnostics(self.retain_http_error_body);
+        Ok(runtime)
     }
 }
 

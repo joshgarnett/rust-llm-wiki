@@ -15,6 +15,7 @@ pub mod records;
 pub mod research;
 pub mod retrieval;
 pub mod sources;
+pub mod storage;
 #[cfg(test)]
 #[path = "../test_support/paths.rs"]
 mod test_paths;

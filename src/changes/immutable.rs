@@ -130,6 +130,24 @@ fn conflict(message: impl Into<String>) -> WikiError {
 }
 
 impl ChangeEngine {
+    /// Abandonment cannot release ownership of a tree with unplanned members.
+    /// Conservatively require the complete original revision namespace absent.
+    pub(crate) fn require_abandoned_revision_trees(&self, manifest: &ChangeManifest) -> Result<()> {
+        for tree in tree_inventory(manifest)? {
+            match fs::symlink_metadata(self.fs.root().resolve(&tree.root)?) {
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => return Err(WikiError::new(ErrorCode::Internal, error.to_string())),
+                Ok(_) => {
+                    return Err(conflict(format!(
+                        "abandon requires revision tree {} absent; preserve unfamiliar members, remove only verified empty directories, or resolve by resuming",
+                        tree.root
+                    )));
+                }
+            }
+        }
+        Ok(())
+    }
+
     pub(crate) fn require_revision_baseline(&self, manifest: &ChangeManifest) -> Result<()> {
         if read_bounded(
             &self.fs,
@@ -241,7 +259,7 @@ impl ChangeEngine {
             if id == current.change.change_id {
                 continue;
             }
-            let (manifest, hash) = self.load_manifest(&id)?;
+            let (manifest, hash) = self.load_manifest_structure(&id)?;
             let other_trees = tree_inventory(&manifest)?;
             if !other_trees
                 .iter()
@@ -255,6 +273,9 @@ impl ChangeEngine {
                 .is_some_and(|r| r.status == ChangeStatus::Aborted)
             {
                 continue;
+            }
+            if terminal.is_none() {
+                self.validate_manifest(&manifest, &id)?;
             }
             let state = journal::load_journal(&self.fs, &manifest, &hash)?;
             let active = terminal

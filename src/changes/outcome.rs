@@ -105,10 +105,14 @@ pub(crate) fn terminal_report(
         return Err(WikiError::invalid("retained receipt note binding mismatch"));
     }
     let verified = journal::decode_journal(&encoded(&proof.journal)?, manifest, hash)?;
-    let snapshot = proof.journal.iter().rev().find_map(|f| match &f.event {
-        ChangeEvent::Indexed { snapshot } => Some(snapshot.clone()),
-        _ => None,
-    });
+    let snapshot = (proof.status == ChangeStatus::Committed)
+        .then(|| {
+            proof.journal.iter().rev().find_map(|f| match &f.event {
+                ChangeEvent::Indexed { snapshot } => Some(snapshot.clone()),
+                _ => None,
+            })
+        })
+        .flatten();
     if verified.status != Some(proof.status) || snapshot != proof.snapshot {
         return Err(WikiError::invalid(
             "retained receipt does not prove terminal outcome",
@@ -225,10 +229,14 @@ fn retain(
             manifest_hash: hash.clone(),
         },
         status,
-        snapshot: transcript.iter().rev().find_map(|f| match &f.event {
-            ChangeEvent::Indexed { snapshot } => Some(snapshot.clone()),
-            _ => None,
-        }),
+        snapshot: (status == ChangeStatus::Committed)
+            .then(|| {
+                transcript.iter().rev().find_map(|f| match &f.event {
+                    ChangeEvent::Indexed { snapshot } => Some(snapshot.clone()),
+                    _ => None,
+                })
+            })
+            .flatten(),
         baseline_note_hash: baseline_hash,
         finalized_note_hash: final_hash,
         journal: transcript,

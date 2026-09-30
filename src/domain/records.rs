@@ -15,8 +15,13 @@ pub struct CanonicalRecord {
 impl CanonicalRecord {
     pub fn new(fields: BTreeMap<String, Value>) -> Result<Self> {
         let schema = required_string(&fields, "wiki_schema")?;
-        if schema != "1" {
-            return Err(field_error("wiki_schema", "must equal the string \"1\""));
+        if schema != "1"
+            && !(schema == "2" && fields.get("wiki_kind").and_then(Value::as_str) == Some("vault"))
+        {
+            return Err(field_error(
+                "wiki_schema",
+                "must equal the string \"1\" (vault markers also support storage layout \"2\")",
+            ));
         }
         let id = RecordId::new(required_string(&fields, "wiki_id")?)?;
         let kind: RecordKind = required_string(&fields, "wiki_kind")?.parse()?;

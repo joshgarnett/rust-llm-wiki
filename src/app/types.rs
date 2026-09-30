@@ -54,6 +54,7 @@ pub struct ReadOutcome {
     pub body: String,
     pub range: ByteSpan,
     pub truncated: bool,
+    pub continuation: Option<ByteSpan>,
 }
 #[derive(Debug, Clone, Serialize)]
 pub struct PlannedOperation {
@@ -97,6 +98,7 @@ pub struct ChangeDetails {
     pub observations: Vec<TargetObservation>,
     pub payloads: Vec<ChangePayload>,
     pub omitted_payloads: Vec<usize>,
+    pub unavailable_payloads: Vec<VaultRelativePath>,
 }
 #[derive(Debug, Clone, Serialize)]
 pub struct ChangePayload {

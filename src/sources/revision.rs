@@ -1,4 +1,5 @@
 //! Read-only canonical and projected source views. Payloads never become records.
+use super::identity::readable_ids;
 use super::types::*;
 use crate::{
     changes::{ReadDependency, ValidationInput},
@@ -153,7 +154,12 @@ impl<'a> SourceView<'a> {
     }
     pub fn from_fs(fs: &'a VaultFs) -> Result<Self> {
         let mut notes = BTreeMap::new();
-        for path in fs.root().scan_markdown()? {
+        for path in fs
+            .root()
+            .scan_markdown()?
+            .into_iter()
+            .filter(canonical_path)
+        {
             if let Some(before) = fs.read_before(&path)? {
                 notes.insert(path, parse_note(&before.bytes));
             }
@@ -226,13 +232,7 @@ impl<'a> SourceView<'a> {
         if self
             .notes
             .values()
-            .filter(|note| {
-                note.fields
-                    .as_ref()
-                    .and_then(|f| f.get("wiki_id"))
-                    .and_then(serde_json::Value::as_str)
-                    == Some(id.as_str())
-            })
+            .filter(|note| readable_ids(note).contains(id))
             .count()
             > 1
         {

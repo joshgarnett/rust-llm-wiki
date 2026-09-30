@@ -15,3 +15,4 @@ pub mod skill_export;
 
 pub mod interrupt;
 pub mod research;
+pub mod storage;

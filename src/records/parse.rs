@@ -130,7 +130,11 @@ pub fn parse_note_with_limits(raw: &[u8], limits: ParseLimits) -> ParsedNote {
             if fields
                 .get("wiki_schema")
                 .and_then(Value::as_str)
-                .is_some_and(|s| s != "1")
+                .is_some_and(|s| {
+                    s != "1"
+                        && !(s == "2"
+                            && fields.get("wiki_kind").and_then(Value::as_str) == Some("vault"))
+                })
             {
                 note.status = ParseStatus::UnsupportedSchema;
                 note.diagnostics.push(WikiError::invalid(

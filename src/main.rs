@@ -99,8 +99,10 @@ fn main() {
             1,
         ),
     };
-    if format == OutputFormat::Human && matches!(envelope.command.as_str(), "read" | "context") {
-        if let Some(freshness) = &envelope.meta.freshness {
+    if format == OutputFormat::Human {
+        if matches!(envelope.command.as_str(), "read" | "context")
+            && let Some(freshness) = &envelope.meta.freshness
+        {
             eprintln!(
                 "Freshness: {freshness}{}",
                 envelope
@@ -113,6 +115,11 @@ fn main() {
         }
         for warning in &envelope.warnings {
             eprintln!("Warning: {warning}");
+        }
+        if envelope.meta.partial && !matches!(envelope.command.as_str(), "search" | "read") {
+            eprintln!(
+                "Partial output: inspect the reported omissions and retained work before continuing."
+            );
         }
     }
     let output_result = if format == OutputFormat::Jsonl {

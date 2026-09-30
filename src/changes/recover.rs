@@ -17,12 +17,13 @@ impl ChangeEngine {
         let mut pending = Vec::new();
         // Discover every unresolved record before giving any publisher authority.
         for id in self.change_ids()? {
-            let (manifest, hash) = self.load_manifest(&id)?;
+            let (manifest, hash) = self.load_manifest_structure(&id)?;
             if let Some(terminal) = outcome::terminal_report(&self.fs, &manifest, &hash)? {
                 outcome::sync_receipt(&self.fs, permit, &manifest.change_id)?;
                 report.changes.push(terminal);
                 continue;
             }
+            self.validate_manifest(&manifest, &id)?;
             let state = journal::load_journal(&self.fs, &manifest, &hash)?;
             let change = PreparedChange {
                 change_id: id,

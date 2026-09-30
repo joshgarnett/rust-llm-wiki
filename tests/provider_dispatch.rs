@@ -7,9 +7,11 @@ mod wire_common;
 use common::*;
 use lwiki::{
     domain::ErrorCode,
+    jobs::diagnostics::DiagnosticKind,
     jobs::*,
     providers::{dispatcher::Dispatcher, types::*},
 };
+use serde_json::json;
 use std::sync::{
     Arc,
     atomic::{AtomicUsize, Ordering},
@@ -155,6 +157,98 @@ fn bounded_mock_reply_constructor_and_errors_do_not_echo_body() {
     assert!(TransportReply::new(200, vec![("Bad Name".into(), "secret".into())], vec![]).is_err());
     assert!(TransportReply::new(200, vec![], vec![1; 8 * 1024 * 1024 + 1]).is_err());
     assert!(TransportReply::new(200, vec![("X-Test".into(), "x".repeat(4097))], vec![]).is_err());
+}
+
+struct HttpBadRequest(AtomicUsize);
+impl Transport for HttpBadRequest {
+    fn execute<'a>(
+        &'a self,
+        _: AuthenticatedRequest<'a>,
+        _: TransportContext,
+    ) -> TransportFuture<'a> {
+        self.0.fetch_add(1, Ordering::SeqCst);
+        Box::pin(async {
+            Ok(TransportReply::new(
+                400,
+                vec![],
+                b"private gateway error with echoed credential".to_vec(),
+            )
+            .unwrap())
+        })
+    }
+}
+
+#[test]
+fn http_error_body_requires_opt_in_and_explicit_raw_inspection() {
+    for retain in [false, true] {
+        let c = wire_common::case(
+            ServiceRole::Generate,
+            RemoteInput {
+                version: 1,
+                operation: RemoteOperation::Generate {
+                    instructions: "Return JSON".into(),
+                    data: "bounded fixture".into(),
+                    output_schema: json!({"type":"object","properties":{"ok":{"type":"boolean"}},"required":["ok"],"additionalProperties":false}),
+                    max_output_tokens: 16,
+                },
+            },
+            "test-model",
+            "https://gateway.example/chat",
+            "",
+            |_| {},
+        );
+        let transport = Arc::new(HttpBadRequest(AtomicUsize::new(0)));
+        let dispatcher = Dispatcher::new(
+            c.fs.clone(),
+            DispatchOptions {
+                broker: c.broker.clone(),
+                transport: transport.clone(),
+                jitter: Arc::new(ZeroJitter),
+            },
+        )
+        .with_http_error_diagnostics(retain);
+        let failure = dispatcher
+            .execute(
+                &c.job,
+                &c.trusted,
+                &c.spec.tasks[0].key,
+                DispatchPurpose::Task,
+            )
+            .err()
+            .unwrap();
+        assert_eq!(transport.0.load(Ordering::SeqCst), 1);
+        assert_eq!(failure.disposition, DispatchDisposition::Rejected);
+        assert!(!format!("{:?}", failure.error).contains("private gateway"));
+        let inspection = c.job.inspect().unwrap();
+        let attempt = &inspection.attempts[0].attempt;
+        let safe = c
+            .job
+            .inspect_diagnostic(attempt, DiagnosticKind::HttpError, false)
+            .unwrap();
+        assert_eq!(safe.is_some(), retain);
+        if let Some(safe) = safe {
+            assert_eq!(safe.reference.reason, "http_400");
+            assert_eq!(
+                safe.reference.observed_bytes,
+                b"private gateway error with echoed credential".len() as u64
+            );
+            assert!(safe.body_utf8.is_none());
+            let raw = c
+                .job
+                .inspect_diagnostic(attempt, DiagnosticKind::HttpError, true)
+                .unwrap()
+                .unwrap();
+            assert_eq!(
+                raw.body_utf8.as_deref(),
+                Some("private gateway error with echoed credential")
+            );
+            assert!(
+                c.job
+                    .prune_diagnostic(attempt, DiagnosticKind::HttpError)
+                    .is_err()
+            );
+        }
+    }
 }
 
 struct RetainedReply {

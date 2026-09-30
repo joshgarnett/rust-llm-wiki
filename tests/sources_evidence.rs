@@ -1120,3 +1120,26 @@ fn malformed_copied_identity_blocks_unique_resolution() {
         ErrorCode::ReferenceAmbiguous
     );
 }
+
+#[test]
+fn syntactically_broken_copied_identity_blocks_source_verification() {
+    let (_t, root) = fixture();
+    let first = capture(&root, b"exact");
+    fs::write(
+        root.path().join("invalid-copy.md"),
+        format!(
+            "---\nwiki_schema: \"1\"\nwiki_id: \"{}\"\nwiki_kind: source\ntitle: [broken\n---\nReadable malformed copy\n",
+            first.source_id
+        ),
+    )
+    .unwrap();
+    assert_eq!(
+        store(&root)
+            .view()
+            .unwrap()
+            .verify(&source_ref(&first, b"exact"), CitationScope::Current)
+            .unwrap_err()
+            .code,
+        ErrorCode::ReferenceAmbiguous
+    );
+}

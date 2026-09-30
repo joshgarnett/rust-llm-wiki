@@ -514,7 +514,7 @@ pub fn stage_import(
         )?;
         let mut retained = None;
         for id in engine.change_ids()? {
-            let inspection = engine.inspect(&id)?;
+            let inspection = engine.inspect_history(&id)?;
             if inspection.manifest.origin.as_ref().is_some_and(|o| {
                 o.operation == OriginOperation::GraphImport
                     && o.packet_id == extracted.artifact.packet_id

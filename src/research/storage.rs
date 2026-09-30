@@ -20,7 +20,7 @@ pub(crate) fn read<T: DeserializeOwned>(
     run: &RecordId,
     kind: RecordKind,
 ) -> Result<(T, Blake3Hash)> {
-    let bytes = prepare::read_bounded(fs, path, MAX_ARTIFACT_BYTES + 16384)?
+    let bytes = prepare::read_bounded(fs, path, MAX_ARTIFACT_BYTES + 65536)?
         .ok_or_else(|| WikiError::new(ErrorCode::RecordNotFound, "research artifact is missing"))?;
     let hash = Blake3Hash::digest(&bytes);
     if expected.is_some_and(|e| e != &hash) {
@@ -104,6 +104,7 @@ pub(crate) fn load_packet(fs: &VaultFs, head: &ResearchHead) -> Result<ResearchP
         || packet.vault_id != head.vault_id
         || packet.run_id != head.run_id
         || packet.scope_hash != head.scope_hash
+        || packet.source_ranges_retired != head.source_ranges_retired
         || packet.generation != head.generation
         || packet.round != head.round
         || packet.remaining_sources != head.scope.max_sources - head.captured_sources
@@ -123,6 +124,7 @@ fn note<T: Serialize>(
     sequence: u32,
     value: &T,
     status: &str,
+    readable: Option<&str>,
 ) -> Result<Vec<u8>> {
     let mut fields = common(id, kind, "Agent research");
     if kind == RecordKind::Run {
@@ -136,9 +138,10 @@ fn note<T: Serialize>(
     }
     let json = String::from_utf8(encode(value)?).map_err(|_| invalid("research JSON UTF-8"))?;
     // JSON escapes embedded newlines, so submitted backticks cannot close this fence.
+    let heading = readable.unwrap_or("# Agent research\n");
     record_bytes(
         CanonicalRecord::new(fields)?,
-        format!("# Agent research\n\n```{FENCE}\n{json}\n```\n").as_bytes(),
+        format!("{heading}\n```{FENCE}\n{json}\n```\n").as_bytes(),
     )
 }
 pub(crate) fn artifact<T: Serialize>(
@@ -164,6 +167,7 @@ pub(crate) fn artifact<T: Serialize>(
         head.generation,
         value,
         "paused",
+        None,
     )?;
     Ok((
         ArtifactRef {
@@ -177,6 +181,170 @@ pub(crate) fn artifact<T: Serialize>(
             apply_after: vec![],
         },
     ))
+}
+/// A bounded prose projection accompanies, but never replaces, the immutable JSON fence.
+pub(crate) fn report_artifact(
+    fs: &VaultFs,
+    head: &ResearchHead,
+    report: &ResearchReport,
+) -> Result<(ArtifactRef, ExpectedWrite)> {
+    let (reference, mut operation) = artifact(head, "report", report)?;
+    let prefix = format!("runs/{}/outputs/report_", head.run_id);
+    let id = RecordId::new(
+        reference
+            .path
+            .as_str()
+            .strip_prefix(&prefix)
+            .and_then(|name| name.strip_suffix(".md"))
+            .ok_or_else(|| invalid("research report artifact ID missing"))?,
+    )?;
+    let readable = readable_report(fs, report)?;
+    let bytes = note(
+        &id,
+        &head.run_id,
+        RecordKind::RunEvent,
+        head.generation,
+        report,
+        "paused",
+        Some(&readable),
+    )?;
+    if bytes.len() > MAX_ARTIFACT_BYTES + 65536 {
+        return Err(invalid(
+            "readable research report exceeds retained note bound",
+        ));
+    }
+    operation.proposed = Some(bytes.clone());
+    Ok((
+        ArtifactRef {
+            path: reference.path,
+            hash: Blake3Hash::digest(&bytes),
+        },
+        operation,
+    ))
+}
+
+fn display(text: &str, max: usize) -> String {
+    let mut end = text.len().min(max);
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    let clipped = &text[..end];
+    let mut out = String::with_capacity(clipped.len());
+    for ch in clipped.chars() {
+        match ch {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '`' => out.push_str("&#96;"),
+            '[' => out.push_str("&#91;"),
+            ']' => out.push_str("&#93;"),
+            '\n' | '\r' => out.push(' '),
+            _ => out.push(ch),
+        }
+    }
+    if end < text.len() {
+        out.push_str(" … [display shortened; complete text in JSON below]");
+    }
+    out
+}
+
+fn readable_report(fs: &VaultFs, report: &ResearchReport) -> Result<String> {
+    let mut out = format!(
+        "# Research report\n\n**Question:** {}\n\n**Completion:** {} ({})\n\n**Freshness:** retained history; check current citations before using this report.\n\n**Claim assessment:** unassessed. Citation validity does not establish truth.\n\n## Claims\n",
+        display(&report.question, 4096),
+        if report.partial {
+            "partial"
+        } else {
+            "complete"
+        },
+        display(
+            report.completion_reason.as_deref().unwrap_or("unspecified"),
+            64
+        ),
+    );
+    if report.claims.is_empty() {
+        out.push_str("\nNo claims were submitted.\n");
+    }
+    for (index, claim) in report.claims.iter().enumerate() {
+        out.push_str(&format!(
+            "\n{}. **Unassessed:** {}\n",
+            index + 1,
+            display(&claim.text, 512)
+        ));
+        for citation in claim.citations.iter().take(4) {
+            let source = match citation {
+                CitationRef::Source(value) => value,
+                CitationRef::Assertion(value) => {
+                    out.push_str(&format!(
+                        "   - Assertion evidence `{}`.\n",
+                        value.assertion_id
+                    ));
+                    let path = format!(
+                        "sources/{}/revisions/{}/revision.md",
+                        value.source_id, value.source_revision
+                    );
+                    let date = acquisition_date(fs, &path)?;
+                    out.push_str(&format!("     - [[{path}|Source revision]]{}\n", date));
+                    continue;
+                }
+            };
+            let path = format!(
+                "sources/{}/revisions/{}/revision.md",
+                source.source_id, source.source_revision
+            );
+            let date = acquisition_date(fs, &path)?;
+            out.push_str(&format!(
+                "   - [[{path}|Source revision]] · UTF-8 bytes {}–{}{}\n",
+                source.span.start(),
+                source.span.end(),
+                date
+            ));
+        }
+        if claim.citations.len() > 4 {
+            out.push_str(&format!(
+                "   - {} more citations are in the JSON record.\n",
+                claim.citations.len() - 4
+            ));
+        }
+    }
+    out.push_str("\n## Unresolved gaps\n");
+    if report.gaps.is_empty() {
+        out.push_str("\nNone reported.\n");
+    }
+    for gap in &report.gaps {
+        out.push_str(&format!("\n- {}", display(gap, 128)));
+    }
+    out.push_str(
+        "\n\nThe JSON record below is authoritative for exact claims, citations and identity.\n",
+    );
+    if out.len() > 48 * 1024 {
+        return Err(invalid("research report readable view exceeds byte bound"));
+    }
+    Ok(out)
+}
+
+fn acquisition_date(fs: &VaultFs, path: &str) -> Result<String> {
+    let path = VaultRelativePath::new(path)?;
+    let Some(bytes) = prepare::read_bounded(fs, &path, 64 * 1024)? else {
+        return Ok(String::new());
+    };
+    let parsed = parse_note(&bytes);
+    let Some(record) = parsed.canonical else {
+        return Ok(String::new());
+    };
+    if record.kind() != RecordKind::Revision {
+        return Ok(String::new());
+    }
+    if let Some(claimed) = record.string("origin_retrieved_at") {
+        return Ok(format!(
+            " · Host-claimed retrieval {}",
+            display(claimed, 64)
+        ));
+    }
+    Ok(record
+        .string("wiki_captured_at")
+        .map(|captured| format!(" · Captured {}", display(captured, 64)))
+        .unwrap_or_default())
 }
 pub(crate) fn head_write(
     head: &ResearchHead,
@@ -197,6 +365,7 @@ pub(crate) fn head_write(
             } else {
                 "completed"
             },
+            None,
         )?),
         apply_after: after,
     })

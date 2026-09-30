@@ -17,7 +17,11 @@
   ],
   "properties": {
     "version": {
-      "const": 1
+      "enum": [
+        1,
+        2
+      ],
+      "description": "Version 2 uses shared immutable payload objects and requires vault storage layout 2. Legacy version 1 manifests retain their exact identity."
     },
     "vault_id": {
       "$ref": "#/$defs/id"
@@ -169,7 +173,7 @@
             "graph_import",
             "graph_resolve",
             "graph_decide",
-                  "graph_review"
+            "graph_review"
           ]
         },
         "packet_id": {

@@ -829,3 +829,57 @@ fn normal_cli_search_recovers_committed_sql_with_incomplete_change_journal() {
         ChangeStatus::Committed
     );
 }
+
+#[test]
+fn tiny_utf8_read_gives_progress_guidance_and_page_errors_give_template() {
+    let t = tempfile::tempdir().unwrap();
+    let root = t.path();
+    fs::write(
+        root.join("WIKI.md"),
+        b"---\nwiki_schema: \"1\"\nwiki_id: test_vault\nwiki_kind: vault\ntitle: Test\n---\n",
+    )
+    .unwrap();
+    let bytes = page("Unicode", "🦀Later");
+    ok(root, &["page", "put", "--file", "-"], Some(&bytes));
+    for mode in [
+        vec!["read", "--id", "Unicode", "--max-bytes", "1"],
+        vec!["read", "--id", "Unicode", "--max-bytes", "1", "--no-sync"],
+    ] {
+        let (exit, output) = invoke(Some(root), &mode, None);
+        assert_eq!(exit, 2, "{output}");
+        assert_eq!(output["error"]["details"]["minimum_max_bytes"], 4);
+    }
+    let complete = ok(root, &["read", "--id", "Unicode", "--max-bytes", "4"], None);
+    assert_eq!(complete["data"]["body"], "🦀");
+    assert_eq!(complete["data"]["continuation"]["start"], 4);
+    assert!(
+        complete["warnings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|v| v.as_str().unwrap().contains("--start 4"))
+    );
+    for args in [
+        vec!["page", "put", "--file", "-"],
+        vec!["page", "put", "--file", "-", "--path", "pages/Plain.md"],
+    ] {
+        let (exit, output) = invoke(Some(root), &args, Some(b"# Plain Markdown"));
+        assert_ne!(exit, 0);
+        assert_eq!(output["meta"]["wiki_id"], "test_vault");
+        assert!(
+            output["error"]["details"]["missing_fields"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|v| v == "wiki_id")
+        );
+        assert!(
+            output["error"]["details"]["template"]
+                .as_str()
+                .unwrap()
+                .contains("wiki_kind: page")
+        );
+    }
+    let schema = ok(root, &["schema", "page"], None);
+    assert!(schema["data"].is_object());
+}

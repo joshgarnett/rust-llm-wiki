@@ -213,7 +213,11 @@ impl ChangeEngine {
             .map_err(|e| WikiError::invalid(e.to_string()))?;
         let deps = resolve_dependencies(&plan.operations)?;
         let mut manifest = ChangeManifest {
-            version: 1,
+            version: if crate::storage::layout::active(self.fs.root())? {
+                2
+            } else {
+                1
+            },
             vault_id: self.vault_id.clone(),
             change_id: change_id.clone(),
             title: draft.title,
@@ -284,7 +288,7 @@ impl ChangeEngine {
         let mut matching = None;
         let mut differing = false;
         for id in self.change_ids()? {
-            let change = self.inspect(&id)?;
+            let change = self.inspect_history(&id)?;
             if let Some(existing) = &change.manifest.origin
                 && existing.operation == origin.operation
                 && existing.packet_id == origin.packet_id
@@ -434,6 +438,51 @@ impl ChangeEngine {
         id: &RecordId,
         remaining: &mut usize,
     ) -> Result<(ChangeManifest, Blake3Hash)> {
+        let (manifest, hash) = self.load_manifest_structure(id)?;
+        let payload_bytes = manifest
+            .operations
+            .iter()
+            .flat_map(|op| [&op.before_payload, &op.after_payload])
+            .flatten()
+            .try_fold(0usize, |total, payload| {
+                usize::try_from(payload.byte_len)
+                    .ok()
+                    .and_then(|len| total.checked_add(len))
+                    .ok_or_else(|| {
+                        WikiError::new(
+                            ErrorCode::BudgetExceeded,
+                            "retained payload aggregate length overflow",
+                        )
+                    })
+            })?;
+        let intrinsic_limit = if manifest.inverse_of.is_some() {
+            MAX_INVERSE_PAYLOAD_BYTES
+        } else if manifest.origin.as_ref().is_some_and(|origin| {
+            matches!(
+                origin.operation,
+                OriginOperation::GraphDecide | OriginOperation::GraphReview
+            )
+        }) {
+            128 * 1024 * 1024
+        } else {
+            usize::MAX
+        };
+        if payload_bytes > (*remaining).min(intrinsic_limit) {
+            return Err(WikiError::new(
+                ErrorCode::BudgetExceeded,
+                "retained inverse ancestry exceeds payload read ceiling",
+            ));
+        }
+        *remaining -= payload_bytes;
+        self.validate_manifest(&manifest, id)?;
+        Ok((manifest, hash))
+    }
+    /// Read exact manifest identity and structural bindings only. This is history
+    /// evidence, not permission to apply or invert without retained payloads.
+    pub(crate) fn load_manifest_structure(
+        &self,
+        id: &RecordId,
+    ) -> Result<(ChangeManifest, Blake3Hash)> {
         let bytes = read_bounded(&self.fs, &manifest_path(id)?, MAX_MANIFEST_BYTES + 65_536)?
             .ok_or_else(|| WikiError::invalid("missing retained manifest"))?;
         let parsed = parse_note(&bytes);
@@ -478,87 +527,16 @@ impl ChangeEngine {
             return Err(WikiError::invalid("manifest fence hash mismatch"));
         }
         let manifest: ChangeManifest = strict_json(json)?;
-        let payload_bytes = manifest
-            .operations
-            .iter()
-            .flat_map(|op| [&op.before_payload, &op.after_payload])
-            .flatten()
-            .try_fold(0usize, |total, payload| {
-                usize::try_from(payload.byte_len)
-                    .ok()
-                    .and_then(|len| total.checked_add(len))
-                    .ok_or_else(|| {
-                        WikiError::new(
-                            ErrorCode::BudgetExceeded,
-                            "retained payload aggregate length overflow",
-                        )
-                    })
-            })?;
-        let intrinsic_limit = if manifest.inverse_of.is_some() {
-            MAX_INVERSE_PAYLOAD_BYTES
-        } else if manifest.origin.as_ref().is_some_and(|origin| {
-            matches!(
-                origin.operation,
-                OriginOperation::GraphDecide | OriginOperation::GraphReview
-            )
-        }) {
-            128 * 1024 * 1024
-        } else {
-            usize::MAX
-        };
-        if payload_bytes > (*remaining).min(intrinsic_limit) {
-            return Err(WikiError::new(
-                ErrorCode::BudgetExceeded,
-                "retained inverse ancestry exceeds payload read ceiling",
-            ));
-        }
-        *remaining -= payload_bytes;
-        self.validate_manifest(&manifest, id)?;
+        self.validate_manifest_structure(&manifest, id)?;
         Ok((manifest, hash))
     }
     pub(crate) fn validate_manifest(&self, manifest: &ChangeManifest, id: &RecordId) -> Result<()> {
-        if manifest.version != 1
-            || &manifest.change_id != id
-            || manifest.vault_id != self.vault_id
-            || manifest.operations.len() > MAX_OPS
-            || manifest.read_preconditions.len() > MAX_OPS
-            || manifest.title.len() > 16_384
-        {
-            return Err(WikiError::invalid(
-                "invalid manifest identity/version/limits",
-            ));
-        }
+        self.validate_manifest_structure(manifest, id)?;
         let targets: Vec<_> = manifest
             .operations
             .iter()
             .map(|op| op.target.clone())
             .collect();
-        validate_retained_targets(&targets)?;
-        let read_paths: Vec<_> = manifest
-            .read_preconditions
-            .iter()
-            .map(|r| r.path.clone())
-            .collect();
-        validate_retained_targets(&read_paths)?;
-        let target_set: BTreeSet<_> = targets.iter().collect();
-        if read_paths.windows(2).any(|pair| pair[0] >= pair[1])
-            || read_paths.iter().any(|path| target_set.contains(path))
-        {
-            return Err(WikiError::invalid(
-                "read conditions must be sorted, unique and unmodified",
-            ));
-        }
-        let combined_paths: Vec<_> = targets.iter().chain(&read_paths).cloned().collect();
-        validate_retained_targets(&combined_paths)?;
-        if targets.windows(2).any(|pair| pair[0] >= pair[1]) {
-            return Err(WikiError::invalid("manifest targets must be sorted"));
-        }
-        let dependencies: Vec<_> = manifest
-            .operations
-            .iter()
-            .map(|op| op.apply_after.clone())
-            .collect();
-        topological_order(&dependencies)?;
         for (index, operation) in manifest.operations.iter().enumerate() {
             if operation.before == operation.after {
                 return Err(WikiError::invalid("retained no-op"));
@@ -606,6 +584,80 @@ impl ChangeEngine {
         }
         Ok(())
     }
+    fn validate_manifest_structure(&self, manifest: &ChangeManifest, id: &RecordId) -> Result<()> {
+        if !matches!(manifest.version, 1 | 2)
+            || &manifest.change_id != id
+            || manifest.vault_id != self.vault_id
+            || manifest.operations.len() > MAX_OPS
+            || manifest.read_preconditions.len() > MAX_OPS
+            || manifest.title.len() > 16_384
+        {
+            return Err(WikiError::invalid(
+                "invalid manifest identity/version/limits",
+            ));
+        }
+        let targets: Vec<_> = manifest
+            .operations
+            .iter()
+            .map(|op| op.target.clone())
+            .collect();
+        validate_retained_targets(&targets)?;
+        let read_paths: Vec<_> = manifest
+            .read_preconditions
+            .iter()
+            .map(|r| r.path.clone())
+            .collect();
+        validate_retained_targets(&read_paths)?;
+        let target_set: BTreeSet<_> = targets.iter().collect();
+        if read_paths.windows(2).any(|pair| pair[0] >= pair[1])
+            || read_paths.iter().any(|path| target_set.contains(path))
+        {
+            return Err(WikiError::invalid(
+                "read conditions must be sorted, unique and unmodified",
+            ));
+        }
+        let combined_paths: Vec<_> = targets.iter().chain(&read_paths).cloned().collect();
+        validate_retained_targets(&combined_paths)?;
+        if targets.windows(2).any(|pair| pair[0] >= pair[1]) {
+            return Err(WikiError::invalid("manifest targets must be sorted"));
+        }
+        let dependencies: Vec<_> = manifest
+            .operations
+            .iter()
+            .map(|op| op.apply_after.clone())
+            .collect();
+        topological_order(&dependencies)?;
+        for (index, op) in manifest.operations.iter().enumerate() {
+            if op.before == op.after
+                || op.role == OperationRole::ImmutableAsset && op.before != ExpectedState::Absent
+            {
+                return Err(WikiError::invalid("invalid retained operation structure"));
+            }
+            for (side, expected, payload) in [
+                ("before", &op.before, &op.before_payload),
+                ("proposed", &op.after, &op.after_payload),
+            ] {
+                match (expected, payload) {
+                    (ExpectedState::Absent, None) => {}
+                    (ExpectedState::Hash(hash), Some(payload))
+                        if payload.path
+                            == if manifest.version == 2 {
+                                crate::storage::layout::object_path(hash)?
+                            } else {
+                                payload_path(id, index, side, &op.target)?
+                            }
+                            && &payload.hash == hash
+                            && payload.byte_len <= MAX_PAYLOAD_BYTES as u64 => {}
+                    _ => {
+                        return Err(WikiError::invalid(
+                            "invalid retained payload reference structure",
+                        ));
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
     pub(crate) fn verify_payload(
         &self,
         id: &RecordId,
@@ -637,7 +689,8 @@ impl ChangeEngine {
         match (expected, payload) {
             (ExpectedState::Absent, None) => Ok(None),
             (ExpectedState::Hash(hash), Some(payload)) => {
-                if payload.path != payload_path(id, index, side, target)?
+                if (payload.path != payload_path(id, index, side, target)?
+                    && payload.path != crate::storage::layout::object_path(hash)?)
                     || &payload.hash != hash
                     || payload.byte_len > MAX_PAYLOAD_BYTES as u64
                 {
@@ -667,8 +720,15 @@ impl ChangeEngine {
         let Some(bytes) = bytes else {
             return Ok(None);
         };
-        let path = payload_path(id, index, side, target)?;
-        self.persist(permit, &path, bytes)?;
+        let path = if crate::storage::layout::active(self.fs.root())? {
+            let path = crate::storage::layout::object_path(&Blake3Hash::digest(bytes))?;
+            crate::storage::layout::put(&self.fs, permit, &path, bytes)?;
+            path
+        } else {
+            let path = payload_path(id, index, side, target)?;
+            self.persist(permit, &path, bytes)?;
+            path
+        };
         Ok(Some(PayloadRef {
             path,
             hash: Blake3Hash::digest(bytes),
@@ -903,10 +963,13 @@ pub(crate) fn read_bounded(
     path: &VaultRelativePath,
     limit: usize,
 ) -> Result<Option<Vec<u8>>> {
+    let logical = path;
     let path = fs.root().resolve(path)?;
     let mut file = match File::open(&path) {
         Ok(file) => file,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return crate::storage::layout::legacy_payload(fs, logical, limit);
+        }
         Err(e) => return Err(io_error(e)),
     };
     let meta = file.metadata().map_err(io_error)?;
@@ -939,7 +1002,7 @@ pub(super) fn read_with_budget(
             ));
         }
         Ok(_) => {}
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
         Err(e) => return Err(io_error(e)),
     }
     let bytes = read_bounded(fs, path, MAX_PAYLOAD_BYTES.min(*remaining))?;

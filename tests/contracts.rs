@@ -442,3 +442,20 @@ fn predicate_literal_and_qualifier_matrix() {
     incomplete.as_object_mut().unwrap().remove("wiki_object_id");
     invalid(incomplete);
 }
+
+#[test]
+fn storage_layout_two_is_reserved_for_vault_markers() {
+    let marker = record("vault", json!({"wiki_schema":"2"}));
+    let parsed = canonical(marker.clone());
+    assert_eq!(parsed.kind(), RecordKind::Vault);
+    let bytes = b"---\nwiki_schema: \"2\"\nwiki_id: vault_fixture\nwiki_kind: vault\ntitle: Layout two\n---\nStorage layout 2\n";
+    assert_eq!(
+        lwiki::records::parse_note(bytes).status,
+        lwiki::records::ParseStatus::Valid
+    );
+    invalid(record(
+        "page",
+        json!({"wiki_schema":"2","wiki_status":"reviewed"}),
+    ));
+    invalid(record("vault", json!({"wiki_schema":"3"})));
+}

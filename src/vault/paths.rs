@@ -103,6 +103,18 @@ impl VaultRoot {
         relative: &VaultRelativePath,
         on_entry: &mut dyn FnMut() -> Result<()>,
     ) -> Result<PathBuf> {
+        let physical = crate::storage::layout::physical_relative(self, relative)?;
+        self.resolve_raw_budgeted(&physical, on_entry)
+    }
+    /// Containment-checked physical paths for migration, never logical aliases.
+    pub(crate) fn resolve_raw(&self, relative: &VaultRelativePath) -> Result<PathBuf> {
+        self.resolve_raw_budgeted(relative, &mut || Ok(()))
+    }
+    pub(crate) fn resolve_raw_budgeted(
+        &self,
+        relative: &VaultRelativePath,
+        on_entry: &mut dyn FnMut() -> Result<()>,
+    ) -> Result<PathBuf> {
         let mut path = self.path.clone();
         for component in relative.as_str().split('/') {
             on_entry()?;
@@ -133,14 +145,19 @@ impl VaultRoot {
     pub fn validate_portable_paths(&self, paths: &[VaultRelativePath]) -> Result<()> {
         let mut planned = BTreeMap::<String, String>::new();
         let mut targets = std::collections::BTreeSet::new();
+        let retained = crate::storage::layout::active(self)?;
         for relative in paths {
             if !targets.insert(relative.as_str()) {
                 return Err(WikiError::invalid("duplicate planned target"));
             }
+            if retained {
+                self.validate_retained_logical_siblings(relative)?;
+            }
             self.resolve(relative)?;
+            let physical = crate::storage::layout::physical_relative(self, relative)?;
             let mut parent = self.path.clone();
             let mut prefix = String::new();
-            for component in relative.as_str().split('/') {
+            for component in physical.as_str().split('/') {
                 if !prefix.is_empty() {
                     prefix.push('/');
                 }
@@ -172,6 +189,67 @@ impl VaultRoot {
         }
         Ok(())
     }
+    /// Relocation must not erase portable logical siblings. Reserve only fixed
+    /// namespace components; run IDs retain their exact spelling and identity.
+    fn validate_retained_logical_siblings(&self, relative: &VaultRelativePath) -> Result<()> {
+        let mut parent = String::new();
+        for component in relative.as_str().split('/') {
+            let reserved: &[&str] = match parent.as_str() {
+                "" => &["changes", "knowledge", "runs"],
+                "knowledge" => &["extractions"],
+                "knowledge/extractions" => &["packets"],
+                p if p.starts_with("runs/") && p.split('/').count() == 2 => {
+                    &["events", "checkpoints", "outputs", "run.md", "research.md"]
+                }
+                _ => &[],
+            };
+            let folded = UniCase::unicode(component).to_folded_case();
+            if reserved
+                .iter()
+                .any(|name| *name != component && *name == folded)
+            {
+                return Err(WikiError::invalid("case-folded managed namespace alias"));
+            }
+            let visible = if parent.is_empty() {
+                self.path.clone()
+            } else {
+                self.resolve_raw(&VaultRelativePath::new(&parent)?)?
+            };
+            // Runs and outputs are split directories: readable reports can stay
+            // visible while machine records and their parent IDs live internally.
+            let internal = if parent == "runs" || parent.starts_with("runs/") {
+                Some(VaultRelativePath::new(format!(".wiki/retained/{parent}"))?)
+            } else if parent.is_empty() {
+                None
+            } else {
+                crate::storage::layout::managed_path(&VaultRelativePath::new(&parent)?)
+            };
+            let internal = internal.map(|path| self.resolve_raw(&path)).transpose()?;
+            for directory in std::iter::once(visible).chain(internal) {
+                let entries = match fs::read_dir(directory) {
+                    Ok(entries) => entries,
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+                    Err(e) => return Err(io_error("check logical siblings", e)),
+                };
+                for entry in entries {
+                    let name = entry
+                        .map_err(|e| io_error("read logical sibling", e))?
+                        .file_name();
+                    let name = name.to_str().ok_or_else(|| {
+                        WikiError::invalid("non-UTF-8 filesystem path is unsupported")
+                    })?;
+                    if name != component && UniCase::unicode(name).to_folded_case() == folded {
+                        return Err(WikiError::invalid("case-folded logical path collision"));
+                    }
+                }
+            }
+            if !parent.is_empty() {
+                parent.push('/');
+            }
+            parent.push_str(component);
+        }
+        Ok(())
+    }
     /// Canonical Markdown envelopes only; source payloads are read via their revision owner.
     pub fn scan_markdown(&self) -> Result<Vec<VaultRelativePath>> {
         self.scan_markdown_budgeted(&mut || Ok(()))
@@ -192,6 +270,20 @@ impl VaultRoot {
     ) -> Result<Vec<VaultRelativePath>> {
         let mut out = Vec::new();
         Self::scan_dir(&self.path, "", &mut out, max_files, on_entry)?;
+        if crate::storage::layout::active(self)? {
+            // Old physical copies may survive interrupted unlink. Only the active
+            // logical namespace supplies canonical identity after activation.
+            out.retain(|path| crate::storage::layout::managed_path(path).is_none());
+            for (physical, logical) in [
+                (".wiki/retained/packets", "knowledge/extractions/packets"),
+                (".wiki/retained/runs", "runs"),
+            ] {
+                let directory = self.resolve_raw(&VaultRelativePath::new(physical)?)?;
+                if directory.is_dir() {
+                    Self::scan_dir(&directory, logical, &mut out, max_files, on_entry)?;
+                }
+            }
+        }
         out.sort_by(|a, b| a.as_str().as_bytes().cmp(b.as_str().as_bytes()));
         Ok(out)
     }

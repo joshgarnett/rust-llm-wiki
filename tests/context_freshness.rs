@@ -505,6 +505,47 @@ fn pure_assembly_rebinds_public_candidates_and_refuses_bad_paths_or_budgets() {
     }
     assert!(assembly::assemble(&reader, &graph_request(), &hits, Some(&forged)).is_err());
 }
+
+#[test]
+fn public_navigation_candidates_cannot_invent_links_or_provenance() {
+    let fixture = Fixture::new();
+    for name in ["unlinked_a", "unlinked_b"] {
+        fs::write(fixture.temp.path().join(format!("{name}.md")), format!("---\nwiki_schema: \"1\"\nwiki_id: {name}\nwiki_kind: page\ntitle: {name}\nwiki_status: reviewed\n---\nReadable unrelated page\n")).unwrap();
+    }
+    let writer = fixture.writer();
+    fixture.catalog.sync(&writer).unwrap();
+    let reader = fixture.catalog.index_snapshot().unwrap();
+    let hits =
+        lwiki::retrieval::lexical::search(&reader, "unmatchedword", &QueryPlan::default()).unwrap();
+    let mut request = graph_request();
+    request.graph.as_mut().unwrap().include_navigation = true;
+    let graph = graph_query::query(&reader, CLAIM, request.graph.as_ref().unwrap()).unwrap();
+    let locator = |name: &str| {
+        let row = &reader.projection().records[&id(name)];
+        DocumentLocator {
+            record: Some(RecordRef {
+                vault_id: id(VAULT),
+                record_id: row.record.id().clone(),
+                expected_kind: RecordKind::Page,
+            }),
+            path: row.path.clone(),
+            observed_hash: row.hash.clone(),
+        }
+    };
+    for reason in [NavigationReason::PageLink, NavigationReason::Provenance] {
+        let mut forged = graph.clone();
+        forged.navigation = vec![NavigationEdge {
+            from: locator("unlinked_a"),
+            to: locator("unlinked_b"),
+            reason,
+        }];
+        let error = assembly::assemble(&reader, &request, &hits, Some(&forged))
+            .err()
+            .unwrap();
+        assert_eq!(error.code, ErrorCode::RecordInvalid);
+        assert!(error.message.contains("canonical links or provenance"));
+    }
+}
 #[test]
 fn draft_and_unsupported_descriptions_remain_discovery_only() {
     let f = Fixture::new();

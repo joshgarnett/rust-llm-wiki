@@ -275,12 +275,57 @@ fn invalid_notes_remain_literal_discovery() {
     assert_eq!(hit.locator.observed_hash, Blake3Hash::digest(raw));
     assert!(hit.excerpt.citation.is_none());
     assert!(
-        search(&r, "RareSymbol", &QueryPlan::default())
-            .unwrap()
+        hits.warnings
+            .iter()
+            .any(|w| w.contains("invalid.md") && w.contains("RECORD_INVALID"))
+    );
+    let lexical = search(&r, "RareSymbol", &QueryPlan::default()).unwrap();
+    assert!(
+        lexical
             .hits
             .iter()
             .any(|h| h.locator.path == relative("invalid.md"))
     );
+    assert!(lexical.warnings.iter().any(|w| w.contains("invalid.md")));
+    assert!(
+        search(&r, "Wiki", &QueryPlan::default())
+            .unwrap()
+            .warnings
+            .iter()
+            .all(|w| !w.contains("invalid.md"))
+    );
+}
+
+#[test]
+fn malformed_hit_warnings_are_bounded_and_do_not_repeat_diagnostic_text() {
+    let (temp, root, catalog) = fixture();
+    for i in 0..5 {
+        write(
+            temp.path(),
+            &format!("broken-{i}.md"),
+            b"---\nwiki_schema: \"2\"\ninvalid: [unfinished\n---\nNoisyNeedle\n",
+        );
+    }
+    let r = reader(&root, &catalog);
+    let result = search(&r, "NoisyNeedle", &QueryPlan::default()).unwrap();
+    assert_eq!(result.hits.len(), 5);
+    assert!(
+        result
+            .hits
+            .iter()
+            .all(|h| h.eligibility == Eligibility::Invalid && h.excerpt.citation.is_none())
+    );
+    assert_eq!(result.warnings.len(), 4);
+    assert!(
+        result
+            .warnings
+            .iter()
+            .take(3)
+            .all(|w| w.contains("invalid_note_hit:")
+                && w.contains("RECORD_INVALID")
+                && !w.contains("unfinished"))
+    );
+    assert!(result.warnings[3].contains("2 additional invalid note hits"));
 }
 
 #[test]
@@ -715,6 +760,108 @@ fn lexical_metadata_and_transcripts_are_excluded_but_literal_is_audit() {
         assert_eq!(hits.hits.len(), 1);
         assert_eq!(hits.hits[0].excerpt.label, ExcerptLabel::NoteText);
         assert!(hits.hits[0].excerpt.citation.is_none());
+    }
+}
+
+#[test]
+fn withdrawn_source_decision_rationale_is_historical_search_only() {
+    let (temp, root, catalog) = fixture();
+    let phrase = "North Lab does not use South Lab.";
+    let source = capture(&root, &catalog, phrase.as_bytes());
+    for entity in ["north", "south"] {
+        write(
+            temp.path(),
+            &format!("entities/{entity}.md"),
+            &note(
+                "entity",
+                entity,
+                entity,
+                json!({"wiki_status":"active","wiki_entity_type":"organization"}),
+                "",
+            ),
+        );
+    }
+    write(
+        temp.path(),
+        "assertion.md",
+        &note(
+            "assertion",
+            "assertion",
+            "Reviewed claim",
+            json!({"wiki_status":"accepted","wiki_subject_id":"north","wiki_object_id":"south","wiki_predicate":"uses","wiki_negated":true}),
+            "Reviewed claim\n",
+        ),
+    );
+    write(
+        temp.path(),
+        "evidence.md",
+        &note(
+            "evidence",
+            "evidence",
+            "Exact support",
+            json!({"wiki_status":"active","wiki_assertion_id":"assertion","wiki_source_id":source.source_id,"wiki_source_revision":source.revision_id,"wiki_stance":"supports","wiki_locator_kind":"utf8-bytes","wiki_span_start":0,"wiki_span_end":phrase.len(),"wiki_quote_hash":Blake3Hash::digest(phrase.as_bytes())}),
+            &String::from_utf8(exact_quote_body(phrase.as_bytes(), "\n", "Explanation").unwrap())
+                .unwrap(),
+        ),
+    );
+    let decision_path = "knowledge/decisions/decision.md";
+    write(
+        temp.path(),
+        decision_path,
+        &note(
+            "decision",
+            "decision",
+            "Review rationale",
+            json!({"wiki_status":"active","wiki_action":"accept","wiki_input_ids":["assertion"],"wiki_output_ids":["assertion"],"wiki_created_at":"2026-09-28T00:00:00Z"}),
+            phrase,
+        ),
+    );
+    let before = reader(&root, &catalog);
+    assert_eq!(
+        before.projection().records[&id("decision")].eligibility,
+        Eligibility::Current
+    );
+    drop(before);
+    let withdraw = SourceStore::new(VaultFs::new(root.clone()))
+        .plan_withdraw(&source.source_id, "fixture withdrawal")
+        .unwrap();
+    let writer = WriterPermit::acquire(&root, Duration::from_millis(200)).unwrap();
+    let engine = ChangeEngine::new(VaultFs::new(root.clone())).unwrap();
+    let prepared = engine
+        .prepare(&writer, withdraw.draft.unwrap())
+        .unwrap()
+        .prepared;
+    engine
+        .apply(&writer, &prepared, &CatalogGraphValidator, &catalog)
+        .unwrap();
+    drop(writer);
+    let after = catalog.verified_snapshot(None).unwrap();
+    assert_eq!(
+        after.projection().records[&id("decision")].eligibility,
+        Eligibility::Current
+    );
+    for mode in [SearchMode::Literal, SearchMode::Lexical] {
+        let mut plan = QueryPlan {
+            mode,
+            ..Default::default()
+        };
+        let current = search(&after, phrase, &plan).unwrap();
+        assert!(
+            current.hits.iter().all(|hit| {
+                hit.locator.path != relative(decision_path)
+                    && hit.reasons.contains(&RetrievalReason::Identity)
+                    && hit.excerpt.text.is_empty()
+            }),
+            "mode {mode:?}: {:?}",
+            current.hits
+        );
+        plan.filters.include_historical = true;
+        let history = search(&after, phrase, &plan).unwrap();
+        assert!(history.hits.iter().any(|hit| {
+            hit.locator.path == relative(decision_path)
+                && hit.eligibility == Eligibility::Current
+                && hit.excerpt.label == ExcerptLabel::NoteText
+        }));
     }
 }
 

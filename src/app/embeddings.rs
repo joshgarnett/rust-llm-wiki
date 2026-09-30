@@ -30,6 +30,13 @@ struct TaskMaterialization {
     probe: bool,
     corpus: bool,
 }
+#[derive(Default)]
+struct RecoveredEmbeddingWork {
+    generated: usize,
+    generated_hashes: BTreeSet<Blake3Hash>,
+    run_id: Option<RecordId>,
+    warnings: Vec<String>,
+}
 struct HitScope<'a> {
     context: Option<bool>,
     graph: Option<&'a GraphPlan>,
@@ -40,6 +47,7 @@ pub struct EmbeddingRuntime<'a> {
     pub job_options: JobOptions,
     pub limits: LifetimeLimits,
     pub deadline_ms: u64,
+    pub requested_limits: Option<super::remote::RequestedJobLimits>,
 }
 #[derive(Debug, Clone, Serialize)]
 pub struct EmbeddingReport {
@@ -67,6 +75,23 @@ struct RunMarker {
 }
 fn fail(code: ErrorCode, text: &str) -> WikiError {
     WikiError::new(code, text)
+}
+fn with_embedding_context(mut error: WikiError, mut context: serde_json::Value) -> WikiError {
+    let reason = error.details.get("reason").cloned().or_else(|| {
+        error
+            .details
+            .get("cause")
+            .and_then(|cause| cause.get("reason"))
+            .cloned()
+    });
+    if let Some(object) = context.as_object_mut() {
+        if let Some(reason) = reason {
+            object.insert("reason".into(), reason);
+        }
+        object.insert("cause".into(), error.details);
+    }
+    error.details = context;
+    error
 }
 fn proof(units: &[RenderedUnit]) -> Result<Blake3Hash> {
     Ok(Blake3Hash::digest(crate::graph::packet::canonical_json(
@@ -208,7 +233,9 @@ impl OfflineApp {
                     },
                 )? > 0;
             }
-            ledger.complete_run()?;
+            if let Some(warning) = self.finish_embedding_job(&ledger)? {
+                report.warnings.push(warning);
+            }
             report.warnings.push("explicit accounted probe validates one response; auto dimension remains corpus-unestablished".into());
         }
         Ok(report)
@@ -293,13 +320,17 @@ impl OfflineApp {
         drop(writer);
         drop(reader);
         drop(store);
-        self.recover_embedding_jobs(&spec, runtime)?;
+        let recovered = self.recover_embedding_jobs(&spec, runtime)?;
+        report.generated_inputs += recovered.generated;
+        report.network_used |= recovered.generated > 0;
+        report.run_id = recovered.run_id;
+        report.warnings.extend(recovered.warnings);
         let available = VectorStore::open(&self.fs, None)?;
         let mut pending = Vec::new();
         for input in missing {
             if available.vector(&space, &input.input_hash)?.is_none() {
                 pending.push(input);
-            } else {
+            } else if !recovered.generated_hashes.contains(&input.input_hash) {
                 report.reused_inputs += 1;
             }
         }
@@ -319,11 +350,13 @@ impl OfflineApp {
                 if already {
                     continue;
                 }
-                let generated=self.dispatch_embedding_task(&ledger,&task,&spec,&units,runtime,TaskMaterialization { probe:false, corpus:true }).map_err(|mut e|{e.details=serde_json::json!({"run_id":report.run_id,"generated_inputs":report.generated_inputs,"space":space,"context":e.details});e})?;
+                let generated=self.dispatch_embedding_task(&ledger,&task,&spec,&units,runtime,TaskMaterialization { probe:false, corpus:true }).map_err(|e| with_embedding_context(e,serde_json::json!({"run_id":report.run_id,"generated_inputs":report.generated_inputs,"space":space})))?;
                 report.generated_inputs += generated;
                 report.network_used |= generated > 0;
             }
-            ledger.complete_run()?;
+            if let Some(warning) = self.finish_embedding_job(&ledger)? {
+                report.warnings.push(warning);
+            }
         }
         let writer = self.embedding_writer()?;
         let catalog = Catalog::new(self.fs.clone(), self.vault_id.clone());
@@ -364,11 +397,12 @@ impl OfflineApp {
         &self,
         spec: &SpaceSpec,
         runtime: &EmbeddingRuntime<'_>,
-    ) -> Result<()> {
+    ) -> Result<RecoveredEmbeddingWork> {
+        let mut activity = RecoveredEmbeddingWork::default();
         let relative = VaultRelativePath::new(".wiki/state/embedding-jobs")?;
         let directory = self.fs.root().resolve(&relative)?;
         if !directory.exists() {
-            return Ok(());
+            return Ok(activity);
         }
         let mut paths = std::fs::read_dir(directory)
             .map_err(|e| fail(ErrorCode::Internal, &e.to_string()))?
@@ -430,10 +464,15 @@ impl OfflineApp {
                     .rev()
                     .find(|a| a.attempt.task_key == task.spec.key);
                 let Some(attempt) = attempt else { continue };
-                if attempt.phase == AttemptPhase::Settled
-                    && attempt.cache_outputs.is_empty()
-                    && marker.operation != "embeddings_check"
+                if matches!(
+                    attempt.phase,
+                    AttemptPhase::OutputCommitted | AttemptPhase::Settled
+                ) && attempt.cache_outputs.is_empty()
+                    && self.embedding_receipt_disposition(attempt)? == OutputDisposition::Rejected
                 {
+                    if attempt.phase == AttemptPhase::OutputCommitted {
+                        ledger.settle(&attempt.attempt)?;
+                    }
                     continue;
                 }
                 if matches!(
@@ -462,7 +501,7 @@ impl OfflineApp {
                     attempt.phase,
                     AttemptPhase::Received | AttemptPhase::OutputCommitted | AttemptPhase::Settled
                 ) {
-                    self.dispatch_embedding_task(
+                    let generated = self.dispatch_embedding_task(
                         &ledger,
                         &task.spec,
                         spec,
@@ -473,27 +512,118 @@ impl OfflineApp {
                             corpus: marker.operation == "embeddings_sync",
                         },
                     )?;
+                    activity.generated += generated;
+                    if generated > 0 {
+                        activity.run_id = Some(inspection.spec.run_id.clone());
+                        activity.generated_hashes.extend(
+                            ledger.inspect()?.tasks[&task.spec.key]
+                                .cache_outputs
+                                .iter()
+                                .map(|output| output.input_hash.clone()),
+                        );
+                    }
                 } else if attempt.remote_exposure == RemoteExposure::PossiblyInFlight {
-                    return Err(fail(
-                        ErrorCode::RecoveryRequired,
-                        "prior embedding send outcome remains unknown; no repeat send authorized",
-                    ));
+                    if !runtime.job_options.policy.retry_uncertain {
+                        return Err(fail(
+                            ErrorCode::RecoveryRequired,
+                            "prior embedding send outcome remains unknown; no repeat send authorized without --retry-uncertain",
+                        ));
+                    }
+                    super::remote::validate_retained_arguments(
+                        &inspection,
+                        &runtime.limits,
+                        runtime.deadline_ms,
+                        runtime.requested_limits.as_ref(),
+                    )?;
+                    if matches!(inspection.state, RunState::Paused | RunState::Stopped) {
+                        ledger.resume(None)?;
+                    }
+                    let generated = self.dispatch_embedding_task(
+                        &ledger,
+                        &task.spec,
+                        spec,
+                        &marker.expected_units,
+                        runtime,
+                        TaskMaterialization {
+                            probe: marker.operation == "embeddings_check",
+                            corpus: marker.operation == "embeddings_sync",
+                        },
+                    )?;
+                    activity.generated += generated;
+                    if generated > 0 {
+                        activity.run_id = Some(inspection.spec.run_id.clone());
+                        activity.generated_hashes.extend(
+                            ledger.inspect()?.tasks[&task.spec.key]
+                                .cache_outputs
+                                .iter()
+                                .map(|output| output.input_hash.clone()),
+                        );
+                    }
                 }
             }
-            if ledger
-                .inspect()?
-                .tasks
-                .values()
-                .all(|t| t.state == TaskState::Completed)
-            {
-                if matches!(
-                    ledger.inspect()?.state,
-                    RunState::Paused | RunState::Stopped
-                ) {
-                    ledger.resume(None)?;
-                }
-                ledger.complete_run()?;
+            if let Some(warning) = self.finish_embedding_job(&ledger)? {
+                activity.warnings.push(warning);
             }
+        }
+        Ok(activity)
+    }
+    fn finish_embedding_job(&self, ledger: &JobLedger) -> Result<Option<String>> {
+        super::remote::finish_provider_job(ledger)
+    }
+    fn verify_embedding_send_inputs(
+        &self,
+        task: &TaskSpec,
+        spec: &SpaceSpec,
+        expected: &[RenderedUnit],
+    ) -> Result<()> {
+        let bytes = crate::changes::prepare::read_bounded(&self.fs, &task.input.path, 256 * 1024)?
+            .ok_or_else(|| {
+                fail(
+                    ErrorCode::RecoveryRequired,
+                    "embedding descriptor missing before dispatch",
+                )
+            })?;
+        if bytes.len() as u64 != task.input.byte_len
+            || Blake3Hash::digest(&bytes) != task.input.hash
+        {
+            return Err(fail(
+                ErrorCode::RecoveryRequired,
+                "embedding descriptor changed before dispatch",
+            ));
+        }
+        let input: RemoteInput = serde_json::from_slice(&bytes)
+            .map_err(|_| WikiError::invalid("embedding descriptor invalid"))?;
+        if crate::graph::packet::canonical_json(&input)? != bytes {
+            return Err(WikiError::invalid("embedding descriptor is noncanonical"));
+        }
+        let RemoteOperation::Embed { inputs, .. } = input.operation else {
+            return Err(WikiError::invalid("embedding descriptor operation differs"));
+        };
+        let hashes: BTreeSet<_> = inputs.iter().map(|input| &input.input_hash).collect();
+        let retained: Vec<_> = expected
+            .iter()
+            .filter(|unit| hashes.contains(&unit.input_hash))
+            .cloned()
+            .collect();
+        if retained.is_empty()
+            || hashes
+                .iter()
+                .any(|hash| !retained.iter().any(|unit| &unit.input_hash == *hash))
+        {
+            return Err(fail(
+                ErrorCode::FreshnessConflict,
+                "embedding task lost its retained corpus units",
+            ));
+        }
+        let writer = self.embedding_writer()?;
+        let catalog = Catalog::new(self.fs.clone(), self.vault_id.clone());
+        let snapshot = catalog.verified_snapshot(Some(&writer))?;
+        let current = render::corpus(&snapshot, &spec.settings)?;
+        if !same_units(&retained, &current) {
+            return Err(fail(
+                ErrorCode::FreshnessConflict,
+                "embedding source changed before new dispatch; retained unknown attempt remains protected",
+            ));
         }
         Ok(())
     }
@@ -730,7 +860,22 @@ impl OfflineApp {
                 marker.run_id,
                 runtime.job_options.clone(),
             )?;
-            let inspection = ledger.replay()?.inspection;
+            let mut inspection = ledger.replay()?.inspection;
+            for attempt in &inspection.attempts {
+                if attempt.phase == AttemptPhase::OutputCommitted
+                    && attempt.cache_outputs.is_empty()
+                    && self.embedding_receipt_disposition(attempt)? == OutputDisposition::Rejected
+                {
+                    ledger.settle(&attempt.attempt)?;
+                }
+            }
+            inspection = ledger.replay()?.inspection;
+            super::remote::validate_retained_arguments(
+                &inspection,
+                &runtime.limits,
+                runtime.deadline_ms,
+                runtime.requested_limits.as_ref(),
+            )?;
             let cache = VectorStore::open(&self.fs, None)?;
             let accounted_missing = !inspection.attempts.is_empty()
                 && inspection
@@ -745,6 +890,14 @@ impl OfflineApp {
                     .collect::<Result<Vec<_>>>()?
                     .into_iter()
                     .any(|valid| !valid);
+            let settled_rejection = inspection.attempts.iter().try_fold(false, |found, a| {
+                if a.phase == AttemptPhase::Settled && a.cache_outputs.is_empty() {
+                    Ok(found
+                        || self.embedding_receipt_disposition(a)? == OutputDisposition::Rejected)
+                } else {
+                    Ok(found)
+                }
+            })?;
             let retired = accounted_missing
                 || inspection
                     .attempts
@@ -754,7 +907,7 @@ impl OfflineApp {
                         .attempts
                         .iter()
                         .any(|a| a.cache_outputs.is_empty())
-                    && !probe;
+                    && (!probe || settled_rejection);
             if inspection.state == RunState::Completed || retired {
                 marker_path = VaultRelativePath::new(format!(
                     ".wiki/state/embedding-jobs/{}-{}.json",
@@ -899,6 +1052,25 @@ impl OfflineApp {
         }
         Ok(())
     }
+    fn embedding_receipt_disposition(
+        &self,
+        attempt: &AttemptInspection,
+    ) -> Result<OutputDisposition> {
+        let reference = attempt.receipt.as_ref().ok_or_else(|| {
+            fail(
+                ErrorCode::RecoveryRequired,
+                "settled embedding receipt missing",
+            )
+        })?;
+        let receipt = jobs::checkpoint::receipt(&self.fs, reference)?;
+        if receipt.attempt != attempt.attempt {
+            return Err(fail(
+                ErrorCode::RecoveryRequired,
+                "embedding receipt attempt differs",
+            ));
+        }
+        Ok(receipt.output_disposition)
+    }
     fn dispatch_embedding_task(
         &self,
         ledger: &JobLedger,
@@ -924,11 +1096,13 @@ impl OfflineApp {
             let writer = self.embedding_writer()?;
             let mut store = VectorStore::open(&self.fs, Some(&writer))?;
             drop(writer);
+            let disposition = self.embedding_receipt_disposition(previous)?;
             if previous
                 .cache_outputs
                 .iter()
                 .all(|r| store.verify_ref(r).unwrap_or(false))
                 && (!previous.cache_outputs.is_empty() || probe)
+                && disposition == OutputDisposition::Validated
             {
                 if previous.phase == AttemptPhase::OutputCommitted {
                     ledger.settle(&previous.attempt)?;
@@ -957,6 +1131,18 @@ impl OfflineApp {
             DispatchPurpose::Task
         };
         let new_dispatch = !previous.is_some_and(|p| p.phase == AttemptPhase::Received);
+        if new_dispatch {
+            super::remote::validate_retained_arguments(
+                &inspection,
+                &runtime.limits,
+                runtime.deadline_ms,
+                runtime.requested_limits.as_ref(),
+            )?;
+            self.remote_gate(runtime)?;
+            if corpus && !probe {
+                self.verify_embedding_send_inputs(task, spec, expected)?;
+            }
+        }
         let outcome = if let Some(previous) = previous.filter(|a| a.phase == AttemptPhase::Received)
         {
             let output = match runtime.dispatcher.decode_retained_classified(
@@ -969,7 +1155,7 @@ impl OfflineApp {
                 Ok(output) => output,
                 Err(failure) => {
                     let invalid = matches!(&failure, RetainedDecodeFailure::InvalidResponse(_));
-                    let mut error = failure.error();
+                    let error = failure.error();
                     if invalid {
                         let rejected = jobs::checkpoint::receipt_plan(
                             ledger,
@@ -983,8 +1169,10 @@ impl OfflineApp {
                         let _ =
                             ledger.pause(StopReason::Failed("retained_provider_response".into()));
                     }
-                    error.details = serde_json::json!({"run_id":previous.attempt.run_id,"attempt":previous.attempt});
-                    return Err(error);
+                    return Err(with_embedding_context(
+                        error,
+                        serde_json::json!({"run_id":previous.attempt.run_id,"attempt":previous.attempt}),
+                    ));
                 }
             };
             DispatchOutcome {
@@ -999,7 +1187,7 @@ impl OfflineApp {
                 output,
             }
         } else {
-            runtime.dispatcher.execute(ledger,runtime.service,&task.key,purpose).map_err(|failure|{let mut e=failure.error;e.details=serde_json::json!({"run_id":inspection.spec.run_id,"attempt":failure.attempt,"spool":failure.spool});e})?
+            runtime.dispatcher.execute(ledger,runtime.service,&task.key,purpose).map_err(|failure| with_embedding_context(failure.error,serde_json::json!({"run_id":inspection.spec.run_id,"attempt":failure.attempt,"spool":failure.spool})))?
         };
         let materialized = (|| -> Result<_> {
             let writer = self.embedding_writer()?;
@@ -1076,12 +1264,14 @@ impl OfflineApp {
         let (valid, refs, mut store, space, target_expected, catalog, input_count) =
             match materialized {
                 Ok(value) => value,
-                Err(mut error) => {
+                Err(error) => {
                     // Only vector contract validation can reject a received provider output.
                     // Local cache/descriptor/writer failures preserve Received and its spool.
                     if error.code != ErrorCode::ProviderResponse {
-                        error.details = serde_json::json!({"run_id":outcome.attempt.run_id,"attempt":outcome.attempt,"recoverable_paid_response":true});
-                        return Err(error);
+                        return Err(with_embedding_context(
+                            error,
+                            serde_json::json!({"run_id":outcome.attempt.run_id,"attempt":outcome.attempt,"recoverable_paid_response":true}),
+                        ));
                     }
                     let rejected = jobs::checkpoint::receipt_plan(
                         ledger,
@@ -1093,8 +1283,10 @@ impl OfflineApp {
                     )?;
                     self.commit_embedding_receipt(ledger, rejected)?;
                     let _ = ledger.pause(StopReason::Failed(format!("{:?}", error.code)));
-                    error.details = serde_json::json!({"run_id":outcome.attempt.run_id,"attempt":outcome.attempt,"paid_output_rejected":true});
-                    return Err(error);
+                    return Err(with_embedding_context(
+                        error,
+                        serde_json::json!({"run_id":outcome.attempt.run_id,"attempt":outcome.attempt,"paid_output_rejected":true}),
+                    ));
                 }
             };
         let disposition = if valid {
@@ -1248,7 +1440,7 @@ impl OfflineApp {
                 },
             )? > 0;
         }
-        ledger.complete_run()?;
+        self.finish_embedding_job(&ledger)?;
         let store = VectorStore::open(&self.fs, None)?;
         let vector = store.vector(&state.id, &input.input_hash)?.ok_or_else(|| {
             fail(
@@ -1283,17 +1475,12 @@ impl OfflineApp {
         let scan = store.exact_stream(
             &state.id,
             query,
-            render::corpus_iter(reader, &state.spec.settings)?,
+            || render::corpus_iter(reader, &state.spec.settings),
             &[TargetKind::Document],
             plan.limits.candidates,
             |unit| retrieval::fusion::unit_allowed(reader, unit, &plan.filters, context, None),
         )?;
         let coverage = scan.coverage;
-        let dense_available = scan
-            .available_by_target
-            .get(&TargetKind::Document)
-            .copied()
-            .unwrap_or(0);
         let dense = scan
             .hits
             .get(&TargetKind::Document)
@@ -1301,20 +1488,47 @@ impl OfflineApp {
             .unwrap_or_default();
         let collapsed = retrieval::fusion::collapse_dense(&dense);
         let mut dense_hits = Vec::new();
-        for (rank, (hit, _passages)) in collapsed.into_iter().enumerate() {
+        for (rank, (hit, passages)) in collapsed.into_iter().enumerate() {
             let document = reader
                 .projection()
                 .documents
                 .iter()
                 .find(|d| d.path == hit.owner)
                 .ok_or_else(|| fail(ErrorCode::FreshnessConflict, "dense owner absent"))?;
-            dense_hits.push(retrieval::fusion::dense_hit(
+            let primary_budget = if passages.len() > 1 {
+                plan.limits.excerpt_bytes / 2
+            } else {
+                plan.limits.excerpt_bytes
+            };
+            let mut focused = retrieval::fusion::dense_hit(
                 reader,
                 document,
                 &hit,
                 rank + 1,
-                plan.limits.excerpt_bytes,
-            )?);
+                primary_budget.max(1),
+            )?;
+            if let Some(second) = passages.get(1) {
+                let remaining = plan
+                    .limits
+                    .excerpt_bytes
+                    .saturating_sub(focused.excerpt.text.len());
+                if remaining > 0 {
+                    let extra = retrieval::fusion::dense_hit(
+                        reader,
+                        document,
+                        second,
+                        rank + 1,
+                        remaining,
+                    )?
+                    .excerpt;
+                    if extra.span.end() <= focused.excerpt.span.start()
+                        || focused.excerpt.span.end() <= extra.span.start()
+                    {
+                        focused.secondary_excerpts.push(extra);
+                    }
+                }
+            }
+            dense_hits.push(focused);
         }
         let mut lists = vec![dense_hits];
         let mut preserved_graph = None;
@@ -1411,7 +1625,12 @@ impl OfflineApp {
         }
         let mut hits = retrieval::fusion::fuse_hits(lists);
         let candidate_count = hits.len();
-        let dense_overflow = dense_available.saturating_sub(dense.len());
+        let dense_overflow = usize::from(
+            scan.owner_cap_reached_by_target
+                .get(&TargetKind::Document)
+                .copied()
+                .unwrap_or(false),
+        );
         omitted += dense_overflow + hits.len().saturating_sub(plan.limits.candidates);
         hits.truncate(plan.limits.candidates);
         let fingerprint = Blake3Hash::digest(crate::graph::packet::canonical_json(&(
@@ -1505,7 +1724,7 @@ impl OfflineApp {
         let scan = store.exact_stream(
             &state.id,
             query,
-            render::corpus_iter(reader, &state.spec.settings)?,
+            || render::corpus_iter(reader, &state.spec.settings),
             &targets,
             plan.limits.candidates,
             |unit| retrieval::fusion::unit_allowed(reader, unit, &plan.filters, None, Some(&plan)),
@@ -1526,12 +1745,12 @@ impl OfflineApp {
             } else {
                 graph_coverage.assertion_candidates = found.len();
             }
-            graph_coverage.omitted_candidates += scan
-                .available_by_target
-                .get(&target)
-                .copied()
-                .unwrap_or(0)
-                .saturating_sub(dense.len());
+            graph_coverage.omitted_candidates += usize::from(
+                scan.owner_cap_reached_by_target
+                    .get(&target)
+                    .copied()
+                    .unwrap_or(false),
+            );
             seeds.extend(found);
         }
         if hybrid {

@@ -6,6 +6,7 @@ pub use types::*;
 mod accounting_tests;
 pub mod budgets;
 pub(crate) mod checkpoint;
+pub mod diagnostics;
 pub mod events;
 mod ledger;
 mod replay;

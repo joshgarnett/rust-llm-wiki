@@ -4,7 +4,7 @@ Research is local coordination with a host agent. There is no built-in research 
 
 ## Commands and state
 
-`research plan QUESTION` previews scope and current lexical/source passages without writes. `research run QUESTION` publishes a run head and immutable `collect_sources` packet. `research import --file FILE` accepts a bounded submission for the outstanding packet and publishes its result atomically. `research resume RUN` recovers interrupted local application and returns the outstanding packet or terminal result. `--refresh` explicitly replaces a stale packet against current sources. `status` and `report` inspect retained local state without providers.
+`research plan QUESTION` previews scope and current lexical/source passages without writes. `research run QUESTION` publishes a run head and immutable `collect_sources` packet. `research import --file FILE` accepts a bounded submission for the outstanding packet and publishes its result in one guarded recoverable changeset; sequential filesystem writes are not a multi-file transaction. `research resume RUN` recovers interrupted local application and returns the outstanding packet or terminal result. `--refresh` explicitly replaces a stale packet against current sources. `status`, `report` and `maintenance` inspect retained local state without providers. Status includes stage, readiness, gaps, remaining budgets and a next action. Report views add current citation state to immutable retained reports; neither inspection rewrites historical bytes.
 
 A collection response submits inline text with a source-local key, title, claimed origin, optional provenance, optional RFC3339 `retrieved_at`, and gaps. The timestamp is a host claim stored on the immutable revision as `origin_retrieved_at` with `origin_retrieved_at_kind: agent-claimed`; it does not replace the CLI capture time. Captures use `SourceOrigin::AgentReport`, preserving exactly the submitted bytes. A host-reported URL does not establish an observed HTTP fetch. The subsequent answer packet assigns short `passage_id` values to exact `CitationRef`/quotation pairs. An answer references those IDs; record IDs and quote hashes are not selectors. Valid citation bytes do not establish entailment. Claims stay `unassessed`, and research never accepts graph facts or applies authored pages automatically.
 
@@ -12,7 +12,7 @@ An answer may request a follow-up collection round. Its gaps replace the current
 
 ## Storage and guarded publication
 
-The mutable typed Run record is `runs/RUN/research.md`; it intentionally does not use the paid-job `run.md` path or `.wiki/state/jobs`. Typed immutable RunEvent records under `runs/RUN/outputs/` hold packets, submissions/receipts and reports in one bounded `lwiki-agent-research-v1` fence. Output identity hashes run, generation, artifact role and canonical JSON; repeated report content in different generations cannot collide.
+The mutable typed Run record has logical path `runs/RUN/research.md` (physical `.wiki/retained/runs/RUN/research.md` in storage schema2); it intentionally does not use the paid-job `run.md` path or `.wiki/state/jobs`. Typed immutable RunEvent records under logical `runs/RUN/outputs/` hold packets, submissions/receipts and reports. Schema2 retains packets/receipts internally and leaves human `report_*.md` outputs visible. These records use one bounded `lwiki-agent-research-v1` fence. Output identity hashes run, generation, artifact role and canonical JSON; repeated report content in different generations cannot collide.
 
 The run head binds vault/run identity, immutable scope hash, generation, round, lifetime capture counters, outstanding packet hash, latest report hash and consumed-packet receipt references. Packet fingerprints cover canonical packet JSON excluding the fingerprint itself. Loading validates scope/counters/identity/hash relationships. Neither a client-supplied packet nor an echoed fingerprint grants authority without the retained head and packet.
 
@@ -33,13 +33,13 @@ Current source changes invalidate an outstanding packet. Refresh explicitly crea
 | Inline sources per submission | 32 |
 | Aggregate inline content per submission | 64 KiB |
 | Packet passages / quotation bytes | 32 / 64 KiB |
-| Newly imported or explicitly selected source passage | First 4096 UTF-8 bytes, ending at a character boundary |
+| Selected source passage | At most 4096 UTF-8 bytes; relevant later chunks and explicit ranges end at character boundaries |
 | Claims / citations per claim | 32 / 16 distinct packet IDs |
 | JSON nesting / values | 24 / 16384 |
 | Packet/head/receipt/report JSON | 1 MiB |
 | Packet generation / consumed imports | 64 / 16 |
 
-Per-field byte checks, strict duplicate-key rejection and checked aggregate source arithmetic apply in addition to JSON schemas. Newly captured passages take priority over earlier passages. Omitted bounded-context candidates produce an explicit warning; complete captures remain available separately, and imports return all captured source IDs. A host needing a later portion of a document can supply a relevant excerpt as a separately identified agent-report source with honest excerpt provenance. A quotation hash checks integrity; it cannot extend the text an answer is authorized to cite.
+Per-field byte checks, strict duplicate-key rejection and checked aggregate source arithmetic apply in addition to JSON schemas. Newly captured passages take priority over earlier passages. Omitted bounded-context candidates produce an explicit warning; complete captures remain available separately, and imports return all captured source IDs. `--source-range SOURCE:START:END` chooses up to 32 exact current UTF-8 spans, each at most 4096 bytes, for a source also named by `--source-id`. Explicit ranges take precedence over overlapping lexical chunks. Refresh persists `source_ranges_retired: true` in the head and subsequent packets, so old offsets stay retired through follow-up imports; the original scope/hash remains unchanged. Packets warn rather than applying old offsets to changed bytes. Relevance selection can find later sections; bounded omissions remain explicit. A quotation hash checks integrity; it cannot extend the text an answer is authorized to cite.
 
 ## Offline, previews and accounting
 
@@ -52,3 +52,9 @@ Planning and dry-run never create caches, packets, receipts, prepared changes or
 Operational research records are excluded from ordinary source retrieval. Captured sources participate in normal current/historical/withdrawn lifecycle handling. Proposing pages or structured graph facts is a separate explicit workflow.
 
 Public schemas: `research-packet` and `research-submission`. See the [0.1.1 test-agent guide](../testing-0.1.1.md) and handoff/recovery integration tests for executable examples and failure cases.
+
+## Human reports and maintenance
+
+New report Markdown starts with the question, unassessed claims, exact revision citation links, capture and host-claimed acquisition dates when known, gaps and completion labels; its original bounded machine payload follows. Old report payloads remain readable. The read-time view labels stale or withdrawn citations and directs explicit refresh/revalidation; it does not promote an old report.
+
+`research maintenance RUN` returns scoped repair tasks for authoritative page support, contradictions, missing synthesis, broken navigation and stale reports/packets. Names and paths aid humans; IDs/hashes anchor agent work. Structural diagnostics and tasks are proposals, not automatic semantic judgments or publication authority. Prepare cited page/guide repairs with `page batch`, preserve each observed author hash and applicable read dependencies, inspect the staged change, then apply explicitly.

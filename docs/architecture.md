@@ -1,6 +1,6 @@
 # Architecture proposal
 
-Status: proposed, 2026-09-28. See [confirmed choices and progress](../PROGRESS.md). Examples describe future behavior, not an existing CLI. The [technical design](technical/README.md) supplies the implementation contracts and takes precedence over earlier exploratory implementation options here.
+Status: historical proposal, 2026-09-28. The [current contract and coverage map](current-contracts.md) and [cleanup register](execution/CLEANUP.md) describe implemented behavior and remaining gates. References below to a future CLI, standalone research executor or unshipped skill are preserved as original planning, not current capability claims. Research now uses host-agent handoffs; the maintained skill ships with the binary.
 
 ## Product boundary
 

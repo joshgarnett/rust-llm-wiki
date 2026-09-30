@@ -17,7 +17,7 @@ filegroup(
 
 filegroup(
     name = "test_assets",
-    srcs = glob(["tests/fixtures/**"]) + ["Cargo.lock"],
+    srcs = glob(["tests/fixtures/**"]) + ["Cargo.lock", "scripts/shared_wiki_recipe.py"],
 )
 
 owned_library(
@@ -140,5 +140,45 @@ test_suite(
         ":machine_contract_test",
         ":offline_cli_test",
         ":skill_export_test",
+    ],
+)
+
+# Routine consequential regressions. Full native crash matrices remain in :test.
+owned_integration_test(
+    name = "conflict_regressions",
+    src = "tests/changes_recovery.rs",
+    shared_srcs = _SHARED_TEST_SOURCES,
+    compile_data = [":compile_assets"],
+    data = [":test_assets"],
+    args = ["conflict_resolution", "resolution_frames"],
+)
+
+owned_crate_test(
+    name = "checkpoint_regressions",
+    crate = ":lwiki_lib",
+    compile_data = [":compile_assets"],
+    data = [":test_assets"],
+    args = ["compact_checkpoint", "legacy_checkpoint_migrates", "storage_cleanup_preserves_legacy_checkpoint", "interrupted_storage_blocks"],
+)
+
+test_suite(
+    name = "regressions",
+    tests = [
+        ":conflict_regressions",
+        ":checkpoint_regressions",
+        ":api_extraction_test",
+        ":catalog_scan_eligibility_test",
+        ":context_cli_test",
+        ":context_freshness_test",
+        ":graph_queries_test",
+        ":provider_dispatch_test",
+        ":remote_cli_test",
+        ":research_handoff_test",
+        ":research_recovery_test",
+        ":retrieval_lexical_test",
+        ":semantic_retrieval_test",
+        ":sources_evidence_test",
+        ":storage_cleanup_test",
+        ":shared_wiki_workflow_test",
     ],
 )

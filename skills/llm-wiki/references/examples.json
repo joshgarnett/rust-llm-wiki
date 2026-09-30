@@ -651,6 +651,84 @@
         "relationship"
       ],
       "check": "withdrawn_support"
+    },
+    {
+      "name": "maintenance-after-withdrawal",
+      "args": [
+        "research",
+        "maintenance",
+        "${research_run}"
+      ]
+    },
+    {
+      "name": "initialize-readable-topic",
+      "args": [
+        "page",
+        "init",
+        "--file",
+        "-",
+        "--title",
+        "Ada evidence note",
+        "--id",
+        "Page.AdaEvidence",
+        "--path",
+        "pages/ada-evidence.md"
+      ],
+      "stdin": "# Ada evidence note\n\nThe original source [[${source}]] was withdrawn. Earlier research is retained history and the conflicting accounts need reassessment.\n"
+    },
+    {
+      "name": "topic-current-hash",
+      "args": [
+        "read",
+        "--id",
+        "Page.AdaEvidence"
+      ],
+      "bindings": {
+        "topic_hash": "/data/hash"
+      }
+    },
+    {
+      "name": "prepare-topic-and-guide",
+      "args": [
+        "--stage",
+        "page",
+        "batch",
+        "--file",
+        "-"
+      ],
+      "stdin": {
+        "title": "Maintain Ada evidence and readable guide",
+        "pages": [
+          {
+            "path": "pages/ada-evidence.md",
+            "if_match": "${topic_hash}",
+            "markdown": "---\nwiki_schema: \"1\"\nwiki_id: Page.AdaEvidence\nwiki_kind: page\nwiki_status: draft\ntitle: \"Ada evidence note\"\n---\n# Ada evidence note\n\nThe original source [[${source}]] was withdrawn. Earlier research is retained history and the conflicting accounts need reassessment.\n\n## Gap\nFind current support before promoting a claim.\n"
+          },
+          {
+            "path": "pages/guide.md",
+            "markdown": "---\nwiki_schema: \"1\"\nwiki_id: Page.Guide\nwiki_kind: page\nwiki_status: draft\ntitle: \"Wiki guide\"\n---\n# Wiki guide\n\n[[pages/ada-evidence.md|Ada evidence and unresolved gap]]\n"
+          }
+        ]
+      },
+      "bindings": {
+        "page_batch_change": "/data/change/change_id"
+      }
+    },
+    {
+      "name": "inspect-topic-and-guide",
+      "args": [
+        "changes",
+        "show",
+        "${page_batch_change}"
+      ]
+    },
+    {
+      "name": "apply-topic-and-guide",
+      "args": [
+        "changes",
+        "apply",
+        "${page_batch_change}"
+      ]
     }
   ]
 }

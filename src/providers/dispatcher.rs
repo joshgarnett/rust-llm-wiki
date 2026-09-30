@@ -41,6 +41,7 @@ pub struct Dispatcher {
     fs: VaultFs,
     options: DispatchOptions,
     network_used: std::sync::atomic::AtomicBool,
+    retain_http_error_body: bool,
 }
 impl Dispatcher {
     pub fn new(fs: VaultFs, options: DispatchOptions) -> Self {
@@ -48,7 +49,13 @@ impl Dispatcher {
             fs,
             options,
             network_used: std::sync::atomic::AtomicBool::new(false),
+            retain_http_error_body: false,
         }
+    }
+    /// Explicit local diagnostic opt-in. No provider response body enters normal errors.
+    pub fn with_http_error_diagnostics(mut self, enabled: bool) -> Self {
+        self.retain_http_error_body = enabled;
+        self
     }
     /// Monotone activity for this dispatcher instance. CLI runtimes scope one
     /// dispatcher to one invocation; retained response reads do not set it.
@@ -664,6 +671,19 @@ impl Dispatcher {
                         return Err(out);
                     }
                 };
+                let diagnostic_error = if self.retain_http_error_body
+                    && !(200..300).contains(&status)
+                {
+                    ledger.retain_diagnostic(
+                        &attempt,
+                        jobs::diagnostics::DiagnosticKind::HttpError,
+                        &reply.body,
+                        reply.observed_body_bytes,
+                        &format!("http_{status}"),
+                    ).err()
+                } else {
+                    None
+                };
                 retained.attempt(&attempt, DispatchDisposition::Rejected);
                 retained.spool = Some(spool.clone());
                 if let Ok(output) = decoded {
@@ -714,6 +734,12 @@ impl Dispatcher {
                     if let Some(change) = retained_change {
                         out.error.details = serde_json::json!({"receipt_change_id": change.change_id, "receipt_manifest_hash": change.manifest_hash});
                     }
+                    out.retry = RetryDecision::Never;
+                    return Err(out);
+                }
+                if diagnostic_error.is_some() {
+                    out.error.details["diagnostic_retention"] =
+                        serde_json::Value::String("failed".into());
                     out.retry = RetryDecision::Never;
                     return Err(out);
                 }
@@ -853,6 +879,15 @@ impl RetainedPaid {
     }
 }
 fn redacted(error: WikiError) -> WikiError {
+    if error.code == ErrorCode::RecoveryRequired
+        && error.message == "uncertain retry requires explicit retry policy and new reservation"
+    {
+        let mut safe = super::diagnostics::error(error.code, "uncertain_retry_requires_opt_in");
+        safe.details["recovery_action"] = serde_json::Value::String(
+            "retry the same API extraction run with --retry-uncertain; the earlier attempt may have been billed and remains reserved".into(),
+        );
+        return safe;
+    }
     super::diagnostics::error(error.code, super::diagnostics::reason(&error).unwrap_or(""))
 }
 fn failure(error: WikiError, attempt: Option<AttemptRef>) -> Box<DispatchFailure> {

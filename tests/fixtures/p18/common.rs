@@ -110,6 +110,7 @@ impl Fixture {
             }),
         }));
         let request = ApiExtractionRequest {
+            requested_limits: None,
             export,
             run_id: id("run_api"),
             created_at_utc_ms: now,

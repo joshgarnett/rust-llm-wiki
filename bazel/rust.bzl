@@ -43,13 +43,14 @@ def owned_binary(name, src, deps = []):
         version = _VERSION,
     )
 
-def owned_crate_test(name, crate, compile_data = [], data = [], timeout = "long"):
+def owned_crate_test(name, crate, compile_data = [], data = [], timeout = "long", args = []):
     """Recompiles a first-party crate under cfg(test), including dev dependencies."""
     rust_test(
         name = name,
         aliases = aliases(normal = True, normal_dev = True),
         compile_data = compile_data,
         crate = crate,
+        args = args,
         data = data,
         deps = all_crate_deps(normal = True, normal_dev = True),
         proc_macro_deps = all_crate_deps(proc_macro = True, proc_macro_dev = True),
@@ -58,7 +59,7 @@ def owned_crate_test(name, crate, compile_data = [], data = [], timeout = "long"
         version = _VERSION,
     )
 
-def owned_integration_test(name, src, shared_srcs = [], compile_data = [], data = []):
+def owned_integration_test(name, src, shared_srcs = [], compile_data = [], data = [], args = []):
     """Defines one Cargo integration-test root with runfiles for its CLI/fixtures."""
     rust_test(
         name = name,
@@ -66,6 +67,7 @@ def owned_integration_test(name, src, shared_srcs = [], compile_data = [], data 
         compile_data = compile_data,
         crate_name = name,
         crate_root = src,
+        args = args,
         data = data + [":lwiki"],
         deps = all_crate_deps(normal = True, normal_dev = True) + [":lwiki_lib"],
         edition = _EDITION,

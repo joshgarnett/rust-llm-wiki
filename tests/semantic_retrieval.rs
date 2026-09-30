@@ -194,12 +194,263 @@ fn rrf_owner_collapse_no_duplicate_votes() {
     let collapsed = fusion::collapse_dense(&hits);
     assert_eq!(collapsed.len(), 2);
     assert!(collapsed.iter().all(|(_, passages)| passages.len() <= 2));
+    let reversed = fusion::collapse_dense(&hits.iter().rev().cloned().collect::<Vec<_>>());
+    assert_eq!(collapsed, reversed);
     let contributions = vec![RankContribution {
         channel: "dense".into(),
         rank: 1,
         score: Some(1.0),
     }];
     assert_eq!(fusion::rrf(&contributions), 1.0 / 61.0);
+}
+#[test]
+fn dense_cap_keeps_two_owners_and_two_passages_across_226_units() {
+    let f = Fixture::new();
+    f.page("long", &"x".repeat(300));
+    f.page("short", "Short owner text.");
+    let reader = f.reader();
+    let base = render::corpus(&reader, &EmbeddingSettings::default()).unwrap();
+    let long = base
+        .iter()
+        .find(|u| u.owner.as_str().ends_with("long.md"))
+        .unwrap();
+    let short = base
+        .iter()
+        .find(|u| u.owner.as_str().ends_with("short.md"))
+        .unwrap();
+    let mut units = Vec::new();
+    let mut vectors = Vec::new();
+    for index in 0..225 {
+        let mut unit = long.clone();
+        unit.unit_id = Blake3Hash::digest(format!("long-unit-{index}"));
+        unit.input_hash = Blake3Hash::digest(format!("long-input-{index}"));
+        let start = long.source_span.unwrap().start() + index;
+        unit.source_span = Some(ByteSpan::new(start, start + 1).unwrap());
+        units.push(unit);
+        vectors.push(vec![1.0, 0.0]);
+    }
+    units.push(short.clone());
+    vectors.push(vec![0.8, 0.6]);
+    let spec = f.spec();
+    let writer = f.writer();
+    let mut store = VectorStore::open(&f.fs, Some(&writer)).unwrap();
+    let space = store.prepare_space(&spec).unwrap();
+    store
+        .put_batch(
+            &space,
+            &units
+                .iter()
+                .map(|u| u.input_hash.clone())
+                .collect::<Vec<_>>(),
+            &vectors,
+            true,
+            &Blake3Hash::digest([]),
+        )
+        .unwrap();
+    store
+        .memberships(&space, reader.snapshot(), &units, true)
+        .unwrap();
+    let scan = store
+        .exact_stream(
+            &space,
+            &[1.0, 0.0],
+            || Ok(units.iter().cloned().map(Ok)),
+            &[TargetKind::Document],
+            2,
+            |_| Ok(true),
+        )
+        .unwrap();
+    let dense = &scan.hits[&TargetKind::Document];
+    let owners = fusion::collapse_dense(dense);
+    assert_eq!(scan.coverage.available_units, 226);
+    assert_eq!(scan.available_by_target[&TargetKind::Document], 2);
+    assert!(
+        !scan
+            .owner_cap_reached_by_target
+            .get(&TargetKind::Document)
+            .copied()
+            .unwrap_or(false)
+    );
+    assert_eq!(owners.len(), 2);
+    assert!(owners[0].0.owner.as_str().ends_with("long.md"));
+    assert_eq!(owners[0].1.len(), 2);
+    assert_ne!(owners[0].1[0].source_span, owners[0].1[1].source_span);
+    assert!(owners[1].0.owner.as_str().ends_with("short.md"));
+    assert_eq!(owners[1].1.len(), 1);
+}
+#[test]
+fn dense_replay_recovers_earlier_second_passage_after_late_wins_and_reentry() {
+    let f = Fixture::new();
+    for owner in ["a", "b", "c"] {
+        f.page(owner, &format!("Owner {owner} text."));
+    }
+    let reader = f.reader();
+    let base = render::corpus(&reader, &EmbeddingSettings::default()).unwrap();
+    let make = |owner: &str, number: usize| {
+        let mut unit = base
+            .iter()
+            .find(|unit| {
+                unit.owner
+                    .as_str()
+                    .ends_with(format!("/{owner}.md").as_str())
+            })
+            .unwrap()
+            .clone();
+        unit.unit_id = Blake3Hash::digest(format!("{owner}-unit-{number}"));
+        unit.input_hash = Blake3Hash::digest(format!("{owner}-input-{number}"));
+        unit
+    };
+    // B initially falls below the k=1 cutoff, later wins after C evicts A.
+    // A then reenters and wins; both winners need their earlier second unit.
+    let units = vec![
+        make("a", 0),
+        make("b", 0),
+        make("c", 0),
+        make("b", 1),
+        make("a", 1),
+    ];
+    let scores: [f32; 5] = [0.8, 0.7, 0.85, 0.9, 0.95];
+    let vectors = scores
+        .iter()
+        .map(|score| vec![*score, (1.0 - score * score).sqrt()])
+        .collect::<Vec<_>>();
+    let spec = f.spec();
+    let writer = f.writer();
+    let mut store = VectorStore::open(&f.fs, Some(&writer)).unwrap();
+    let space = store.prepare_space(&spec).unwrap();
+    store
+        .put_batch(
+            &space,
+            &units
+                .iter()
+                .map(|u| u.input_hash.clone())
+                .collect::<Vec<_>>(),
+            &vectors,
+            true,
+            &Blake3Hash::digest([]),
+        )
+        .unwrap();
+    store
+        .memberships(&space, reader.snapshot(), &units, true)
+        .unwrap();
+    let scan = |count| {
+        store
+            .exact_stream(
+                &space,
+                &[1.0, 0.0],
+                || Ok(units[..count].iter().cloned().map(Ok)),
+                &[TargetKind::Document],
+                1,
+                |_| Ok(true),
+            )
+            .unwrap()
+    };
+    let late_b = scan(4);
+    let b = &late_b.hits[&TargetKind::Document];
+    assert_eq!(b.len(), 2);
+    assert_eq!(b[0].unit_id, units[3].unit_id);
+    assert_eq!(b[1].unit_id, units[1].unit_id);
+    assert_eq!(late_b.coverage.available_units, 4);
+    assert!(late_b.owner_cap_reached_by_target[&TargetKind::Document]);
+    let reentered_a = scan(5);
+    let a = &reentered_a.hits[&TargetKind::Document];
+    assert_eq!(a.len(), 2);
+    assert_eq!(a[0].unit_id, units[4].unit_id);
+    assert_eq!(a[1].unit_id, units[0].unit_id);
+    assert_eq!(reentered_a.coverage.available_units, 5);
+    assert_eq!(reentered_a.available_by_target[&TargetKind::Document], 1);
+}
+#[test]
+fn semantic_hit_and_context_keep_two_disjoint_passages_for_one_owner() {
+    let f = Fixture::new();
+    let body = (0..90)
+        .map(|i| format!("A long separated passage number {i:03}.\n\n"))
+        .collect::<String>();
+    f.page("long", &body);
+    f.page("short", "A short page.");
+    let mut spec = f.spec();
+    spec.settings.max_input_bytes = 300;
+    let reader = f.reader();
+    let units = render::corpus(&reader, &spec.settings).unwrap();
+    let mut long = units
+        .iter()
+        .filter(|u| u.owner.as_str().ends_with("long.md"))
+        .collect::<Vec<_>>();
+    long.sort_by_key(|u| u.source_span.unwrap().start());
+    assert!(long.len() >= 4);
+    let first = long.first().unwrap().unit_id.clone();
+    let last = long.last().unwrap().unit_id.clone();
+    let vectors = units
+        .iter()
+        .map(|u| {
+            if u.unit_id == first || u.unit_id == last {
+                vec![1.0, 0.0]
+            } else if u.owner.as_str().ends_with("short.md") {
+                vec![0.8, 0.6]
+            } else {
+                vec![0.0, 1.0]
+            }
+        })
+        .collect::<Vec<_>>();
+    let writer = f.writer();
+    let mut store = VectorStore::open(&f.fs, Some(&writer)).unwrap();
+    let space = store.prepare_space(&spec).unwrap();
+    store
+        .put_batch(
+            &space,
+            &units
+                .iter()
+                .map(|u| u.input_hash.clone())
+                .collect::<Vec<_>>(),
+            &vectors,
+            true,
+            &Blake3Hash::digest([]),
+        )
+        .unwrap();
+    store
+        .memberships(&space, reader.snapshot(), &units, true)
+        .unwrap();
+    drop(store);
+    drop(writer);
+    f.query_seed(&spec, "two passages", vec![1.0, 0.0]);
+    let plan = QueryPlan {
+        mode: SearchMode::Semantic,
+        ..Default::default()
+    };
+    let result = f
+        .offline()
+        .semantic_search("two passages", &plan, None, false, false, None)
+        .unwrap();
+    let hit = result
+        .hits
+        .iter()
+        .find(|h| h.locator.path.as_str().ends_with("long.md"))
+        .unwrap();
+    assert_eq!(hit.secondary_excerpts.len(), 1);
+    let second = &hit.secondary_excerpts[0];
+    assert!(
+        hit.excerpt.span.end() <= second.span.start()
+            || second.span.end() <= hit.excerpt.span.start()
+    );
+    assert!(hit.excerpt.text.len() + second.text.len() <= plan.limits.excerpt_bytes);
+    let request = ContextRequest {
+        documents: plan,
+        ..Default::default()
+    };
+    let context = f
+        .offline()
+        .semantic_context("two passages", &request, None, false, false)
+        .unwrap();
+    assert_eq!(
+        context
+            .passages()
+            .iter()
+            .filter(|p| p.locator.path.as_str().ends_with("long.md"))
+            .count(),
+        2
+    );
+    assert!(context.usage().rendered_bytes <= request.budget.max_bytes);
+    assert!(context.usage().estimated_tokens <= request.budget.max_tokens);
 }
 #[test]
 fn offline_missing_query_vector_no_remote() {
@@ -761,6 +1012,8 @@ fn body_only_orphan_preserves_unknown_no_automatic_resend() {
     let responses = Arc::new(Responses::new());
     let dispatch = dispatcher(&f.fs, responses.clone());
     let mut interrupted = runtime(&f.service, &dispatch);
+    interrupted.limits.concurrency = 2;
+    interrupted.limits.attempts_per_task = 2;
     interrupted.job_options.fault = Some(Arc::new(OnceFault {
         point: LedgerCheckpoint::AfterSpoolBytesSync,
         armed: std::sync::atomic::AtomicBool::new(true),
@@ -779,6 +1032,101 @@ fn body_only_orphan_preserves_unknown_no_automatic_resend() {
         .unwrap_err();
     assert_eq!(error.code, ErrorCode::RecoveryRequired);
     assert_eq!(responses.calls.load(Ordering::SeqCst), 1);
+    let mut authorized = runtime(&f.service, &dispatch);
+    authorized.limits = interrupted.limits.clone();
+    authorized.job_options.policy.retry_uncertain = true;
+    let retried = f
+        .app
+        .embeddings_sync(&EmbeddingSettings::default(), &authorized)
+        .unwrap();
+    assert!(retried.network_used);
+    assert_eq!(retried.generated_inputs, 1);
+    assert_eq!(retried.reused_inputs, 0);
+    assert!(retried.run_id.is_some());
+    assert!(!retried.warnings.is_empty());
+    assert_eq!(responses.calls.load(Ordering::SeqCst), 2);
+    let inspection = JobLedger::new(
+        f.fs.clone(),
+        f.app.vault_id().clone(),
+        retried.run_id.unwrap(),
+        options(),
+    )
+    .unwrap()
+    .inspect()
+    .unwrap();
+    assert_eq!(inspection.attempts.len(), 2);
+    assert_eq!(
+        inspection.attempts[0].billing,
+        BillingDisposition::UnknownReserved
+    );
+}
+#[test]
+fn authorized_unknown_embedding_retry_rechecks_corpus_before_sending() {
+    let f = Fixture::new();
+    f.page("a", "Original authored passage");
+    let responses = Arc::new(Responses::new());
+    let dispatch = dispatcher(&f.fs, responses.clone());
+    let mut interrupted = runtime(&f.service, &dispatch);
+    interrupted.limits.concurrency = 2;
+    interrupted.limits.attempts_per_task = 2;
+    interrupted.job_options.fault = Some(Arc::new(OnceFault {
+        point: LedgerCheckpoint::AfterSpoolBytesSync,
+        armed: std::sync::atomic::AtomicBool::new(true),
+    }));
+    let initial = f
+        .app
+        .embeddings_sync(&EmbeddingSettings::default(), &interrupted)
+        .unwrap_err();
+    let run: RecordId = serde_json::from_value(initial.details["run_id"].clone()).unwrap();
+    let ledger = JobLedger::new(
+        f.fs.clone(),
+        f.app.vault_id().clone(),
+        run.clone(),
+        options(),
+    )
+    .unwrap();
+    let before = ledger.inspect().unwrap();
+    assert_eq!(before.budget.unknown_attempts.len(), 1);
+    if before.state == RunState::Running {
+        ledger.pause(StopReason::OutcomeUnknown).unwrap();
+    }
+    let mut effective = interrupted.limits.clone();
+    effective.requests += 1;
+    ledger
+        .amend_retained_limits(
+            effective.clone(),
+            before.effective_deadline_utc_ms,
+            "Explicitly raise cumulative request limit".into(),
+        )
+        .unwrap();
+    let mut old_limits = runtime(&f.service, &dispatch);
+    old_limits.limits = interrupted.limits.clone();
+    old_limits.job_options.policy.retry_uncertain = true;
+    let error = f
+        .app
+        .embeddings_sync(&EmbeddingSettings::default(), &old_limits)
+        .unwrap_err();
+    assert_eq!(error.code, ErrorCode::Usage);
+    assert_eq!(error.details["reason"], "retained_limits_require_amendment");
+    assert_eq!(responses.calls.load(Ordering::SeqCst), 1);
+    f.page("a", "Human changed the passage before the retry");
+    let mut retry = runtime(&f.service, &dispatch);
+    retry.limits = effective;
+    retry.job_options.policy.retry_uncertain = true;
+    let error = f
+        .app
+        .embeddings_sync(&EmbeddingSettings::default(), &retry)
+        .unwrap_err();
+    assert_eq!(error.code, ErrorCode::FreshnessConflict, "{error:?}");
+    assert_eq!(responses.calls.load(Ordering::SeqCst), 1);
+    let after = ledger.inspect().unwrap();
+    assert_eq!(after.spec.run_id, run);
+    assert_eq!(after.attempts.len(), before.attempts.len());
+    assert_eq!(
+        after.budget.unknown_attempts,
+        before.budget.unknown_attempts
+    );
+    assert_eq!(after.budget.dispatched_requests, 1);
 }
 #[test]
 fn later_dimension_mismatch_charged_partial_cache_retained() {

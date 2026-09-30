@@ -121,7 +121,7 @@ pub(crate) fn normal_policy(filters: &SearchFilters) -> String {
     let operational = if filters.include_historical {
         "1"
     } else {
-        "coalesce(d.kind,'') NOT IN ('extraction_packet','extraction','run','run_event','change') \
+        "coalesce(d.kind,'') NOT IN ('extraction_packet','extraction','run','run_event','change','decision') \
          AND d.path NOT GLOB 'knowledge/extractions/packets/*' \
          AND d.path NOT GLOB 'knowledge/extractions/extraction_*.md' \
          AND d.path NOT GLOB 'runs/*/outputs/run_event_generation_*.md' \

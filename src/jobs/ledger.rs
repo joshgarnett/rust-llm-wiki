@@ -261,6 +261,36 @@ impl JobLedger {
             true,
         )
     }
+    /// Explicitly raise retained lifetime bounds without changing run state or
+    /// releasing any reservation. Planned jobs can be amended after expiry.
+    pub fn amend_retained_limits(
+        &self,
+        limits: LifetimeLimits,
+        deadline_utc_ms: i64,
+        reason: String,
+    ) -> Result<EventRef> {
+        self.local_write()?;
+        self.with(true, |g, l| {
+            if !matches!(
+                l.state.inspection.state,
+                RunState::Planned | RunState::Paused | RunState::Stopped
+            ) {
+                return Err(WikiError::invalid(
+                    "only planned/paused/stopped jobs may amend retained limits",
+                ));
+            }
+            self.bind_inputs(&l.state.inspection)?;
+            let now = self.options.clock.read()?.utc_ms;
+            let amendment = LimitAmendment {
+                requested_at_utc_ms: now,
+                reason,
+                limits,
+                deadline_utc_ms,
+            };
+            validate_amendment(l, &amendment, now)?;
+            self.append(g, l, EventPayload::Amendment { amendment })
+        })
+    }
     fn resume_internal(
         &self,
         amendment: Option<LimitAmendment>,
@@ -286,10 +316,10 @@ impl JobLedger {
                 self.append(g, l, EventPayload::Amendment { amendment })?;
             }
             self.control_gate(l)?;
-            if l.state.inspection.budget.remote_inflight > 0 {
+            if l.state.inspection.budget.remote_inflight > 0 && !self.options.policy.retry_uncertain {
                 return Err(fail(
                     ErrorCode::RecoveryRequired,
-                    "possible remote requests require reconciliation before resume",
+                    "possible remote requests require reconciliation or explicit --retry-uncertain; prior billing and concurrency holds remain",
                 ));
             }
             self.append(
@@ -310,6 +340,7 @@ impl JobLedger {
         Ok(())
     }
     pub(super) fn paid_gate(&self) -> Result<()> {
+        self.fs.require_storage_ready()?;
         self.local_write()?;
         if self.options.policy.offline {
             return Err(fail(
@@ -973,6 +1004,12 @@ impl JobLedgerApi for JobLedger {
             ));
         }
         let run_bytes = checkpoint::run_bytes(&initial_inspection(&spec)?)?;
+        let legacy_mirror = checkpoint::legacy_bootstrap_mirror(
+            &self.fs,
+            &spec,
+            &loaded.frames[0],
+            &Blake3Hash::digest(&run_bytes),
+        )?;
         let mut d = checkpoint::draft("Create durable planned run", &spec);
         d.read_preconditions = spec.scope.read_preconditions.clone();
         d.operations.push(checkpoint::write(
@@ -980,12 +1017,9 @@ impl JobLedgerApi for JobLedger {
             ExpectedState::Absent,
             run_bytes,
         ));
-        let frame = &loaded.frames[0];
-        d.operations.push(checkpoint::write(
-            checkpoint::event_path(&self.run_id, &frame.event.event_id)?,
-            ExpectedState::Absent,
-            checkpoint::event_bytes(&frame.event)?,
-        ));
+        if let Some(mirror) = legacy_mirror {
+            d.operations.push(mirror);
+        }
         drop(g);
         let engine = ChangeEngine::new(self.fs.clone())?;
         let prepared = find_or_prepare(&engine, writer, &d)?;
@@ -1608,7 +1642,7 @@ fn find_or_prepare(
     draft: &ChangeDraft,
 ) -> Result<PreparedChange> {
     for id in engine.change_ids()? {
-        let i = engine.inspect(&id)?;
+        let i = engine.inspect_history(&id)?;
         if i.manifest.allocated_ids.get("run") != draft.allocated_ids.get("run")
             || i.manifest.operations.len() != draft.operations.len()
             || i.manifest.title != draft.title
@@ -1815,7 +1849,7 @@ impl JobLedger {
         change: &PreparedChange,
     ) -> Result<EventRef> {
         let engine = ChangeEngine::new(self.fs.clone())?;
-        let committed = engine.inspect(&change.change_id)?;
+        let committed = engine.inspect_history(&change.change_id)?;
         if &committed.prepared != change || committed.status != ChangeStatus::Committed {
             return Err(fail(
                 ErrorCode::RecoveryRequired,
@@ -1843,14 +1877,6 @@ impl JobLedger {
                 "checkpoint does not match retained operational prefix",
             ));
         }
-        let prefix = replay::replay(&l.frames[..=n], 0)?.inspection;
-        let expected = checkpoint::run_bytes(&prefix)?;
-        if actual != expected {
-            return Err(fail(
-                ErrorCode::ContentConflict,
-                "checkpoint bytes differ from exact projected operational state",
-            ));
-        }
         let run = reference(
             &self.vault_id,
             &self.run_id,
@@ -1858,13 +1884,8 @@ impl JobLedger {
             Blake3Hash::digest(&actual),
             RecordKind::Run,
         );
-        checkpoint::committed(&self.fs, change, std::slice::from_ref(&run))?;
-        for f in &l.frames[..=n] {
-            let path = checkpoint::event_path(&self.run_id, &f.event.event_id)?;
-            if read(&self.fs, &path)?.as_ref() != Some(&checkpoint::event_bytes(&f.event)?) {
-                return Err(events::corrupt("checkpoint event mirror missing/edited"));
-            }
-        }
+        let completed_tasks =
+            checkpoint::verify_checkpoint_commit(&self.fs, change, &run, &l.frames)?;
         if l.state.inspection.run_note.as_ref() == Some(&run) {
             return existing_ref(
                 l,
@@ -1875,14 +1896,7 @@ impl JobLedger {
             g,
             l,
             EventPayload::Checkpoint {
-                completed_tasks: events::completed_task_summary(
-                    prefix
-                        .tasks
-                        .iter()
-                        .filter(|(_, t)| t.state == TaskState::Completed)
-                        .map(|(key, _)| key.clone())
-                        .collect(),
-                )?,
+                completed_tasks,
                 frontier: None,
                 run_note: run,
             },
@@ -2493,7 +2507,7 @@ impl JobLedger {
             let engine = ChangeEngine::new(self.fs.clone())?;
             let mut found = None;
             for id in engine.change_ids()? {
-                let inspected = engine.inspect(&id)?;
+                let inspected = engine.inspect_history(&id)?;
                 if inspected.status == ChangeStatus::Committed
                     && inspected.manifest.operations.iter().any(|op| {
                         op.target == path && op.after == ExpectedState::Hash(reference.hash.clone())
@@ -2545,7 +2559,7 @@ impl JobLedger {
         let hash = Blake3Hash::digest(actual);
         let engine = ChangeEngine::new(self.fs.clone())?;
         for id in engine.change_ids()? {
-            let inspected = engine.inspect(&id)?;
+            let inspected = engine.inspect_history(&id)?;
             if inspected.status == ChangeStatus::Committed
                 && inspected
                     .manifest

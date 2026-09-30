@@ -2428,3 +2428,295 @@ fn begin_send_rejects_utc_regression_below_unpersisted_before_flush_sample() {
     assert_eq!(replayed.budget.dispatched_requests, 1);
     assert_eq!(replayed.budget.outstanding.requests, 1);
 }
+
+#[test]
+fn compact_checkpoints_have_no_event_mirrors_and_no_acknowledgment_write_loop() {
+    let (_temp, fs, job, spec, _) = fixture(1, |_| {});
+    job.with(true, |_, loaded| {
+        for frame in &loaded.frames {
+            assert!(
+                ledger::read(
+                    &fs,
+                    &checkpoint::event_path(&spec.run_id, &frame.event.event_id)?
+                )?
+                .is_none()
+            );
+        }
+        Ok(())
+    })
+    .unwrap();
+    let draft = job.checkpoint_plan().unwrap();
+    assert_eq!(draft.operations.len(), 2);
+    assert_eq!(
+        draft
+            .operations
+            .iter()
+            .filter(|op| op.target.as_str().ends_with(".json"))
+            .count(),
+        1
+    );
+    assert!(
+        draft
+            .operations
+            .iter()
+            .all(|op| !op.target.as_str().contains("/events/"))
+    );
+    commit_checkpoint(&fs, &job, draft);
+    let before = job.inspect().unwrap();
+    assert!(job.checkpoint_plan().unwrap().operations.is_empty());
+    assert!(job.checkpoint_plan().unwrap().operations.is_empty());
+    assert_eq!(job.inspect().unwrap().last_event, before.last_event);
+    assert_eq!(job.inspect().unwrap().budget.dispatched_requests, 0);
+    job.with(true, |_, loaded| {
+        for frame in &loaded.frames {
+            assert!(
+                ledger::read(
+                    &fs,
+                    &checkpoint::event_path(&spec.run_id, &frame.event.event_id)?
+                )?
+                .is_none()
+            );
+        }
+        Ok(())
+    })
+    .unwrap();
+}
+
+#[test]
+fn legacy_checkpoint_migrates_then_verifies_without_historical_run_payloads() {
+    let (_temp, fs, job, spec, _) = fixture(1, |_| {});
+    let legacy = job
+        .with(true, |_, loaded| {
+            checkpoint::checkpoint_plan_bounded(&fs, loaded, 256, 1024 * 1024)
+        })
+        .unwrap();
+    commit_checkpoint(&fs, &job, legacy);
+    let (old_run, old_summary, migration) = job
+        .with(true, |_, loaded| {
+            let EventPayload::Checkpoint {
+                run_note,
+                completed_tasks,
+                ..
+            } = &loaded.frames.last().unwrap().event.payload
+            else {
+                panic!("checkpoint expected")
+            };
+            let migration = checkpoint::compact_summary_migration_plan(
+                &fs,
+                run_note,
+                completed_tasks,
+                &loaded.frames,
+            )?;
+            Ok((run_note.clone(), completed_tasks.clone(), migration))
+        })
+        .unwrap();
+    assert_eq!(migration.operations.len(), 1);
+    assert!(migration.operations[0].target.as_str().ends_with(".json"));
+    let engine = ChangeEngine::new(fs.clone()).unwrap();
+    let writer = WriterPermit::acquire(fs.root(), Duration::from_secs(1)).unwrap();
+    let prepared = engine.prepare(&writer, migration).unwrap().prepared;
+    engine
+        .apply(
+            &writer,
+            &prepared,
+            &CatalogGraphValidator,
+            &Catalog::new(fs.clone(), spec.vault_id.clone()),
+        )
+        .unwrap();
+    drop(writer);
+    job.pause(StopReason::User("fixture pause".into())).unwrap();
+    commit_checkpoint(&fs, &job, job.checkpoint_plan().unwrap());
+    let before = job.inspect().unwrap();
+    let mut publications = Vec::new();
+    // Simulate only removal of old payload copies, after replacement proof commit.
+    // The real retention command must separately establish reachability/undo policy.
+    for change_id in engine.change_ids().unwrap() {
+        let inspected = engine.inspect_history(&change_id).unwrap();
+        for op in &inspected.manifest.operations {
+            if op.target == old_run.path
+                && op.after == crate::vault::ExpectedState::Hash(old_run.hash.clone())
+            {
+                publications.push(inspected.prepared.clone());
+            }
+            for payload in [&op.before_payload, &op.after_payload]
+                .into_iter()
+                .flatten()
+            {
+                if payload.hash == old_run.hash {
+                    let path = fs.root().resolve(&payload.path).unwrap();
+                    if path.exists() {
+                        std::fs::remove_file(path).unwrap();
+                    }
+                }
+            }
+        }
+    }
+    assert!(!publications.is_empty());
+    for publication in &publications {
+        assert!(engine.inspect(&publication.change_id).is_err());
+        let proof = engine
+            .prove_committed_output(publication, &old_run.path, &old_run.hash)
+            .unwrap();
+        assert_eq!(proof.hash(), &old_run.hash);
+    }
+    job.with(true, |_, loaded| {
+        checkpoint::verify_summary_proof(&fs, &old_run, &old_summary, &loaded.frames)?;
+        assert!(
+            checkpoint::compact_summary_migration_plan(
+                &fs,
+                &old_run,
+                &old_summary,
+                &loaded.frames
+            )?
+            .operations
+            .is_empty()
+        );
+        Ok(())
+    })
+    .unwrap();
+    assert_eq!(
+        job.inspect().unwrap().budget.dispatched_requests,
+        before.budget.dispatched_requests
+    );
+    // Exact regenerated bytes never replace lost publication authority.
+    for publication in &publications {
+        std::fs::remove_file(
+            fs.root()
+                .path()
+                .join(format!("changes/{}/outcome.json", publication.change_id)),
+        )
+        .unwrap();
+        assert!(
+            engine
+                .prove_committed_output(publication, &old_run.path, &old_run.hash)
+                .is_err()
+        );
+    }
+    assert!(job.with(true, |_, _| Ok(())).is_err());
+}
+
+#[test]
+fn compact_checkpoint_rejects_edited_locator_even_with_recomputed_checksum() {
+    let (_temp, fs, job, _spec, _) = fixture(1, |_| {});
+    let draft = job.checkpoint_plan().unwrap();
+    let path = draft
+        .operations
+        .iter()
+        .find(|op| op.target.as_str().ends_with(".json"))
+        .unwrap()
+        .target
+        .clone();
+    commit_checkpoint(&fs, &job, draft);
+    let actual = fs.root().resolve(&path).unwrap();
+    let bytes = std::fs::read(&actual).unwrap();
+    let text = std::str::from_utf8(&bytes).unwrap();
+    let original_proof = text
+        .strip_prefix("{\"proof\":")
+        .unwrap()
+        .rsplit_once(",\"checksum\":")
+        .unwrap()
+        .0;
+    let edited_proof =
+        original_proof.replacen("\"formatter_version\":2", "\"formatter_version\":99", 1);
+    assert_ne!(edited_proof, original_proof);
+    let checksum = serde_json::to_string(&Blake3Hash::digest(edited_proof.as_bytes())).unwrap();
+    std::fs::write(
+        &actual,
+        format!("{{\"proof\":{edited_proof},\"checksum\":{checksum}}}"),
+    )
+    .unwrap();
+    assert!(job.with(true, |_, _| Ok(())).is_err());
+    std::fs::write(&actual, bytes).unwrap();
+    job.with(true, |_, _| Ok(())).unwrap();
+}
+
+#[test]
+fn storage_cleanup_preserves_legacy_checkpoint_and_unknown_charge_authority() {
+    let (_temp, fs, job, spec, clock) = fixture(1, |_| {});
+    let legacy = job
+        .with(true, |_, loaded| {
+            checkpoint::checkpoint_plan_bounded(&fs, loaded, 256, 1024 * 1024)
+        })
+        .unwrap();
+    commit_checkpoint(&fs, &job, legacy);
+    let attempt = authorize(&job, &spec.tasks[0]);
+    job.replay().unwrap();
+    job.pause(StopReason::User("storage fixture".into()))
+        .unwrap();
+    commit_checkpoint(&fs, &job, job.checkpoint_plan().unwrap());
+    let before = job.inspect().unwrap();
+    assert_eq!(before.budget.outstanding.requests, 1);
+    let journal = std::fs::read(
+        fs.root()
+            .path()
+            .join(format!(".wiki/state/jobs/{}/journal.bin", spec.run_id)),
+    )
+    .unwrap();
+    let writer = WriterPermit::acquire(fs.root(), Duration::from_secs(1)).unwrap();
+    let options = crate::storage::StorageOptions {
+        retain_undo_changes: 0,
+        ..Default::default()
+    };
+    crate::storage::cleanup(&fs, &writer, &options).unwrap();
+    drop(writer);
+    let after = job.inspect().unwrap();
+    assert_eq!(after.budget, before.budget);
+    assert_eq!(after.tasks, before.tasks);
+    assert_eq!(after.attempts[0].attempt, attempt);
+    assert_eq!(
+        after.attempts[0].billing,
+        BillingDisposition::UnknownReserved
+    );
+    assert_eq!(
+        std::fs::read(
+            fs.root()
+                .path()
+                .join(format!(".wiki/state/jobs/{}/journal.bin", spec.run_id))
+        )
+        .unwrap(),
+        journal
+    );
+    let reopened = JobLedger::new(
+        fs.clone(),
+        spec.vault_id,
+        spec.run_id,
+        common::options(clock),
+    )
+    .unwrap();
+    assert_eq!(reopened.replay().unwrap().inspection.budget, before.budget);
+    let writer = WriterPermit::acquire(fs.root(), Duration::from_secs(1)).unwrap();
+    assert_eq!(
+        crate::storage::cleanup(&fs, &writer, &options)
+            .unwrap()
+            .deleted_files,
+        0
+    );
+}
+
+#[test]
+fn interrupted_storage_blocks_operational_mutations_and_paid_admission_but_not_status() {
+    let (_temp, fs, job, spec, _) = fixture(1, |_| {});
+    let directory = fs.root().path().join(".wiki/state/storage");
+    std::fs::create_dir_all(&directory).unwrap();
+    std::fs::write(directory.join("cleanup.json"), b"damaged retained intent").unwrap();
+    let path = fs
+        .root()
+        .path()
+        .join(format!(".wiki/state/jobs/{}/journal.bin", spec.run_id));
+    let before = std::fs::read(&path).unwrap();
+    assert_eq!(job.inspect().unwrap().budget.dispatched_requests, 0);
+    assert_eq!(
+        job.reserve(&spec.tasks[0].key, bound(&spec.tasks[0]))
+            .err()
+            .unwrap()
+            .code,
+        ErrorCode::RecoveryRequired
+    );
+    assert_eq!(
+        job.pause(StopReason::User("blocked".into()))
+            .unwrap_err()
+            .code,
+        ErrorCode::RecoveryRequired
+    );
+    assert_eq!(std::fs::read(path).unwrap(), before);
+}

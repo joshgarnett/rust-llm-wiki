@@ -51,6 +51,7 @@ pub(crate) fn scope(scope: &ResearchScope) -> Result<()> {
     if scope.urls.len() > 32
         || scope.exclusions.len() > 32
         || scope.source_ids.len() > MAX_PASSAGES
+        || scope.source_ranges.len() > MAX_PASSAGES
         || !(1..=8).contains(&scope.max_rounds)
         || scope.max_sources > 64
         || scope.max_source_bytes > 4 * 1024 * 1024
@@ -63,6 +64,18 @@ pub(crate) fn scope(scope: &ResearchScope) -> Result<()> {
     let unique: BTreeSet<_> = scope.source_ids.iter().collect();
     if unique.len() != scope.source_ids.len() {
         return Err(invalid("duplicate research source ID"));
+    }
+    let mut ranges = BTreeSet::new();
+    for range in &scope.source_ranges {
+        if !unique.contains(&range.source_id)
+            || range.span.is_empty()
+            || range.span.len() > 4096
+            || !ranges.insert((&range.source_id, range.span.start(), range.span.end()))
+        {
+            return Err(invalid(
+                "research source ranges must name a selected source and be unique, nonempty and at most 4096 bytes",
+            ));
+        }
     }
     Ok(())
 }

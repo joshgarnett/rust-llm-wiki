@@ -12,7 +12,11 @@ use crate::{
     records::parse_note,
 };
 use rusqlite::{params_from_iter, types::Value};
-use std::{cmp::Ordering, collections::BTreeMap, ops::Range};
+use std::{
+    cmp::Ordering,
+    collections::{BTreeMap, BTreeSet},
+    ops::Range,
+};
 
 pub fn lexical_expression(query: &str) -> Result<String> {
     validate_query(query)?;
@@ -418,6 +422,7 @@ fn search_inner(
             eligibility: document.eligibility,
             identity_eligibility: record.and_then(|row| row.identity_eligibility),
             excerpt,
+            secondary_excerpts: Vec::new(),
             reasons,
             rank_contributions: candidate.ranks.clone(),
             source_id: document.source_id.clone(),
@@ -432,6 +437,45 @@ fn search_inner(
     let mut warnings = Vec::new();
     if omitted_candidates > 0 {
         warnings.push("candidate_cap_reached; omitted_candidates is a lower bound".into());
+    }
+    let invalid_hits = hits
+        .iter()
+        .filter(|hit| {
+            hit.eligibility == Eligibility::Invalid
+                && !hit.reasons.contains(&RetrievalReason::Identity)
+        })
+        .collect::<Vec<_>>();
+    if !invalid_hits.is_empty() {
+        let paths = invalid_hits
+            .iter()
+            .map(|hit| hit.locator.path.clone())
+            .collect::<BTreeSet<_>>();
+        let mut codes: BTreeMap<VaultRelativePath, BTreeSet<ErrorCode>> = BTreeMap::new();
+        for diagnostic in &reader.projection().diagnostics {
+            if paths.contains(&diagnostic.path) {
+                codes
+                    .entry(diagnostic.path.clone())
+                    .or_default()
+                    .insert(diagnostic.code);
+            }
+        }
+        for hit in invalid_hits.iter().take(3) {
+            let reason = codes
+                .get(&hit.locator.path)
+                .and_then(|codes| codes.iter().next())
+                .copied()
+                .unwrap_or(ErrorCode::RecordInvalid);
+            warnings.push(format!(
+                "invalid_note_hit: {} ({reason}); text discovery only, not verified evidence; run check for details",
+                hit.locator.path
+            ));
+        }
+        if invalid_hits.len() > 3 {
+            warnings.push(format!(
+                "{} additional invalid note hits; run check for details",
+                invalid_hits.len() - 3
+            ));
+        }
     }
     let dependency_fingerprint = Blake3Hash::digest(
         serde_json::to_vec(&reader.projection().dependencies)

@@ -202,6 +202,12 @@ fn decode_fence<T: serde::de::DeserializeOwned>(bytes: &[u8], fence: &str) -> Re
         .map_err(|_| events::corrupt("canonical payload invalid"))
 }
 pub(super) fn run_bytes(i: &LedgerInspection) -> Result<Vec<u8>> {
+    run_bytes_version(i, 1)
+}
+fn run_bytes_version(i: &LedgerInspection, formatter: u32) -> Result<Vec<u8>> {
+    if !matches!(formatter, 1 | 2) {
+        return Err(events::corrupt("unknown run formatter"));
+    }
     let mut f = fields(&i.spec.run_id, RecordKind::Run, &i.spec.title);
     f.insert(
         "wiki_status".into(),
@@ -211,7 +217,9 @@ pub(super) fn run_bytes(i: &LedgerInspection) -> Result<Vec<u8>> {
         "wiki_created_at".into(),
         timestamp(i.spec.created_at_utc_ms)?.into(),
     );
-    if let Some(event) = &i.last_event {
+    if formatter == 1
+        && let Some(event) = &i.last_event
+    {
         f.insert(
             "wiki_checkpoint_event_id".into(),
             event.event_id.as_str().into(),
@@ -230,6 +238,43 @@ pub(super) fn run_bytes(i: &LedgerInspection) -> Result<Vec<u8>> {
             checkpoint: i.last_event.clone(),
         },
     )
+}
+/// Preserve the exact old bootstrap draft when retrying a v1 creation that
+/// already retained its genesis mirror operation. New runs allocate no mirror.
+pub(super) fn legacy_bootstrap_mirror(
+    fs: &VaultFs,
+    spec: &RunSpec,
+    genesis: &JournalFrame,
+    run_hash: &Blake3Hash,
+) -> Result<Option<ExpectedWrite>> {
+    let path = event_path(&spec.run_id, &genesis.event.event_id)?;
+    let run_path = run_path(&spec.run_id)?;
+    let bytes = event_bytes(&genesis.event)?;
+    let hash = Blake3Hash::digest(&bytes);
+    let engine = ChangeEngine::new(fs.clone())?;
+    for id in engine.change_ids()? {
+        let inspected = engine.inspect_history(&id)?;
+        if !matches!(
+            inspected.status,
+            ChangeStatus::Aborted | ChangeStatus::Conflict
+        ) && inspected.manifest.title == "Create durable planned run"
+            && inspected.manifest.allocated_ids.get("run") == Some(&spec.run_id)
+            && inspected.manifest.operations.len() == 2
+            && inspected.manifest.operations.iter().any(|op| {
+                op.target == path
+                    && op.before == ExpectedState::Absent
+                    && op.after == ExpectedState::Hash(hash.clone())
+            })
+            && inspected.manifest.operations.iter().any(|op| {
+                op.target == run_path
+                    && op.before == ExpectedState::Absent
+                    && op.after == ExpectedState::Hash(run_hash.clone())
+            })
+        {
+            return Ok(Some(write(path, ExpectedState::Absent, bytes)));
+        }
+    }
+    Ok(None)
 }
 pub(super) fn event_bytes(event: &LedgerEvent) -> Result<Vec<u8>> {
     let mut f = fields(&event.event_id, RecordKind::RunEvent, "Immutable job event");
@@ -308,17 +353,151 @@ pub(super) fn write(
         apply_after: vec![],
     }
 }
-const CHECKPOINT_MIRROR_BATCH: usize = 256;
-const CHECKPOINT_PAYLOAD_BYTES: usize = 16 * 1024 * 1024;
-pub(super) fn checkpoint_plan(fs: &VaultFs, loaded: &ledger::Loaded) -> Result<ChangeDraft> {
-    checkpoint_plan_bounded(
-        fs,
-        loaded,
-        CHECKPOINT_MIRROR_BATCH,
-        CHECKPOINT_PAYLOAD_BYTES,
+/// A locator into retained exact history, never standalone accounting authority.
+/// Version 1 run formatting remains frozen so old bytes can be regenerated.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CompactCheckpointProof {
+    version: u32,
+    vault_id: RecordId,
+    run_id: RecordId,
+    spec_hash: Blake3Hash,
+    genesis_hash: Blake3Hash,
+    through: EventRef,
+    formatter_version: u32,
+    run_note: DurableOutputRef,
+    completed_tasks: CompletedTaskSummary,
+}
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CompactCheckpointEnvelope {
+    proof: CompactCheckpointProof,
+    checksum: Blake3Hash,
+}
+fn compact_path(run: &DurableOutputRef) -> Result<VaultRelativePath> {
+    VaultRelativePath::new(format!(
+        "runs/{}/checkpoints/{}.json",
+        run.record.record_id,
+        run.hash.hex()
+    ))
+}
+fn completed_summary(i: &LedgerInspection) -> Result<CompletedTaskSummary> {
+    events::completed_task_summary(
+        i.tasks
+            .iter()
+            .filter(|(_, task)| task.state == TaskState::Completed)
+            .map(|(key, _)| key.clone())
+            .collect(),
     )
 }
-// A fully mirrored prefix is sufficient; the immutable operational history is never pruned.
+fn compact_proof(
+    frames: &[JournalFrame],
+    through: usize,
+    formatter_version: u32,
+) -> Result<(CompactCheckpointProof, Vec<u8>)> {
+    let frame = frames
+        .get(through)
+        .ok_or_else(|| events::corrupt("compact checkpoint prefix absent"))?;
+    let prefix = super::replay::replay(&frames[..=through], 0)?.inspection;
+    let bytes = run_bytes_version(&prefix, formatter_version)?;
+    let run_note = DurableOutputRef {
+        record: RecordRef {
+            vault_id: prefix.spec.vault_id.clone(),
+            record_id: prefix.spec.run_id.clone(),
+            expected_kind: RecordKind::Run,
+        },
+        path: run_path(&prefix.spec.run_id)?,
+        hash: Blake3Hash::digest(&bytes),
+    };
+    Ok((
+        CompactCheckpointProof {
+            version: 2,
+            vault_id: prefix.spec.vault_id.clone(),
+            run_id: prefix.spec.run_id.clone(),
+            spec_hash: prefix.spec_hash.clone(),
+            genesis_hash: frames[0].checksum.clone(),
+            through: events::event_ref(frame),
+            formatter_version,
+            run_note,
+            completed_tasks: completed_summary(&prefix)?,
+        },
+        bytes,
+    ))
+}
+fn compact_json(value: &impl Serialize, maximum: usize) -> Result<Vec<u8>> {
+    let bytes = serde_json::to_vec(value).map_err(|_| events::corrupt("compact proof encoding"))?;
+    if bytes.len() > maximum {
+        return Err(events::corrupt("compact proof exceeds bound"));
+    }
+    Ok(bytes)
+}
+fn compact_bytes(proof: CompactCheckpointProof) -> Result<Vec<u8>> {
+    let checksum = Blake3Hash::digest(compact_json(&proof, EVENT_MAX_BYTES)?);
+    compact_json(
+        &CompactCheckpointEnvelope { proof, checksum },
+        EVENT_MAX_BYTES,
+    )
+}
+fn add_compact_write(
+    fs: &VaultFs,
+    draft: &mut ChangeDraft,
+    proof: CompactCheckpointProof,
+) -> Result<()> {
+    let path = compact_path(&proof.run_note)?;
+    let bytes = compact_bytes(proof)?;
+    match ledger::read(fs, &path)? {
+        Some(actual) if actual == bytes => {}
+        Some(_) => {
+            return Err(events::corrupt(
+                "immutable compact checkpoint proof changed",
+            ));
+        }
+        None => draft
+            .operations
+            .push(write(path, ExpectedState::Absent, bytes)),
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+const CHECKPOINT_MIRROR_BATCH: usize = 256;
+#[cfg(test)]
+const CHECKPOINT_PAYLOAD_BYTES: usize = 16 * 1024 * 1024;
+pub(super) fn checkpoint_plan(fs: &VaultFs, loaded: &ledger::Loaded) -> Result<ChangeDraft> {
+    let inspection = &loaded.state.inspection;
+    let expected = inspection
+        .run_note
+        .as_ref()
+        .ok_or_else(|| events::corrupt("run binding missing"))?;
+    let mut draft = draft("Checkpoint durable run prefix", &inspection.spec);
+    // A checkpoint acknowledgment alone does not change the represented run.
+    // Do not manufacture another publication merely to mirror that acknowledgment.
+    let through = loaded
+        .frames
+        .iter()
+        .rposition(|frame| !matches!(frame.event.payload, EventPayload::Checkpoint { .. }))
+        .ok_or_else(|| events::corrupt("checkpoint genesis absent"))?;
+    let (proof, bytes) = compact_proof(&loaded.frames, through, 2)?;
+    if proof.run_note == *expected {
+        return Ok(draft);
+    }
+    add_compact_write(fs, &mut draft, proof)?;
+    let mut run = write(
+        run_path(&inspection.spec.run_id)?,
+        ExpectedState::Hash(expected.hash.clone()),
+        bytes,
+    );
+    run.apply_after = draft
+        .operations
+        .iter()
+        .map(|op| op.target.clone())
+        .collect();
+    draft.operations.push(run);
+    Ok(draft)
+}
+/// Legacy v1 fixture writer; production checkpoints use the compact v2 proof.
+/// The immutable operational history is never pruned.
+#[cfg(test)]
 pub(super) fn checkpoint_plan_bounded(
     fs: &VaultFs,
     loaded: &ledger::Loaded,
@@ -545,7 +724,7 @@ pub(super) fn committed(
     outputs: &[DurableOutputRef],
 ) -> Result<()> {
     let engine = ChangeEngine::new(fs.clone())?;
-    let inspected = engine.inspect(&change.change_id)?;
+    let inspected = engine.inspect_history(&change.change_id)?;
     if &inspected.prepared != change || inspected.status != ChangeStatus::Committed {
         return Err(WikiError::new(
             ErrorCode::RecoveryRequired,
@@ -554,6 +733,7 @@ pub(super) fn committed(
     }
     for r in outputs {
         output(fs, r)?;
+        engine.prove_committed_output(change, &r.path, &r.hash)?;
         if r.record.vault_id != *engine.vault_id()
             || !inspected
                 .manifest
@@ -588,53 +768,69 @@ pub(crate) fn receipt_plan(
         )
     })
 }
-pub(super) fn verify_summary_proof(
+/// Locate historical publication without reading before/proposed payload copies.
+fn committed_hash(
     fs: &VaultFs,
-    note_ref: &DurableOutputRef,
-    summary: &CompletedTaskSummary,
-    frames: &[JournalFrame],
-) -> Result<()> {
+    path: &VaultRelativePath,
+    hash: &Blake3Hash,
+) -> Result<PreparedChange> {
+    let engine = ChangeEngine::new(fs.clone())?;
+    for id in engine.change_ids()? {
+        let inspected = engine.inspect_history(&id)?;
+        if inspected.status == ChangeStatus::Committed
+            && inspected
+                .manifest
+                .operations
+                .iter()
+                .any(|op| &op.target == path && op.after == ExpectedState::Hash(hash.clone()))
+        {
+            engine.prove_committed_output(&inspected.prepared, path, hash)?;
+            return Ok(inspected.prepared);
+        }
+    }
+    Err(events::corrupt(
+        "checkpoint output has no retained committed publication",
+    ))
+}
+fn legacy_summary_bytes(fs: &VaultFs, note_ref: &DurableOutputRef) -> Result<Vec<u8>> {
     let current = ledger::read(fs, &note_ref.path)?;
-    let bytes = if let Some(bytes) = current.filter(|b| Blake3Hash::digest(b) == note_ref.hash) {
-        bytes
-    } else {
-        let engine = ChangeEngine::new(fs.clone())?;
-        let mut found = None;
-        for id in engine.change_ids()? {
-            let inspected = engine.inspect(&id)?;
-            if inspected.status != ChangeStatus::Committed {
-                continue;
-            }
-            for op in inspected.manifest.operations {
-                if op.target == note_ref.path
-                    && op.after == ExpectedState::Hash(note_ref.hash.clone())
-                    && let Some(payload) = op.after_payload
+    if let Some(bytes) = current.filter(|bytes| Blake3Hash::digest(bytes) == note_ref.hash) {
+        return Ok(bytes);
+    }
+    let engine = ChangeEngine::new(fs.clone())?;
+    for id in engine.change_ids()? {
+        let inspected = engine.inspect_history(&id)?;
+        if inspected.status != ChangeStatus::Committed {
+            continue;
+        }
+        for op in inspected.manifest.operations {
+            if op.target == note_ref.path
+                && op.after == ExpectedState::Hash(note_ref.hash.clone())
+                && let Some(payload) = op.after_payload
+            {
+                let bytes = ledger::read(fs, &payload.path)?
+                    .ok_or_else(|| events::corrupt("retained checkpoint payload missing"))?;
+                if Blake3Hash::digest(&bytes) != note_ref.hash
+                    || bytes.len() as u64 != payload.byte_len
                 {
-                    let bytes = ledger::read(fs, &payload.path)?
-                        .ok_or_else(|| events::corrupt("retained checkpoint payload missing"))?;
-                    if Blake3Hash::digest(&bytes) != note_ref.hash {
-                        return Err(events::corrupt("retained checkpoint payload hash differs"));
-                    }
-                    found = Some(bytes);
-                    break;
+                    return Err(events::corrupt(
+                        "retained checkpoint payload hash/length differs",
+                    ));
                 }
-            }
-            if found.is_some() {
-                break;
+                return Ok(bytes);
             }
         }
-        found
-            .ok_or_else(|| events::corrupt("checkpoint has no retained committed exact payload"))?
-    };
-    let parsed = crate::records::parse_note(&bytes);
-    if parsed
-        .canonical
-        .as_ref()
-        .is_none_or(|c| c.id() != &note_ref.record.record_id || c.kind() != RecordKind::Run)
-    {
-        return Err(events::corrupt("checkpoint record identity differs"));
     }
-    let plan = decode_run(&bytes)?;
+    Err(events::corrupt(
+        "checkpoint has no retained committed exact payload",
+    ))
+}
+fn proof_for_bytes(
+    note_ref: &DurableOutputRef,
+    bytes: &[u8],
+    frames: &[JournalFrame],
+) -> Result<CompactCheckpointProof> {
+    let plan = decode_run(bytes)?;
     let event = plan
         .checkpoint
         .ok_or_else(|| events::corrupt("checkpoint prefix absent"))?;
@@ -648,20 +844,229 @@ pub(super) fn verify_summary_proof(
             "checkpoint prefix differs from durable history",
         ));
     }
-    let prefix = super::replay::replay(&frames[..=n], 0)?.inspection;
-    if run_bytes(&prefix)? != bytes
-        || events::completed_task_summary(
-            prefix
-                .tasks
-                .iter()
-                .filter(|(_, task)| task.state == TaskState::Completed)
-                .map(|(key, _)| key.clone())
-                .collect(),
-        )? != *summary
+    for formatter in [1, 2] {
+        let (proof, regenerated) = compact_proof(frames, n, formatter)?;
+        if proof.run_note == *note_ref && regenerated == bytes {
+            return Ok(proof);
+        }
+    }
+    Err(events::corrupt(
+        "checkpoint bytes/identity differ from exact operational prefix",
+    ))
+}
+fn read_compact(
+    fs: &VaultFs,
+    note_ref: &DurableOutputRef,
+    frames: &[JournalFrame],
+) -> Result<Option<CompactCheckpointProof>> {
+    let path = compact_path(note_ref)?;
+    let Some(bytes) = crate::changes::prepare::read_bounded(fs, &path, EVENT_MAX_BYTES)? else {
+        return Ok(None);
+    };
+    let envelope: CompactCheckpointEnvelope = crate::changes::prepare::strict_json(&bytes)
+        .map_err(|_| events::corrupt("compact checkpoint proof invalid"))?;
+    let proof = &envelope.proof;
+    if envelope.checksum != Blake3Hash::digest(compact_json(proof, EVENT_MAX_BYTES)?)
+        || proof.version != 2
+        || !matches!(proof.formatter_version, 1 | 2)
+        || proof.run_note != *note_ref
     {
         return Err(events::corrupt(
-            "checkpoint summary/bytes differ from actual complete task keys",
+            "compact checkpoint proof binding/checksum differs",
+        ));
+    }
+    let n = usize::try_from(proof.through.sequence)
+        .map_err(|_| events::corrupt("compact checkpoint prefix too large"))?;
+    let (expected, _) = compact_proof(frames, n, proof.formatter_version)?;
+    if expected != *proof || compact_bytes(expected)? != bytes {
+        return Err(events::corrupt(
+            "compact checkpoint differs from exact retained prefix",
+        ));
+    }
+    // Neither a checksummed sidecar nor regenerated bytes alone prove publication.
+    committed_hash(fs, &path, &Blake3Hash::digest(&bytes))?;
+    committed_hash(fs, &note_ref.path, &note_ref.hash)?;
+    Ok(Some(envelope.proof))
+}
+pub(super) fn verify_summary_proof(
+    fs: &VaultFs,
+    note_ref: &DurableOutputRef,
+    summary: &CompletedTaskSummary,
+    frames: &[JournalFrame],
+) -> Result<()> {
+    let proof = match read_compact(fs, note_ref, frames)? {
+        Some(proof) => proof,
+        None => {
+            let bytes = legacy_summary_bytes(fs, note_ref)?;
+            let proof = proof_for_bytes(note_ref, &bytes, frames)?;
+            committed_hash(fs, &note_ref.path, &note_ref.hash)?;
+            proof
+        }
+    };
+    if proof.completed_tasks != *summary {
+        return Err(events::corrupt(
+            "checkpoint summary differs from actual complete task keys",
         ));
     }
     Ok(())
+}
+/// Verify an actual publication before its operational checkpoint acknowledgment.
+/// Legacy plans still require their exact immutable event mirrors; compact plans
+/// require committed proof bytes and regenerate from the original event prefix.
+pub(super) fn verify_checkpoint_commit(
+    fs: &VaultFs,
+    change: &PreparedChange,
+    run: &DurableOutputRef,
+    frames: &[JournalFrame],
+) -> Result<CompletedTaskSummary> {
+    output(fs, run)?;
+    let bytes =
+        ledger::read(fs, &run.path)?.ok_or_else(|| events::corrupt("checkpoint run missing"))?;
+    let expected = proof_for_bytes(run, &bytes, frames)?;
+    ChangeEngine::new(fs.clone())?.prove_committed_output(change, &run.path, &run.hash)?;
+    if let Some(proof) = read_compact(fs, run, frames)? {
+        if proof != expected {
+            return Err(events::corrupt(
+                "committed compact checkpoint prefix differs",
+            ));
+        }
+    } else {
+        let n = expected.through.sequence as usize;
+        for frame in &frames[..=n] {
+            let path = event_path(&run.record.record_id, &frame.event.event_id)?;
+            if ledger::read(fs, &path)?.as_ref() != Some(&event_bytes(&frame.event)?) {
+                return Err(events::corrupt(
+                    "legacy checkpoint event mirror missing/edited",
+                ));
+            }
+        }
+    }
+    Ok(expected.completed_tasks)
+}
+/// Pure bounded migration plan. Original history and publication must verify
+/// before retaining a compact locator; applying this draft never deletes bytes.
+pub(crate) fn compact_summary_migration_plan(
+    fs: &VaultFs,
+    note_ref: &DurableOutputRef,
+    summary: &CompletedTaskSummary,
+    frames: &[JournalFrame],
+) -> Result<ChangeDraft> {
+    verify_summary_proof(fs, note_ref, summary, frames)?;
+    let proof = match read_compact(fs, note_ref, frames)? {
+        Some(proof) => proof,
+        None => proof_for_bytes(note_ref, &legacy_summary_bytes(fs, note_ref)?, frames)?,
+    };
+    let prefix = super::replay::replay(&frames[..=proof.through.sequence as usize], 0)?.inspection;
+    let mut draft = draft("Retain compact historical checkpoint proof", &prefix.spec);
+    add_compact_write(fs, &mut draft, proof)?;
+    Ok(draft)
+}
+
+/// Complete, head-anchored history for storage migration. Read-only and never
+/// returns dispatch authority; cleanup holds the run lock before using it to delete.
+pub(crate) struct StorageRunHistory {
+    pub frames: Vec<JournalFrame>,
+    pub checkpoints: Vec<(DurableOutputRef, CompletedTaskSummary)>,
+    pub mirrors: Vec<(VaultRelativePath, Blake3Hash, u64)>,
+    pub binds_vault_marker: bool,
+}
+pub(crate) fn storage_run_history(fs: &VaultFs, run_id: &RecordId) -> Result<StorageRunHistory> {
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Head {
+        version: u32,
+        run_id: RecordId,
+        spec_hash: Blake3Hash,
+        genesis_hash: Blake3Hash,
+        last_event: EventRef,
+        journal_length: u64,
+    }
+    let read = |name: &str, maximum| {
+        crate::changes::prepare::read_bounded(
+            fs,
+            &VaultRelativePath::new(format!(".wiki/state/jobs/{run_id}/{name}"))?,
+            maximum,
+        )?
+        .ok_or_else(|| events::corrupt("storage migration requires complete job history and head"))
+    };
+    let bytes = read("journal.bin", JOURNAL_MAX_BYTES as usize)?;
+    let decoded = events::decode(&bytes, run_id)?;
+    if decoded.torn_tail {
+        return Err(events::corrupt(
+            "recover torn job history before storage migration",
+        ));
+    }
+    let head: Head =
+        crate::changes::prepare::strict_json(&read("checkpoint.json", METADATA_MAX_BYTES)?)?;
+    let index = usize::try_from(head.last_event.sequence)
+        .map_err(|_| events::corrupt("storage head overflow"))?;
+    let end = decoded
+        .frames
+        .get(index)
+        .ok_or_else(|| events::corrupt("storage job history suffix missing"))?;
+    let length = decoded.frames[..=index]
+        .iter()
+        .try_fold(0u64, |sum, frame| {
+            sum.checked_add(events::encode(&frame.event)?.1.len() as u64)
+                .ok_or_else(|| events::corrupt("storage head length overflow"))
+        })?;
+    let state = super::replay::replay(&decoded.frames, decoded.safe_offset)?.inspection;
+    if head.version != 1
+        || &head.run_id != run_id
+        || head.spec_hash != state.spec_hash
+        || head.genesis_hash != decoded.frames[0].checksum
+        || events::event_ref(end) != head.last_event
+        || length != head.journal_length
+        || length > decoded.safe_offset
+    {
+        return Err(events::corrupt(
+            "storage head differs from complete original history",
+        ));
+    }
+    if state.spec.vault_id != ChangeEngine::new(fs.clone())?.vault_id().clone() {
+        return Err(events::corrupt("storage job belongs to another vault"));
+    }
+    let current = state
+        .run_note
+        .as_ref()
+        .ok_or_else(|| events::corrupt("storage run reference absent"))?;
+    output(fs, current)?;
+    let referenced = parse_note(
+        &ledger::read(fs, &current.path)?.ok_or_else(|| events::corrupt("storage run missing"))?,
+    )
+    .canonical
+    .and_then(|r| r.string("wiki_checkpoint_event_id").map(str::to_owned));
+    let mut checkpoints = Vec::new();
+    let mut mirrors = Vec::new();
+    for frame in &decoded.frames {
+        if let EventPayload::Checkpoint {
+            run_note,
+            completed_tasks,
+            ..
+        } = &frame.event.payload
+        {
+            verify_summary_proof(fs, run_note, completed_tasks, &decoded.frames)?;
+            checkpoints.push((run_note.clone(), completed_tasks.clone()));
+        }
+        if referenced.as_deref() != Some(frame.event.event_id.as_str()) {
+            let bytes = event_bytes(&frame.event)?;
+            mirrors.push((
+                event_path(run_id, &frame.event.event_id)?,
+                Blake3Hash::digest(&bytes),
+                bytes.len() as u64,
+            ));
+        }
+    }
+    Ok(StorageRunHistory {
+        frames: decoded.frames,
+        checkpoints,
+        mirrors,
+        binds_vault_marker: state
+            .spec
+            .scope
+            .read_preconditions
+            .iter()
+            .any(|p| p.path.as_str() == "WIKI.md")
+            && !matches!(state.state, RunState::Completed | RunState::Failed),
+    })
 }

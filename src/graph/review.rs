@@ -2344,7 +2344,7 @@ pub fn stage_review(
     if let Some(r) = &current.restored_receipt {
         let mut retained = None;
         for id in engine.change_ids()? {
-            let c = engine.inspect(&id)?;
+            let c = engine.inspect_history(&id)?;
             if c.manifest
                 .origin
                 .as_ref()

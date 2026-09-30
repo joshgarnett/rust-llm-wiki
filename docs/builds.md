@@ -44,7 +44,7 @@ marker and leaves other targets and ordinary Cargo dependency sources unchanged.
 | `just check` | Formatting and strict Clippy for all targets |
 | `just test-smoke` | Runfile paths, contracts, machine output, offline CLI and skill export |
 | `just build-tools-test` | Build orchestration regressions with fake tools |
-| `just ci` | Check, build-tool regressions and CLI smoke subset |
+| `just ci` | Check, build tools, CLI smoke and consequential regression subsets |
 | `just test` | Library, binary, integration, example tests and doctests |
 | `just candidate NEW_DIR` | Native release archive and copied-binary smoke |
 | `just qualify [NEW_DIR]` | Full Unix qualification, including release recipes and disposable-vault checks |
@@ -96,6 +96,10 @@ decisions remain in [external qualification](qualification.md).
   targets and produces a build/capability candidate; it does not qualify
   durable writes or crash recovery. Windows has a 60-minute job allowance for
   setup, full source compilation and an optimized candidate; Unix jobs use 30 minutes.
+- The short Unix gate includes `just test-regressions`: consequential provider,
+  source authority, graph/context, research, shared workflow and storage cases,
+  plus bounded conflict-resolution/checkpoint regressions. It does not run the
+  complete native interruption matrix. `just qualify` runs that full suite.
 - `Opt-in native qualification` remains manual. It runs full Unix qualification
   and retains its logs and candidate archive. Windows remains build-only.
 - `Release build` manually builds six native targets from one workflow commit:
@@ -105,6 +109,12 @@ decisions remain in [external qualification](qualification.md).
   checksum and build information. Different commits may build concurrently;
   duplicate runs of the same commit serialize. Release creation remains a
   separate step after all six artifacts from one successful run are verified.
+- Before promoting any future release, require successful full native Unix
+  qualification from the exact source commit used by the six candidate archives,
+  together with matching binary/source hashes and the maintained skill recipe.
+  Short CI, cross-builds and earlier commits' results are insufficient for that
+  promotion. Unavailable host/provider qualification remains explicitly recorded;
+  this cleanup does not choose a version or publish a release.
 - Shared setup installs pinned Rust and Just, downloads the pinned native
   Bazelisk binary with its checksum, caches downloaded dependency archives and Just by OS,
   architecture, toolchain and lockfiles, then fetches the locked Bazel graph.

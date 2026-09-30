@@ -172,7 +172,7 @@ Run states match storage: `planned -> running -> completed|paused|failed|stopped
 
 Task attempts advance `pending -> reserved -> dispatch_intent -> received -> output_committed -> settled`. Definite pre-send failure releases its reservation. A crash after dispatch intent is conservatively `outcome_unknown`, even if nothing actually left the machine. No exactly-once claim is possible without provider cooperation; sending a local task key does not establish remote idempotency.
 
-`runs/<id>/run.md` contains scope, limits, frontier, completed task keys, and checkpoint. Immutable event notes carry storage's `run_id,sequence,event_type,occurred_at,request_id?` frontmatter and a bounded `lwiki.run-event.v1` fenced JSON payload:
+Logical `runs/<id>/run.md` contains scope, limits, completed task keys and checkpoint; storage schema2 keeps it under `.wiki/retained/runs/`. New production checkpoints use a compact proof binding vault/run/spec, the exact journal prefix and the historically committed run bytes; they omit per-event Markdown mirrors. Legacy event notes/readers remain supported for migration and carry storage's `run_id,sequence,event_type,occurred_at,request_id?` frontmatter and a bounded `lwiki.run-event.v1` fenced JSON payload:
 
 ```rust
 struct UsageReceipt {
@@ -225,3 +225,11 @@ Run these against mocks and fault-injected storage first; add opt-in live contra
 Explicit generation probes request up to 256 output tokens, bounded by the configured service maximum and caller output-unit ceiling. Unproven gateway token/cost ceilings still fail admission rather than promising unsupported hard guarantees; request/byte ceilings remain available. Responses and Chat use the configured adapter for probes.
 
 Response header names follow RFC 9110 token syntax, including underscores, while count/byte/name/value-control limits remain enforced. Invalid headers report `response_headers_invalid`; oversized bodies report `response_bound`. [RFC 9110 §5.6.2](https://www.rfc-editor.org/rfc/rfc9110.html#name-tokens)
+
+## Cleanup additions to the job contract
+
+`jobs status --run ID` exposes retained effective limits/deadline and reservations. `jobs amend --run ID --reason TEXT` permits monotonic amendments for planned, paused or stopped jobs, including expired planned jobs. It appends history, never resets consumed bytes/requests/units or uncertain charges. Explicit CLI overrides must equal effective retained values before any new dispatch; omitted CLI flags inherit. A concrete library runtime without an override mask must supply effective values. Amendment does not authorize an uncertain resend: `--retry-uncertain` remains explicit, and admission still enforces original exposure/concurrency/attempt/lifetime holds. Corpus freshness is checked before a new embedding send; an already paid Received response can be reconciled locally without another call.
+
+Completed useful output can coexist with an unsettled earlier attempt; such a run remains paused and inspectable with its holds. A semantic rejection retains bounded private output (256 KiB), fixed grounding diagnostics and explicit host-import repair; it never automatically salvages items or buys repair. HTTP error-body retention is opt-in (`--retain-http-error-body`, 16 KiB). Safe metadata inspection is the default; `jobs diagnostics inspect ... --raw` exposes private text explicitly. Prune requires a settled, known-billing attempt. Normal errors omit body text and model-controlled identifiers.
+
+During a pending storage cleanup epoch, operational mutations and paid admission refuse while read-only status remains available. Compact checkpoint migration is verified before obsolete transaction payloads can expire; complete journals, receipt authority and unknown-charge holds remain protected. Complete-vault backup includes `.wiki/state` and `.wiki/retained`; Markdown-only reconstruction cannot recreate accounting.

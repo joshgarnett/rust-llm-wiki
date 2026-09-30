@@ -9,4 +9,6 @@ pub mod embeddings;
 pub mod remote;
 mod review;
 
+mod pages;
 pub mod probe;
+pub use pages::{PageBatchRequest, PageUpdate};

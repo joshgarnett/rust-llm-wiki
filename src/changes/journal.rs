@@ -32,6 +32,12 @@ pub fn encode_frame(frame: &JournalFrame) -> Result<Vec<u8>> {
     Ok(bytes)
 }
 
+pub(crate) fn frame_hash(frame: &JournalFrame) -> Result<crate::domain::Blake3Hash> {
+    Ok(crate::domain::Blake3Hash::digest(
+        serde_json::to_vec(frame).map_err(|e| WikiError::invalid(e.to_string()))?,
+    ))
+}
+
 pub fn decode_journal(
     bytes: &[u8],
     manifest: &ChangeManifest,
@@ -215,6 +221,45 @@ fn validate_frames(
             (ChangeEvent::Aborted, Some(ChangeStatus::Prepared)) => {
                 status = Some(ChangeStatus::Aborted);
                 true
+            }
+            (
+                ChangeEvent::ResolutionAccepted {
+                    mode,
+                    conflict_sequence,
+                    conflict_hash,
+                    observations,
+                },
+                Some(ChangeStatus::Conflict),
+            ) => {
+                let prior = sequence.checked_sub(1).and_then(|n| frames.get(n));
+                let valid = prior.is_some_and(|prior| {
+                    prior.sequence == *conflict_sequence
+                        && matches!(prior.event, ChangeEvent::Conflict { .. })
+                        && frame_hash(prior).is_ok_and(|hash| hash == *conflict_hash)
+                }) && observations.len() == manifest.operations.len()
+                    && observations
+                        .iter()
+                        .zip(&manifest.operations)
+                        .all(|(seen, op)| {
+                            seen.target == op.target
+                                && seen.before == op.before
+                                && seen.after == op.after
+                                && match mode {
+                                    ConflictResolutionMode::Resume => {
+                                        seen.observed == op.before || seen.observed == op.after
+                                    }
+                                    ConflictResolutionMode::Abandon => seen.observed == op.before,
+                                }
+                        });
+                if valid {
+                    completed.clear();
+                    intent = None;
+                    status = Some(match mode {
+                        ConflictResolutionMode::Resume => ChangeStatus::Applying,
+                        ConflictResolutionMode::Abandon => ChangeStatus::Aborted,
+                    });
+                }
+                valid
             }
             (
                 ChangeEvent::Conflict {

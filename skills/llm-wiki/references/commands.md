@@ -320,6 +320,111 @@ Options:
 
 ```
 
+## page init
+
+```text
+Initialize plain Markdown with a stable page identity and draft envelope
+
+Usage: lwiki page init [OPTIONS] --file <FILE> --title <TITLE>
+
+Options:
+      --file <FILE>
+          Plain UTF-8 Markdown body; use - for bounded standard input
+
+      --wiki <WIKI>
+          Wiki root containing WIKI.md; defaults to discovery from the current directory
+
+      --format <FORMAT>
+          Output format: human-readable text, a JSON envelope or JSON Lines events
+
+          [possible values: human, json, jsonl]
+
+      --title <TITLE>
+          Human-readable title for the new draft page
+
+      --id <ID>
+          Stable page identity; omit to allocate one
+
+      --json
+          Emit one structured JSON envelope
+
+      --jsonl
+          Emit JSON Lines events for supported streaming commands
+
+      --path <PATH>
+          New vault-relative path; defaults to pages/<record-id>.md
+
+      --offline
+          Prevent provider requests and credential helper calls; local operations remain available
+
+      --dry-run
+          Preview without writes, provider requests or credential resolution
+
+      --stage
+          Retain a guarded preparation for a later explicit changes apply
+
+      --preferences <PREFERENCES>
+          Explicit trusted local JSON preferences; never read ambient credentials
+
+      --profile <PROFILE>
+          Trusted provider profile name from the private provider configuration
+
+      --lock-timeout-ms <LOCK_TIMEOUT_MS>
+          Maximum writer-lock wait in milliseconds (default: 5000; preferences may override)
+
+  -h, --help
+          Print help
+
+```
+
+## page batch
+
+```text
+Prepare/apply 1–16 coupled page updates, each with its own author hash
+
+Usage: lwiki page batch [OPTIONS] --file <FILE>
+
+Options:
+      --file <FILE>
+          JSON request matching schema page-batch; use - for stdin
+
+      --wiki <WIKI>
+          Wiki root containing WIKI.md; defaults to discovery from the current directory
+
+      --format <FORMAT>
+          Output format: human-readable text, a JSON envelope or JSON Lines events
+
+          [possible values: human, json, jsonl]
+
+      --json
+          Emit one structured JSON envelope
+
+      --jsonl
+          Emit JSON Lines events for supported streaming commands
+
+      --offline
+          Prevent provider requests and credential helper calls; local operations remain available
+
+      --dry-run
+          Preview without writes, provider requests or credential resolution
+
+      --stage
+          Retain a guarded preparation for a later explicit changes apply
+
+      --preferences <PREFERENCES>
+          Explicit trusted local JSON preferences; never read ambient credentials
+
+      --profile <PROFILE>
+          Trusted provider profile name from the private provider configuration
+
+      --lock-timeout-ms <LOCK_TIMEOUT_MS>
+          Maximum writer-lock wait in milliseconds (default: 5000; preferences may override)
+
+  -h, --help
+          Print help
+
+```
+
 ## page rename
 
 ```text
@@ -737,12 +842,8 @@ Options:
       --max-requests <MAX_REQUESTS>
           Lifetime request-attempt ceiling, including retries
 
-          [default: 60]
-
       --concurrency <CONCURRENCY>
           Maximum simultaneous provider requests
-
-          [default: 2]
 
       --stage
           Retain a guarded preparation for a later explicit changes apply
@@ -750,15 +851,11 @@ Options:
       --attempts-per-task <ATTEMPTS_PER_TASK>
           Maximum attempts for an individual provider task
 
-          [default: 3]
-
       --preferences <PREFERENCES>
           Explicit trusted local JSON preferences; never read ambient credentials
 
       --deadline-ms <DEADLINE_MS>
           Overall remote operation deadline in milliseconds from startup
-
-          [default: 900000]
 
       --profile <PROFILE>
           Trusted provider profile name from the private provider configuration
@@ -794,6 +891,9 @@ Options:
 
       --retry-uncertain
           Opt into retrying uncertain work under retained accounting; prior attempts may be billed
+
+      --retain-http-error-body
+          Retain a bounded private HTTP error-body diagnostic for explicit inspection
 
       --probe
           Explicitly contact the selected provider within the supplied request limits
@@ -855,12 +955,8 @@ Options:
       --max-requests <MAX_REQUESTS>
           Lifetime request-attempt ceiling, including retries
 
-          [default: 60]
-
       --concurrency <CONCURRENCY>
           Maximum simultaneous provider requests
-
-          [default: 2]
 
       --stage
           Retain a guarded preparation for a later explicit changes apply
@@ -868,15 +964,11 @@ Options:
       --attempts-per-task <ATTEMPTS_PER_TASK>
           Maximum attempts for an individual provider task
 
-          [default: 3]
-
       --preferences <PREFERENCES>
           Explicit trusted local JSON preferences; never read ambient credentials
 
       --deadline-ms <DEADLINE_MS>
           Overall remote operation deadline in milliseconds from startup
-
-          [default: 900000]
 
       --profile <PROFILE>
           Trusted provider profile name from the private provider configuration
@@ -912,6 +1004,9 @@ Options:
 
       --retry-uncertain
           Opt into retrying uncertain work under retained accounting; prior attempts may be billed
+
+      --retain-http-error-body
+          Retain a bounded private HTTP error-body diagnostic for explicit inspection
 
   -h, --help
           Print help
@@ -952,12 +1047,8 @@ Options:
       --max-requests <MAX_REQUESTS>
           Lifetime request-attempt ceiling, including retries
 
-          [default: 60]
-
       --concurrency <CONCURRENCY>
           Maximum simultaneous provider requests
-
-          [default: 2]
 
       --jsonl
           Emit JSON Lines events for supported streaming commands
@@ -965,15 +1056,11 @@ Options:
       --attempts-per-task <ATTEMPTS_PER_TASK>
           Maximum attempts for an individual provider task
 
-          [default: 3]
-
       --offline
           Prevent provider requests and credential helper calls; local operations remain available
 
       --deadline-ms <DEADLINE_MS>
           Overall remote operation deadline in milliseconds from startup
-
-          [default: 900000]
 
       --dry-run
           Preview without writes, provider requests or credential resolution
@@ -1018,6 +1105,9 @@ Options:
 
       --retry-uncertain
           Opt into retrying uncertain work under retained accounting; prior attempts may be billed
+
+      --retain-http-error-body
+          Retain a bounded private HTTP error-body diagnostic for explicit inspection
 
       --lexical-fallback
           Use lexical results when compatible embeddings are unavailable
@@ -1109,12 +1199,8 @@ Options:
       --max-requests <MAX_REQUESTS>
           Lifetime request-attempt ceiling, including retries
 
-          [default: 60]
-
       --concurrency <CONCURRENCY>
           Maximum simultaneous provider requests
-
-          [default: 2]
 
       --jsonl
           Emit JSON Lines events for supported streaming commands
@@ -1122,15 +1208,11 @@ Options:
       --attempts-per-task <ATTEMPTS_PER_TASK>
           Maximum attempts for an individual provider task
 
-          [default: 3]
-
       --offline
           Prevent provider requests and credential helper calls; local operations remain available
 
       --deadline-ms <DEADLINE_MS>
           Overall remote operation deadline in milliseconds from startup
-
-          [default: 900000]
 
       --dry-run
           Preview without writes, provider requests or credential resolution
@@ -1175,6 +1257,9 @@ Options:
 
       --retry-uncertain
           Opt into retrying uncertain work under retained accounting; prior attempts may be billed
+
+      --retain-http-error-body
+          Retain a bounded private HTTP error-body diagnostic for explicit inspection
 
       --lexical-fallback
           Use lexical results when compatible embeddings are unavailable
@@ -1351,12 +1436,8 @@ Options:
       --max-requests <MAX_REQUESTS>
           Lifetime request-attempt ceiling, including retries
 
-          [default: 60]
-
       --concurrency <CONCURRENCY>
           Maximum simultaneous provider requests
-
-          [default: 2]
 
       --json
           Emit one structured JSON envelope
@@ -1364,15 +1445,11 @@ Options:
       --attempts-per-task <ATTEMPTS_PER_TASK>
           Maximum attempts for an individual provider task
 
-          [default: 3]
-
       --jsonl
           Emit JSON Lines events for supported streaming commands
 
       --deadline-ms <DEADLINE_MS>
           Overall remote operation deadline in milliseconds from startup
-
-          [default: 900000]
 
       --offline
           Prevent provider requests and credential helper calls; local operations remain available
@@ -1420,6 +1497,9 @@ Options:
 
       --retry-uncertain
           Opt into retrying uncertain work under retained accounting; prior attempts may be billed
+
+      --retain-http-error-body
+          Retain a bounded private HTTP error-body diagnostic for explicit inspection
 
       --run <RUN>
           Existing extraction run ID to resume with retained accounting
@@ -1691,12 +1771,8 @@ Options:
       --max-requests <MAX_REQUESTS>
           Lifetime request-attempt ceiling, including retries
 
-          [default: 60]
-
       --concurrency <CONCURRENCY>
           Maximum simultaneous provider requests
-
-          [default: 2]
 
       --json
           Emit one structured JSON envelope
@@ -1704,15 +1780,11 @@ Options:
       --attempts-per-task <ATTEMPTS_PER_TASK>
           Maximum attempts for an individual provider task
 
-          [default: 3]
-
       --jsonl
           Emit JSON Lines events for supported streaming commands
 
       --deadline-ms <DEADLINE_MS>
           Overall remote operation deadline in milliseconds from startup
-
-          [default: 900000]
 
       --offline
           Prevent provider requests and credential helper calls; local operations remain available
@@ -1760,6 +1832,9 @@ Options:
 
       --retry-uncertain
           Opt into retrying uncertain work under retained accounting; prior attempts may be billed
+
+      --retain-http-error-body
+          Retain a bounded private HTTP error-body diagnostic for explicit inspection
 
       --lexical-fallback
           Use lexical results when compatible embeddings are unavailable
@@ -1882,12 +1957,8 @@ Options:
       --max-requests <MAX_REQUESTS>
           Lifetime request-attempt ceiling, including retries
 
-          [default: 60]
-
       --concurrency <CONCURRENCY>
           Maximum simultaneous provider requests
-
-          [default: 2]
 
       --json
           Emit one structured JSON envelope
@@ -1895,15 +1966,11 @@ Options:
       --attempts-per-task <ATTEMPTS_PER_TASK>
           Maximum attempts for an individual provider task
 
-          [default: 3]
-
       --jsonl
           Emit JSON Lines events for supported streaming commands
 
       --deadline-ms <DEADLINE_MS>
           Overall remote operation deadline in milliseconds from startup
-
-          [default: 900000]
 
       --offline
           Prevent provider requests and credential helper calls; local operations remain available
@@ -1951,6 +2018,9 @@ Options:
 
       --retry-uncertain
           Opt into retrying uncertain work under retained accounting; prior attempts may be billed
+
+      --retain-http-error-body
+          Retain a bounded private HTTP error-body diagnostic for explicit inspection
 
       --lexical-fallback
           Use lexical results when compatible embeddings are unavailable
@@ -2112,63 +2182,58 @@ Options:
           [possible values: human, json, jsonl]
 
       --role <ROLE>
-          Provider capability to probe: embed, generate or search
+          Provider capability to probe: embed or generate
 
           [default: embed]
           [possible values: embed, generate]
 
+      --extraction-schema
+          Probe the real extraction JSON schema; requires --probe --role generate
+
       --json
           Emit one structured JSON envelope
-
-      --providers-config <PROVIDERS_CONFIG>
-          Private TOML configuration; never discover provider files inside a vault
 
       --jsonl
           Emit JSON Lines events for supported streaming commands
 
+      --providers-config <PROVIDERS_CONFIG>
+          Private TOML configuration; never discover provider files inside a vault
+
       --max-requests <MAX_REQUESTS>
           Lifetime request-attempt ceiling, including retries
-
-          [default: 60]
-
-      --concurrency <CONCURRENCY>
-          Maximum simultaneous provider requests
-
-          [default: 2]
 
       --offline
           Prevent provider requests and credential helper calls; local operations remain available
 
-      --attempts-per-task <ATTEMPTS_PER_TASK>
-          Maximum attempts for an individual provider task
-
-          [default: 3]
+      --concurrency <CONCURRENCY>
+          Maximum simultaneous provider requests
 
       --dry-run
           Preview without writes, provider requests or credential resolution
 
-      --deadline-ms <DEADLINE_MS>
-          Overall remote operation deadline in milliseconds from startup
-
-          [default: 900000]
+      --attempts-per-task <ATTEMPTS_PER_TASK>
+          Maximum attempts for an individual provider task
 
       --stage
           Retain a guarded preparation for a later explicit changes apply
 
-      --max-request-bytes <MAX_REQUEST_BYTES>
-          Lifetime ceiling on outgoing request bytes
+      --deadline-ms <DEADLINE_MS>
+          Overall remote operation deadline in milliseconds from startup
 
       --preferences <PREFERENCES>
           Explicit trusted local JSON preferences; never read ambient credentials
 
-      --max-response-bytes <MAX_RESPONSE_BYTES>
-          Lifetime ceiling on incoming response bytes
+      --max-request-bytes <MAX_REQUEST_BYTES>
+          Lifetime ceiling on outgoing request bytes
 
       --profile <PROFILE>
           Trusted provider profile name from the private provider configuration
 
       --lock-timeout-ms <LOCK_TIMEOUT_MS>
           Maximum writer-lock wait in milliseconds (default: 5000; preferences may override)
+
+      --max-response-bytes <MAX_RESPONSE_BYTES>
+          Lifetime ceiling on incoming response bytes
 
       --max-input-units <MAX_INPUT_UNITS>
           Lifetime ceiling for each input and cached-input billable class
@@ -2192,6 +2257,9 @@ Options:
 
       --retry-uncertain
           Opt into retrying uncertain work under retained accounting; prior attempts may be billed
+
+      --retain-http-error-body
+          Retain a bounded private HTTP error-body diagnostic for explicit inspection
 
   -h, --help
           Print help
@@ -2233,15 +2301,13 @@ Options:
       --jsonl
           Emit JSON Lines events for supported streaming commands
 
+      --source-range <SOURCE_RANGES>
+          Exact current UTF-8 source range SOURCE:START:END; repeat for selected passages
+
       --max-rounds <MAX_ROUNDS>
           Maximum collection/answer rounds (1–8), including the initial round
 
           [default: 3]
-
-      --max-sources <MAX_SOURCES>
-          Maximum total sources accepted from the agent (0–64)
-
-          [default: 15]
 
       --offline
           Prevent provider requests and credential helper calls; local operations remain available
@@ -2249,19 +2315,24 @@ Options:
       --dry-run
           Preview without writes, provider requests or credential resolution
 
+      --max-sources <MAX_SOURCES>
+          Maximum total sources accepted from the agent (0–64)
+
+          [default: 15]
+
       --max-source-bytes <MAX_SOURCE_BYTES>
           Maximum lifetime source-content bytes accepted locally (up to 4 MiB)
 
           [default: 524288]
-
-      --run-id <RUN_ID>
-          New run ID; omit to allocate one. Existing IDs require resume
 
       --stage
           Retain a guarded preparation for a later explicit changes apply
 
       --preferences <PREFERENCES>
           Explicit trusted local JSON preferences; never read ambient credentials
+
+      --run-id <RUN_ID>
+          New run ID; omit to allocate one. Existing IDs require resume
 
       --profile <PROFILE>
           Trusted provider profile name from the private provider configuration
@@ -2309,15 +2380,13 @@ Options:
       --jsonl
           Emit JSON Lines events for supported streaming commands
 
+      --source-range <SOURCE_RANGES>
+          Exact current UTF-8 source range SOURCE:START:END; repeat for selected passages
+
       --max-rounds <MAX_ROUNDS>
           Maximum collection/answer rounds (1–8), including the initial round
 
           [default: 3]
-
-      --max-sources <MAX_SOURCES>
-          Maximum total sources accepted from the agent (0–64)
-
-          [default: 15]
 
       --offline
           Prevent provider requests and credential helper calls; local operations remain available
@@ -2325,19 +2394,24 @@ Options:
       --dry-run
           Preview without writes, provider requests or credential resolution
 
+      --max-sources <MAX_SOURCES>
+          Maximum total sources accepted from the agent (0–64)
+
+          [default: 15]
+
       --max-source-bytes <MAX_SOURCE_BYTES>
           Maximum lifetime source-content bytes accepted locally (up to 4 MiB)
 
           [default: 524288]
-
-      --run-id <RUN_ID>
-          New run ID; omit to allocate one. Existing IDs require resume
 
       --stage
           Retain a guarded preparation for a later explicit changes apply
 
       --preferences <PREFERENCES>
           Explicit trusted local JSON preferences; never read ambient credentials
+
+      --run-id <RUN_ID>
+          New run ID; omit to allocate one. Existing IDs require resume
 
       --profile <PROFILE>
           Trusted provider profile name from the private provider configuration
@@ -2405,7 +2479,7 @@ Options:
 ## research import
 
 ```text
-Validate an agent submission and atomically capture sources or a cited report
+Validate an agent submission and publish captures/report through guarded recovery
 
 Usage: lwiki research import [OPTIONS] --file <FILE>
 
@@ -2521,6 +2595,244 @@ Options:
 
       --json
           Emit one structured JSON envelope
+
+      --jsonl
+          Emit JSON Lines events for supported streaming commands
+
+      --offline
+          Prevent provider requests and credential helper calls; local operations remain available
+
+      --dry-run
+          Preview without writes, provider requests or credential resolution
+
+      --stage
+          Retain a guarded preparation for a later explicit changes apply
+
+      --preferences <PREFERENCES>
+          Explicit trusted local JSON preferences; never read ambient credentials
+
+      --profile <PROFILE>
+          Trusted provider profile name from the private provider configuration
+
+      --lock-timeout-ms <LOCK_TIMEOUT_MS>
+          Maximum writer-lock wait in milliseconds (default: 5000; preferences may override)
+
+  -h, --help
+          Print help
+
+```
+
+## research maintenance
+
+```text
+List concrete host repair tasks for stale support, contradictions and missing synthesis
+
+Usage: lwiki research maintenance [OPTIONS] <RUN_ID>
+
+Arguments:
+  <RUN_ID>
+          Research run ID whose sources and retained answers define repair scope
+
+Options:
+      --wiki <WIKI>
+          Wiki root containing WIKI.md; defaults to discovery from the current directory
+
+      --format <FORMAT>
+          Output format: human-readable text, a JSON envelope or JSON Lines events
+
+          [possible values: human, json, jsonl]
+
+      --json
+          Emit one structured JSON envelope
+
+      --jsonl
+          Emit JSON Lines events for supported streaming commands
+
+      --offline
+          Prevent provider requests and credential helper calls; local operations remain available
+
+      --dry-run
+          Preview without writes, provider requests or credential resolution
+
+      --stage
+          Retain a guarded preparation for a later explicit changes apply
+
+      --preferences <PREFERENCES>
+          Explicit trusted local JSON preferences; never read ambient credentials
+
+      --profile <PROFILE>
+          Trusted provider profile name from the private provider configuration
+
+      --lock-timeout-ms <LOCK_TIMEOUT_MS>
+          Maximum writer-lock wait in milliseconds (default: 5000; preferences may override)
+
+  -h, --help
+          Print help
+
+```
+
+## storage inventory
+
+```text
+Measure bounded file, logical-byte and duplicate-content totals
+
+Usage: lwiki storage inventory [OPTIONS]
+
+Options:
+      --retain-undo-changes <RETAIN_UNDO_CHANGES>
+          Completed changes to retain for ordinary undo; dependencies remain protected
+
+          [default: 20]
+
+      --wiki <WIKI>
+          Wiki root containing WIKI.md; defaults to discovery from the current directory
+
+      --format <FORMAT>
+          Output format: human-readable text, a JSON envelope or JSON Lines events
+
+          [possible values: human, json, jsonl]
+
+      --max-files <MAX_FILES>
+          Maximum physical files to inspect; partial inventory is disclosed
+
+          [default: 100000]
+
+      --json
+          Emit one structured JSON envelope
+
+      --max-bytes <MAX_BYTES>
+          Maximum aggregate bytes to hash during inventory and cleanup planning
+
+          [default: 1073741824]
+
+      --expected-plan <EXPECTED_PLAN>
+          Bind cleanup to the exact hash returned by storage plan
+
+      --jsonl
+          Emit JSON Lines events for supported streaming commands
+
+      --offline
+          Prevent provider requests and credential helper calls; local operations remain available
+
+      --dry-run
+          Preview without writes, provider requests or credential resolution
+
+      --stage
+          Retain a guarded preparation for a later explicit changes apply
+
+      --preferences <PREFERENCES>
+          Explicit trusted local JSON preferences; never read ambient credentials
+
+      --profile <PROFILE>
+          Trusted provider profile name from the private provider configuration
+
+      --lock-timeout-ms <LOCK_TIMEOUT_MS>
+          Maximum writer-lock wait in milliseconds (default: 5000; preferences may override)
+
+  -h, --help
+          Print help
+
+```
+
+## storage plan
+
+```text
+Preview exact retained/protected data and migration blockers without writes
+
+Usage: lwiki storage plan [OPTIONS]
+
+Options:
+      --retain-undo-changes <RETAIN_UNDO_CHANGES>
+          Completed changes to retain for ordinary undo; dependencies remain protected
+
+          [default: 20]
+
+      --wiki <WIKI>
+          Wiki root containing WIKI.md; defaults to discovery from the current directory
+
+      --format <FORMAT>
+          Output format: human-readable text, a JSON envelope or JSON Lines events
+
+          [possible values: human, json, jsonl]
+
+      --max-files <MAX_FILES>
+          Maximum physical files to inspect; partial inventory is disclosed
+
+          [default: 100000]
+
+      --json
+          Emit one structured JSON envelope
+
+      --max-bytes <MAX_BYTES>
+          Maximum aggregate bytes to hash during inventory and cleanup planning
+
+          [default: 1073741824]
+
+      --expected-plan <EXPECTED_PLAN>
+          Bind cleanup to the exact hash returned by storage plan
+
+      --jsonl
+          Emit JSON Lines events for supported streaming commands
+
+      --offline
+          Prevent provider requests and credential helper calls; local operations remain available
+
+      --dry-run
+          Preview without writes, provider requests or credential resolution
+
+      --stage
+          Retain a guarded preparation for a later explicit changes apply
+
+      --preferences <PREFERENCES>
+          Explicit trusted local JSON preferences; never read ambient credentials
+
+      --profile <PROFILE>
+          Trusted provider profile name from the private provider configuration
+
+      --lock-timeout-ms <LOCK_TIMEOUT_MS>
+          Maximum writer-lock wait in milliseconds (default: 5000; preferences may override)
+
+  -h, --help
+          Print help
+
+```
+
+## storage cleanup
+
+```text
+Migrate and compact retained operational data; keep full-vault backups
+
+Usage: lwiki storage cleanup [OPTIONS]
+
+Options:
+      --retain-undo-changes <RETAIN_UNDO_CHANGES>
+          Completed changes to retain for ordinary undo; dependencies remain protected
+
+          [default: 20]
+
+      --wiki <WIKI>
+          Wiki root containing WIKI.md; defaults to discovery from the current directory
+
+      --format <FORMAT>
+          Output format: human-readable text, a JSON envelope or JSON Lines events
+
+          [possible values: human, json, jsonl]
+
+      --max-files <MAX_FILES>
+          Maximum physical files to inspect; partial inventory is disclosed
+
+          [default: 100000]
+
+      --json
+          Emit one structured JSON envelope
+
+      --max-bytes <MAX_BYTES>
+          Maximum aggregate bytes to hash during inventory and cleanup planning
+
+          [default: 1073741824]
+
+      --expected-plan <EXPECTED_PLAN>
+          Bind cleanup to the exact hash returned by storage plan
 
       --jsonl
           Emit JSON Lines events for supported streaming commands
@@ -2747,6 +3059,325 @@ Options:
 
 ```
 
+## changes resolve
+
+```text
+Resolve a durable conflict using an inspected, hash-bound request
+
+Usage: lwiki changes resolve [OPTIONS] <ID>
+
+Arguments:
+  <ID>
+          Conflicted changeset ID to inspect or resolve
+
+Options:
+      --mode <MODE>
+          Produce a resolution request with --dry-run
+
+          [default: resume]
+          [possible values: resume, abandon]
+
+      --wiki <WIKI>
+          Wiki root containing WIKI.md; defaults to discovery from the current directory
+
+      --file <FILE>
+          JSON request returned by changes resolve --dry-run; use - for stdin
+
+      --format <FORMAT>
+          Output format: human-readable text, a JSON envelope or JSON Lines events
+
+          [possible values: human, json, jsonl]
+
+      --json
+          Emit one structured JSON envelope
+
+      --jsonl
+          Emit JSON Lines events for supported streaming commands
+
+      --offline
+          Prevent provider requests and credential helper calls; local operations remain available
+
+      --dry-run
+          Preview without writes, provider requests or credential resolution
+
+      --stage
+          Retain a guarded preparation for a later explicit changes apply
+
+      --preferences <PREFERENCES>
+          Explicit trusted local JSON preferences; never read ambient credentials
+
+      --profile <PROFILE>
+          Trusted provider profile name from the private provider configuration
+
+      --lock-timeout-ms <LOCK_TIMEOUT_MS>
+          Maximum writer-lock wait in milliseconds (default: 5000; preferences may override)
+
+  -h, --help
+          Print help
+
+```
+
+## jobs amend
+
+```text
+Explicitly preserve or raise cumulative limits of a planned/paused/stopped job
+
+Usage: lwiki jobs amend [OPTIONS] --run <RUN> --reason <REASON>
+
+Options:
+      --run <RUN>
+          Retained provider run ID whose cumulative limits will be raised
+
+      --wiki <WIKI>
+          Wiki root containing WIKI.md; defaults to discovery from the current directory
+
+      --format <FORMAT>
+          Output format: human-readable text, a JSON envelope or JSON Lines events
+
+          [possible values: human, json, jsonl]
+
+      --reason <REASON>
+          Brief explanation retained with the amendment
+
+      --json
+          Emit one structured JSON envelope
+
+      --providers-config <PROVIDERS_CONFIG>
+          Private TOML configuration; never discover provider files inside a vault
+
+      --jsonl
+          Emit JSON Lines events for supported streaming commands
+
+      --max-requests <MAX_REQUESTS>
+          Lifetime request-attempt ceiling, including retries
+
+      --concurrency <CONCURRENCY>
+          Maximum simultaneous provider requests
+
+      --offline
+          Prevent provider requests and credential helper calls; local operations remain available
+
+      --attempts-per-task <ATTEMPTS_PER_TASK>
+          Maximum attempts for an individual provider task
+
+      --dry-run
+          Preview without writes, provider requests or credential resolution
+
+      --deadline-ms <DEADLINE_MS>
+          Overall remote operation deadline in milliseconds from startup
+
+      --stage
+          Retain a guarded preparation for a later explicit changes apply
+
+      --max-request-bytes <MAX_REQUEST_BYTES>
+          Lifetime ceiling on outgoing request bytes
+
+      --preferences <PREFERENCES>
+          Explicit trusted local JSON preferences; never read ambient credentials
+
+      --max-response-bytes <MAX_RESPONSE_BYTES>
+          Lifetime ceiling on incoming response bytes
+
+      --profile <PROFILE>
+          Trusted provider profile name from the private provider configuration
+
+      --lock-timeout-ms <LOCK_TIMEOUT_MS>
+          Maximum writer-lock wait in milliseconds (default: 5000; preferences may override)
+
+      --max-input-units <MAX_INPUT_UNITS>
+          Lifetime ceiling for each input and cached-input billable class
+
+      --max-output-units <MAX_OUTPUT_UNITS>
+          Lifetime ceiling for each output and reasoning billable class
+
+      --max-cost <MAX_COST>
+          Checked decimal ceiling; requires a complete provable provider bound
+
+      --currency <CURRENCY>
+          Currency code used with --max-cost
+
+          [default: USD]
+
+      --requests-per-minute <REQUESTS_PER_MINUTE>
+          Maximum provider requests dispatched per minute
+
+      --tokens-per-minute <TOKENS_PER_MINUTE>
+          Maximum accounted provider tokens per minute
+
+      --retry-uncertain
+          Opt into retrying uncertain work under retained accounting; prior attempts may be billed
+
+      --retain-http-error-body
+          Retain a bounded private HTTP error-body diagnostic for explicit inspection
+
+  -h, --help
+          Print help
+
+```
+
+## jobs status
+
+```text
+Inspect retained progress, effective limits and unknown holds without provider access
+
+Usage: lwiki jobs status [OPTIONS] --run <RUN>
+
+Options:
+      --run <RUN>
+          Retained provider run ID returned by the original operation
+
+      --wiki <WIKI>
+          Wiki root containing WIKI.md; defaults to discovery from the current directory
+
+      --format <FORMAT>
+          Output format: human-readable text, a JSON envelope or JSON Lines events
+
+          [possible values: human, json, jsonl]
+
+      --json
+          Emit one structured JSON envelope
+
+      --jsonl
+          Emit JSON Lines events for supported streaming commands
+
+      --offline
+          Prevent provider requests and credential helper calls; local operations remain available
+
+      --dry-run
+          Preview without writes, provider requests or credential resolution
+
+      --stage
+          Retain a guarded preparation for a later explicit changes apply
+
+      --preferences <PREFERENCES>
+          Explicit trusted local JSON preferences; never read ambient credentials
+
+      --profile <PROFILE>
+          Trusted provider profile name from the private provider configuration
+
+      --lock-timeout-ms <LOCK_TIMEOUT_MS>
+          Maximum writer-lock wait in milliseconds (default: 5000; preferences may override)
+
+  -h, --help
+          Print help
+
+```
+
+## jobs diagnostics inspect
+
+```text
+Metadata is safe by default; --raw explicitly includes private provider text
+
+Usage: lwiki jobs diagnostics inspect [OPTIONS] --run <RUN> --attempt <ATTEMPT> --kind <KIND>
+
+Options:
+      --run <RUN>
+          Retained provider run ID
+
+      --wiki <WIKI>
+          Wiki root containing WIKI.md; defaults to discovery from the current directory
+
+      --attempt <ATTEMPT>
+          Attempt ID from jobs status; identifies the private diagnostic
+
+      --format <FORMAT>
+          Output format: human-readable text, a JSON envelope or JSON Lines events
+
+          [possible values: human, json, jsonl]
+
+      --json
+          Emit one structured JSON envelope
+
+      --kind <KIND>
+          Diagnostic family to inspect
+
+          [possible values: semantic-rejection, http-error]
+
+      --jsonl
+          Emit JSON Lines events for supported streaming commands
+
+      --raw
+          Include bounded private provider text instead of safe metadata only
+
+      --offline
+          Prevent provider requests and credential helper calls; local operations remain available
+
+      --dry-run
+          Preview without writes, provider requests or credential resolution
+
+      --stage
+          Retain a guarded preparation for a later explicit changes apply
+
+      --preferences <PREFERENCES>
+          Explicit trusted local JSON preferences; never read ambient credentials
+
+      --profile <PROFILE>
+          Trusted provider profile name from the private provider configuration
+
+      --lock-timeout-ms <LOCK_TIMEOUT_MS>
+          Maximum writer-lock wait in milliseconds (default: 5000; preferences may override)
+
+  -h, --help
+          Print help
+
+```
+
+## jobs diagnostics prune
+
+```text
+Prune only a settled diagnostic with known billing; unknown holds remain protected
+
+Usage: lwiki jobs diagnostics prune [OPTIONS] --run <RUN> --attempt <ATTEMPT> --kind <KIND>
+
+Options:
+      --run <RUN>
+          Retained provider run ID
+
+      --wiki <WIKI>
+          Wiki root containing WIKI.md; defaults to discovery from the current directory
+
+      --attempt <ATTEMPT>
+          Settled, known-billing attempt ID from jobs status
+
+      --format <FORMAT>
+          Output format: human-readable text, a JSON envelope or JSON Lines events
+
+          [possible values: human, json, jsonl]
+
+      --json
+          Emit one structured JSON envelope
+
+      --kind <KIND>
+          Diagnostic family to remove explicitly
+
+          [possible values: semantic-rejection, http-error]
+
+      --jsonl
+          Emit JSON Lines events for supported streaming commands
+
+      --offline
+          Prevent provider requests and credential helper calls; local operations remain available
+
+      --dry-run
+          Preview without writes, provider requests or credential resolution
+
+      --stage
+          Retain a guarded preparation for a later explicit changes apply
+
+      --preferences <PREFERENCES>
+          Explicit trusted local JSON preferences; never read ambient credentials
+
+      --profile <PROFILE>
+          Trusted provider profile name from the private provider configuration
+
+      --lock-timeout-ms <LOCK_TIMEOUT_MS>
+          Maximum writer-lock wait in milliseconds (default: 5000; preferences may override)
+
+  -h, --help
+          Print help
+
+```
+
 ## recover
 
 ```text
@@ -2855,6 +3486,8 @@ Options:
 
 - `lwiki --json schema output`
 - `lwiki --json schema record`
+- `lwiki --json schema page`
+- `lwiki --json schema page-batch`
 - `lwiki --json schema stream`
 - `lwiki --json schema extraction`
 - `lwiki --json schema extraction-packet`

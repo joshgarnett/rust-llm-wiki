@@ -1797,3 +1797,404 @@ fn subprocess_killed_after_private_revision_stage_creation_recovers_exact_member
         ChangeStatus::Committed
     );
 }
+
+fn durable_conflict(root: &VaultRoot, change: &PreparedChange, applying: bool) {
+    if applying {
+        stop_at(root, change, "files_applied");
+    } else {
+        fs::remove_file(
+            root.path()
+                .join(journal::journal_path(&change.change_id).unwrap().as_str()),
+        )
+        .unwrap();
+    }
+    fs::write(root.path().join("alpha.md"), b"author conflict bytes").unwrap();
+    let engine = ChangeEngine::new(VaultFs::new(root.clone())).unwrap();
+    let permit = WriterPermit::acquire(root, Duration::ZERO).unwrap();
+    assert_eq!(
+        engine
+            .recover(&permit, &Validator, &Publisher::default())
+            .unwrap_err()
+            .code,
+        ErrorCode::ContentConflict
+    );
+    assert_eq!(
+        engine.inspect(&change.change_id).unwrap().status,
+        ChangeStatus::Conflict
+    );
+}
+
+fn restore_original_targets(root: &VaultRoot, change: &PreparedChange) {
+    let engine = ChangeEngine::new(VaultFs::new(root.clone())).unwrap();
+    let inspection = engine.inspect(&change.change_id).unwrap();
+    for op in inspection.manifest.operations {
+        let target = root.path().join(op.target.as_str());
+        match op.before_payload {
+            Some(payload) => fs::write(
+                target,
+                fs::read(root.path().join(payload.path.as_str())).unwrap(),
+            )
+            .unwrap(),
+            None => {
+                if target.exists() {
+                    fs::remove_file(target).unwrap();
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn conflict_resolution_preserves_unfamiliar_bytes_and_rejects_stale_requests() {
+    let (_temp, root) = fixture();
+    let change = prepared(&root);
+    durable_conflict(&root, &change, false);
+    let engine = ChangeEngine::new(VaultFs::new(root.clone())).unwrap();
+    let permit = WriterPermit::acquire(&root, Duration::ZERO).unwrap();
+    for mode in [
+        ConflictResolutionMode::Resume,
+        ConflictResolutionMode::Abandon,
+    ] {
+        let plan = engine.resolution_plan(&change, mode).unwrap();
+        assert_eq!(
+            engine
+                .resolve(&permit, &plan, &Validator, &Publisher::default())
+                .unwrap_err()
+                .code,
+            ErrorCode::ContentConflict
+        );
+        assert_eq!(
+            fs::read(root.path().join("alpha.md")).unwrap(),
+            b"author conflict bytes"
+        );
+        assert_eq!(
+            engine.inspect(&change.change_id).unwrap().status,
+            ChangeStatus::Conflict
+        );
+    }
+    let stale = engine
+        .resolution_plan(&change, ConflictResolutionMode::Resume)
+        .unwrap();
+    fs::write(root.path().join("alpha.md"), b"old alpha").unwrap();
+    assert_eq!(
+        engine
+            .resolve(&permit, &stale, &Validator, &Publisher::default())
+            .unwrap_err()
+            .code,
+        ErrorCode::ContentConflict
+    );
+    let plan = engine
+        .resolution_plan(&change, ConflictResolutionMode::Resume)
+        .unwrap();
+    assert_eq!(
+        engine
+            .resolve(&permit, &plan, &Validator, &Publisher::default())
+            .unwrap()
+            .status,
+        ChangeStatus::Committed
+    );
+    assert_new(&root);
+    assert_eq!(
+        engine
+            .resolve(&permit, &plan, &Validator, &Publisher::default())
+            .unwrap()
+            .status,
+        ChangeStatus::Committed
+    );
+}
+
+#[test]
+fn conflict_resolution_abandons_restored_targets_and_releases_vault_guard() {
+    let (_temp, root) = fixture();
+    let change = prepared(&root);
+    durable_conflict(&root, &change, true);
+    restore_original_targets(&root, &change);
+    let engine = ChangeEngine::new(VaultFs::new(root.clone())).unwrap();
+    let permit = WriterPermit::acquire(&root, Duration::ZERO).unwrap();
+    let request = engine
+        .resolution_plan(&change, ConflictResolutionMode::Abandon)
+        .unwrap();
+    let publisher = Publisher::default();
+    assert_eq!(
+        engine
+            .resolve(&permit, &request, &Validator, &publisher)
+            .unwrap()
+            .status,
+        ChangeStatus::Aborted
+    );
+    assert_eq!(publisher.calls.load(Ordering::SeqCst), 0);
+    assert_eq!(
+        fs::read(root.path().join("alpha.md")).unwrap(),
+        b"old alpha"
+    );
+    assert_eq!(
+        engine
+            .resolve(&permit, &request, &Validator, &publisher)
+            .unwrap()
+            .status,
+        ChangeStatus::Aborted
+    );
+    let later = engine.prepare(&permit, draft()).unwrap().prepared;
+    assert_eq!(
+        engine
+            .apply(&permit, &later, &Validator, &publisher)
+            .unwrap()
+            .status,
+        ChangeStatus::Committed
+    );
+}
+
+#[test]
+fn conflict_resolution_resumes_mixed_states_and_preserves_original_scope_guards() {
+    let (_temp, root) = fixture();
+    let change = prepared(&root);
+    durable_conflict(&root, &change, true);
+    fs::write(root.path().join("alpha.md"), b"old alpha").unwrap();
+    let engine = ChangeEngine::new(VaultFs::new(root.clone())).unwrap();
+    let permit = WriterPermit::acquire(&root, Duration::ZERO).unwrap();
+    let request = engine
+        .resolution_plan(&change, ConflictResolutionMode::Resume)
+        .unwrap();
+    fs::write(root.path().join("unrelated.md"), b"changed context").unwrap();
+    let publisher = Publisher::default();
+    let error = engine
+        .resolve(&permit, &request, &Validator, &publisher)
+        .unwrap_err();
+    assert_eq!(error.code, ErrorCode::ContentConflict);
+    assert!(error.message.contains("prevalidation is stale"));
+    assert_eq!(
+        engine.inspect(&change.change_id).unwrap().status,
+        ChangeStatus::Conflict
+    );
+    assert_eq!(publisher.calls.load(Ordering::SeqCst), 0);
+    fs::write(root.path().join("unrelated.md"), b"context").unwrap();
+    assert_eq!(
+        engine
+            .resolve(&permit, &request, &Validator, &publisher)
+            .unwrap()
+            .status,
+        ChangeStatus::Committed
+    );
+    assert_new(&root);
+}
+
+#[test]
+fn conflict_resolution_rejects_lost_applying_validation_and_original_read_guard_changes() {
+    for missing_baseline in [false, true] {
+        let (_temp, root) = fixture();
+        let engine = ChangeEngine::new(VaultFs::new(root.clone())).unwrap();
+        let permit = WriterPermit::acquire(&root, Duration::ZERO).unwrap();
+        let mut proposal = draft();
+        proposal.read_preconditions = vec![ReadDependency {
+            path: rel("unrelated.md"),
+            expected: ExpectedState::Hash(Blake3Hash::digest(b"context")),
+        }];
+        let change = engine.prepare(&permit, proposal).unwrap().prepared;
+        drop(permit);
+        durable_conflict(&root, &change, true);
+        fs::write(root.path().join("alpha.md"), b"new alpha").unwrap();
+        if missing_baseline {
+            fs::remove_file(
+                root.path()
+                    .join(format!("changes/{}/validation.json", change.change_id)),
+            )
+            .unwrap();
+        } else {
+            fs::write(root.path().join("unrelated.md"), b"new context").unwrap();
+        }
+        let permit = WriterPermit::acquire(&root, Duration::ZERO).unwrap();
+        let request = engine
+            .resolution_plan(&change, ConflictResolutionMode::Resume)
+            .unwrap();
+        let error = engine
+            .resolve(&permit, &request, &Validator, &Publisher::default())
+            .unwrap_err();
+        assert_eq!(
+            error.code,
+            if missing_baseline {
+                ErrorCode::RecoveryRequired
+            } else {
+                ErrorCode::ContentConflict
+            }
+        );
+        assert_eq!(
+            engine.inspect(&change.change_id).unwrap().status,
+            ChangeStatus::Conflict
+        );
+    }
+}
+
+#[test]
+fn conflict_resolution_cannot_claim_foreign_revision_trees_or_release_unplanned_members() {
+    const TREE: &str = "sources/source_s/revisions/revision_r";
+    for mode in [
+        ConflictResolutionMode::Resume,
+        ConflictResolutionMode::Abandon,
+    ] {
+        let (_temp, root) = fixture();
+        let engine = ChangeEngine::new(VaultFs::new(root.clone())).unwrap();
+        let permit = WriterPermit::acquire(&root, Duration::ZERO).unwrap();
+        let mut proposal = draft();
+        proposal
+            .operations
+            .extend(revision_draft(TREE, &[("original.bin", b"planned")]).operations);
+        let change = engine.prepare(&permit, proposal).unwrap().prepared;
+        drop(permit);
+        durable_conflict(&root, &change, false);
+        fs::write(root.path().join("alpha.md"), b"old alpha").unwrap();
+        fs::create_dir_all(root.path().join(TREE)).unwrap();
+        let foreign = match mode {
+            ConflictResolutionMode::Resume => "original.bin",
+            ConflictResolutionMode::Abandon => "foreign.bin",
+        };
+        fs::write(root.path().join(TREE).join(foreign), b"planned").unwrap();
+        let permit = WriterPermit::acquire(&root, Duration::ZERO).unwrap();
+        let request = engine.resolution_plan(&change, mode).unwrap();
+        assert_eq!(
+            engine
+                .resolve(&permit, &request, &Validator, &Publisher::default())
+                .unwrap_err()
+                .code,
+            ErrorCode::ContentConflict
+        );
+        assert_eq!(
+            fs::read(root.path().join(TREE).join(foreign)).unwrap(),
+            b"planned"
+        );
+        assert_eq!(
+            engine.inspect(&change.change_id).unwrap().status,
+            ChangeStatus::Conflict
+        );
+    }
+}
+
+#[test]
+fn resolution_frames_reject_forged_conflict_bindings_and_target_observations() {
+    let (_temp, root) = fixture();
+    let change = prepared(&root);
+    durable_conflict(&root, &change, false);
+    fs::write(root.path().join("alpha.md"), b"old alpha").unwrap();
+    let engine = ChangeEngine::new(VaultFs::new(root.clone())).unwrap();
+    let inspection = engine.inspect(&change.change_id).unwrap();
+    let plan = engine
+        .resolution_plan(&change, ConflictResolutionMode::Resume)
+        .unwrap();
+    let valid = ChangeEvent::ResolutionAccepted {
+        mode: plan.mode,
+        conflict_sequence: plan.conflict_sequence,
+        conflict_hash: plan.conflict_hash.clone(),
+        observations: plan.observations.clone(),
+    };
+    let mut prefix = Vec::new();
+    for frame in &inspection.journal.frames {
+        prefix.extend(journal::encode_frame(frame).unwrap());
+    }
+    for variant in 0..7 {
+        let mut event = valid.clone();
+        if let ChangeEvent::ResolutionAccepted {
+            mode,
+            conflict_sequence,
+            conflict_hash,
+            observations,
+        } = &mut event
+        {
+            match variant {
+                0 => *conflict_sequence += 1,
+                1 => *conflict_hash = Blake3Hash::digest(b"unrelated conflict"),
+                2 => {
+                    observations.pop();
+                }
+                3 => observations[1] = observations[0].clone(),
+                4 => observations[0].observed = ExpectedState::Hash(Blake3Hash::digest(b"third")),
+                5 => observations[0].before = ExpectedState::Absent,
+                6 => {
+                    *mode = ConflictResolutionMode::Abandon;
+                    observations[0].observed = observations[0].after.clone();
+                }
+                _ => unreachable!(),
+            }
+        }
+        let frame = JournalFrame {
+            version: 1,
+            sequence: inspection.journal.frames.len() as u64,
+            change_id: change.change_id.clone(),
+            manifest_hash: change.manifest_hash.clone(),
+            event,
+        };
+        let mut encoded = prefix.clone();
+        // Valid framing checksums deliberately surround an invalid transition body.
+        encoded.extend(journal::encode_frame(&frame).unwrap());
+        assert!(
+            journal::decode_journal(&encoded, &inspection.manifest, &change.manifest_hash).is_err(),
+            "variant {variant}"
+        );
+    }
+}
+
+#[test]
+fn conflict_resolution_crash_boundaries_resume_without_reauthorizing_abandonment() {
+    for mode in [
+        ConflictResolutionMode::Resume,
+        ConflictResolutionMode::Abandon,
+    ] {
+        let make = || {
+            let (temp, root) = fixture();
+            let change = prepared(&root);
+            durable_conflict(&root, &change, true);
+            restore_original_targets(&root, &change);
+            (temp, root, change)
+        };
+        let (_temp, root, change) = make();
+        let io = Arc::new(FaultIo::new(None, false));
+        let engine = ChangeEngine::new(VaultFs::with_io(root.clone(), io.clone())).unwrap();
+        let permit = WriterPermit::acquire(&root, Duration::ZERO).unwrap();
+        let request = engine.resolution_plan(&change, mode).unwrap();
+        engine
+            .resolve(&permit, &request, &Validator, &Publisher::default())
+            .unwrap();
+        let boundaries = io.events.lock().unwrap().clone();
+        drop(permit);
+        for after in [false, true] {
+            for (boundary, name) in boundaries.iter().enumerate() {
+                let (_temp, root, change) = make();
+                let io = Arc::new(FaultIo::new(Some(boundary), after));
+                let engine = ChangeEngine::new(VaultFs::with_io(root.clone(), io.clone())).unwrap();
+                let permit = WriterPermit::acquire(&root, Duration::ZERO).unwrap();
+                let request = engine.resolution_plan(&change, mode).unwrap();
+                let _ = engine.resolve(&permit, &request, &Validator, &Publisher::default());
+                assert!(
+                    io.fired.load(Ordering::SeqCst),
+                    "{mode:?} {boundary} {name}"
+                );
+                drop(permit);
+                drop(engine);
+                let engine = ChangeEngine::new(VaultFs::new(root.clone())).unwrap();
+                let permit = WriterPermit::acquire(&root, Duration::ZERO).unwrap();
+                if engine.inspect(&change.change_id).unwrap().status == ChangeStatus::Conflict {
+                    engine
+                        .resolve(&permit, &request, &Validator, &Publisher::default())
+                        .unwrap();
+                } else {
+                    engine
+                        .recover(&permit, &Validator, &Publisher::default())
+                        .unwrap();
+                }
+                let expected = match mode {
+                    ConflictResolutionMode::Resume => {
+                        assert_new(&root);
+                        ChangeStatus::Committed
+                    }
+                    ConflictResolutionMode::Abandon => {
+                        assert_eq!(
+                            fs::read(root.path().join("alpha.md")).unwrap(),
+                            b"old alpha"
+                        );
+                        assert!(!root.path().join("new.md").exists());
+                        ChangeStatus::Aborted
+                    }
+                };
+                assert_eq!(engine.inspect(&change.change_id).unwrap().status, expected);
+            }
+        }
+    }
+}

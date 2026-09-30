@@ -12,7 +12,7 @@ use crate::{
         Blake3Hash, CanonicalRecord, CitationRef, Eligibility, ErrorCode, RecordId, RecordKind,
         Result, VaultRelativePath, WikiError,
     },
-    records::{LinkResolution, ParsedNote, RegistryEntry, resolve_typed},
+    records::{LinkResolution, ParsedNote, RegistryEntry, resolve_typed, resolve_untyped},
     sources::{CitationScope, SourceView, evidence::evidence_reference, revision::canonical_path},
     vault::VaultFs,
 };
@@ -418,6 +418,33 @@ pub(crate) fn compute(
     let mut supersession: BTreeMap<RecordId, BTreeSet<RecordId>> = BTreeMap::new();
     for (id, row) in records.iter_mut() {
         let record = row.record.clone();
+        if record.kind() == RecordKind::Assertion {
+            for link in list(&record, "wiki_evidence") {
+                let reason = match resolve_untyped(&registry, &link) {
+                    LinkResolution::Resolved { id: target, .. } => match snapshot.get(&target) {
+                        Some(evidence) if evidence.record.kind() == RecordKind::Evidence => {
+                            if evidence.record.string("wiki_assertion_id") == Some(id.as_str()) {
+                                None
+                            } else {
+                                Some("evidence_link_wrong_assertion")
+                            }
+                        }
+                        Some(_) => Some("evidence_link_wrong_kind"),
+                        None => Some("evidence_link_missing"),
+                    },
+                    LinkResolution::Ambiguous { .. } => Some("evidence_link_ambiguous"),
+                    _ => Some("evidence_link_missing"),
+                };
+                if let Some(reason) = reason {
+                    diagnostics.push(diagnostic(
+                        &row.path,
+                        Some(id),
+                        ErrorCode::RecordInvalid,
+                        serde_json::json!({"reason":reason,"link":link}),
+                    ));
+                }
+            }
+        }
         for (field, kind, companion) in references(&record) {
             if let Some(value) = record.string(field) {
                 let target = RecordId::new(value)?;
@@ -855,26 +882,38 @@ pub(crate) fn compute(
                             == Some(out.packet_fingerprint.as_str())
                 });
                 if let Some((_, packet)) = bound {
-                    let source = snapshot
-                        .get(&RecordId::new(
-                            packet
-                                .record
-                                .string("wiki_source_id")
-                                .expect("packet source"),
-                        )?)
-                        .expect("valid packet source");
-                    if source.record.string("wiki_status") == Some("withdrawn") {
-                        set(row, Eligibility::Withdrawn, "source_withdrawn");
-                    } else if source.record.string("wiki_current_revision")
-                        != packet.record.string("wiki_source_revision")
-                    {
-                        set(row, Eligibility::Historical, "older_revision");
+                    let source = packet
+                        .record
+                        .string("wiki_source_id")
+                        .and_then(|id| RecordId::new(id).ok())
+                        .and_then(|id| snapshot.get(&id))
+                        .filter(|source| source.record.kind() == RecordKind::Source);
+                    if let Some(source) = source {
+                        if source.record.string("wiki_status") == Some("withdrawn") {
+                            set(row, Eligibility::Withdrawn, "source_withdrawn");
+                        } else if source.record.string("wiki_current_revision")
+                            != packet.record.string("wiki_source_revision")
+                        {
+                            set(row, Eligibility::Historical, "older_revision");
+                        } else {
+                            set(
+                                row,
+                                Eligibility::Unsupported,
+                                "operational_generation_output",
+                            );
+                        }
                     } else {
                         set(
                             row,
                             Eligibility::Unsupported,
-                            "operational_generation_output",
+                            "generation_output_source_unresolved",
                         );
+                        diagnostics.push(diagnostic(
+                            &row.path,
+                            Some(row.record.id()),
+                            ErrorCode::RecordInvalid,
+                            serde_json::json!({"reason":"generation_output_source_unresolved","packet":packet.record.id()}),
+                        ));
                     }
                 } else {
                     set(row, Eligibility::Unsupported, "unbound_generation_output");

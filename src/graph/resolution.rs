@@ -983,7 +983,7 @@ pub fn stage_resolution(
     if let Some(canonical) = &current.restored_receipt {
         let mut retained = None;
         for id in engine.change_ids()? {
-            let inspection = engine.inspect(&id)?;
+            let inspection = engine.inspect_history(&id)?;
             if inspection
                 .manifest
                 .origin

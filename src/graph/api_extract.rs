@@ -22,6 +22,7 @@ pub struct ApiExtractionRequest {
     pub limits: LifetimeLimits,
     pub max_output_tokens: u64,
     pub new_extraction: bool,
+    pub requested_limits: Option<crate::app::remote::RequestedJobLimits>,
 }
 #[derive(Serialize)]
 pub struct ApiExtractionOutcome {
@@ -34,6 +35,7 @@ pub struct ApiExtractionOutcome {
     pub receipt: Option<DurableOutputRef>,
     pub reused: bool,
     pub dry_run: bool,
+    pub warnings: Vec<String>,
 }
 
 pub(crate) struct ExtractionTaskContext<'a> {
@@ -85,6 +87,7 @@ impl OfflineApp {
         dispatcher: &Dispatcher,
         options: JobOptions,
     ) -> Result<ApiExtractionOutcome> {
+        service.validate_generation_output_limit(request.max_output_tokens)?;
         // Planning is local and must not inspect credentials, ledger, or paid state.
         if self.options.dry_run || options.policy.dry_run {
             let view = SourceView::from_fs_bounded(&self.fs, packet::SOURCE_CAP, 4096)?;
@@ -99,6 +102,7 @@ impl OfflineApp {
                 receipt: None,
                 reused: plan.reused,
                 dry_run: true,
+                warnings: vec![],
             });
         }
         let offline = self.options.offline || options.policy.offline;
@@ -196,6 +200,20 @@ impl OfflineApp {
             generation_cache::retain_input(&self.fs, &writer, &task_plan)?;
         }
         let inspection = ledger.replay()?.inspection;
+        if existing {
+            let deadline_ms = u64::try_from(
+                request
+                    .deadline_utc_ms
+                    .saturating_sub(request.created_at_utc_ms),
+            )
+            .unwrap_or(0);
+            crate::app::remote::validate_retained_arguments(
+                &inspection,
+                &request.limits,
+                deadline_ms,
+                request.requested_limits.as_ref(),
+            )?;
+        }
         if inspection.spec.scope.operation != "graph_extract_api"
             || inspection.tasks.len() != 1
             || inspection
@@ -252,6 +270,18 @@ impl OfflineApp {
         let engine = ChangeEngine::new(self.fs.clone())?;
         let catalog = Catalog::new(self.fs.clone(), self.vault_id.clone());
         let retained_task = &inspection.tasks[&task.key];
+        // Canonical reservations may change after packet export. Revalidate before
+        // either paid admission or returning retained output as reusable.
+        let fresh_view = SourceView::from_fs_bounded(&self.fs, packet::SOURCE_CAP, 4096)?;
+        let fresh_packet = packet::load_packet(&fresh_view, &packet.packet().packet_id)?;
+        if fresh_packet.packet() != packet.packet()
+            || fresh_packet.dependencies() != packet.dependencies()
+        {
+            return Err(WikiError::new(
+                ErrorCode::FreshnessConflict,
+                "extraction source or packet authority changed before execution",
+            ));
+        }
         let (output, receipt, response, reused) = if retained_task.state == TaskState::Completed {
             let output = retained_task
                 .outputs
@@ -278,7 +308,7 @@ impl OfflineApp {
             ledger.settle(&retained.attempt)?;
             ledger.remove_spool_after_verified_commit(&retained.attempt)?;
             if complete_run && inspection.state == RunState::Running {
-                ledger.complete_run()?;
+                crate::app::remote::finish_provider_job(ledger)?;
             }
             self.checkpoint_generation(ledger)?;
             (output, receipt, retained.response.into_bytes(), true)
@@ -314,11 +344,30 @@ impl OfflineApp {
                         "extraction cancelled before dispatch",
                     ));
                 }
+                if inspection
+                    .attempts
+                    .iter()
+                    .any(|attempt| attempt.phase == AttemptPhase::DispatchIntent)
+                    && !options.policy.retry_uncertain
+                {
+                    let mut error = WikiError::new(
+                        ErrorCode::RecoveryRequired,
+                        "uncertain extraction requires explicit --retry-uncertain; prior billing and concurrency holds remain",
+                    );
+                    error.details = serde_json::json!({"reason":"uncertain_retry_requires_opt_in","recovery_action":format!("retry graph extract with --run {} --retry-uncertain after inspecting jobs status; the prior attempt may be billed", inspection.spec.run_id)});
+                    return Err(extraction_failure(
+                        error,
+                        &inspection.spec.run_id,
+                        packet,
+                        &task.key,
+                        coverage,
+                    ));
+                }
                 match inspection.state {
                     RunState::Planned if complete_run => {
                         ledger.start()?;
                     }
-                    RunState::Paused if complete_run => {
+                    RunState::Paused | RunState::Stopped if complete_run => {
                         ledger.resume(None)?;
                     }
                     RunState::Planned
@@ -363,6 +412,23 @@ impl OfflineApp {
                 if error.code != ErrorCode::ExtractionInvalid {
                     return Err(error);
                 }
+                let reason = error
+                    .details
+                    .get("reason")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("extraction_invalid");
+                // This paid output remains private and has no authority as evidence.
+                // Retain it before publishing the rejected receipt so a host can
+                // inspect and submit corrected JSON through the ordinary importer.
+                let diagnostic_error = ledger
+                    .retain_diagnostic(
+                        &generated.attempt,
+                        jobs::diagnostics::DiagnosticKind::SemanticRejection,
+                        &response,
+                        response.len() as u64,
+                        reason,
+                    )
+                    .err();
                 let rejected = jobs::checkpoint::receipt_plan(
                     ledger,
                     &generated.attempt,
@@ -373,6 +439,18 @@ impl OfflineApp {
                 )?;
                 self.commit_generation_task(ledger, &rejected, complete_run)?;
                 self.checkpoint_generation(ledger)?;
+                if diagnostic_error.is_some() {
+                    let mut error = error;
+                    error.details["diagnostic_retention"] =
+                        serde_json::Value::String("failed".into());
+                    return Err(extraction_failure(
+                        error,
+                        &inspection.spec.run_id,
+                        packet,
+                        &task.key,
+                        coverage,
+                    ));
+                }
                 return Err(extraction_failure(
                     error,
                     &inspection.spec.run_id,
@@ -457,6 +535,13 @@ impl OfflineApp {
             receipt: Some(receipt),
             reused,
             dry_run: false,
+            warnings: if complete_run {
+                crate::app::remote::finish_provider_job(ledger)?
+                    .into_iter()
+                    .collect()
+            } else {
+                vec![]
+            },
         })
     }
     #[cfg(test)]
@@ -519,7 +604,7 @@ impl OfflineApp {
         ledger.settle(attempt)?;
         ledger.finish_remote_task(&task.key, vec![output.clone()], vec![], |_| Ok(false))?;
         if complete_run && ledger.inspect()?.state == RunState::Running {
-            ledger.complete_run()?;
+            crate::app::remote::finish_provider_job(ledger)?;
         }
         ledger.remove_spool_after_verified_commit(attempt)?;
         self.checkpoint_generation(ledger)?;
@@ -583,7 +668,7 @@ impl OfflineApp {
                 |_: &VectorCacheRef| Ok(false),
             )?;
             if complete_run {
-                ledger.complete_run()?;
+                crate::app::remote::finish_provider_job(ledger)?;
             }
         }
         ledger.remove_spool_after_verified_commit(&plan.attempt)?;
@@ -591,6 +676,9 @@ impl OfflineApp {
     }
     fn checkpoint_generation(&self, ledger: &JobLedger) -> Result<()> {
         let draft = ledger.checkpoint_plan()?;
+        if draft.operations.is_empty() {
+            return Ok(());
+        }
         let writer = WriterPermit::acquire(
             self.fs.root(),
             Duration::from_millis(self.options.lock_timeout_ms),

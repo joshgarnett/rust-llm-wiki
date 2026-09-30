@@ -146,6 +146,23 @@ pub enum ChangeStatus {
     Conflict,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConflictResolutionMode {
+    Resume,
+    Abandon,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ConflictResolutionRequest {
+    pub change: PreparedChange,
+    pub mode: ConflictResolutionMode,
+    pub conflict_sequence: u64,
+    pub conflict_hash: Blake3Hash,
+    pub observations: Vec<TargetObservation>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "event", rename_all = "snake_case", deny_unknown_fields)]
 pub enum ChangeEvent {
@@ -165,6 +182,12 @@ pub enum ChangeEvent {
     Aborted,
     Conflict {
         phase: String,
+        observations: Vec<TargetObservation>,
+    },
+    ResolutionAccepted {
+        mode: ConflictResolutionMode,
+        conflict_sequence: u64,
+        conflict_hash: Blake3Hash,
         observations: Vec<TargetObservation>,
     },
 }

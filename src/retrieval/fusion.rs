@@ -16,9 +16,9 @@ pub fn collapse_dense(hits: &[DenseHit]) -> Vec<(DenseHit, Vec<DenseHit>)> {
     let mut owners: BTreeMap<VaultRelativePath, Vec<DenseHit>> = BTreeMap::new();
     for hit in hits {
         let passages = owners.entry(hit.owner.clone()).or_default();
-        if passages.len() < 2 {
-            passages.push(hit.clone());
-        }
+        passages.push(hit.clone());
+        passages.sort();
+        passages.truncate(2);
     }
     let mut out = owners
         .into_values()
@@ -121,6 +121,7 @@ pub fn dense_hit(
         eligibility: document.eligibility,
         identity_eligibility: record.and_then(|r| r.identity_eligibility),
         excerpt,
+        secondary_excerpts: vec![],
         reasons: vec![RetrievalReason::Semantic],
         rank_contributions: vec![RankContribution {
             channel: "dense".into(),
@@ -136,6 +137,19 @@ pub fn fuse_hits(lists: Vec<Vec<SearchHit>>) -> Vec<SearchHit> {
     for list in lists {
         for hit in list {
             if let Some(old) = found.get_mut(&hit.locator.path) {
+                for excerpt in std::iter::once(&hit.excerpt).chain(&hit.secondary_excerpts) {
+                    let distinct = |other: &SearchExcerpt| {
+                        excerpt.span.end() <= other.span.start()
+                            || other.span.end() <= excerpt.span.start()
+                    };
+                    if old.secondary_excerpts.is_empty()
+                        && !excerpt.span.is_empty()
+                        && distinct(&old.excerpt)
+                        && old.secondary_excerpts.iter().all(distinct)
+                    {
+                        old.secondary_excerpts.push(excerpt.clone());
+                    }
+                }
                 for contribution in hit.rank_contributions {
                     if !old
                         .rank_contributions

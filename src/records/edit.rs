@@ -13,10 +13,10 @@ pub fn migrate_schema(note: &ParsedNote, target: &str, expected: &Blake3Hash) ->
             "migration predecessor hash differs",
         ));
     }
-    if target != "1" {
+    if target != "1" && target != "2" {
         return Err(WikiError::new(
             ErrorCode::CapabilityUnavailable,
-            "only schema 1 migration is implemented",
+            "only legacy schema 1 and vault storage layout 2 migrations are implemented",
         ));
     }
     if !matches!(
@@ -31,9 +31,16 @@ pub fn migrate_schema(note: &ParsedNote, target: &str, expected: &Blake3Hash) ->
         .fields
         .clone()
         .ok_or_else(|| WikiError::invalid("migration metadata unavailable"))?;
-    match fields.get("wiki_schema").and_then(Value::as_str) {
-        Some("1") if note.is_editable() => return Ok(note.raw.clone()),
-        Some("0") => {}
+    match (fields.get("wiki_schema").and_then(Value::as_str), target) {
+        (Some(current), target) if current == target && note.is_editable() => {
+            return Ok(note.raw.clone());
+        }
+        (Some("0"), "1") => {}
+        (Some("1"), "2")
+            if note
+                .canonical
+                .as_ref()
+                .is_some_and(|r| r.kind() == RecordKind::Vault) => {}
         _ => {
             return Err(WikiError::new(
                 ErrorCode::CapabilityUnavailable,
@@ -41,7 +48,7 @@ pub fn migrate_schema(note: &ParsedNote, target: &str, expected: &Blake3Hash) ->
             ));
         }
     }
-    fields.insert("wiki_schema".into(), Value::String("1".into()));
+    fields.insert("wiki_schema".into(), Value::String(target.into()));
     let canonical = CanonicalRecord::new(fields)?;
     if matches!(
         canonical.kind(),
@@ -57,7 +64,7 @@ pub fn migrate_schema(note: &ParsedNote, target: &str, expected: &Blake3Hash) ->
         .ok_or_else(|| WikiError::invalid("migration schema range unavailable"))?;
     let range = editable_range(note, start, "wiki_schema")?;
     let mut output = note.raw[..range.start].to_vec();
-    output.extend_from_slice(b"\"1\"");
+    output.extend_from_slice(format!("\"{target}\"").as_bytes());
     output.extend_from_slice(&note.raw[range.end..]);
     let result = parse_note(&output);
     if result.canonical.as_ref() != Some(&canonical) || result.body() != note.body() {

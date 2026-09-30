@@ -6,11 +6,14 @@ mod common;
 mod provider;
 use common::*;
 use lwiki::{
+    app::remote::RemoteRuntime,
     app::*,
     changes::*,
     domain::*,
     graph::{generation_cache, *},
+    jobs::diagnostics::DiagnosticKind,
     jobs::*,
+    retrieval::QueryPlan,
     sources::SourceView,
 };
 use serde_json::json;
@@ -67,6 +70,399 @@ fn api_and_agent_same_packet_import_semantics() {
     assert_eq!(i.attempts[0].phase, AttemptPhase::Settled);
     assert!(i.attempts[0].spool.is_none());
     assert_eq!(i.tasks.values().next().unwrap().state, TaskState::Completed);
+}
+
+#[test]
+fn uncertain_generation_retry_returns_useful_import_and_retains_prior_hold() {
+    let mut f = Fixture::new();
+    f.request.limits.concurrency = 2;
+    f.request.limits.attempts_per_task = 2;
+    let lost = Arc::new(Mock {
+        calls: AtomicUsize::new(0),
+        body: Mutex::new(None),
+        cancel: None,
+        fail: true,
+    });
+    assert!(
+        f.app
+            .graph_extract_api(
+                &f.request,
+                &f.service,
+                &f.dispatcher(lost.clone()),
+                f.options.clone()
+            )
+            .is_err()
+    );
+    assert_eq!(lost.calls.load(Ordering::SeqCst), 1);
+    let valid = Mock::response(f.response());
+    assert!(
+        f.app
+            .graph_extract_api(
+                &f.request,
+                &f.service,
+                &f.dispatcher(valid.clone()),
+                f.options.clone()
+            )
+            .is_err()
+    );
+    assert_eq!(valid.calls.load(Ordering::SeqCst), 0);
+    let mut options = f.options.clone();
+    options.policy.retry_uncertain = true;
+    let retried = f
+        .app
+        .graph_extract_api(
+            &f.request,
+            &f.service,
+            &f.dispatcher(valid.clone()),
+            options.clone(),
+        )
+        .unwrap();
+    assert_eq!(valid.calls.load(Ordering::SeqCst), 1);
+    assert!(retried.import.as_ref().unwrap().prepared.is_some());
+    assert!(!retried.warnings.is_empty());
+    let ledger = JobLedger::new(
+        f.fs.clone(),
+        f.app.vault_id().clone(),
+        f.request.run_id.clone(),
+        options,
+    )
+    .unwrap();
+    let inspection = ledger.inspect().unwrap();
+    assert_eq!(inspection.state, RunState::Paused);
+    assert_eq!(inspection.attempts.len(), 2);
+    assert_eq!(inspection.budget.dispatched_requests, 2);
+    assert_eq!(inspection.attempts[0].phase, AttemptPhase::DispatchIntent);
+    assert_eq!(
+        inspection.attempts[0].billing,
+        BillingDisposition::UnknownReserved
+    );
+    assert_eq!(inspection.budget.remote_inflight, 1);
+    let reused = f
+        .app
+        .graph_extract_api(
+            &f.request,
+            &f.service,
+            &f.dispatcher(valid.clone()),
+            f.options.clone(),
+        )
+        .unwrap();
+    assert!(reused.reused);
+    assert_eq!(valid.calls.load(Ordering::SeqCst), 1);
+    assert_eq!(ledger.inspect().unwrap().budget.remote_inflight, 1);
+}
+
+#[test]
+fn generation_service_cap_fails_before_packet_job_or_transport() {
+    let mut f = Fixture::new();
+    let before = provider::tree(f.temp.path());
+    f.request.max_output_tokens = 4097;
+    let mock = Mock::response(f.response());
+    let error = f
+        .app
+        .graph_extract_api(
+            &f.request,
+            &f.service,
+            &f.dispatcher(mock.clone()),
+            f.options.clone(),
+        )
+        .err()
+        .unwrap();
+    assert_eq!(error.code, ErrorCode::Usage);
+    assert_eq!(error.details["reason"], "generation_output_limit");
+    assert_eq!(error.details["requested"], 4097);
+    assert_eq!(error.details["effective_service_cap"], 4096);
+    assert_eq!(
+        error.details["configuration_key"],
+        "services.service.max_output_tokens"
+    );
+    assert_eq!(mock.calls.load(Ordering::SeqCst), 0);
+    assert_eq!(provider::tree(f.temp.path()), before);
+}
+
+#[test]
+fn semantic_diagnostic_does_not_echo_model_controlled_identifiers() {
+    let f = Fixture::new();
+    let raw = serde_json::to_string(&f.response())
+        .unwrap()
+        .replace("\"m3\"", "\"PRIVATE_SENTINEL_SECRET\"");
+    let mut response: serde_json::Value = serde_json::from_str(&raw).unwrap();
+    response["mentions"][2]["quote"] = json!("Tool");
+    response["mentions"][2]
+        .as_object_mut()
+        .unwrap()
+        .remove("span");
+    let mock = Mock::response(response);
+    let error = f
+        .app
+        .graph_extract_api(
+            &f.request,
+            &f.service,
+            &f.dispatcher(mock),
+            f.options.clone(),
+        )
+        .err()
+        .unwrap();
+    assert_eq!(error.code, ErrorCode::ExtractionInvalid);
+    assert!(!format!("{error:?}").contains("PRIVATE_SENTINEL_SECRET"));
+    assert_eq!(
+        error.details["retained_details"]["item_id_hash"],
+        Blake3Hash::digest(b"PRIVATE_SENTINEL_SECRET").to_string()
+    );
+}
+
+#[test]
+fn paid_quote_rejection_retains_private_output_for_explicit_host_repair() {
+    let f = Fixture::new();
+    let mut repeated = f.response();
+    repeated["mentions"][2]
+        .as_object_mut()
+        .unwrap()
+        .remove("span");
+    let raw = serde_json::to_string(&repeated).unwrap();
+    let mock = Mock::content(raw.clone(), "stop");
+    let error = match f.app.graph_extract_api(
+        &f.request,
+        &f.service,
+        &f.dispatcher(mock.clone()),
+        f.options.clone(),
+    ) {
+        Ok(_) => panic!("ambiguous quote was accepted"),
+        Err(error) => error,
+    };
+    assert_eq!(error.code, ErrorCode::ExtractionInvalid);
+    let detail = &error.details["retained_details"];
+    assert_eq!(detail["reason"], "quotation_ambiguous");
+    assert_eq!(detail["item_kind"], "mention");
+    assert_eq!(
+        detail["item_id_hash"],
+        Blake3Hash::digest(b"m3").to_string()
+    );
+    assert_eq!(detail["window_id"], "w1");
+    assert_eq!(detail["match_count"], 2);
+    assert_eq!(detail["candidate_spans"].as_array().unwrap().len(), 2);
+    assert_eq!(mock.calls.load(Ordering::SeqCst), 1);
+    let ledger = f.ledger();
+    let inspection = ledger.inspect().unwrap();
+    let attempt = &inspection.attempts[0];
+    assert_eq!(attempt.phase, AttemptPhase::Settled);
+    assert!(attempt.spool.is_none());
+    assert!(attempt.outputs.is_empty());
+    let safe = ledger
+        .inspect_diagnostic(&attempt.attempt, DiagnosticKind::SemanticRejection, false)
+        .unwrap()
+        .unwrap();
+    assert_eq!(safe.reference.reason, "quotation_ambiguous");
+    assert!(safe.body_utf8.is_none());
+    let exposed = ledger
+        .inspect_diagnostic(&attempt.attempt, DiagnosticKind::SemanticRejection, true)
+        .unwrap()
+        .unwrap();
+    assert_eq!(exposed.body_utf8.as_deref(), Some(raw.as_str()));
+    assert!(
+        ledger
+            .prune_diagnostic(&attempt.attempt, DiagnosticKind::SemanticRejection)
+            .is_err()
+    );
+    let corrected = serde_json::to_vec(&f.response()).unwrap();
+    assert!(f.app.graph_import(&corrected, false).unwrap()["prepared"].is_object());
+    assert_eq!(mock.calls.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn quote_diagnostics_distinguish_absent_and_wrong_absolute_span() {
+    for (quote, span, expected) in [
+        ("Not in the source", None, "quotation_absent"),
+        ("Tool", Some((0, 4)), "quotation_span_invalid"),
+    ] {
+        let f = Fixture::new();
+        let mut response = f.response();
+        response["mentions"][2]["quote"] = json!(quote);
+        match span {
+            Some((start, end)) => {
+                response["mentions"][2]["span"] = json!({"start":start,"end":end})
+            }
+            None => {
+                response["mentions"][2]
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("span");
+            }
+        }
+        let mock = Mock::response(response);
+        let error = match f.app.graph_extract_api(
+            &f.request,
+            &f.service,
+            &f.dispatcher(mock),
+            f.options.clone(),
+        ) {
+            Ok(_) => panic!("invalid quote was accepted"),
+            Err(error) => error,
+        };
+        let detail = &error.details["retained_details"];
+        assert_eq!(detail["reason"], expected);
+        assert_eq!(
+            detail["item_id_hash"],
+            Blake3Hash::digest(b"m3").to_string()
+        );
+        assert_eq!(detail["match_count"], if quote == "Tool" { 2 } else { 0 });
+    }
+}
+
+#[test]
+fn explicit_extraction_schema_probe_uses_real_contract_fixture() {
+    let f = Fixture::new();
+    let response = json!({
+        "schema": EXTRACTION_SCHEMA,
+        "packet_id": "packet_probe",
+        "packet_fingerprint": Blake3Hash::digest(b"lwiki.extraction-probe.v1"),
+        "mentions": [],
+        "assertions": [],
+        "unresolved": [],
+    });
+    let mock = Mock::response(response);
+    let dispatcher = f.dispatcher(mock.clone());
+    let runtime = RemoteRuntime {
+        service: f.service,
+        dispatcher,
+        job_options: f.options,
+        limits: f.request.limits,
+        created_at_utc_ms: f.request.created_at_utc_ms,
+        deadline_utc_ms: f.request.deadline_utc_ms,
+        requested_limits: None,
+    };
+    let outcome = f.app.probe_extraction_schema(&runtime).unwrap();
+    assert!(outcome.validated);
+    assert_eq!(outcome.output_contract.as_deref(), Some(EXTRACTION_SCHEMA));
+    assert_eq!(mock.calls.load(Ordering::SeqCst), 1);
+    let path = f
+        .temp
+        .path()
+        .join(format!("runs/{}/inputs/probe.json", outcome.run_id));
+    let retained: lwiki::providers::types::RemoteInput =
+        serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+    let lwiki::providers::types::RemoteOperation::Generate { output_schema, .. } =
+        retained.operation
+    else {
+        panic!("schema probe sent a non-generation task");
+    };
+    let actual_schema: serde_json::Value =
+        serde_json::from_str(include_str!("../schemas/extraction-v1.json")).unwrap();
+    assert_eq!(output_schema, actual_schema);
+}
+
+fn add_malformed_duplicate_source(f: &Fixture) {
+    std::fs::write(
+        f.temp.path().join("broken-duplicate.md"),
+        format!(
+            "---\nwiki_schema: \"1\"\nwiki_id: \"{}\"\nwiki_kind: source\ntitle: [broken\n---\nSafe malformed text\n",
+            f.request.export.source_id
+        ),
+    )
+    .unwrap();
+}
+
+#[test]
+fn malformed_duplicate_blocks_reused_packet_and_paid_dispatch() {
+    let f = Fixture::new();
+    let exported = f.app.graph_extract_agent(&f.request.export).unwrap();
+    assert!(exported.ready_to_import);
+    add_malformed_duplicate_source(&f);
+    let err = f.app.graph_extract_agent(&f.request.export).unwrap_err();
+    assert_eq!(err.code, ErrorCode::ReferenceAmbiguous);
+    let mock = Mock::response(f.response());
+    let err = match f.app.graph_extract_api(
+        &f.request,
+        &f.service,
+        &f.dispatcher(mock.clone()),
+        f.options.clone(),
+    ) {
+        Ok(_) => panic!("ambiguous source reached API extraction"),
+        Err(error) => error,
+    };
+    assert_eq!(err.code, ErrorCode::ReferenceAmbiguous);
+    assert_eq!(mock.calls.load(Ordering::SeqCst), 0);
+}
+
+#[test]
+fn retained_generation_output_with_invalidated_source_projects_without_panic() {
+    let f = Fixture::new();
+    let mock = Mock::response(f.response());
+    f.app
+        .graph_extract_api(
+            &f.request,
+            &f.service,
+            &f.dispatcher(mock.clone()),
+            f.options.clone(),
+        )
+        .unwrap();
+    assert_eq!(mock.calls.load(Ordering::SeqCst), 1);
+    add_malformed_duplicate_source(&f);
+    let projected = lwiki::catalog::scan::scan(&f.fs, &id("vault_test")).unwrap();
+    assert!(!projected.records.contains_key(&f.request.export.source_id));
+    assert!(projected.diagnostics.iter().any(|diagnostic| {
+        diagnostic.details["reason"] == "generation_output_source_unresolved"
+    }));
+    assert!(projected.documents.iter().any(|document| {
+        document.path.as_str() == "broken-duplicate.md"
+            && document.record_id.is_none()
+            && document.raw_text.contains("Safe malformed text")
+    }));
+
+    let checked = f.app.check().unwrap();
+    assert!(checked.error_count > 0);
+    assert!(checked.diagnostics.iter().any(|diagnostic| {
+        diagnostic.details["reason"] == "generation_output_source_unresolved"
+    }));
+    f.app.index_sync(true).unwrap();
+    let hits = f
+        .app
+        .semantic_search(
+            "Safe malformed text",
+            &QueryPlan::default(),
+            None,
+            false,
+            true,
+            None,
+        )
+        .unwrap();
+    assert!(!hits.network_used);
+    assert!(hits.hits.iter().any(|hit| {
+        hit.locator.path.as_str() == "broken-duplicate.md"
+            && hit.locator.record.is_none()
+            && hit.excerpt.citation.is_none()
+    }));
+    assert!(hits.hits.iter().all(|hit| {
+        hit.excerpt.citation.is_none()
+            && hit
+                .secondary_excerpts
+                .iter()
+                .all(|excerpt| excerpt.citation.is_none())
+    }));
+    let source_hits = f
+        .app
+        .semantic_search("Ada", &QueryPlan::default(), None, false, true, None)
+        .unwrap();
+    assert!(!source_hits.network_used);
+    assert!(source_hits.hits.iter().all(|hit| {
+        hit.excerpt.citation.is_none()
+            && hit
+                .secondary_excerpts
+                .iter()
+                .all(|excerpt| excerpt.citation.is_none())
+    }));
+    let graph = f
+        .app
+        .semantic_graph("Ada", &GraphPlan::default(), None, false, true)
+        .unwrap();
+    assert!(!graph.network_used);
+    assert!(graph.assertions.is_empty());
+    assert!(
+        graph
+            .seeds
+            .iter()
+            .all(|seed| { seed.record_ref.record_id != f.request.export.source_id })
+    );
+    assert_eq!(mock.calls.load(Ordering::SeqCst), 1);
 }
 
 #[test]
@@ -566,6 +962,233 @@ fn default_run_identity_is_pure_stable_and_binds_source_model_revision_context()
             .default_api_extraction_run_id(&request, &changed, 1024)
             .unwrap()
     );
+}
+
+fn growth_snapshot(fixture: &Fixture) -> lwiki::storage::StorageTotals {
+    let inventory = lwiki::storage::inventory(&fixture.fs, &Default::default()).unwrap();
+    assert!(inventory.complete);
+    inventory.totals
+}
+
+fn bounded_api_delta(
+    label: &str,
+    before: &lwiki::storage::StorageTotals,
+    after: &lwiki::storage::StorageTotals,
+    max_new_files: u64,
+    max_new_bytes: u64,
+) {
+    assert!(
+        after.files.saturating_sub(before.files) <= max_new_files,
+        "{label}: {before:?} -> {after:?}"
+    );
+    assert!(
+        after.logical_bytes.saturating_sub(before.logical_bytes) <= max_new_bytes,
+        "{label}: {before:?} -> {after:?}"
+    );
+    eprintln!(
+        "S05 {label}: files {} -> {}, bytes {} -> {}, unique {} -> {}, duplicate {} -> {}",
+        before.files,
+        after.files,
+        before.logical_bytes,
+        after.logical_bytes,
+        before.unique_content_bytes,
+        after.unique_content_bytes,
+        before.duplicate_bytes,
+        after.duplicate_bytes
+    );
+}
+
+fn compact_and_check_api_authority(fixture: &Fixture) {
+    let before = growth_snapshot(fixture);
+    let options = lwiki::storage::StorageOptions {
+        retain_undo_changes: 1,
+        ..Default::default()
+    };
+    let plan = lwiki::storage::plan_cleanup(&fixture.fs, &options).unwrap();
+    let writer =
+        lwiki::vault::WriterPermit::acquire(fixture.fs.root(), std::time::Duration::from_secs(5))
+            .unwrap();
+    let result = lwiki::storage::cleanup(
+        &fixture.fs,
+        &writer,
+        &lwiki::storage::StorageOptions {
+            expected_plan: Some(plan.plan_hash),
+            ..options
+        },
+    )
+    .unwrap();
+    drop(writer);
+    let after = growth_snapshot(fixture);
+    assert_eq!(result.after.files, after.files);
+    assert_eq!(result.after.logical_bytes, after.logical_bytes);
+    // Cleanup may add fixed migration metadata in a small fixture. It must
+    // retain exact job attempts, receipts, and unknown billing reservations.
+    let _ = fixture.ledger().inspect().unwrap();
+    eprintln!(
+        "S05 cleanup: files {} -> {}, bytes {} -> {}, unique {} -> {}, duplicate {} -> {}; deleted {} files",
+        before.files,
+        after.files,
+        before.logical_bytes,
+        after.logical_bytes,
+        before.unique_content_bytes,
+        after.unique_content_bytes,
+        before.duplicate_bytes,
+        after.duplicate_bytes,
+        result.deleted_files
+    );
+}
+
+#[test]
+fn measured_api_success_rejection_retry_and_cleanup_growth() {
+    // Bounds are per one small packet and one bounded mock response. They
+    // catch accidental per-event fanout without promising a whole-vault size.
+    let success = Fixture::new();
+    let before = growth_snapshot(&success);
+    let response = success.response();
+    let mock = Mock::response(response.clone());
+    let extracted = success
+        .app
+        .graph_extract_api(
+            &success.request,
+            &success.service,
+            &success.dispatcher(mock.clone()),
+            success.options.clone(),
+        )
+        .unwrap();
+    let imported = extracted.import.unwrap();
+    success.apply(imported.prepared.as_ref().unwrap());
+    let materialized = growth_snapshot(&success);
+    bounded_api_delta(
+        "successful API and apply",
+        &before,
+        &materialized,
+        50,
+        512 * 1024,
+    );
+    let reused = success
+        .app
+        .graph_extract_api(
+            &success.request,
+            &success.service,
+            &success.dispatcher(mock.clone()),
+            success.options.clone(),
+        )
+        .unwrap();
+    assert!(reused.reused);
+    let host_repeat = success
+        .app
+        .graph_import(serde_json::to_string(&response).unwrap().as_bytes(), false)
+        .unwrap();
+    assert_eq!(
+        host_repeat["allocations"],
+        serde_json::to_value(&imported.allocations).unwrap()
+    );
+    assert_eq!(mock.calls.load(Ordering::SeqCst), 1);
+    let repeated = growth_snapshot(&success);
+    bounded_api_delta("API and host repeat", &materialized, &repeated, 0, 4096);
+    compact_and_check_api_authority(&success);
+    assert_eq!(
+        success
+            .ledger()
+            .inspect()
+            .unwrap()
+            .budget
+            .dispatched_requests,
+        1
+    );
+
+    let rejected = Fixture::new();
+    let before = growth_snapshot(&rejected);
+    let mut invalid = rejected.response();
+    invalid["mentions"][2]
+        .as_object_mut()
+        .unwrap()
+        .remove("span");
+    let invalid_mock = Mock::response(invalid);
+    assert_eq!(
+        rejected
+            .app
+            .graph_extract_api(
+                &rejected.request,
+                &rejected.service,
+                &rejected.dispatcher(invalid_mock.clone()),
+                rejected.options.clone(),
+            )
+            .err()
+            .expect("ambiguous paid output must be rejected")
+            .code,
+        ErrorCode::ExtractionInvalid
+    );
+    let rejection = growth_snapshot(&rejected);
+    bounded_api_delta("semantic rejection", &before, &rejection, 44, 384 * 1024);
+    let rejected_attempt = &rejected.ledger().inspect().unwrap().attempts[0];
+    assert_eq!(rejected_attempt.phase, AttemptPhase::Settled);
+    assert!(
+        rejected
+            .ledger()
+            .inspect_diagnostic(
+                &rejected_attempt.attempt,
+                DiagnosticKind::SemanticRejection,
+                false
+            )
+            .unwrap()
+            .is_some()
+    );
+    compact_and_check_api_authority(&rejected);
+
+    let mut retried = Fixture::new();
+    retried.request.limits.concurrency = 2;
+    retried.request.limits.attempts_per_task = 2;
+    let before = growth_snapshot(&retried);
+    let uncertain = Arc::new(Mock {
+        calls: AtomicUsize::new(0),
+        body: Mutex::new(None),
+        cancel: None,
+        fail: true,
+    });
+    assert!(
+        retried
+            .app
+            .graph_extract_api(
+                &retried.request,
+                &retried.service,
+                &retried.dispatcher(uncertain.clone()),
+                retried.options.clone(),
+            )
+            .is_err()
+    );
+    let unknown = growth_snapshot(&retried);
+    bounded_api_delta("unknown attempt", &before, &unknown, 24, 256 * 1024);
+    let valid_mock = Mock::response(retried.response());
+    let mut retry_options = retried.options.clone();
+    retry_options.policy.retry_uncertain = true;
+    let useful = retried
+        .app
+        .graph_extract_api(
+            &retried.request,
+            &retried.service,
+            &retried.dispatcher(valid_mock.clone()),
+            retry_options,
+        )
+        .unwrap();
+    retried.apply(useful.import.unwrap().prepared.as_ref().unwrap());
+    let complete = growth_snapshot(&retried);
+    bounded_api_delta("retried useful output", &unknown, &complete, 32, 256 * 1024);
+    let inspection = retried.ledger().inspect().unwrap();
+    assert_eq!(inspection.attempts.len(), 2);
+    assert_eq!(inspection.budget.dispatched_requests, 2);
+    assert_eq!(
+        inspection.attempts[0].billing,
+        BillingDisposition::UnknownReserved
+    );
+    compact_and_check_api_authority(&retried);
+    let after = retried.ledger().inspect().unwrap();
+    assert_eq!(after.attempts.len(), 2);
+    assert_eq!(
+        after.attempts[0].billing,
+        BillingDisposition::UnknownReserved
+    );
+    assert!(after.budget.remote_inflight > 0);
 }
 
 #[test]

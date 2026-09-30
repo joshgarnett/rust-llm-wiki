@@ -188,6 +188,7 @@ pub(super) fn select(
     edge: &GraphAssertion,
     scope: ContextScope,
     rank: usize,
+    source_ids: &[RecordId],
 ) -> Result<Option<SelectedBundle>> {
     let Some(row) = reader.projection().records.get(&edge.record_ref.record_id) else {
         return Ok(None);
@@ -302,6 +303,16 @@ pub(super) fn select(
         };
         let index = usize::from(stance == EvidenceStance::Contradicts);
         totals[index] += 1;
+        // Candidate assertion scope is broader than evidence scope. Preserve
+        // full totals for honest omitted support/counterevidence disclosure.
+        if !source_ids.is_empty()
+            && !evidence
+                .record
+                .string("wiki_source_id")
+                .is_some_and(|id| source_ids.iter().any(|source| source.as_str() == id))
+        {
+            continue;
+        }
         if !usable(evidence, scope) {
             continue;
         }

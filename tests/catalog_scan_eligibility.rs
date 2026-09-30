@@ -303,6 +303,78 @@ fn copied_ids_and_companion_conflicts_exclude_all() {
     let p = scan(&fs, &id("vault_test")).unwrap();
     assert_eq!(p.records[&id("use")].eligibility, Eligibility::Invalid);
 }
+
+#[test]
+fn evidence_navigation_reports_missing_wrong_kind_and_wrong_membership() {
+    let (temp, fs) = fixture();
+    write(
+        temp.path(),
+        "assertions/other.md",
+        &bytes(
+            "assertion",
+            "other",
+            json!({"wiki_status":"proposed","wiki_subject_id":"alpha","wiki_object_id":"beta","wiki_predicate":"uses"}),
+            b"Other assertion\n",
+        ),
+    );
+    edit(
+        temp.path(),
+        "evidence/evidence_b.md",
+        "wiki_assertion_id",
+        json!("other"),
+    );
+    edit(
+        temp.path(),
+        "assertions/use.md",
+        "wiki_evidence",
+        json!([
+            "[[evidence/missing.md]]",
+            "[[entities/alpha.md]]",
+            "[[evidence/evidence_b.md]]",
+            "[[evidence/evidence_a.md]]"
+        ]),
+    );
+    let projected = scan(&fs, &id("vault_test")).unwrap();
+    let reasons: Vec<_> = projected
+        .diagnostics
+        .iter()
+        .filter(|diagnostic| diagnostic.path.as_str() == "assertions/use.md")
+        .filter_map(|diagnostic| diagnostic.details["reason"].as_str())
+        .collect();
+    assert!(reasons.contains(&"evidence_link_missing"));
+    assert!(reasons.contains(&"evidence_link_wrong_kind"));
+    assert!(reasons.contains(&"evidence_link_wrong_assertion"));
+    assert_eq!(
+        reasons
+            .iter()
+            .filter(|reason| reason.starts_with("evidence_link_"))
+            .count(),
+        3
+    );
+    assert_eq!(
+        projected.records[&id("use")].eligibility,
+        Eligibility::Current
+    );
+}
+
+#[test]
+fn malformed_decision_keeps_audit_kind_without_losing_raw_text() {
+    let (temp, fs) = fixture();
+    write(
+        temp.path(),
+        "knowledge/decisions/broken.md",
+        b"---\nwiki_kind: decision\nwiki_id: decision_broken\ntitle: [broken\n---\nRetained editorial rationale\n",
+    );
+    let projection = scan(&fs, &id("vault_test")).unwrap();
+    let document = projection
+        .documents
+        .iter()
+        .find(|document| document.path.as_str() == "knowledge/decisions/broken.md")
+        .unwrap();
+    assert_eq!(document.kind, Some(RecordKind::Decision));
+    assert!(document.raw_text.contains("Retained editorial rationale"));
+    assert_eq!(document.eligibility, Eligibility::Invalid);
+}
 #[test]
 fn graph_endpoints_use_resolved_names_and_keep_direction() {
     let (temp, fs) = fixture();

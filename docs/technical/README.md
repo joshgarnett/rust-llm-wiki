@@ -1,6 +1,6 @@
 # Technical design
 
-Status: proposed implementation baseline, reviewed 2026-09-28. Requirements baseline: commit `4652248`. Three design agents and the primary agent developed and cross-reviewed these contracts; no CLI has been implemented. Implementation is the next step, following the [ordered handoff](implementation-handoff.md).
+Status: implementation contracts with historical design text. The CLI is implemented; current capabilities, local coverage and remaining cleanup gates are routed through [current-contracts.md](../current-contracts.md). The 2026-09-28 design baseline at `4652248` and [ordered handoff](implementation-handoff.md) remain historical evidence. Host-agent research replaces the original built-in research executor; storage schema2 and compact retained proofs extend the original layout contract.
 
 ## Design areas
 

@@ -6,6 +6,13 @@ pub(crate) const MAX_ARTIFACT_BYTES: usize = 1048576;
 pub(crate) const MAX_PASSAGES: usize = 32;
 pub(crate) const MAX_PASSAGE_BYTES: usize = 65536;
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ResearchSourceRange {
+    pub source_id: RecordId,
+    pub span: ByteSpan,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ResearchScope {
@@ -13,6 +20,8 @@ pub struct ResearchScope {
     pub urls: Vec<String>,
     pub exclusions: Vec<String>,
     pub source_ids: Vec<RecordId>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub source_ranges: Vec<ResearchSourceRange>,
     pub offline: bool,
     pub max_rounds: u32,
     pub max_sources: u32,
@@ -42,6 +51,9 @@ pub struct ResearchPacket {
     pub packet_fingerprint: Blake3Hash,
     pub scope_hash: Blake3Hash,
     pub scope: ResearchScope,
+    /// Refresh permanently retires revision-bound offsets while preserving original scope identity.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub source_ranges_retired: bool,
     pub stage: ResearchStage,
     pub round: u32,
     pub remaining_sources: u32,
@@ -137,6 +149,8 @@ pub(crate) struct ResearchHead {
     pub run_id: RecordId,
     pub scope: ResearchScope,
     pub scope_hash: Blake3Hash,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub source_ranges_retired: bool,
     pub generation: u32,
     pub round: u32,
     pub captured_sources: u32,
@@ -145,6 +159,9 @@ pub(crate) struct ResearchHead {
     pub report: Option<ArtifactRef>,
     pub receipts: Vec<ReceiptRef>,
     pub gaps: Vec<String>,
+}
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]

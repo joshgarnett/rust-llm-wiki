@@ -54,7 +54,7 @@ impl Catalog {
             return Err(WikiError::invalid("catalog vault identity changed"));
         }
         for id in engine.change_ids()? {
-            let i = engine.inspect(&id)?;
+            let i = engine.inspect_history(&id)?;
             if let Some(permit) = exempt.filter(|p| p.change().change_id == id) {
                 if i.prepared != *permit.change()
                     || !matches!(i.status, ChangeStatus::FilesApplied | ChangeStatus::Indexed)

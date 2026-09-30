@@ -31,7 +31,7 @@ jobs:
         with:
           persist-credentials: false
       - uses: ./.github/actions/setup
-      - name: Format, lint, build tooling and CLI smoke tests
+      - name: Format, lint, tooling, CLI smoke and consequential regressions
         run: just ci
       - name: Build and smoke a native candidate
         run: just candidate "$RUNNER_TEMP/lwiki-candidate"

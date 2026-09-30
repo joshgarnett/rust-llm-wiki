@@ -32,6 +32,7 @@ fn scope(sources: Vec<RecordId>) -> ResearchScope {
         urls: vec![],
         exclusions: vec![],
         source_ids: sources,
+        source_ranges: vec![],
         offline: false,
         max_rounds: 3,
         max_sources: 2,

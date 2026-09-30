@@ -458,11 +458,17 @@ fn result(
                 .into(),
         );
     }
+    if !plan.filters.source_ids.is_empty() {
+        warnings.push("source filter scopes emitted evidence; omitted support and contradiction counts include evidence outside the selected sources".into());
+    }
     let opposing_omitted = assertions.iter().any(|a| a.omitted_opposing_assertions > 0);
     if opposing_omitted {
         warnings.push("opposing assertion links were capped; omitted_opposing_assertions counts the remaining current matches".into());
     }
     let truncated = opposing_omitted
+        || assertions
+            .iter()
+            .any(|a| a.omitted_support + a.omitted_contradictions > 0)
         || end < total
         || walked.coverage.omitted_candidates > 0
         || walked.coverage.omitted_seeds > 0

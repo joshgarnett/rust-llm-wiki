@@ -50,12 +50,16 @@ test:
 test-smoke:
     {{ python }} scripts/bazel.py -- test --nofetch //:smoke
 
+# Provider/source/retrieval/research/storage and bounded conflict/checkpoint cases.
+test-regressions:
+    {{ python }} scripts/bazel.py -- test --nofetch //:regressions
+
 # Check build scripts without compiling Rust or using the network.
 build-tools-test:
     {{ python }} -m unittest discover -s scripts -p 'test_*.py' -v
 
 # Same short gate as Unix PR CI. Full acceptance is `just qualify`.
-ci: check build-tools-test test-smoke
+ci: check build-tools-test test-smoke test-regressions
 
 # Build and smoke a native candidate archive in a new directory; no publication.
 candidate output:

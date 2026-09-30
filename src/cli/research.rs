@@ -2,7 +2,7 @@
 use crate::{
     app::OfflineApp,
     domain::*,
-    research::{self, ResearchScope},
+    research::{self, ResearchScope, ResearchSourceRange},
 };
 use clap::{Args, Subcommand};
 use serde_json::Value;
@@ -21,7 +21,7 @@ pub enum ResearchCommand {
     Run(ResearchPlanArguments),
     /// Return the outstanding agent packet; never execute tools.
     Resume(ResearchResumeArguments),
-    /// Validate an agent submission and atomically capture sources or a cited report.
+    /// Validate an agent submission and publish captures/report through guarded recovery.
     Import {
         /// JSON submission path, or - for standard input.
         #[arg(long)]
@@ -37,6 +37,11 @@ pub enum ResearchCommand {
         /// Research run ID returned by run.
         run_id: RecordId,
     },
+    /// List concrete host repair tasks for stale support, contradictions and missing synthesis.
+    Maintenance {
+        /// Research run ID whose sources and retained answers define repair scope.
+        run_id: RecordId,
+    },
 }
 impl ResearchCommand {
     pub fn name(&self) -> &'static str {
@@ -47,6 +52,7 @@ impl ResearchCommand {
             Self::Import { .. } => "research import",
             Self::Status { .. } => "research status",
             Self::Report { .. } => "research report",
+            Self::Maintenance { .. } => "research maintenance",
         }
     }
 }
@@ -63,6 +69,9 @@ pub struct ResearchPlanArguments {
     /// Include the current captured text of this source; repeat as needed.
     #[arg(long = "source-id")]
     pub source_ids: Vec<RecordId>,
+    /// Exact current UTF-8 source range SOURCE:START:END; repeat for selected passages.
+    #[arg(long = "source-range", value_parser = parse_source_range)]
+    pub source_ranges: Vec<ResearchSourceRange>,
     /// Maximum collection/answer rounds (1–8), including the initial round.
     #[arg(long, default_value_t = 3)]
     pub max_rounds: u32,
@@ -102,6 +111,7 @@ pub fn execute(command: &ResearchCommand, app: &OfflineApp) -> Result<ResearchCl
                 urls: args.urls.clone(),
                 exclusions: args.exclusions.clone(),
                 source_ids: args.source_ids.clone(),
+                source_ranges: args.source_ranges.clone(),
                 offline: app.options().offline,
                 max_rounds: args.max_rounds,
                 max_sources: args.max_sources,
@@ -127,7 +137,8 @@ pub fn execute(command: &ResearchCommand, app: &OfflineApp) -> Result<ResearchCl
             value(research::import(app, &bytes)?)?
         }
         ResearchCommand::Status { run_id } => research::status(app, run_id)?,
-        ResearchCommand::Report { run_id } => value(research::report(app, run_id)?)?,
+        ResearchCommand::Report { run_id } => research::report_view(app, run_id)?,
+        ResearchCommand::Maintenance { run_id } => research::maintenance(app, run_id)?,
     };
     let partial = data
         .get("partial")
@@ -140,4 +151,23 @@ pub fn execute(command: &ResearchCommand, app: &OfflineApp) -> Result<ResearchCl
         partial,
         warnings: vec![],
     })
+}
+
+fn parse_source_range(value: &str) -> std::result::Result<ResearchSourceRange, String> {
+    let fields: Vec<_> = value.split(':').collect();
+    if fields.len() != 3 {
+        return Err("expected SOURCE:START:END".into());
+    }
+    let source_id = RecordId::new(fields[0]).map_err(|e| e.message)?;
+    let start = fields[1]
+        .parse::<u64>()
+        .map_err(|_| "START must be a byte offset")?;
+    let end = fields[2]
+        .parse::<u64>()
+        .map_err(|_| "END must be a byte offset")?;
+    let span = ByteSpan::new(start, end).map_err(|e| e.message)?;
+    if span.is_empty() || end - start > 4096 {
+        return Err("range must contain 1–4096 UTF-8 bytes".into());
+    }
+    Ok(ResearchSourceRange { source_id, span })
 }

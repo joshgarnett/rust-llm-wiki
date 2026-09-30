@@ -11,11 +11,7 @@ use crate::{
 };
 use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
-use std::{
-    cmp::Ordering,
-    collections::{BTreeMap, BinaryHeap},
-    time::Duration,
-};
+use std::{cmp::Ordering, collections::BTreeMap, time::Duration};
 const CACHE_PATH: &str = ".wiki/cache/embeddings.sqlite3";
 fn sql(e: rusqlite::Error) -> WikiError {
     WikiError::new(ErrorCode::IndexCorrupt, format!("embedding cache: {e}"))
@@ -73,7 +69,10 @@ impl Ord for DenseHit {
 pub struct DenseScan {
     pub hits: BTreeMap<TargetKind, Vec<DenseHit>>,
     pub coverage: Coverage,
+    /// Number of distinct owners retained for each target, bounded by k.
     pub available_by_target: BTreeMap<TargetKind, usize>,
+    /// At least one other owner was seen after the selected owner cap filled.
+    pub owner_cap_reached_by_target: BTreeMap<TargetKind, bool>,
 }
 pub struct VectorStore {
     connection: Connection,
@@ -521,7 +520,8 @@ impl VectorStore {
         tx.commit().map_err(sql)?;
         Ok(coverage)
     }
-    /// Each SQL row carries at most one bounded vector. Top-k heap memory is O(k).
+    /// Each SQL row carries at most one bounded vector. Selection memory is
+    /// O(k) owners and two passages per owner for each target.
     /// `units` is the freshly rendered/filtered target universe; no stale member can score.
     pub fn exact(
         &self,
@@ -535,7 +535,7 @@ impl VectorStore {
             .exact_stream(
                 space,
                 query,
-                units.iter().cloned().map(Ok),
+                || Ok(units.iter().cloned().map(Ok)),
                 &[target],
                 k,
                 |_| Ok(true),
@@ -544,18 +544,22 @@ impl VectorStore {
             .remove(&target)
             .unwrap_or_default())
     }
-    pub fn exact_stream<I, F>(
+    /// The factory must replay the same bounded corpus and eligibility view.
+    /// Coverage is counted once; a second pass retrieves two units for each
+    /// winning owner without storing metadata for every corpus owner.
+    pub fn exact_stream<I, S, F>(
         &self,
         space: &Blake3Hash,
         query: &[f32],
-        units: I,
+        units: S,
         targets: &[TargetKind],
         k: usize,
-        mut allowed: F,
+        allowed: F,
     ) -> Result<DenseScan>
     where
+        S: Fn() -> Result<I>,
         I: IntoIterator<Item = Result<RenderedUnit>>,
-        F: FnMut(&RenderedUnit) -> Result<bool>,
+        F: Fn(&RenderedUnit) -> Result<bool>,
     {
         if k == 0 || k > 160 {
             return Err(WikiError::new(
@@ -572,13 +576,16 @@ impl VectorStore {
                 "query/corpus dimensions differ",
             ));
         }
-        let mut heaps: BTreeMap<TargetKind, BinaryHeap<DenseHit>> = targets
+        // First pass identifies exact top owners using only their best unit.
+        // A rejected owner may later win, so its earlier second-best unit
+        // cannot be retained correctly with a one-pass O(k) selection.
+        let mut owners: BTreeMap<TargetKind, BTreeMap<VaultRelativePath, DenseHit>> = targets
             .iter()
-            .map(|target| (*target, BinaryHeap::new()))
+            .map(|target| (*target, BTreeMap::new()))
             .collect();
         let mut coverage = Coverage::default();
-        let mut available_by_target = BTreeMap::new();
-        for unit in units {
+        let mut owner_cap_reached_by_target = BTreeMap::new();
+        for unit in units()? {
             let unit = unit?;
             if !targets.contains(&unit.target) || !allowed(&unit)? {
                 continue;
@@ -599,10 +606,80 @@ impl VectorStore {
                 continue;
             };
             coverage.available_units += 1;
-            *available_by_target.entry(unit.target).or_insert(0) += 1;
             let score = cosine(query, &vector)?;
-            let heap = heaps.get_mut(&unit.target).expect("selected target");
-            heap.push(DenseHit {
+            let hit = DenseHit {
+                unit_id: unit.unit_id,
+                target: unit.target,
+                owner: unit.owner,
+                target_id: unit.target_id,
+                source_span: unit.source_span,
+                input_hash: unit.input_hash,
+                score,
+            };
+            let selected = owners.get_mut(&hit.target).expect("selected target");
+            if let Some(best) = selected.get_mut(&hit.owner) {
+                if hit < *best {
+                    *best = hit;
+                }
+                continue;
+            }
+            if selected.len() == k {
+                owner_cap_reached_by_target.insert(hit.target, true);
+                let worst_owner = selected
+                    .iter()
+                    .max_by(|(_, a), (_, b)| a.cmp(b))
+                    .map(|(owner, best)| (owner.clone(), best.clone()))
+                    .expect("full owner selection");
+                if hit >= worst_owner.1 {
+                    continue;
+                }
+                selected.remove(&worst_owner.0);
+            }
+            selected.insert(hit.owner.clone(), hit);
+        }
+        let available_by_target = owners
+            .iter()
+            .map(|(target, selected)| (*target, selected.len()))
+            .collect();
+        // Replay only the final owners to recover their best two units even
+        // when an early unit lost the moving k-owner cutoff. This costs one
+        // more corpus traversal, retains O(k) unit metadata, and never treats
+        // a candidate's arrival order as evidence of rank.
+        let mut passages: BTreeMap<TargetKind, BTreeMap<VaultRelativePath, Vec<DenseHit>>> = owners
+            .iter()
+            .map(|(target, selected)| {
+                (
+                    *target,
+                    selected
+                        .keys()
+                        .cloned()
+                        .map(|owner| (owner, Vec::new()))
+                        .collect(),
+                )
+            })
+            .collect();
+        for unit in units()? {
+            let unit = unit?;
+            if !passages
+                .get(&unit.target)
+                .is_some_and(|selected| selected.contains_key(&unit.owner))
+                || !allowed(&unit)?
+            {
+                continue;
+            }
+            // Missing units were counted in the first pass and remain absent
+            // from ranking. A vanished winning unit is caught by the final
+            // best-hit comparison below.
+            let Some(vector) = self.vector(space, &unit.input_hash)? else {
+                continue;
+            };
+            let score = cosine(query, &vector)?;
+            let selected = passages
+                .get_mut(&unit.target)
+                .expect("selected target")
+                .get_mut(&unit.owner)
+                .expect("selected owner");
+            selected.push(DenseHit {
                 unit_id: unit.unit_id,
                 target: unit.target,
                 owner: unit.owner,
@@ -611,28 +688,32 @@ impl VectorStore {
                 input_hash: unit.input_hash,
                 score,
             });
-            if heap.len() > k {
-                heap.pop();
+            selected.sort();
+            selected.truncate(2);
+        }
+        for (target, selected) in &owners {
+            for (owner, best) in selected {
+                if passages[target][owner].first() != Some(best) {
+                    return Err(WikiError::new(
+                        ErrorCode::FreshnessConflict,
+                        "selected owner changed during exact replay",
+                    ));
+                }
             }
         }
-        let hits = heaps
+        let hits = passages
             .into_iter()
-            .map(|(target, heap)| {
-                let mut out = heap.into_vec();
-                out.sort_by(|a, b| {
-                    b.score
-                        .total_cmp(&a.score)
-                        .then(a.target_id.cmp(&b.target_id))
-                        .then(a.owner.cmp(&b.owner))
-                        .then(a.unit_id.cmp(&b.unit_id))
-                });
-                (target, out)
+            .map(|(target, selected)| {
+                let mut groups = selected.into_values().collect::<Vec<_>>();
+                groups.sort_by(|a, b| a[0].cmp(&b[0]));
+                (target, groups.into_iter().flatten().collect())
             })
             .collect();
         Ok(DenseScan {
             hits,
             coverage,
             available_by_target,
+            owner_cap_reached_by_target,
         })
     }
 }

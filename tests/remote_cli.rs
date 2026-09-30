@@ -8,7 +8,11 @@ mod common;
 mod provider;
 use clap::Parser;
 use common::*;
-use lwiki::cli::{Arguments, execute};
+use lwiki::{
+    cli::{Arguments, execute},
+    domain::RecordId,
+    jobs::JobLedgerApi,
+};
 use serde_json::{Value, json};
 use std::{
     collections::BTreeMap,
@@ -489,6 +493,363 @@ fn native_generation_probe_unknown_unit_bound_refuses_before_send() {
 
 #[path = "fixtures/p17/common.rs"]
 mod embedding_fixture;
+fn accept_embedding_request(listener: &std::net::TcpListener) -> std::net::TcpStream {
+    let deadline = Instant::now() + Duration::from_secs(20);
+    let mut socket = loop {
+        match listener.accept() {
+            Ok((socket, _)) => break socket,
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                assert!(Instant::now() < deadline, "embedding mock request timeout");
+                std::thread::sleep(Duration::from_millis(2));
+            }
+            Err(error) => panic!("embedding mock accept: {error}"),
+        }
+    };
+    socket.set_nonblocking(false).unwrap();
+    socket
+        .set_read_timeout(Some(Duration::from_secs(10)))
+        .unwrap();
+    let mut request = Vec::new();
+    let (start, length) = loop {
+        let mut buffer = [0; 4096];
+        let count = socket.read(&mut buffer).unwrap();
+        assert!(count > 0);
+        request.extend_from_slice(&buffer[..count]);
+        assert!(request.len() < 512 * 1024);
+        if let Some(end) = request.windows(4).position(|part| part == b"\r\n\r\n") {
+            let header = std::str::from_utf8(&request[..end]).unwrap();
+            let length = header
+                .lines()
+                .find_map(|line| {
+                    let (key, value) = line.split_once(':')?;
+                    key.eq_ignore_ascii_case("content-length")
+                        .then(|| value.trim().parse::<usize>().unwrap())
+                })
+                .unwrap();
+            break (end + 4, length);
+        }
+    };
+    while request.len() < start + length {
+        let mut buffer = [0; 4096];
+        let count = socket.read(&mut buffer).unwrap();
+        assert!(count > 0);
+        request.extend_from_slice(&buffer[..count]);
+    }
+    let body: Value = serde_json::from_slice(&request[start..start + length]).unwrap();
+    assert_eq!(body["model"], "test-model");
+    socket
+}
+fn send_embedding_response(socket: &mut std::net::TcpStream, invalid_usage: bool) {
+    let usage = if invalid_usage {
+        json!({"prompt_tokens":"bad","total_tokens":2})
+    } else {
+        json!({"prompt_tokens":2,"total_tokens":2,"completion_tokens":0})
+    };
+    let response = serde_json::to_vec(&json!({"model":"test-model",
+        "data":[{"index":0,"embedding":[1.0,0.0]}],"usage":usage}))
+    .unwrap();
+    write!(socket,"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",response.len()).unwrap();
+    socket.write_all(&response).unwrap();
+    socket.flush().unwrap();
+}
+fn embedding_cli(f: &embedding_fixture::Fixture, args: &[&str]) -> (Value, bool) {
+    let output = std::process::Command::new(test_paths::binary(env!("CARGO_BIN_EXE_lwiki")))
+        .args([
+            "--wiki",
+            f.fs.root().path().to_str().unwrap(),
+            "--json",
+            "--profile",
+            "primary",
+        ])
+        .args(args)
+        .args(["--providers-config", f.config.to_str().unwrap()])
+        .output()
+        .unwrap();
+    (
+        serde_json::from_slice(&output.stdout).unwrap(),
+        output.status.success(),
+    )
+}
+fn embedding_mock_config(f: &embedding_fixture::Fixture, endpoint: std::net::SocketAddr) {
+    let content = std::fs::read_to_string(&f.config).unwrap().replace(
+        "url='https://mock.example/v1/embeddings'",
+        &format!("url='http://{endpoint}/embedding'\nallow_loopback_http=true"),
+    );
+    embedding_fixture::private_write(&f.config, content);
+}
+#[test]
+fn rejected_probe_retains_accounting_and_same_space_can_probe_then_sync() {
+    let f = embedding_fixture::Fixture::new();
+    f.page("one", "Alpha");
+    let listener = std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).unwrap();
+    embedding_mock_config(&f, listener.local_addr().unwrap());
+    listener.set_nonblocking(true).unwrap();
+    let server = std::thread::spawn(move || {
+        for invalid in [true, false, false] {
+            let mut socket = accept_embedding_request(&listener);
+            send_embedding_response(&mut socket, invalid);
+        }
+    });
+    let (first, success) = embedding_cli(&f, &["embeddings", "check", "--probe"]);
+    assert!(!success, "{first}");
+    assert_eq!(first["error"]["code"], "PROVIDER_RESPONSE");
+    assert_eq!(first["error"]["details"]["reason"], "usage_invalid");
+    let old_run: RecordId =
+        serde_json::from_value(first["error"]["details"]["run_id"].clone()).unwrap();
+    let (second, success) = embedding_cli(&f, &["embeddings", "check", "--probe"]);
+    assert!(success, "{second}");
+    let (third, success) = embedding_cli(&f, &["embeddings", "sync"]);
+    assert!(success, "{third}");
+    assert_eq!(third["data"]["published"], true);
+    server.join().unwrap();
+    let ledger = lwiki::jobs::JobLedger::new(
+        f.fs.clone(),
+        f.app.vault_id().clone(),
+        old_run,
+        embedding_fixture::options(),
+    )
+    .unwrap();
+    let inspection = ledger.inspect().unwrap();
+    assert_eq!(inspection.attempts.len(), 1);
+    assert_eq!(
+        inspection.attempts[0].phase,
+        lwiki::jobs::AttemptPhase::Settled
+    );
+    assert!(inspection.attempts[0].receipt.is_some());
+    assert_eq!(inspection.budget.dispatched_requests, 1);
+}
+#[test]
+fn uncertain_embedding_retry_requires_opt_in_and_keeps_original_hold() {
+    let f = embedding_fixture::Fixture::new();
+    f.page("one", "Alpha");
+    let listener = std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).unwrap();
+    embedding_mock_config(&f, listener.local_addr().unwrap());
+    listener.set_nonblocking(true).unwrap();
+    let server = std::thread::spawn(move || {
+        drop(accept_embedding_request(&listener));
+        let mut socket = accept_embedding_request(&listener);
+        send_embedding_response(&mut socket, false);
+    });
+    let (first, success) = embedding_cli(&f, &["embeddings", "sync"]);
+    assert!(!success, "{first}");
+    let run: RecordId =
+        serde_json::from_value(first["error"]["details"]["run_id"].clone()).unwrap();
+    let (denied, success) = embedding_cli(&f, &["embeddings", "sync"]);
+    assert!(!success, "{denied}");
+    assert_eq!(denied["error"]["code"], "RECOVERY_REQUIRED");
+    let (amended, success) = embedding_cli(
+        &f,
+        &[
+            "jobs",
+            "amend",
+            "--run",
+            run.as_str(),
+            "--reason",
+            "retain unknown attempt and raise allowance",
+            "--max-requests",
+            "100",
+        ],
+    );
+    assert!(success, "{amended}");
+    assert_eq!(
+        amended["data"]["inspection"]["budget"]["dispatched_requests"],
+        1
+    );
+    assert_eq!(
+        amended["data"]["inspection"]["budget"]["unknown_attempts"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    assert_eq!(
+        amended["data"]["inspection"]["effective_limits"]["requests"],
+        100
+    );
+    let (changed, success) = embedding_cli(
+        &f,
+        &[
+            "embeddings",
+            "sync",
+            "--retry-uncertain",
+            "--max-requests",
+            "60",
+        ],
+    );
+    assert!(!success, "{changed}");
+    assert_eq!(changed["error"]["code"], "USAGE");
+    assert_eq!(
+        changed["error"]["details"]["reason"],
+        "retained_limits_require_amendment"
+    );
+    let (retried, success) = embedding_cli(&f, &["embeddings", "sync", "--retry-uncertain"]);
+    assert!(success, "{retried}");
+    assert_eq!(retried["data"]["published"], true);
+    server.join().unwrap();
+    let ledger = lwiki::jobs::JobLedger::new(
+        f.fs.clone(),
+        f.app.vault_id().clone(),
+        run,
+        embedding_fixture::options(),
+    )
+    .unwrap();
+    let inspection = ledger.inspect().unwrap();
+    assert_eq!(inspection.attempts.len(), 2);
+    assert_eq!(inspection.budget.dispatched_requests, 2);
+    // The retry's valid response has token usage but no cost/rate card; its
+    // billing hold is retained as well as the original unknown outcome.
+    assert_eq!(inspection.budget.unknown_attempts.len(), 2);
+    assert_eq!(
+        inspection.attempts[1].phase,
+        lwiki::jobs::AttemptPhase::Settled
+    );
+    assert_eq!(
+        inspection.attempts[1].billing,
+        lwiki::jobs::BillingDisposition::UnknownReserved
+    );
+    assert_eq!(
+        inspection.attempts[0].billing,
+        lwiki::jobs::BillingDisposition::UnknownReserved
+    );
+}
+#[test]
+fn uncertain_embedding_retry_respects_concurrency_and_final_request_slot() {
+    for bound in [["--concurrency", "1"], ["--max-requests", "1"]] {
+        let f = embedding_fixture::Fixture::new();
+        f.page("one", "Alpha");
+        let listener = std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).unwrap();
+        embedding_mock_config(&f, listener.local_addr().unwrap());
+        listener.set_nonblocking(true).unwrap();
+        let server = std::thread::spawn(move || drop(accept_embedding_request(&listener)));
+        let first_args = ["embeddings", "sync", bound[0], bound[1]];
+        let (first, success) = embedding_cli(&f, &first_args);
+        assert!(!success, "{first}");
+        server.join().unwrap();
+        let retry_args = [
+            "embeddings",
+            "sync",
+            bound[0],
+            bound[1],
+            "--retry-uncertain",
+        ];
+        let (retry, success) = embedding_cli(&f, &retry_args);
+        assert!(!success, "{retry}");
+        assert_eq!(retry["error"]["code"], "BUDGET_EXCEEDED", "{retry}");
+        let run: RecordId =
+            serde_json::from_value(first["error"]["details"]["run_id"].clone()).unwrap();
+        let ledger = lwiki::jobs::JobLedger::new(
+            f.fs.clone(),
+            f.app.vault_id().clone(),
+            run,
+            embedding_fixture::options(),
+        )
+        .unwrap();
+        let inspection = ledger.inspect().unwrap();
+        assert_eq!(inspection.attempts.len(), 1);
+        assert_eq!(inspection.budget.unknown_attempts.len(), 1);
+    }
+}
+#[test]
+fn expired_planned_embedding_job_can_be_amended_without_resetting_history() {
+    let f = embedding_fixture::Fixture::new();
+    f.page("one", "Alpha");
+    let listener = std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).unwrap();
+    embedding_mock_config(&f, listener.local_addr().unwrap());
+    listener.set_nonblocking(true).unwrap();
+    let (expired, success) = embedding_cli(&f, &["embeddings", "sync", "--deadline-ms", "1"]);
+    assert!(!success, "{expired}");
+    assert_eq!(expired["error"]["code"], "BUDGET_EXCEEDED");
+    let marker_dir = f.fs.root().path().join(".wiki/state/embedding-jobs");
+    let marker = std::fs::read_dir(marker_dir)
+        .unwrap()
+        .next()
+        .unwrap()
+        .unwrap()
+        .path();
+    let marker: Value = serde_json::from_slice(&std::fs::read(marker).unwrap()).unwrap();
+    let run = marker["run_id"].as_str().unwrap();
+    let before = files(f.fs.root().path());
+    let (preview, success) = embedding_cli(
+        &f,
+        &[
+            "--dry-run",
+            "jobs",
+            "amend",
+            "--run",
+            run,
+            "--reason",
+            "resume expired plan",
+            "--max-requests",
+            "100",
+            "--deadline-ms",
+            "900000",
+        ],
+    );
+    assert!(success, "{preview}");
+    assert_eq!(preview["data"]["applied"], false);
+    assert_eq!(files(f.fs.root().path()), before);
+    let (lowered, success) = embedding_cli(
+        &f,
+        &[
+            "jobs",
+            "amend",
+            "--run",
+            run,
+            "--reason",
+            "invalid reduction",
+            "--max-requests",
+            "1",
+            "--deadline-ms",
+            "900000",
+        ],
+    );
+    assert!(!success, "{lowered}");
+    assert_eq!(files(f.fs.root().path()), before);
+    let (amended, success) = embedding_cli(
+        &f,
+        &[
+            "jobs",
+            "amend",
+            "--run",
+            run,
+            "--reason",
+            "resume expired plan",
+            "--max-requests",
+            "100",
+            "--deadline-ms",
+            "900000",
+        ],
+    );
+    assert!(success, "{amended}");
+    assert_eq!(amended["data"]["inspection"]["state"], "planned");
+    assert_eq!(
+        amended["data"]["inspection"]["effective_limits"]["requests"],
+        100
+    );
+    assert_eq!(
+        amended["data"]["inspection"]["budget"]["dispatched_requests"],
+        0
+    );
+    let server = std::thread::spawn(move || {
+        let mut socket = accept_embedding_request(&listener);
+        send_embedding_response(&mut socket, false);
+    });
+    let (resumed, success) = embedding_cli(&f, &["embeddings", "sync"]);
+    assert!(success, "{resumed}");
+    assert_eq!(resumed["data"]["published"], true);
+    server.join().unwrap();
+    let ledger = lwiki::jobs::JobLedger::new(
+        f.fs.clone(),
+        f.app.vault_id().clone(),
+        RecordId::new(run).unwrap(),
+        embedding_fixture::options(),
+    )
+    .unwrap();
+    let inspection = ledger.inspect().unwrap();
+    assert_eq!(inspection.spec.limits.requests, 60);
+    assert_eq!(inspection.effective_limits.requests, 100);
+    assert_eq!(inspection.budget.dispatched_requests, 1);
+}
 #[test]
 fn native_embedding_cli_sync_query_graph_context_and_cached_offline_reuse() {
     let f = embedding_fixture::Fixture::new();

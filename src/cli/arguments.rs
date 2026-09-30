@@ -126,6 +126,8 @@ pub enum Command {
         #[command(subcommand)]
         command: PageCommand,
     },
+    /// Inspect storage and preview or apply supported retention and migration.
+    Storage(super::storage::StorageArguments),
     /// Capture source files, refresh immutable revisions or withdraw support.
     Source {
         #[command(subcommand)]
@@ -161,9 +163,12 @@ pub enum Command {
         /// Explicitly contact the selected provider within the supplied request limits.
         #[arg(long)]
         probe: bool,
-        /// Provider capability to probe: embed, generate or search.
+        /// Provider capability to probe: embed or generate.
         #[arg(long, value_enum, default_value = "embed", requires = "probe")]
         role: super::remote::ProbeRole,
+        /// Probe the real extraction JSON schema; requires --probe --role generate.
+        #[arg(long, requires = "probe")]
+        extraction_schema: bool,
         #[command(flatten)]
         remote: super::remote::RemoteArguments,
     },
@@ -171,6 +176,11 @@ pub enum Command {
     Changes {
         #[command(subcommand)]
         command: ChangesCommand,
+    },
+    /// Amend retained provider-job limits without discarding accounting.
+    Jobs {
+        #[command(subcommand)]
+        command: JobsCommand,
     },
     /// Reconcile interrupted changes while preserving unfamiliar edits.
     Recover,
@@ -188,6 +198,27 @@ pub enum Command {
 }
 #[derive(Debug, Subcommand)]
 pub enum PageCommand {
+    /// Initialize plain Markdown with a stable page identity and draft envelope.
+    Init {
+        /// Plain UTF-8 Markdown body; use - for bounded standard input.
+        #[arg(long)]
+        file: PathBuf,
+        /// Human-readable title for the new draft page.
+        #[arg(long)]
+        title: String,
+        /// Stable page identity; omit to allocate one.
+        #[arg(long)]
+        id: Option<RecordId>,
+        /// New vault-relative path; defaults to pages/<record-id>.md.
+        #[arg(long)]
+        path: Option<VaultRelativePath>,
+    },
+    /// Prepare/apply 1–16 coupled page updates, each with its own author hash.
+    Batch {
+        /// JSON request matching schema page-batch; use - for stdin.
+        #[arg(long)]
+        file: PathBuf,
+    },
     /// Create a page or replace one using its expected content hash.
     Put {
         /// Markdown page file with a valid page envelope; use - for stdin.
@@ -271,6 +302,17 @@ pub enum IndexCommand {
 }
 #[derive(Debug, Subcommand)]
 pub enum ChangesCommand {
+    /// Resolve a durable conflict using an inspected, hash-bound request.
+    Resolve {
+        /// Conflicted changeset ID to inspect or resolve.
+        id: RecordId,
+        /// Produce a resolution request with --dry-run.
+        #[arg(long, value_enum, default_value = "resume")]
+        mode: ResolutionMode,
+        /// JSON request returned by changes resolve --dry-run; use - for stdin.
+        #[arg(long)]
+        file: Option<PathBuf>,
+    },
     /// Inspect a retained changeset and its exact proposed operations.
     Show {
         /// Stable record or changeset ID returned by an earlier command.
@@ -293,6 +335,87 @@ pub enum ChangesCommand {
     Rollback {
         /// Stable record or changeset ID returned by an earlier command.
         id: RecordId,
+    },
+}
+#[derive(Debug, Clone, Copy, ValueEnum)]
+pub enum ResolutionMode {
+    Resume,
+    Abandon,
+}
+impl ResolutionMode {
+    pub fn mode(self) -> crate::changes::ConflictResolutionMode {
+        match self {
+            Self::Resume => crate::changes::ConflictResolutionMode::Resume,
+            Self::Abandon => crate::changes::ConflictResolutionMode::Abandon,
+        }
+    }
+}
+#[derive(Debug, Subcommand)]
+pub enum JobsCommand {
+    /// Inspect retained progress, effective limits and unknown holds without provider access.
+    Status {
+        /// Retained provider run ID returned by the original operation.
+        #[arg(long)]
+        run: RecordId,
+    },
+    /// Explicitly inspect or remove bounded private attempt diagnostics.
+    Diagnostics {
+        #[command(subcommand)]
+        command: DiagnosticsCommand,
+    },
+    /// Explicitly preserve or raise cumulative limits of a planned/paused/stopped job.
+    Amend {
+        /// Retained provider run ID whose cumulative limits will be raised.
+        #[arg(long)]
+        run: RecordId,
+        /// Brief explanation retained with the amendment.
+        #[arg(long)]
+        reason: String,
+        #[command(flatten)]
+        remote: Box<super::remote::RemoteArguments>,
+    },
+}
+#[derive(Debug, Clone, Copy, ValueEnum)]
+pub enum DiagnosticKindArgument {
+    SemanticRejection,
+    HttpError,
+}
+impl DiagnosticKindArgument {
+    pub fn kind(self) -> crate::jobs::diagnostics::DiagnosticKind {
+        match self {
+            Self::SemanticRejection => crate::jobs::diagnostics::DiagnosticKind::SemanticRejection,
+            Self::HttpError => crate::jobs::diagnostics::DiagnosticKind::HttpError,
+        }
+    }
+}
+#[derive(Debug, Subcommand)]
+pub enum DiagnosticsCommand {
+    /// Metadata is safe by default; --raw explicitly includes private provider text.
+    Inspect {
+        /// Retained provider run ID.
+        #[arg(long)]
+        run: RecordId,
+        /// Attempt ID from jobs status; identifies the private diagnostic.
+        #[arg(long)]
+        attempt: RecordId,
+        /// Diagnostic family to inspect.
+        #[arg(long, value_enum)]
+        kind: DiagnosticKindArgument,
+        /// Include bounded private provider text instead of safe metadata only.
+        #[arg(long)]
+        raw: bool,
+    },
+    /// Prune only a settled diagnostic with known billing; unknown holds remain protected.
+    Prune {
+        /// Retained provider run ID.
+        #[arg(long)]
+        run: RecordId,
+        /// Settled, known-billing attempt ID from jobs status.
+        #[arg(long)]
+        attempt: RecordId,
+        /// Diagnostic family to remove explicitly.
+        #[arg(long, value_enum)]
+        kind: DiagnosticKindArgument,
     },
 }
 #[derive(Debug, Clone, Copy, ValueEnum)]
@@ -550,6 +673,13 @@ impl Command {
             Self::Schema { .. } => "schema",
             Self::Init { .. } => "init",
             Self::Read { .. } => "read",
+            Self::Storage(options) => options.command.name(),
+            Self::Page {
+                command: PageCommand::Init { .. },
+            } => "page init",
+            Self::Page {
+                command: PageCommand::Batch { .. },
+            } => "page batch",
             Self::Page {
                 command: PageCommand::Put { .. },
             } => "page put",
@@ -614,6 +744,27 @@ impl Command {
             Self::Changes {
                 command: ChangesCommand::Rollback { .. },
             } => "changes rollback",
+            Self::Changes {
+                command: ChangesCommand::Resolve { .. },
+            } => "changes resolve",
+            Self::Jobs {
+                command: JobsCommand::Amend { .. },
+            } => "jobs amend",
+            Self::Jobs {
+                command: JobsCommand::Status { .. },
+            } => "jobs status",
+            Self::Jobs {
+                command:
+                    JobsCommand::Diagnostics {
+                        command: DiagnosticsCommand::Inspect { .. },
+                    },
+            } => "jobs diagnostics inspect",
+            Self::Jobs {
+                command:
+                    JobsCommand::Diagnostics {
+                        command: DiagnosticsCommand::Prune { .. },
+                    },
+            } => "jobs diagnostics prune",
             Self::Recover => "recover",
             Self::Migrate { .. } => "migrate",
         }

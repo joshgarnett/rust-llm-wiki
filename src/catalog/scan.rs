@@ -10,7 +10,7 @@ use crate::{
         LinkResolution, ParsedNote, RegistryEntry, extract_links, parse_note, resolve_typed,
         resolve_untyped,
     },
-    sources::{SourceView, revision::canonical_path},
+    sources::{SourceView, identity::readable_ids, revision::canonical_path},
     vault::{ExpectedState, VaultFs},
 };
 use pulldown_cmark::{Event, Parser, Tag, TagEnd};
@@ -19,7 +19,7 @@ use std::collections::{BTreeMap, BTreeSet};
 /// Cache identity binds every semantic adapter, not merely frontmatter parsing.
 pub fn parser_fingerprint() -> Blake3Hash {
     Blake3Hash::digest(format!(
-        "{};catalog-v1;canonical-membership-bytewise-v1;source-original-content-span-quote-fence-structural-v2;typed-id-companion-v1;decisions-explicit-conflict-cycle-v1;mention-complete-artifact-membership-explicit-scope-v1;entity-explicit-exhaustive-remap-receipt-supersession-v1;eligibility-full-note-transitive-v1;packet-source-lifecycle-v2;derived-source-lifecycle-v1;opposing-accepted-assertions-v1;markdown-lexical-events-v1;graph-readable-directed-endpoints-v1;unicode61 remove_diacritics 2;no-stemming",
+        "{};catalog-v1;canonical-membership-bytewise-v1;source-original-content-span-quote-fence-structural-v2;typed-id-companion-v1;decisions-explicit-conflict-cycle-v1;mention-complete-artifact-membership-explicit-scope-v1;entity-explicit-exhaustive-remap-receipt-supersession-v1;eligibility-full-note-transitive-v1;packet-source-lifecycle-v2;derived-source-lifecycle-v1;opposing-accepted-assertions-v1;evidence-navigation-diagnostics-v1;bookkeeping-kind-v2;markdown-lexical-events-v1;graph-readable-directed-endpoints-v1;unicode61 remove_diacritics 2;no-stemming",
         crate::records::parser_fingerprint()
     ))
 }
@@ -98,14 +98,14 @@ pub(crate) fn readable_id(note: &ParsedNote) -> Option<RecordId> {
     }
 }
 
-/// Operational copies remain operational when malformed metadata or duplicate
-/// IDs prevent canonical adoption. Only a readable top-level declaration
-/// qualifies; arbitrary author prose still receives ordinary discovery.
-fn declared_operational_kind(note: &ParsedNote) -> Option<RecordKind> {
-    let operational = |kind| {
+/// Bookkeeping copies retain their kind when malformed metadata or duplicate
+/// IDs prevent adoption. A readable top-level declaration is required.
+fn declared_bookkeeping_kind(note: &ParsedNote) -> Option<RecordKind> {
+    let bookkeeping = |kind| {
         matches!(
             kind,
-            RecordKind::ExtractionPacket
+            RecordKind::Decision
+                | RecordKind::ExtractionPacket
                 | RecordKind::Extraction
                 | RecordKind::Run
                 | RecordKind::RunEvent
@@ -124,71 +124,18 @@ fn declared_operational_kind(note: &ParsedNote) -> Option<RecordKind> {
                     .and_then(|kind| kind.parse().ok())
             })
         });
-    declared.filter(|kind| operational(*kind)).or_else(|| {
+    declared.filter(|kind| bookkeeping(*kind)).or_else(|| {
         isolated_fields(note).iter().find_map(|fields| {
             fields
                 .get("wiki_kind")
                 .and_then(serde_json::Value::as_str)
                 .and_then(|kind| kind.parse().ok())
-                .filter(|kind| operational(*kind))
+                .filter(|kind| bookkeeping(*kind))
         })
     })
 }
 
-fn readable_ids(note: &ParsedNote) -> BTreeSet<RecordId> {
-    if let Some(value) = note
-        .fields
-        .as_ref()
-        .and_then(|f| f.get("wiki_id"))
-        .and_then(serde_json::Value::as_str)
-    {
-        return RecordId::new(value).into_iter().collect();
-    }
-    isolated_fields(note)
-        .iter()
-        .filter_map(|fields| fields.get("wiki_id"))
-        .filter_map(serde_json::Value::as_str)
-        .filter_map(|value| RecordId::new(value).ok())
-        .collect()
-}
-
-/// Bounded strict parsing of independent top-level fields is only a reservation
-/// aid for malformed envelopes. These fields never create adopted records.
-pub(crate) fn isolated_fields(note: &ParsedNote) -> Vec<BTreeMap<String, serde_json::Value>> {
-    let Some(text) = note.literal_text() else {
-        return Vec::new();
-    };
-    let mut lines = text.strip_prefix('\u{feff}').unwrap_or(text).lines();
-    if lines.next() != Some("---") {
-        return Vec::new();
-    }
-    let envelope: Vec<_> = lines.take_while(|line| *line != "---").collect();
-    let mut fields = Vec::new();
-    let mut index = 0;
-    while index < envelope.len() {
-        let line = envelope[index];
-        if line.is_empty() || line.starts_with([' ', '\t']) {
-            index += 1;
-            continue;
-        }
-        let start = index;
-        index += 1;
-        while index < envelope.len()
-            && (envelope[index].is_empty() || envelope[index].starts_with([' ', '\t']))
-        {
-            index += 1;
-        }
-        let candidate = envelope[start..index].join("\n");
-        if candidate.len() > crate::records::ParseLimits::default().max_envelope_bytes {
-            continue;
-        }
-        let candidate = parse_note(format!("---\n{candidate}\n---\n").as_bytes());
-        if let Some(parsed) = candidate.fields {
-            fields.push(parsed);
-        }
-    }
-    fields
-}
+pub(crate) use crate::sources::identity::isolated_fields;
 
 pub(crate) fn diagnostic(
     path: &VaultRelativePath,
@@ -300,8 +247,8 @@ fn project_input(fs: &VaultFs, input: &ValidationInput, closed: bool) -> Result<
             .filter(|row| &row.path == path);
         let raw_text = note.literal_text().unwrap_or_default().to_owned();
         let body = std::str::from_utf8(note.body()).unwrap_or_default();
-        let operational = declared_operational_kind(note);
-        let excluded = operational.is_some()
+        let bookkeeping = declared_bookkeeping_kind(note);
+        let excluded = bookkeeping.is_some_and(|kind| kind != RecordKind::Decision)
             || row.is_some_and(|r| {
                 matches!(
                     r.record.kind(),
@@ -321,7 +268,7 @@ fn project_input(fs: &VaultFs, input: &ValidationInput, closed: bool) -> Result<
             path: path.clone(),
             hash: note.source_hash.clone(),
             record_id: row.map(|r| r.record.id().clone()),
-            kind: row.map(|r| r.record.kind()).or(operational),
+            kind: row.map(|r| r.record.kind()).or(bookkeeping),
             title,
             aliases: row.map_or_else(Vec::new, |r| list(&r.record, "aliases")),
             headings,

@@ -45,6 +45,102 @@ fn app(root: &VaultRoot, dry: bool) -> OfflineApp {
 fn page(name: &str, body: &str) -> Vec<u8> {
     format!("---\nwiki_schema: \"1\"\nwiki_id: {name}\nwiki_kind: page\ntitle: {name}\nwiki_status: reviewed\n---\n{body}").into_bytes()
 }
+
+#[test]
+fn coupled_pages_validate_together_and_preserve_intervening_author_edits() {
+    let (temp, root) = fixture();
+    let app = app(&root, false);
+    let topic = page("topic", "# Cafes\n\n[Browse the index](guide.md)\n");
+    let index = page("index", "# Local guide\n\n[Read the cafes](topic.md)\n");
+    let batch = |topic: Vec<u8>, index: Vec<u8>, hashes: Option<(Blake3Hash, Blake3Hash)>| {
+        PageBatchRequest {
+            title: "Update linked cafe guide and index".into(),
+            pages: vec![
+                PageUpdate {
+                    path: rel("pages/topic.md"),
+                    markdown: String::from_utf8(topic).unwrap(),
+                    if_match: hashes.as_ref().map(|v| v.0.clone()),
+                },
+                PageUpdate {
+                    path: rel("pages/guide.md"),
+                    markdown: String::from_utf8(index).unwrap(),
+                    if_match: hashes.as_ref().map(|v| v.1.clone()),
+                },
+            ],
+            read_preconditions: vec![],
+        }
+    };
+    let created = app
+        .page_batch(batch(topic.clone(), index.clone(), None))
+        .unwrap();
+    assert_eq!(created.status, Some(ChangeStatus::Committed));
+    let staged = OfflineApp::new(
+        VaultFs::new(root.clone()),
+        OperationOptions {
+            stage_only: true,
+            offline: true,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let proposal = staged
+        .page_batch(batch(
+            page("topic", "# Updated cafes\n\n[index](guide.md)\n"),
+            page("index", "# Updated guide\n\n[topic](topic.md)\n"),
+            Some((Blake3Hash::digest(&topic), Blake3Hash::digest(&index))),
+        ))
+        .unwrap();
+    let authored = page(
+        "topic",
+        "# Cafes\n\nHuman note: ask about outdoor seating.\n[index](guide.md)\n",
+    );
+    fs::write(temp.path().join("pages/topic.md"), &authored).unwrap();
+    let error = app
+        .changes_apply(proposal.change.unwrap().change_id)
+        .unwrap_err();
+    assert!(matches!(
+        error.code,
+        ErrorCode::ContentConflict | ErrorCode::FreshnessConflict
+    ));
+    assert_eq!(
+        fs::read(temp.path().join("pages/topic.md")).unwrap(),
+        authored
+    );
+    assert_eq!(fs::read(temp.path().join("pages/guide.md")).unwrap(), index);
+}
+
+#[test]
+fn page_initializer_creates_draft_identity_and_refuses_overwrite() {
+    let (temp, root) = fixture();
+    let app = app(&root, false);
+    let created = app
+        .page_initialize(
+            Some(rel("pages/cafes.md")),
+            Some(id("cafes")),
+            "Cafes & gardens".into(),
+            "# A readable guide\n\nHost citations go here.\n".into(),
+        )
+        .unwrap();
+    assert_eq!(created.allocated_ids["pages/cafes.md"], id("cafes"));
+    let original = fs::read(temp.path().join("pages/cafes.md")).unwrap();
+    let note = parse_note(&original);
+    assert_eq!(note.canonical.unwrap().string("wiki_status"), Some("draft"));
+    assert_eq!(
+        app.page_initialize(
+            Some(rel("pages/cafes.md")),
+            Some(id("cafes")),
+            "Replacement".into(),
+            "New body".into()
+        )
+        .unwrap_err()
+        .code,
+        ErrorCode::ContentConflict
+    );
+    assert_eq!(
+        fs::read(temp.path().join("pages/cafes.md")).unwrap(),
+        original
+    );
+}
 fn request(content: &[u8]) -> CaptureRequest {
     CaptureRequest {
         title: "Captured fixture".into(),
@@ -659,6 +755,22 @@ fn schema_migration_is_explicit_and_guarded() {
         .code,
         ErrorCode::CapabilityUnavailable
     );
+}
+#[test]
+fn vault_schema_two_requires_coordinated_storage_migration() {
+    let (temp, root) = fixture();
+    let bytes = fs::read(temp.path().join("WIKI.md")).unwrap();
+    let error = app(&root, false)
+        .migrate(
+            RecordSelector::Path(rel("WIKI.md")),
+            Blake3Hash::digest(&bytes),
+            "2",
+        )
+        .unwrap_err();
+    assert_eq!(error.code, ErrorCode::Usage);
+    assert_eq!(error.details["reason"], "storage_migration_required");
+    assert_eq!(fs::read(temp.path().join("WIKI.md")).unwrap(), bytes);
+    assert!(!temp.path().join(".wiki/state/storage/layout.json").exists());
 }
 #[test]
 fn dry_run_missing_cache_does_not_create_lock_or_cache() {

@@ -1,6 +1,6 @@
-# Markdown wiki format, draft version 1
+# Markdown wiki format
 
-Status: proposed, 2026-09-28. This is a format contract to implement and test, not an implemented standard. It incorporates the user's preference for Obsidian-compatible Markdown, best-effort recovery from files, and resilience to heading edits.
+Status: implemented record envelope with storage schema2 extension. The original 2026-09-28 layout and examples below describe schema1; [current contracts](current-contracts.md) and [technical storage](technical/storage.md#storage-schema2-and-explicit-retention) describe current managed paths and validation. Schema2 applies to `WIKI.md` after coordinated `storage cleanup`; ordinary source/page/graph records retain schema1. IDs, citation bytes and editable headings retain their original contracts.
 
 ## Design rule
 
@@ -146,3 +146,5 @@ Default semantic inputs are selected knowledge pages, source text, and readable 
 | In-flight locks, network responses, unrecorded spending | Reconcile operational journals; not a Markdown-only guarantee |
 
 The test is semantic recovery of recorded knowledge, not a byte-identical SQLite database. Missing/damaged notes, ambiguous IDs, unsupported schema versions, and absent attachments produce a recovery report. The CLI must not hide incomplete recovery behind a successful index build.
+
+Storage schema2 keeps machine transaction payloads, extraction packets and detailed run heads under `.wiki/retained` using application logical paths. Readable knowledge, captured source revisions and human research report Markdown remain visible. A complete supported backup/restore includes `.wiki/state` and `.wiki/retained`; copying visible Markdown alone loses transaction/accounting authority. Cache can be rebuilt. Use `storage inventory`, `storage plan` and guarded `storage cleanup` for explicit migration/retention, and `changes show`, `jobs status --run` or `read --path` to inspect logical records. Manual directory moves/deletions do not migrate a vault.

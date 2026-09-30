@@ -212,6 +212,7 @@ pub fn runtime<'a>(
     dispatcher: &'a Dispatcher,
 ) -> EmbeddingRuntime<'a> {
     EmbeddingRuntime {
+        requested_limits: None,
         service,
         dispatcher,
         job_options: options(),

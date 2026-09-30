@@ -1,6 +1,6 @@
 # Implementation plan
 
-Status: proposed, 2026-09-28. The [technical design and implementation handoff](technical/implementation-handoff.md) refines this product roadmap into interfaces and ordered work. This is a dependency-ordered plan, not a promised calendar schedule. No CLI is implemented yet.
+Status: historical proposal, 2026-09-28. The [current contract and coverage map](current-contracts.md) and [cleanup register](execution/CLEANUP.md) describe implemented behavior and remaining gates. References below to a future CLI, standalone research executor or unshipped skill are preserved as original planning, not current capability claims. Research now uses host-agent handoffs; the maintained skill ships with the binary.
 
 ## Product choices
 

@@ -221,6 +221,19 @@ fn evidence(
         } else {
             contradiction_total += 1;
         }
+        // Source filtering scopes emitted evidence as well as candidate assertions.
+        // Totals deliberately precede this check so the omitted counts disclose
+        // support and counterevidence hidden by the caller's source scope.
+        if !plan.filters.source_ids.is_empty()
+            && !row.record.string("wiki_source_id").is_some_and(|id| {
+                plan.filters
+                    .source_ids
+                    .iter()
+                    .any(|source| source.as_str() == id)
+            })
+        {
+            continue;
+        }
         // Keep current refs first; historical/ineligible refs remain counted omissions
         // unless explicitly requested. None can acquire a citation by discovery alone.
         if row.eligibility != Eligibility::Current && !plan.filters.include_historical {
@@ -768,6 +781,45 @@ fn build(
         omitted_opposing_assertions,
     }))
 }
+fn provenance_field(key: &str) -> bool {
+    key.starts_with("wiki_")
+        && !matches!(key, "wiki_id" | "wiki_subject_id" | "wiki_object_id")
+        && (key.ends_with("_id")
+            || key.ends_with("_ids")
+            || matches!(
+                key,
+                "wiki_current_revision" | "wiki_revisions" | "wiki_source_revision"
+            ))
+}
+
+/// Verify directed navigation against the canonical link/provenance projection.
+pub(crate) fn navigation_is_canonical(reader: &ReaderSnapshot, edge: &NavigationEdge) -> bool {
+    let Some(target) = edge.to.record.as_ref() else {
+        return false;
+    };
+    match edge.reason {
+        NavigationReason::PageLink => reader.projection().links.iter().any(|link| {
+            link.from_path == edge.from.path && link.target_id.as_ref() == Some(&target.record_id)
+        }),
+        NavigationReason::Provenance => reader
+            .projection()
+            .records
+            .values()
+            .find(|row| row.path == edge.from.path)
+            .is_some_and(|row| {
+                row.record.fields().iter().any(|(key, value)| {
+                    provenance_field(key)
+                        && (value.as_str() == Some(target.record_id.as_str())
+                            || value.as_array().is_some_and(|items| {
+                                items
+                                    .iter()
+                                    .any(|item| item.as_str() == Some(target.record_id.as_str()))
+                            }))
+                })
+            }),
+    }
+}
+
 fn navigation_edges(
     reader: &ReaderSnapshot,
     row: &RecordRow,
@@ -806,16 +858,7 @@ fn navigation_edges(
         });
     }
     for (key, value) in row.record.fields() {
-        if key == "wiki_id" || !key.starts_with("wiki_") {
-            continue;
-        }
-        if !(key.ends_with("_id")
-            || key.ends_with("_ids")
-            || matches!(
-                key.as_str(),
-                "wiki_current_revision" | "wiki_revisions" | "wiki_source_revision"
-            ))
-        {
+        if !provenance_field(key) {
             continue;
         }
         let values: Vec<_> = value
@@ -837,9 +880,6 @@ fn navigation_edges(
             else {
                 continue;
             };
-            if matches!(key.as_str(), "wiki_subject_id" | "wiki_object_id") {
-                continue;
-            }
             edges.push(NavigationEdge {
                 from: from.clone(),
                 to: locator(reader, target),

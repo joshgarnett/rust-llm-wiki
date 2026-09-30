@@ -468,6 +468,22 @@ impl ProviderConfig {
     }
 }
 impl TrustedService {
+    /// Checked service dimension; reading it does not resolve authentication.
+    pub fn validate_generation_output_limit(&self, requested: u64) -> Result<()> {
+        let cap = self.service.max_output_tokens.unwrap_or(4096);
+        if self.summary.capability != Capability::Generate || requested == 0 || requested > cap {
+            let mut error = WikiError::new(
+                ErrorCode::Usage,
+                format!(
+                    "requested generation output limit {requested} exceeds or is invalid for the effective service cap {cap}; configure services.{}.max_output_tokens (default 4096) or lower --max-output-tokens",
+                    self.summary.service_id
+                ),
+            );
+            error.details = serde_json::json!({"reason":"generation_output_limit","requested":requested,"effective_service_cap":cap,"configuration_key":format!("services.{}.max_output_tokens",self.summary.service_id),"next_action":"lower --max-output-tokens or explicitly raise the private service cap"});
+            return Err(error);
+        }
+        Ok(())
+    }
     pub fn summary(&self) -> ServiceSummary {
         self.summary.clone()
     }

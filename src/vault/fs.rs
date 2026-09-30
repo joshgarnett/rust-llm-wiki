@@ -146,6 +146,7 @@ impl DurableIo for NativeIo {
 pub struct VaultFs {
     root: VaultRoot,
     io: Arc<dyn DurableIo>,
+    storage_recovery: bool,
 }
 pub struct StagedFile {
     path: PathBuf,
@@ -172,13 +173,41 @@ impl VaultFs {
         Self::with_io(root, Arc::new(NativeIo))
     }
     pub fn with_io(root: VaultRoot, io: Arc<dyn DurableIo>) -> Self {
-        Self { root, io }
+        Self {
+            root,
+            io,
+            storage_recovery: false,
+        }
     }
     pub fn root(&self) -> &VaultRoot {
         &self.root
     }
     pub(crate) fn durable_io(&self) -> Arc<dyn DurableIo> {
         Arc::clone(&self.io)
+    }
+    /// Only the storage coordinator may continue an immutable pending cleanup.
+    pub(crate) fn for_storage_recovery(&self) -> Self {
+        Self {
+            root: self.root.clone(),
+            io: Arc::clone(&self.io),
+            storage_recovery: true,
+        }
+    }
+    pub(crate) fn require_storage_ready(&self) -> Result<()> {
+        if !self.storage_recovery
+            && crate::storage::layout::raw_read(
+                &self.root,
+                &VaultRelativePath::new(".wiki/state/storage/cleanup.json")?,
+                64 * 1024 * 1024,
+            )?
+            .is_some()
+        {
+            return Err(WikiError::new(
+                ErrorCode::RecoveryRequired,
+                "storage cleanup is interrupted; run `lwiki storage cleanup` before ordinary writes",
+            ));
+        }
+        Ok(())
     }
     fn require_operational(target: &VaultRelativePath) -> Result<()> {
         if !target.as_str().starts_with(".wiki/state/") {
@@ -196,6 +225,7 @@ impl VaultFs {
         permit: &WriterPermit,
     ) -> Result<DirectorySync> {
         permit.require_root(&self.root)?;
+        self.require_storage_ready()?;
         Self::require_operational(target)?;
         self.root
             .validate_portable_paths(std::slice::from_ref(target))?;
@@ -221,6 +251,7 @@ impl VaultFs {
         permit: &WriterPermit,
     ) -> Result<()> {
         permit.require_root(&self.root)?;
+        self.require_storage_ready()?;
         Self::require_operational(target)?;
         let path = self.root.resolve(target)?;
         // Truncation never creates a missing operational file.
@@ -252,6 +283,7 @@ impl VaultFs {
         permit: &WriterPermit,
     ) -> Result<DirectorySync> {
         permit.require_root(&self.root)?;
+        self.require_storage_ready()?;
         let path = self.root.resolve(target)?;
         match File::open(&path) {
             Ok(file) => self
@@ -282,8 +314,10 @@ impl VaultFs {
         permit: &WriterPermit,
     ) -> Result<DirectorySync> {
         permit.require_root(&self.root)?;
+        self.require_storage_ready()?;
         self.root
             .validate_portable_paths(std::slice::from_ref(directory))?;
+        let directory = crate::storage::layout::physical_relative(&self.root, directory)?;
         let mut relative = String::new();
         let mut support = DirectorySync::Supported;
         for part in directory.as_str().split('/') {
@@ -321,10 +355,31 @@ impl VaultFs {
         permit: &WriterPermit,
     ) -> Result<StagedFile> {
         permit.require_root(&self.root)?;
+        self.require_storage_ready()?;
         self.root
             .validate_portable_paths(std::slice::from_ref(target))?;
         let destination = self.root.resolve(target)?;
         let parent = destination.parent().expect("managed file has parent");
+        // Logical operational files can have a managed physical parent different
+        // from their visible siblings. Ensure only that contained parent.
+        if crate::storage::layout::managed_path(target).is_some()
+            && crate::storage::layout::active(&self.root)?
+        {
+            let relative = parent
+                .strip_prefix(self.root.path())
+                .map_err(|_| WikiError::invalid("mapped stage escapes vault"))?
+                .to_str()
+                .ok_or_else(|| WikiError::invalid("mapped parent UTF-8 invalid"))?;
+            if !relative.is_empty()
+                && self.ensure_directory(&VaultRelativePath::new(relative)?, permit)?
+                    == DirectorySync::Unsupported
+            {
+                return Err(WikiError::new(
+                    ErrorCode::CapabilityUnavailable,
+                    "mapped parent durability unavailable",
+                ));
+            }
+        }
         let path = parent.join(format!(".lwiki-stage-{}.tmp", uuid::Uuid::now_v7()));
         let mut file = match self.io.create_stage(&path) {
             Ok(file) => file,
@@ -373,6 +428,7 @@ impl VaultFs {
         permit: &WriterPermit,
     ) -> Result<DirectorySync> {
         permit.require_root(&self.root)?;
+        self.require_storage_ready()?;
         if staged.root != self.root {
             return Err(WikiError::invalid("stage belongs to another vault"));
         }
@@ -411,6 +467,7 @@ impl VaultFs {
         permit: &WriterPermit,
     ) -> Result<DirectorySync> {
         permit.require_root(&self.root)?;
+        self.require_storage_ready()?;
         self.root
             .validate_portable_paths(std::slice::from_ref(target))?;
         let destination = self.root.resolve(target)?;

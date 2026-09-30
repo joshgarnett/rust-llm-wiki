@@ -9,6 +9,8 @@ use std::{
 };
 const FORWARD: &str = "assertion_00000000-0000-7000-8000-00000000000a";
 const PAGE: &str = "page_00000000-0000-7000-8000-000000000011";
+const SOURCE_A: &str = "source_00000000-0000-7000-8000-000000000005";
+const SOURCE_B: &str = "source_00000000-0000-7000-8000-000000000006";
 fn copy(from: &Path, to: &Path) {
     fs::create_dir_all(to).unwrap();
     for entry in fs::read_dir(from).unwrap() {
@@ -171,6 +173,134 @@ fn context_cli_preserves_scopes_stances_and_exact_text_budget() {
             .iter()
             .all(|p| p["label"] == "note_text" && p["citations"].as_array().unwrap().is_empty())
     );
+}
+
+#[test]
+fn source_scope_limits_graph_and_context_evidence_with_counterevidence_counts() {
+    let f = fixture();
+    let graph = ok(
+        f.path(),
+        &[
+            "graph",
+            "query",
+            "uses",
+            "--strategy",
+            "relationship",
+            "--source-id",
+            SOURCE_B,
+        ],
+    );
+    let forward = graph["data"]["assertions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|a| a["record_ref"]["record_id"] == FORWARD)
+        .unwrap();
+    assert!(
+        forward["support"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|e| e["source"]["source_id"] == SOURCE_B)
+    );
+    assert!(forward["contradictions"].as_array().unwrap().is_empty());
+    assert!(forward["omitted_contradictions"].as_u64().unwrap() >= 1);
+    assert!(forward["omitted_support"].as_u64().unwrap() >= 1);
+    assert!(
+        graph["data"]["warnings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|w| w.as_str().unwrap().contains("outside the selected sources"))
+    );
+
+    let context = ok(
+        f.path(),
+        &[
+            "context",
+            "uses",
+            "--target",
+            "graph",
+            "--strategy",
+            "relationship",
+            "--source-id",
+            SOURCE_B,
+        ],
+    );
+    let bundle = context["data"]["bundles"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|b| b["assertion"]["record_id"] == FORWARD)
+        .unwrap();
+    assert!(bundle["omitted_contradictions"].as_u64().unwrap() >= 1);
+    assert!(
+        context["data"]["passages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .flat_map(|p| p["citations"].as_array().unwrap())
+            .all(|c| c["reference"]["source_id"] == SOURCE_B)
+    );
+    assert!(!context["data"]["text"].as_str().unwrap().contains(SOURCE_A));
+}
+
+#[test]
+fn requested_navigation_is_labeled_and_budget_omissions_are_visible() {
+    let f = fixture();
+    let page = f.path().join("knowledge/entities/north_lab.md");
+    let mut bytes = fs::read(&page).unwrap();
+    bytes.extend_from_slice(b"\n[[south_lab.md]]\n");
+    fs::write(&page, bytes).unwrap();
+    let nav = ok(
+        f.path(),
+        &[
+            "context",
+            "North Lab",
+            "--target",
+            "graph",
+            "--strategy",
+            "entity",
+            "--navigation",
+            "--verification-max-elapsed-ms",
+            "30000",
+        ],
+    );
+    let text = nav["data"]["text"].as_str().unwrap();
+    assert!(
+        text.contains("[navigation; PageLink; no asserted relationship]"),
+        "{text}"
+    );
+    assert!(text.contains("north_lab.md") && text.contains("south_lab.md"));
+    assert_eq!(nav["data"]["usage"]["rendered_bytes"], text.len());
+    assert!(nav["data"]["usage"]["graph_bytes"].as_u64().unwrap() > 0);
+    let small = ok(
+        f.path(),
+        &[
+            "context",
+            "North Lab",
+            "--target",
+            "graph",
+            "--strategy",
+            "entity",
+            "--navigation",
+            "--max-bytes",
+            "100",
+            "--max-tokens",
+            "25",
+            "--verification-max-elapsed-ms",
+            "30000",
+        ],
+    );
+    assert!(
+        small["data"]["omissions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|o| o["reason"].as_str().unwrap().starts_with("navigation_"))
+    );
+    assert_eq!(small["meta"]["partial"], true);
+    assert!(small["data"]["text"].as_str().unwrap().len() <= 100);
 }
 
 #[test]
