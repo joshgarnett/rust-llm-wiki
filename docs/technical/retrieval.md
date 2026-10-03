@@ -77,6 +77,8 @@ All values below are **proposed tuning defaults**, not measured quality or provi
 | Context total / hybrid graph share | 3,000 estimated tokens and 12,000 bytes / at most 50% |
 | Evidence passages per assertion | 2 support + 1 contradiction |
 
+The final rendered context defaults to 12,000 bytes / 3,000 estimated tokens. Callers can explicitly raise both limits to 16,384 bytes / 4,096 estimated tokens. Instruction and output reservations share these limits; the first exhausted budget wins. Counts use UTF-8 bytes divided by four, rounded up, rather than a model tokenizer. These bounds cover rendered context, not the complete JSON response or an intermediate host-selection task. The historical evaluation profile uses 6,000 bytes / 1,500 estimated tokens; increasing a limit does not establish an improvement in completeness.
+
 Query limits are application bounds, with [comparison and measurement rationale](../query-limits.md). Every accepted lexical whitespace phrase participates in the quoted OR expression; excess input returns `USAGE`, without truncation. The whitespace-term ceiling applies to lexical search (including the lexical branch of hybrid search), not literal or semantic-only input. Embedding spaces independently enforce `max_input_bytes` on the complete query plus prefix (default 12,000 bytes); exceeding that bound returns `BUDGET_EXCEEDED` before dispatch. Passage selection has its own 256 distinct tokenized-term work limit and discloses any omission: punctuation can turn one whitespace phrase into several tokens.
 
 

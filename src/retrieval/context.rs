@@ -83,9 +83,9 @@ fn normalize_request(request: &ContextRequest) -> Result<ContextRequest> {
     let b = &request.budget;
     let v = &request.verification_budget;
     if b.max_bytes == 0
-        || b.max_bytes > 12000
+        || b.max_bytes > 16 * 1024
         || b.max_tokens == 0
-        || b.max_tokens > 3000
+        || b.max_tokens > 4096
         || b.instruction_bytes
             .checked_add(b.output_bytes)
             .is_none_or(|n| n > b.max_bytes)

@@ -34,6 +34,8 @@ If a complete embedding cache already exists for the question and sources, use `
 
 ## Limits and failures
 
+The examples use the historical evaluation budget of 6,000 bytes / 1,500 estimated tokens for final context. The CLI default is 12,000 / 3,000. To allow up to 16 KiB, pass `--max-bytes 16384 --max-tokens 4096` in **both** commands. Increasing only the byte limit leaves the token limit in force. These are ceilings, not output targets, and include any instruction/output reservations. They bound the rendered context, not the complete JSON envelope or the intermediate selector task. A larger budget still needs evaluation for completeness and irrelevant material.
+
 The task contains at most 80 candidate cards and 130,048 UTF-8 bytes, with 1,024 additional bytes reserved by the evaluation protocol for transport instructions. Byte limits include metadata and JSON escaping. Owners are interleaved before truncation to preserve source coverage; a bounded pool can still omit required evidence. The byte/4 token estimate is not actual model usage.
 
 A reply may contain at most 20 unique supplied IDs and 4,096 bytes. Unknown IDs, duplicate fields or IDs, extra fields and malformed replies fail validation. `--selection -` reads a reply from standard input. File input must be a regular file.

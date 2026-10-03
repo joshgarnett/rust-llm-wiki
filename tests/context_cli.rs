@@ -500,8 +500,8 @@ fn context_cli_dry_run_is_pure_and_bad_requests_never_claim_verification() {
     );
     assert_eq!(tree(f.path()), before);
     for flags in [
-        vec!["--max-bytes", "12001"],
-        vec!["--max-tokens", "3001"],
+        vec!["--max-bytes", "16385"],
+        vec!["--max-tokens", "4097"],
         vec!["--limit", "51"],
         vec!["--target", "graph", "--depth", "3"],
         vec!["--instruction-bytes", "12001"],
@@ -682,6 +682,73 @@ fn context_default_retains_surrounding_explanation_and_explicit_excerpt_bounds_w
             <= 240
     );
     assert!(default["data"]["text"].as_str().unwrap().len() <= 12000);
+}
+
+#[test]
+fn explicit_16k_context_budget_preserves_token_and_reservation_bounds() {
+    let f = fixture();
+    fs::create_dir_all(f.path().join("knowledge/pages")).unwrap();
+    for n in 100..120 {
+        fs::write(
+            f.path().join(format!("knowledge/pages/budget-{n}.md")),
+            format!(
+                "---\nwiki_schema: \"1\"\nwiki_id: page_00000000-0000-7000-8000-{n:012}\nwiki_kind: page\ntitle: Budget {n}\nwiki_status: reviewed\n---\n# Budget {n}\n\nbudgetprobe {}\n",
+                "Evidence café numbered example. ".repeat(27)
+            ),
+        )
+        .unwrap();
+    }
+    let run = |bytes: &str, tokens: &str, extra: &[&str]| {
+        let mut args = vec![
+            "context",
+            "budgetprobe",
+            "--kind",
+            "page",
+            "--limit",
+            "20",
+            "--max-bytes",
+            bytes,
+            "--max-tokens",
+            tokens,
+            "--verification-max-elapsed-ms",
+            "30000",
+        ];
+        args.extend_from_slice(extra);
+        invoke(f.path(), &args)
+    };
+    let (exit, large) = run("16384", "4096", &[]);
+    assert_eq!(exit, 0, "{large}");
+    let text = large["data"]["text"].as_str().unwrap();
+    assert!(text.len() > 12000 && text.len() <= 16384, "{}", text.len());
+    assert_eq!(large["data"]["usage"]["rendered_bytes"], text.len());
+    assert!(large["data"]["usage"]["estimated_tokens"].as_u64().unwrap() <= 4096);
+
+    let (exit, token_limited) = run("16384", "1500", &[]);
+    assert_eq!(exit, 0, "{token_limited}");
+    assert!(token_limited["data"]["text"].as_str().unwrap().len() <= 6000);
+    assert!(
+        token_limited["data"]["passages"].as_array().unwrap().len()
+            < large["data"]["passages"].as_array().unwrap().len()
+    );
+
+    let (exit, reserved) = run(
+        "16384",
+        "4096",
+        &[
+            "--instruction-bytes",
+            "4000",
+            "--instruction-tokens",
+            "1000",
+        ],
+    );
+    assert_eq!(exit, 0, "{reserved}");
+    assert!(reserved["data"]["text"].as_str().unwrap().len() <= 12384);
+    assert_eq!(reserved["data"]["usage"]["reserved_bytes"], 4000);
+    for (bytes, tokens) in [("16385", "4096"), ("16384", "4097")] {
+        let (exit, rejected) = run(bytes, tokens, &[]);
+        assert_ne!(exit, 0);
+        assert_eq!(rejected["error"]["code"], "USAGE");
+    }
 }
 
 #[test]
