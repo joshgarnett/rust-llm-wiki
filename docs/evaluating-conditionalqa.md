@@ -79,6 +79,17 @@ The first local adapter preserved raw `<p>`, `<li>` and heading tags in `.md` so
 
 That run also retained one independent error: `train-211` exceeded the earlier product's 64-whitespace-term lexical query ceiling. Its full task is 75 terms/398 UTF-8 bytes. V2 retains every task query byte-identical to v1 and records term/byte counts without truncating scenario facts or dropping the record. The product-side query-bound change and its boundary tests are separate from this rendering fix; use a binary whose query limits cover the declared tasks, and retain any errors in the denominator. Adapter preparation itself does not establish a new product query limit.
 
+## Recorded local replay
+
+On 2026-10-03, the repaired 24-document corpus was imported into a new disposable wiki and all 24 train tasks were evaluated offline with designated-document filtering, 6,000 rendered bytes and 1,500 estimated tokens. This makes source-hit rates a passage-selection diagnostic, not a global-retrieval score.
+
+| Candidate | Query errors | Verified citations | All annotated evidence covered | Mean evidence-byte coverage |
+| --- | ---: | ---: | ---: | ---: |
+| Previous 64-term ceiling |1/24|92|6/16 answerable tasks (37.5%)|64.0%|
+| New 16 KiB/256-term ceiling |0/24|96|6/16 answerable tasks (37.5%)|68.7%|
+
+The new limit admits the full previously rejected scenario and finds the designated source for all 16 answerable tasks. It does not improve the all-evidence completion count. No semantic-completeness or unanswerable-success score is inferred. The optimized new binary has SHA256 `082d73b4381e81649b9f5ca583cb505271fca2ae466d0368c47364e95016a900`; old and new outputs retain the same dataset/mapping and task bytes. Detailed evidence lives locally under `.artifacts/conditionalqa-live-v2/lexical-old-limits` and `lexical-new-limits`. [Query-limit research and boundaries](query-limits.md) describe the separate product change.
+
 ## Remaining evaluation work
 
 The existing runner scores citation correctness, source hits and gold location coverage. It does not interpret `answer_condition_associations`, judge whether all requested answers and their applicability conditions are supported, detect unsupported conclusions, or make an abstention decision. Independent semantic labels/critic assessment are required for those metrics. Report conditioned/plain/unanswerable strata separately and preserve every retrieval error in its declared denominator. The runner currently aggregates the whole selected split; per-stratum reporting and explicit condition-location diagnostics are useful extensions.

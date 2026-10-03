@@ -2147,6 +2147,7 @@ impl OfflineApp {
         fallback: bool,
         selection: &retrieval::context_selection_packet::SelectionAction,
     ) -> Result<ContextResult> {
+        retrieval::context::validate_request(text, request)?;
         retrieval::context::validate_selection_action(request, selection)?;
         let options = ContextOptions {
             selection: selection.clone(),

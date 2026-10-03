@@ -2,6 +2,13 @@
 use crate::{catalog::SnapshotVerification, domain::*};
 use serde::{Deserialize, Serialize, ser::SerializeStruct};
 
+/// Application input bound, independent of a space's embedding input budget.
+pub const MAX_QUERY_BYTES: usize = 16 * 1024;
+/// Maximum whitespace-separated phrases in a lexical OR expression.
+pub const MAX_LEXICAL_TERMS: usize = 256;
+/// Separate work bound after tokenization/deduplication during passage selection.
+pub(crate) const MAX_CONTEXT_QUERY_TERMS: usize = 256;
+
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SearchMode {

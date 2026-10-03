@@ -130,17 +130,16 @@ impl SpaceSpec {
         Ok(())
     }
     pub fn query(&self, text: &str) -> Result<crate::providers::types::EmbeddingInput> {
-        if text.trim().is_empty() || text.len() > 4096 {
-            return Err(WikiError::new(
-                ErrorCode::Usage,
-                "query must contain 1..4096 UTF-8 bytes",
-            ));
-        }
+        super::lexical::validate_query(text)?;
         let utf8 = format!("{}{}", self.settings.query_prefix, text);
         if utf8.len() > self.settings.max_input_bytes {
             return Err(WikiError::new(
                 ErrorCode::BudgetExceeded,
-                "query prefix and text exceed input bound",
+                format!(
+                    "query prefix and text use {} bytes, exceeding this embedding space's max_input_bytes ({})",
+                    utf8.len(),
+                    self.settings.max_input_bytes
+                ),
             ));
         }
         Ok(crate::providers::types::EmbeddingInput {

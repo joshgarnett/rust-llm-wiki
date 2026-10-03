@@ -21,6 +21,75 @@ use std::{
     sync::{Arc, atomic::Ordering},
 };
 #[test]
+fn oversized_hybrid_queries_fail_before_provider_or_space_access() {
+    let f = Fixture::new();
+    let responses = Arc::new(Responses::new());
+    let dispatch = dispatcher(&f.fs, responses.clone());
+    let runtime = runtime(&f.service, &dispatch);
+    let plan = QueryPlan {
+        mode: SearchMode::Hybrid,
+        ..Default::default()
+    };
+    let request = ContextRequest {
+        documents: plan.clone(),
+        ..Default::default()
+    };
+    for query in [
+        "x".repeat(16 * 1024 + 1),
+        std::iter::repeat_n("word", 257)
+            .collect::<Vec<_>>()
+            .join(" "),
+    ] {
+        assert_eq!(
+            f.app
+                .semantic_search(&query, &plan, Some(&runtime), false, false, None)
+                .unwrap_err()
+                .code,
+            ErrorCode::Usage
+        );
+        assert_eq!(
+            f.app
+                .semantic_context(&query, &request, Some(&runtime), false, false)
+                .unwrap_err()
+                .code,
+            ErrorCode::Usage
+        );
+    }
+    assert_eq!(responses.calls.load(Ordering::SeqCst), 0);
+}
+
+#[test]
+fn query_bytes_and_embedding_space_budget_are_independent() {
+    let f = Fixture::new();
+    let mut spec = f.spec();
+    let text = "界".repeat(5461) + "x";
+    assert_eq!(text.len(), 16 * 1024);
+    assert_eq!(
+        spec.query(&text).err().unwrap().code,
+        ErrorCode::BudgetExceeded
+    );
+    spec.settings.query_prefix = "query: ".into();
+    spec.settings.max_input_bytes = text.len() + spec.settings.query_prefix.len();
+    let input = spec.query(&text).unwrap();
+    assert_eq!(input.utf8, format!("query: {text}"));
+    assert_eq!(input.input_hash, Blake3Hash::digest(input.utf8.as_bytes()));
+    spec.settings.max_input_bytes -= 1;
+    assert_eq!(
+        spec.query(&text).err().unwrap().code,
+        ErrorCode::BudgetExceeded
+    );
+    spec.settings.max_input_bytes = 20_000;
+    for invalid in [text + "x", " \n ".into(), "NUL\0word".into()] {
+        assert_eq!(spec.query(&invalid).err().unwrap().code, ErrorCode::Usage);
+    }
+    // Semantic input is not subject to the lexical whitespace-phrase ceiling.
+    let many = std::iter::repeat_n("word", 257)
+        .collect::<Vec<_>>()
+        .join(" ");
+    assert_eq!(spec.query(&many).unwrap().utf8, format!("query: {many}"));
+}
+
+#[test]
 fn short_whole_long_unicode_split_header_limit() {
     let f = Fixture::new();
     f.page("short", "# Heading\n\nA small note.\n");
@@ -1457,7 +1526,10 @@ fn dense_filters_before_limit_hybrid_context_verified_source_citations() {
     f.page("a", "Alpha");
     f.page("b", "Beta");
     let units = corpus(&f);
-    let spec = f.spec();
+    let mut spec = f.spec();
+    spec.settings.max_input_bytes = 20_000;
+    let long_query = format!("uses {}a", "x".repeat(16 * 1024 - 6));
+    let changed_query = format!("uses {}b", "x".repeat(16 * 1024 - 6));
     f.seed(&spec, &units, true);
     f.query_seed(&spec, "Alpha", vec![1.0, 0.0]);
     let plan = QueryPlan {
@@ -1506,8 +1578,11 @@ fn dense_filters_before_limit_hybrid_context_verified_source_citations() {
     store
         .put_batch(
             &space,
-            &[spec.query("uses").unwrap().input_hash],
-            &[vec![1.0, 0.0]],
+            &["uses", &long_query, &changed_query]
+                .iter()
+                .map(|query| spec.query(query).unwrap().input_hash)
+                .collect::<Vec<_>>(),
+            &vec![vec![1.0, 0.0]; 3],
             false,
             &Blake3Hash::digest([]),
         )
@@ -1577,6 +1652,45 @@ fn dense_filters_before_limit_hybrid_context_verified_source_citations() {
             .iter()
             .any(|a| !a.support.is_empty() && !a.path.is_empty())
     );
+
+    // Full accepted input must work through all graph-enabled paths; the
+    // internal space/query key must not impose a smaller hidden byte ceiling.
+    let mut graph_plan = request.graph.clone().unwrap();
+    graph_plan.limits.hits = 1;
+    let first = offline
+        .semantic_graph(&long_query, &graph_plan, None, false, false)
+        .unwrap();
+    assert!(first.next_cursor.is_some());
+    graph_plan.cursor = first.next_cursor;
+    assert!(
+        offline
+            .semantic_graph(&long_query, &graph_plan, None, false, false)
+            .is_ok()
+    );
+    assert_eq!(
+        offline
+            .semantic_graph(&changed_query, &graph_plan, None, false, false)
+            .unwrap_err()
+            .code,
+        ErrorCode::CursorStale
+    );
+    let long_context = offline
+        .semantic_context(&long_query, &request, None, false, false)
+        .unwrap();
+    assert!(!long_context.passages().is_empty());
+    assert!(!long_context.network_used);
+    let long_hits = offline
+        .semantic_search(
+            &long_query,
+            &request.documents,
+            None,
+            false,
+            false,
+            request.graph.as_ref(),
+        )
+        .unwrap();
+    assert!(!long_hits.graph.unwrap().seeds.is_empty());
+    assert!(!long_hits.network_used);
 }
 
 #[test]

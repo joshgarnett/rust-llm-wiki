@@ -9,6 +9,10 @@ use rusqlite::{params_from_iter, types::Value};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
+// Semantic keys bind the complete query plus a fixed space-hash prefix.
+// Keep cursor identity unchanged while allowing the shared input ceiling.
+const MAX_QUERY_KEY_BYTES: usize = crate::retrieval::MAX_QUERY_BYTES + 128;
+
 pub fn validate_plan(plan: &GraphPlan) -> Result<GraphPlan> {
     let limits = &plan.limits;
     if limits.candidates == 0
@@ -97,7 +101,7 @@ pub fn from_seeds(
     key: &str,
 ) -> Result<GraphResult> {
     let plan = validate_plan(plan)?;
-    if seeds.len() > 160 || key.len() > 8192 {
+    if seeds.len() > 160 || key.len() > MAX_QUERY_KEY_BYTES {
         return Err(WikiError::new(
             ErrorCode::BudgetExceeded,
             "graph seed input exceeds bound",

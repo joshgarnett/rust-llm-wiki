@@ -67,14 +67,18 @@ All values below are **proposed tuning defaults**, not measured quality or provi
 
 | Control | Default |
 |---|---:|
-| Query bytes / whitespace terms | 4,096 / 64 |
+| Query UTF-8 bytes / lexical whitespace terms | 16,384 / 256 |
 | Candidates per lexical/dense list | 80 |
 | RRF constant / list weight | 60 / 1 |
 | Graph seeds total / traversal depth | 12 / 1; hard depth cap 2 |
 | Incident assertions per seed / total visited assertions | 16 / 128 |
+
 | Search hits / context passages per document | 10 / 4 for source-aware document context; 2 for literal/legacy assembly |
 | Context total / hybrid graph share | 3,000 estimated tokens and 12,000 bytes / at most 50% |
 | Evidence passages per assertion | 2 support + 1 contradiction |
+
+Query limits are application bounds, with [comparison and measurement rationale](../query-limits.md). Every accepted lexical whitespace phrase participates in the quoted OR expression; excess input returns `USAGE`, without truncation. The whitespace-term ceiling applies to lexical search (including the lexical branch of hybrid search), not literal or semantic-only input. Embedding spaces independently enforce `max_input_bytes` on the complete query plus prefix (default 12,000 bytes); exceeding that bound returns `BUDGET_EXCEEDED` before dispatch. Passage selection has its own 256 distinct tokenized-term work limit and discloses any omission: punctuation can turn one whitespace phrase into several tokens.
+
 
 Use `rrf(x) = Σ weight/(60 + one_based_rank(x))`; absent candidates contribute zero. This combines ranks rather than BM25/cosine scales. [Original RRF paper](https://cormack.uwaterloo.ca/cormacksigir09-rrf.pdf) Before fusion, collapse document units by owner using their best rank, keeping the best two passages; multiple units do not manufacture multiple votes. Exact lookup, lexical, and dense lists retain named contributions.
 
@@ -84,7 +88,7 @@ Nonliteral document context uses the query and authenticated, eligible source ow
 
 With complete cached-unit coverage, semantic and hybrid context retain exact eligible embedding-unit locations for each discovered owner. Hybrid discovery still combines lexical and dense owner candidates. Evidence selection orders retained units by dense cosine, with conventional unit-body BM25 only for equal-cosine ties, followed by deterministic path/span order. Diagnostic dense/BM25 ranks remain visible separately from the final selection rank; they do not add duplicate selection votes. Missing/corrupt vectors are unavailable rather than zero similarity. Incomplete owner/unit coverage falls back to bounded lexical passage selection for the whole retrieved owner set and emits a warning. No new embedding request is made by passage selection.
 
-Each unit maps to one canonical structural parent: bounded paragraphs, lists with introductions, and code/explanation groups. Identical parents retain their strongest child without extra votes, before the global candidate cap. Packing attempts the parent first and its associated exact child if the parent does not fit. A unit larger than the requested excerpt uses a bounded query-focused child and discloses clipping. Managed-note metadata is excluded; captured content remains payload. Structural, lexical-unit and coarse-focus scans are separately bounded to1MiB per owner/4MiB total each; structural starts and units are capped at4096, query terms at128. Cached-vector reads reserve at most64MiB. Limits and omitted regions are disclosed.
+Each unit maps to one canonical structural parent: bounded paragraphs, lists with introductions, and code/explanation groups. Identical parents retain their strongest child without extra votes, before the global candidate cap. Packing attempts the parent first and its associated exact child if the parent does not fit. A unit larger than the requested excerpt uses a bounded query-focused child and discloses clipping. Managed-note metadata is excluded; captured content remains payload. Structural, lexical-unit and coarse-focus scans are separately bounded to1MiB per owner/4MiB total each; structural starts and units are capped at4096, distinct tokenized query terms at256. Cached-vector reads reserve at most64MiB. Limits and omitted regions are disclosed.
 
 Lexical-only selection uses SQLite tokenization, conservative English suffix normalization and grammatical-word exclusion while preserving negation, restrictions and marked identifiers. It proposes at most32 windows per owner under bounded source scans, including two discovery anchors, and packs by owner rank, local relevance, query-term coverage and actual rendered cost. These heuristics affect neither FTS indexing nor embedding inputs.
 

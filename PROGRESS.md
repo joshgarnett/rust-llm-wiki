@@ -8,6 +8,8 @@ The 2026-10-03 context-completeness goal remains open. Independent development r
 
 Local milestones: `2c340ef` adds reproducible evaluation and separates durable documentation from local session evidence; `8a0f228` adds the tested selection workflow; `77f0382` records complementary datasets and pinned acquisition; `fb91449` preserves source coverage at the candidate-input byte limit; `70d2122` adds the ContractNLI adapter and its 204-task offline evaluation. These commits are checkpoints, not a declaration of quality acceptance. Further dataset adapters and independent development/held-out evaluation are in progress. Detailed run logs and mutable checkpoints remain local.
 
+The ConditionalQA adapter and source-format correction are committed as `f20b6c0`. Its paired offline run preserves full questions and shows the distinction between admission and quality: the expanded 16 KiB/256-term input limits remove the final query error, while exhaustive evidence completion remains 6/16. [Query-limit research](docs/query-limits.md) records comparisons, engine measurements and independent review; [quality-target research](docs/rag-quality-targets.md) recommends retaining the 90% scoped unseen pilot instead of pursuing perfect scores.
+
 ## Scope
 
 Design a self-contained Rust CLI for a local, human-readable LLM wiki, with useful human and agent interfaces, lexical and graph retrieval, optional semantic retrieval, cost-controlled research, and a portable usage skill.

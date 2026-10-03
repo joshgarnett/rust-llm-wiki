@@ -21,10 +21,10 @@ use std::{
 pub fn lexical_expression(query: &str) -> Result<String> {
     validate_query(query)?;
     let terms: Vec<_> = query.split_whitespace().collect();
-    if terms.len() > 64 {
+    if terms.len() > MAX_LEXICAL_TERMS {
         return Err(WikiError::new(
             ErrorCode::Usage,
-            "lexical query exceeds 64 whitespace terms",
+            format!("lexical query exceeds {MAX_LEXICAL_TERMS} whitespace terms"),
         ));
     }
     Ok(terms
@@ -33,12 +33,15 @@ pub fn lexical_expression(query: &str) -> Result<String> {
         .collect::<Vec<_>>()
         .join(" OR "))
 }
-fn validate_query(query: &str) -> Result<()> {
+pub(crate) fn validate_query(query: &str) -> Result<()> {
     if query.trim().is_empty() {
         return Err(WikiError::new(ErrorCode::Usage, "query must not be blank"));
     }
-    if query.len() > 4096 {
-        return Err(WikiError::new(ErrorCode::Usage, "query exceeds 4096 bytes"));
+    if query.len() > MAX_QUERY_BYTES {
+        return Err(WikiError::new(
+            ErrorCode::Usage,
+            format!("query exceeds {MAX_QUERY_BYTES} UTF-8 bytes"),
+        ));
     }
     if query.contains('\0') {
         return Err(WikiError::new(
@@ -52,7 +55,7 @@ fn validate_query(query: &str) -> Result<()> {
 pub fn validate_plan(query: &str, plan: &QueryPlan) -> Result<QueryPlan> {
     validate_query(query)?;
     validate_limits(&plan.limits)?;
-    if plan.mode == SearchMode::Lexical {
+    if matches!(plan.mode, SearchMode::Lexical | SearchMode::Hybrid) {
         lexical_expression(query)?;
     }
     let mut plan = plan.clone();

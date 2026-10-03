@@ -3,7 +3,7 @@
 use super::{
     context_types::ContextSemanticCue,
     excerpts::{SourceMap, Tokenizer},
-    types::RankContribution,
+    types::{MAX_CONTEXT_QUERY_TERMS, RankContribution},
 };
 use crate::{
     catalog::{DocumentRow, ReaderSnapshot},
@@ -17,7 +17,6 @@ const OWNER_SCAN_BYTES: usize = 1024 * 1024;
 const TOTAL_SCAN_BYTES: usize = 4 * OWNER_SCAN_BYTES;
 const MAX_STARTS: usize = 4096;
 const MAX_UNITS: usize = 4096;
-const MAX_QUERY_TERMS: usize = 128;
 const MAX_CANDIDATES: usize = 160;
 
 pub(crate) struct UnitDocument<'a> {
@@ -371,22 +370,17 @@ pub(crate) fn select_units(
             "context unit cap exceeded",
         ));
     }
-    if query.trim().is_empty() || query.len() > 4096 || query.contains('\0') {
-        return Err(WikiError::new(
-            ErrorCode::Usage,
-            "context query must be nonblank, NUL-free and at most 4096 bytes",
-        ));
-    }
+    super::lexical::validate_query(query)?;
     let tokenizer = Tokenizer::new(reader.connection())?;
     let all_terms = tokenizer
         .tokens(query)?
         .into_iter()
         .map(|token| token.text)
         .collect::<std::collections::BTreeSet<_>>();
-    let term_cap = all_terms.len() > MAX_QUERY_TERMS;
+    let term_cap = all_terms.len() > MAX_CONTEXT_QUERY_TERMS;
     let query_terms = all_terms
         .into_iter()
-        .take(MAX_QUERY_TERMS)
+        .take(MAX_CONTEXT_QUERY_TERMS)
         .collect::<Vec<_>>();
     let mut result = UnitSelection {
         candidates: vec![],
@@ -1024,7 +1018,7 @@ mod tests {
         for (bytes, limit) in [(0, 80), (2049, 80), (128, 0), (128, 161)] {
             assert!(select_units(&reader, "orbit", &inputs, &cues, bytes, limit).is_err());
         }
-        let query = (0..140)
+        let query = (0..MAX_CONTEXT_QUERY_TERMS + 1)
             .map(|index| format!("feature{index}"))
             .collect::<Vec<_>>()
             .join(" ");

@@ -2,6 +2,7 @@
 use super::{
     context_types::ContextSemanticCue,
     excerpts::{SourceMap, Tokenizer},
+    types::MAX_CONTEXT_QUERY_TERMS,
 };
 use crate::{
     catalog::{DocumentRow, ReaderSnapshot},
@@ -17,7 +18,6 @@ use std::{
 const OWNER_SCAN_BYTES: usize = 1024 * 1024;
 const TOTAL_SCAN_BYTES: usize = 4 * OWNER_SCAN_BYTES;
 const MAX_BLOCKS: usize = 4096;
-const MAX_TERMS: usize = 128;
 const MAX_CANDIDATES: usize = 32;
 const MAX_SEMANTIC_CUES: usize = 4096;
 
@@ -591,7 +591,7 @@ fn select(
         if terms.contains_key(&key) {
             continue;
         }
-        if terms.len() == MAX_TERMS {
+        if terms.len() == MAX_CONTEXT_QUERY_TERMS {
             term_cap = true;
             break;
         }
@@ -1087,14 +1087,14 @@ mod tests {
     #[test]
     fn scan_and_query_limits_are_reported_without_invalid_spans() {
         let raw = "ordinary prose\n\n".repeat(OWNER_SCAN_BYTES / 8);
-        let query = (0..140)
+        let query = (0..MAX_CONTEXT_QUERY_TERMS + 1)
             .map(|i| format!("feature{i}"))
             .collect::<Vec<_>>()
             .join(" ");
         let selected = selection(&raw, &query, 128, &[]);
         assert!(selected.scanned_bytes <= OWNER_SCAN_BYTES);
         assert!(selected.scanned_blocks <= MAX_BLOCKS);
-        assert!(selected.term_weights.len() <= MAX_TERMS);
+        assert!(selected.term_weights.len() <= MAX_CONTEXT_QUERY_TERMS);
         assert!(
             selected
                 .omissions

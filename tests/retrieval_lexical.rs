@@ -756,7 +756,7 @@ fn original_source_spans_and_unicode_tokenizer_are_exact() {
 #[test]
 fn query_and_candidate_bounds_are_explicit() {
     let (temp, root, catalog) = fixture();
-    let many = std::iter::repeat_n("word", 65)
+    let many = std::iter::repeat_n("word", 257)
         .collect::<Vec<_>>()
         .join(" ");
     write(temp.path(), "many.md", many.as_bytes());
@@ -770,7 +770,7 @@ fn query_and_candidate_bounds_are_explicit() {
     );
     assert_eq!(search(&r, &many, &literal_plan()).unwrap().hits.len(), 1);
     assert_eq!(
-        search(&r, &"a".repeat(4097), &literal_plan())
+        search(&r, &"a".repeat(16 * 1024 + 1), &literal_plan())
             .unwrap_err()
             .code,
         ErrorCode::Usage
@@ -788,6 +788,63 @@ fn query_and_candidate_bounds_are_explicit() {
     let second = search(&r, "needle", &plan).unwrap();
     assert_eq!(second.hits.len(), 30);
     assert!(second.next_cursor.is_none() && second.truncated);
+}
+
+#[test]
+fn long_scenario_query_keeps_its_last_requirement() {
+    let (temp, root, catalog) = fixture();
+    write(
+        temp.path(),
+        "answer.md",
+        b"The latequalifier applies here.\n",
+    );
+    write(temp.path(), "distractor.md", b"Other unrelated material.\n");
+    let r = reader(&root, &catalog);
+    // Full scenarios may exceed 64 words. The last requirement must still
+    // participate in discovery instead of being silently dropped.
+    let mut terms = (0..255).map(|n| format!("absent{n}")).collect::<Vec<_>>();
+    terms.push("latequalifier".into());
+    let hits = search(&r, &terms.join(" "), &QueryPlan::default()).unwrap();
+    assert_eq!(hits.hits.len(), 1);
+    assert_eq!(hits.hits[0].locator.path, relative("answer.md"));
+    assert!(hits.hits[0].excerpt.text.contains("latequalifier"));
+    // The full byte allowance is accepted independently of the term allowance.
+    let mut padded = terms.join(" ");
+    padded.push_str(&" ".repeat(16 * 1024 - padded.len()));
+    assert_eq!(
+        search(&r, &padded, &QueryPlan::default()).unwrap().hits[0]
+            .locator
+            .path,
+        relative("answer.md")
+    );
+    terms.push("excess".into());
+    assert_eq!(
+        search(&r, &terms.join(" "), &QueryPlan::default())
+            .unwrap_err()
+            .code,
+        ErrorCode::Usage
+    );
+}
+
+#[test]
+fn unicode_query_limit_counts_utf8_bytes_and_preserves_literal_text() {
+    let (temp, root, catalog) = fixture();
+    let query = "界".repeat(5461) + "x";
+    assert_eq!(query.len(), 16 * 1024);
+    write(temp.path(), "unicode.md", query.as_bytes());
+    let r = reader(&root, &catalog);
+    assert_eq!(search(&r, &query, &literal_plan()).unwrap().hits.len(), 1);
+    assert!(lexical_expression(&query).is_ok());
+    assert_eq!(
+        lexical_expression(&(query.clone() + "x")).unwrap_err().code,
+        ErrorCode::Usage
+    );
+    assert_eq!(
+        search(&r, &(query + "x"), &literal_plan())
+            .unwrap_err()
+            .code,
+        ErrorCode::Usage
+    );
 }
 
 #[test]
@@ -986,6 +1043,21 @@ fn withdrawn_source_decision_rationale_is_historical_search_only() {
 
 #[test]
 fn pure_plan_validation_has_no_cache_dependency() {
+    let too_many = std::iter::repeat_n("word", 257)
+        .collect::<Vec<_>>()
+        .join(" ");
+    for mode in [SearchMode::Lexical, SearchMode::Hybrid] {
+        let plan = QueryPlan {
+            mode,
+            ..Default::default()
+        };
+        assert_eq!(
+            lwiki::retrieval::lexical::validate_plan(&too_many, &plan)
+                .unwrap_err()
+                .code,
+            ErrorCode::Usage
+        );
+    }
     let mut plan = QueryPlan::default();
     plan.filters.tags = vec!["z".into(), "a".into(), "z".into()];
     plan.cursor = Some("copied without decoding".into());
