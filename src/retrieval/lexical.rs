@@ -154,6 +154,12 @@ fn search_inner(
             "semantic and hybrid retrieval require the embedding application",
         ));
     }
+    if reader.normalized_layout() && !source_only {
+        return Err(WikiError::new(
+            ErrorCode::CapabilityUnavailable,
+            "normalized direct retrieval currently supports indexed captured sources only",
+        ));
+    }
     let plan = validate_plan(query, plan)?;
     let base_fingerprint = cursor::fingerprint(query, &plan)?;
     let base_fingerprint = if reader.query_scope() == "strict_catalog" {
@@ -182,7 +188,7 @@ fn search_inner(
         plan.limits.candidates,
     )?;
     if source_only {
-        validate_source_indexes(reader.connection())?;
+        validate_source_indexes(reader.connection(), reader.normalized_layout())?;
     }
     let tokenizer = if plan.mode == SearchMode::Lexical {
         Some(Tokenizer::new(reader.connection())?)
@@ -571,10 +577,12 @@ fn missing_source_index() -> WikiError {
 
 /// Validate the complete access-index definition. A matching name or column
 /// prefix alone does not exclude an incompatible partial predicate/collation.
-fn validate_source_indexes(connection: &Connection) -> Result<()> {
+fn validate_source_indexes(connection: &Connection, normalized: bool) -> Result<()> {
     for (name, key) in SOURCE_INDEXES {
-        let expected =
-            format!("CREATE INDEX {name} ON documents(gen,{key},path) WHERE {SOURCE_PREDICATE}");
+        let generation = if normalized { "" } else { "gen," };
+        let expected = format!(
+            "CREATE INDEX {name} ON documents({generation}{key},path) WHERE {SOURCE_PREDICATE}"
+        );
         let mut statement = connection
             .prepare("SELECT sql FROM sqlite_schema WHERE type='index' AND name=?1 AND tbl_name='documents' LIMIT 2")
             .map_err(sql_error)?;
@@ -638,6 +646,7 @@ fn source_filters_sql(filters: &SearchFilters, values: &mut Vec<Value>) -> Strin
 }
 
 fn source_candidate_query(
+    normalized: bool,
     generation: i64,
     query: &str,
     expression: &str,
@@ -645,6 +654,9 @@ fn source_candidate_query(
     key: &str,
     index: Option<&str>,
 ) -> (String, Vec<Value>) {
+    if normalized {
+        return normalized_source_candidate_query(query, expression, plan, key, index);
+    }
     let fts = index.is_none();
     let mut values = vec![
         Value::Text(if fts { expression.into() } else { query.into() }),
@@ -697,6 +709,70 @@ fn source_candidate_query(
     (sql, values)
 }
 
+/// Normalized FTS external content uses doc_row as its rowid. The materialized
+/// sorter retains keys/ranks only; metadata and source scope precede its LIMIT.
+fn normalized_source_candidate_query(
+    query: &str,
+    expression: &str,
+    plan: &QueryPlan,
+    key: &str,
+    index: Option<&str>,
+) -> (String, Vec<Value>) {
+    let fts = index.is_none();
+    let mut values = vec![Value::Text(if fts {
+        expression.into()
+    } else {
+        query.into()
+    })];
+    let common = source_filters_sql(&plan.filters, &mut values);
+    let bound = filters::bind(
+        &mut values,
+        Value::Integer((plan.limits.candidates + 1) as i64),
+    );
+    let access = index.map_or(String::new(), |index| format!("INDEXED BY {index}"));
+    let condition = if fts {
+        "documents_fts MATCH ?1".into()
+    } else {
+        format!("d.{key}=?1")
+    };
+    let join = if fts {
+        "JOIN documents_fts ON documents_fts.rowid=d.doc_row"
+    } else {
+        ""
+    };
+    let score = if fts {
+        "bm25(documents_fts,8,6,3,2,1)"
+    } else {
+        "NULL"
+    };
+    let fts_columns = if fts {
+        ",f.title,f.aliases,f.headings,f.tags,f.body"
+    } else {
+        ""
+    };
+    let fts_lookup = if fts {
+        "JOIN documents_fts f ON f.rowid=c.doc_row"
+    } else {
+        ""
+    };
+    let columns = crate::catalog::normalized_schema::DOCUMENT_COLUMNS
+        .split(',')
+        .map(|column| format!("d.{column}"))
+        .collect::<Vec<_>>()
+        .join(",");
+    let sql = format!(
+        "WITH candidate_ids AS MATERIALIZED (\
+         SELECT d.doc_row,{score} AS score,d.path FROM documents d {access} {join} \
+         WHERE d.owner_revision IS NOT NULL AND d.source_id IS NOT NULL \
+         AND d.eligibility='current' AND d.record_id IS NULL AND d.kind IS NULL \
+         AND ({condition}) AND ({common}) ORDER BY score,d.path LIMIT {bound}) \
+         SELECT {columns},c.score,d.aliases_text,d.tags_text{fts_columns} \
+         FROM candidate_ids c JOIN documents d ON d.doc_row=c.doc_row {fts_lookup} \
+         ORDER BY c.score,c.path"
+    );
+    (sql, values)
+}
+
 /// Candidate keys/ranks are capped before fetching document JSON. In
 /// particular, an FTS sorter never carries every matching document's raw text.
 fn source_candidates(
@@ -734,7 +810,15 @@ fn source_candidates(
         (2, "", None, RetrievalReason::Lexical, "lexical"),
     ] {
         let fts = index.is_none();
-        let (sql, values) = source_candidate_query(generation, query, expression, plan, key, index);
+        let (sql, values) = source_candidate_query(
+            reader.normalized_layout(),
+            generation,
+            query,
+            expression,
+            plan,
+            key,
+            index,
+        );
         let mut statement = reader.connection().prepare(&sql).map_err(sql_error)?;
         let mut rows = statement
             .query(params_from_iter(values))
@@ -746,8 +830,10 @@ fn source_candidates(
                 break;
             }
             let document = reader.decode_document(row, 0)?;
-            validate_source_document(row, &document, fts)?;
-            let score: Option<f64> = row.get(1).map_err(sql_error)?;
+            validate_source_document(row, &document, fts, reader.normalized_layout())?;
+            let score: Option<f64> = row
+                .get(if reader.normalized_layout() { 14 } else { 1 })
+                .map_err(sql_error)?;
             if score.is_some_and(|score| !score.is_finite()) {
                 return Err(WikiError::new(
                     ErrorCode::IndexCorrupt,
@@ -792,7 +878,37 @@ fn sql_text<'a>(row: &'a Row<'_>, column: usize) -> Result<&'a str> {
         .map_err(|error| WikiError::new(ErrorCode::IndexCorrupt, error.to_string()))
 }
 
-fn validate_source_document(row: &Row<'_>, document: &DocumentRow, fts: bool) -> Result<()> {
+fn validate_source_document(
+    row: &Row<'_>,
+    document: &DocumentRow,
+    fts: bool,
+    normalized: bool,
+) -> Result<()> {
+    if normalized {
+        let consistent = document.record_id.is_none()
+            && document.kind.is_none()
+            && document.source_id.is_some()
+            && document.owner_revision.is_some()
+            && document.eligibility == Eligibility::Current
+            && document.aliases.is_empty()
+            && document.tags.is_empty()
+            && sql_text(row, 15)?.is_empty()
+            && sql_text(row, 16)?.is_empty()
+            && Blake3Hash::digest(document.raw_text.as_bytes()) == document.hash;
+        let fts_consistent = !fts
+            || (sql_text(row, 17)? == document.title
+                && sql_text(row, 18)?.is_empty()
+                && sql_text(row, 19)? == document.headings
+                && sql_text(row, 20)?.is_empty()
+                && sql_text(row, 21)? == document.body);
+        if !consistent || !fts_consistent {
+            return Err(WikiError::new(
+                ErrorCode::IndexCorrupt,
+                "selected source document differs from its normalized columns",
+            ));
+        }
+        return Ok(());
+    }
     let consistent = sql_text(row, 2)? == document.path.as_str()
         && matches!(row.get_ref(3).map_err(sql_error)?, ValueRef::Null)
         && matches!(row.get_ref(4).map_err(sql_error)?, ValueRef::Null)
@@ -1207,6 +1323,316 @@ mod indexed_source_tests {
         document
     }
 
+    fn publish_normalized_sources(
+        catalog: &crate::catalog::Catalog,
+        documents: &[DocumentRow],
+    ) -> crate::catalog::normalized_build::CompletedCatalog {
+        use crate::{
+            catalog::{
+                RetrievalSink,
+                file_types::{BuildIdentity, CatalogSelection},
+                normalized_build::{BuildLimits, NormalizedBuilder},
+                scan, selector,
+            },
+            vault::WriterPermit,
+        };
+        let writer =
+            WriterPermit::acquire(catalog.fs.root(), std::time::Duration::from_secs(1)).unwrap();
+        let identity = BuildIdentity {
+            selection: CatalogSelection::new(catalog.vault_id.clone(), 1).unwrap(),
+            origin: None,
+            vector_cache_lost: false,
+            vector_loss_unknown: false,
+        };
+        selector::prepare(&catalog.fs, &writer, &identity.selection).unwrap();
+        let mut builder =
+            NormalizedBuilder::begin(&catalog.fs, &writer, identity, BuildLimits::default())
+                .unwrap();
+        let input = scan::scan_input(&catalog.fs, &catalog.vault_id).unwrap();
+        let projection = scan::project_with_sink(&catalog.fs, &input, false, &mut builder).unwrap();
+        for document in documents {
+            builder.document(document.clone()).unwrap();
+        }
+        let completed = builder.finish(&projection).unwrap();
+        selector::publish(
+            &catalog.fs,
+            &writer,
+            &completed.identity.selection,
+            std::time::Duration::from_secs(1),
+        )
+        .unwrap();
+        completed
+    }
+
+    fn normalized_fixture(
+        documents: &[DocumentRow],
+    ) -> (
+        tempfile::TempDir,
+        crate::catalog::Catalog,
+        crate::catalog::normalized_build::CompletedCatalog,
+    ) {
+        use crate::vault::{VaultFs, VaultRoot};
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::write(temp.path().join("WIKI.md"), "---\nwiki_schema: \"1\"\nwiki_id: vault_source_sql\nwiki_kind: vault\ntitle: Source fixture\n---\nFixture\n").unwrap();
+        let catalog = crate::catalog::Catalog::new(
+            VaultFs::new(VaultRoot::explicit(temp.path()).unwrap()),
+            RecordId::new("vault_source_sql").unwrap(),
+        );
+        let completed = publish_normalized_sources(&catalog, documents);
+        (temp, catalog, completed)
+    }
+
+    #[test]
+    fn real_normalized_indexed_source_queries_match_legacy_candidates_and_spans() {
+        let legacy = reader();
+        let alpha = source(&legacy, "alpha", "Captured title");
+        let beta = source(&legacy, "beta", "Captured title");
+        let (_temp, catalog, _completed) = normalized_fixture(&[alpha.clone(), beta.clone()]);
+        let normalized = catalog
+            .query_snapshot(crate::catalog::query_types::QueryReadLimits::default())
+            .unwrap();
+        assert!(normalized.normalized_layout());
+        for query in [
+            "source_alpha",
+            "revision_beta",
+            "Captured title",
+            "needle",
+            "cafe",
+        ] {
+            for filters in [
+                SearchFilters::default(),
+                SearchFilters {
+                    source_ids: vec![beta.source_id.clone().unwrap()],
+                    path_prefix: Some("sources/be".into()),
+                    ..Default::default()
+                },
+            ] {
+                let plan = QueryPlan {
+                    filters,
+                    limits: SearchLimits {
+                        candidates: 1,
+                        hits: 1,
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                };
+                let old = search_indexed_sources(&legacy, query, &plan).unwrap();
+                let new = search_indexed_sources(&normalized, query, &plan).unwrap();
+                assert_eq!(new.candidate_count, old.candidate_count, "{query}");
+                assert_eq!(new.truncated, old.truncated, "{query}");
+                assert_eq!(new.hits.len(), old.hits.len(), "{query}");
+                for (new, old) in new.hits.iter().zip(&old.hits) {
+                    assert_eq!(new.locator, old.locator, "{query}");
+                    assert_eq!(new.reasons, old.reasons, "{query}");
+                    assert_eq!(new.excerpt, old.excerpt, "{query}");
+                    assert_eq!(
+                        new.rank_contributions
+                            .iter()
+                            .map(|rank| (&rank.channel, rank.rank))
+                            .collect::<Vec<_>>(),
+                        old.rank_contributions
+                            .iter()
+                            .map(|rank| (&rank.channel, rank.rank))
+                            .collect::<Vec<_>>(),
+                        "{query}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn normalized_scope_filters_avoid_unselected_corruption_and_charge_selected_rows() {
+        let legacy = reader();
+        let alpha = source(&legacy, "alpha", "Captured title");
+        let beta = source(&legacy, "beta", "Captured title");
+        let (_temp, catalog, completed) = normalized_fixture(&[alpha, beta.clone()]);
+        let database = Connection::open(&completed.path).unwrap();
+        database
+            .execute_batch("UPDATE documents SET aliases_json='{' WHERE source_id='source_alpha'")
+            .unwrap();
+        let normalized = catalog
+            .query_snapshot(crate::catalog::query_types::QueryReadLimits::default())
+            .unwrap();
+        let plan = QueryPlan {
+            filters: SearchFilters {
+                source_ids: vec![beta.source_id.unwrap()],
+                path_prefix: Some("sources/be".into()),
+                ..Default::default()
+            },
+            limits: SearchLimits {
+                candidates: 1,
+                hits: 1,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let hits = search_indexed_sources(&normalized, "needle", &plan).unwrap();
+        assert_eq!(hits.hits[0].locator.path, beta.path);
+        assert_eq!(normalized.usage().rows, 1);
+        assert_eq!(
+            search_indexed_sources(&normalized, "source_alpha", &QueryPlan::default())
+                .unwrap_err()
+                .code,
+            ErrorCode::IndexCorrupt
+        );
+        assert_eq!(normalized.usage().rows, 2);
+        let limited = catalog
+            .query_snapshot(crate::catalog::query_types::QueryReadLimits {
+                max_row_bytes: 1,
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(
+            search_indexed_sources(&limited, "needle", &plan)
+                .unwrap_err()
+                .code,
+            ErrorCode::BudgetExceeded
+        );
+        assert_eq!(limited.usage().rows, 0);
+    }
+
+    #[test]
+    fn normalized_source_hash_and_empty_external_content_derivatives_fail_closed() {
+        for mutation in [
+            "UPDATE documents SET raw_text='tampered' WHERE source_id='source_alpha'",
+            "UPDATE documents SET aliases_json='[\"alias\"]' WHERE source_id='source_alpha'",
+            "UPDATE documents SET tags_json='[\"tag\"]' WHERE source_id='source_alpha'",
+            "UPDATE documents SET aliases_text='alias' WHERE source_id='source_alpha'",
+            "UPDATE documents SET tags_text='tag' WHERE source_id='source_alpha'",
+        ] {
+            let legacy = reader();
+            let alpha = source(&legacy, "alpha", "Captured title");
+            let (_temp, catalog, completed) = normalized_fixture(&[alpha]);
+            Connection::open(completed.path)
+                .unwrap()
+                .execute_batch(mutation)
+                .unwrap();
+            let normalized = catalog
+                .query_snapshot(crate::catalog::query_types::QueryReadLimits::default())
+                .unwrap();
+            assert_eq!(
+                search_indexed_sources(&normalized, "needle", &QueryPlan::default())
+                    .unwrap_err()
+                    .code,
+                ErrorCode::IndexCorrupt,
+                "{mutation}"
+            );
+            assert_eq!(normalized.usage().rows, 1);
+        }
+    }
+
+    #[test]
+    fn normalized_candidate_plans_have_no_generation_and_fetch_payload_after_limit() {
+        let legacy = reader();
+        let alpha = source(&legacy, "alpha", "Captured title");
+        let (_temp, catalog, _completed) = normalized_fixture(&[alpha]);
+        let normalized = catalog
+            .query_snapshot(crate::catalog::query_types::QueryReadLimits::default())
+            .unwrap();
+        for (key, index) in [
+            ("source_id", Some("source_document_ids")),
+            ("owner_revision", Some("source_revision_ids")),
+            ("title", Some("source_document_titles")),
+            ("", None),
+        ] {
+            let (sql, values) = source_candidate_query(
+                true,
+                1,
+                "needle",
+                "\"needle\"",
+                &QueryPlan::default(),
+                key,
+                index,
+            );
+            assert!(!sql.contains("d.gen"));
+            let (keys, payload) = sql.split_once("SELECT d.path,d.file_hash").unwrap();
+            assert!(keys.contains("AS MATERIALIZED"));
+            assert!(keys.contains("LIMIT ?"));
+            assert!(!keys.contains("raw_text"));
+            assert!(!keys.contains("body"));
+            assert!(payload.contains("JOIN documents d ON d.doc_row=c.doc_row"));
+            let details: Vec<String> = normalized
+                .connection()
+                .prepare(&format!("EXPLAIN QUERY PLAN {sql}"))
+                .unwrap()
+                .query_map(params_from_iter(values), |row| row.get(3))
+                .unwrap()
+                .collect::<std::result::Result<_, _>>()
+                .unwrap();
+            assert!(
+                details
+                    .iter()
+                    .any(|detail| detail.contains("MATERIALIZE candidate_ids")),
+                "{details:?}"
+            );
+            assert!(
+                details
+                    .iter()
+                    .any(|detail| detail.contains("SEARCH d USING INTEGER PRIMARY KEY")),
+                "{details:?}"
+            );
+            if let Some(index) = index {
+                assert!(
+                    details
+                        .iter()
+                        .any(|detail| detail.contains("SEARCH d USING INDEX")
+                            && detail.contains(index)
+                            && detail.contains(&format!("{key}=?"))),
+                    "{details:?}"
+                );
+            } else {
+                assert!(
+                    details.iter().any(|detail| detail
+                        .contains("SCAN documents_fts VIRTUAL TABLE INDEX")
+                        && detail.contains('M')),
+                    "{details:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn normalized_cursors_reject_new_physical_file_even_with_identical_logical_snapshot() {
+        let legacy = reader();
+        let alpha = source(&legacy, "alpha", "Captured title");
+        let beta = source(&legacy, "beta", "Captured title");
+        let docs = [alpha, beta];
+        let (_temp, catalog, _completed) = normalized_fixture(&docs);
+        let old = catalog
+            .query_snapshot(crate::catalog::query_types::QueryReadLimits::default())
+            .unwrap();
+        let plan = QueryPlan {
+            limits: SearchLimits {
+                candidates: 2,
+                hits: 1,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let cursor = search_indexed_sources(&old, "needle", &plan)
+            .unwrap()
+            .next_cursor
+            .unwrap();
+        publish_normalized_sources(&catalog, &docs);
+        let new = catalog
+            .query_snapshot(crate::catalog::query_types::QueryReadLimits::default())
+            .unwrap();
+        assert_eq!(old.snapshot(), new.snapshot());
+        assert_ne!(old.publication_id(), new.publication_id());
+        let plan = QueryPlan {
+            cursor: Some(cursor),
+            ..plan
+        };
+        assert_eq!(
+            search_indexed_sources(&new, "needle", &plan)
+                .unwrap_err()
+                .code,
+            ErrorCode::CursorStale
+        );
+        assert!(search_indexed_sources(&old, "needle", &plan).is_ok());
+    }
+
     #[test]
     fn source_sql_exact_ids_title_and_fts_share_exact_byte_excerpts() {
         let reader = reader();
@@ -1421,8 +1847,15 @@ mod indexed_source_tests {
     }
 
     fn query_plan(reader: &Reader, key: &str, index: Option<&str>) -> (String, Vec<String>) {
-        let (sql, values) =
-            source_candidate_query(1, "needle", "\"needle\"", &QueryPlan::default(), key, index);
+        let (sql, values) = source_candidate_query(
+            false,
+            1,
+            "needle",
+            "\"needle\"",
+            &QueryPlan::default(),
+            key,
+            index,
+        );
         let mut statement = reader
             .connection
             .prepare(&format!("EXPLAIN QUERY PLAN {sql}"))

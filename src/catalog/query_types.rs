@@ -60,6 +60,14 @@ pub(crate) struct QueryReadUsage {
 /// Returning owned rows keeps bounded reads fallible instead of hiding a full
 /// projection behind a borrowed reference. The interface makes no freshness claim.
 pub(crate) trait QueryCatalog {
+    /// SQL layout for direct bounded retrieval. Legacy adapters keep returning
+    /// false because their private connection retains the original SQL shape.
+    fn normalized_layout(&self) -> bool {
+        false
+    }
+    fn publication_id(&self) -> Option<&str> {
+        None
+    }
     fn connection(&self) -> &Connection;
     fn snapshot(&self) -> &ReadSnapshot;
     fn vault_id(&self) -> &RecordId;

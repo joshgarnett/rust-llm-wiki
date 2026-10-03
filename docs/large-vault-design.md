@@ -12,6 +12,15 @@ replacement explicitly changes them. This work must preserve canonical Markdown,
 immutable source revisions, rebuildable local indexes, exact citations, offline
 operation, bounded remote embedding calls and recovery/accounting invariants.
 
+The current storage checkpoint includes a streaming normalized builder, leased
+catalog selection and direct bounded captured-source queries. The production
+publisher still uses the previous representation; ordinary incremental updates
+and the default-query transition are unfinished. The foundation passed 289 unit
+tests (five ignored), with a subsequent focused catalog check after narrow
+hardening. Formatting passed. The lint gate still reports unused entry points
+because publication and explicit auditing are not connected yet. These are
+component results, not CLI workflow, update-latency or large-vault qualification.
+
 ## Why a redesign is necessary
 
 A public 299-source corpus exposed an operational failure before answer quality
@@ -104,6 +113,18 @@ the old file through a lifetime lease. This topology is for full rebuilds; norma
 source updates still need bounded deltas. Normalization alone does not require
 multiple files, so the extra selector, lease and retirement machinery must justify
 its resource and concurrency costs in actual workflow tests before activation.
+
+For ordinary updates, use a transaction on the selected database with SQLite WAL:
+old read transactions retain their snapshot, and new transactions see committed
+rows and postings together. This requires explicitly replacing the candidate's
+DELETE-only serving and no-sidecar checks; changing a pragma alone is insufficient.
+Bound checkpoint and retained-WAL costs when readers remain open. The successful
+public update response must acknowledge index visibility, not merely an accepted
+background job. SQLite's [WAL documentation](https://www.sqlite.org/wal.html),
+Tantivy's explicit [reader reload policy](https://docs.rs/tantivy/0.26.2/tantivy/enum.ReloadPolicy.html)
+and Meilisearch's [asynchronous task completion](https://www.meilisearch.com/docs/capabilities/indexing/tasks_and_batches/async_operations)
+support these distinct transaction and visibility mechanisms. They are design
+references, not performance evidence for this implementation.
 
 Owned-cache lookups must use bounded, direct generated paths. Enumerating sibling
 filenames on every acquisition makes query work grow with publication history,

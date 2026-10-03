@@ -3,9 +3,10 @@
 //! This reader deliberately does not audit cache completeness or prove canonical
 //! freshness. A coordinator must verify selected canonical evidence separately.
 use super::{
-    Catalog, CatalogDiagnostic, DocumentRow, RecordRow, SnapshotVerification,
+    Catalog, CatalogDiagnostic, DocumentRow, RecordRow, SnapshotVerification, normalized_read,
+    normalized_schema,
     query_types::{QueryCatalog, QueryReadLimits, QueryReadUsage},
-    scan, sql,
+    scan, selector, sql,
 };
 use crate::domain::{
     Blake3Hash, ErrorCode, ReadSnapshot, RecordId, Result, VaultRelativePath, WikiError,
@@ -15,11 +16,27 @@ use serde::de::DeserializeOwned;
 use std::{
     cell::Cell,
     collections::BTreeSet,
+    ops::Deref,
     time::{Duration, Instant},
 };
 
+enum QueryConnection {
+    Legacy(Connection),
+    Normalized(selector::Selected<Connection>),
+}
+
+impl Deref for QueryConnection {
+    type Target = Connection;
+    fn deref(&self) -> &Connection {
+        match self {
+            Self::Legacy(connection) => connection,
+            Self::Normalized(selected) => selected.value(),
+        }
+    }
+}
+
 pub(crate) struct QuerySnapshot {
-    connection: Connection,
+    connection: QueryConnection,
     snapshot: ReadSnapshot,
     vault_id: RecordId,
     verification: SnapshotVerification,
@@ -36,6 +53,45 @@ impl Catalog {
                 ErrorCode::ConfigInvalid,
                 "catalog busy timeout exceeds 30 seconds",
             ));
+        }
+        let timeout = self.options.busy_timeout_ms.min(limits.max_elapsed_ms);
+        let mut selected_header = None;
+        if let Some(selected) = selector::acquire(
+            &self.fs,
+            &self.vault_id,
+            Duration::from_millis(timeout),
+            |path, selection| {
+                let connection = Connection::open_with_flags(
+                    path,
+                    OpenFlags::SQLITE_OPEN_READ_ONLY
+                        | OpenFlags::SQLITE_OPEN_NO_MUTEX
+                        | OpenFlags::SQLITE_OPEN_NOFOLLOW,
+                )
+                .map_err(sql::sql_error)?;
+                configure_query(&connection, &limits)?;
+                sql::configure(&connection, timeout, false)?;
+                connection
+                    .execute_batch("BEGIN DEFERRED")
+                    .map_err(sql::sql_error)?;
+                let header = normalized_read::header(&connection, selection)?;
+                if header.snapshot.parser_fingerprint != scan::parser_fingerprint() {
+                    return Err(WikiError::new(
+                        ErrorCode::OfflineUnavailable,
+                        "catalog parser fingerprint changed; run index sync or rebuild",
+                    ));
+                }
+                selected_header = Some(header.snapshot);
+                Ok(connection)
+            },
+        )? {
+            return Ok(QuerySnapshot {
+                snapshot: selected_header.expect("successful selection reads its header"),
+                connection: QueryConnection::Normalized(selected),
+                vault_id: self.vault_id.clone(),
+                verification: SnapshotVerification::IndexSnapshot,
+                usage: Cell::new(QueryReadUsage::default()),
+                limits,
+            });
         }
         let path = self.cache_path()?;
         if !path.exists() {
@@ -96,7 +152,7 @@ impl Catalog {
         drop(rows);
         drop(statement);
         Ok(QuerySnapshot {
-            connection,
+            connection: QueryConnection::Legacy(connection),
             snapshot,
             // Schema v1 does not have a vault identity header. Selected canonical
             // proof must establish this caller-supplied identity before citations.
@@ -201,6 +257,15 @@ impl QuerySnapshot {
 }
 
 impl QueryCatalog for QuerySnapshot {
+    fn publication_id(&self) -> Option<&str> {
+        match &self.connection {
+            QueryConnection::Normalized(selected) => Some(&selected.selection().file_id),
+            QueryConnection::Legacy(_) => None,
+        }
+    }
+    fn normalized_layout(&self) -> bool {
+        matches!(&self.connection, QueryConnection::Normalized(_))
+    }
     fn connection(&self) -> &Connection {
         &self.connection
     }
@@ -214,6 +279,63 @@ impl QueryCatalog for QuerySnapshot {
         &self.verification
     }
     fn record(&self, id: &RecordId) -> Result<Option<RecordRow>> {
+        if self.normalized_layout() {
+            let mut statement = self.connection.prepare(
+                "SELECT row_json,id,kind,path,hash,authored_status,eligibility,identity_eligibility,description_eligibility,disputed FROM records INDEXED BY sqlite_autoindex_records_1 WHERE id=?1",
+            ).map_err(sql::sql_error)?;
+            let mut rows = statement.query([id.as_str()]).map_err(sql::sql_error)?;
+            let Some(row) = rows.next().map_err(sql::sql_error)? else {
+                return Ok(None);
+            };
+            let mut bytes = 0usize;
+            for column in 0..9 {
+                let length = match row.get_ref(column).map_err(sql::sql_error)? {
+                    ValueRef::Text(value) => value.len(),
+                    ValueRef::Null if matches!(column, 5 | 7 | 8) => 0,
+                    _ => return Err(corrupt("normalized record column has the wrong SQL type")),
+                };
+                bytes = bytes.checked_add(length).ok_or_else(|| {
+                    WikiError::new(
+                        ErrorCode::BudgetExceeded,
+                        "normalized record byte count overflow",
+                    )
+                })?;
+            }
+            self.reserve(bytes)?;
+            let decoded: RecordRow = serde_json::from_slice(text_bytes(row, 0)?)
+                .map_err(|error| corrupt(error.to_string()))?;
+            let eligibility = |value: crate::domain::Eligibility| match value {
+                crate::domain::Eligibility::Current => "current",
+                crate::domain::Eligibility::Historical => "historical",
+                crate::domain::Eligibility::Stale => "stale",
+                crate::domain::Eligibility::Withdrawn => "withdrawn",
+                crate::domain::Eligibility::Unsupported => "unsupported",
+                crate::domain::Eligibility::Invalid => "invalid",
+            };
+            let optional = |column| -> Result<Option<&str>> {
+                match row.get_ref(column).map_err(sql::sql_error)? {
+                    ValueRef::Null => Ok(None),
+                    ValueRef::Text(bytes) => utf8(bytes).map(Some),
+                    _ => Err(corrupt("normalized record optional value is invalid")),
+                }
+            };
+            if decoded.record.id() != id
+                || utf8(text_bytes(row, 1)?)? != id.as_str()
+                || utf8(text_bytes(row, 2)?)? != decoded.record.kind().as_str()
+                || utf8(text_bytes(row, 3)?)? != decoded.path.as_str()
+                || utf8(text_bytes(row, 4)?)? != decoded.hash.as_str()
+                || optional(5)? != decoded.authored_status.as_deref()
+                || utf8(text_bytes(row, 6)?)? != eligibility(decoded.eligibility)
+                || optional(7)? != decoded.identity_eligibility.map(eligibility)
+                || optional(8)? != decoded.description_eligibility.map(eligibility)
+                || row.get::<_, i64>(9).map_err(sql::sql_error)? != i64::from(decoded.disputed)
+            {
+                return Err(corrupt(
+                    "selected record differs from its normalized columns",
+                ));
+            }
+            return Ok(Some(decoded));
+        }
         let mut statement = self.connection.prepare(
             "SELECT row_json FROM records INDEXED BY sqlite_autoindex_records_1 WHERE gen=?1 AND id=?2",
         ).map_err(sql::sql_error)?;
@@ -233,6 +355,23 @@ impl QueryCatalog for QuerySnapshot {
         Ok(Some(decoded))
     }
     fn document(&self, path: &VaultRelativePath) -> Result<Option<DocumentRow>> {
+        if self.normalized_layout() {
+            let mut statement = self.connection.prepare(&format!(
+                "SELECT {} FROM documents INDEXED BY sqlite_autoindex_documents_1 WHERE path=?1",
+                normalized_schema::DOCUMENT_COLUMNS,
+            )).map_err(sql::sql_error)?;
+            let mut rows = statement.query([path.as_str()]).map_err(sql::sql_error)?;
+            let Some(row) = rows.next().map_err(sql::sql_error)? else {
+                return Ok(None);
+            };
+            let decoded = self.decode_document(row, 0)?;
+            if &decoded.path != path {
+                return Err(corrupt(
+                    "selected document path differs from its indexed key",
+                ));
+            }
+            return Ok(Some(decoded));
+        }
         let mut statement = self.connection.prepare(
             "SELECT row_json FROM documents INDEXED BY sqlite_autoindex_documents_1 WHERE gen=?1 AND path=?2",
         ).map_err(sql::sql_error)?;
@@ -263,6 +402,36 @@ impl QueryCatalog for QuerySnapshot {
                 "catalog diagnostic path budget exhausted",
             ));
         }
+        if self.normalized_layout() {
+            // Column names alone admit a partial index that silently excludes
+            // selected warnings, or a collation that changes path equality.
+            let mut statement = self.connection.prepare(
+                "SELECT sql FROM sqlite_schema WHERE type='index' AND name='diagnostic_paths' AND tbl_name='diagnostics' LIMIT 2",
+            ).map_err(sql::sql_error)?;
+            let mut rows = statement.query([]).map_err(sql::sql_error)?;
+            let valid = if let Some(row) = rows.next().map_err(sql::sql_error)? {
+                let bytes = text_bytes(row, 0)?;
+                bytes.len() <= 4096
+                    && utf8(bytes)?
+                        .trim()
+                        .trim_end_matches(';')
+                        .chars()
+                        .filter(|character| !character.is_whitespace())
+                        .map(|character| character.to_ascii_lowercase())
+                        .collect::<String>()
+                        == "createindexdiagnostic_pathsondiagnostics(path)"
+            } else {
+                false
+            };
+            if !valid || rows.next().map_err(sql::sql_error)?.is_some() {
+                let mut error = WikiError::new(
+                    ErrorCode::CapabilityUnavailable,
+                    "catalog lacks the bounded diagnostic path index",
+                );
+                error.hint = Some("run index rebuild".into());
+                return Err(error);
+            }
+        }
         // Old schema-v1 caches may lack this additional access index. Do not
         // silently replace selected lookups with a complete diagnostic scan.
         let mut index = self.connection.prepare(
@@ -279,7 +448,12 @@ impl QueryCatalog for QuerySnapshot {
             .map_err(sql::sql_error)?
             .collect::<std::result::Result<Vec<_>, _>>()
             .map_err(sql::sql_error)?;
-        if columns != [(0, Some(true), Some(false)), (1, Some(false), Some(true))] {
+        let expected = if self.normalized_layout() {
+            vec![(0, Some(false), Some(true))]
+        } else {
+            vec![(0, Some(true), Some(false)), (1, Some(false), Some(true))]
+        };
+        if columns != expected {
             let mut error = WikiError::new(
                 ErrorCode::CapabilityUnavailable,
                 "catalog lacks the bounded diagnostic path index",
@@ -287,10 +461,12 @@ impl QueryCatalog for QuerySnapshot {
             error.hint = Some("run index rebuild".into());
             return Err(error);
         }
-        let mut statement = self.connection.prepare(
-            "SELECT path,record_id,code,details_json FROM diagnostics INDEXED BY diagnostic_paths \
-             WHERE gen=?1 AND path=?2 ORDER BY rowid LIMIT ?3",
-        ).map_err(sql::sql_error)?;
+        let query = if self.normalized_layout() {
+            "SELECT path,record_id,code,details_json FROM diagnostics INDEXED BY diagnostic_paths WHERE path=?2 ORDER BY diagnostic_row LIMIT ?3"
+        } else {
+            "SELECT path,record_id,code,details_json FROM diagnostics INDEXED BY diagnostic_paths WHERE gen=?1 AND path=?2 ORDER BY rowid LIMIT ?3"
+        };
+        let mut statement = self.connection.prepare(query).map_err(sql::sql_error)?;
         let mut result = Vec::new();
         for path in paths {
             // Read one excess row to fail rather than silently truncate diagnostics.
@@ -353,6 +529,18 @@ impl QueryCatalog for QuerySnapshot {
         Ok(result)
     }
     fn dependency_fingerprint(&self) -> Result<Blake3Hash> {
+        // Include physical identity and the actual pinned epoch: rebuilt files
+        // can share logical headers/epochs while containing different candidates.
+        if let QueryConnection::Normalized(selected) = &self.connection {
+            return serde_json::to_vec(&(
+                self.query_scope(),
+                &self.vault_id,
+                &selected.selection().file_id,
+                &self.snapshot,
+            ))
+            .map(Blake3Hash::digest)
+            .map_err(|error| WikiError::new(ErrorCode::Internal, error.to_string()));
+        }
         // Scope/header commitment only. This is not a global dependency proof.
         serde_json::to_vec(&(self.query_scope(), &self.vault_id, &self.snapshot))
             .map(Blake3Hash::digest)
@@ -362,6 +550,27 @@ impl QueryCatalog for QuerySnapshot {
         "indexed_evidence"
     }
     fn decode_document(&self, row: &Row<'_>, column: usize) -> Result<DocumentRow> {
+        if self.normalized_layout() {
+            let mut extra = 0usize;
+            for index in column + 14..row.as_ref().column_count() {
+                if let ValueRef::Text(value) = row.get_ref(index).map_err(sql::sql_error)? {
+                    extra = extra.checked_add(value.len()).ok_or_else(|| {
+                        WikiError::new(
+                            ErrorCode::BudgetExceeded,
+                            "normalized selected byte count overflow",
+                        )
+                    })?;
+                }
+            }
+            return normalized_read::document(row, column, |bytes| {
+                self.reserve(bytes.checked_add(extra).ok_or_else(|| {
+                    WikiError::new(
+                        ErrorCode::BudgetExceeded,
+                        "normalized selected byte count overflow",
+                    )
+                })?)
+            });
+        }
         self.decode(row, column)
     }
 }
@@ -408,6 +617,310 @@ mod tests {
     }
     fn defaults(catalog: &Catalog) -> QuerySnapshot {
         catalog.query_snapshot(QueryReadLimits::default()).unwrap()
+    }
+
+    fn publish_normalized(
+        catalog: &Catalog,
+        epoch: u64,
+    ) -> super::super::normalized_build::CompletedCatalog {
+        use crate::catalog::{
+            file_types::{BuildIdentity, CatalogSelection},
+            normalized_build::{BuildLimits, NormalizedBuilder},
+        };
+        let writer = WriterPermit::acquire(catalog.fs.root(), Duration::from_secs(1)).unwrap();
+        let identity = BuildIdentity {
+            selection: CatalogSelection::new(catalog.vault_id.clone(), epoch).unwrap(),
+            origin: None,
+            vector_cache_lost: false,
+            vector_loss_unknown: false,
+        };
+        selector::prepare(&catalog.fs, &writer, &identity.selection).unwrap();
+        let mut builder =
+            NormalizedBuilder::begin(&catalog.fs, &writer, identity, BuildLimits::default())
+                .unwrap();
+        let input = scan::scan_input(&catalog.fs, &catalog.vault_id).unwrap();
+        let projection = scan::project_with_sink(&catalog.fs, &input, false, &mut builder).unwrap();
+        let completed = builder.finish(&projection).unwrap();
+        selector::publish(
+            &catalog.fs,
+            &writer,
+            &completed.identity.selection,
+            Duration::from_secs(1),
+        )
+        .unwrap();
+        completed
+    }
+
+    #[test]
+    fn selected_v2_uses_bounded_normalized_rows_records_and_diagnostics() {
+        let (_temp, _root, catalog) = unsynced();
+        let completed = publish_normalized(&catalog, 1);
+        let database = Connection::open(&completed.path).unwrap();
+        database.execute("INSERT INTO diagnostics(path,record_id,code,details_json) VALUES('page.md','page_query','INDEX_CORRUPT','{}')", []).unwrap();
+        // An unrelated invalid payload must not affect selected lookups.
+        database
+            .execute("UPDATE records SET row_json='{' WHERE id='vault_query'", [])
+            .unwrap();
+        let reader = defaults(&catalog);
+        assert!(reader.normalized_layout());
+        assert_eq!(
+            reader.publication_id(),
+            Some(completed.identity.selection.file_id.as_str())
+        );
+        assert_eq!(reader.verification(), &SnapshotVerification::IndexSnapshot);
+        assert_eq!(reader.usage(), QueryReadUsage::default());
+        assert_eq!(
+            reader.document(&path("page.md")).unwrap().unwrap().title,
+            "Old selected title"
+        );
+        assert_eq!(
+            reader
+                .record(&id("page_query"))
+                .unwrap()
+                .unwrap()
+                .record
+                .title(),
+            "Old selected title"
+        );
+        assert_eq!(
+            reader
+                .diagnostics(&BTreeSet::from([path("page.md")]))
+                .unwrap()
+                .len(),
+            1
+        );
+        assert_eq!(reader.usage().rows, 3);
+        assert!(reader.usage().bytes > 0);
+        assert_eq!(
+            reader.record(&id("vault_query")).unwrap_err().code,
+            ErrorCode::IndexCorrupt
+        );
+        assert_eq!(reader.usage().rows, 4);
+        assert!(
+            reader
+                .connection()
+                .execute("DELETE FROM documents", [])
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn selected_v2_reserves_before_json_and_enforces_aggregate_limits() {
+        let (_temp, _root, catalog) = unsynced();
+        let completed = publish_normalized(&catalog, 1);
+        let database = Connection::open(&completed.path).unwrap();
+        database
+            .execute(
+                "UPDATE documents SET aliases_json='{' WHERE path='page.md'",
+                [],
+            )
+            .unwrap();
+        let reader = catalog
+            .query_snapshot(QueryReadLimits {
+                max_row_bytes: 1,
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(
+            reader.document(&path("page.md")).unwrap_err().code,
+            ErrorCode::BudgetExceeded
+        );
+        assert_eq!(reader.usage(), QueryReadUsage::default());
+        drop(reader);
+        let reader = defaults(&catalog);
+        assert_eq!(
+            reader.document(&path("page.md")).unwrap_err().code,
+            ErrorCode::IndexCorrupt
+        );
+        assert_eq!(reader.usage().rows, 1);
+        drop(reader);
+        database
+            .execute(
+                "UPDATE documents SET aliases_json='[]' WHERE path='page.md'",
+                [],
+            )
+            .unwrap();
+        let reader = catalog
+            .query_snapshot(QueryReadLimits {
+                max_rows: 1,
+                ..Default::default()
+            })
+            .unwrap();
+        reader.document(&path("page.md")).unwrap().unwrap();
+        assert_eq!(
+            reader.record(&id("page_query")).unwrap_err().code,
+            ErrorCode::BudgetExceeded
+        );
+        let bytes = reader.usage().bytes;
+        let reader = catalog
+            .query_snapshot(QueryReadLimits {
+                max_bytes: bytes,
+                ..Default::default()
+            })
+            .unwrap();
+        reader.document(&path("page.md")).unwrap().unwrap();
+        assert_eq!(
+            reader.document(&path("page.md")).unwrap_err().code,
+            ErrorCode::BudgetExceeded
+        );
+    }
+
+    #[test]
+    fn selected_v2_validates_records_and_bounded_diagnostic_index() {
+        for mutation in [
+            "UPDATE records SET path='tampered.md' WHERE id='page_query'",
+            "UPDATE records SET disputed=1 WHERE id='page_query'",
+            "UPDATE records SET identity_eligibility='current' WHERE id='page_query'",
+            "UPDATE records SET row_json='{' WHERE id='page_query'",
+        ] {
+            let (_temp, _root, catalog) = unsynced();
+            let completed = publish_normalized(&catalog, 1);
+            Connection::open(completed.path)
+                .unwrap()
+                .execute_batch(mutation)
+                .unwrap();
+            let reader = defaults(&catalog);
+            assert_eq!(
+                reader.record(&id("page_query")).unwrap_err().code,
+                ErrorCode::IndexCorrupt,
+                "{mutation}"
+            );
+            assert_eq!(reader.usage().rows, 1);
+        }
+        let (_temp, _root, catalog) = unsynced();
+        let completed = publish_normalized(&catalog, 1);
+        Connection::open(completed.path)
+            .unwrap()
+            .execute_batch(
+                "DROP INDEX diagnostic_paths; CREATE INDEX diagnostic_paths ON diagnostics(code)",
+            )
+            .unwrap();
+        assert_eq!(
+            defaults(&catalog)
+                .diagnostics(&BTreeSet::from([path("page.md")]))
+                .unwrap_err()
+                .code,
+            ErrorCode::CapabilityUnavailable
+        );
+    }
+
+    #[test]
+    fn selected_v2_rejects_partial_collated_and_oversized_diagnostic_index_definitions() {
+        for replacement in [
+            String::new(),
+            "CREATE INDEX diagnostic_paths ON diagnostics(path) WHERE code='NONE'".into(),
+            "CREATE INDEX diagnostic_paths ON diagnostics(path COLLATE NOCASE)".into(),
+            "CREATE UNIQUE INDEX diagnostic_paths ON diagnostics(path)".into(),
+            format!(
+                "CREATE INDEX diagnostic_paths ON diagnostics(path) /*{}*/",
+                "x".repeat(4096)
+            ),
+        ] {
+            let (_temp, _root, catalog) = unsynced();
+            let completed = publish_normalized(&catalog, 1);
+            let database = Connection::open(completed.path).unwrap();
+            database.execute("INSERT INTO diagnostics(path,record_id,code,details_json) VALUES('page.md',NULL,'INDEX_CORRUPT','{}')", []).unwrap();
+            database
+                .execute_batch("DROP INDEX diagnostic_paths")
+                .unwrap();
+            database.execute_batch(&replacement).unwrap();
+            let reader = defaults(&catalog);
+            let error = reader
+                .diagnostics(&BTreeSet::from([path("page.md")]))
+                .unwrap_err();
+            assert_eq!(
+                error.code,
+                ErrorCode::CapabilityUnavailable,
+                "{replacement}"
+            );
+            assert_eq!(error.hint.as_deref(), Some("run index rebuild"));
+            assert_eq!(reader.usage(), QueryReadUsage::default());
+        }
+    }
+
+    #[test]
+    fn selected_v2_old_reader_holds_lease_and_physical_identity_survives_same_epoch() {
+        let (temp, root, catalog) = unsynced();
+        let first = publish_normalized(&catalog, 1);
+        let held = defaults(&catalog);
+        let fingerprint = held.dependency_fingerprint().unwrap();
+        fs::write(temp.path().join("page.md"), page("New selected title")).unwrap();
+        let second = publish_normalized(&catalog, 1);
+        let current = defaults(&catalog);
+        assert_eq!(held.snapshot().generation, current.snapshot().generation);
+        assert_ne!(held.publication_id(), current.publication_id());
+        assert_ne!(fingerprint, current.dependency_fingerprint().unwrap());
+        assert_eq!(
+            held.document(&path("page.md")).unwrap().unwrap().title,
+            "Old selected title"
+        );
+        assert_eq!(
+            current.document(&path("page.md")).unwrap().unwrap().title,
+            "New selected title"
+        );
+        let writer = WriterPermit::acquire(&root, Duration::from_secs(1)).unwrap();
+        assert!(
+            !selector::retire(
+                &catalog.fs,
+                &writer,
+                &catalog.vault_id,
+                &first.identity.selection,
+                Duration::ZERO
+            )
+            .unwrap()
+        );
+        drop(held);
+        assert!(
+            selector::retire(
+                &catalog.fs,
+                &writer,
+                &catalog.vault_id,
+                &first.identity.selection,
+                Duration::ZERO
+            )
+            .unwrap()
+        );
+        assert!(second.path.exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn selected_v2_read_only_catalog_directory_is_unchanged() {
+        use std::os::unix::fs::PermissionsExt;
+        let (temp, _root, catalog) = unsynced();
+        let completed = publish_normalized(&catalog, 1);
+        let directory = completed.path.parent().unwrap();
+        let before: BTreeSet<_> = fs::read_dir(directory)
+            .unwrap()
+            .map(|entry| {
+                let path = entry.unwrap().path();
+                (
+                    path.clone(),
+                    fs::read(&path).unwrap(),
+                    fs::metadata(&path).unwrap().modified().unwrap(),
+                )
+            })
+            .collect();
+        let permissions = fs::metadata(directory).unwrap().permissions();
+        fs::set_permissions(directory, fs::Permissions::from_mode(0o500)).unwrap();
+        let reader = defaults(&catalog);
+        reader.document(&path("page.md")).unwrap().unwrap();
+        reader.record(&id("page_query")).unwrap().unwrap();
+        drop(reader);
+        fs::set_permissions(directory, permissions).unwrap();
+        let after: BTreeSet<_> = fs::read_dir(directory)
+            .unwrap()
+            .map(|entry| {
+                let path = entry.unwrap().path();
+                (
+                    path.clone(),
+                    fs::read(&path).unwrap(),
+                    fs::metadata(&path).unwrap().modified().unwrap(),
+                )
+            })
+            .collect();
+        assert_eq!(before, after);
+        assert!(!temp.path().join(".wiki/cache/index.sqlite").exists());
     }
 
     #[test]

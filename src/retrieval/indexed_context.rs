@@ -36,6 +36,12 @@ struct SelectedCatalog<'a> {
 }
 
 impl QueryCatalog for SelectedCatalog<'_> {
+    fn publication_id(&self) -> Option<&str> {
+        self.reader.publication_id()
+    }
+    fn normalized_layout(&self) -> bool {
+        self.reader.normalized_layout()
+    }
     fn connection(&self) -> &Connection {
         self.reader.connection()
     }
@@ -460,14 +466,25 @@ pub(super) fn context(
         .iter()
         .map(|(path, bytes)| (path.clone(), ExpectedState::Hash(Blake3Hash::digest(bytes))))
         .collect();
-    selected.fingerprint = Blake3Hash::digest(
+    let selected_commitment = if let Some(publication) = reader.publication_id() {
+        serde_json::to_vec(&(
+            "lwiki-indexed-evidence-selected-dependencies-v1",
+            catalog.vault_id(),
+            publication,
+            reader.snapshot(),
+            &states,
+        ))
+    } else {
         serde_json::to_vec(&(
             "lwiki-indexed-evidence-selected-dependencies-v1",
             catalog.vault_id(),
             reader.snapshot(),
             &states,
         ))
-        .map_err(|error| WikiError::new(ErrorCode::Internal, error.to_string()))?,
+    };
+    selected.fingerprint = Blake3Hash::digest(
+        selected_commitment
+            .map_err(|error| WikiError::new(ErrorCode::Internal, error.to_string()))?,
     );
     let anchors: Vec<_> = hits
         .hits
@@ -608,6 +625,100 @@ mod tests {
     use super::*;
     use crate::sources::revision::{common, record_bytes};
     use serde_json::json;
+
+    #[test]
+    fn selected_wrapper_preserves_layout_and_physical_cursor_binding() {
+        struct Reader {
+            connection: Connection,
+            snapshot: ReadSnapshot,
+            vault: RecordId,
+            publication: Option<&'static str>,
+            normalized: bool,
+        }
+        impl QueryCatalog for Reader {
+            fn publication_id(&self) -> Option<&str> {
+                self.publication
+            }
+            fn normalized_layout(&self) -> bool {
+                self.normalized
+            }
+            fn connection(&self) -> &Connection {
+                &self.connection
+            }
+            fn snapshot(&self) -> &ReadSnapshot {
+                &self.snapshot
+            }
+            fn vault_id(&self) -> &RecordId {
+                &self.vault
+            }
+            fn verification(&self) -> &SnapshotVerification {
+                &SnapshotVerification::IndexSnapshot
+            }
+            fn record(&self, _: &RecordId) -> Result<Option<RecordRow>> {
+                panic!("unused selected reader access")
+            }
+            fn document(&self, _: &VaultRelativePath) -> Result<Option<DocumentRow>> {
+                panic!("unused selected reader access")
+            }
+            fn diagnostics(
+                &self,
+                _: &BTreeSet<VaultRelativePath>,
+            ) -> Result<Vec<CatalogDiagnostic>> {
+                panic!("unused selected reader access")
+            }
+            fn dependency_fingerprint(&self) -> Result<Blake3Hash> {
+                panic!("unused selected reader access")
+            }
+            fn query_scope(&self) -> &'static str {
+                "indexed_evidence"
+            }
+            fn decode_document(&self, _: &Row<'_>, _: usize) -> Result<DocumentRow> {
+                panic!("unused selected reader access")
+            }
+        }
+        let reader = |publication, normalized| Reader {
+            connection: Connection::open_in_memory().unwrap(),
+            snapshot: ReadSnapshot {
+                generation: 1,
+                parser_fingerprint: Blake3Hash::digest("parser"),
+                control_manifest: Blake3Hash::digest("manifest"),
+            },
+            vault: RecordId::new("vault_wrapper").unwrap(),
+            publication,
+            normalized,
+        };
+        fn wrap(reader: &dyn QueryCatalog) -> SelectedCatalog<'_> {
+            SelectedCatalog {
+                reader,
+                records: BTreeMap::new(),
+                documents: BTreeMap::new(),
+                fingerprint: Blake3Hash::digest("selected"),
+            }
+        }
+        let old = reader(Some("00000000000000000000000000000001"), true);
+        let selected = wrap(&old as &dyn QueryCatalog);
+        assert!(selected.normalized_layout());
+        assert_eq!(selected.publication_id(), old.publication_id());
+        let fingerprint = Blake3Hash::digest("query");
+        let cursor = super::super::cursor::encode(&selected, fingerprint.clone(), 1).unwrap();
+        assert_eq!(
+            super::super::cursor::offset(&selected, &fingerprint, Some(&cursor), 2).unwrap(),
+            1
+        );
+        let new = reader(Some("00000000000000000000000000000002"), true);
+        let replacement = wrap(&new as &dyn QueryCatalog);
+        assert_eq!(replacement.snapshot(), selected.snapshot());
+        assert_eq!(
+            super::super::cursor::offset(&replacement, &fingerprint, Some(&cursor), 2)
+                .unwrap_err()
+                .code,
+            ErrorCode::CursorStale
+        );
+        let legacy = reader(None, false);
+        let legacy = wrap(&legacy as &dyn QueryCatalog);
+        assert!(!legacy.normalized_layout());
+        assert_eq!(legacy.publication_id(), None);
+    }
 
     fn record_row(record: CanonicalRecord, path: &str) -> (RecordRow, Vec<u8>) {
         let bytes = record_bytes(record.clone(), b"").unwrap();

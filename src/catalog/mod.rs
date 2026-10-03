@@ -1,10 +1,16 @@
 //! Rebuildable catalog generations and complete graph eligibility.
 pub mod eligibility;
+pub(crate) mod file_types;
 mod integrity;
+pub(crate) mod normalized_audit;
+pub(crate) mod normalized_build;
+pub(crate) mod normalized_read;
+pub(crate) mod normalized_schema;
 pub mod publish;
 pub(crate) mod query;
 pub(crate) mod query_types;
 pub mod scan;
+pub(crate) mod selector;
 pub mod snapshot;
 pub mod sql;
 pub mod types;

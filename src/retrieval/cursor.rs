@@ -10,6 +10,8 @@ struct Cursor {
     snapshot: ReadSnapshot,
     query: Blake3Hash,
     offset: usize,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    publication: Option<String>,
 }
 pub(crate) fn fingerprint(query: &str, plan: &QueryPlan) -> Result<Blake3Hash> {
     serde_json::to_vec(&(
@@ -49,6 +51,7 @@ pub(crate) fn offset(
         serde_json::from_slice(&bytes).map_err(|_| stale("malformed pagination cursor"))?;
     if value.version != 1
         || value.snapshot != *reader.snapshot()
+        || value.publication.as_deref() != reader.publication_id()
         || &value.query != fingerprint
         || value.offset >= cap
     {
@@ -66,6 +69,7 @@ pub(crate) fn encode(
         snapshot: reader.snapshot().clone(),
         query: fingerprint,
         offset,
+        publication: reader.publication_id().map(str::to_owned),
     })
     .map_err(|e| WikiError::new(ErrorCode::Internal, e.to_string()))?;
     Ok(bytes.iter().map(|byte| format!("{byte:02x}")).collect())
