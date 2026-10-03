@@ -6,7 +6,7 @@ Started: 2026-09-28. Status: local M0–M4 implementation complete; P00–P21 an
 
 The 2026-10-03 context-completeness goal remains open. Independent development review found that relevant sources still lost required facts during passage selection. The [evaluation summary](docs/execution/reports/EVAL-RESEARCH.md) records measured gains, regressions and the unmet acceptance gate. The [host-selection workflow](docs/context-selection.md) now preserves verified source evidence while allowing an agent to select complementary passages; it has additional latency and unavailable model-usage accounting.
 
-Local milestones: `2c340ef` adds reproducible evaluation and separates durable documentation from local session evidence; `8a0f228` adds the tested selection workflow; `77f0382` records complementary datasets and pinned acquisition; `fb91449` preserves source coverage at the candidate-input byte limit. These commits are checkpoints, not a declaration of quality acceptance. Further dataset adapters and independent development/held-out evaluation are in progress. Detailed run logs and mutable checkpoints remain local.
+Local milestones: `2c340ef` adds reproducible evaluation and separates durable documentation from local session evidence; `8a0f228` adds the tested selection workflow; `77f0382` records complementary datasets and pinned acquisition; `fb91449` preserves source coverage at the candidate-input byte limit; `70d2122` adds the ContractNLI adapter and its 204-task offline evaluation. These commits are checkpoints, not a declaration of quality acceptance. Further dataset adapters and independent development/held-out evaluation are in progress. Detailed run logs and mutable checkpoints remain local.
 
 ## Scope
 
