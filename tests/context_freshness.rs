@@ -202,7 +202,9 @@ fn freshness_budget_cannot_claim_verified() {
     fn check_error(error: WikiError, flag: &str) {
         assert_eq!(error.code, ErrorCode::BudgetExceeded);
         assert!(!error.retryable);
-        assert!(error.hint.as_deref().unwrap().contains(flag));
+        let hint = error.hint.as_deref().unwrap();
+        assert!(hint.contains(flag));
+        assert!(hint.contains("only if below its ceiling"));
     }
     let f = Fixture::new();
     let writer = f.writer();

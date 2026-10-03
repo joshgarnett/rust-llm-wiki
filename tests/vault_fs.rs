@@ -714,7 +714,7 @@ fn cooperating_writers_serialize() {
 }
 
 #[test]
-fn proof_budgets_cover_nested_marker_scans_and_checked_resolution() {
+fn proof_budgets_cover_discovery_and_resolution_without_sibling_rescans() {
     use lwiki::domain::WikiError;
     let (_temp, root) = fixture();
     fs::create_dir(root.path().join("large")).unwrap();
@@ -725,11 +725,48 @@ fn proof_budgets_cover_nested_marker_scans_and_checked_resolution() {
         )
         .unwrap();
     }
-    for resolving in [false, true] {
+    let count_resolve = || {
+        let mut calls = 0;
+        assert!(
+            root.resolve_budgeted(&rel("large/item-199.bin"), &mut || {
+                calls += 1;
+                Ok(())
+            })
+            .unwrap()
+            .is_file()
+        );
+        calls
+    };
+    let count_scan = || {
+        let mut calls = 0;
+        let paths = root
+            .scan_markdown_budgeted(&mut || {
+                calls += 1;
+                Ok(())
+            })
+            .unwrap();
+        assert_eq!(paths, [rel("WIKI.md")]);
+        calls
+    };
+    let small_resolve = count_resolve();
+    let small_scan = count_scan();
+    assert!(small_resolve > 0 && small_resolve <= 8);
+    for index in 200..1000 {
+        fs::write(
+            root.path().join(format!("large/item-{index}.bin")),
+            b"payload",
+        )
+        .unwrap();
+    }
+    assert_eq!(count_resolve(), small_resolve);
+    // Discovery still inspects every added entry. Repeated operations are not
+    // concealed by unique-entry accounting.
+    assert_eq!(count_scan() - small_scan, 800);
+    for (resolving, limit) in [(false, 8), (true, small_resolve - 1)] {
         let mut calls = 0;
         let mut budget = || {
             calls += 1;
-            if calls > 8 {
+            if calls > limit {
                 Err(WikiError::new(ErrorCode::BudgetExceeded, "entry budget"))
             } else {
                 Ok(())
@@ -742,7 +779,59 @@ fn proof_budgets_cover_nested_marker_scans_and_checked_resolution() {
             root.scan_markdown_budgeted(&mut budget).unwrap_err()
         };
         assert_eq!(error.code, ErrorCode::BudgetExceeded);
-        assert_eq!(calls, 9);
+        assert_eq!(calls, limit + 1);
     }
-    assert!(root.resolve(&rel("large/item-199.bin")).unwrap().is_file());
+}
+
+#[test]
+fn fresh_marker_probe_preserves_case_nonregular_policy_and_positive_scan_budget() {
+    use lwiki::domain::WikiError;
+    let (_temp, root) = fixture();
+    let directory = root.path().join("child");
+    fs::create_dir(&directory).unwrap();
+    fs::write(directory.join("page.md"), b"page").unwrap();
+    assert!(root.resolve(&rel("child/page.md")).is_ok());
+    // The optimistic lookup may find this alias on case-insensitive filesystems;
+    // only an exact spelling is a nested-vault marker.
+    fs::write(directory.join("wiki.md"), b"not an exact marker").unwrap();
+    assert!(root.resolve(&rel("child/page.md")).is_ok());
+    fs::remove_file(directory.join("wiki.md")).unwrap();
+    fs::write(directory.join("WIKI.md"), b"nested marker").unwrap();
+    let mut calls = 0;
+    let error = root
+        .resolve_budgeted(&rel("child/page.md"), &mut || {
+            calls += 1;
+            if calls > 2 {
+                Err(WikiError::new(
+                    ErrorCode::BudgetExceeded,
+                    "positive marker budget",
+                ))
+            } else {
+                Ok(())
+            }
+        })
+        .unwrap_err();
+    // Component check + fresh probe precede the separately metered exact-name
+    // directory open; a positive probe cannot bypass that work reservation.
+    assert_eq!(error.code, ErrorCode::BudgetExceeded);
+    assert_eq!(calls, 3);
+    assert!(
+        root.resolve(&rel("child/page.md"))
+            .unwrap_err()
+            .message
+            .contains("nested vault")
+    );
+    // Every call observes fresh marker state. Neither absence nor presence is cached.
+    fs::remove_file(directory.join("WIKI.md")).unwrap();
+    fs::create_dir(directory.join("WIKI.md")).unwrap();
+    assert!(root.resolve(&rel("child/page.md")).is_ok());
+    fs::remove_dir(directory.join("WIKI.md")).unwrap();
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(root.path().join("WIKI.md"), directory.join("WIKI.md")).unwrap();
+        assert!(root.resolve(&rel("child/page.md")).is_ok());
+        fs::remove_file(directory.join("WIKI.md")).unwrap();
+    }
+    fs::write(directory.join("WIKI.md"), b"nested again").unwrap();
+    assert!(root.resolve(&rel("child/page.md")).is_err());
 }

@@ -1,5 +1,13 @@
 # Context evaluation research and implementation
 
+## Public scale failure and first structural repair
+
+Importing 299 public development source texts (1,339,673 UTF-8 bytes) exposed a capacity defect: all 64 prospectively selected lexical-context questions failed at the hard 65,536-entry proof ceiling. These are operational failures, not semantic grades. The original import also exceeded its 1,800-second experiment deadline after 250 successful sources; a separately recorded finite continuation imported the remaining 49 without replacing the failed attempt.
+
+Independent architecture review traced an accidental quadratic cost to nested-vault detection: resolving each source path repeatedly enumerated all siblings merely to establish that `WIKI.md` was absent. A fresh, metered no-follow marker probe now avoids negative sibling enumeration. Positive probes still enumerate exact spelling, preserving case behavior; discovery, symlink and nested-vault checks remain in place. Regressions show constant path-resolution work when sibling count grows from 200 to 1,000, while full discovery still counts every added entry. Proof limits and freshness guarantees are unchanged. Budget-exhaustion hints now recommend an increase only below the supported ceiling.
+
+The marker change passed ten local targets covering unit, vault, context, semantic retrieval, native catalog/change recovery, storage cleanup, format and Clippy. The later hint change passed focused freshness/format/Clippy checks after correcting one formatting-only failure. These checks do not establish large-vault capacity or answer quality. The [large-vault design](../../large-vault-design.md) and [prospective acceptance protocol](../../testing-large-vaults.md) address remaining full-catalog reconstruction, global proof, publication, ingestion and vector-scan costs. Unseen acceptance remains suspended until the replacement candidate and protocol are frozen; no private query outcomes informed this repair.
+
 ## Development checkpoint: host selection
 
 The context-completeness goal remains open. On the same fine-grained embedding cache, the automatic candidate reaches 15 complete, 12 partial and one bad result across 28 answerable development questions, versus baseline 7/20/1. Three previously complete cases regress. All four absent-information cases remain unsupported. These results do not meet the independent acceptance gate.

@@ -33,6 +33,17 @@ fn exact_marker(path: &Path) -> Result<bool> {
     exact_marker_budgeted(path, &mut || Ok(()))
 }
 fn exact_marker_budgeted(path: &Path, on_entry: &mut dyn FnMut() -> Result<()>) -> Result<bool> {
+    // Most managed directories are not nested vaults. A fresh negative probe
+    // avoids enumerating every sibling again for each checked file path.
+    // A positive probe still needs exact-name enumeration on case-insensitive
+    // filesystems, where looking up WIKI.md can find a differently cased name.
+    on_entry()?;
+    match fs::symlink_metadata(path.join("WIKI.md")) {
+        Ok(meta) if !meta.is_file() || meta.file_type().is_symlink() => return Ok(false),
+        Ok(_) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => return Err(io_error("inspect vault marker", error)),
+    }
     on_entry()?;
     for entry in fs::read_dir(path).map_err(|e| io_error("read vault directory", e))? {
         on_entry()?;

@@ -107,16 +107,16 @@ fn budget_error(message: &str) -> WikiError {
     let mut error = WikiError::new(ErrorCode::BudgetExceeded, message);
     error.hint = match message {
         "final-proof directory/component/entry budget exceeded" => Some(
-            "Inspect vault size and layout, then rerun context with a larger --verification-max-entries allowance. Directory and path-component checks can revisit entries; this is not a unique-file count.",
+            "Increase --verification-max-entries only if below its ceiling. At the ceiling, this vault exceeds the supported entry budget for verified context. Directory and path-component checks can revisit entries; this is not a unique-file count.",
         ),
         "final-proof file-read budget exceeded" => Some(
-            "Inspect the evidence file count, then rerun context with a larger --verification-max-files allowance.",
+            "Increase --verification-max-files only if below its ceiling. At the ceiling, this vault exceeds the supported file-read budget for verified context.",
         ),
         "final-proof byte budget exceeded before read" => Some(
-            "Inspect evidence file sizes, then rerun context with a larger --verification-max-bytes allowance.",
+            "Increase --verification-max-bytes only if below its ceiling. At the ceiling, this vault exceeds the supported byte budget for verified context.",
         ),
         "elapsed final-proof deadline exceeded" => Some(
-            "Inspect vault size and local filesystem responsiveness, then rerun context with a larger --verification-max-elapsed-ms allowance.",
+            "Inspect local filesystem responsiveness; increase --verification-max-elapsed-ms only if below its ceiling. At the ceiling, verification cannot finish within the supported deadline.",
         ),
         _ => None,
     }
