@@ -104,7 +104,24 @@ fn io_error(e: std::io::Error) -> WikiError {
     WikiError::new(ErrorCode::Internal, format!("context proof read: {e}"))
 }
 fn budget_error(message: &str) -> WikiError {
-    WikiError::new(ErrorCode::BudgetExceeded, message)
+    let mut error = WikiError::new(ErrorCode::BudgetExceeded, message);
+    error.hint = match message {
+        "final-proof directory/component/entry budget exceeded" => Some(
+            "Inspect vault size and layout, then rerun context with a larger --verification-max-entries allowance. Directory and path-component checks can revisit entries; this is not a unique-file count.",
+        ),
+        "final-proof file-read budget exceeded" => Some(
+            "Inspect the evidence file count, then rerun context with a larger --verification-max-files allowance.",
+        ),
+        "final-proof byte budget exceeded before read" => Some(
+            "Inspect evidence file sizes, then rerun context with a larger --verification-max-bytes allowance.",
+        ),
+        "elapsed final-proof deadline exceeded" => Some(
+            "Inspect vault size and local filesystem responsiveness, then rerun context with a larger --verification-max-elapsed-ms allowance.",
+        ),
+        _ => None,
+    }
+    .map(str::to_owned);
+    error
 }
 fn conflict(message: &str) -> WikiError {
     WikiError::new(ErrorCode::FreshnessConflict, message)

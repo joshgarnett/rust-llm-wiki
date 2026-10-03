@@ -197,33 +197,32 @@ fn second_change_fails_without_a_third_attempt() {
 }
 #[test]
 fn freshness_budget_cannot_claim_verified() {
+    fn check_error(error: WikiError, flag: &str) {
+        assert_eq!(error.code, ErrorCode::BudgetExceeded);
+        assert!(!error.retryable);
+        assert!(error.hint.as_deref().unwrap().contains(flag));
+    }
     let f = Fixture::new();
     let writer = f.writer();
     let mut r = ContextRequest::default();
     r.verification_budget.max_files = 1;
-    assert_eq!(
-        context(&f.catalog, Some(&writer), "uses", &r)
-            .unwrap_err()
-            .code,
-        ErrorCode::BudgetExceeded
+    check_error(
+        context(&f.catalog, Some(&writer), "uses", &r).unwrap_err(),
+        "--verification-max-files",
     );
     assert!(!f.temp.path().join(".wiki/cache/index.sqlite").exists());
     r.verification_budget = VerificationBudget::default();
     r.verification_budget.max_bytes = 1;
-    assert_eq!(
-        context(&f.catalog, Some(&writer), "uses", &r)
-            .unwrap_err()
-            .code,
-        ErrorCode::BudgetExceeded
+    check_error(
+        context(&f.catalog, Some(&writer), "uses", &r).unwrap_err(),
+        "--verification-max-bytes",
     );
     assert!(!f.temp.path().join(".wiki/cache/index.sqlite").exists());
     r.verification_budget = VerificationBudget::default();
     r.verification_budget.max_entries = 1;
-    assert_eq!(
-        context(&f.catalog, Some(&writer), "uses", &r)
-            .unwrap_err()
-            .code,
-        ErrorCode::BudgetExceeded
+    check_error(
+        context(&f.catalog, Some(&writer), "uses", &r).unwrap_err(),
+        "--verification-max-entries",
     );
     r.verification_budget = VerificationBudget::default();
     r.verification_budget.max_elapsed_ms = 5;
@@ -232,18 +231,24 @@ fn freshness_budget_cannot_claim_verified() {
         kind: Mutation::Sleep,
         calls: AtomicUsize::new(0),
     });
-    assert_eq!(
+    check_error(
         context_with_options(
             &f.catalog,
             Some(&writer),
             "uses",
             &r,
-            &ContextOptions { fault: Some(hook) }
+            &ContextOptions { fault: Some(hook) },
         )
-        .unwrap_err()
-        .code,
-        ErrorCode::BudgetExceeded
+        .unwrap_err(),
+        "--verification-max-elapsed-ms",
     );
+    // Explicitly restoring adequate bounds can produce verified context again.
+    r.verification_budget = VerificationBudget::default();
+    let result = context(&f.catalog, Some(&writer), "uses", &r).unwrap();
+    assert!(matches!(
+        result.verification(),
+        SnapshotVerification::VerifiedSnapshot { .. }
+    ));
 }
 #[test]
 fn both_attempts_share_the_file_budget() {

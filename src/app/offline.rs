@@ -535,7 +535,7 @@ impl OfflineApp {
         bounded(&bytes)?;
         if !crate::sources::revision::canonical_path(&path) {
             return Err(WikiError::invalid(
-                "page target must be canonical Markdown path",
+                "page target must be a canonical .md record path; index.md is reserved for generated navigation (use pages/overview.md for an authored landing page)",
             ));
         }
         let new = parse_note(&bytes);

@@ -1,0 +1,674 @@
+{
+  "schema": "lwiki.ux-validation.v1",
+  "status": "completed_locally_with_retrieval_quality_limits",
+  "baseline_commit": "490b71a18b567ed15e9617dd12d7bfbb57201eae",
+  "source_dirty": true,
+  "candidate": {
+    "schema_version": 1,
+    "scope": "native release build and copied-binary version/capabilities smoke only; not full qualification",
+    "source": {
+      "commit": "490b71a18b567ed15e9617dd12d7bfbb57201eae",
+      "dirty": true,
+      "note": "Informational, not qualified provenance. HEAD/status and build contract digests were compared before/after; unchanged status does not prove dirty file contents stayed unchanged."
+    },
+    "bazel": "Bazelisk 1.29.0\nbazel 9.2.0",
+    "host": "aarch64-apple-darwin",
+    "target": "aarch64-apple-darwin",
+    "package_version": "0.1.2",
+    "build_command": [
+      "/Library/Developer/CommandLineTools/usr/bin/python3",
+      "/Users/jgarnett/Devleopment/rust-llm-wiki/scripts/bazel.py",
+      "--",
+      "build",
+      "--config=release",
+      "--nofetch",
+      "//:lwiki"
+    ],
+    "rust_toolchain": "[toolchain]\nchannel = \"1.98.0\"\nprofile = \"minimal\"\ncomponents = [\"clippy\", \"rustfmt\"]\n",
+    "bazel_module": "module(name = \"rust_llm_wiki\", version = \"0.1.2\")\n\nbazel_dep(name = \"platforms\", version = \"1.1.0\")\nbazel_dep(name = \"rules_rust\", version = \"0.72.0\")\n\nrust = use_extension(\"@rules_rust//rust:extensions.bzl\", \"rust\")\nrust.toolchain(\n    edition = \"2024\",\n    versions = [\"1.98.0\"],\n    extra_target_triples = [\n        \"aarch64-apple-darwin\",\n        \"x86_64-apple-darwin\",\n        \"aarch64-unknown-linux-gnu\",\n        \"x86_64-unknown-linux-gnu\",\n        \"aarch64-pc-windows-msvc\",\n        \"x86_64-pc-windows-msvc\",\n    ],\n)\nuse_repo(rust, \"rust_toolchains\")\nregister_toolchains(\"@rust_toolchains//:all\")\n\ncrate = use_extension(\"@rules_rust//crate_universe:extensions.bzl\", \"crate\")\ncrate.from_cargo(\n    name = \"crates\",\n    cargo_lockfile = \"//:Cargo.lock\",\n    lockfile = \"//:cargo-bazel-lock.json\",\n    manifests = [\"//:Cargo.toml\"],\n    isolated = True,\n    supported_platform_triples = [\n        \"aarch64-apple-darwin\",\n        \"x86_64-apple-darwin\",\n        \"aarch64-unknown-linux-gnu\",\n        \"x86_64-unknown-linux-gnu\",\n        \"aarch64-pc-windows-msvc\",\n        \"x86_64-pc-windows-msvc\",\n    ],\n)\ncrate.annotation(\n    crate = \"ring\",\n    version = \"0.17.14\",\n    repositories = [\"crates\"],\n    patches = [\"//bazel:ring_windows_arm64_cflags.patch\"],\n    patch_args = [\"-p1\"],\n)\ncrate.annotation_select(\n    crate = \"ring\",\n    version = \"0.17.14\",\n    repositories = [\"crates\"],\n    triples = [\"aarch64-pc-windows-msvc\"],\n    build_script_env = {\"LWIKI_RING_WINDOWS_ARM64_CLANG\": \"1\"},\n)\nuse_repo(crate, \"crates\")\n",
+    "bazel_version_pin": "9.2.0",
+    "build_contract_sha256": {
+      "Cargo.toml": "28724e6fdb44d8240fc191fcd109f75dff1060d5ee1322a4c1acd9d72bd4e1b8",
+      "Cargo.lock": "a8e7099a610d83c22f008d5965697537dff4bfb33f795b52578b4ae51cc52553",
+      "MODULE.bazel": "5e30396c3690405686b88266b812d3b5f34fda7c863e697cd03dc3917f8720d8",
+      "MODULE.bazel.lock": "7879b81486d299d61ae622a561203785d4a7b91e8f0382e3c614d472d9244efa",
+      "cargo-bazel-lock.json": "deffe5b0d95f4f0210aea19b19f52e22444f57b6734a40667f0ee2cc4f1cf9bf",
+      ".bazelversion": "1b9487d55bea47fea50d226cc9c53bc548877ad2a318bac8fbc8b320f429e5c5",
+      ".bazelrc": "cb1b3f8a089ca7fb6804c5029a602ae660ff25fb8081fa520b67474d434e38cc",
+      "rust-toolchain.toml": "495c69d1db93f25f53e3d0d2d40d812313366cc368de317871c2ace6c6ffafa4",
+      "scripts/bazel.py": "f727e423befd2ac156a94f482cf02da966cfa5d80e8665f4348245f14d1a2811"
+    },
+    "cargo_lock_sha256": "a8e7099a610d83c22f008d5965697537dff4bfb33f795b52578b4ae51cc52553",
+    "binary": "lwiki",
+    "binary_sha256": "3c03dbd9cbb03d3dd0655be014044b0cbedaf587956198683f60569c912251e6"
+  },
+  "source_manifest": {
+    "path": ".artifacts/ux-live/checks/final-source-sha256.json",
+    "files": 326,
+    "sha256": "480cf7912271f0a7c367b443d866555d58140248842ea793f96448aae7ce8d6e",
+    "checked_unchanged_after_build": true
+  },
+  "tests": {
+    "aggregate_targets": 24,
+    "rust_parent_cases": 284,
+    "focused_unit_cases": 4,
+    "python_tool_tests": 41,
+    "aggregate_target_details": [
+      {
+        "target": "clippy",
+        "cases": 1,
+        "failures": 0,
+        "skipped": 0,
+        "xml_sha256": "b3e4a430f6333d47e64f67543944f604ff7b313f263876ef94a33b0b5e276a7c",
+        "rust_summaries": []
+      },
+      {
+        "target": "format",
+        "cases": 1,
+        "failures": 0,
+        "skipped": 0,
+        "xml_sha256": "49f87a6d272cd2eb1ddb7a1f109e7bbedbcecc3d94e67289a689667ba0cadbf6",
+        "rust_summaries": []
+      },
+      {
+        "target": "api_extraction_test",
+        "cases": 1,
+        "failures": 0,
+        "skipped": 0,
+        "xml_sha256": "f64ce6f967563ed405b839237ef5dff503d71c82a5e41fabfb9c46196907ca74",
+        "rust_summaries": [
+          {
+            "passed": 21,
+            "failed": 0,
+            "ignored": 0
+          }
+        ]
+      },
+      {
+        "target": "build_paths_test",
+        "cases": 1,
+        "failures": 0,
+        "skipped": 0,
+        "xml_sha256": "49556fcdb21dbfc4129da71c1e5701b69c2c06505833c8690f6c31c913d1bef6",
+        "rust_summaries": [
+          {
+            "passed": 8,
+            "failed": 0,
+            "ignored": 0
+          }
+        ]
+      },
+      {
+        "target": "catalog_scan_eligibility_test",
+        "cases": 1,
+        "failures": 0,
+        "skipped": 0,
+        "xml_sha256": "78a4ac363b733ec9e7d868177c08e95cac7b09022840c36451604916f90532b3",
+        "rust_summaries": [
+          {
+            "passed": 16,
+            "failed": 0,
+            "ignored": 0
+          }
+        ]
+      },
+      {
+        "target": "checkpoint_regressions",
+        "cases": 1,
+        "failures": 0,
+        "skipped": 0,
+        "xml_sha256": "4556b201663e5095372cd2040c1c469b02d4b64d500b4394926d4ca099007fb1",
+        "rust_summaries": [
+          {
+            "passed": 5,
+            "failed": 0,
+            "ignored": 0
+          }
+        ]
+      },
+      {
+        "target": "conflict_regressions",
+        "cases": 1,
+        "failures": 0,
+        "skipped": 0,
+        "xml_sha256": "d234a95998c5d503b4bd168ad8b4e452a738f3920633d98e8730eddcdaea659f",
+        "rust_summaries": [
+          {
+            "passed": 7,
+            "failed": 0,
+            "ignored": 0
+          }
+        ]
+      },
+      {
+        "target": "context_freshness_test",
+        "cases": 1,
+        "failures": 0,
+        "skipped": 0,
+        "xml_sha256": "236af6989e057c67bf34fcbd1ccc3a258cc1fd278ac09d7adfbdf6f5dad8f8d3",
+        "rust_summaries": [
+          {
+            "passed": 19,
+            "failed": 0,
+            "ignored": 0
+          }
+        ]
+      },
+      {
+        "target": "contracts_test",
+        "cases": 1,
+        "failures": 0,
+        "skipped": 0,
+        "xml_sha256": "56d895d0b979b3ffdc48a331b6d42681281a3c82d5631a7ce7cff238f8f730ad",
+        "rust_summaries": [
+          {
+            "passed": 5,
+            "failed": 0,
+            "ignored": 0
+          }
+        ]
+      },
+      {
+        "target": "graph_queries_test",
+        "cases": 1,
+        "failures": 0,
+        "skipped": 0,
+        "xml_sha256": "c7576e6a1bb4c06acf49d20174b99b5bb21218f9b214ed3163780bbeeb08f78d",
+        "rust_summaries": [
+          {
+            "passed": 19,
+            "failed": 0,
+            "ignored": 0
+          }
+        ]
+      },
+      {
+        "target": "machine_contract_test",
+        "cases": 1,
+        "failures": 0,
+        "skipped": 0,
+        "xml_sha256": "944c67061345ae26116d6e6da25c2d576a38f216e9aa6d89bc42bb8a0f8e045f",
+        "rust_summaries": [
+          {
+            "passed": 7,
+            "failed": 0,
+            "ignored": 0
+          }
+        ]
+      },
+      {
+        "target": "offline_application_test",
+        "cases": 1,
+        "failures": 0,
+        "skipped": 0,
+        "xml_sha256": "19bd4af96fa0abf635a6f7de2c82e9c1721b3edd12f4277adcbbc40f38824312",
+        "rust_summaries": [
+          {
+            "passed": 19,
+            "failed": 0,
+            "ignored": 0
+          }
+        ]
+      },
+      {
+        "target": "offline_cli_test",
+        "cases": 1,
+        "failures": 0,
+        "skipped": 0,
+        "xml_sha256": "5b22bf7ee22aa89c82bd2c8fc1bd2f082f91736e210476bc55a3dfb52c844c3e",
+        "rust_summaries": [
+          {
+            "passed": 16,
+            "failed": 0,
+            "ignored": 0
+          }
+        ]
+      },
+      {
+        "target": "provider_dispatch_test",
+        "cases": 1,
+        "failures": 0,
+        "skipped": 0,
+        "xml_sha256": "2c2b068931e75bc292ae935b89bf37fc4a0d73f9f5a3a9787c5699dcaf0b5b14",
+        "rust_summaries": [
+          {
+            "passed": 7,
+            "failed": 0,
+            "ignored": 0
+          }
+        ]
+      },
+      {
+        "target": "remote_cli_test",
+        "cases": 1,
+        "failures": 0,
+        "skipped": 0,
+        "xml_sha256": "382930816755abfd702e43006a6017b6aa2307e50fe85318bf240b0d7a96095c",
+        "rust_summaries": [
+          {
+            "passed": 17,
+            "failed": 0,
+            "ignored": 0
+          }
+        ]
+      },
+      {
+        "target": "research_handoff_test",
+        "cases": 1,
+        "failures": 0,
+        "skipped": 0,
+        "xml_sha256": "6e4ab02377cd4a50f572c52a85c76062b061c27786869fef87b3c92cc69aa1a8",
+        "rust_summaries": [
+          {
+            "passed": 16,
+            "failed": 0,
+            "ignored": 0
+          }
+        ]
+      },
+      {
+        "target": "research_recovery_test",
+        "cases": 1,
+        "failures": 0,
+        "skipped": 0,
+        "xml_sha256": "c8b20e97181f8dff3fb145a93363493abbe855b068a93d4af8ee3031481b4a60",
+        "rust_summaries": [
+          {
+            "passed": 5,
+            "failed": 0,
+            "ignored": 0
+          }
+        ]
+      },
+      {
+        "target": "retrieval_lexical_test",
+        "cases": 1,
+        "failures": 0,
+        "skipped": 0,
+        "xml_sha256": "7738ca59e5e89f4786aeaaa4b72aa2f69da18a80cfdf758ff60edfb8ddb6b613",
+        "rust_summaries": [
+          {
+            "passed": 26,
+            "failed": 0,
+            "ignored": 0
+          }
+        ]
+      },
+      {
+        "target": "semantic_retrieval_test",
+        "cases": 1,
+        "failures": 0,
+        "skipped": 0,
+        "xml_sha256": "658004ed85beecb6002d812cacc41004cf37a61401cdbdc086fef1d97fdc5dd0",
+        "rust_summaries": [
+          {
+            "passed": 25,
+            "failed": 0,
+            "ignored": 0
+          }
+        ]
+      },
+      {
+        "target": "shared_wiki_workflow_test",
+        "cases": 1,
+        "failures": 0,
+        "skipped": 0,
+        "xml_sha256": "4a9cd54da03baea6039fec478e2244132e9ccc1ed4808e34ad5762409c844320",
+        "rust_summaries": [
+          {
+            "passed": 1,
+            "failed": 0,
+            "ignored": 0
+          }
+        ]
+      },
+      {
+        "target": "sources_evidence_test",
+        "cases": 1,
+        "failures": 0,
+        "skipped": 0,
+        "xml_sha256": "77c6851d755a54e78cd8d48d6f5eb31a0b897bdc669dbeffbd3f6a8e1bd9019d",
+        "rust_summaries": [
+          {
+            "passed": 19,
+            "failed": 0,
+            "ignored": 0
+          }
+        ]
+      },
+      {
+        "target": "storage_cleanup_test",
+        "cases": 1,
+        "failures": 0,
+        "skipped": 0,
+        "xml_sha256": "8d8d5c02113fac80cb2ac8599bf38e65bea00d42c0a794745b6461dc74d33068",
+        "rust_summaries": [
+          {
+            "passed": 13,
+            "failed": 0,
+            "ignored": 0
+          }
+        ]
+      },
+      {
+        "target": "context_cli_test",
+        "cases": 1,
+        "failures": 0,
+        "skipped": 0,
+        "xml_sha256": "44781efab053808200a2df0f2b78a93ae1581b9b7e4c6fc1467370e3369e85c7",
+        "rust_summaries": [
+          {
+            "passed": 9,
+            "failed": 0,
+            "ignored": 0
+          }
+        ]
+      },
+      {
+        "target": "skill_export_test",
+        "cases": 1,
+        "failures": 0,
+        "skipped": 0,
+        "xml_sha256": "2c980132e1b00fc937c03c729af0fb633d034c1b139e3c960199890accd97144",
+        "rust_summaries": [
+          {
+            "passed": 4,
+            "failed": 0,
+            "ignored": 0
+          }
+        ]
+      }
+    ],
+    "qualification_note": "Initial integration22/24passed; corrected manifest and reviewed-page fixtures passed in continuations. Final resource-specific verification hints were tested by context_freshness and context_cli plus format/Clippy. Other integration results are reused; no single whole final-source matrix pass or full historical fault-matrix rerun claimed.",
+    "docs": {
+      "binary": "/Users/jgarnett/Devleopment/rust-llm-wiki/.artifacts/ux-final-candidate/lwiki",
+      "sha256": "3c03dbd9cbb03d3dd0655be014044b0cbedaf587956198683f60569c912251e6",
+      "cases": [
+        {
+          "document": "README.md",
+          "directory": "/Users/jgarnett/Devleopment/rust-llm-wiki/.artifacts/docs-usability/readme-optimized-final with spaces",
+          "shell_blocks_passed": [
+            1
+          ],
+          "cli_commands_passed": 5,
+          "outcome": "PASS"
+        },
+        {
+          "document": "docs/getting-started.md",
+          "directory": "/Users/jgarnett/Devleopment/rust-llm-wiki/.artifacts/docs-usability/tutorial-optimized-final with spaces",
+          "shell_blocks_passed": [
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9
+          ],
+          "cli_commands_passed": 18,
+          "outcome": "PASS"
+        }
+      ]
+    },
+    "provider_final_log": ".artifacts/ux-live/checks/provider-final-success.log",
+    "logs": [
+      ".artifacts/ux-live/checks/integration.log",
+      ".artifacts/ux-live/checks/final-continuation.log",
+      ".artifacts/ux-live/checks/context-final.log",
+      ".artifacts/ux-live/checks/focused-unit.log",
+      ".artifacts/ux-live/checks/focused-unit-cases.log",
+      ".artifacts/ux-live/checks/build-tools.log",
+      ".artifacts/ux-live/checks/candidate.log",
+      ".artifacts/ux-live/checks/docs-final.log"
+    ],
+    "retained_failed_attempts": [
+      "context-cli-fixture-failure.log",
+      "integration-missing-test-import.log",
+      "integration-clippy-style-failure.log",
+      "integration.log",
+      "final-continuation.log",
+      "heldout-semantic.log",
+      "heldout-remaining.log",
+      "provider-final.log"
+    ],
+    "final_local_file_links": 74,
+    "final_diff_whitespace": "pass"
+  },
+  "retrieval": {
+    "queries_sha256": "b277c9840a01b03bfd1f11ece0205080a0a1be71692610f6287b9b5652638138",
+    "paired_index_generation": 87,
+    "ranked_lists_equal": 72,
+    "paired_context_ratings": {
+      "lexical": {
+        "old": [
+          1,
+          6,
+          15
+        ],
+        "new": [
+          11,
+          9,
+          2
+        ]
+      },
+      "semantic": {
+        "old": [
+          0,
+          9,
+          13
+        ],
+        "new": [
+          11,
+          10,
+          1
+        ]
+      },
+      "hybrid": {
+        "old": [
+          0,
+          9,
+          13
+        ],
+        "new": [
+          11,
+          10,
+          1
+        ]
+      }
+    },
+    "rating_order": [
+      "usable",
+      "partial",
+      "not_useful"
+    ],
+    "paired_reviewed_passages": 853,
+    "heldout_sha256": "130c010742ae6702e6dc8e92339b0348def0b0132c125b71f82aba917dd0e7a5",
+    "heldout_semantic_ratings": [
+      1,
+      3,
+      2
+    ],
+    "heldout_absent": 2,
+    "heldout_context_citations_verified": 40,
+    "heldout_verification_max_entries": 65536,
+    "heldout_initial_default_failure": "h06 final-proof16384entry limit exceeded; original saved in evaluation-heldout-initial",
+    "frozen_retrieval_not_tuned_against_heldout": true,
+    "heldout_summaries": {
+      "lexical": {
+        "mode": "lexical",
+        "queries": 8,
+        "answerable": 6,
+        "hit_at_1": 0.8333333333333334,
+        "hit_at_5": 1.0,
+        "mrr_at_5": 0.9166666666666666,
+        "mean_source_recall_at_5": 0.9166666666666666,
+        "mean_context_source_recall": 0.9166666666666666,
+        "verified_source_citations": 61,
+        "median_search_seconds": 1.0839841044999998,
+        "live_requests_invocations": 0,
+        "query_sha256": "130c010742ae6702e6dc8e92339b0348def0b0132c125b71f82aba917dd0e7a5"
+      },
+      "semantic": {
+        "mode": "semantic",
+        "queries": 8,
+        "answerable": 6,
+        "hit_at_1": 1.0,
+        "hit_at_5": 1.0,
+        "mrr_at_5": 1.0,
+        "mean_source_recall_at_5": 1.0,
+        "mean_context_source_recall": 1.0,
+        "verified_source_citations": 97,
+        "median_search_seconds": 2.2469968125,
+        "live_requests_invocations": 0,
+        "query_sha256": "130c010742ae6702e6dc8e92339b0348def0b0132c125b71f82aba917dd0e7a5"
+      },
+      "hybrid": {
+        "mode": "hybrid",
+        "queries": 8,
+        "answerable": 6,
+        "hit_at_1": 1.0,
+        "hit_at_5": 1.0,
+        "mrr_at_5": 1.0,
+        "mean_source_recall_at_5": 1.0,
+        "mean_context_source_recall": 1.0,
+        "verified_source_citations": 107,
+        "median_search_seconds": 2.3195429169999997,
+        "live_requests_invocations": 0,
+        "query_sha256": "130c010742ae6702e6dc8e92339b0348def0b0132c125b71f82aba917dd0e7a5"
+      }
+    },
+    "limits": [
+      "agent assessment, not human",
+      "same corpus; regression set informed implementation",
+      "automatic passage completeness remains weak",
+      "no generated answers or answer-level abstention tested"
+    ]
+  },
+  "live_usage": {
+    "receipt_count": 40,
+    "validated_receipts": 40,
+    "reported_input_tokens": 89124,
+    "unknown_reserved": 40,
+    "monetary_cost": "unknown; no trusted ratecard",
+    "validated_models": [
+      "text-embedding-3-small"
+    ]
+  },
+  "corpus_lifecycle": {
+    "ok": true,
+    "source_id": "source_01a0ff30-f340-71a3-98c2-ce8bf6d3ac18",
+    "old_revision": "revision_01a0ff30-f340-71a3-98c2-ce9be8e873bc",
+    "new_revision": "revision_01a0ff56-c018-7d13-91da-0ab0428d9e53",
+    "old_revision_preserved": true,
+    "benchmark_metadata_preserved": true,
+    "changed_pages": [
+      {
+        "path": "pages/cli.md",
+        "before_sha256": "c6b3110abe4520828424a352827a5c4c91c88285491c065a00c4b0dff0fd4b6e",
+        "after_sha256": "4eb72bbf439a72015344be363b465481d959c3ab8607178edf3cce9778b64cd8"
+      }
+    ],
+    "coverage_after": {
+      "active_space": "blake3:9561688aec5f990e3006dea33767f99b4b83145613896f71cd111adef7ebd93d",
+      "coverage": {
+        "available_units": 172,
+        "corrupt_units": 0,
+        "eligible_units": 174,
+        "missing_units": 2,
+        "pending_units": 0
+      },
+      "dry_run": false,
+      "generated_inputs": 0,
+      "network_used": false,
+      "published": false,
+      "reused_inputs": 0,
+      "run_id": null,
+      "settings": {
+        "document_prefix": "",
+        "max_input_bytes": 8000,
+        "quality_target_bytes": 3000,
+        "query_prefix": ""
+      },
+      "space": "blake3:9561688aec5f990e3006dea33767f99b4b83145613896f71cd111adef7ebd93d",
+      "warnings": [
+        "local check does not establish provider compatibility; missing/corrupt cache is missing coverage"
+      ]
+    },
+    "complete_vault_restored": true,
+    "offline": true,
+    "note": "No provider dispatched; bounded sync argv is prepared only. Full copy retains .wiki/state and cache. Rebuild tested on restored copy."
+  },
+  "final_sync": {
+    "active_space": "blake3:9561688aec5f990e3006dea33767f99b4b83145613896f71cd111adef7ebd93d",
+    "coverage": {
+      "available_units": 174,
+      "corrupt_units": 0,
+      "eligible_units": 174,
+      "missing_units": 0,
+      "pending_units": 0
+    },
+    "dry_run": false,
+    "generated_inputs": 2,
+    "network_used": true,
+    "published": true,
+    "reused_inputs": 172,
+    "run_id": "run_01a0ff59-7a62-7971-82d0-a72a5f5a0523",
+    "settings": {
+      "document_prefix": "",
+      "max_input_bytes": 8000,
+      "quality_target_bytes": 3000,
+      "query_prefix": ""
+    },
+    "space": "blake3:9561688aec5f990e3006dea33767f99b4b83145613896f71cd111adef7ebd93d",
+    "warnings": []
+  },
+  "final_reuse": {
+    "active_space": "blake3:9561688aec5f990e3006dea33767f99b4b83145613896f71cd111adef7ebd93d",
+    "coverage": {
+      "available_units": 174,
+      "corrupt_units": 0,
+      "eligible_units": 174,
+      "missing_units": 0,
+      "pending_units": 0
+    },
+    "dry_run": false,
+    "generated_inputs": 0,
+    "network_used": false,
+    "published": true,
+    "reused_inputs": 174,
+    "run_id": null,
+    "settings": {
+      "document_prefix": "",
+      "max_input_bytes": 8000,
+      "quality_target_bytes": 3000,
+      "query_prefix": ""
+    },
+    "space": "blake3:9561688aec5f990e3006dea33767f99b4b83145613896f71cd111adef7ebd93d",
+    "warnings": []
+  },
+  "credential_scan": {
+    "files_scanned": 6111,
+    "exact_token_matches": 0,
+    "original_token_mode": "0o644"
+  },
+  "wiki_archive": {
+    "archive": ".artifacts/ux-corpus-wiki.tar.gz",
+    "sha256": "e7565bbe5bb138fd8fbd95fc15eb6169981241a0c9aec6163a563dfa3d071ae0",
+    "bytes": 6475953,
+    "wiki_files": 1059,
+    "includes_hidden_state_and_cache": true
+  },
+  "platform": "macOS ARM64",
+  "external_limits": [
+    "other native platforms/full crash qualification",
+    "power loss",
+    "generation API",
+    "other provider models/gateways",
+    "installed hosts/GUI discovery",
+    "broad corpus and human relevance study",
+    "billing reconciliation"
+  ],
+  "no_publication_or_installation": true
+}

@@ -5,7 +5,7 @@ pub mod dispatch;
 pub mod extraction;
 pub mod resolution;
 pub use arguments::{Arguments, Command, OutputFormat};
-pub use dispatch::{execute, present};
+pub use dispatch::{execute, present, present_with_wiki};
 mod decisions;
 mod review;
 

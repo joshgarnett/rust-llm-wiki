@@ -135,6 +135,125 @@ fn lexical_excerpt_prefers_full_name_after_many_partial_matches() {
 }
 
 #[test]
+fn lexical_question_focuses_late_identifiers_after_frequent_first_words() {
+    let (_temp, root, catalog) = fixture();
+    let raw = format!(
+        "# Intro\n\n{}\n## Subprocess fixtures\n\nFor CLI testing, assert_cmd checks a child process and assert_fs supplies test files.\n",
+        "How a program runs: naïve λ introductory notes.\n".repeat(160)
+    );
+    let captured = capture(&root, &catalog, raw.as_bytes());
+    let r = catalog.verified_snapshot(None).unwrap();
+    let mut plan = QueryPlan::default();
+    plan.filters.source_ids.push(captured.source_id.clone());
+    let query = "How do assert_cmd and assert_fs help test a Rust command line program?";
+    let hits = search(&r, query, &plan).unwrap();
+    let hit = hits
+        .hits
+        .iter()
+        .find(|hit| hit.owner_revision == Some(captured.revision_id.clone()))
+        .unwrap();
+    assert!(hit.excerpt.text.contains("assert_cmd"));
+    assert!(hit.excerpt.text.contains("assert_fs"));
+    assert_eq!(hit.excerpt.span.slice(&raw).unwrap(), hit.excerpt.text);
+    assert!(hit.excerpt.text.len() <= plan.limits.excerpt_bytes);
+    assert!(hit.excerpt.matched_spans.len() <= 64);
+    for span in &hit.excerpt.matched_spans {
+        assert!(span.start() >= hit.excerpt.span.start());
+        assert!(span.end() <= hit.excerpt.span.end());
+        span.slice(&raw).unwrap();
+    }
+    let citation = hit.excerpt.citation.as_ref().unwrap();
+    let view = SourceView::from_fs(catalog.fs()).unwrap();
+    assert_eq!(
+        view.verify(citation, CitationScope::Current).unwrap().quote,
+        hit.excerpt.text.as_bytes()
+    );
+    assert_eq!(
+        search(&r, query, &plan).unwrap().hits[0].excerpt.span,
+        hits.hits[0].excerpt.span
+    );
+}
+
+#[test]
+fn lexical_excerpt_weights_distinct_overlap_without_language_stopwords() {
+    let (temp, root, catalog) = fixture();
+    let raw = format!(
+        "{}\n## Поздний раздел\n\nнастройка спутника проверяет маркер Ωmega.\n",
+        "как работает общий пример как работает общий пример\n".repeat(150)
+    );
+    write(temp.path(), "manual.md", raw.as_bytes());
+    let r = reader(&root, &catalog);
+    let query = "как работает настройка спутника маркер Ωmega";
+    let mut plan = QueryPlan::default();
+    plan.limits.excerpt_bytes = 160;
+    let hits = search(&r, query, &plan).unwrap();
+    let excerpt = &hits.hits[0].excerpt;
+    assert!(excerpt.text.contains("настройка спутника"));
+    assert!(excerpt.text.contains("Ωmega"));
+    assert!(excerpt.text.len() <= 160);
+    assert_eq!(excerpt.span.slice(&raw).unwrap(), excerpt.text);
+    assert!(excerpt.matched_spans.len() >= 4);
+}
+
+#[test]
+fn lexical_excerpt_selects_late_cluster_after_more_than_64_repeats() {
+    let (temp, root, catalog) = fixture();
+    let raw = format!(
+        "{}\n{}\n{}\nHow alpha and beta work with shared state.\n",
+        "How shared introductory material works.\n".repeat(100),
+        "alpha alone describes a different topic.\n".repeat(100),
+        "beta alone describes another topic.\n".repeat(100)
+    );
+    write(temp.path(), "cluster.md", raw.as_bytes());
+    let r = reader(&root, &catalog);
+    let query = "How shared beta alpha";
+    let hits = search(&r, query, &QueryPlan::default()).unwrap();
+    assert!(
+        hits.hits[0]
+            .excerpt
+            .text
+            .contains("How alpha and beta work with shared state.")
+    );
+    assert_eq!(
+        hits.hits[0].excerpt.span.slice(&raw).unwrap(),
+        hits.hits[0].excerpt.text
+    );
+}
+
+#[test]
+fn lexical_focus_does_not_drop_literal_case_and_punctuation_match() {
+    let (_temp, root, catalog) = fixture();
+    let raw = format!(
+        "{}\nExact identifier: Should_Panic() checks the requested behavior.\n",
+        "how a common introductory word behaves naïvely\n".repeat(100)
+    );
+    let captured = capture(&root, &catalog, raw.as_bytes());
+    let r = catalog.verified_snapshot(None).unwrap();
+    let mut plan = literal_plan();
+    plan.filters.source_ids.push(captured.source_id.clone());
+    let hits = search(&r, "Should_Panic()", &plan).unwrap();
+    let hit = hits.hits.first().unwrap();
+    assert!(hit.excerpt.text.contains("Should_Panic()"));
+    assert_eq!(hit.excerpt.matched_spans.len(), 1);
+    assert_eq!(
+        hit.excerpt.matched_spans[0].slice(&raw).unwrap(),
+        "Should_Panic()"
+    );
+    assert_eq!(hit.excerpt.span.slice(&raw).unwrap(), hit.excerpt.text);
+    assert!(search(&r, "should_panic()", &plan).unwrap().hits.is_empty());
+    let view = SourceView::from_fs(catalog.fs()).unwrap();
+    assert_eq!(
+        view.verify(
+            hit.excerpt.citation.as_ref().unwrap(),
+            CitationScope::Current
+        )
+        .unwrap()
+        .quote,
+        hit.excerpt.text.as_bytes()
+    );
+}
+
+#[test]
 fn lexical_or_colon_star_quotes_are_data() {
     let (temp, root, catalog) = fixture();
     write(

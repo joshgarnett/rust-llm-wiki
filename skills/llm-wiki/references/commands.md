@@ -1150,9 +1150,7 @@ Options:
           [default: 80]
 
       --excerpt-bytes <EXCERPT_BYTES>
-          Maximum UTF-8 bytes in each excerpt
-
-          [default: 240]
+          Maximum UTF-8 bytes in each excerpt (default: search 240, context 1024)
 
       --cursor <CURSOR>
           Continuation cursor from an identical query on the same index generation
@@ -1302,9 +1300,7 @@ Options:
           [default: 80]
 
       --excerpt-bytes <EXCERPT_BYTES>
-          Maximum UTF-8 bytes in each excerpt
-
-          [default: 240]
+          Maximum UTF-8 bytes in each excerpt (default: search 240, context 1024)
 
       --cursor <CURSOR>
           Continuation cursor from an identical query on the same index generation

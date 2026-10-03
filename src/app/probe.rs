@@ -412,7 +412,7 @@ impl OfflineApp {
             ledger.finish_remote_task(&task.key, vec![], vec![], |_| Ok(false))?;
             ledger.complete_run()?;
             Ok(ProbeOutcome {
-                run_id,
+                run_id: run_id.clone(),
                 role,
                 validated: true,
                 network_used: runtime.dispatcher.network_used(),
@@ -422,6 +422,38 @@ impl OfflineApp {
         })();
         result.map_err(|mut error| {
             error.network_used |= runtime.dispatcher.network_used();
+            // A returned error ends this probe invocation. Pause the retained
+            // run without changing attempts, receipts, or unknown billing holds.
+            // Never make Running jobs globally amendable: another dispatcher
+            // could still own them.
+            let pause = ledger.inspect().and_then(|inspection| {
+                if inspection.state == RunState::Running {
+                    let reason = if inspection.attempts.iter().any(|attempt| {
+                        attempt.phase != AttemptPhase::Settled
+                            || attempt.billing == BillingDisposition::UnknownReserved
+                    }) {
+                        StopReason::OutcomeUnknown
+                    } else if error.code == ErrorCode::BudgetExceeded {
+                        StopReason::Budget
+                    } else {
+                        StopReason::Failed("provider_probe_failed".into())
+                    };
+                    ledger.pause(reason)?;
+                }
+                Ok(())
+            });
+            if !error.details.is_object() {
+                error.details = serde_json::json!({});
+            }
+            error.details["run_id"] = serde_json::to_value(&run_id).unwrap();
+            error.details["next_action"] = format!(
+                "Inspect retained accounting with: lwiki jobs status --run {run_id}. After correcting the reported setup or budget issue, explicitly rerun doctor --probe; it creates a new probe run and does not erase prior charges."
+            ).into();
+            if pause.is_err() {
+                // Preserve the original error; a failed state transition must
+                // not be presented as a successfully paused run.
+                error.details["recovery_action"] = "Could not pause the retained probe; inspect jobs status and local recovery before further provider work.".into();
+            }
             error
         })
     }

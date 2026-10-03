@@ -254,12 +254,21 @@ impl SourceMap {
         map
     }
     pub(crate) fn original_span(&self, span: Range<usize>) -> Option<Range<usize>> {
-        let first = self.segments.iter().find(|segment| {
-            segment.normalized.end > span.start && segment.normalized.start < span.end
-        })?;
-        let last = self.segments.iter().rev().find(|segment| {
-            segment.normalized.end > span.start && segment.normalized.start < span.end
-        })?;
+        // Segments are emitted in normalized byte order. Query-aware windows
+        // map every matching token, so avoid rescanning all Markdown segments
+        // for each one. Preserve the original overlap predicates exactly.
+        let first = self.segments.get(
+            self.segments
+                .partition_point(|segment| segment.normalized.end <= span.start),
+        )?;
+        let last = self.segments.get(
+            self.segments
+                .partition_point(|segment| segment.normalized.start < span.end)
+                .checked_sub(1)?,
+        )?;
+        if first.normalized.start >= span.end || last.normalized.end <= span.start {
+            return None;
+        }
         let start = if first.exact {
             first.original.start + span.start.saturating_sub(first.normalized.start)
         } else {

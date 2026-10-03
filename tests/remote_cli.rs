@@ -268,6 +268,20 @@ fn native_incomplete_responses_probe_retains_one_paid_attempt_and_fixed_reason()
 }
 
 fn native_generation_probe_case(responses: bool, service_cap: Option<u64>, incomplete: bool) {
+    native_generation_probe_auth_case(responses, service_cap, incomplete, false);
+}
+
+#[test]
+fn native_generation_probe_accepts_private_credential_file_with_terminal_newline() {
+    native_generation_probe_auth_case(false, None, false, true);
+}
+
+fn native_generation_probe_auth_case(
+    responses: bool,
+    service_cap: Option<u64>,
+    incomplete: bool,
+    file_auth: bool,
+) {
     let f = Fixture::new();
     let listener = std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).unwrap();
     let address = listener.local_addr().unwrap();
@@ -366,6 +380,19 @@ fn native_generation_probe_case(responses: bool, service_cap: Option<u64>, incom
     } else {
         content
     };
+    let credential_file = tempfile::NamedTempFile::new().unwrap();
+    std::fs::write(credential_file.path(), b"synthetic-cli-secret\n").unwrap();
+    let content = if file_auth {
+        content.replace(
+            "key_env=\"EXPLICIT_FIXTURE_TOKEN\"",
+            &format!(
+                "key_file={}",
+                provider::quote(credential_file.path().to_str().unwrap())
+            ),
+        )
+    } else {
+        content
+    };
     std::fs::write(&config, content).unwrap();
     let result = std::process::Command::new(test_paths::binary(env!("CARGO_BIN_EXE_lwiki")))
         .args([
@@ -425,6 +452,12 @@ fn native_generation_probe_case(responses: bool, service_cap: Option<u64>, incom
         let retained = String::from_utf8(bytes).unwrap();
         assert!(retained.contains("incomplete_max_output_tokens"));
         assert!(retained.contains("\"billable_units\""));
+        let inspection = native_probe_status(&f, run);
+        assert_eq!(inspection["state"], "paused");
+        assert_eq!(inspection["attempts"][0]["phase"], "settled");
+        // The fixture has no trusted rate card: pausing must retain the paid
+        // attempt's unknown billing rather than mark it released or free.
+        assert_eq!(inspection["attempts"][0]["billing"], "unknown_reserved");
     } else {
         assert_eq!(value["data"]["probe"]["validated"], true);
         assert_eq!(
@@ -433,6 +466,164 @@ fn native_generation_probe_case(responses: bool, service_cap: Option<u64>, incom
                 .unwrap()
                 .len(),
             1
+        );
+    }
+}
+
+fn native_probe_status(f: &Fixture, run: &str) -> Value {
+    let output = std::process::Command::new(test_paths::binary(env!("CARGO_BIN_EXE_lwiki")))
+        .args([
+            "--wiki",
+            f.temp.path().to_str().unwrap(),
+            "--json",
+            "--offline",
+            "jobs",
+            "status",
+            "--run",
+            run,
+        ])
+        .output()
+        .unwrap();
+    let value: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert!(output.status.success(), "{value}");
+    value["data"].clone()
+}
+
+#[test]
+fn native_embedding_probe_small_response_budget_is_actionable_and_amendable() {
+    native_probe_setup_failure(false);
+}
+
+#[cfg(unix)]
+#[test]
+fn native_probe_insecure_credential_file_is_actionable_and_never_sent() {
+    native_probe_setup_failure(true);
+}
+
+fn native_probe_setup_failure(insecure_file: bool) {
+    let f = Fixture::new();
+    let listener = std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let config = f.temp.path().join("providers.toml");
+    let credential_file = tempfile::NamedTempFile::new().unwrap();
+    std::fs::write(credential_file.path(), b"must-not-leak-fixture-secret\n").unwrap();
+    #[cfg(unix)]
+    if insecure_file {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(
+            credential_file.path(),
+            std::fs::Permissions::from_mode(0o644),
+        )
+        .unwrap();
+    }
+    let mut content = std::fs::read_to_string(&config)
+        .unwrap()
+        .replace("generation=\"service\"", "embedding=\"service\"")
+        .replace(
+            "adapter=\"chat-completions-v1\"",
+            "adapter=\"embeddings-v1\"",
+        )
+        .replace(
+            "https://gateway.example/chat",
+            &format!("http://{}/probe", listener.local_addr().unwrap()),
+        )
+        .replace(
+            "model=\"test-model\"",
+            "allow_loopback_http=true\nmodel=\"test-model\"",
+        );
+    if insecure_file {
+        content = content.replace(
+            "key_env=\"EXPLICIT_FIXTURE_TOKEN\"",
+            &format!(
+                "key_file={}",
+                provider::quote(credential_file.path().to_str().unwrap())
+            ),
+        );
+    }
+    std::fs::write(&config, content).unwrap();
+    let mut command = std::process::Command::new(test_paths::binary(env!("CARGO_BIN_EXE_lwiki")));
+    command.args([
+        "--wiki",
+        f.temp.path().to_str().unwrap(),
+        "--json",
+        "--profile",
+        "primary",
+        "doctor",
+        "--probe",
+        "--role",
+        "embed",
+        "--providers-config",
+        config.to_str().unwrap(),
+        "--max-requests",
+        "1",
+        "--attempts-per-task",
+        "1",
+    ]);
+    if !insecure_file {
+        command.args(["--max-response-bytes", "262144"]);
+    }
+    let output = command
+        .env_remove("EXPLICIT_FIXTURE_TOKEN")
+        .output()
+        .unwrap();
+    let value: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert!(!output.status.success(), "{value}");
+    assert_eq!(value["meta"]["network_used"], false);
+    assert!(
+        matches!(listener.accept(), Err(error) if error.kind() == std::io::ErrorKind::WouldBlock)
+    );
+    assert!(!String::from_utf8_lossy(&output.stdout).contains("must-not-leak-fixture-secret"));
+    assert!(
+        !String::from_utf8_lossy(&output.stdout).contains(credential_file.path().to_str().unwrap())
+    );
+    let expected = if insecure_file {
+        "credential_file_unavailable_or_invalid"
+    } else {
+        "response_byte_budget_exceeded"
+    };
+    assert_eq!(value["error"]["details"]["cause"]["reason"], expected);
+    let hint = value["error"]["details"]["cause"]["next_action"]
+        .as_str()
+        .unwrap();
+    assert!(hint.contains(if insecure_file { "0600" } else { "8388608" }));
+    let run = value["error"]["details"]["run_id"].as_str().unwrap();
+    let inspection = native_probe_status(&f, run);
+    assert_eq!(inspection["state"], "paused");
+    let attempts = inspection["attempts"].as_array().unwrap();
+    if insecure_file {
+        assert_eq!(attempts.len(), 1);
+        assert_eq!(attempts[0]["billing"], "released_not_sent");
+    } else {
+        assert!(attempts.is_empty());
+        let amended = std::process::Command::new(test_paths::binary(env!("CARGO_BIN_EXE_lwiki")))
+            .args([
+                "--wiki",
+                f.temp.path().to_str().unwrap(),
+                "--json",
+                "--offline",
+                "jobs",
+                "amend",
+                "--run",
+                run,
+                "--reason",
+                "explicit fixture response allowance",
+                "--max-response-bytes",
+                "8388608",
+            ])
+            .output()
+            .unwrap();
+        let result: Value = serde_json::from_slice(&amended.stdout).unwrap();
+        assert!(amended.status.success(), "{result}");
+        assert_eq!(
+            result["data"]["inspection"]["effective_limits"]["response_bytes"],
+            8388608
+        );
+        assert_eq!(
+            result["data"]["inspection"]["attempts"]
+                .as_array()
+                .unwrap()
+                .len(),
+            0
         );
     }
 }

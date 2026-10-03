@@ -142,7 +142,7 @@ pub fn resolve(
             .as_ref()
             .is_some_and(|c| c.allowed_profiles.contains(profile));
         if !result.profile_permitted {
-            result.warnings.push(format!("selected profile {profile:?} is not locally permitted; local operations remain available"));
+            result.warnings.push(format!("selected profile {profile:?} is not listed in local preferences; provider authorization is checked separately before remote work"));
         }
     }
     Ok(result)

@@ -1,6 +1,6 @@
 use clap::Parser;
 use lwiki::{
-    cli::{Arguments, OutputFormat, execute, present},
+    cli::{Arguments, OutputFormat, execute, present, present_with_wiki},
     output::Envelope,
 };
 use serde_json::json;
@@ -100,6 +100,38 @@ fn main() {
         ),
     };
     if format == OutputFormat::Human {
+        if envelope.ok
+            && envelope.command == "read"
+            && let Some(hash) = envelope.data["hash"].as_str()
+        {
+            eprintln!(
+                "Record: {}\nHash (for --if-match): {hash}",
+                envelope.data["path"].as_str().unwrap_or_default()
+            );
+        }
+        if envelope.ok && envelope.command == "context" && envelope.data["text"].is_string() {
+            if envelope.data["text"] == "" {
+                eprintln!(
+                    "{}",
+                    if envelope.meta.partial {
+                        "No context fits the requested bounds. Increase --max-bytes / --max-tokens or narrow the query."
+                    } else {
+                        "No matching context. Try fewer query terms, literal search for exact text, or semantic search after embeddings sync."
+                    }
+                );
+            }
+            if let Some(omissions) = envelope.data["omissions"].as_array() {
+                let mut reasons = std::collections::BTreeMap::<&str, u64>::new();
+                for omission in omissions {
+                    *reasons
+                        .entry(omission["reason"].as_str().unwrap_or("unspecified"))
+                        .or_default() += omission["count"].as_u64().unwrap_or(0);
+                }
+                for (reason, count) in reasons {
+                    eprintln!("Omitted {count}: {reason}");
+                }
+            }
+        }
         if matches!(envelope.command.as_str(), "read" | "context")
             && let Some(freshness) = &envelope.meta.freshness
         {
@@ -131,9 +163,19 @@ fn main() {
             serde_json::to_value(&envelope).expect("serializable envelope"),
         )
     } else if format == OutputFormat::Human && !envelope.ok {
-        present(&envelope, format, &mut io::stderr().lock())
+        present_with_wiki(
+            &envelope,
+            format,
+            &mut io::stderr().lock(),
+            args.wiki.as_deref(),
+        )
     } else {
-        present(&envelope, format, &mut io::stdout().lock())
+        present_with_wiki(
+            &envelope,
+            format,
+            &mut io::stdout().lock(),
+            args.wiki.as_deref(),
+        )
     };
     if output_result.is_err() {
         std::process::exit(1);

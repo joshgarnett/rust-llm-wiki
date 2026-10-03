@@ -615,3 +615,71 @@ fn context_human_stdout_is_exact_budgeted_authority() {
             .contains("Freshness: verified_snapshot")
     );
 }
+
+#[test]
+fn empty_and_bounded_human_context_explain_the_result_on_stderr() {
+    let f = fixture();
+    let run = |query: &str, extra: &[&str]| {
+        Command::new(test_paths::binary(env!("CARGO_BIN_EXE_lwiki")))
+            .arg("--wiki")
+            .arg(f.path())
+            .args(["--offline", "context", query])
+            .args(extra)
+            .output()
+            .unwrap()
+    };
+    let missing = run("zqxvnonexistent", &[]);
+    assert!(missing.status.success());
+    assert!(missing.stdout.is_empty());
+    assert!(
+        String::from_utf8(missing.stderr)
+            .unwrap()
+            .contains("No matching context")
+    );
+    let bounded = run(PAGE, &["--max-bytes", "10"]);
+    assert!(bounded.status.success());
+    assert!(bounded.stdout.len() <= 10);
+    let stderr = String::from_utf8(bounded.stderr).unwrap();
+    assert!(
+        stderr.contains("No context fits") && stderr.contains("Omitted"),
+        "{stderr}"
+    );
+}
+
+#[test]
+fn context_default_retains_surrounding_explanation_and_explicit_excerpt_bounds_win() {
+    let f = fixture();
+    let text = format!(
+        "---\nwiki_schema: \"1\"\nwiki_id: page_00000000-0000-7000-8000-000000000099\nwiki_kind: page\ntitle: Explanation\nwiki_status: reviewed\n---\n# Explanation\n\nwaterproof {}\n",
+        "Useful surrounding explanation with UTF-8 café. ".repeat(35)
+    );
+    std::fs::create_dir_all(f.path().join("knowledge/pages")).unwrap();
+    std::fs::write(f.path().join("knowledge/pages/explanation.md"), text).unwrap();
+    let run = |extra: &[&str]| {
+        let output = Command::new(test_paths::binary(env!("CARGO_BIN_EXE_lwiki")))
+            .arg("--wiki")
+            .arg(f.path())
+            .args(["--json", "--offline", "context", "waterproof"])
+            .args(extra)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stdout)
+        );
+        serde_json::from_slice::<serde_json::Value>(&output.stdout).unwrap()
+    };
+    let default = run(&[]);
+    let text = default["data"]["passages"][0]["text"].as_str().unwrap();
+    assert!(text.len() > 240 && text.len() <= 1024);
+    let explicit = run(&["--excerpt-bytes", "240"]);
+    assert!(
+        explicit["data"]["passages"][0]["text"]
+            .as_str()
+            .unwrap()
+            .len()
+            <= 240
+    );
+    assert!(default["data"]["text"].as_str().unwrap().len() <= 12000);
+}

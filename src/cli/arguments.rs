@@ -616,9 +616,9 @@ pub struct SearchArguments {
     /// Maximum ranked candidates considered before final selection.
     #[arg(long, default_value_t = 80)]
     pub candidates: usize,
-    /// Maximum UTF-8 bytes in each excerpt.
-    #[arg(long, default_value_t = 240)]
-    pub excerpt_bytes: usize,
+    /// Maximum UTF-8 bytes in each excerpt (default: search 240, context 1024).
+    #[arg(long)]
+    pub excerpt_bytes: Option<usize>,
     /// Continuation cursor from an identical query on the same index generation.
     #[arg(long)]
     pub cursor: Option<String>,
@@ -647,7 +647,7 @@ impl SearchArguments {
             limits: SearchLimits {
                 hits: self.limit,
                 candidates: self.candidates,
-                excerpt_bytes: self.excerpt_bytes,
+                excerpt_bytes: self.excerpt_bytes.unwrap_or(240),
             },
             cursor: self.cursor.clone(),
         }

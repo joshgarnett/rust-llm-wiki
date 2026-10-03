@@ -883,3 +883,148 @@ fn tiny_utf8_read_gives_progress_guidance_and_page_errors_give_template() {
     let schema = ok(root, &["schema", "page"], None);
     assert!(schema["data"].is_object());
 }
+
+#[test]
+fn human_search_pagination_and_input_errors_offer_executable_recovery() {
+    let temp = fixture();
+    for name in ["first", "second", "third"] {
+        ok(
+            temp.path(),
+            &["page", "put", "--file", "-"],
+            Some(&page(name, "Irrigation uses collected rainwater.\n")),
+        );
+    }
+    let human = |args: &[&str]| {
+        Command::new(test_paths::binary(env!("CARGO_BIN_EXE_lwiki")))
+            .arg("--wiki")
+            .arg(temp.path())
+            .arg("--offline")
+            .args(args)
+            .output()
+            .unwrap()
+    };
+    let first = human(&["search", "irrigation", "--limit", "1"]);
+    assert!(first.status.success());
+    let text = String::from_utf8(first.stdout).unwrap();
+    let cursor = text
+        .split("--cursor '")
+        .nth(1)
+        .unwrap()
+        .split('\'')
+        .next()
+        .unwrap();
+    let next = human(&["search", "irrigation", "--limit", "1", "--cursor", cursor]);
+    assert!(
+        next.status.success(),
+        "{}",
+        String::from_utf8_lossy(&next.stderr)
+    );
+    let next = String::from_utf8(next.stdout).unwrap();
+    assert_ne!(text.lines().nth(1), next.lines().nth(1));
+    let bounded = human(&["search", "irrigation", "--candidates", "1", "--limit", "10"]);
+    assert!(bounded.status.success());
+    let text = String::from_utf8(bounded.stdout).unwrap();
+    assert!(text.contains("increase --candidates"), "{text}");
+    assert!(!text.contains("--cursor '"));
+    let missing = temp.path().join("missing-input.txt");
+    let result = human(&["source", "add", missing.to_str().unwrap()]);
+    assert_eq!(result.status.code(), Some(2));
+    assert!(result.stdout.is_empty());
+    let error = String::from_utf8(result.stderr).unwrap();
+    assert!(
+        error.contains("USAGE")
+            && error.contains("missing-input.txt")
+            && error.contains("readable file"),
+        "{error}"
+    );
+    assert_eq!(ok(temp.path(), &["check"], None)["data"]["error_count"], 0);
+}
+
+#[test]
+fn human_mutation_summary_distinguishes_preview_prepared_and_committed() {
+    let temp = fixture();
+    let input = temp.path().join("example.txt");
+    fs::write(&input, "Collect rainwater for irrigation.\n").unwrap();
+    let run = |extra: &[&str]| {
+        let output = Command::new(test_paths::binary(env!("CARGO_BIN_EXE_lwiki")))
+            .arg("--wiki")
+            .arg(temp.path())
+            .args(extra)
+            .args(["source", "add"])
+            .arg(&input)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8(output.stdout).unwrap()
+    };
+    assert!(run(&["--dry-run"]).contains("source add: preview"));
+    let staged = run(&["--stage"]);
+    assert!(
+        staged.contains("source add: prepared") && staged.contains("changes apply"),
+        "{staged}"
+    );
+    let committed = run(&[]);
+    assert!(
+        committed.contains("source add: committed") && committed.contains("source: source_"),
+        "{committed}"
+    );
+    assert!(!committed.contains("manifest_hash"));
+}
+
+#[cfg(unix)]
+#[test]
+fn human_staged_commands_keep_vault_selection_and_search_escapes_terminal_controls() {
+    let parent = tempfile::Builder::new()
+        .prefix("lwiki ' quoted ")
+        .tempdir()
+        .unwrap();
+    let root = parent.path().join("vault space");
+    let (exit, _) = invoke(None, &["init", root.to_str().unwrap()], None);
+    assert_eq!(exit, 0);
+    let input = parent.path().join("notes.txt");
+    fs::write(&input, "Orchard safety. \x1b[31mForged color\x1b[0m\n").unwrap();
+    let output = Command::new(test_paths::binary(env!("CARGO_BIN_EXE_lwiki")))
+        .arg("--wiki")
+        .arg(&root)
+        .args(["--stage", "source", "add"])
+        .arg(&input)
+        .args(["--title", "Orchard\nForged heading\t\x1b[31m"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let summary = String::from_utf8(output.stdout).unwrap();
+    let command = summary
+        .lines()
+        .find_map(|line| line.strip_prefix("Apply with: lwiki "))
+        .unwrap();
+    // The copied command must work outside the vault, including shell quoting.
+    let result = Command::new("/bin/sh")
+        .args(["-c", &format!("exec \"$1\" {command}"), "lwiki-test"])
+        .arg(test_paths::binary(env!("CARGO_BIN_EXE_lwiki")))
+        .current_dir(parent.path())
+        .output()
+        .unwrap();
+    assert!(
+        result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    let output = Command::new(test_paths::binary(env!("CARGO_BIN_EXE_lwiki")))
+        .arg("--wiki")
+        .arg(&root)
+        .args(["search", "Orchard"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    assert!(!output.stdout.contains(&0x1b));
+    let text = String::from_utf8(output.stdout).unwrap();
+    assert!(
+        text.contains("Orchard\\nForged heading\\t\\u{1b}"),
+        "{text}"
+    );
+    assert!(!text.contains("\nForged heading"));
+}

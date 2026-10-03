@@ -888,7 +888,12 @@ fn redacted(error: WikiError) -> WikiError {
         );
         return safe;
     }
-    super::diagnostics::error(error.code, super::diagnostics::reason(&error).unwrap_or(""))
+    super::diagnostics::error(
+        error.code,
+        super::diagnostics::reason(&error)
+            .or_else(|| super::diagnostics::local(&error))
+            .unwrap_or(""),
+    )
 }
 fn failure(error: WikiError, attempt: Option<AttemptRef>) -> Box<DispatchFailure> {
     Box::new(DispatchFailure {
@@ -1424,4 +1429,46 @@ fn pause_running(ledger: &JobLedger, reason: StopReason) -> Result<()> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod diagnostic_redaction_tests {
+    use super::*;
+
+    #[test]
+    fn setup_reasons_preserve_only_closed_local_diagnostics() {
+        let mut local = WikiError::new(
+            ErrorCode::ProviderAuth,
+            "credential file unavailable or invalid",
+        );
+        local.details = serde_json::json!({"path":"secret-marker", "next_action":"secret-marker"});
+        let safe = redacted(local);
+        assert_eq!(
+            safe.details["reason"],
+            "credential_file_unavailable_or_invalid"
+        );
+        assert!(
+            safe.details["next_action"]
+                .as_str()
+                .unwrap()
+                .contains("0600")
+        );
+        assert!(!format!("{safe:?}").contains("secret-marker"));
+
+        for message in [
+            "credential file unavailable or invalid: secret-marker",
+            "secret-marker",
+        ] {
+            let mut untrusted = WikiError::new(ErrorCode::ProviderAuth, message);
+            untrusted.details = serde_json::json!({"reason":"secret-marker", "next_action":"secret-marker", "token":"secret-marker"});
+            let safe = redacted(untrusted);
+            assert_eq!(safe.message, "bounded provider operation failed");
+            assert!(!format!("{safe:?}").contains("secret-marker"));
+        }
+        let wrong_code = redacted(WikiError::new(
+            ErrorCode::ProviderResponse,
+            "credential file unavailable or invalid",
+        ));
+        assert_eq!(wrong_code.message, "bounded provider operation failed");
+    }
 }

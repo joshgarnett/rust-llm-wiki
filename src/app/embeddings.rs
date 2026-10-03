@@ -1500,12 +1500,13 @@ impl OfflineApp {
             } else {
                 plan.limits.excerpt_bytes
             };
-            let mut focused = retrieval::fusion::dense_hit(
+            let mut focused = retrieval::fusion::dense_hit_for_query(
                 reader,
                 document,
                 &hit,
                 rank + 1,
                 primary_budget.max(1),
+                text,
             )?;
             if let Some(second) = passages.get(1) {
                 let remaining = plan
@@ -1513,12 +1514,13 @@ impl OfflineApp {
                     .excerpt_bytes
                     .saturating_sub(focused.excerpt.text.len());
                 if remaining > 0 {
-                    let extra = retrieval::fusion::dense_hit(
+                    let extra = retrieval::fusion::dense_hit_for_query(
                         reader,
                         document,
                         second,
                         rank + 1,
                         remaining,
+                        text,
                     )?
                     .excerpt;
                     if extra.span.end() <= focused.excerpt.span.start()
@@ -1603,12 +1605,13 @@ impl OfflineApp {
                         input_hash: evidence.source.quote_hash.clone(),
                         score: assertion.rrf_score,
                     };
-                    let mut hit = retrieval::fusion::dense_hit(
+                    let mut hit = retrieval::fusion::dense_hit_for_query(
                         reader,
                         document,
                         &synthetic,
                         rank + 1,
                         plan.limits.excerpt_bytes,
+                        text,
                     )?;
                     hit.rank_contributions = vec![RankContribution {
                         channel: "graph_evidence".into(),

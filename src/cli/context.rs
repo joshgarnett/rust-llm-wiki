@@ -79,7 +79,10 @@ pub struct ContextArguments {
 }
 impl ContextArguments {
     pub fn request(&self) -> ContextRequest {
-        let documents = self.search.plan();
+        let mut documents = self.search.plan();
+        // Context needs enough surrounding prose to support an answer; search
+        // keeps its shorter discovery snippets. Explicit caller bounds win.
+        documents.limits.excerpt_bytes = self.search.excerpt_bytes.unwrap_or(1024);
         let target = match self.target {
             Target::Documents => ContextTarget::Documents,
             Target::Graph => ContextTarget::Graph,

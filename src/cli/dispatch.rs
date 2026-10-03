@@ -1183,15 +1183,23 @@ fn input(path: &Path) -> Result<Vec<u8>> {
             .read_to_end(&mut bytes)
     } else {
         File::open(path)
-            .map_err(|e| WikiError::new(ErrorCode::Internal, format!("open input: {e}")))?
+            .map_err(|e| input_error(path, e))?
             .take(MAX_INPUT_BYTES as u64 + 1)
             .read_to_end(&mut bytes)
     }
-    .map_err(|e| WikiError::new(ErrorCode::Internal, format!("read input: {e}")))?;
+    .map_err(|e| input_error(path, e))?;
     if bytes.len() > MAX_INPUT_BYTES {
         return Err(usage("input exceeds 16 MiB"));
     }
     Ok(bytes)
+}
+fn input_error(path: &Path, error: io::Error) -> WikiError {
+    let mut failure = WikiError::new(
+        ErrorCode::Usage,
+        format!("cannot read input {}: {error}", path.display()),
+    );
+    failure.details = serde_json::json!({"next_action": "Check that the input path names a readable file, or use - to read standard input."});
+    failure
 }
 fn capture(path: &Path, title: Option<&str>, media_type: Option<String>) -> Result<CaptureRequest> {
     let original = input(path)?;
@@ -1249,6 +1257,61 @@ pub fn present(
     format: OutputFormat,
     output: &mut impl Write,
 ) -> io::Result<()> {
+    present_with_wiki(envelope, format, output, None)
+}
+
+/// Terminal summaries retain the caller's explicit vault selection.
+/// Read/context stdout remains exact, pipeable content authority.
+pub fn present_with_wiki(
+    envelope: &Envelope,
+    format: OutputFormat,
+    output: &mut impl Write,
+    wiki: Option<&Path>,
+) -> io::Result<()> {
+    if matches!(format, OutputFormat::Human)
+        && !(envelope.ok && matches!(envelope.command.as_str(), "read" | "context"))
+    {
+        let mut bytes = Vec::new();
+        present_inner(envelope, format, &mut bytes, wiki)?;
+        write!(
+            output,
+            "{}",
+            terminal_text(&String::from_utf8_lossy(&bytes), true)
+        )
+    } else {
+        present_inner(envelope, format, output, wiki)
+    }
+}
+
+fn terminal_text(text: &str, multiline: bool) -> String {
+    text.chars()
+        .flat_map(|c| {
+            if (c.is_control() && !(multiline && matches!(c, '\n' | '\t')))
+                || matches!(c, '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}')
+            {
+                c.escape_default().collect::<Vec<_>>()
+            } else {
+                vec![c]
+            }
+        })
+        .collect()
+}
+
+fn present_inner(
+    envelope: &Envelope,
+    format: OutputFormat,
+    output: &mut impl Write,
+    wiki: Option<&Path>,
+) -> io::Result<()> {
+    let command_prefix = wiki.map_or_else(
+        || "lwiki".to_owned(),
+        |path| {
+            format!(
+                "lwiki --wiki '{}'",
+                path.to_string_lossy().replace('\'', "'\\''")
+            )
+        },
+    );
     match format {
         OutputFormat::Json => {
             serde_json::to_writer(&mut *output, envelope)?;
@@ -1261,7 +1324,16 @@ pub fn present(
         OutputFormat::Human if !envelope.ok => {
             if let Some(error) = &envelope.error {
                 writeln!(output, "{}: {}", error.code, error.message)?;
+                if let Some(hint) = &error.hint {
+                    writeln!(output, "{hint}")?;
+                }
                 human_error_guidance(output, &error.details)?;
+                if error.code == "CONTENT_CONFLICT" {
+                    writeln!(
+                        output,
+                        "Inspect the current record and retained change before retrying. For an author edit, reconcile the current content and prepare a new change with its observed hash. If recovery reports a durable conflict, inspect changes resolve --help."
+                    )?;
+                }
             }
             if let Some(change) = envelope
                 .data
@@ -1271,7 +1343,7 @@ pub fn present(
             {
                 writeln!(
                     output,
-                    "Retained change: {change}\nInspect with: lwiki changes show {change}"
+                    "Retained change: {change}\nInspect with: {command_prefix} changes show {change}"
                 )?;
             }
             if let Some(diagnostics) = envelope.data.get("diagnostics").and_then(Value::as_array) {
@@ -1325,8 +1397,8 @@ pub fn present(
                     writeln!(
                         output,
                         "{} — {} ({})\n{}\n",
-                        hit["path"].as_str().unwrap_or_default(),
-                        hit["title"].as_str().unwrap_or_default(),
+                        terminal_text(hit["path"].as_str().unwrap_or_default(), false),
+                        terminal_text(hit["title"].as_str().unwrap_or_default(), false),
                         hit["eligibility"].as_str().unwrap_or_default(),
                         hit["excerpt"]["text"].as_str().unwrap_or_default()
                     )?;
@@ -1335,16 +1407,83 @@ pub fn present(
                     writeln!(output, "No matches.")?;
                 }
                 if envelope.meta.partial {
-                    writeln!(
-                        output,
-                        "Results are truncated; use the continuation cursor for another page."
-                    )?;
+                    if let Some(cursor) = envelope.data["next_cursor"].as_str() {
+                        writeln!(
+                            output,
+                            "More results: repeat this search with the same options and --cursor '{cursor}'"
+                        )?;
+                    } else {
+                        writeln!(
+                            output,
+                            "Results are truncated by the candidate bound; increase --candidates or narrow the query. No continuation cursor is available."
+                        )?;
+                    }
                 }
                 Ok(())
             } else {
                 serde_json::to_writer_pretty(&mut *output, &envelope.data)?;
                 writeln!(output)
             }
+        }
+        OutputFormat::Human if envelope.command == "init" => {
+            let action = if envelope.data["created"] == true {
+                "Created wiki"
+            } else {
+                "Would create wiki"
+            };
+            writeln!(
+                output,
+                "{action}: {}",
+                envelope.data["path"].as_str().unwrap_or_default()
+            )?;
+            writeln!(
+                output,
+                "Wiki ID: {}",
+                envelope.data["id"].as_str().unwrap_or_default()
+            )?;
+            writeln!(
+                output,
+                "Next: add a local file with lwiki --wiki PATH source add FILE, then search its contents."
+            )
+        }
+        OutputFormat::Human if envelope.data["plan"]["operations"].is_array() => {
+            let status = envelope.data["status"].as_str().unwrap_or("preview");
+            writeln!(output, "{}: {status}", envelope.command)?;
+            if let Some(ids) = envelope.data["allocated_ids"].as_object() {
+                for (kind, id) in ids {
+                    if let Some(id) = id.as_str() {
+                        writeln!(output, "{kind}: {id}")?;
+                    }
+                }
+            }
+            if let Some(extraction) = envelope.data["extraction_status"].as_str() {
+                writeln!(
+                    output,
+                    "Extraction: {extraction}; citable: {}",
+                    envelope.data["citable"]
+                )?;
+            }
+            for operation in envelope.data["plan"]["operations"].as_array().unwrap() {
+                writeln!(
+                    output,
+                    "  {} ({} bytes)",
+                    operation["path"].as_str().unwrap_or_default(),
+                    operation["byte_len"]
+                )?;
+            }
+            if let Some(change) = envelope.data["change"]["change_id"].as_str() {
+                writeln!(output, "Change: {change}")?;
+                if status == "prepared" {
+                    writeln!(
+                        output,
+                        "Inspect with: {command_prefix} changes show {change}\nApply with: {command_prefix} changes apply {change}"
+                    )?;
+                }
+            }
+            if envelope.data["reused"] == true {
+                writeln!(output, "Reused the existing change; no duplicate capture.")?;
+            }
+            Ok(())
         }
         OutputFormat::Human => {
             serde_json::to_writer_pretty(&mut *output, &envelope.data)?;

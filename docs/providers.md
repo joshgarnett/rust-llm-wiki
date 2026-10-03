@@ -31,6 +31,54 @@ output_limit_field = "max_completion_tokens" # or max_tokens if required
 response_mode = "text-json"
 ```
 
+## Set up embeddings for a new wiki
+
+Use a private provider file outside the wiki. `--providers-config` requires an **absolute path**; a relative path is rejected. Obtain the wiki ID from `lwiki --wiki /absolute/wiki --json read --path WIKI.md` (`meta.wiki_id`). Replace all three path/ID placeholders below with your actual values:
+
+```toml
+version = 1
+[profiles.openai]
+embedding = "embed-small"
+
+[services.embed-small]
+adapter = "embeddings-v1"
+url = "https://api.openai.com/v1/embeddings"
+model = "text-embedding-3-small"
+revision = "my-embedding-policy-v1"
+dimensions = 1536
+max_batch_items = 32
+max_batch_bytes = 131072
+
+[services.embed-small.auth]
+kind = "static"
+key_file = "/absolute/private/token"
+
+[vault_bindings.personal]
+root = "/absolute/wiki"
+wiki_id = "paste-your-vault-id"
+allowed_profiles = ["openai"]
+```
+
+The configuration and credential files must be regular private files; on Unix use owner-only permissions such as `0600`. A token file may end in one LF or CRLF. Alternatively use `key_env = "OPENAI_API_KEY"` and provide the key in that process's environment. Never put the token in captured sources, a shared vault, or command arguments. The root/ID binding authorizes this specific wiki; a copied wiki requires its own explicit binding.
+
+With `WIKI` and `PROVIDERS` set to their absolute paths, these commands make small, explicitly bounded paid requests:
+
+```sh
+lwiki --wiki "$WIKI" --json doctor --probe --role embed \
+  --providers-config "$PROVIDERS" --profile openai --max-requests 1
+lwiki --wiki "$WIKI" --json embeddings sync \
+  --providers-config "$PROVIDERS" --profile openai --max-requests 20 \
+  --quality-target-bytes 3000 --max-input-bytes 8000
+lwiki --wiki "$WIKI" search 'how can I recover from a failed deployment' --mode semantic \
+  --providers-config "$PROVIDERS" --profile openai --max-requests 1
+```
+
+A successful sync reports published coverage; a repeated unchanged sync reuses cached inputs. Semantic search embeds the query, then searches the retained corpus vectors. A cached identical query can subsequently run with `--offline`. Offline mode cannot embed a new query. Add `--dry-run` to preview an operation without sending text or opening credentials; coverage and provider authorization may remain unchecked.
+
+Request limits include retries. Each embedding attempt conservatively reserves **8 MiB of response allowance**, even when its eventual response is smaller. A `--max-response-bytes` ceiling must cover settled usage plus outstanding and proposed reservations. Without a complete trusted rate card, monetary cost remains unknown and conservative reservations can remain after successful output. This is not a report of zero spend or a claim that no token usage was returned. Inspect `jobs status --run RUN_ID` before changing a budget. A failed probe is retained and paused; correcting configuration and rerunning the probe creates a new run, preserving earlier accounting.
+
+The [live usability evaluation](execution/reports/UX-VALIDATION.md) records the exact tested corpus, model and limitations. Other endpoints, models and generation adapters still require their own checks.
+
 ## Manual checks
 
 Run commands against a disposable vault with your explicit provider file and profile:

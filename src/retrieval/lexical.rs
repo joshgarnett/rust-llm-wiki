@@ -521,7 +521,23 @@ fn match_ranges(
         let note = parse_note(document.raw_text.as_bytes());
         note.raw.len() - note.body().len()
     };
-    let map = SourceMap::markdown(&document.raw_text, offset);
+    query_matches(
+        tokenizer,
+        &document.raw_text,
+        offset..document.raw_text.len(),
+        query,
+        excerpt_bytes,
+    )
+}
+
+fn query_matches(
+    tokenizer: &Tokenizer<'_>,
+    raw: &str,
+    bounds: Range<usize>,
+    query: &str,
+    excerpt_bytes: usize,
+) -> Result<Vec<Range<usize>>> {
+    let map = SourceMap::markdown(&raw[..bounds.end], bounds.start);
     let tokens = tokenizer.tokens(&map.text)?;
     let mut matches = Vec::new();
     // Prefer the complete query over an early isolated word. Search the full
@@ -534,7 +550,7 @@ fn match_ranges(
                 let normalized = window[0].span.start..window[window.len() - 1].span.end;
                 if let Some(original) = map.original_span(normalized.clone())
                     && original.len() <= excerpt_bytes.saturating_mul(2) / 3
-                    && document.raw_text.get(original.clone()) == map.text.get(normalized)
+                    && raw.get(original.clone()) == map.text.get(normalized)
                 {
                     matches.push(original);
                     if matches.len() == 64 {
@@ -547,36 +563,115 @@ fn match_ranges(
             return Ok(matches);
         }
     }
-    for term in query.split_whitespace() {
-        let phrase = tokenizer.tokens(term)?;
-        if phrase.is_empty() {
+    // Score all windows, rather than allowing the first frequent query term
+    // to consume the match cap. Distinct normalized query tokens vote once
+    // per window, weighted by inverse frequency in this document. This is
+    // language independent and keeps repeated common words from overwhelming
+    // late identifiers. Document ranking remains the FTS ranking above.
+    let mut terms = BTreeMap::new();
+    for token in &phrase {
+        let next = terms.len();
+        terms.entry(token.text.as_str()).or_insert(next);
+    }
+    let mut frequencies = vec![0usize; terms.len()];
+    let mut occurrences = Vec::new();
+    for token in &tokens {
+        let Some(&term) = terms.get(token.text.as_str()) else {
             continue;
+        };
+        frequencies[term] += 1;
+        if let Some(original) = map.original_span(token.span.clone())
+            && raw.get(original.clone()) == map.text.get(token.span.clone())
+        {
+            occurrences.push((original, term));
         }
-        for window in tokens.windows(phrase.len()) {
-            if window
-                .iter()
-                .zip(&phrase)
-                .all(|(source, query)| source.text == query.text)
-            {
-                let normalized = window.first().expect("nonempty").span.start
-                    ..window.last().expect("nonempty").span.end;
-                if let Some(original) = map.original_span(normalized.clone())
-                    && document.raw_text.get(original.clone()) == map.text.get(normalized)
-                {
-                    matches.push(original);
-                }
+    }
+    if occurrences.is_empty() {
+        return Ok(vec![]);
+    }
+    // Fixed-point weights make equal-scoring windows choose the earliest
+    // original span without floating-point accumulation/tie drift.
+    let weights = frequencies
+        .iter()
+        .map(|&frequency| {
+            if frequency == 0 {
+                0
+            } else {
+                ((1.0 + (tokens.len() as f64 / frequency as f64).ln()) * 1_000_000.0).round() as u64
             }
-            if matches.len() >= 64 {
+        })
+        .collect::<Vec<_>>();
+    let mut counts = vec![0usize; terms.len()];
+    let (mut left, mut right, mut score, mut best_score, mut best) = (0, 0, 0u64, 0u64, 0);
+    for (index, (anchor, _)) in occurrences.iter().enumerate() {
+        let window = excerpt_window(raw, bounds.clone(), anchor.start, excerpt_bytes);
+        while right < occurrences.len() && occurrences[right].0.end <= window.end {
+            let term = occurrences[right].1;
+            if counts[term] == 0 {
+                score += weights[term];
+            }
+            counts[term] += 1;
+            right += 1;
+        }
+        while left < right && occurrences[left].0.start < window.start {
+            let term = occurrences[left].1;
+            counts[term] -= 1;
+            if counts[term] == 0 {
+                score -= weights[term];
+            }
+            left += 1;
+        }
+        if score > best_score {
+            best_score = score;
+            best = index;
+        }
+    }
+    let anchor = occurrences[best].0.clone();
+    let window = excerpt_window(raw, bounds, anchor.start, excerpt_bytes);
+    let mut matches = vec![anchor.clone()];
+    for (span, _) in occurrences {
+        if span != anchor && span.start >= window.start && span.end <= window.end {
+            matches.push(span);
+            if matches.len() == 64 {
                 break;
             }
         }
-        if matches.len() >= 64 {
-            break;
-        }
     }
-    matches.sort_by_key(|span| span.start);
-    matches.dedup();
     Ok(matches)
+}
+
+fn excerpt_window(raw: &str, bounds: Range<usize>, anchor: usize, bytes: usize) -> Range<usize> {
+    let mut start = anchor.saturating_sub(bytes / 3).max(bounds.start);
+    while start < bounds.end && !raw.is_char_boundary(start) {
+        start += 1;
+    }
+    let mut end = start.saturating_add(bytes).min(bounds.end);
+    while end > start && !raw.is_char_boundary(end) {
+        end -= 1;
+    }
+    start..end
+}
+
+/// Focus within a winning embedding unit without widening its citation scope.
+/// Token matching guides the window, but all returned text/spans/hash still
+/// come from the exact original UTF-8 source bytes.
+pub(crate) fn focused_excerpt(
+    reader: &ReaderSnapshot,
+    document: &DocumentRow,
+    query: &str,
+    span: ByteSpan,
+    bytes: usize,
+) -> Result<SearchExcerpt> {
+    validate_query(query)?;
+    span.slice(&document.raw_text)?;
+    let bounds = span.start() as usize..span.end() as usize;
+    let tokenizer = Tokenizer::new(reader.connection())?;
+    let matches = query_matches(&tokenizer, &document.raw_text, bounds.clone(), query, bytes)?;
+    let anchor = matches
+        .first()
+        .map_or(bounds.start, |matched| matched.start);
+    let window = excerpt_window(&document.raw_text, bounds, anchor, bytes);
+    build_excerpt(reader, document, window, &matches)
 }
 pub(crate) fn excerpt(
     reader: &ReaderSnapshot,
@@ -603,26 +698,32 @@ pub(crate) fn excerpt(
         });
     }
     let anchor = matches.first().map_or(body, |span| span.start);
-    let mut start = anchor.saturating_sub(bytes / 3).max(
-        if mode == SearchMode::Lexical || matches.is_empty() {
-            body
-        } else {
-            0
-        },
-    );
-    while start < raw.len() && !raw.is_char_boundary(start) {
-        start += 1;
-    }
-    let mut end = (start + bytes).min(raw.len());
-    while end > start && !raw.is_char_boundary(end) {
-        end -= 1;
-    }
+    let minimum = if mode == SearchMode::Lexical || matches.is_empty() {
+        body
+    } else {
+        0
+    };
+    let window = excerpt_window(raw, minimum..raw.len(), anchor, bytes);
+    build_excerpt(reader, document, window, matches)
+}
+
+fn build_excerpt(
+    reader: &ReaderSnapshot,
+    document: &DocumentRow,
+    window: Range<usize>,
+    matches: &[Range<usize>],
+) -> Result<SearchExcerpt> {
+    let raw = &document.raw_text;
+    let start = window.start;
+    let end = window.end;
     let span = ByteSpan::new(start as u64, end as u64)?;
-    let matched_spans = matches
+    let mut matched_spans = matches
         .iter()
         .filter(|matched| matched.start >= start && matched.end <= end)
         .map(|matched| ByteSpan::new(matched.start as u64, matched.end as u64))
         .collect::<Result<Vec<_>>>()?;
+    matched_spans.sort_by_key(|span| (span.start(), span.end()));
+    matched_spans.dedup();
     let text = raw
         .get(start..end)
         .ok_or_else(|| WikiError::new(ErrorCode::IndexCorrupt, "excerpt boundaries invalid"))?

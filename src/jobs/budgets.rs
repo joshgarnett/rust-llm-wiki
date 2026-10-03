@@ -254,17 +254,35 @@ pub(super) fn fits(
     let mut total = settled.clone();
     add(&mut total, outstanding)?;
     add(&mut total, proposed)?;
-    if total.requests > limits.requests
-        || limits
-            .request_bytes
-            .is_some_and(|n| total.request_bytes > n)
-        || limits
-            .response_bytes
-            .is_some_and(|n| total.response_bytes > n)
-        || limits
-            .billable_units
-            .iter()
-            .any(|(c, n)| total.billable_units.get(c).copied().unwrap_or_default() > *n)
+    // Keep admission unchanged while naming the exhausted local resource. These
+    // fixed literals survive the provider diagnostic boundary without exposing
+    // arbitrary configuration, credentials, or provider response data.
+    for (exceeded, message) in [
+        (
+            total.requests > limits.requests,
+            "lifetime request reservation exceeds run budget",
+        ),
+        (
+            limits
+                .request_bytes
+                .is_some_and(|n| total.request_bytes > n),
+            "lifetime request-byte reservation exceeds run budget",
+        ),
+        (
+            limits
+                .response_bytes
+                .is_some_and(|n| total.response_bytes > n),
+            "lifetime response-byte reservation exceeds run budget",
+        ),
+    ] {
+        if exceeded {
+            return Err(WikiError::new(ErrorCode::BudgetExceeded, message));
+        }
+    }
+    if limits
+        .billable_units
+        .iter()
+        .any(|(c, n)| total.billable_units.get(c).copied().unwrap_or_default() > *n)
         || (total.requests > 0
             && limits.max_cost.as_ref().is_some_and(|max| {
                 total.cost.as_ref().is_none_or(|v| {
