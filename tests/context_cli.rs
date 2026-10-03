@@ -80,6 +80,501 @@ fn tree(root: &Path) -> BTreeMap<PathBuf, (Vec<u8>, std::time::SystemTime)> {
     walk(root, root, &mut out);
     out
 }
+
+// A read-only WAL connection may create SQLite coordination sidecars. This
+// allows those exact effects, while keeping canonical/operational files, the
+// main database and existing WAL bytes AND timestamps immutable.
+fn assert_index_read_unchanged(
+    root: &Path,
+    before: &BTreeMap<PathBuf, (Vec<u8>, std::time::SystemTime)>,
+) {
+    let mut after = tree(root);
+    let mut expected = before.clone();
+    let shm = PathBuf::from(".wiki/cache/index.sqlite-shm");
+    if after.contains_key(&shm) {
+        assert!(
+            fs::symlink_metadata(root.join(&shm))
+                .unwrap()
+                .file_type()
+                .is_file()
+        );
+    }
+    after.remove(&shm);
+    expected.remove(&shm);
+    let wal = PathBuf::from(".wiki/cache/index.sqlite-wal");
+    if !expected.contains_key(&wal)
+        && let Some((bytes, _)) = after.remove(&wal)
+    {
+        assert!(
+            fs::symlink_metadata(root.join(&wal))
+                .unwrap()
+                .file_type()
+                .is_file()
+        );
+        assert!(
+            bytes.is_empty(),
+            "a read-only connection must not create WAL frames"
+        );
+    }
+    let cache = PathBuf::from(".wiki/cache");
+    if let (Some((_, timestamp)), Some((_, old))) = (after.get_mut(&cache), expected.get(&cache)) {
+        *timestamp = *old;
+    }
+    let changed: Vec<_> = after
+        .keys()
+        .chain(expected.keys())
+        .filter(|path| after.get(*path) != expected.get(*path))
+        .collect();
+    assert!(
+        changed.is_empty(),
+        "index read changed protected paths: {changed:?}"
+    );
+}
+
+const INDEXED_BODY: &str = "# Independent capture\n\nindexedprobe: The cedar cabinet contains 37 blue folders.\nThe access phrase is café 東京 🦀.\n";
+
+fn add_context_source(root: &Path, body: &str) -> (String, String) {
+    let input = tempfile::NamedTempFile::new().unwrap();
+    fs::write(input.path(), body).unwrap();
+    let added = ok(
+        root,
+        &[
+            "source",
+            "add",
+            input.path().to_str().unwrap(),
+            "--media-type",
+            "text/markdown",
+            "--title",
+            "Independent capture",
+        ],
+    );
+    (
+        added["data"]["allocated_ids"]["source"]
+            .as_str()
+            .unwrap()
+            .into(),
+        added["data"]["allocated_ids"]["revision"]
+            .as_str()
+            .unwrap()
+            .into(),
+    )
+}
+
+#[test]
+fn indexed_evidence_requires_an_explicit_cache_and_never_creates_one() {
+    let f = fixture();
+    let before = tree(f.path());
+    for extra in [vec![], vec!["--no-sync"]] {
+        let mut args = vec!["context", "uses", "--scope", "indexed-evidence"];
+        args.extend(extra);
+        let (exit, rejected) = invoke(f.path(), &args);
+        assert_ne!(exit, 0, "{rejected}");
+        assert_eq!(rejected["error"]["code"], "OFFLINE_UNAVAILABLE");
+        assert!(rejected["meta"]["freshness"].is_null());
+        assert_eq!(tree(f.path()), before);
+    }
+    assert!(!f.path().join(".wiki/cache/index.sqlite").exists());
+    ok(f.path(), &["index", "sync"]);
+    assert_eq!(
+        ok(
+            f.path(),
+            &["context", "uses", "--scope", "indexed-evidence"]
+        )["meta"]["freshness"],
+        "indexed_evidence"
+    );
+}
+
+#[test]
+fn indexed_evidence_is_read_only_scoped_and_independently_cited() {
+    use lwiki::domain::{Blake3Hash, ByteSpan};
+    let f = fixture();
+    let (source, revision) = add_context_source(f.path(), INDEXED_BODY);
+    let synced = ok(f.path(), &["index", "sync"]);
+    let prefix = format!("sources/{source}/revisions/{revision}/");
+    let before = tree(f.path());
+    let result = ok(
+        f.path(),
+        &[
+            "context",
+            "indexedprobe",
+            "--scope",
+            "indexed-evidence",
+            "--no-sync",
+            "--source-id",
+            &source,
+            "--path-prefix",
+            &prefix,
+        ],
+    );
+    assert_index_read_unchanged(f.path(), &before);
+    assert_eq!(result["meta"]["freshness"], "indexed_evidence");
+    let verification = &result["data"]["verification"];
+    assert_eq!(verification["mode"], "indexed_evidence");
+    assert_eq!(verification["evidence_domain"], "captured_sources");
+    assert_eq!(verification["global_membership_verified"], false);
+    assert_eq!(
+        verification["discovery_generation"],
+        synced["data"]["report"]["snapshot"]["generation"]
+    );
+    assert_eq!(
+        verification["discovery_generation"],
+        result["meta"]["index_generation"]
+    );
+    assert_eq!(verification["verified_at"], result["meta"]["verified_at"]);
+    assert!(verification["verified_at"].is_string());
+    assert!(verification["catalog_rows_decoded"].as_u64().unwrap() > 0);
+    assert!(verification["catalog_bytes_decoded"].as_u64().unwrap() > 0);
+    assert!(result["data"]["bundles"].as_array().unwrap().is_empty());
+    let passages = result["data"]["passages"].as_array().unwrap();
+    assert!(!passages.is_empty());
+    for passage in passages {
+        let span: ByteSpan = serde_json::from_value(passage["span"].clone()).unwrap();
+        let quote = span.slice(INDEXED_BODY).unwrap();
+        assert_eq!(passage["text"], quote);
+        assert_eq!(passage["label"], "captured_source");
+        assert!(
+            passage["locator"]["path"]
+                .as_str()
+                .unwrap()
+                .starts_with(&prefix)
+        );
+        let citations = passage["citations"].as_array().unwrap();
+        assert_eq!(citations.len(), 1);
+        assert_eq!(citations[0]["kind"], "source");
+        let reference = &citations[0]["reference"];
+        assert_eq!(reference["source_id"], source);
+        assert_eq!(reference["source_revision"], revision);
+        assert_eq!(reference["span"], passage["span"]);
+        assert_eq!(
+            reference["quote_hash"],
+            Blake3Hash::digest(quote.as_bytes()).as_str()
+        );
+    }
+    let text = result["data"]["text"].as_str().unwrap();
+    assert!(text.contains("37 blue folders") && text.contains("café 東京 🦀"));
+    assert!(text.contains("global membership, identity uniqueness and completeness not verified"));
+    assert_eq!(result["data"]["usage"]["rendered_bytes"], text.len());
+    assert_eq!(
+        result["data"]["usage"]["estimated_tokens"],
+        text.len().div_ceil(4)
+    );
+    assert!(text.len() <= 12000);
+    let human = Command::new(test_paths::binary(env!("CARGO_BIN_EXE_lwiki")))
+        .arg("--wiki")
+        .arg(f.path())
+        .args([
+            "--offline",
+            "context",
+            "indexedprobe",
+            "--scope",
+            "indexed-evidence",
+            "--no-sync",
+            "--source-id",
+            &source,
+            "--path-prefix",
+            &prefix,
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        human.status.success(),
+        "{}",
+        String::from_utf8_lossy(&human.stderr)
+    );
+    assert_eq!(human.stdout, text.as_bytes());
+    assert!(
+        String::from_utf8(human.stderr)
+            .unwrap()
+            .contains("Freshness: indexed_evidence")
+    );
+    assert_index_read_unchanged(f.path(), &before);
+}
+
+#[test]
+fn indexed_evidence_does_not_discover_new_sources_but_default_current_does() {
+    let f = fixture();
+    ok(f.path(), &["index", "sync"]);
+    let other = fixture();
+    let (source, _) = add_context_source(other.path(), INDEXED_BODY);
+    // Copy canonical captured bytes without changing the tested vault's cache.
+    copy(
+        &other.path().join(format!("sources/{source}")),
+        &f.path().join(format!("sources/{source}")),
+    );
+    let before = tree(f.path());
+    let indexed = ok(
+        f.path(),
+        &[
+            "context",
+            "indexedprobe",
+            "--scope",
+            "indexed-evidence",
+            "--source-id",
+            &source,
+        ],
+    );
+    assert_index_read_unchanged(f.path(), &before);
+    assert_eq!(indexed["meta"]["freshness"], "indexed_evidence");
+    assert_eq!(
+        indexed["data"]["verification"]["global_membership_verified"],
+        false
+    );
+    assert!(indexed["data"]["passages"].as_array().unwrap().is_empty());
+    let current = ok(
+        f.path(),
+        &["context", "indexedprobe", "--source-id", &source],
+    );
+    assert_eq!(current["meta"]["freshness"], "verified_snapshot");
+    assert!(
+        current["data"]["text"]
+            .as_str()
+            .unwrap()
+            .contains("37 blue folders")
+    );
+}
+
+#[test]
+fn indexed_evidence_refuses_changed_selected_capture_without_implicit_sync() {
+    for changed in ["source.md", "revision.md", "original.bin", "content.md"] {
+        let f = fixture();
+        let (source, revision) = add_context_source(f.path(), INDEXED_BODY);
+        ok(f.path(), &["index", "sync"]);
+        let base = f.path().join(format!("sources/{source}"));
+        let path = if changed == "source.md" {
+            base.join(changed)
+        } else {
+            base.join(format!("revisions/{revision}/{changed}"))
+        };
+        let mut bytes = fs::read(&path).unwrap();
+        bytes.extend_from_slice(b"\nchanged after index sync\n");
+        fs::write(&path, bytes).unwrap();
+        let before = tree(f.path());
+        for extra in [vec![], vec!["--no-sync"]] {
+            let mut args = vec![
+                "context",
+                "indexedprobe",
+                "--scope",
+                "indexed-evidence",
+                "--source-id",
+                &source,
+            ];
+            args.extend(extra);
+            let (exit, rejected) = invoke(f.path(), &args);
+            assert_ne!(exit, 0, "{changed}: {rejected}");
+            assert!(
+                matches!(
+                    rejected["error"]["code"].as_str(),
+                    Some("FRESHNESS_CONFLICT" | "SOURCE_INTEGRITY")
+                ),
+                "{changed}: {rejected}"
+            );
+            assert!(rejected["meta"]["freshness"].is_null());
+            assert!(rejected["meta"]["verified_at"].is_null());
+            assert_index_read_unchanged(f.path(), &before);
+        }
+    }
+}
+
+#[test]
+fn indexed_evidence_rejects_unsupported_requests_without_creating_state() {
+    let f = fixture();
+    let before = tree(f.path());
+    for flags in [
+        vec!["--mode", "semantic"],
+        vec!["--mode", "hybrid"],
+        vec!["--mode", "literal"],
+        vec!["--target", "graph"],
+        vec!["--target", "combined"],
+        vec!["--kind", "source"],
+        vec!["--status", "active"],
+        vec!["--tag", "test"],
+        vec!["--include-proposed"],
+        vec!["--include-historical"],
+        vec!["--prepare-selection"],
+        vec!["--selection", "/nonexistent/indexed-evidence-reply.json"],
+    ] {
+        let mut args = vec!["context", "uses", "--scope", "indexed-evidence"];
+        args.extend(flags);
+        let (exit, rejected) = invoke(f.path(), &args);
+        assert_eq!(exit, 2, "{args:?}: {rejected}");
+        assert_eq!(rejected["error"]["code"], "USAGE");
+        assert!(
+            rejected["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("indexed-evidence"),
+            "{rejected}"
+        );
+        assert!(rejected["meta"]["freshness"].is_null());
+        assert_eq!(tree(f.path()), before);
+    }
+}
+
+#[test]
+fn indexed_evidence_budgets_rendered_authority_and_selected_proof() {
+    let f = fixture();
+    let (source, _) = add_context_source(f.path(), INDEXED_BODY);
+    ok(f.path(), &["index", "sync"]);
+    let before = tree(f.path());
+    let result = ok(
+        f.path(),
+        &[
+            "context",
+            "indexedprobe",
+            "--scope",
+            "indexed-evidence",
+            "--source-id",
+            &source,
+            "--max-bytes",
+            "500",
+            "--max-tokens",
+            "125",
+            "--instruction-bytes",
+            "40",
+            "--instruction-tokens",
+            "10",
+        ],
+    );
+    let text = result["data"]["text"].as_str().unwrap();
+    assert!(text.len() <= 460);
+    assert!(text.len().div_ceil(4) <= 115);
+    assert_eq!(result["data"]["usage"]["rendered_bytes"], text.len());
+    assert_eq!(result["data"]["usage"]["reserved_bytes"], 40);
+    assert_eq!(result["data"]["usage"]["reserved_tokens"], 10);
+    let (exit, rejected) = invoke(
+        f.path(),
+        &[
+            "context",
+            "indexedprobe",
+            "--scope",
+            "indexed-evidence",
+            "--source-id",
+            &source,
+            "--verification-max-bytes",
+            "1",
+        ],
+    );
+    assert_eq!(exit, 7, "{rejected}");
+    assert_eq!(rejected["error"]["code"], "BUDGET_EXCEEDED");
+    assert!(rejected["meta"]["freshness"].is_null());
+    assert_index_read_unchanged(f.path(), &before);
+}
+
+#[test]
+fn legacy_cache_missing_bounded_indexes_requires_rebuild_only_for_indexed_evidence() {
+    for index in [
+        "source_document_ids",
+        "source_revision_ids",
+        "source_document_titles",
+    ] {
+        let f = fixture();
+        let (source, _) = add_context_source(f.path(), INDEXED_BODY);
+        ok(f.path(), &["index", "sync"]);
+        let db = rusqlite::Connection::open(f.path().join(".wiki/cache/index.sqlite")).unwrap();
+        db.execute_batch(&format!("DROP INDEX {index}")).unwrap();
+        drop(db);
+        let before = tree(f.path());
+        let (exit, rejected) = invoke(
+            f.path(),
+            &[
+                "context",
+                "indexedprobe",
+                "--scope",
+                "indexed-evidence",
+                "--source-id",
+                &source,
+            ],
+        );
+        assert_ne!(exit, 0, "{index}: {rejected}");
+        assert_eq!(
+            rejected["error"]["code"], "CAPABILITY_UNAVAILABLE",
+            "{index}: {rejected}"
+        );
+        assert!(
+            rejected["error"]["hint"]
+                .as_str()
+                .unwrap()
+                .contains("index rebuild")
+        );
+        assert!(rejected["meta"]["freshness"].is_null());
+        assert_index_read_unchanged(f.path(), &before);
+        let strict = ok(
+            f.path(),
+            &["context", "indexedprobe", "--source-id", &source],
+        );
+        assert_eq!(strict["meta"]["freshness"], "verified_snapshot");
+        assert!(
+            strict["data"]["text"]
+                .as_str()
+                .unwrap()
+                .contains("37 blue folders")
+        );
+        ok(f.path(), &["index", "rebuild"]);
+        assert_eq!(
+            ok(
+                f.path(),
+                &["context", "indexedprobe", "--scope", "indexed-evidence"]
+            )["meta"]["freshness"],
+            "indexed_evidence"
+        );
+    }
+}
+
+#[test]
+fn indexed_evidence_reads_uncheckpointed_wal_without_mutating_it() {
+    let f = fixture();
+    ok(f.path(), &["index", "sync"]);
+    let cache = f.path().join(".wiki/cache/index.sqlite");
+    let keeper = rusqlite::Connection::open(&cache).unwrap();
+    keeper
+        .execute_batch("PRAGMA wal_autocheckpoint=0;")
+        .unwrap();
+    let _: i64 = keeper
+        .query_row(
+            "SELECT published_gen FROM index_meta WHERE singleton=1",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let body = "# WAL-only capture\n\nwalonlyprobe: The amber drawer contains 19 cards.\n";
+    let (source, _) = add_context_source(f.path(), body);
+    let wal = f.path().join(".wiki/cache/index.sqlite-wal");
+    assert!(fs::metadata(&wal).unwrap().len() > 32);
+    // Independently inspect only the main file: the new source is committed in
+    // WAL and is not yet present in the checkpointed database.
+    let isolated = tempfile::tempdir().unwrap();
+    fs::copy(&cache, isolated.path().join("main.sqlite")).unwrap();
+    let main_only = rusqlite::Connection::open(isolated.path().join("main.sqlite")).unwrap();
+    let count: i64 = main_only
+        .query_row(
+            "SELECT count(*) FROM records WHERE id=?1",
+            [&source],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(count, 0, "fixture must need committed WAL content");
+    let before = tree(f.path());
+    let result = ok(
+        f.path(),
+        &[
+            "context",
+            "walonlyprobe",
+            "--scope",
+            "indexed-evidence",
+            "--source-id",
+            &source,
+        ],
+    );
+    assert!(
+        result["data"]["text"]
+            .as_str()
+            .unwrap()
+            .contains("19 cards")
+    );
+    assert_index_read_unchanged(f.path(), &before);
+    drop(keeper);
+}
+
 #[test]
 fn context_cli_preserves_scopes_stances_and_exact_text_budget() {
     let f = fixture();

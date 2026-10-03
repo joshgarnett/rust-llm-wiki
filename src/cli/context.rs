@@ -8,6 +8,7 @@ pub enum Scope {
     Current,
     Historical,
     Snapshot,
+    IndexedEvidence,
 }
 #[derive(Debug, Clone, Copy, ValueEnum)]
 pub enum Target {
@@ -25,7 +26,7 @@ pub struct ContextArguments {
     /// Apply an ID-only host reply to the exact current candidate packet (file or - for stdin).
     #[arg(long, value_name = "FILE")]
     pub selection: Option<std::path::PathBuf>,
-    /// Evidence scope: verified current, historical, or unverified index snapshot.
+    /// Evidence scope: current, historical, snapshot, or indexed-evidence (captured sources only).
     #[arg(long, value_enum, default_value = "current")]
     pub scope: Scope,
     /// Retrieve document passages, graph evidence or both.
@@ -179,6 +180,7 @@ impl ContextArguments {
                 Scope::Current => ContextScope::Current,
                 Scope::Historical => ContextScope::Historical,
                 Scope::Snapshot => ContextScope::Snapshot,
+                Scope::IndexedEvidence => ContextScope::IndexedEvidence,
             },
             target,
             documents,

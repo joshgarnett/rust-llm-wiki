@@ -5,7 +5,7 @@ use super::{
     types::MAX_CONTEXT_QUERY_TERMS,
 };
 use crate::{
-    catalog::{DocumentRow, ReaderSnapshot},
+    catalog::{DocumentRow, query_types::QueryCatalog},
     domain::*,
     records::parse_note,
 };
@@ -77,7 +77,7 @@ struct OwnerBlocks<'a> {
 }
 
 pub(crate) fn select_candidates_with_semantics(
-    reader: &ReaderSnapshot,
+    reader: &dyn QueryCatalog,
     query: &str,
     documents: &[SelectionDocument<'_>],
     max_excerpt_bytes: usize,

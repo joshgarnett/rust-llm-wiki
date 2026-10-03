@@ -268,6 +268,9 @@ impl Catalog {
         .map_err(sql::sql_error)?;
         self.checkpoint(PublicationCheckpoint::AfterPointer)?;
         sql::prune_generations(&tx, generation)?;
+        if force {
+            sql::rebuild_query_indexes(&tx)?;
+        }
         self.recheck(p, exempt)?;
         tx.commit().map_err(sql::sql_error)?;
         self.checkpoint(PublicationCheckpoint::AfterCommit)?;

@@ -33,6 +33,7 @@
           "enum": [
             null,
             "verified_snapshot",
+            "indexed_evidence",
             "index_snapshot"
           ]
         },

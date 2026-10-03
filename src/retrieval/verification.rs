@@ -20,7 +20,7 @@ pub fn context(
 ) -> Result<ContextResult> {
     context_with_options(catalog, writer, query, request, &ContextOptions::default())
 }
-struct Meter {
+pub(super) struct Meter {
     budget: VerificationBudget,
     start: Instant,
     bytes: usize,
@@ -28,7 +28,7 @@ struct Meter {
     entries: usize,
 }
 impl Meter {
-    fn new(budget: &VerificationBudget) -> Self {
+    pub(super) fn new(budget: &VerificationBudget) -> Self {
         Self {
             budget: budget.clone(),
             start: Instant::now(),
@@ -37,11 +37,16 @@ impl Meter {
             entries: 0,
         }
     }
-    fn check(&self) -> Result<()> {
+    pub(super) fn check(&self) -> Result<()> {
         if self.start.elapsed().as_millis() >= u128::from(self.budget.max_elapsed_ms) {
             return Err(budget_error("elapsed final-proof deadline exceeded"));
         }
         Ok(())
+    }
+    pub(super) fn remaining_ms(&self) -> u64 {
+        self.budget
+            .max_elapsed_ms
+            .saturating_sub(u64::try_from(self.start.elapsed().as_millis()).unwrap_or(u64::MAX))
     }
     fn entry(&mut self) -> Result<()> {
         self.check()?;
@@ -53,7 +58,11 @@ impl Meter {
         self.entries += 1;
         Ok(())
     }
-    fn read(&mut self, catalog: &Catalog, path: &VaultRelativePath) -> Result<Option<Vec<u8>>> {
+    pub(super) fn read(
+        &mut self,
+        catalog: &Catalog,
+        path: &VaultRelativePath,
+    ) -> Result<Option<Vec<u8>>> {
         self.check()?;
         let full = catalog
             .fs()
@@ -250,7 +259,7 @@ fn candidates(
     };
     Ok((hits, graph))
 }
-fn seal(
+pub(super) fn seal(
     mut draft: context::ContextDraft,
     verification: SnapshotVerification,
     meter: &Meter,
@@ -283,6 +292,9 @@ pub fn context_with_options(
     request: &ContextRequest,
     options: &ContextOptions,
 ) -> Result<ContextResult> {
+    if request.scope == ContextScope::IndexedEvidence {
+        return super::indexed_context::context(catalog, query, request, options);
+    }
     context_with_retrieval(
         catalog,
         writer,
@@ -350,6 +362,12 @@ where
     let request = context::validate_request(query, request)?;
     context::validate_selection_action(&request, &options.selection)?;
     meter.check()?;
+    if request.scope == ContextScope::IndexedEvidence {
+        return Err(WikiError::new(
+            ErrorCode::Usage,
+            "indexed-evidence requires its bounded lexical coordinator",
+        ));
+    }
     if request.scope == ContextScope::Snapshot {
         let reader = catalog.index_snapshot()?;
         meter.check()?;

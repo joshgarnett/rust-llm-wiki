@@ -164,14 +164,3 @@ pub(crate) fn row<'a>(
         .as_ref()
         .and_then(|id| reader.projection().records.get(id))
 }
-pub(crate) fn identity_only(
-    reader: &ReaderSnapshot,
-    document: &DocumentRow,
-    filters: &SearchFilters,
-) -> bool {
-    !filters.include_historical
-        && row(reader, document).is_some_and(|record| {
-            record.identity_eligibility == Some(Eligibility::Current)
-                && record.description_eligibility != Some(Eligibility::Current)
-        })
-}

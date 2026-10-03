@@ -1247,3 +1247,296 @@ fn host_selection_replays_exact_current_cards_and_rejects_changed_bindings() {
     let writer = f.writer();
     assert!(context_with_options(&f.catalog, Some(&writer), "uses", &request, &options).is_err());
 }
+
+const INDEXED_FAULT_BODY: &str = "# Indexed capture\n\nindexedfaultprobe: The cedar cabinet contains 37 blue folders.\nThe access phrase is café 東京 🦀.\n";
+
+fn indexed_fault_request(source: RecordId) -> ContextRequest {
+    let mut request = ContextRequest {
+        scope: ContextScope::IndexedEvidence,
+        ..Default::default()
+    };
+    request.documents.filters.source_ids = vec![source];
+    request.verification_budget.max_elapsed_ms = 5000;
+    request
+}
+
+struct IndexedFileFault {
+    path: PathBuf,
+    replacement: Option<Vec<u8>>,
+    calls: AtomicUsize,
+}
+
+impl ContextFault for IndexedFileFault {
+    fn check(&self, checkpoint: ContextCheckpoint) -> Result<()> {
+        assert_eq!(
+            checkpoint,
+            ContextCheckpoint::BeforeFinalVerification { attempt: 0 }
+        );
+        assert_eq!(self.calls.fetch_add(1, Ordering::SeqCst), 0);
+        let bytes = self.replacement.clone().unwrap_or_else(|| {
+            let mut bytes = fs::read(&self.path).unwrap();
+            bytes.extend_from_slice(b"\nchanged just before emission\n");
+            bytes
+        });
+        fs::write(&self.path, bytes).unwrap();
+        Ok(())
+    }
+}
+
+#[test]
+fn indexed_evidence_rechecks_each_selected_dependency_and_never_retries() {
+    for changed in [
+        "WIKI.md",
+        "source.md",
+        "revision.md",
+        "original.bin",
+        "content.md",
+    ] {
+        let f = Fixture::new();
+        let source = capture_context_fixture(&f, INDEXED_FAULT_BODY);
+        let writer = f.writer();
+        let generation = f.catalog.sync(&writer).unwrap().snapshot.generation;
+        let source_path = f.temp.path().join(format!("sources/{source}/source.md"));
+        let source_note = lwiki::records::parse_note(&fs::read(&source_path).unwrap());
+        let revision = source_note
+            .canonical
+            .as_ref()
+            .unwrap()
+            .string("wiki_current_revision")
+            .unwrap();
+        let path = match changed {
+            "WIKI.md" => f.temp.path().join("WIKI.md"),
+            "source.md" => source_path,
+            _ => f
+                .temp
+                .path()
+                .join(format!("sources/{source}/revisions/{revision}/{changed}")),
+        };
+        let hook = Arc::new(IndexedFileFault {
+            path,
+            replacement: None,
+            calls: AtomicUsize::new(0),
+        });
+        let error = context_with_options(
+            &f.catalog,
+            None,
+            "indexedfaultprobe",
+            &indexed_fault_request(source),
+            &ContextOptions {
+                fault: Some(hook.clone()),
+                ..Default::default()
+            },
+        )
+        .unwrap_err();
+        assert_eq!(
+            error.code,
+            ErrorCode::FreshnessConflict,
+            "{changed}: {error:?}"
+        );
+        assert_eq!(hook.calls.load(Ordering::SeqCst), 1, "{changed}");
+        assert_eq!(
+            f.catalog.index_snapshot().unwrap().snapshot().generation,
+            generation,
+            "{changed}"
+        );
+    }
+}
+
+#[test]
+fn indexed_evidence_empty_result_still_rechecks_the_vault_marker() {
+    let f = Fixture::new();
+    let writer = f.writer();
+    let generation = f.catalog.sync(&writer).unwrap().snapshot.generation;
+    let request = indexed_fault_request(id(SOURCE1));
+    let empty = context_with_options(
+        &f.catalog,
+        None,
+        "zqxvabsentindexedfault",
+        &request,
+        &ContextOptions::default(),
+    )
+    .unwrap();
+    assert!(empty.passages().is_empty());
+    assert!(matches!(
+        empty.verification(),
+        SnapshotVerification::IndexedEvidence {
+            global_membership_verified: false,
+            ..
+        }
+    ));
+    let hook = Arc::new(IndexedFileFault {
+        path: f.temp.path().join("WIKI.md"),
+        replacement: None,
+        calls: AtomicUsize::new(0),
+    });
+    let error = context_with_options(
+        &f.catalog,
+        None,
+        "zqxvabsentindexedfault",
+        &request,
+        &ContextOptions {
+            fault: Some(hook.clone()),
+            ..Default::default()
+        },
+    )
+    .unwrap_err();
+    assert_eq!(error.code, ErrorCode::FreshnessConflict);
+    assert_eq!(hook.calls.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        f.catalog.index_snapshot().unwrap().snapshot().generation,
+        generation
+    );
+}
+
+#[test]
+fn indexed_evidence_unrelated_new_note_preserves_only_the_declared_weak_proof() {
+    let f = Fixture::new();
+    let source = capture_context_fixture(&f, INDEXED_FAULT_BODY);
+    let writer = f.writer();
+    let generation = f.catalog.sync(&writer).unwrap().snapshot.generation;
+    // This new unindexed note duplicates an entity ID. Its global identity
+    // conflict is outside the selected-source proof and must not be hidden
+    // behind a VerifiedSnapshot claim.
+    let hook = Arc::new(IndexedFileFault {
+        path: f.temp.path().join("new-unindexed-entity.md"),
+        replacement: Some(fs::read(f.temp.path().join("knowledge/entities/north_lab.md")).unwrap()),
+        calls: AtomicUsize::new(0),
+    });
+    let result = context_with_options(
+        &f.catalog,
+        None,
+        "indexedfaultprobe",
+        &indexed_fault_request(source.clone()),
+        &ContextOptions {
+            fault: Some(hook.clone()),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(hook.calls.load(Ordering::SeqCst), 1);
+    assert_eq!(result.snapshot().generation, generation);
+    match result.verification() {
+        SnapshotVerification::IndexedEvidence {
+            discovery_generation,
+            evidence_domain,
+            global_membership_verified,
+            ..
+        } => {
+            assert_eq!(*discovery_generation, generation);
+            assert_eq!(evidence_domain, "captured_sources");
+            assert!(!global_membership_verified);
+        }
+        other => panic!("unindexed identity conflict cannot receive a global proof: {other:?}"),
+    }
+    assert!(
+        result
+            .text()
+            .contains("global membership, identity uniqueness and completeness not verified")
+    );
+    assert!(!result.passages().is_empty());
+    for passage in result.passages() {
+        assert_eq!(
+            passage.span.slice(INDEXED_FAULT_BODY).unwrap(),
+            passage.text
+        );
+        assert!(
+            !passage
+                .locator
+                .path
+                .as_str()
+                .contains("new-unindexed-entity")
+        );
+        for citation in &passage.citations {
+            let CitationRef::Source(reference) = citation else {
+                panic!("captured-source citation expected")
+            };
+            assert_eq!(reference.source_id, source);
+            assert_eq!(
+                reference.quote_hash,
+                Blake3Hash::digest(passage.text.as_bytes())
+            );
+        }
+    }
+    assert_eq!(
+        f.catalog.index_snapshot().unwrap().snapshot().generation,
+        generation
+    );
+}
+
+#[test]
+fn indexed_evidence_consistent_cache_payload_forgery_cannot_replace_canonical_bytes() {
+    let f = Fixture::new();
+    let source = capture_context_fixture(&f, INDEXED_FAULT_BODY);
+    let writer = f.writer();
+    let generation = i64::try_from(f.catalog.sync(&writer).unwrap().snapshot.generation).unwrap();
+    let db = rusqlite::Connection::open(f.temp.path().join(".wiki/cache/index.sqlite")).unwrap();
+    let serialized: String = db.query_row(
+        "SELECT row_json FROM documents WHERE gen=?1 AND source_id=?2 AND owner_revision IS NOT NULL AND eligibility='current'",
+        rusqlite::params![generation, source.as_str()],
+        |row| row.get(0),
+    ).unwrap();
+    let mut document: DocumentRow = serde_json::from_str(&serialized).unwrap();
+    let canonical_before = fs::read(f.temp.path().join(document.path.as_str())).unwrap();
+    assert_eq!(canonical_before, INDEXED_FAULT_BODY.as_bytes());
+    document.raw_text = document
+        .raw_text
+        .replace("37 blue folders", "999 red folders");
+    document.body = document.body.replace("37 blue folders", "999 red folders");
+    document.hash = Blake3Hash::digest(document.raw_text.as_bytes());
+    assert_ne!(document.hash, Blake3Hash::digest(&canonical_before));
+    let transaction = db.unchecked_transaction().unwrap();
+    assert_eq!(transaction.execute(
+        "UPDATE documents SET raw_text=?1,body=?2,file_hash=?3,row_json=?4 WHERE gen=?5 AND path=?6",
+        rusqlite::params![document.raw_text, document.body, document.hash.as_str(), serde_json::to_string(&document).unwrap(), generation, document.path.as_str()],
+    ).unwrap(), 1);
+    assert_eq!(transaction.execute(
+        "UPDATE documents_fts SET body=?1 WHERE gen=?2 AND doc_row=(SELECT doc_row FROM documents WHERE gen=?2 AND path=?3)",
+        rusqlite::params![document.body, generation, document.path.as_str()],
+    ).unwrap(), 1);
+    transaction.commit().unwrap();
+    drop(db);
+    let error = context_with_options(
+        &f.catalog,
+        None,
+        "indexedfaultprobe",
+        &indexed_fault_request(source),
+        &ContextOptions::default(),
+    )
+    .unwrap_err();
+    assert!(
+        matches!(
+            error.code,
+            ErrorCode::IndexCorrupt | ErrorCode::FreshnessConflict | ErrorCode::SourceIntegrity
+        ),
+        "{error:?}"
+    );
+    assert_eq!(
+        fs::read(f.temp.path().join(document.path.as_str())).unwrap(),
+        canonical_before
+    );
+    let db = rusqlite::Connection::open(f.temp.path().join(".wiki/cache/index.sqlite")).unwrap();
+    let after: i64 = db
+        .query_row("SELECT published_gen FROM index_meta", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(after, generation);
+}
+
+#[test]
+fn indexed_evidence_cannot_be_assembled_with_only_an_unverified_legacy_reader() {
+    let f = Fixture::new();
+    let writer = f.writer();
+    f.catalog.sync(&writer).unwrap();
+    let reader = f.catalog.index_snapshot().unwrap();
+    let hits = lwiki::retrieval::search(&reader, "uses", &QueryPlan::default()).unwrap();
+    let request = ContextRequest {
+        scope: ContextScope::IndexedEvidence,
+        ..Default::default()
+    };
+    assert_eq!(
+        assembly::assemble(&reader, &request, &hits, None)
+            .err()
+            .unwrap()
+            .code,
+        ErrorCode::Usage
+    );
+}

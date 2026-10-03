@@ -7,11 +7,14 @@ use super::{
     types::*,
 };
 use crate::{
-    catalog::{DocumentRow, ReaderSnapshot, SnapshotVerification},
+    catalog::{DocumentRow, ReaderSnapshot, SnapshotVerification, query_types::QueryCatalog},
     domain::*,
     records::parse_note,
 };
-use rusqlite::{params_from_iter, types::Value};
+use rusqlite::{
+    Connection, Row, params_from_iter,
+    types::{Value, ValueRef},
+};
 use std::{
     cmp::Ordering,
     collections::{BTreeMap, BTreeSet},
@@ -110,7 +113,7 @@ fn compare(a: &Candidate, b: &Candidate) -> Ordering {
 }
 
 pub fn search(reader: &ReaderSnapshot, query: &str, plan: &QueryPlan) -> Result<HitSet> {
-    search_inner(reader, query, plan, None)
+    search_inner(reader, query, plan, None, false)
 }
 /// Context eligibility is applied before every candidate and hit limit.
 pub(crate) fn search_context(
@@ -119,13 +122,31 @@ pub(crate) fn search_context(
     plan: &QueryPlan,
     historical: bool,
 ) -> Result<HitSet> {
-    search_inner(reader, query, plan, Some(historical))
+    search_inner(reader, query, plan, Some(historical), false)
 }
+
+/// Indexed evidence starts with captured sources; other domains remain explicit.
+pub(crate) fn search_indexed_sources(
+    reader: &dyn QueryCatalog,
+    query: &str,
+    plan: &QueryPlan,
+) -> Result<HitSet> {
+    if plan.mode != SearchMode::Lexical {
+        return Err(WikiError::new(
+            ErrorCode::Usage,
+            "indexed evidence requires lexical mode",
+        ));
+    }
+    validate_source_filters(&plan.filters)?;
+    search_inner(reader, query, plan, Some(false), true)
+}
+
 fn search_inner(
-    reader: &ReaderSnapshot,
+    reader: &dyn QueryCatalog,
     query: &str,
     plan: &QueryPlan,
     context_scope: Option<bool>,
+    source_only: bool,
 ) -> Result<HitSet> {
     if !matches!(plan.mode, SearchMode::Literal | SearchMode::Lexical) {
         return Err(WikiError::new(
@@ -135,6 +156,14 @@ fn search_inner(
     }
     let plan = validate_plan(query, plan)?;
     let base_fingerprint = cursor::fingerprint(query, &plan)?;
+    let base_fingerprint = if reader.query_scope() == "strict_catalog" {
+        base_fingerprint
+    } else {
+        Blake3Hash::digest(
+            serde_json::to_vec(&(reader.query_scope(), base_fingerprint))
+                .map_err(|error| WikiError::new(ErrorCode::Internal, error.to_string()))?,
+        )
+    };
     let fingerprint = if let Some(historical) = context_scope {
         Blake3Hash::digest(
             serde_json::to_vec(&("lwiki-context-documents-v1", base_fingerprint, historical))
@@ -152,6 +181,9 @@ fn search_inner(
         plan.cursor.as_deref(),
         plan.limits.candidates,
     )?;
+    if source_only {
+        validate_source_indexes(reader.connection())?;
+    }
     let tokenizer = if plan.mode == SearchMode::Lexical {
         Some(Tokenizer::new(reader.connection())?)
     } else {
@@ -177,7 +209,14 @@ fn search_inner(
     let mut candidates: BTreeMap<VaultRelativePath, Candidate> = BTreeMap::new();
     let mut overflow = false;
     let mut literal_count = 0usize;
-    if let Some(expression) = &expression {
+    if source_only {
+        (candidates, overflow) = source_candidates(
+            reader,
+            query,
+            expression.as_deref().expect("indexed lexical expression"),
+            &plan,
+        )?;
+    } else if let Some(expression) = &expression {
         for (tier, condition, reason, channel, fts, identity) in [
             (
                 0,
@@ -269,26 +308,29 @@ fn search_inner(
                 "SELECT d.row_json,{score} AS score FROM documents d {joins} LEFT JOIN records r ON r.gen=d.gen AND r.id=d.record_id WHERE d.gen=?2 AND ({condition}) AND ({common}) AND ({policy}) AND ({context_policy}) ORDER BY score,coalesce(d.record_id,d.path),d.path LIMIT {bound}"
             );
             let mut statement = reader.connection().prepare(&sql).map_err(sql_error)?;
-            let rows = statement
-                .query_map(params_from_iter(values), |row| {
-                    Ok((row.get::<_, String>(0)?, row.get::<_, Option<f64>>(1)?))
-                })
+            let mut rows = statement
+                .query(params_from_iter(values))
                 .map_err(sql_error)?;
-            for (index, row) in rows.enumerate() {
+            let mut index = 0;
+            while let Some(row) = rows.next().map_err(sql_error)? {
                 if index == plan.limits.candidates {
                     overflow = true;
                     break;
                 }
-                let (serialized, score) = row.map_err(sql_error)?;
-                let document: DocumentRow = serde_json::from_str(&serialized)
-                    .map_err(|e| WikiError::new(ErrorCode::IndexCorrupt, e.to_string()))?;
+                let document = reader.decode_document(row, 0)?;
+                let score: Option<f64> = row.get(1).map_err(sql_error)?;
                 if score.is_some_and(|score| !score.is_finite()) {
                     return Err(WikiError::new(
                         ErrorCode::IndexCorrupt,
                         "non-finite lexical rank",
                     ));
                 }
-                let identity = identity || filters::identity_only(reader, &document, &plan.filters);
+                let identity = identity
+                    || (!plan.filters.include_historical
+                        && record_for(reader, &document)?.is_some_and(|record| {
+                            record.identity_eligibility == Some(Eligibility::Current)
+                                && record.description_eligibility != Some(Eligibility::Current)
+                        }));
                 let contribution = RankContribution {
                     channel: channel.into(),
                     rank: index + 1,
@@ -315,6 +357,7 @@ fn search_inner(
                 } else {
                     candidates.insert(document.path.clone(), candidate);
                 }
+                index += 1;
             }
         }
     } else {
@@ -329,12 +372,11 @@ fn search_inner(
             "SELECT d.row_json FROM documents d LEFT JOIN records r ON r.gen=d.gen AND r.id=d.record_id WHERE d.gen=?1 AND ({common}) AND ({policy}) AND ({context_policy}) ORDER BY coalesce(d.record_id,d.path),d.path"
         );
         let mut statement = reader.connection().prepare(&sql).map_err(sql_error)?;
-        let rows = statement
-            .query_map(params_from_iter(values), |row| row.get::<_, String>(0))
+        let mut rows = statement
+            .query(params_from_iter(values))
             .map_err(sql_error)?;
-        for row in rows {
-            let document: DocumentRow = serde_json::from_str(&row.map_err(sql_error)?)
-                .map_err(|e| WikiError::new(ErrorCode::IndexCorrupt, e.to_string()))?;
+        while let Some(row) = rows.next().map_err(sql_error)? {
+            let document = reader.decode_document(row, 0)?;
             if !literal_matches(&document.raw_text, query).is_empty() {
                 literal_count += 1;
                 if candidates.len() == plan.limits.candidates {
@@ -374,10 +416,10 @@ fn search_inner(
         .take(end.saturating_sub(offset))
     {
         let document = &candidate.document;
-        let record = filters::row(reader, document);
+        let record = record_for(reader, document)?;
         let record_ref = if let (Some(id), Some(kind)) = (&document.record_id, document.kind) {
             Some(RecordRef {
-                vault_id: reader.projection().vault_id.clone(),
+                vault_id: reader.vault_id().clone(),
                 record_id: id.clone(),
                 expected_kind: kind,
             })
@@ -385,10 +427,12 @@ fn search_inner(
             document
                 .owner_revision
                 .as_ref()
-                .and_then(|id| reader.projection().records.get(id))
+                .map(|id| reader.record(id))
+                .transpose()?
+                .flatten()
                 .filter(|row| row.record.kind() == RecordKind::Revision)
                 .map(|row| RecordRef {
-                    vault_id: reader.projection().vault_id.clone(),
+                    vault_id: reader.vault_id().clone(),
                     record_id: row.record.id().clone(),
                     expected_kind: RecordKind::Revision,
                 })
@@ -421,9 +465,9 @@ fn search_inner(
             },
             title: document.title.clone(),
             kind: document.kind,
-            authored_status: record.and_then(|row| row.authored_status.clone()),
+            authored_status: record.as_ref().and_then(|row| row.authored_status.clone()),
             eligibility: document.eligibility,
-            identity_eligibility: record.and_then(|row| row.identity_eligibility),
+            identity_eligibility: record.as_ref().and_then(|row| row.identity_eligibility),
             excerpt,
             secondary_excerpts: Vec::new(),
             reasons,
@@ -454,13 +498,11 @@ fn search_inner(
             .map(|hit| hit.locator.path.clone())
             .collect::<BTreeSet<_>>();
         let mut codes: BTreeMap<VaultRelativePath, BTreeSet<ErrorCode>> = BTreeMap::new();
-        for diagnostic in &reader.projection().diagnostics {
-            if paths.contains(&diagnostic.path) {
-                codes
-                    .entry(diagnostic.path.clone())
-                    .or_default()
-                    .insert(diagnostic.code);
-            }
+        for diagnostic in reader.diagnostics(&paths)? {
+            codes
+                .entry(diagnostic.path)
+                .or_default()
+                .insert(diagnostic.code);
         }
         for hit in invalid_hits.iter().take(3) {
             let reason = codes
@@ -480,10 +522,7 @@ fn search_inner(
             ));
         }
     }
-    let dependency_fingerprint = Blake3Hash::digest(
-        serde_json::to_vec(&reader.projection().dependencies)
-            .map_err(|e| WikiError::new(ErrorCode::Internal, e.to_string()))?,
-    );
+    let dependency_fingerprint = reader.dependency_fingerprint()?;
     Ok(HitSet {
         network_used: false,
         graph: None,
@@ -498,8 +537,307 @@ fn search_inner(
         warnings,
     })
 }
+const SOURCE_PREDICATE: &str =
+    "owner_revision IS NOT NULL AND source_id IS NOT NULL AND eligibility='current'";
+const SOURCE_INDEXES: [(&str, &str); 3] = [
+    ("source_document_ids", "source_id"),
+    ("source_revision_ids", "owner_revision"),
+    ("source_document_titles", "title"),
+];
+
+fn validate_source_filters(filters: &SearchFilters) -> Result<()> {
+    if !filters.kinds.is_empty()
+        || !filters.tags.is_empty()
+        || !filters.authored_statuses.is_empty()
+        || filters.include_proposed
+        || filters.include_historical
+    {
+        return Err(WikiError::new(
+            ErrorCode::Usage,
+            "indexed source evidence supports only source ID and path prefix filters",
+        ));
+    }
+    Ok(())
+}
+
+fn missing_source_index() -> WikiError {
+    let mut error = WikiError::new(
+        ErrorCode::CapabilityUnavailable,
+        "catalog lacks the bounded current-source search indexes",
+    );
+    error.hint = Some("run index rebuild".into());
+    error
+}
+
+/// Validate the complete access-index definition. A matching name or column
+/// prefix alone does not exclude an incompatible partial predicate/collation.
+fn validate_source_indexes(connection: &Connection) -> Result<()> {
+    for (name, key) in SOURCE_INDEXES {
+        let expected =
+            format!("CREATE INDEX {name} ON documents(gen,{key},path) WHERE {SOURCE_PREDICATE}");
+        let mut statement = connection
+            .prepare("SELECT sql FROM sqlite_schema WHERE type='index' AND name=?1 AND tbl_name='documents' LIMIT 2")
+            .map_err(sql_error)?;
+        let mut rows = statement.query([name]).map_err(sql_error)?;
+        let Some(row) = rows.next().map_err(sql_error)? else {
+            return Err(missing_source_index());
+        };
+        let actual = sql_text(row, 0)?;
+        // SQLite preserves DDL text. Ignore whitespace/case outside quotes;
+        // quoted identifiers and string values must retain their meaning.
+        if actual.len() > 4096 || normalize_index_sql(actual) != normalize_index_sql(&expected) {
+            return Err(missing_source_index());
+        }
+        if rows.next().map_err(sql_error)?.is_some() {
+            return Err(missing_source_index());
+        }
+    }
+    Ok(())
+}
+
+fn normalize_index_sql(sql: &str) -> String {
+    let mut quoted = false;
+    sql.trim_end_matches(';')
+        .chars()
+        .filter_map(|character| {
+            if character == '\'' {
+                quoted = !quoted;
+                Some(character)
+            } else if quoted {
+                Some(character)
+            } else if character.is_whitespace() {
+                None
+            } else {
+                Some(character.to_ascii_lowercase())
+            }
+        })
+        .collect()
+}
+
+fn source_filters_sql(filters: &SearchFilters, values: &mut Vec<Value>) -> String {
+    let mut clauses = Vec::new();
+    if !filters.source_ids.is_empty() {
+        let ids = filters
+            .source_ids
+            .iter()
+            .map(|id| filters::bind(values, Value::Text(id.as_str().into())))
+            .collect::<Vec<_>>();
+        clauses.push(format!("d.source_id IN ({})", ids.join(",")));
+    }
+    if let Some(prefix) = &filters.path_prefix {
+        // Keep the established byte-prefix semantics. These predicates inspect
+        // SQL columns only, before the candidate limit and JSON decoding.
+        let bound = filters::bind(values, Value::Text(prefix.clone()));
+        clauses.push(format!("substr(d.path,1,length({bound}))={bound}"));
+    }
+    if clauses.is_empty() {
+        "1".into()
+    } else {
+        clauses.join(" AND ")
+    }
+}
+
+fn source_candidate_query(
+    generation: i64,
+    query: &str,
+    expression: &str,
+    plan: &QueryPlan,
+    key: &str,
+    index: Option<&str>,
+) -> (String, Vec<Value>) {
+    let fts = index.is_none();
+    let mut values = vec![
+        Value::Text(if fts { expression.into() } else { query.into() }),
+        Value::Integer(generation),
+    ];
+    let common = source_filters_sql(&plan.filters, &mut values);
+    let bound = filters::bind(
+        &mut values,
+        Value::Integer((plan.limits.candidates + 1) as i64),
+    );
+    let access = index.map_or(String::new(), |index| format!("INDEXED BY {index}"));
+    let condition = if fts {
+        "documents_fts MATCH ?1".into()
+    } else {
+        format!("d.{key}=?1")
+    };
+    let join = if fts {
+        "JOIN documents_fts ON documents_fts.doc_row=d.doc_row AND documents_fts.gen=d.gen"
+    } else {
+        ""
+    };
+    let score = if fts {
+        "bm25(documents_fts,8,6,3,2,1,0,0)"
+    } else {
+        "NULL"
+    };
+    let fts_id = if fts { "documents_fts.rowid" } else { "NULL" };
+    let fts_columns = if fts {
+        ",f.title,f.aliases,f.headings,f.tags,f.body"
+    } else {
+        ""
+    };
+    let fts_lookup = if fts {
+        "JOIN documents_fts f ON f.rowid=c.fts_rowid"
+    } else {
+        ""
+    };
+    let sql = format!(
+        "WITH candidate_ids AS MATERIALIZED (\
+         SELECT d.doc_row,{score} AS score,{fts_id} AS fts_rowid,d.path \
+         FROM documents d {access} {join} \
+         WHERE d.gen=?2 AND d.owner_revision IS NOT NULL AND d.source_id IS NOT NULL \
+         AND d.eligibility='current' AND d.record_id IS NULL AND d.kind IS NULL \
+         AND ({condition}) AND ({common}) ORDER BY score,d.path LIMIT {bound}) \
+         SELECT d.row_json,c.score,d.path,d.record_id,d.kind,d.file_hash,d.title,d.body,\
+         d.raw_text,d.source_id,d.owner_revision,d.eligibility{fts_columns} \
+         FROM candidate_ids c JOIN documents d ON d.doc_row=c.doc_row {fts_lookup} \
+         ORDER BY c.score,c.path"
+    );
+    (sql, values)
+}
+
+/// Candidate keys/ranks are capped before fetching document JSON. In
+/// particular, an FTS sorter never carries every matching document's raw text.
+fn source_candidates(
+    reader: &dyn QueryCatalog,
+    query: &str,
+    expression: &str,
+    plan: &QueryPlan,
+) -> Result<(BTreeMap<VaultRelativePath, Candidate>, bool)> {
+    let generation = i64::try_from(reader.snapshot().generation)
+        .map_err(|_| WikiError::new(ErrorCode::IndexCorrupt, "generation outside SQL range"))?;
+    let mut candidates: BTreeMap<VaultRelativePath, Candidate> = BTreeMap::new();
+    let mut overflow = false;
+    for (tier, key, index, reason, channel) in [
+        (
+            0,
+            "source_id",
+            Some("source_document_ids"),
+            RetrievalReason::ExactId,
+            "exact_id",
+        ),
+        (
+            0,
+            "owner_revision",
+            Some("source_revision_ids"),
+            RetrievalReason::ExactId,
+            "exact_id",
+        ),
+        (
+            1,
+            "title",
+            Some("source_document_titles"),
+            RetrievalReason::ExactTitle,
+            "exact_title",
+        ),
+        (2, "", None, RetrievalReason::Lexical, "lexical"),
+    ] {
+        let fts = index.is_none();
+        let (sql, values) = source_candidate_query(generation, query, expression, plan, key, index);
+        let mut statement = reader.connection().prepare(&sql).map_err(sql_error)?;
+        let mut rows = statement
+            .query(params_from_iter(values))
+            .map_err(sql_error)?;
+        let mut rank = 0;
+        while let Some(row) = rows.next().map_err(sql_error)? {
+            if rank == plan.limits.candidates {
+                overflow = true;
+                break;
+            }
+            let document = reader.decode_document(row, 0)?;
+            validate_source_document(row, &document, fts)?;
+            let score: Option<f64> = row.get(1).map_err(sql_error)?;
+            if score.is_some_and(|score| !score.is_finite()) {
+                return Err(WikiError::new(
+                    ErrorCode::IndexCorrupt,
+                    "non-finite lexical rank",
+                ));
+            }
+            rank += 1;
+            let contribution = RankContribution {
+                channel: channel.into(),
+                rank,
+                score,
+            };
+            let candidate = Candidate {
+                document,
+                tier,
+                score,
+                reasons: vec![reason],
+                ranks: vec![contribution.clone()],
+                identity: false,
+            };
+            if let Some(existing) = candidates.get_mut(&candidate.document.path) {
+                if !existing.reasons.contains(&reason) {
+                    existing.reasons.push(reason);
+                }
+                existing.ranks.push(contribution);
+                if compare(&candidate, existing) == Ordering::Less {
+                    existing.tier = tier;
+                    existing.score = score;
+                }
+            } else {
+                candidates.insert(candidate.document.path.clone(), candidate);
+            }
+        }
+    }
+    Ok((candidates, overflow))
+}
+
+fn sql_text<'a>(row: &'a Row<'_>, column: usize) -> Result<&'a str> {
+    row.get_ref(column)
+        .map_err(sql_error)?
+        .as_str()
+        .map_err(|error| WikiError::new(ErrorCode::IndexCorrupt, error.to_string()))
+}
+
+fn validate_source_document(row: &Row<'_>, document: &DocumentRow, fts: bool) -> Result<()> {
+    let consistent = sql_text(row, 2)? == document.path.as_str()
+        && matches!(row.get_ref(3).map_err(sql_error)?, ValueRef::Null)
+        && matches!(row.get_ref(4).map_err(sql_error)?, ValueRef::Null)
+        && document.record_id.is_none()
+        && document.kind.is_none()
+        && sql_text(row, 5)? == document.hash.as_str()
+        && sql_text(row, 6)? == document.title
+        && sql_text(row, 7)? == document.body
+        && sql_text(row, 8)? == document.raw_text
+        && Some(sql_text(row, 9)?) == document.source_id.as_ref().map(RecordId::as_str)
+        && Some(sql_text(row, 10)?) == document.owner_revision.as_ref().map(RecordId::as_str)
+        && sql_text(row, 11)? == "current"
+        && document.eligibility == Eligibility::Current
+        && document.aliases.is_empty()
+        && document.tags.is_empty()
+        && Blake3Hash::digest(document.raw_text.as_bytes()) == document.hash;
+    let fts_consistent = !fts
+        || (sql_text(row, 12)? == document.title
+            && sql_text(row, 13)?.is_empty()
+            && sql_text(row, 14)? == document.headings
+            && sql_text(row, 15)?.is_empty()
+            && sql_text(row, 16)? == document.body);
+    if !consistent || !fts_consistent {
+        return Err(WikiError::new(
+            ErrorCode::IndexCorrupt,
+            "selected source document differs from its indexed columns",
+        ));
+    }
+    Ok(())
+}
+
 fn sql_error(error: rusqlite::Error) -> WikiError {
-    WikiError::new(ErrorCode::IndexCorrupt, format!("retrieval SQL: {error}"))
+    crate::catalog::sql::sql_error(error)
+}
+
+fn record_for(
+    reader: &dyn QueryCatalog,
+    document: &DocumentRow,
+) -> Result<Option<crate::catalog::RecordRow>> {
+    document
+        .record_id
+        .as_ref()
+        .map(|id| reader.record(id))
+        .transpose()
+        .map(Option::flatten)
 }
 
 fn match_ranges(
@@ -677,7 +1015,7 @@ pub(crate) fn focused_excerpt(
     build_excerpt(reader, document, window, &matches)
 }
 pub(crate) fn excerpt(
-    reader: &ReaderSnapshot,
+    reader: &dyn QueryCatalog,
     document: &DocumentRow,
     matches: &[Range<usize>],
     bytes: usize,
@@ -711,7 +1049,7 @@ pub(crate) fn excerpt(
 }
 
 fn build_excerpt(
-    reader: &ReaderSnapshot,
+    reader: &dyn QueryCatalog,
     document: &DocumentRow,
     window: Range<usize>,
     matches: &[Range<usize>],
@@ -764,4 +1102,446 @@ fn build_excerpt(
         },
         citation,
     })
+}
+
+#[cfg(test)]
+mod indexed_source_tests {
+    use super::*;
+    use crate::catalog::{CatalogDiagnostic, RecordRow};
+    use rusqlite::params;
+    use std::cell::Cell;
+
+    struct Reader {
+        connection: Connection,
+        snapshot: ReadSnapshot,
+        vault: RecordId,
+        decoded: Cell<usize>,
+    }
+    impl QueryCatalog for Reader {
+        fn connection(&self) -> &Connection {
+            &self.connection
+        }
+        fn snapshot(&self) -> &ReadSnapshot {
+            &self.snapshot
+        }
+        fn vault_id(&self) -> &RecordId {
+            &self.vault
+        }
+        fn verification(&self) -> &SnapshotVerification {
+            &SnapshotVerification::IndexSnapshot
+        }
+        fn record(&self, _id: &RecordId) -> Result<Option<RecordRow>> {
+            Ok(None)
+        }
+        fn document(&self, _path: &VaultRelativePath) -> Result<Option<DocumentRow>> {
+            Ok(None)
+        }
+        fn diagnostics(
+            &self,
+            _paths: &BTreeSet<VaultRelativePath>,
+        ) -> Result<Vec<CatalogDiagnostic>> {
+            Ok(vec![])
+        }
+        fn dependency_fingerprint(&self) -> Result<Blake3Hash> {
+            Ok(Blake3Hash::digest(b"indexed test scope"))
+        }
+        fn query_scope(&self) -> &'static str {
+            "indexed_evidence"
+        }
+        fn decode_document(&self, row: &Row<'_>, column: usize) -> Result<DocumentRow> {
+            self.decoded.set(self.decoded.get() + 1);
+            serde_json::from_str(sql_text(row, column)?)
+                .map_err(|error| WikiError::new(ErrorCode::IndexCorrupt, error.to_string()))
+        }
+    }
+    fn reader() -> Reader {
+        let connection = Connection::open_in_memory().unwrap();
+        connection.execute_batch(
+            "CREATE TABLE documents(doc_row INTEGER PRIMARY KEY,gen INTEGER,path TEXT,record_id TEXT,kind TEXT,file_hash TEXT,title TEXT,body TEXT,raw_text TEXT,source_id TEXT,owner_revision TEXT,eligibility TEXT,row_json TEXT); \
+             CREATE VIRTUAL TABLE documents_fts USING fts5(title,aliases,headings,tags,body,gen UNINDEXED,doc_row UNINDEXED,tokenize='unicode61 remove_diacritics 2');"
+        ).unwrap();
+        for (name, key) in SOURCE_INDEXES {
+            connection
+                .execute_batch(&format!(
+                    "CREATE INDEX {name} ON documents(gen,{key},path) WHERE {SOURCE_PREDICATE}"
+                ))
+                .unwrap();
+        }
+        Reader {
+            connection,
+            snapshot: ReadSnapshot {
+                generation: 1,
+                parser_fingerprint: Blake3Hash::digest(b"parser"),
+                control_manifest: Blake3Hash::digest(b"manifest"),
+            },
+            vault: RecordId::new("vault_source_sql").unwrap(),
+            decoded: Cell::new(0),
+        }
+    }
+    fn source(reader: &Reader, name: &str, title: &str) -> DocumentRow {
+        let raw_text = "# Evidence\n\nA captured needle café fact.\n".to_owned();
+        let document = DocumentRow {
+            path: VaultRelativePath::new(format!("sources/{name}/content.md")).unwrap(),
+            hash: Blake3Hash::digest(raw_text.as_bytes()),
+            record_id: None,
+            kind: None,
+            title: title.into(),
+            aliases: vec![],
+            headings: "Evidence".into(),
+            tags: vec![],
+            body: "A captured needle café fact.".into(),
+            raw_text,
+            source_id: Some(RecordId::new(format!("source_{name}")).unwrap()),
+            owner_revision: Some(RecordId::new(format!("revision_{name}")).unwrap()),
+            eligibility: Eligibility::Current,
+            reasons: vec![],
+        };
+        reader.connection.execute(
+            "INSERT INTO documents(gen,path,record_id,kind,file_hash,title,body,raw_text,source_id,owner_revision,eligibility,row_json) VALUES(1,?1,NULL,NULL,?2,?3,?4,?5,?6,?7,'current',?8)",
+            params![document.path.as_str(),document.hash.as_str(),document.title,document.body,document.raw_text,document.source_id.as_ref().unwrap().as_str(),document.owner_revision.as_ref().unwrap().as_str(),serde_json::to_string(&document).unwrap()],
+        ).unwrap();
+        reader.connection.execute(
+            "INSERT INTO documents_fts(title,aliases,headings,tags,body,gen,doc_row) VALUES(?1,'',?2,'',?3,1,?4)",
+            params![document.title,document.headings,document.body,reader.connection.last_insert_rowid()],
+        ).unwrap();
+        document
+    }
+
+    #[test]
+    fn source_sql_exact_ids_title_and_fts_share_exact_byte_excerpts() {
+        let reader = reader();
+        let document = source(&reader, "alpha", "Captured title");
+        for (query, reason) in [
+            ("source_alpha", RetrievalReason::ExactId),
+            ("revision_alpha", RetrievalReason::ExactId),
+            ("Captured title", RetrievalReason::ExactTitle),
+            ("needle", RetrievalReason::Lexical),
+            ("cafe", RetrievalReason::Lexical),
+        ] {
+            let hits = search_indexed_sources(&reader, query, &QueryPlan::default()).unwrap();
+            assert_eq!(hits.hits.len(), 1, "{query}");
+            let hit = &hits.hits[0];
+            assert_eq!(hit.locator.path, document.path);
+            assert!(hit.reasons.contains(&reason), "{query}");
+            assert!(!hit.reasons.contains(&RetrievalReason::Identity));
+            assert_eq!(
+                hit.excerpt.span.slice(&document.raw_text).unwrap(),
+                hit.excerpt.text
+            );
+            assert!(hit.excerpt.citation.is_none());
+        }
+    }
+
+    #[test]
+    fn source_filters_reject_unsupported_requests_before_sql() {
+        let mut reader = reader();
+        reader.connection = Connection::open_in_memory().unwrap();
+        for filters in [
+            SearchFilters {
+                kinds: vec![RecordKind::Source],
+                ..SearchFilters::default()
+            },
+            SearchFilters {
+                tags: vec!["tag".into()],
+                ..SearchFilters::default()
+            },
+            SearchFilters {
+                authored_statuses: vec!["reviewed".into()],
+                ..SearchFilters::default()
+            },
+            SearchFilters {
+                include_historical: true,
+                ..SearchFilters::default()
+            },
+            SearchFilters {
+                include_proposed: true,
+                ..SearchFilters::default()
+            },
+        ] {
+            let error = search_indexed_sources(
+                &reader,
+                "needle",
+                &QueryPlan {
+                    filters,
+                    ..QueryPlan::default()
+                },
+            )
+            .unwrap_err();
+            assert_eq!(error.code, ErrorCode::Usage);
+        }
+        assert_eq!(reader.decoded.get(), 0);
+    }
+
+    #[test]
+    fn source_id_and_path_filters_apply_before_the_cap() {
+        let reader = reader();
+        source(&reader, "alpha", "Captured title");
+        let selected = source(&reader, "beta", "Captured title");
+        let plan = QueryPlan {
+            filters: SearchFilters {
+                source_ids: vec![RecordId::new("source_beta").unwrap()],
+                path_prefix: Some("sources/be".into()),
+                ..SearchFilters::default()
+            },
+            limits: SearchLimits {
+                candidates: 1,
+                hits: 1,
+                ..SearchLimits::default()
+            },
+            ..QueryPlan::default()
+        };
+        let hits = search_indexed_sources(&reader, "needle", &plan).unwrap();
+        assert_eq!(hits.hits.len(), 1);
+        assert_eq!(hits.hits[0].locator.path, selected.path);
+        assert!(!hits.truncated);
+        assert_eq!(reader.decoded.get(), 1);
+    }
+
+    #[test]
+    fn source_sql_does_not_decode_matching_managed_or_ineligible_documents() {
+        let reader = reader();
+        let selected = source(&reader, "selected", "Captured title");
+        for (name, eligibility, kind) in [
+            ("historical", "historical", None),
+            ("invalid", "invalid", None),
+            ("entity", "current", Some("entity")),
+        ] {
+            source(&reader, name, "Captured title");
+            reader
+                .connection
+                .execute(
+                    "UPDATE documents SET eligibility=?1,kind=?2,row_json='{' WHERE source_id=?3",
+                    params![eligibility, kind, format!("source_{name}")],
+                )
+                .unwrap();
+        }
+        let hits = search_indexed_sources(&reader, "needle", &QueryPlan::default()).unwrap();
+        assert_eq!(hits.hits.len(), 1);
+        assert_eq!(hits.hits[0].locator.path, selected.path);
+        assert_eq!(reader.decoded.get(), 1);
+    }
+
+    #[test]
+    fn source_index_missing_or_incompatible_fails_with_rebuild_hint() {
+        for replacement in [
+            "",
+            "CREATE INDEX source_document_ids ON documents(source_id,gen,path)",
+            "CREATE INDEX source_document_ids ON documents(gen,source_id,path) WHERE eligibility='historical'",
+            "CREATE INDEX source_document_ids ON documents(gen,source_id COLLATE NOCASE,path) WHERE owner_revision IS NOT NULL AND source_id IS NOT NULL AND eligibility='current'",
+        ] {
+            let reader = reader();
+            reader
+                .connection
+                .execute_batch("DROP INDEX source_document_ids")
+                .unwrap();
+            reader.connection.execute_batch(replacement).unwrap();
+            let error =
+                search_indexed_sources(&reader, "needle", &QueryPlan::default()).unwrap_err();
+            assert_eq!(error.code, ErrorCode::CapabilityUnavailable);
+            assert_eq!(error.hint.as_deref(), Some("run index rebuild"));
+            assert_eq!(reader.decoded.get(), 0);
+        }
+    }
+
+    #[test]
+    fn selected_source_sql_json_and_fts_disagreement_fails_closed() {
+        for mutation in [
+            "UPDATE documents SET title='tampered title'",
+            "UPDATE documents SET path='sources/tampered/content.md'",
+            "UPDATE documents SET source_id='source_tampered'",
+            "UPDATE documents SET owner_revision='revision_tampered'",
+            "UPDATE documents SET file_hash='tampered'",
+            "UPDATE documents SET body='tampered body'",
+            "UPDATE documents SET raw_text='tampered raw'",
+            "UPDATE documents_fts SET title='tampered title'",
+            "UPDATE documents_fts SET aliases='tampered alias'",
+            "UPDATE documents_fts SET headings='tampered heading'",
+            "UPDATE documents_fts SET tags='tampered tag'",
+            "UPDATE documents_fts SET body='tampered needle body'",
+        ] {
+            let reader = reader();
+            source(&reader, "alpha", "Captured title");
+            reader.connection.execute_batch(mutation).unwrap();
+            assert_eq!(
+                search_indexed_sources(&reader, "needle", &QueryPlan::default())
+                    .unwrap_err()
+                    .code,
+                ErrorCode::IndexCorrupt,
+                "{mutation}"
+            );
+        }
+    }
+
+    #[test]
+    fn source_candidate_cap_and_cursor_bind_filters() {
+        let reader = reader();
+        source(&reader, "alpha", "Captured title");
+        source(&reader, "beta", "Captured title");
+        source(&reader, "gamma", "Captured title");
+        let mut plan = QueryPlan {
+            limits: SearchLimits {
+                candidates: 2,
+                hits: 1,
+                ..SearchLimits::default()
+            },
+            ..QueryPlan::default()
+        };
+        let first = search_indexed_sources(&reader, "needle", &plan).unwrap();
+        assert_eq!(first.candidate_count, 2);
+        assert_eq!(first.omitted_candidates, 1);
+        assert!(first.truncated);
+        assert_eq!(reader.decoded.get(), 2);
+        plan.cursor = first.next_cursor;
+        let second = search_indexed_sources(&reader, "needle", &plan).unwrap();
+        assert_ne!(first.hits[0].locator.path, second.hits[0].locator.path);
+        plan.filters.path_prefix = Some("sources/alpha".into());
+        assert_eq!(
+            search_indexed_sources(&reader, "needle", &plan)
+                .unwrap_err()
+                .code,
+            ErrorCode::CursorStale
+        );
+    }
+
+    #[test]
+    fn source_sql_vm_interruption_is_a_budget_failure() {
+        let reader = reader();
+        source(&reader, "alpha", "Captured title");
+        reader
+            .connection
+            .progress_handler(1, Some(|| true))
+            .unwrap();
+        let error = match source_candidates(&reader, "needle", "\"needle\"", &QueryPlan::default())
+        {
+            Ok(_) => panic!("interrupted source candidate query unexpectedly completed"),
+            Err(error) => error,
+        };
+        assert_eq!(error.code, ErrorCode::BudgetExceeded);
+        assert_eq!(reader.decoded.get(), 0);
+    }
+
+    fn query_plan(reader: &Reader, key: &str, index: Option<&str>) -> (String, Vec<String>) {
+        let (sql, values) =
+            source_candidate_query(1, "needle", "\"needle\"", &QueryPlan::default(), key, index);
+        let mut statement = reader
+            .connection
+            .prepare(&format!("EXPLAIN QUERY PLAN {sql}"))
+            .unwrap();
+        let details = statement
+            .query_map(params_from_iter(values), |row| row.get::<_, String>(3))
+            .unwrap()
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .unwrap();
+        (sql, details)
+    }
+
+    #[test]
+    fn production_source_query_plans_use_bound_key_indexes_and_materialized_candidates() {
+        let reader = reader();
+        source(&reader, "alpha", "Captured title");
+        for (index, key) in SOURCE_INDEXES {
+            let (sql, details) = query_plan(&reader, key, Some(index));
+            assert!(
+                details
+                    .iter()
+                    .any(|detail| detail.contains("SEARCH d USING INDEX")
+                        && detail.contains(index)
+                        && detail.contains("gen=?")
+                        && detail.contains(&format!("{key}=?"))),
+                "{key}: {details:?}"
+            );
+            assert_materialized_payload_fetch(&sql, &details);
+        }
+    }
+
+    fn assert_materialized_payload_fetch(sql: &str, details: &[String]) {
+        assert!(
+            details
+                .iter()
+                .any(|detail| detail.contains("MATERIALIZE candidate_ids")),
+            "{details:?}"
+        );
+        assert!(
+            details
+                .iter()
+                .any(|detail| detail.contains("SEARCH d USING INTEGER PRIMARY KEY (rowid=?)")),
+            "{details:?}"
+        );
+        let (keys, payload) = sql.split_once("SELECT d.row_json").unwrap();
+        assert!(keys.contains("AS MATERIALIZED"));
+        assert!(keys.contains("LIMIT ?"));
+        assert!(!keys.contains("row_json"));
+        assert!(!keys.contains("raw_text"));
+        assert!(payload.contains("JOIN documents d ON d.doc_row=c.doc_row"));
+    }
+
+    #[test]
+    fn production_source_fts_plan_uses_match_then_document_primary_key() {
+        let reader = reader();
+        source(&reader, "alpha", "Captured title");
+        let (sql, details) = query_plan(&reader, "", None);
+        assert!(
+            details.iter().any(
+                |detail| detail.contains("SCAN documents_fts VIRTUAL TABLE INDEX")
+                    && detail.split_once("INDEX").unwrap().1.contains('M')
+            ),
+            "{details:?}"
+        );
+        // There are separate PK lookups for candidates and the capped payload
+        // fetch. A generation-range document scan would violate this path.
+        assert_eq!(
+            details
+                .iter()
+                .filter(|detail| detail.contains("SEARCH d USING INTEGER PRIMARY KEY (rowid=?)"))
+                .count(),
+            2,
+            "{details:?}"
+        );
+        assert!(
+            !details.iter().any(|detail| detail.starts_with("SCAN d ")
+                || (detail.starts_with("SEARCH d USING INDEX") && detail.contains("gen=?"))),
+            "{details:?}"
+        );
+        assert!(
+            details.iter().any(
+                |detail| detail.contains("SCAN f VIRTUAL TABLE INDEX") && detail.contains(":=")
+            ),
+            "{details:?}"
+        );
+        assert_materialized_payload_fetch(&sql, &details);
+    }
+
+    #[test]
+    fn common_term_decodes_only_eighty_capped_current_sources() {
+        let reader = reader();
+        // Every indexed row matches the same frequent term. Unselected cache
+        // JSON is deliberately unreadable, including the 81st current source.
+        for number in 0..81 {
+            source(&reader, &format!("a{number:03}"), "Captured title");
+        }
+        reader
+            .connection
+            .execute(
+                "UPDATE documents SET row_json='{' WHERE source_id='source_a080'",
+                [],
+            )
+            .unwrap();
+        for number in 0..512 {
+            source(&reader, &format!("unselected{number:03}"), "Captured title");
+        }
+        reader.connection.execute("UPDATE documents SET kind='entity',row_json='{' WHERE source_id LIKE 'source_unselected%'", []).unwrap();
+        let hits = search_indexed_sources(&reader, "needle", &QueryPlan::default()).unwrap();
+        assert_eq!(hits.candidate_count, 80);
+        assert_eq!(hits.omitted_candidates, 1);
+        assert!(hits.truncated);
+        assert_eq!(hits.hits.len(), 10);
+        assert_eq!(reader.decoded.get(), 80);
+        assert!(hits.hits.iter().all(|hit| {
+            hit.source_id
+                .as_ref()
+                .unwrap()
+                .as_str()
+                .starts_with("source_a")
+        }));
+    }
 }

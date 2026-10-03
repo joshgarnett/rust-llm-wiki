@@ -1,0 +1,880 @@
+//! Selected, bounded reads from an ordinary pinned catalog generation.
+//!
+//! This reader deliberately does not audit cache completeness or prove canonical
+//! freshness. A coordinator must verify selected canonical evidence separately.
+use super::{
+    Catalog, CatalogDiagnostic, DocumentRow, RecordRow, SnapshotVerification,
+    query_types::{QueryCatalog, QueryReadLimits, QueryReadUsage},
+    scan, sql,
+};
+use crate::domain::{
+    Blake3Hash, ErrorCode, ReadSnapshot, RecordId, Result, VaultRelativePath, WikiError,
+};
+use rusqlite::{Connection, OpenFlags, Row, limits::Limit, params, types::ValueRef};
+use serde::de::DeserializeOwned;
+use std::{
+    cell::Cell,
+    collections::BTreeSet,
+    time::{Duration, Instant},
+};
+
+pub(crate) struct QuerySnapshot {
+    connection: Connection,
+    snapshot: ReadSnapshot,
+    vault_id: RecordId,
+    verification: SnapshotVerification,
+    usage: Cell<QueryReadUsage>,
+    limits: QueryReadLimits,
+}
+
+impl Catalog {
+    pub(crate) fn query_snapshot(&self, limits: QueryReadLimits) -> Result<QuerySnapshot> {
+        // Reject invalid requests before resolving or opening any cache path.
+        limits.validate()?;
+        if self.options.busy_timeout_ms > 30_000 {
+            return Err(WikiError::new(
+                ErrorCode::ConfigInvalid,
+                "catalog busy timeout exceeds 30 seconds",
+            ));
+        }
+        let path = self.cache_path()?;
+        if !path.exists() {
+            return Err(WikiError::new(
+                ErrorCode::OfflineUnavailable,
+                "catalog cache is absent",
+            ));
+        }
+        // Install limits before configure/header SQL. These are cooperative SQL
+        // safeguards, not a hard wall-clock or process-memory guarantee.
+        let connection = Connection::open_with_flags(
+            &path,
+            OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        )
+        .map_err(sql::sql_error)?;
+        configure_query(&connection, &limits)?;
+        sql::configure(
+            &connection,
+            self.options.busy_timeout_ms.min(limits.max_elapsed_ms),
+            false,
+        )?;
+        connection
+            .execute_batch("BEGIN DEFERRED")
+            .map_err(sql::sql_error)?;
+        sql::validate_header(&connection)?;
+        let mut statement = connection
+            .prepare(
+                "SELECT g.gen,g.parser_hash,g.manifest_hash FROM index_meta m \
+             JOIN generations g ON g.gen=m.published_gen \
+             WHERE m.singleton=1 AND g.state='complete'",
+            )
+            .map_err(sql::sql_error)?;
+        let mut rows = statement.query([]).map_err(sql::sql_error)?;
+        let row = rows.next().map_err(sql::sql_error)?.ok_or_else(|| {
+            WikiError::new(
+                ErrorCode::OfflineUnavailable,
+                "catalog has no published generation",
+            )
+        })?;
+        let generation: i64 = row.get(0).map_err(sql::sql_error)?;
+        if generation <= 0 {
+            return Err(corrupt("catalog generation must be positive"));
+        }
+        // Hash fields have a fixed encoded size; never copy an unbounded header.
+        let parser = header_hash(row, 1)?;
+        let manifest = header_hash(row, 2)?;
+        if parser != scan::parser_fingerprint() {
+            return Err(WikiError::new(
+                ErrorCode::OfflineUnavailable,
+                "catalog parser fingerprint changed; run index sync or rebuild",
+            ));
+        }
+        let snapshot = ReadSnapshot {
+            generation: generation as u64,
+            parser_fingerprint: parser,
+            control_manifest: manifest,
+        };
+        drop(rows);
+        drop(statement);
+        Ok(QuerySnapshot {
+            connection,
+            snapshot,
+            // Schema v1 does not have a vault identity header. Selected canonical
+            // proof must establish this caller-supplied identity before citations.
+            vault_id: self.vault_id.clone(),
+            verification: SnapshotVerification::IndexSnapshot,
+            usage: Cell::new(QueryReadUsage::default()),
+            limits,
+        })
+    }
+}
+
+fn configure_query(connection: &Connection, limits: &QueryReadLimits) -> Result<()> {
+    let start = Instant::now();
+    let elapsed = Duration::from_millis(limits.max_elapsed_ms);
+    // SQLite may do substantial work inside a native FTS operation between
+    // callbacks. Count executed VM work cumulatively across this connection.
+    // SQLite can reset its interval counter for newly prepared short statements.
+    // A one-op callback is required for a cumulative connection allowance.
+    let interval = 1;
+    let mut remaining = limits.max_vm_steps;
+    connection
+        .progress_handler(
+            interval,
+            Some(move || {
+                if start.elapsed() >= elapsed || remaining <= interval as u64 {
+                    return true;
+                }
+                remaining -= interval as u64;
+                false
+            }),
+        )
+        .map_err(sql::sql_error)?;
+    // SQLite's row/value ceiling includes duplicated projected text fields;
+    // it is deliberately distinct from the lower JSON deserialization ceiling.
+    connection
+        .set_limit(Limit::SQLITE_LIMIT_LENGTH, 32 * 1024 * 1024)
+        .map_err(sql::sql_error)?;
+    connection
+        .set_limit(Limit::SQLITE_LIMIT_SQL_LENGTH, 256 * 1024)
+        .map_err(sql::sql_error)?;
+    connection
+        .execute_batch("PRAGMA mmap_size=0; PRAGMA cache_size=-8192; PRAGMA temp_store=FILE;")
+        .map_err(sql::sql_error)?;
+    Ok(())
+}
+
+fn corrupt(message: impl Into<String>) -> WikiError {
+    WikiError::new(ErrorCode::IndexCorrupt, message)
+}
+
+fn text_bytes<'a>(row: &'a Row<'_>, column: usize) -> Result<&'a [u8]> {
+    match row.get_ref(column).map_err(sql::sql_error)? {
+        ValueRef::Text(bytes) => Ok(bytes),
+        _ => Err(corrupt("catalog selected field is not SQLite text")),
+    }
+}
+
+fn utf8(bytes: &[u8]) -> Result<&str> {
+    std::str::from_utf8(bytes).map_err(|_| corrupt("catalog selected text is not UTF-8"))
+}
+
+fn header_hash(row: &Row<'_>, column: usize) -> Result<Blake3Hash> {
+    let bytes = text_bytes(row, column)?;
+    if bytes.len() != 71 {
+        return Err(corrupt("catalog header hash has invalid length"));
+    }
+    Blake3Hash::new(utf8(bytes)?).map_err(|_| corrupt("catalog header hash is invalid"))
+}
+
+impl QuerySnapshot {
+    pub(crate) fn usage(&self) -> QueryReadUsage {
+        self.usage.get()
+    }
+
+    fn reserve(&self, bytes: usize) -> Result<()> {
+        let previous = self.usage.get();
+        let rows = previous.rows.checked_add(1);
+        let total = previous.bytes.checked_add(bytes);
+        if bytes > self.limits.max_row_bytes
+            || rows.is_none_or(|rows| rows > self.limits.max_rows)
+            || total.is_none_or(|total| total > self.limits.max_bytes)
+        {
+            return Err(WikiError::new(
+                ErrorCode::BudgetExceeded,
+                "catalog selected-row read budget exhausted",
+            ));
+        }
+        // Malformed selected rows still consume budget. Failed reservations do
+        // not allocate, deserialize, or refund already attempted decoding work.
+        self.usage.set(QueryReadUsage {
+            rows: rows.unwrap(),
+            bytes: total.unwrap(),
+        });
+        Ok(())
+    }
+
+    fn decode<T: DeserializeOwned>(&self, row: &Row<'_>, column: usize) -> Result<T> {
+        let bytes = text_bytes(row, column)?;
+        self.reserve(bytes.len())?;
+        serde_json::from_slice(bytes).map_err(|error| corrupt(error.to_string()))
+    }
+}
+
+impl QueryCatalog for QuerySnapshot {
+    fn connection(&self) -> &Connection {
+        &self.connection
+    }
+    fn snapshot(&self) -> &ReadSnapshot {
+        &self.snapshot
+    }
+    fn vault_id(&self) -> &RecordId {
+        &self.vault_id
+    }
+    fn verification(&self) -> &SnapshotVerification {
+        &self.verification
+    }
+    fn record(&self, id: &RecordId) -> Result<Option<RecordRow>> {
+        let mut statement = self.connection.prepare(
+            "SELECT row_json FROM records INDEXED BY sqlite_autoindex_records_1 WHERE gen=?1 AND id=?2",
+        ).map_err(sql::sql_error)?;
+        let mut rows = statement
+            .query(params![
+                sql::integer(self.snapshot.generation)?,
+                id.as_str()
+            ])
+            .map_err(sql::sql_error)?;
+        let Some(row) = rows.next().map_err(sql::sql_error)? else {
+            return Ok(None);
+        };
+        let decoded: RecordRow = self.decode(row, 0)?;
+        if decoded.record.id() != id {
+            return Err(corrupt("selected record ID differs from its indexed key"));
+        }
+        Ok(Some(decoded))
+    }
+    fn document(&self, path: &VaultRelativePath) -> Result<Option<DocumentRow>> {
+        let mut statement = self.connection.prepare(
+            "SELECT row_json FROM documents INDEXED BY sqlite_autoindex_documents_1 WHERE gen=?1 AND path=?2",
+        ).map_err(sql::sql_error)?;
+        let mut rows = statement
+            .query(params![
+                sql::integer(self.snapshot.generation)?,
+                path.as_str()
+            ])
+            .map_err(sql::sql_error)?;
+        let Some(row) = rows.next().map_err(sql::sql_error)? else {
+            return Ok(None);
+        };
+        let decoded = self.decode_document(row, 0)?;
+        if &decoded.path != path {
+            return Err(corrupt(
+                "selected document path differs from its indexed key",
+            ));
+        }
+        Ok(Some(decoded))
+    }
+    fn diagnostics(&self, paths: &BTreeSet<VaultRelativePath>) -> Result<Vec<CatalogDiagnostic>> {
+        if paths.is_empty() {
+            return Ok(Vec::new());
+        }
+        if paths.len() > self.limits.max_rows {
+            return Err(WikiError::new(
+                ErrorCode::BudgetExceeded,
+                "catalog diagnostic path budget exhausted",
+            ));
+        }
+        // Old schema-v1 caches may lack this additional access index. Do not
+        // silently replace selected lookups with a complete diagnostic scan.
+        let mut index = self.connection.prepare(
+            "SELECT seqno,name='gen',name='path' FROM pragma_index_info('diagnostic_paths') ORDER BY seqno LIMIT 3",
+        ).map_err(sql::sql_error)?;
+        let columns = index
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, Option<bool>>(1)?,
+                    row.get::<_, Option<bool>>(2)?,
+                ))
+            })
+            .map_err(sql::sql_error)?
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(sql::sql_error)?;
+        if columns != [(0, Some(true), Some(false)), (1, Some(false), Some(true))] {
+            let mut error = WikiError::new(
+                ErrorCode::CapabilityUnavailable,
+                "catalog lacks the bounded diagnostic path index",
+            );
+            error.hint = Some("run index rebuild".into());
+            return Err(error);
+        }
+        let mut statement = self.connection.prepare(
+            "SELECT path,record_id,code,details_json FROM diagnostics INDEXED BY diagnostic_paths \
+             WHERE gen=?1 AND path=?2 ORDER BY rowid LIMIT ?3",
+        ).map_err(sql::sql_error)?;
+        let mut result = Vec::new();
+        for path in paths {
+            // Read one excess row to fail rather than silently truncate diagnostics.
+            let remaining = self.limits.max_rows.saturating_sub(self.usage.get().rows);
+            let mut rows = statement
+                .query(params![
+                    sql::integer(self.snapshot.generation)?,
+                    path.as_str(),
+                    (remaining + 1) as i64,
+                ])
+                .map_err(sql::sql_error)?;
+            while let Some(row) = rows.next().map_err(sql::sql_error)? {
+                let raw_path = text_bytes(row, 0)?;
+                let raw_id = match row.get_ref(1).map_err(sql::sql_error)? {
+                    ValueRef::Null => None,
+                    ValueRef::Text(bytes) => Some(bytes),
+                    _ => return Err(corrupt("catalog diagnostic record ID is not text")),
+                };
+                let raw_code = text_bytes(row, 2)?;
+                let raw_details = text_bytes(row, 3)?;
+                let bytes = [
+                    raw_path.len(),
+                    raw_id.map_or(0, <[u8]>::len),
+                    raw_code.len(),
+                    raw_details.len(),
+                ]
+                .into_iter()
+                .try_fold(0usize, |total, bytes| total.checked_add(bytes))
+                .ok_or_else(|| {
+                    WikiError::new(
+                        ErrorCode::BudgetExceeded,
+                        "catalog diagnostic byte count overflow",
+                    )
+                })?;
+                self.reserve(bytes)?;
+                if utf8(raw_path)? != path.as_str() {
+                    return Err(corrupt(
+                        "selected diagnostic path differs from its indexed key",
+                    ));
+                }
+                let record_id = raw_id
+                    .map(|bytes| {
+                        RecordId::new(utf8(bytes)?)
+                            .map_err(|_| corrupt("invalid catalog diagnostic record ID"))
+                    })
+                    .transpose()?;
+                let code =
+                    serde_json::from_value(serde_json::Value::String(utf8(raw_code)?.to_owned()))
+                        .map_err(|error| corrupt(error.to_string()))?;
+                let details = serde_json::from_slice(raw_details)
+                    .map_err(|error| corrupt(error.to_string()))?;
+                result.push(CatalogDiagnostic {
+                    path: path.clone(),
+                    record_id,
+                    code,
+                    details,
+                });
+            }
+        }
+        Ok(result)
+    }
+    fn dependency_fingerprint(&self) -> Result<Blake3Hash> {
+        // Scope/header commitment only. This is not a global dependency proof.
+        serde_json::to_vec(&(self.query_scope(), &self.vault_id, &self.snapshot))
+            .map(Blake3Hash::digest)
+            .map_err(|error| WikiError::new(ErrorCode::Internal, error.to_string()))
+    }
+    fn query_scope(&self) -> &'static str {
+        "indexed_evidence"
+    }
+    fn decode_document(&self, row: &Row<'_>, column: usize) -> Result<DocumentRow> {
+        self.decode(row, column)
+    }
+}
+
+impl Drop for QuerySnapshot {
+    fn drop(&mut self) {
+        let _ = self.connection.execute_batch("ROLLBACK");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::vault::{VaultFs, VaultRoot, WriterPermit};
+    use std::{fs, time::Duration};
+
+    fn path(value: &str) -> VaultRelativePath {
+        VaultRelativePath::new(value).unwrap()
+    }
+    fn id(value: &str) -> RecordId {
+        RecordId::new(value).unwrap()
+    }
+    fn page(title: &str) -> String {
+        format!(
+            "---\nwiki_schema: \"1\"\nwiki_id: page_query\nwiki_kind: page\ntitle: {title}\nwiki_status: reviewed\n---\n# {title}\n\nBounded selected evidence.\n"
+        )
+    }
+    fn unsynced() -> (tempfile::TempDir, VaultRoot, Catalog) {
+        let temp = tempfile::tempdir().unwrap();
+        fs::write(temp.path().join("WIKI.md"), "---\nwiki_schema: \"1\"\nwiki_id: vault_query\nwiki_kind: vault\ntitle: Bounded query fixture\n---\n").unwrap();
+        fs::write(temp.path().join("page.md"), page("Old selected title")).unwrap();
+        let root = VaultRoot::explicit(temp.path()).unwrap();
+        let catalog = Catalog::new(VaultFs::new(root.clone()), id("vault_query"));
+        (temp, root, catalog)
+    }
+    fn fixture() -> (tempfile::TempDir, VaultRoot, Catalog) {
+        let (temp, root, catalog) = unsynced();
+        let writer = WriterPermit::acquire(&root, Duration::from_millis(200)).unwrap();
+        catalog.sync(&writer).unwrap();
+        (temp, root, catalog)
+    }
+    fn database(catalog: &Catalog) -> Connection {
+        Connection::open(catalog.cache_path().unwrap()).unwrap()
+    }
+    fn defaults(catalog: &Catalog) -> QuerySnapshot {
+        catalog.query_snapshot(QueryReadLimits::default()).unwrap()
+    }
+
+    #[test]
+    fn normalized_selected_queries_count_rows_and_bytes() {
+        let (_temp, _root, catalog) = fixture();
+        let expected = catalog.index_snapshot().unwrap();
+        let reader = defaults(&catalog);
+        assert_eq!(reader.usage(), QueryReadUsage::default());
+        assert_eq!(reader.snapshot(), expected.snapshot());
+        assert_eq!(reader.verification(), &SnapshotVerification::IndexSnapshot);
+        assert_eq!(reader.query_scope(), "indexed_evidence");
+        let document = reader.document(&path("page.md")).unwrap().unwrap();
+        assert_eq!(
+            &document,
+            expected
+                .projection()
+                .documents
+                .iter()
+                .find(|row| row.path == path("page.md"))
+                .unwrap()
+        );
+        let record = reader.record(&id("page_query")).unwrap().unwrap();
+        assert_eq!(&record, &expected.projection().records[&id("page_query")]);
+        let bytes: usize = database(&catalog).query_row(
+            "SELECT (SELECT length(CAST(row_json AS BLOB)) FROM documents WHERE path='page.md') \
+             +(SELECT length(CAST(row_json AS BLOB)) FROM records WHERE id='page_query')",
+            [], |row| row.get::<_, i64>(0),
+        ).unwrap().try_into().unwrap();
+        assert_eq!(reader.usage(), QueryReadUsage { rows: 2, bytes });
+        assert!(reader.document(&path("absent.md")).unwrap().is_none());
+        assert!(reader.record(&id("absent")).unwrap().is_none());
+        assert_eq!(reader.usage().rows, 2);
+        assert!(
+            reader
+                .connection()
+                .execute("DELETE FROM documents", [])
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn invalid_limits_and_missing_cache_fail_without_creating_state() {
+        let (temp, _root, catalog) = unsynced();
+        let limits = QueryReadLimits {
+            max_rows: 0,
+            ..QueryReadLimits::default()
+        };
+        assert_eq!(
+            catalog.query_snapshot(limits).err().unwrap().code,
+            ErrorCode::Usage
+        );
+        assert_eq!(
+            catalog
+                .query_snapshot(QueryReadLimits::default())
+                .err()
+                .unwrap()
+                .code,
+            ErrorCode::OfflineUnavailable
+        );
+        assert!(!temp.path().join(".wiki").exists());
+        for limits in [
+            QueryReadLimits {
+                max_rows: 4097,
+                ..QueryReadLimits::default()
+            },
+            QueryReadLimits {
+                max_bytes: 0,
+                ..QueryReadLimits::default()
+            },
+            QueryReadLimits {
+                max_row_bytes: 0,
+                ..QueryReadLimits::default()
+            },
+        ] {
+            assert_eq!(
+                catalog.query_snapshot(limits).err().unwrap().code,
+                ErrorCode::Usage
+            );
+        }
+    }
+
+    #[test]
+    fn oversized_selected_rows_fail_before_json_decoding() {
+        for table in ["documents", "records"] {
+            let (_temp, _root, catalog) = fixture();
+            database(&catalog)
+                .execute(
+                    &format!("UPDATE {table} SET row_json=?1"),
+                    ["x".repeat(4096)],
+                )
+                .unwrap();
+            let reader = catalog
+                .query_snapshot(QueryReadLimits {
+                    max_row_bytes: 1024,
+                    ..QueryReadLimits::default()
+                })
+                .unwrap();
+            let error = if table == "documents" {
+                reader.document(&path("page.md")).err().unwrap()
+            } else {
+                reader.record(&id("page_query")).err().unwrap()
+            };
+            assert_eq!(error.code, ErrorCode::BudgetExceeded);
+            assert_eq!(reader.usage(), QueryReadUsage::default());
+        }
+    }
+
+    #[test]
+    fn malformed_selected_rows_consume_budget_and_fail_closed() {
+        for table in ["documents", "records"] {
+            let (_temp, _root, catalog) = fixture();
+            database(&catalog)
+                .execute(&format!("UPDATE {table} SET row_json='{{'"), [])
+                .unwrap();
+            let reader = defaults(&catalog);
+            let error = if table == "documents" {
+                reader.document(&path("page.md")).err().unwrap()
+            } else {
+                reader.record(&id("page_query")).err().unwrap()
+            };
+            assert_eq!(error.code, ErrorCode::IndexCorrupt);
+            assert_eq!(reader.usage(), QueryReadUsage { rows: 1, bytes: 1 });
+        }
+    }
+
+    #[test]
+    fn non_text_and_invalid_utf8_selected_rows_fail_closed() {
+        for mutation in [
+            "UPDATE documents SET row_json=x'ff' WHERE path='page.md'",
+            "UPDATE documents SET row_json=CAST(x'ff' AS TEXT) WHERE path='page.md'",
+        ] {
+            let (_temp, _root, catalog) = fixture();
+            database(&catalog).execute_batch(mutation).unwrap();
+            assert_eq!(
+                defaults(&catalog)
+                    .document(&path("page.md"))
+                    .err()
+                    .unwrap()
+                    .code,
+                ErrorCode::IndexCorrupt
+            );
+        }
+    }
+
+    #[test]
+    fn aggregate_row_and_byte_budgets_cover_repeated_reads() {
+        let (_temp, _root, catalog) = fixture();
+        let bytes: usize = database(&catalog)
+            .query_row(
+                "SELECT length(CAST(row_json AS BLOB)) FROM documents WHERE path='page.md'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap()
+            .try_into()
+            .unwrap();
+        for limits in [
+            QueryReadLimits {
+                max_rows: 1,
+                ..QueryReadLimits::default()
+            },
+            QueryReadLimits {
+                max_bytes: 2 * bytes - 1,
+                ..QueryReadLimits::default()
+            },
+        ] {
+            let reader = catalog.query_snapshot(limits).unwrap();
+            reader.document(&path("page.md")).unwrap();
+            assert_eq!(
+                reader.document(&path("page.md")).err().unwrap().code,
+                ErrorCode::BudgetExceeded
+            );
+            assert_eq!(reader.usage(), QueryReadUsage { rows: 1, bytes });
+        }
+    }
+
+    #[test]
+    fn header_rejects_old_or_damaged_schema_pointer_and_hashes() {
+        for (mutation, code) in [
+            ("PRAGMA user_version=999", ErrorCode::CapabilityUnavailable),
+            ("DROP TABLE documents", ErrorCode::IndexCorrupt),
+            (
+                "UPDATE index_meta SET published_gen=NULL",
+                ErrorCode::OfflineUnavailable,
+            ),
+            (
+                "UPDATE index_meta SET published_gen=999999",
+                ErrorCode::OfflineUnavailable,
+            ),
+            (
+                "UPDATE generations SET state='building'",
+                ErrorCode::OfflineUnavailable,
+            ),
+            (
+                "UPDATE generations SET parser_hash='invalid'",
+                ErrorCode::IndexCorrupt,
+            ),
+            (
+                "UPDATE generations SET manifest_hash='invalid'",
+                ErrorCode::IndexCorrupt,
+            ),
+            (
+                "UPDATE generations SET parser_hash='blake3:0000000000000000000000000000000000000000000000000000000000000000'",
+                ErrorCode::OfflineUnavailable,
+            ),
+        ] {
+            let (_temp, _root, catalog) = fixture();
+            let db = database(&catalog);
+            // Deliberately inject corrupt cache states that normal writes forbid.
+            db.pragma_update(None, "foreign_keys", false).unwrap();
+            db.execute_batch(mutation).unwrap();
+            assert_eq!(
+                catalog
+                    .query_snapshot(QueryReadLimits::default())
+                    .err()
+                    .unwrap()
+                    .code,
+                code,
+                "{mutation}"
+            );
+        }
+    }
+
+    #[test]
+    fn unselected_corruption_is_outside_selected_integrity_scope() {
+        let (_temp, _root, catalog) = fixture();
+        let db = database(&catalog);
+        db.pragma_update(None, "foreign_keys", false).unwrap();
+        db.execute_batch("UPDATE generations SET projection_json='{'; UPDATE documents SET row_json='{' WHERE path='WIKI.md'; UPDATE records SET row_json='{' WHERE id='vault_query'; INSERT INTO dependencies VALUES(999999,'','orphan.md',NULL,'manifest');").unwrap();
+        let reader = defaults(&catalog);
+        assert_eq!(
+            reader.document(&path("page.md")).unwrap().unwrap().title,
+            "Old selected title"
+        );
+        assert!(reader.record(&id("page_query")).unwrap().is_some());
+        assert_eq!(reader.usage().rows, 2);
+        assert_eq!(
+            catalog.index_snapshot().err().unwrap().code,
+            ErrorCode::IndexCorrupt
+        );
+        // No projection JSON, global FK audit, or unselected-row reconstruction.
+        assert_eq!(reader.verification(), &SnapshotVerification::IndexSnapshot);
+    }
+
+    #[test]
+    fn selected_lookup_rejects_mismatched_json_keys() {
+        for mutation in [
+            "UPDATE documents SET row_json=replace(row_json,'page.md','other.md') WHERE path='page.md'",
+            "UPDATE records SET row_json=replace(row_json,'page_query','other_query') WHERE id='page_query'",
+        ] {
+            let (_temp, _root, catalog) = fixture();
+            database(&catalog).execute_batch(mutation).unwrap();
+            let reader = defaults(&catalog);
+            let error = if mutation.contains("documents") {
+                reader.document(&path("page.md")).err().unwrap()
+            } else {
+                reader.record(&id("page_query")).err().unwrap()
+            };
+            assert_eq!(error.code, ErrorCode::IndexCorrupt);
+        }
+    }
+
+    #[test]
+    fn bounded_diagnostics_select_only_requested_paths_and_fail_on_excess() {
+        let (_temp, _root, catalog) = fixture();
+        let db = database(&catalog);
+        db.execute_batch("DELETE FROM diagnostics").unwrap();
+        for (value, details) in [("page.md", "{\"fact\":1}"), ("unselected.md", "{")] {
+            db.execute(
+                "INSERT INTO diagnostics VALUES(1,?1,NULL,?2,?3)",
+                params![value, ErrorCode::RecordInvalid.to_string(), details],
+            )
+            .unwrap();
+        }
+        let paths = BTreeSet::from([path("page.md")]);
+        let reader = defaults(&catalog);
+        let diagnostics = reader.diagnostics(&paths).unwrap();
+        assert_eq!(diagnostics.len(), 1);
+        assert_eq!(diagnostics[0].details, serde_json::json!({"fact": 1}));
+        assert_eq!(reader.usage().rows, 1);
+        db.execute(
+            "INSERT INTO diagnostics VALUES(1,'page.md',NULL,?1,'{}')",
+            [ErrorCode::RecordInvalid.to_string()],
+        )
+        .unwrap();
+        let limited = catalog
+            .query_snapshot(QueryReadLimits {
+                max_rows: 1,
+                ..QueryReadLimits::default()
+            })
+            .unwrap();
+        assert_eq!(
+            limited.diagnostics(&paths).err().unwrap().code,
+            ErrorCode::BudgetExceeded
+        );
+        assert_eq!(limited.usage().rows, 1);
+    }
+
+    #[test]
+    fn legacy_missing_diagnostics_index_never_falls_back_to_full_scan() {
+        let (_temp, _root, catalog) = fixture();
+        database(&catalog)
+            .execute_batch("DROP INDEX diagnostic_paths")
+            .unwrap();
+        let reader = defaults(&catalog);
+        assert!(reader.document(&path("page.md")).unwrap().is_some());
+        assert!(reader.diagnostics(&BTreeSet::new()).unwrap().is_empty());
+        let error = reader
+            .diagnostics(&BTreeSet::from([path("page.md")]))
+            .err()
+            .unwrap();
+        assert_eq!(error.code, ErrorCode::CapabilityUnavailable);
+        assert_eq!(error.hint.as_deref(), Some("run index rebuild"));
+    }
+
+    #[test]
+    fn oversized_and_malformed_selected_diagnostics_are_metered() {
+        for details in ["{".to_owned(), "x".repeat(4096)] {
+            let (_temp, _root, catalog) = fixture();
+            let db = database(&catalog);
+            db.execute_batch("DELETE FROM diagnostics").unwrap();
+            db.execute(
+                "INSERT INTO diagnostics VALUES(1,'page.md',NULL,?1,?2)",
+                params![ErrorCode::RecordInvalid.to_string(), details],
+            )
+            .unwrap();
+            let reader = catalog
+                .query_snapshot(QueryReadLimits {
+                    max_row_bytes: 1024,
+                    ..QueryReadLimits::default()
+                })
+                .unwrap();
+            let error = reader
+                .diagnostics(&BTreeSet::from([path("page.md")]))
+                .err()
+                .unwrap();
+            assert_eq!(
+                error.code,
+                if details.len() > 1024 {
+                    ErrorCode::BudgetExceeded
+                } else {
+                    ErrorCode::IndexCorrupt
+                }
+            );
+            assert_eq!(reader.usage().rows, usize::from(details.len() <= 1024));
+        }
+    }
+
+    #[test]
+    fn pinned_query_transaction_retains_previous_published_generation() {
+        let (temp, root, catalog) = fixture();
+        let held = defaults(&catalog);
+        let old = held.snapshot().clone();
+        let fingerprint = held.dependency_fingerprint().unwrap();
+        fs::write(temp.path().join("page.md"), page("New selected title")).unwrap();
+        let writer = WriterPermit::acquire(&root, Duration::from_millis(200)).unwrap();
+        let published = catalog.sync(&writer).unwrap();
+        assert!(published.snapshot.generation > old.generation);
+        assert_eq!(held.snapshot(), &old);
+        assert_eq!(
+            held.document(&path("page.md")).unwrap().unwrap().title,
+            "Old selected title"
+        );
+        assert_eq!(
+            held.record(&id("page_query"))
+                .unwrap()
+                .unwrap()
+                .record
+                .title(),
+            "Old selected title"
+        );
+        assert_eq!(held.dependency_fingerprint().unwrap(), fingerprint);
+        let current = defaults(&catalog);
+        assert_eq!(
+            current.document(&path("page.md")).unwrap().unwrap().title,
+            "New selected title"
+        );
+        assert_ne!(current.dependency_fingerprint().unwrap(), fingerprint);
+    }
+
+    #[test]
+    fn scope_fingerprint_commits_caller_vault_and_header_only() {
+        let (_temp, root, catalog) = fixture();
+        let reader = defaults(&catalog);
+        let expected = Blake3Hash::digest(
+            serde_json::to_vec(&("indexed_evidence", id("vault_query"), reader.snapshot()))
+                .unwrap(),
+        );
+        assert_eq!(reader.dependency_fingerprint().unwrap(), expected);
+        let other = Catalog::new(VaultFs::new(root), id("other_vault"));
+        assert_ne!(defaults(&other).dependency_fingerprint().unwrap(), expected);
+        // Caller identity is deliberately not enough to authorize any citation.
+        assert_eq!(
+            defaults(&other).verification(),
+            &SnapshotVerification::IndexSnapshot
+        );
+    }
+    #[test]
+    fn sql_work_budget_interrupts_even_when_query_would_return_no_rows() {
+        let connection = Connection::open_in_memory().unwrap();
+        configure_query(
+            &connection,
+            &QueryReadLimits {
+                max_vm_steps: 10_000,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let error = connection.query_row(
+            "WITH RECURSIVE n(x) AS (SELECT 1 UNION ALL SELECT x+1 FROM n WHERE x<1000000) SELECT x FROM n WHERE x<0",
+            [], |r| r.get::<_, i64>(0),
+        ).unwrap_err();
+        assert_eq!(sql::sql_error(error).code, ErrorCode::BudgetExceeded);
+    }
+
+    #[test]
+    fn sql_work_budget_is_cumulative_across_small_statements() {
+        let connection = Connection::open_in_memory().unwrap();
+        configure_query(
+            &connection,
+            &QueryReadLimits {
+                max_vm_steps: 5000,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let mut interrupted = false;
+        for _ in 0..5000 {
+            match connection.query_row("SELECT 42", [], |r| r.get::<_, i64>(0)) {
+                Ok(42) => (),
+                Err(error) => {
+                    assert_eq!(sql::sql_error(error).code, ErrorCode::BudgetExceeded);
+                    interrupted = true;
+                    break;
+                }
+                other => panic!("unexpected result: {other:?}"),
+            }
+        }
+        assert!(
+            interrupted,
+            "short queries must not reset the connection work allowance"
+        );
+    }
+
+    #[test]
+    fn sql_deadline_and_value_size_refuse_before_rust_decode() {
+        let connection = Connection::open_in_memory().unwrap();
+        configure_query(
+            &connection,
+            &QueryReadLimits {
+                max_elapsed_ms: 1,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        std::thread::sleep(Duration::from_millis(3));
+        let error = connection.query_row(
+            "WITH RECURSIVE n(x) AS (SELECT 1 UNION ALL SELECT x+1 FROM n WHERE x<1000000) SELECT x FROM n WHERE x<0", [], |r| r.get::<_, i64>(0),
+        ).unwrap_err();
+        assert_eq!(sql::sql_error(error).code, ErrorCode::BudgetExceeded);
+        let connection = Connection::open_in_memory().unwrap();
+        configure_query(&connection, &QueryReadLimits::default()).unwrap();
+        let error = connection
+            .query_row("SELECT length(zeroblob(33554433))", [], |r| {
+                r.get::<_, i64>(0)
+            })
+            .unwrap_err();
+        assert_eq!(sql::sql_error(error).code, ErrorCode::BudgetExceeded);
+    }
+}

@@ -1,5 +1,5 @@
 {
-  "checksum": "99e898f44ff39a98bb3e176253d113a093d50dc34e8c915193a39f789fd950fd",
+  "checksum": "fd2af8846a95da1567fa3f1ce3bd764d0864fc7ec78499dbbbb927356b6c2eb8",
   "crates": {
     "ahash 0.8.12": {
       "name": "ahash",
@@ -8184,6 +8184,8 @@
         "crate_features": {
           "common": [
             "bundled",
+            "hooks",
+            "limits",
             "modern_sqlite"
           ],
           "selects": {}

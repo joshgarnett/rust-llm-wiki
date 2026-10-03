@@ -198,7 +198,11 @@ unsafe extern "C" fn collect(
 }
 fn tokenizer_error(code: i32) -> WikiError {
     WikiError::new(
-        ErrorCode::CapabilityUnavailable,
+        if matches!(code, ffi::SQLITE_INTERRUPT | ffi::SQLITE_TOOBIG) {
+            ErrorCode::BudgetExceeded
+        } else {
+            ErrorCode::CapabilityUnavailable
+        },
         format!("bundled FTS5 tokenizer failed ({code})"),
     )
 }

@@ -1,6 +1,6 @@
 # Large-vault architecture and validation
 
-Status: implementation plan, not a supported-capacity claim. The initial target is
+Status: architecture plan with an initial [indexed-context implementation](indexed-context.md), not a supported-capacity claim. The initial target is
 100,000 distinct current documents containing approximately 10 GB of UTF-8 text.
 Count original copies, retained revisions, operational records, retrieval units,
 vectors and index files separately. A 10,000-document / 1 GB tier supplies the

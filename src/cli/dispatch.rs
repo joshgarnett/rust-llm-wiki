@@ -713,7 +713,13 @@ fn execute_inner(args: &Arguments) -> Result<Envelope> {
             }
         }
         Command::Context(context) => {
-            let request = context.request();
+            let request =
+                retrieval::context::validate_request(&context.search.query, &context.request())?;
+            if request.scope == retrieval::ContextScope::IndexedEvidence
+                && (context.prepare_selection || context.selection.is_some())
+            {
+                return Err(usage("indexed-evidence does not support host selection"));
+            }
             let selection = context.selection_action()?;
             retrieval::context::validate_selection_action(&request, &selection)?;
             if matches!(
@@ -726,10 +732,15 @@ fn execute_inner(args: &Arguments) -> Result<Envelope> {
             {
                 context.search.remote.limits()?;
             }
-            if context.search.no_sync && request.scope != retrieval::ContextScope::Snapshot {
+            if context.search.no_sync
+                && !matches!(
+                    request.scope,
+                    retrieval::ContextScope::Snapshot | retrieval::ContextScope::IndexedEvidence
+                )
+            {
                 return Err(WikiError::new(
                     ErrorCode::FreshnessConflict,
-                    "unverified context requires --scope snapshot",
+                    "--no-sync requires --scope snapshot or --scope indexed-evidence",
                 ));
             }
             let request = retrieval::context::validate_request(&context.search.query, &request)?;
@@ -772,7 +783,11 @@ fn execute_inner(args: &Arguments) -> Result<Envelope> {
                             fault: None,
                         },
                     );
-                    let writer = if request.scope == retrieval::ContextScope::Snapshot {
+                    let writer = if matches!(
+                        request.scope,
+                        retrieval::ContextScope::Snapshot
+                            | retrieval::ContextScope::IndexedEvidence
+                    ) {
                         None
                     } else {
                         Some(WriterPermit::acquire(
@@ -796,6 +811,10 @@ fn execute_inner(args: &Arguments) -> Result<Envelope> {
                 match result.verification() {
                     SnapshotVerification::IndexSnapshot => {
                         envelope.meta.freshness = Some("index_snapshot".into())
+                    }
+                    SnapshotVerification::IndexedEvidence { verified_at, .. } => {
+                        envelope.meta.freshness = Some("indexed_evidence".into());
+                        envelope.meta.verified_at = Some(verified_at.clone());
                     }
                     SnapshotVerification::VerifiedSnapshot { verified_at } => {
                         envelope.meta.freshness = Some("verified_snapshot".into());
@@ -1083,6 +1102,10 @@ fn snapshot_metadata(meta: &mut Metadata, reader: &ReaderSnapshot) {
     meta.index_generation = Some(reader.snapshot().generation);
     match reader.verification() {
         SnapshotVerification::IndexSnapshot => meta.freshness = Some("index_snapshot".into()),
+        SnapshotVerification::IndexedEvidence { verified_at, .. } => {
+            meta.freshness = Some("indexed_evidence".into());
+            meta.verified_at = Some(verified_at.clone());
+        }
         SnapshotVerification::VerifiedSnapshot { verified_at } => {
             meta.freshness = Some("verified_snapshot".into());
             meta.verified_at = Some(verified_at.clone());
@@ -1614,6 +1637,10 @@ fn result_metadata(
     meta.index_generation = Some(snapshot.generation);
     match verification {
         SnapshotVerification::IndexSnapshot => meta.freshness = Some("index_snapshot".into()),
+        SnapshotVerification::IndexedEvidence { verified_at, .. } => {
+            meta.freshness = Some("indexed_evidence".into());
+            meta.verified_at = Some(verified_at.clone());
+        }
         SnapshotVerification::VerifiedSnapshot { verified_at } => {
             meta.freshness = Some("verified_snapshot".into());
             meta.verified_at = Some(verified_at.clone());

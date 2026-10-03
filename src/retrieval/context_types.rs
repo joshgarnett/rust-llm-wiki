@@ -31,6 +31,7 @@ pub enum ContextScope {
     Current,
     Historical,
     Snapshot,
+    IndexedEvidence,
 }
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

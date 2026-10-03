@@ -4,5 +4,6 @@ pub mod evidence;
 pub(crate) mod identity;
 pub mod lifecycle;
 pub mod revision;
+pub(crate) mod selected;
 pub mod types;
 pub use types::*;

@@ -52,6 +52,7 @@ The [six native GitHub release jobs](https://github.com/joshgarnett/rust-llm-wik
 ## Documentation
 
 - [End-user quality and critic workflow](docs/testing-usability.md): repeatable CLI, documentation and retrieval evaluation.
+- [Indexed context](docs/indexed-context.md): verify selected captured-source bytes using an existing lexical index, with an explicit generation-scoped guarantee.
 - [Context evaluation](docs/evaluating-context.md): reproducible public datasets, exact evidence coverage and independent completeness assessment.
 
 - [Getting started](docs/getting-started.md): an offline tutorial and practical capture, page, refresh and agent-export examples.

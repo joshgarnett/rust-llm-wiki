@@ -6,7 +6,13 @@ use std::{path::Path, time::Duration};
 
 pub(crate) const SQL_VERSION: i64 = 1;
 pub(crate) fn sql_error(error: rusqlite::Error) -> WikiError {
-    WikiError::new(ErrorCode::IndexCorrupt, format!("SQLite catalog: {error}"))
+    let code = match error.sqlite_error_code() {
+        Some(rusqlite::ErrorCode::OperationInterrupted | rusqlite::ErrorCode::TooBig) => {
+            ErrorCode::BudgetExceeded
+        }
+        _ => ErrorCode::IndexCorrupt,
+    };
+    WikiError::new(code, format!("SQLite catalog: {error}"))
 }
 pub(crate) fn json<T: serde::Serialize>(value: &T) -> Result<String> {
     serde_json::to_string(value).map_err(|e| WikiError::new(ErrorCode::Internal, e.to_string()))
@@ -95,6 +101,23 @@ pub(crate) fn validate(c: &Connection) -> Result<()> {
     if quick != "ok" {
         return Err(WikiError::new(ErrorCode::IndexCorrupt, quick));
     }
+    validate_header(c)?;
+    let violation: Option<String> = c
+        .query_row("PRAGMA foreign_key_check", [], |r| r.get(0))
+        .optional()
+        .map_err(sql_error)?;
+    if violation.is_some() {
+        return Err(WikiError::new(
+            ErrorCode::IndexCorrupt,
+            "catalog foreign key violation",
+        ));
+    }
+    Ok(())
+}
+
+/// Validate version and required SQL shapes without claiming full cache integrity.
+/// Strict readers additionally perform the page, FK and projection audits.
+pub(crate) fn validate_header(c: &Connection) -> Result<()> {
     if version(c)? != SQL_VERSION {
         return Err(WikiError::new(
             ErrorCode::CapabilityUnavailable,
@@ -129,24 +152,31 @@ pub(crate) fn validate(c: &Connection) -> Result<()> {
         ))
         .map_err(sql_error)?;
     }
-    let violation: Option<String> = c
-        .query_row("PRAGMA foreign_key_check", [], |r| r.get(0))
-        .optional()
-        .map_err(sql_error)?;
-    if violation.is_some() {
-        return Err(WikiError::new(
-            ErrorCode::IndexCorrupt,
-            "catalog foreign key violation",
-        ));
-    }
     Ok(())
 }
+/// Explicit rebuild upgrades optional read access paths transactionally, even
+/// when the cache's table format did not require a schema migration.
+pub(crate) fn rebuild_query_indexes(tx: &Transaction<'_>) -> Result<()> {
+    tx.execute_batch("        DROP INDEX IF EXISTS source_document_ids;
+        DROP INDEX IF EXISTS source_revision_ids;
+        DROP INDEX IF EXISTS source_document_titles;
+        DROP INDEX IF EXISTS diagnostic_paths;
+        CREATE INDEX source_document_ids ON documents(gen,source_id,path) WHERE owner_revision IS NOT NULL AND source_id IS NOT NULL AND eligibility='current';
+        CREATE INDEX source_revision_ids ON documents(gen,owner_revision,path) WHERE owner_revision IS NOT NULL AND source_id IS NOT NULL AND eligibility='current';
+        CREATE INDEX source_document_titles ON documents(gen,title,path) WHERE owner_revision IS NOT NULL AND source_id IS NOT NULL AND eligibility='current';
+        CREATE INDEX diagnostic_paths ON diagnostics(gen,path);
+    ").map_err(sql_error)
+}
+
 const SCHEMA: &str = r#"
 CREATE TABLE generations(gen INTEGER PRIMARY KEY CHECK(gen>0),state TEXT NOT NULL CHECK(state IN ('building','complete')),manifest_hash TEXT NOT NULL,parser_hash TEXT NOT NULL,projection_json TEXT NOT NULL);
 CREATE TABLE index_meta(singleton INTEGER PRIMARY KEY CHECK(singleton=1),published_gen INTEGER REFERENCES generations(gen),vector_cache_lost INTEGER NOT NULL CHECK(vector_cache_lost IN (0,1)),vector_loss_unknown INTEGER NOT NULL CHECK(vector_loss_unknown IN (0,1)));
 INSERT INTO index_meta VALUES(1,NULL,0,1);
 CREATE TABLE documents(doc_row INTEGER PRIMARY KEY,gen INTEGER NOT NULL REFERENCES generations(gen),path TEXT NOT NULL,record_id TEXT,kind TEXT,file_hash TEXT NOT NULL,title TEXT NOT NULL,body TEXT NOT NULL,raw_text TEXT NOT NULL,source_id TEXT,owner_revision TEXT,eligibility TEXT NOT NULL,row_json TEXT NOT NULL,UNIQUE(gen,path));
 CREATE UNIQUE INDEX record_ids ON documents(gen,record_id) WHERE record_id IS NOT NULL;
+CREATE INDEX source_document_ids ON documents(gen,source_id,path) WHERE owner_revision IS NOT NULL AND source_id IS NOT NULL AND eligibility='current';
+CREATE INDEX source_revision_ids ON documents(gen,owner_revision,path) WHERE owner_revision IS NOT NULL AND source_id IS NOT NULL AND eligibility='current';
+CREATE INDEX source_document_titles ON documents(gen,title,path) WHERE owner_revision IS NOT NULL AND source_id IS NOT NULL AND eligibility='current';
 CREATE TABLE records(gen INTEGER NOT NULL REFERENCES generations(gen),id TEXT NOT NULL,kind TEXT NOT NULL,path TEXT NOT NULL,hash TEXT NOT NULL,authored_status TEXT,eligibility TEXT NOT NULL,disputed INTEGER NOT NULL,row_json TEXT NOT NULL,PRIMARY KEY(gen,id));
 CREATE TABLE aliases(gen INTEGER NOT NULL,id TEXT NOT NULL,alias TEXT NOT NULL,PRIMARY KEY(gen,id,alias),FOREIGN KEY(gen,id) REFERENCES records(gen,id));
 CREATE TABLE entities(gen INTEGER NOT NULL,id TEXT NOT NULL,entity_type TEXT,identity_eligibility TEXT,description_eligibility TEXT,PRIMARY KEY(gen,id),FOREIGN KEY(gen,id) REFERENCES records(gen,id));
@@ -160,6 +190,7 @@ CREATE TABLE decisions(gen INTEGER NOT NULL,id TEXT NOT NULL,action TEXT,status 
 CREATE TABLE dependencies(gen INTEGER NOT NULL REFERENCES generations(gen),owner_id TEXT NOT NULL,path TEXT NOT NULL,expected_hash TEXT,role TEXT NOT NULL,PRIMARY KEY(gen,owner_id,path,role));
 CREATE TABLE links(gen INTEGER NOT NULL REFERENCES generations(gen),from_path TEXT NOT NULL,byte_start INTEGER NOT NULL,target_id TEXT,target_path TEXT,resolution TEXT NOT NULL);
 CREATE TABLE diagnostics(gen INTEGER NOT NULL REFERENCES generations(gen),path TEXT NOT NULL,record_id TEXT,code TEXT NOT NULL,details_json TEXT NOT NULL);
+CREATE INDEX diagnostic_paths ON diagnostics(gen,path);
 CREATE VIRTUAL TABLE documents_fts USING fts5(title,aliases,headings,tags,body,gen UNINDEXED,doc_row UNINDEXED,tokenize='unicode61 remove_diacritics 2');
 CREATE VIRTUAL TABLE graph_fts USING fts5(name,aliases,endpoints,predicate,qualifiers,description,target_kind UNINDEXED,target_id UNINDEXED,gen UNINDEXED,tokenize='unicode61 remove_diacritics 2');
 PRAGMA user_version=1;

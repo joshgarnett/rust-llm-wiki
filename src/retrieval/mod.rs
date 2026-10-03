@@ -8,6 +8,7 @@ pub(crate) mod context_units;
 pub mod cursor;
 pub mod excerpts;
 pub mod filters;
+pub(crate) mod indexed_context;
 pub mod lexical;
 pub mod literal;
 pub mod types;

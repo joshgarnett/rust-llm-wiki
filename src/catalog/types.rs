@@ -57,7 +57,19 @@ pub struct ReaderSnapshot {
 #[serde(tag = "mode", rename_all = "snake_case")]
 pub enum SnapshotVerification {
     IndexSnapshot,
-    VerifiedSnapshot { verified_at: String },
+    VerifiedSnapshot {
+        verified_at: String,
+    },
+    /// Selected canonical source bytes checked against a pinned discovery index.
+    /// This does not establish global membership, unique IDs or completeness.
+    IndexedEvidence {
+        verified_at: String,
+        discovery_generation: u64,
+        evidence_domain: String,
+        global_membership_verified: bool,
+        catalog_rows_decoded: usize,
+        catalog_bytes_decoded: usize,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

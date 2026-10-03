@@ -1,6 +1,6 @@
 //! Stateless bounded cursors bind the complete snapshot and query contract.
 use super::types::*;
-use crate::{catalog::ReaderSnapshot, domain::*};
+use crate::{catalog::query_types::QueryCatalog, domain::*};
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize)]
@@ -23,7 +23,7 @@ pub(crate) fn fingerprint(query: &str, plan: &QueryPlan) -> Result<Blake3Hash> {
     .map_err(|e| WikiError::new(ErrorCode::Internal, e.to_string()))
 }
 pub(crate) fn offset(
-    reader: &ReaderSnapshot,
+    reader: &dyn QueryCatalog,
     fingerprint: &Blake3Hash,
     cursor: Option<&str>,
     cap: usize,
@@ -57,7 +57,7 @@ pub(crate) fn offset(
     Ok(value.offset)
 }
 pub(crate) fn encode(
-    reader: &ReaderSnapshot,
+    reader: &dyn QueryCatalog,
     fingerprint: Blake3Hash,
     offset: usize,
 ) -> Result<String> {

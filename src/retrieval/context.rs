@@ -2,7 +2,7 @@
 use super::context_selection_packet::{self, SelectionAction, SelectionCard, SelectionPacket};
 use super::{bundles, context_types::*, types::*};
 use crate::{
-    catalog::ReaderSnapshot,
+    catalog::{ReaderSnapshot, query_types::QueryCatalog},
     domain::*,
     graph::{GraphResult, NavigationEdge},
 };
@@ -69,6 +69,21 @@ pub fn validate_selection_action(request: &ContextRequest, action: &SelectionAct
     Ok(())
 }
 fn normalize_request(request: &ContextRequest) -> Result<ContextRequest> {
+    if request.scope == ContextScope::IndexedEvidence
+        && (request.target != ContextTarget::Documents
+            || request.graph.is_some()
+            || request.documents.mode != SearchMode::Lexical
+            || !request.documents.filters.kinds.is_empty()
+            || !request.documents.filters.authored_statuses.is_empty()
+            || !request.documents.filters.tags.is_empty()
+            || request.documents.filters.include_historical
+            || request.documents.filters.include_proposed)
+    {
+        return Err(WikiError::new(
+            ErrorCode::Usage,
+            "indexed-evidence supports current captured-source documents in lexical mode with source and path filters only",
+        ));
+    }
     let mut normalized = request.clone();
     normalized.documents = super::lexical::validate_plan("context", &request.documents)?;
     if let Some(g) = &request.graph {
@@ -106,10 +121,16 @@ fn normalize_request(request: &ContextRequest) -> Result<ContextRequest> {
             "context or verification budget exceeds its ceiling or reservation",
         ));
     }
-    normalized.documents.filters.include_historical = request.scope != ContextScope::Current;
+    normalized.documents.filters.include_historical = matches!(
+        request.scope,
+        ContextScope::Historical | ContextScope::Snapshot
+    );
     normalized.documents.filters.include_proposed = false;
     if let Some(g) = &mut normalized.graph {
-        g.filters.include_historical = request.scope != ContextScope::Current;
+        g.filters.include_historical = matches!(
+            request.scope,
+            ContextScope::Historical | ContextScope::Snapshot
+        );
         g.filters.include_proposed = false;
     }
     Ok(normalized)
@@ -290,16 +311,16 @@ fn matches_filters(
                     })
             }))
 }
-struct Packet {
-    passages: Vec<ContextPassage>,
-    bundle: Option<EvidenceBundle>,
-    navigation: Option<NavigationEdge>,
-    key: String,
-    score: f64,
-    selection: Option<super::context_selection::SelectionCandidate>,
-    unit_score: Option<f64>,
-    fallback: Option<ContextPassage>,
-    unit_clipped: bool,
+pub(super) struct Packet {
+    pub(super) passages: Vec<ContextPassage>,
+    pub(super) bundle: Option<EvidenceBundle>,
+    pub(super) navigation: Option<NavigationEdge>,
+    pub(super) key: String,
+    pub(super) score: f64,
+    pub(super) selection: Option<super::context_selection::SelectionCandidate>,
+    pub(super) unit_score: Option<f64>,
+    pub(super) fallback: Option<ContextPassage>,
+    pub(super) unit_clipped: bool,
 }
 fn navigation_end<'a>(
     reader: &'a ReaderSnapshot,
@@ -333,7 +354,7 @@ fn navigation_end<'a>(
         .ok_or_else(|| WikiError::new(ErrorCode::FreshnessConflict, "navigation document absent"))
 }
 fn citation_state(
-    reader: &ReaderSnapshot,
+    reader: &dyn QueryCatalog,
     citation: &CitationRef,
 ) -> Result<crate::sources::CitationState> {
     use crate::sources::CitationState;
@@ -342,9 +363,7 @@ fn citation_state(
         CitationRef::Assertion(r) => (&r.source_id, &r.source_revision),
     };
     let source = reader
-        .projection()
-        .records
-        .get(source_id)
+        .record(source_id)?
         .ok_or_else(|| WikiError::invalid("citation source absent from pinned projection"))?;
     let mut state = if source.record.string("wiki_status") == Some("withdrawn") {
         CitationState::Withdrawn
@@ -355,17 +374,11 @@ fn citation_state(
     };
     if let CitationRef::Assertion(r) = citation {
         let evidence = reader
-            .projection()
-            .records
-            .get(&r.evidence_id)
+            .record(&r.evidence_id)?
             .ok_or_else(|| WikiError::invalid("citation evidence absent from pinned projection"))?;
-        let assertion = reader
-            .projection()
-            .records
-            .get(&r.assertion_id)
-            .ok_or_else(|| {
-                WikiError::invalid("citation assertion absent from pinned projection")
-            })?;
+        let assertion = reader.record(&r.assertion_id)?.ok_or_else(|| {
+            WikiError::invalid("citation assertion absent from pinned projection")
+        })?;
         if state == CitationState::Current
             && (evidence.record.string("wiki_status") != Some("active")
                 || assertion.record.string("wiki_status") != Some("accepted"))
@@ -408,16 +421,19 @@ fn compact_direct_citations(passages: &mut [ContextPassage]) {
 }
 
 fn render(
-    reader: &ReaderSnapshot,
+    reader: &dyn QueryCatalog,
     scope: ContextScope,
     passages: &[ContextPassage],
     bundles: &[EvidenceBundle],
     navigation: &[NavigationEdge],
 ) -> Result<(String, usize)> {
-    let mut text = if scope == ContextScope::Snapshot {
-        "[context index_snapshot; unverified]\n\n".to_owned()
-    } else {
-        String::new()
+    let mut text = match scope {
+        ContextScope::Snapshot => "[context index_snapshot; unverified]\n\n".to_owned(),
+        ContextScope::IndexedEvidence => format!(
+            "[context indexed_evidence; discovery generation {}; captured sources only; selected canonical bytes verified; global membership, identity uniqueness and completeness not verified]\n\n",
+            reader.snapshot().generation
+        ),
+        _ => String::new(),
     };
     let mut graph_bytes = 0;
     for (i, p) in passages.iter().enumerate() {
@@ -457,14 +473,16 @@ fn render(
         let path_labels = b
             .path
             .iter()
-            .map(|step| {
-                let row = &reader.projection().records[&step.assertion.record_id];
-                format!(
+            .map(|step| -> Result<_> {
+                let row = reader
+                    .record(&step.assertion.record_id)?
+                    .ok_or_else(|| WikiError::invalid("assertion path record missing"))?;
+                Ok(format!(
                     "{}: {:?}, status {:?}",
                     step.assertion.record_id, row.eligibility, row.authored_status
-                )
+                ))
             })
-            .collect::<Vec<_>>()
+            .collect::<Result<Vec<_>>>()?
             .join("; ");
         text.push_str(&format!("[assertion {}; {:?}; status {:?}; disputed {}]\n{} {} {}\nQualifiers: {}\nPath: {}\nPath states: {}\nPassages: {:?}; omitted support {}; omitted contradiction {}\n\n",b.assertion.record_id,b.eligibility,b.authored_status,b.disputed,b.subject.record_id,b.predicate,serde_json::to_string(&b.object).map_err(|e|WikiError::invalid(e.to_string()))?,serde_json::to_string(&b.qualifiers).map_err(|e|WikiError::invalid(e.to_string()))?,serde_json::to_string(&b.path).map_err(|e|WikiError::invalid(e.to_string()))?,path_labels,b.passage_indices,b.omitted_support,b.omitted_contradictions));
         graph_bytes += text.len() - start
@@ -540,6 +558,12 @@ fn assemble_inner(
     selection_action: &SelectionAction,
 ) -> Result<ContextDraft> {
     let request = normalize_request(request)?;
+    if request.scope == ContextScope::IndexedEvidence {
+        return Err(WikiError::new(
+            ErrorCode::Usage,
+            "indexed-evidence requires the selected-source verification coordinator",
+        ));
+    }
     let request = &request;
     validate_selection_action(request, selection_action)?;
     if hits.hits.len() > request.documents.limits.hits
@@ -951,6 +975,57 @@ fn assemble_inner(
             bundle.rank_contributions = best;
         }
     }
+    pack(
+        reader,
+        request,
+        PackingInput {
+            packets,
+            omissions,
+            term_weights,
+            selection_warnings,
+            source_aware,
+            query,
+            signals,
+            selection_action,
+            hits,
+            graph,
+            dependency_fingerprint,
+        },
+    )
+}
+
+pub(super) struct PackingInput<'a> {
+    pub packets: Vec<Packet>,
+    pub omissions: Vec<ContextOmission>,
+    pub term_weights: Vec<u64>,
+    pub selection_warnings: Vec<String>,
+    pub source_aware: bool,
+    pub query: Option<&'a str>,
+    pub signals: &'a ContextSelectionSignals,
+    pub selection_action: &'a SelectionAction,
+    pub hits: &'a HitSet,
+    pub graph: Option<&'a GraphResult>,
+    pub dependency_fingerprint: Blake3Hash,
+}
+
+pub(super) fn pack(
+    reader: &dyn QueryCatalog,
+    request: &ContextRequest,
+    input: PackingInput<'_>,
+) -> Result<ContextDraft> {
+    let PackingInput {
+        mut packets,
+        mut omissions,
+        term_weights,
+        mut selection_warnings,
+        source_aware,
+        query,
+        signals,
+        selection_action,
+        hits,
+        graph,
+        dependency_fingerprint,
+    } = input;
     packets.sort_by(|a, b| b.score.total_cmp(&a.score).then(a.key.cmp(&b.key)));
     let reserved_bytes = request.budget.instruction_bytes + request.budget.output_bytes;
     let reserved_tokens = request.budget.instruction_tokens + request.budget.output_tokens;
@@ -985,13 +1060,9 @@ fn assemble_inner(
                     ));
                 }
                 let title = reader
-                    .projection()
-                    .documents
-                    .iter()
-                    .find(|document| document.path == passage.locator.path)
+                    .document(&passage.locator.path)?
                     .ok_or_else(|| WikiError::invalid("selection owner unavailable"))?
-                    .title
-                    .clone();
+                    .title;
                 let (rendered, _) = render(reader, request.scope, &packet.passages, &[], &[])?;
                 Ok(SelectionCard {
                     id: format!("c{index:04}"),

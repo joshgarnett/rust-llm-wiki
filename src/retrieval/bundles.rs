@@ -1,7 +1,7 @@
 //! Canonical evidence selection. Public graph payloads are discovery selectors only.
 use super::{context_types::*, types::*};
 use crate::{
-    catalog::{ReaderSnapshot, RecordRow},
+    catalog::{ReaderSnapshot, RecordRow, query_types::QueryCatalog},
     domain::*,
     graph::{GraphAssertion, GraphObject, GraphPathStep, GraphQualifiers},
     sources::EvidenceStance,
@@ -107,7 +107,7 @@ pub(super) fn owner(p: &ContextPassage) -> String {
 pub(super) fn merge(
     a: &mut ContextPassage,
     b: &ContextPassage,
-    reader: &ReaderSnapshot,
+    reader: &dyn QueryCatalog,
 ) -> Result<bool> {
     if owner(a) != owner(b)
         || a.label != b.label
@@ -119,10 +119,7 @@ pub(super) fn merge(
     let start = a.span.start().min(b.span.start());
     let end = a.span.end().max(b.span.end());
     let document = reader
-        .projection()
-        .documents
-        .iter()
-        .find(|d| d.path == a.locator.path)
+        .document(&a.locator.path)?
         .ok_or_else(|| WikiError::invalid("passage owner missing"))?;
     let span = ByteSpan::new(start, end)?;
     a.text = span.slice(&document.raw_text)?.to_owned();
@@ -148,7 +145,7 @@ pub(super) fn merge(
 /// The map lets packing remap every already admitted bundle after coalescence.
 pub(super) fn coalesce(
     passages: &mut Vec<ContextPassage>,
-    reader: &ReaderSnapshot,
+    reader: &dyn QueryCatalog,
 ) -> Result<Vec<usize>> {
     let old = std::mem::take(passages);
     let length = old.len();
