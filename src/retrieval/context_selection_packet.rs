@@ -4,7 +4,10 @@ use super::context_types::ContextPassage;
 use crate::{domain::*, graph::packet::canonical_json};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::{collections::BTreeSet, io::Write};
+use std::{
+    collections::{BTreeMap, BTreeSet, VecDeque},
+    io::Write,
+};
 
 const VERSION: &str = "lwiki.context-selection.v1";
 const MAX_CARDS: usize = 80;
@@ -260,6 +263,33 @@ fn input(binding: &Value, cards: &[SelectionCard]) -> Result<(Blake3Hash, String
     let text = String::from_utf8(encoded)
         .map_err(|_| WikiError::invalid("serialized selector input is not UTF-8"))?;
     Ok((fingerprint, text))
+}
+
+/// Preserve discovered-owner coverage before bounded packet serialization.
+/// Owner rounds follow first appearance, using the same canonical identity as
+/// evidence packing; cards within each owner retain their original order.
+/// This changes only the candidate-input order, never an ID or evidence byte.
+pub fn interleave_by_owner(cards: Vec<SelectionCard>) -> Vec<SelectionCard> {
+    let count = cards.len();
+    let mut indices = BTreeMap::new();
+    let mut groups: Vec<VecDeque<SelectionCard>> = Vec::new();
+    for card in cards {
+        let owner = super::bundles::owner(&card.passage);
+        let index = *indices.entry(owner).or_insert_with(|| {
+            groups.push(VecDeque::new());
+            groups.len() - 1
+        });
+        groups[index].push_back(card);
+    }
+    let mut pending = VecDeque::from(groups);
+    let mut result = Vec::with_capacity(count);
+    while let Some(mut group) = pending.pop_front() {
+        result.push(group.pop_front().expect("owner groups are nonempty"));
+        if !group.is_empty() {
+            pending.push_back(group);
+        }
+    }
+    result
 }
 
 pub fn build_packet(binding: Value, mut cards: Vec<SelectionCard>) -> Result<SelectionPacket> {
@@ -526,6 +556,126 @@ mod tests {
         assert_eq!(packet.omitted_candidates, 3);
         assert_eq!(packet.cards.last().unwrap().id, "c0079");
         assert!(validate_reply(&packet, &reply(&packet, &["c0080"])).is_err());
+    }
+
+    #[test]
+    fn owner_interleaving_preserves_evidence_and_source_coverage_under_byte_truncation() {
+        let original = (0..5)
+            .flat_map(|owner| {
+                (0..16).map(move |item| {
+                    let mut card = card(&format!("c{owner}_{item:02}"));
+                    card.title = "Long source title ".repeat(160);
+                    card.passage.locator.path =
+                        VaultRelativePath::new(format!("sources/owner-{owner}/content.md"))
+                            .unwrap();
+                    card.passage.locator.observed_hash =
+                        Blake3Hash::digest(format!("owner {owner}"));
+                    card.passage.support_group = Some(card.passage.locator.observed_hash.clone());
+                    card.passage.text =
+                        format!("Owner {owner}, fact {item}: {}", "Exact fact. ".repeat(75));
+                    card.passage.span =
+                        ByteSpan::new(10, 10 + card.passage.text.len() as u64).unwrap();
+                    let span = card.passage.span;
+                    let hash = Blake3Hash::digest(card.passage.text.as_bytes());
+                    let reference = source_reference(&mut card);
+                    reference.source_id = RecordId::new(format!("source_owner{owner}")).unwrap();
+                    reference.source_revision =
+                        RecordId::new(format!("revision_owner{owner}")).unwrap();
+                    reference.span = span;
+                    reference.quote_hash = hash;
+                    card.child_span = None;
+                    card.rendered_bytes = card.passage.text.len() + 400;
+                    card
+                })
+            })
+            .collect::<Vec<_>>();
+        let owner = |card: &SelectionCard| super::super::bundles::owner(&card.passage);
+        let prefix = build_packet(binding(), original.clone()).unwrap();
+        assert!(prefix.candidate_count < MAX_CARDS);
+        assert!(
+            !prefix
+                .cards
+                .iter()
+                .any(|card| owner(card) == owner(&original[64]))
+        );
+
+        let interleaved = interleave_by_owner(original.clone());
+        assert_eq!(interleaved, interleave_by_owner(original.clone()));
+        assert_eq!(interleaved.len(), original.len());
+        assert_eq!(
+            interleaved
+                .iter()
+                .take(5)
+                .map(|card| &card.id)
+                .collect::<Vec<_>>(),
+            [0, 16, 32, 48, 64]
+                .into_iter()
+                .map(|index| &original[index].id)
+                .collect::<Vec<_>>()
+        );
+        for card in &interleaved {
+            assert_eq!(original.iter().find(|old| old.id == card.id), Some(card));
+        }
+        for first in original.iter().step_by(16) {
+            let ids = |cards: &[SelectionCard]| {
+                cards
+                    .iter()
+                    .filter(|card| owner(card) == owner(first))
+                    .map(|card| card.id.clone())
+                    .collect::<Vec<_>>()
+            };
+            assert_eq!(ids(&original), ids(&interleaved));
+        }
+
+        let packet = build_packet(binding(), interleaved.clone()).unwrap();
+        assert_eq!(
+            packet,
+            build_packet(binding(), interleaved.clone()).unwrap()
+        );
+        assert!(packet.candidate_count < MAX_CARDS);
+        assert_eq!(packet.cards, interleaved[..packet.candidate_count]);
+        assert_eq!(
+            packet
+                .cards
+                .iter()
+                .map(owner)
+                .collect::<BTreeSet<_>>()
+                .len(),
+            5
+        );
+        assert!(packet.input_bytes <= MAX_INPUT_BYTES);
+        assert!(packet.estimated_tokens <= MAX_ESTIMATED_TOKENS);
+        assert_eq!(
+            packet.omitted_candidates,
+            original.len() - packet.candidate_count
+        );
+        assert_ne!(packet.fingerprint, prefix.fingerprint);
+        assert!(validate_reply(&packet, &reply(&prefix, &[])).is_err());
+        let ids = packet
+            .cards
+            .iter()
+            .take(5)
+            .map(|card| card.id.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(validate_reply(&packet, &reply(&packet, &ids)).unwrap(), ids);
+    }
+
+    #[test]
+    fn interleaving_uses_canonical_mirror_identity_and_handles_empty_or_single_owner() {
+        assert!(interleave_by_owner(vec![]).is_empty());
+        let single = vec![card("a"), card("b")];
+        assert_eq!(interleave_by_owner(single.clone()), single);
+        let mut first = card("first");
+        first.passage.support_group = Some(Blake3Hash::digest(b"mirrored content"));
+        let mut mirror = first.clone();
+        mirror.id = "mirror".into();
+        mirror.passage.locator.path = VaultRelativePath::new("sources/mirror/content.md").unwrap();
+        let mut other = card("other");
+        other.passage.support_group = Some(Blake3Hash::digest(b"different content"));
+        assert_eq!(
+            interleave_by_owner(vec![first.clone(), mirror.clone(), other.clone()]),
+            vec![first, other, mirror]
+        );
     }
 
     #[test]

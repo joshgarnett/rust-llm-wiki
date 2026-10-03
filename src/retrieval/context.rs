@@ -1008,7 +1008,7 @@ fn assemble_inner(
                 "snapshot": reader.snapshot(), "dependency_fingerprint": dependency_fingerprint,
                 "max_passages_per_owner": 4,
             }),
-            cards,
+            context_selection_packet::interleave_by_owner(cards),
         )?;
         if matches!(selection_action, SelectionAction::Prepare) {
             let mut warnings = hits.warnings.clone();
