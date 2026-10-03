@@ -1,5 +1,13 @@
 # Context evaluation research and implementation
 
+## Source-count diagnostic and discovered validation ceiling
+
+The [reproducible diagnostic](../../testing-large-vaults.md#development-diagnostic-for-validation-memory) passed its 12-command smoke protocol, including seven intentional rejection cases. At 1,000 sources containing 100,000,000 UTF-8 content bytes, all five diagnostic commands passed. Public graph validation checked 3,008 controls and 5,008 unique dependency guards in 21.683 seconds, with 113,311,744 bytes native peak RSS. The separate full projection retained 201,261,637 bytes of retrieval text and reached 333,217,792 bytes peak RSS. Validation performs proposed and baseline projections; full projection performs one, so their timings are not a direct speedup comparison.
+
+The frozen safety calculation admitted the 10,000-source tier. Generation and exact fixture audit passed for 1,000,000,000 content bytes, but validation **failed** after 10.268 seconds externally observed, at 324,976,640 bytes native peak RSS: `BUDGET_EXCEEDED: review bounded capture exhausted`. The review verifier applies its 4,096-document capture limit before determining whether a review is involved. The experiment's time, memory and disk limits were not exceeded, and fixture/source hashes were unchanged. This is a product failure, not a passing scale result; the failed run and original binary are retained.
+
+These single observations use directly generated canonical files, fixed 1,000 pages and one small graph. They do not test normal ingestion, search latency, publication or recovery. The example and supervisor passed formatting/Clippy; an independent critic checked the smoke, 1k evidence and prospective 10k admission. Local raw evidence: `.artifacts/large-vault-design/metadata-runs`. The next repair must separate review applicability from review-specific proof budgets while preserving genuine review limits and malformed-receipt rejection.
+
 ## Validation and lookup preparation
 
 Graph validation now computes its complete metadata, eligibility and dependencies without constructing the additional retrieval document, link and graph display rows. Full catalog projection uses the same validation core. Source reads, failed-read dependencies, closed-input behavior and the canonical manifest digest remain covered by exact comparisons. The manifest hash streams its original byte framing. Immutable source views and catalog passes also build reusable ID/path/stem/alias indexes; 314,145 comparisons against the original resolvers check lookup semantics, including ambiguity and exact case-sensitive aliases.

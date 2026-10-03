@@ -90,6 +90,47 @@ Neighbor recall is separate from complete-answer coverage.
 
 ## Evidence and critic
 
+### Development diagnostic for validation memory
+
+[The scaling example](../examples/catalog_scaling_probe.rs) directly generates
+synthetic canonical files and measures the public graph validator in a fresh
+process. Its `audit` command checks exact fixture membership, deterministic
+bytes, manifests and source ownership. A separate `project` command checks full
+graph expectations and reports retained retrieval text and dependency duplication.
+This diagnostic bypasses managed import, publication and recovery; it does not
+qualify the acceptance workloads above.
+
+On macOS, build `//:catalog_scaling_probe` with the repository's Bazel wrapper,
+then run the [supervisor](../scripts/catalog_scaling_probe.py) from the repository
+root:
+
+```sh
+mkdir -p .artifacts/catalog-scale
+python3 scripts/catalog_scaling_probe.py \
+  --binary "$PWD/bazel-bin/catalog_scaling_probe" \
+  --account-root "$PWD/.artifacts/catalog-scale" \
+  --output "$PWD/.artifacts/catalog-scale/smoke-001" --stage smoke
+```
+
+Every output directory must be new. After smoke passes, use `--stage 1000` with
+a new output directory. For `--stage 10000`, also pass `--baseline` pointing to
+the successful 1k directory; keep all runs beneath the same account root. The
+supervisor refuses 10k unless the frozen time, memory and disk admission margins
+fit. It never runs full projection at 10k. Failed and refused runs remain on disk.
+
+Each source has exactly 100,000 UTF-8 content bytes plus a separate original
+copy. All tiers retain 1,000 pages and one fixed small graph, so this measures
+source-count growth, not graph-fanout growth. Caps are 900 seconds per child
+command, 8 GiB child-process-tree RSS, 4 GiB allocated diagnostic disk and at
+least 32 GiB free space. Polling can overshoot; native RSS also checks short-lived
+peaks. Python supervisor memory is outside the child RSS measurement. Pre/post
+hash passes warm the filesystem; Rust phase time, loading time and externally
+observed child duration are separate fields, and the latter includes polling
+delay. A validator call performs both proposed and baseline projections, so its
+time is not directly comparable to one full projection as an optimization ratio.
+
+### Acceptance evidence
+
 Freeze the binary/tree, protocol, generator/seed, manifests, expected outcomes,
 budgets, CLI arguments, cache/space state and ordered tasks before acceptance.
 Measure monotonic subprocess start-to-exit time, including setup/proof/render.

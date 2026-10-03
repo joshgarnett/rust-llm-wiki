@@ -37,6 +37,14 @@ bound those operations. Ten GB of current text also needs substantially more tha
 10 GB of disk: original/content copies, retained history, indexes, journals and
 temporary rebuild space all contribute.
 
+The whole-catalog JSON value is also a hard storage obstacle, independently of
+memory. SQLite defaults to a 1,000,000,000-byte string/BLOB limit and supports at
+most 2,147,483,645 bytes for one value; its length limit also applies to a complete
+row. A projection containing 10 GB of source text cannot be stored in that single
+value. Increasing query budgets cannot repair this representation; publication
+must use independently addressable rows.
+[SQLite implementation limits](https://www.sqlite.org/limits.html)
+
 ## Chosen direction
 
 Use independently addressable catalog records, source manifests, reverse
