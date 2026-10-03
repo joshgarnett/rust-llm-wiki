@@ -1,5 +1,15 @@
 # Context evaluation research and implementation
 
+## Bounded indexed-source milestone
+
+Commit `709ffa3` adds the opt-in [indexed-evidence workflow](../../indexed-context.md): bounded catalog reads and verification of selected captured-source bytes, with an explicit published generation and no claim of global membership verification. Existing strict behavior remains available. Independent review scored this implementation milestone **9/10**, with no remaining milestone correctness blockers. This does not award the overall quality or large-vault goal a passing score.
+
+The final focused gate passed 20 context CLI tests, 28 freshness tests, 28 semantic-retrieval tests, two catalog recovery tests, formatting and Clippy; one recovery test was ignored. Unit validation also passed after fixing cumulative SQL work accounting. Earlier failed runs remain recorded, including a real defect where explicit rebuild did not install the new access indexes. Tests now cover committed evidence present only in SQLite WAL and distinguish permitted shared-memory coordination from mutations to canonical files or the database/WAL.
+
+On a copied 299-source public development wiki (1.34 MB of current source text), candidate `10f586397d5f9b7c16012a2d4788140fd7593e64972bade089f5984d57e7310f` completed all **64 frozen questions with no operational failures, 62 released-source hits and 512 exact source-citation audits**. Median local query time was 1.247 seconds; median selected proof work was 107,397 bytes, 42 file reads and 448 entries. The earlier strict run had identical hit flags, but seven cases returned different supplemental source sets. These observations concern different freshness contracts and do not establish complete answers, exact context compatibility, a controlled speedup or 100k/10GB capacity. No provider or selector calls occurred. Local evidence: `.artifacts/eval-2026/indexed-source-replay-001`.
+
+A separate default-scope compatibility replay passed all 32 exact selector packets and 96 normalized baseline/control/host outputs, with 411 independently hashed citations. Normalization excluded only two verification timestamps and three proof-work counters. All 1,420 non-writer-lock files remained byte-identical, including databases, WAL and shared-memory files; writer-lock inode and OS exclusion checks passed. The prospective protocol permitted diagnostic lock text and narrowly defined SQLite coordination changes. There were no retries, provider calls, selector calls or new semantic grades. This replay checks the existing development workflow, not indexed-scope completeness or unseen acceptance. Local evidence: `.artifacts/context-host-selection/indexed-compat-001`.
+
 ## Compatibility after the traversal repair
 
 The repaired candidate reproduced all 32 development selector packets byte for byte and all 96 baseline/control/host result envelopes after excluding only two verification timestamps and three proof-work counters. Independent audits checked 411 citations. The previous semantic judgments can therefore be reused as compatibility evidence; this is not a new quality score or unseen acceptance result.
