@@ -11,6 +11,7 @@ impl Catalog {
     /// Rebuild a verified read view in memory, including FTS. This creates no
     /// cache files and permits local research after disposable cache deletion.
     pub fn canonical_snapshot(&self) -> Result<ReaderSnapshot> {
+        self.require_legacy_catalog()?;
         self.guard_current(None)?;
         let projection = scan::scan(&self.fs, &self.vault_id)?;
         let mut connection = rusqlite::Connection::open_in_memory().map_err(sql::sql_error)?;
@@ -37,11 +38,11 @@ impl Catalog {
         connection
             .execute_batch("BEGIN DEFERRED")
             .map_err(sql::sql_error)?;
-        let snapshot = ReadSnapshot {
-            generation: 1,
-            parser_fingerprint: projection.parser_fingerprint.clone(),
-            control_manifest: projection.control_manifest.clone(),
-        };
+        let snapshot = ReadSnapshot::canonical(
+            1,
+            projection.parser_fingerprint.clone(),
+            projection.control_manifest.clone(),
+        );
         Ok(ReaderSnapshot {
             connection,
             snapshot,
@@ -54,6 +55,7 @@ impl Catalog {
         })
     }
     pub fn index_snapshot(&self) -> Result<ReaderSnapshot> {
+        self.require_legacy_catalog()?;
         let path = self.cache_path()?;
         if !path.exists() {
             return Err(WikiError::new(
@@ -77,15 +79,15 @@ impl Catalog {
         }
         let projection: CatalogProjection = serde_json::from_str(&serialized)
             .map_err(|e| WikiError::new(ErrorCode::IndexCorrupt, e.to_string()))?;
-        let snapshot = ReadSnapshot {
-            generation: u64::try_from(generation)
+        let snapshot = ReadSnapshot::canonical(
+            u64::try_from(generation)
                 .map_err(|_| WikiError::new(ErrorCode::IndexCorrupt, "negative generation"))?,
-            parser_fingerprint: crate::domain::Blake3Hash::new(parser)?,
-            control_manifest: crate::domain::Blake3Hash::new(manifest)?,
-        };
+            crate::domain::Blake3Hash::new(parser)?,
+            crate::domain::Blake3Hash::new(manifest)?,
+        );
         if projection.vault_id != self.vault_id
             || snapshot.parser_fingerprint != projection.parser_fingerprint
-            || snapshot.control_manifest != projection.control_manifest
+            || snapshot.require_canonical_manifest()? != &projection.control_manifest
         {
             return Err(WikiError::new(
                 ErrorCode::IndexCorrupt,
@@ -101,6 +103,7 @@ impl Catalog {
         })
     }
     pub fn verified_snapshot(&self, writer: Option<&WriterPermit>) -> Result<ReaderSnapshot> {
+        self.require_legacy_catalog()?;
         if let Some(w) = writer {
             w.require_root(self.fs.root())?;
         }

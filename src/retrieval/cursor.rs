@@ -49,7 +49,7 @@ pub(crate) fn offset(
         .collect::<Result<Vec<_>>>()?;
     let value: Cursor =
         serde_json::from_slice(&bytes).map_err(|_| stale("malformed pagination cursor"))?;
-    if value.version != 1
+    if value.version != cursor_version(reader)
         || value.snapshot != *reader.snapshot()
         || value.publication.as_deref() != reader.publication_id()
         || &value.query != fingerprint
@@ -65,7 +65,7 @@ pub(crate) fn encode(
     offset: usize,
 ) -> Result<String> {
     let bytes = serde_json::to_vec(&Cursor {
-        version: 1,
+        version: cursor_version(reader),
         snapshot: reader.snapshot().clone(),
         query: fingerprint,
         offset,
@@ -73,6 +73,14 @@ pub(crate) fn encode(
     })
     .map_err(|e| WikiError::new(ErrorCode::Internal, e.to_string()))?;
     Ok(bytes.iter().map(|byte| format!("{byte:02x}")).collect())
+}
+
+fn cursor_version(reader: &dyn QueryCatalog) -> u32 {
+    if reader.snapshot().publication().is_some() {
+        2
+    } else {
+        1
+    }
 }
 fn digit(value: u8) -> Result<u8> {
     match value {

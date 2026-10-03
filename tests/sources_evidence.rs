@@ -143,11 +143,11 @@ impl PublicationBackend for Publisher {
         permit: &PublicationPermit<'_>,
         _: &ValidationInput,
     ) -> Result<ReadSnapshot> {
-        Ok(ReadSnapshot {
-            generation: 1,
-            parser_fingerprint: permit.graph().parser_fingerprint.clone(),
-            control_manifest: permit.graph().control_manifest.clone(),
-        })
+        Ok(ReadSnapshot::canonical(
+            1,
+            permit.graph().parser_fingerprint.clone(),
+            permit.graph().control_manifest.clone(),
+        ))
     }
 }
 fn apply(root: &VaultRoot, draft: ChangeDraft) {

@@ -344,7 +344,7 @@ pub(super) fn context(
         ));
     }
     meter.check()?;
-    catalog.guard_current(None)?;
+    catalog.guard_query()?;
     meter.check()?;
     let reader = catalog.query_snapshot(QueryReadLimits {
         max_elapsed_ms: meter.remaining_ms(),
@@ -567,7 +567,11 @@ pub(super) fn context(
     warnings.push(format!("source-aware context inspected {} bytes in {} blocks; query overlap guides passage selection, not answer completeness", selection.scanned_bytes, selection.scanned_blocks));
     warnings.push(format!("discovery domain: captured-source payloads only; {} candidate owners and {} selected owners; pages, graph records and other vault content were not searched; omissions outside this domain are not counted", hits.candidate_count, hits.hits.len()));
     warnings.push("eligibility and discovery refer to the published generation; selected source heads and complete original/content bytes were checked, without proving global identity uniqueness, membership, cache completeness or unselected dependency freshness".into());
-    warnings.push("pending-apply safety guards still inspect retained change history outside canonical proof byte/file counters; SQL VM and elapsed limits are cooperative and decoded-row ceilings are not a hard process-memory limit".into());
+    if reader.normalized_layout() {
+        warnings.push("SQL VM and elapsed limits are cooperative and decoded-row ceilings are not a hard process-memory limit".into());
+    } else {
+        warnings.push("pending-apply safety guards still inspect retained change history outside canonical proof byte/file counters; SQL VM and elapsed limits are cooperative and decoded-row ceilings are not a hard process-memory limit".into());
+    }
     let signals = ContextSelectionSignals::default();
     let draft = context::pack(
         &selected,
@@ -592,7 +596,7 @@ pub(super) fn context(
         fault.check(ContextCheckpoint::BeforeFinalVerification { attempt: 0 })?;
     }
     meter.check()?;
-    catalog.guard_current(None)?;
+    reader.verify_operations(catalog)?;
     meter.check()?;
     for (path, expected) in &states {
         let bytes = meter
@@ -605,13 +609,14 @@ pub(super) fn context(
         }
     }
     meter.check()?;
-    catalog.guard_current(None)?;
+    reader.verify_operations(catalog)?;
     meter.check()?;
     let usage = reader.usage();
     let verification = SnapshotVerification::IndexedEvidence {
         verified_at: crate::sources::revision::timestamp()?,
         discovery_generation: reader.snapshot().generation,
         evidence_domain: "captured_sources".into(),
+        pending_operation_at_start: reader.pending_operation_at_start(),
         global_membership_verified: false,
         catalog_rows_decoded: usage.rows,
         catalog_bytes_decoded: usage.bytes,
@@ -676,12 +681,21 @@ mod tests {
                 panic!("unused selected reader access")
             }
         }
-        let reader = |publication, normalized| Reader {
+        let reader = |publication: Option<&'static str>, normalized| Reader {
             connection: Connection::open_in_memory().unwrap(),
-            snapshot: ReadSnapshot {
-                generation: 1,
-                parser_fingerprint: Blake3Hash::digest("parser"),
-                control_manifest: Blake3Hash::digest("manifest"),
+            snapshot: match publication {
+                Some(file_id) => ReadSnapshot::published(
+                    1,
+                    Blake3Hash::digest("parser"),
+                    file_id.to_owned(),
+                    Blake3Hash::digest("publication"),
+                )
+                .unwrap(),
+                None => ReadSnapshot::canonical(
+                    1,
+                    Blake3Hash::digest("parser"),
+                    Blake3Hash::digest("manifest"),
+                ),
             },
             vault: RecordId::new("vault_wrapper").unwrap(),
             publication,
@@ -707,7 +721,11 @@ mod tests {
         );
         let new = reader(Some("00000000000000000000000000000002"), true);
         let replacement = wrap(&new as &dyn QueryCatalog);
-        assert_eq!(replacement.snapshot(), selected.snapshot());
+        assert_eq!(
+            replacement.snapshot().generation,
+            selected.snapshot().generation
+        );
+        assert_ne!(replacement.snapshot(), selected.snapshot());
         assert_eq!(
             super::super::cursor::offset(&replacement, &fingerprint, Some(&cursor), 2)
                 .unwrap_err()
@@ -798,6 +816,202 @@ mod tests {
             reasons: vec![],
         };
         (source, revision, document, bytes)
+    }
+
+    #[test]
+    fn normalized_source_proof_survives_unrelated_operations_and_rejects_selected_edit() {
+        use crate::{
+            catalog::{
+                file_types::{BuildIdentity, CatalogSelection},
+                normalized_build::{BuildLimits, NormalizedBuilder},
+                scan, selector,
+            },
+            changes::{PreparedChange, operation_authority},
+            sources::{CaptureRequest, ExtractionInput, SourceOrigin, SourceStore},
+            vault::{VaultFs, VaultRoot, WriterPermit},
+        };
+        use std::{
+            sync::{
+                Arc,
+                atomic::{AtomicUsize, Ordering},
+            },
+            time::Duration,
+        };
+        struct RevisionFault {
+            fs: VaultFs,
+            vault: RecordId,
+            calls: AtomicUsize,
+            selected_edit: Option<std::path::PathBuf>,
+        }
+        impl ContextFault for RevisionFault {
+            fn check(&self, checkpoint: ContextCheckpoint) -> Result<()> {
+                assert_eq!(
+                    checkpoint,
+                    ContextCheckpoint::BeforeFinalVerification { attempt: 0 }
+                );
+                assert_eq!(self.calls.fetch_add(1, Ordering::SeqCst), 0);
+                let writer = WriterPermit::acquire(self.fs.root(), Duration::from_secs(1))?;
+                let idle = operation_authority::load(
+                    &self.fs,
+                    &self.vault,
+                    operation_authority::Presence::Required,
+                )?
+                .unwrap();
+                let change = PreparedChange {
+                    change_id: RecordId::new("change_final_hook")?,
+                    manifest_hash: Blake3Hash::digest("final hook operation"),
+                };
+                let intended = operation_authority::Publication {
+                    file_id: idle.publication().file_id.clone(),
+                    epoch: idle.publication().epoch + 1,
+                };
+                let active =
+                    operation_authority::begin(&self.fs, &writer, &idle, change.clone(), intended)?;
+                // This operation changed no canonical bytes, so cancel is
+                // justified and unrelated revision changes do not block reads.
+                operation_authority::cancel(&self.fs, &writer, &active, &change)?;
+                if let Some(path) = &self.selected_edit {
+                    let mut bytes = std::fs::read(path).unwrap();
+                    bytes.extend_from_slice(b"\nexternal selected-content edit\n");
+                    std::fs::write(path, bytes).unwrap();
+                }
+                Ok(())
+            }
+        }
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::write(temp.path().join("WIKI.md"), "---\nwiki_schema: \"1\"\nwiki_id: vault_final_hook\nwiki_kind: vault\ntitle: Final hook fixture\n---\nFixture\n").unwrap();
+        let fs = VaultFs::new(VaultRoot::explicit(temp.path()).unwrap());
+        let vault = RecordId::new("vault_final_hook").unwrap();
+        let body = "# Source proof\n\nsourceproofneedle: Café evidence preserves captured bytes.\n";
+        let capture = SourceStore::new(fs.clone())
+            .plan_capture(CaptureRequest {
+                title: "Source proof fixture".into(),
+                origin_kind: SourceOrigin::LocalFile,
+                origin: "fixture.md".into(),
+                original: body.as_bytes().to_vec(),
+                extraction: ExtractionInput::Utf8Preserve,
+                media_type: Some("text/markdown".into()),
+            })
+            .unwrap();
+        let content_path = temp.path().join(format!(
+            "sources/{}/revisions/{}/content.md",
+            capture.source_id, capture.revision_id
+        ));
+        // Populate a disposable canonical fixture from the real capture planner.
+        // This exercises selected proof, rather than claiming changeset replay.
+        for operation in capture.draft.unwrap().operations {
+            let target = temp.path().join(operation.target.as_str());
+            std::fs::create_dir_all(target.parent().unwrap()).unwrap();
+            std::fs::write(target, operation.proposed.unwrap()).unwrap();
+        }
+        {
+            let writer = WriterPermit::acquire(fs.root(), Duration::from_secs(1)).unwrap();
+            let identity = BuildIdentity {
+                selection: CatalogSelection::new(vault.clone(), 1).unwrap(),
+                origin: None,
+                vector_cache_lost: false,
+                vector_loss_unknown: false,
+            };
+            selector::prepare(&fs, &writer, &identity.selection).unwrap();
+            let mut builder =
+                NormalizedBuilder::begin(&fs, &writer, identity, BuildLimits::default()).unwrap();
+            let input = scan::scan_input(&fs, &vault).unwrap();
+            let projection = scan::project_with_sink(&fs, &input, false, &mut builder).unwrap();
+            let completed = builder.finish(&projection).unwrap();
+            selector::publish(
+                &fs,
+                &writer,
+                &completed.identity.selection,
+                Duration::from_secs(1),
+            )
+            .unwrap();
+        }
+        let catalog = Catalog::new(fs.clone(), vault.clone());
+        let mut request = ContextRequest {
+            scope: ContextScope::IndexedEvidence,
+            ..Default::default()
+        };
+        request.documents.filters.source_ids = vec![capture.source_id];
+        let baseline = context(
+            &catalog,
+            "sourceproofneedle",
+            &request,
+            &ContextOptions::default(),
+        )
+        .unwrap();
+        assert!(!baseline.passages().is_empty());
+        // A query that starts during an unrelated active operation remains
+        // available and reports that precise initial observation.
+        {
+            let writer = WriterPermit::acquire(fs.root(), Duration::from_secs(1)).unwrap();
+            let idle = catalog.operation_state().unwrap().unwrap();
+            let change = PreparedChange {
+                change_id: RecordId::new("change_unrelated_active").unwrap(),
+                manifest_hash: Blake3Hash::digest("unrelated active"),
+            };
+            let intended = operation_authority::Publication {
+                file_id: idle.publication().file_id.clone(),
+                epoch: idle.publication().epoch + 1,
+            };
+            let active =
+                operation_authority::begin(&fs, &writer, &idle, change.clone(), intended).unwrap();
+            let result = context(
+                &catalog,
+                "sourceproofneedle",
+                &request,
+                &ContextOptions::default(),
+            )
+            .unwrap();
+            assert_eq!(result.passages(), baseline.passages());
+            let SnapshotVerification::IndexedEvidence {
+                pending_operation_at_start,
+                ..
+            } = result.verification()
+            else {
+                panic!("indexed proof expected");
+            };
+            assert_eq!(pending_operation_at_start.as_ref(), Some(&change.change_id));
+            operation_authority::cancel(&fs, &writer, &active, &change).unwrap();
+        }
+        let fault = Arc::new(RevisionFault {
+            fs: fs.clone(),
+            vault: vault.clone(),
+            calls: AtomicUsize::new(0),
+            selected_edit: None,
+        });
+        let options = ContextOptions {
+            fault: Some(fault.clone()),
+            ..Default::default()
+        };
+        let result = context(&catalog, "sourceproofneedle", &request, &options).unwrap();
+        assert_eq!(result.passages(), baseline.passages());
+        let SnapshotVerification::IndexedEvidence {
+            pending_operation_at_start,
+            ..
+        } = result.verification()
+        else {
+            panic!("indexed proof expected");
+        };
+        assert_eq!(pending_operation_at_start, &None);
+        assert_eq!(fault.calls.load(Ordering::SeqCst), 1);
+
+        let fault = Arc::new(RevisionFault {
+            fs,
+            vault,
+            calls: AtomicUsize::new(0),
+            selected_edit: Some(content_path),
+        });
+        let options = ContextOptions {
+            fault: Some(fault.clone()),
+            ..Default::default()
+        };
+        assert_eq!(
+            context(&catalog, "sourceproofneedle", &request, &options)
+                .unwrap_err()
+                .code,
+            ErrorCode::FreshnessConflict
+        );
+        assert_eq!(fault.calls.load(Ordering::SeqCst), 1);
     }
 
     #[test]

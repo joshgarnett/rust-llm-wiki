@@ -87,11 +87,7 @@ pub(crate) fn header(
         _ => Err(corrupt("catalog loss notice is not boolean")),
     };
     let result = CatalogHeader {
-        snapshot: ReadSnapshot {
-            generation: epoch as u64,
-            parser_fingerprint: hash(6)?,
-            control_manifest: hash(7)?,
-        },
+        snapshot: ReadSnapshot::canonical(epoch as u64, hash(6)?, hash(7)?),
         dependency_hash: hash(8)?,
         origin,
         vector_cache_lost: flag(12)?,

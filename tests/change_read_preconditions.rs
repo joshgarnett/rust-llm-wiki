@@ -103,11 +103,11 @@ impl PublicationBackend for Publisher {
             )
             .unwrap();
         }
-        Ok(ReadSnapshot {
-            generation: 1,
-            parser_fingerprint: permit.graph().parser_fingerprint.clone(),
-            control_manifest: permit.graph().control_manifest.clone(),
-        })
+        Ok(ReadSnapshot::canonical(
+            1,
+            permit.graph().parser_fingerprint.clone(),
+            permit.graph().control_manifest.clone(),
+        ))
     }
 }
 

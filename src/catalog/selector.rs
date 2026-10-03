@@ -372,6 +372,11 @@ fn marker(fs: &VaultFs, vault: &RecordId) -> Result<bool> {
     }
     Ok(true)
 }
+/// Any retained activation evidence requires operational authority, including
+/// an interrupted selector replacement. Never interpret corruption as legacy.
+pub(crate) fn has_activation_evidence(fs: &VaultFs) -> Result<bool> {
+    Ok(read(fs, ACTIVE)?.is_some() || read(fs, CURRENT)?.is_some())
+}
 fn selection(fs: &VaultFs, vault: &RecordId) -> Result<Option<CatalogSelection>> {
     let active = marker(fs, vault)?;
     let Some(bytes) = read(fs, CURRENT)? else {
@@ -508,7 +513,7 @@ fn rollback_header(checked: &Checked) -> Result<()> {
 }
 
 /// Verify publication/retirement ownership, never create SQL or recover WAL.
-fn verify_sealed(fs: &VaultFs, selection: &CatalogSelection) -> Result<Checked> {
+fn verify_sealed(fs: &VaultFs, selection: &CatalogSelection) -> Result<(Checked, u64)> {
     no_sidecars(fs, selection)?;
     let checked = Checked::open(&path(fs, database_name(selection))?, false, false)?;
     rollback_header(&checked)?;
@@ -558,9 +563,58 @@ fn verify_sealed(fs: &VaultFs, selection: &CatalogSelection) -> Result<Checked> 
             "catalog is unsealed or selected identity does not match header",
         ));
     }
+    let epoch: i64 = connection
+        .query_row(
+            "SELECT epoch FROM catalog_meta WHERE singleton=1",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(super::sql::sql_error)?;
     checked.verify()?;
     drop(connection);
-    Ok(checked)
+    Ok((checked, epoch as u64))
+}
+
+/// A durable complete candidate precedes the publication floor, which precedes
+/// selection. A failed selector switch may resume only this exact candidate.
+fn acknowledge_candidate(
+    fs: &VaultFs,
+    writer: &WriterPermit,
+    candidate: &CatalogSelection,
+    epoch: u64,
+) -> Result<()> {
+    use crate::changes::operation_authority::{self as operations, Presence, Publication};
+    let presence = if has_activation_evidence(fs)? {
+        Presence::Required
+    } else {
+        Presence::LegacyMayBeAbsent
+    };
+    let publication = Publication {
+        file_id: candidate.file_id.clone(),
+        epoch,
+    };
+    match operations::load(fs, &candidate.vault_id, presence)? {
+        None => {
+            // One explicit activation reconciliation, never a per-query scan.
+            super::Catalog::new(fs.clone(), candidate.vault_id.clone()).guard_current(None)?;
+            operations::activate(fs, writer, &candidate.vault_id, publication, presence)?;
+        }
+        Some(authority) if authority.publication() == &publication => {
+            operations::activate(fs, writer, &candidate.vault_id, publication, presence)?;
+        }
+        Some(authority) => {
+            let current = selection(fs, &candidate.vault_id)?;
+            if !current.is_some_and(|selected| selected.file_id == authority.publication().file_id)
+            {
+                return Err(WikiError::new(
+                    ErrorCode::RecoveryRequired,
+                    "unfinished catalog publication must resume its acknowledged candidate",
+                ));
+            }
+            operations::publish_rebuild(fs, writer, &authority, publication)?;
+        }
+    }
+    Ok(())
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum PublishPoint {
@@ -598,7 +652,7 @@ pub(crate) fn publish_with_faults(
         true,
         timeout.saturating_sub(started.elapsed()),
     )?;
-    let db = verify_sealed(fs, selected)?;
+    let (db, epoch) = verify_sealed(fs, selected)?;
     // Re-sync a complete file observed after an interrupted build/seal.
     db.file
         .sync_all()
@@ -609,6 +663,7 @@ pub(crate) fn publish_with_faults(
             .map_err(|e| io("sync sealed catalog directory", e))?,
     )?;
     let active = marker(fs, &selected.vault_id)?; // foreign/corrupt marker never implicitly repaired
+    acknowledge_candidate(fs, writer, selected, epoch)?;
     fault(PublishPoint::BeforeMarker)?;
     if !active {
         let bytes = serde_json::to_vec(&Activation {
@@ -661,6 +716,20 @@ pub(crate) fn retire(
     {
         return Ok(false);
     }
+    if crate::changes::operation_authority::load(
+        fs,
+        vault,
+        if has_activation_evidence(fs)? {
+            crate::changes::operation_authority::Presence::Required
+        } else {
+            crate::changes::operation_authority::Presence::LegacyMayBeAbsent
+        },
+    )?
+    .is_some_and(|authority| authority.publication().file_id == candidate.file_id)
+    {
+        // An interrupted switch still needs its exact acknowledged candidate.
+        return Ok(false);
+    }
     let Some(lease) = lock(
         Checked::open(&path(fs, lease_name(candidate))?, false, true)?,
         true,
@@ -669,7 +738,7 @@ pub(crate) fn retire(
     else {
         return Ok(false);
     };
-    let db = verify_sealed(fs, candidate)?;
+    let (db, _) = verify_sealed(fs, candidate)?;
     gate.checked.verify()?;
     lease.checked.verify()?;
     db.verify()?;
@@ -693,13 +762,17 @@ mod tests {
     use crate::vault::{DurableIo, NativeIo, VaultRoot};
     use std::sync::{
         Arc,
-        atomic::{AtomicU8, Ordering},
+        atomic::{AtomicU8, AtomicU64, Ordering},
         mpsc,
     };
 
     fn fixture() -> (tempfile::TempDir, VaultFs, WriterPermit, RecordId) {
         let temp = tempfile::tempdir().unwrap();
-        let fs = VaultFs::new(VaultRoot::for_initialization(temp.path()).unwrap());
+        fs::write(
+            temp.path().join("WIKI.md"),
+            "---\nwiki_schema: \"1\"\nwiki_id: vault_selector_test\nwiki_kind: vault\ntitle: Disposable selector fixture\n---\nFixture\n",
+        ).unwrap();
+        let fs = VaultFs::new(VaultRoot::explicit(temp.path()).unwrap());
         let writer = WriterPermit::acquire(fs.root(), Duration::ZERO).unwrap();
         (
             temp,
@@ -714,7 +787,13 @@ mod tests {
         vault: &RecordId,
         text: &str,
     ) -> CatalogSelection {
-        let selected = CatalogSelection::new(vault.clone(), 1).unwrap();
+        // Several tests prepare both candidates before publishing either one.
+        // Give every candidate a distinct increasing epoch independently of the
+        // currently selected pointer, including those unselected preparations.
+        static NEXT_EPOCH: AtomicU64 = AtomicU64::new(1);
+        let selected =
+            CatalogSelection::new(vault.clone(), NEXT_EPOCH.fetch_add(1, Ordering::Relaxed))
+                .unwrap();
         let name = prepare(fs, writer, &selected).unwrap();
         let connection = Connection::open(name).unwrap();
         connection
@@ -789,6 +868,9 @@ mod tests {
             b"stale legacy",
         )
         .unwrap();
+        // An interrupted activation may retain only the marker, but its
+        // acknowledged authority must already have been made durable.
+        acknowledge_candidate(&fs, &writer, &selected, selected.creation_epoch).unwrap();
         fs::write(
             path(&fs, ACTIVE).unwrap(),
             serde_json::to_vec(&Activation {
@@ -1115,6 +1197,114 @@ mod tests {
             assert_eq!(text(&get(&fs, &vault).unwrap().unwrap()), "safe");
         }
     }
+    #[test]
+    fn interrupted_rebuild_resumes_exact_acknowledged_candidate() {
+        use crate::changes::operation_authority::{self as operations, Presence};
+        let (_temp, fs, writer, vault) = fixture();
+        let first = build(&fs, &writer, &vault, "first");
+        put(&fs, &writer, &first);
+        let second = build(&fs, &writer, &vault, "second");
+        assert!(
+            publish_with_faults(&fs, &writer, &second, Duration::ZERO, &mut |point| {
+                if point == PublishPoint::BeforeMarker {
+                    Err(corrupt("interrupted switch"))
+                } else {
+                    Ok(())
+                }
+            })
+            .is_err()
+        );
+        let pending = operations::load(&fs, &vault, Presence::Required)
+            .unwrap()
+            .unwrap();
+        assert_eq!(pending.publication().file_id, second.file_id);
+        assert_eq!(
+            selection(&fs, &vault).unwrap().unwrap().file_id,
+            first.file_id
+        );
+        assert!(!retire(&fs, &writer, &vault, &second, Duration::ZERO).unwrap());
+        let third = build(&fs, &writer, &vault, "unrelated replacement");
+        assert_eq!(
+            publish(&fs, &writer, &third, Duration::ZERO)
+                .unwrap_err()
+                .code,
+            ErrorCode::RecoveryRequired
+        );
+        put(&fs, &writer, &second);
+        assert_eq!(text(&get(&fs, &vault).unwrap().unwrap()), "second");
+        let resumed = operations::load(&fs, &vault, Presence::Required)
+            .unwrap()
+            .unwrap();
+        assert_eq!(resumed.revision(), pending.revision());
+        assert_eq!(resumed.publication(), pending.publication());
+    }
+    #[test]
+    fn activation_reconciles_unresolved_legacy_intent_before_establishing_idle() {
+        use crate::changes::{ChangeDraft, ChangeEngine, ChangeEvent, ExpectedWrite, journal};
+        let (_temp, fs, writer, vault) = fixture();
+        let engine = ChangeEngine::new(fs.clone()).unwrap();
+        let staged = engine
+            .prepare(
+                &writer,
+                ChangeDraft {
+                    title: "Unresolved legacy update".into(),
+                    origin: None,
+                    inverse_of: None,
+                    allocated_ids: Default::default(),
+                    read_preconditions: vec![],
+                    operations: vec![ExpectedWrite {
+                        target: VaultRelativePath::new("draft.md").unwrap(),
+                        expected: ExpectedState::Absent,
+                        proposed: Some(b"proposed".to_vec()),
+                        apply_after: vec![],
+                    }],
+                },
+            )
+            .unwrap();
+        journal::append_event(
+            &fs,
+            &writer,
+            &staged.manifest,
+            &staged.prepared.manifest_hash,
+            ChangeEvent::Applying,
+        )
+        .unwrap();
+        let candidate = build(&fs, &writer, &vault, "candidate");
+        assert_eq!(
+            publish(&fs, &writer, &candidate, Duration::ZERO)
+                .unwrap_err()
+                .code,
+            ErrorCode::RecoveryRequired
+        );
+        assert!(
+            !fs.root()
+                .path()
+                .join(".wiki/state/operations.json")
+                .exists()
+        );
+        assert!(!has_activation_evidence(&fs).unwrap());
+    }
+    #[test]
+    fn normalized_activation_fences_legacy_readers_sync_and_rebuild() {
+        let (_temp, fs, writer, vault) = fixture();
+        let catalog = super::super::Catalog::new(fs.clone(), vault.clone());
+        catalog.sync(&writer).unwrap();
+        drop(catalog.index_snapshot().unwrap());
+        let candidate = build(&fs, &writer, &vault, "normalized");
+        put(&fs, &writer, &candidate);
+        let before = snapshot(fs.root().path());
+        for error in [
+            catalog.index_snapshot().err().unwrap(),
+            catalog.verified_snapshot(Some(&writer)).err().unwrap(),
+            catalog.canonical_snapshot().err().unwrap(),
+            catalog.check_available().unwrap_err(),
+            catalog.sync(&writer).unwrap_err(),
+            catalog.rebuild(&writer).unwrap_err(),
+        ] {
+            assert_eq!(error.code, ErrorCode::CapabilityUnavailable);
+        }
+        assert_eq!(before, snapshot(fs.root().path()));
+    }
     struct RenameFault {
         point: u8,
         after: AtomicU8,
@@ -1122,6 +1312,12 @@ mod tests {
     impl DurableIo for RenameFault {
         fn create_stage(&self, p: &Path) -> std::io::Result<File> {
             NativeIo.create_stage(p)
+        }
+        fn create_private_stage(&self, p: &Path) -> std::io::Result<File> {
+            NativeIo.create_private_stage(p)
+        }
+        fn create_private_directory(&self, p: &Path) -> std::io::Result<()> {
+            NativeIo.create_private_directory(p)
         }
         fn open_append(&self, p: &Path) -> std::io::Result<File> {
             NativeIo.open_append(p)
@@ -1138,8 +1334,10 @@ mod tests {
         fn replace(&self, s: &Path, t: &Path) -> std::io::Result<()> {
             let kind = if t.ends_with("catalog-v2-active.json") {
                 1
-            } else {
+            } else if t.ends_with("catalog-current.json") {
                 2
+            } else {
+                return NativeIo.replace(s, t);
             };
             if self.point == kind * 2 - 1 {
                 return Err(std::io::Error::other("injected before rename"));
@@ -1180,11 +1378,19 @@ mod tests {
                     after: AtomicU8::new(0),
                 }),
             );
-            assert!(publish(&faulty, &writer, &selected, Duration::ZERO).is_err());
+            let error = publish(&faulty, &writer, &selected, Duration::ZERO).unwrap_err();
+            assert!(
+                error.message.contains("injected"),
+                "fault point {point} did not reach injected failure: {error:?}"
+            );
             let result = get(&fs, &vault);
             match point {
                 1 => assert!(result.unwrap().is_none()),
-                2 | 3 => assert!(result.is_err()),
+                2 | 3 => assert!(
+                    result.is_err(),
+                    "fault point {point}: expected retained activation marker; present={}",
+                    path(&fs, ACTIVE).unwrap().exists()
+                ),
                 4 => assert_eq!(text(&result.unwrap().unwrap()), "safe"),
                 _ => unreachable!(),
             }

@@ -69,6 +69,8 @@ pub enum SnapshotVerification {
         global_membership_verified: bool,
         catalog_rows_decoded: usize,
         catalog_bytes_decoded: usize,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pending_operation_at_start: Option<RecordId>,
     },
 }
 

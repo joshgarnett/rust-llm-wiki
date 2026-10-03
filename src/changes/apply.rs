@@ -325,7 +325,7 @@ impl ChangeEngine {
         };
         let snapshot = publisher.publish(&self.fs, &authority, &final_input)?;
         if snapshot.parser_fingerprint != graph.parser_fingerprint
-            || snapshot.control_manifest != graph.control_manifest
+            || snapshot.require_canonical_manifest()? != &graph.control_manifest
         {
             return Err(recovery_error(
                 "publisher returned a snapshot outside the verified graph",

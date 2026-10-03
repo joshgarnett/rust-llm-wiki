@@ -403,12 +403,243 @@ pub enum CitationRef {
     Source(SourceSpanRef),
     Assertion(EvidenceRef),
 }
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+/// Identity of a read view. Canonical manifests and published epochs provide
+/// different guarantees and must never be compared as interchangeable hashes.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ReadSnapshot {
     pub generation: u64,
     pub parser_fingerprint: Blake3Hash,
-    pub control_manifest: Blake3Hash,
+    #[serde(flatten)]
+    pub binding: SnapshotBinding,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(untagged)]
+pub enum SnapshotBinding {
+    CanonicalManifest { control_manifest: Blake3Hash },
+    PublishedEpoch { publication: PublishedEpochBinding },
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PublishedEpochBinding {
+    pub version: u32,
+    pub file_id: String,
+    pub publication_hash: Blake3Hash,
+}
+impl PublishedEpochBinding {
+    fn validate(&self) -> Result<()> {
+        if self.version != 1
+            || self.file_id.len() != 32
+            || !self
+                .file_id
+                .bytes()
+                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+        {
+            return Err(WikiError::invalid("invalid published snapshot binding"));
+        }
+        Ok(())
+    }
+}
+impl ReadSnapshot {
+    /// Preserve the original serialized snapshot shape for retained receipts.
+    pub fn canonical(
+        generation: u64,
+        parser_fingerprint: Blake3Hash,
+        control_manifest: Blake3Hash,
+    ) -> Self {
+        Self {
+            generation,
+            parser_fingerprint,
+            binding: SnapshotBinding::CanonicalManifest { control_manifest },
+        }
+    }
+    pub fn published(
+        generation: u64,
+        parser_fingerprint: Blake3Hash,
+        file_id: String,
+        publication_hash: Blake3Hash,
+    ) -> Result<Self> {
+        let publication = PublishedEpochBinding {
+            version: 1,
+            file_id,
+            publication_hash,
+        };
+        publication.validate()?;
+        if generation == 0 || generation > i64::MAX as u64 {
+            return Err(WikiError::invalid("invalid published snapshot epoch"));
+        }
+        Ok(Self {
+            generation,
+            parser_fingerprint,
+            binding: SnapshotBinding::PublishedEpoch { publication },
+        })
+    }
+    pub fn canonical_manifest(&self) -> Option<&Blake3Hash> {
+        match &self.binding {
+            SnapshotBinding::CanonicalManifest { control_manifest } => Some(control_manifest),
+            SnapshotBinding::PublishedEpoch { .. } => None,
+        }
+    }
+    pub fn require_canonical_manifest(&self) -> Result<&Blake3Hash> {
+        self.canonical_manifest().ok_or_else(|| WikiError::new(
+            ErrorCode::OfflineUnavailable,
+            "this operation requires a canonical manifest; a published epoch is not a full-vault audit",
+        ))
+    }
+    pub fn publication(&self) -> Option<&PublishedEpochBinding> {
+        match &self.binding {
+            SnapshotBinding::CanonicalManifest { .. } => None,
+            SnapshotBinding::PublishedEpoch { publication } => Some(publication),
+        }
+    }
+}
+fn present_snapshot_binding<'de, D, T>(deserializer: D) -> std::result::Result<Option<T>, D::Error>
+where
+    D: Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    T::deserialize(deserializer).map(Some)
+}
+
+impl<'de> Deserialize<'de> for ReadSnapshot {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> std::result::Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Wire {
+            generation: u64,
+            parser_fingerprint: Blake3Hash,
+            #[serde(default, deserialize_with = "present_snapshot_binding")]
+            control_manifest: Option<Blake3Hash>,
+            #[serde(default, deserialize_with = "present_snapshot_binding")]
+            publication: Option<PublishedEpochBinding>,
+        }
+        let wire = Wire::deserialize(deserializer)?;
+        match (wire.control_manifest, wire.publication) {
+            (Some(manifest), None) => Ok(Self::canonical(
+                wire.generation,
+                wire.parser_fingerprint,
+                manifest,
+            )),
+            (None, Some(publication)) => {
+                publication.validate().map_err(serde::de::Error::custom)?;
+                Self::published(
+                    wire.generation,
+                    wire.parser_fingerprint,
+                    publication.file_id,
+                    publication.publication_hash,
+                )
+                .map_err(serde::de::Error::custom)
+            }
+            _ => Err(serde::de::Error::custom(
+                "snapshot must have exactly one canonical or published binding",
+            )),
+        }
+    }
+}
+
+#[cfg(test)]
+mod snapshot_binding_tests {
+    use super::*;
+    fn schemas_accept(value: &Value) -> bool {
+        [
+            include_str!("../../schemas/run-v1.json"),
+            include_str!("../../schemas/run-event-v1.json"),
+        ]
+        .into_iter()
+        .all(|raw| {
+            let schema: Value = serde_json::from_str(raw).unwrap();
+            let focused = serde_json::json!({
+                "$ref": "#/$defs/ReadSnapshot", "$defs": schema["$defs"]
+            });
+            jsonschema::validator_for(&focused).unwrap().is_valid(value)
+        })
+    }
+    #[test]
+    fn legacy_receipt_snapshot_round_trips_without_wire_change() {
+        let parser = Blake3Hash::digest("parser");
+        let manifest = Blake3Hash::digest("manifest");
+        let old = format!(
+            "{{\"generation\":7,\"parser_fingerprint\":\"{parser}\",\"control_manifest\":\"{manifest}\"}}"
+        );
+        let snapshot: ReadSnapshot = serde_json::from_str(&old).unwrap();
+        assert_eq!(snapshot.require_canonical_manifest().unwrap(), &manifest);
+        assert!(snapshot.publication().is_none());
+        assert_eq!(serde_json::to_string(&snapshot).unwrap(), old);
+        assert!(schemas_accept(&serde_json::to_value(snapshot).unwrap()));
+    }
+    #[test]
+    fn published_binding_never_supplies_canonical_manifest() {
+        let snapshot = ReadSnapshot::published(
+            7,
+            Blake3Hash::digest("parser"),
+            "1234567890abcdef1234567890abcdef".into(),
+            Blake3Hash::digest("publication"),
+        )
+        .unwrap();
+        assert!(snapshot.canonical_manifest().is_none());
+        assert_eq!(
+            snapshot.require_canonical_manifest().unwrap_err().code,
+            ErrorCode::OfflineUnavailable
+        );
+        let encoded = serde_json::to_vec(&snapshot).unwrap();
+        assert_eq!(
+            serde_json::from_slice::<ReadSnapshot>(&encoded).unwrap(),
+            snapshot
+        );
+        assert!(schemas_accept(&serde_json::to_value(snapshot).unwrap()));
+        assert!(
+            !String::from_utf8(encoded)
+                .unwrap()
+                .contains("control_manifest")
+        );
+    }
+    #[test]
+    fn malformed_or_ambiguous_snapshot_bindings_are_rejected() {
+        let snapshot = ReadSnapshot::published(
+            7,
+            Blake3Hash::digest("parser"),
+            "1234567890abcdef1234567890abcdef".into(),
+            Blake3Hash::digest("publication"),
+        )
+        .unwrap();
+        let valid = serde_json::to_value(snapshot).unwrap();
+        let mut variants = Vec::new();
+        let mut value = valid.clone();
+        value["control_manifest"] = Value::Null;
+        variants.push(value);
+        let mut value = valid.clone();
+        value["publication"] = Value::Null;
+        variants.push(value);
+        let mut value = valid.clone();
+        value["control_manifest"] = serde_json::json!(Blake3Hash::digest("mixed"));
+        value["generation"] = 0.into();
+        variants.push(value);
+
+        let mut value = valid.clone();
+        value["control_manifest"] = serde_json::json!(Blake3Hash::digest("false canonical"));
+        variants.push(value);
+        let mut value = valid.clone();
+        value.as_object_mut().unwrap().remove("publication");
+        variants.push(value);
+        let mut value = valid.clone();
+        value["publication"]["version"] = 2.into();
+        variants.push(value);
+        let mut value = valid.clone();
+        value["publication"]["file_id"] = "../foreign".into();
+        variants.push(value);
+        let mut value = valid.clone();
+        value["publication"]["unexpected"] = true.into();
+        variants.push(value);
+        let mut value = valid.clone();
+        value["generation"] = 0.into();
+        variants.push(value);
+        let mut value = valid;
+        value["generation"] = serde_json::json!(u64::MAX);
+        variants.push(value);
+        for value in variants {
+            assert!(!schemas_accept(&value));
+            assert!(serde_json::from_value::<ReadSnapshot>(value).is_err());
+        }
+    }
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

@@ -618,11 +618,11 @@ impl<'a> NormalizedBuilder<'a> {
         self.stats.elapsed_ms = self.started.elapsed().as_millis().min(u64::MAX as u128) as u64;
         Ok(CompletedCatalog {
             identity: self.identity.clone(),
-            snapshot: ReadSnapshot {
-                generation: self.identity.selection.creation_epoch,
-                parser_fingerprint: projection.parser_fingerprint.clone(),
-                control_manifest: projection.control_manifest.clone(),
-            },
+            snapshot: ReadSnapshot::canonical(
+                self.identity.selection.creation_epoch,
+                projection.parser_fingerprint.clone(),
+                projection.control_manifest.clone(),
+            ),
             dependency_hash,
             stats: self.stats.clone(),
             path: self.path.clone(),

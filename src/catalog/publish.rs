@@ -8,6 +8,41 @@ use crate::{
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior};
 
 impl Catalog {
+    pub(crate) fn operation_state(
+        &self,
+    ) -> Result<Option<crate::changes::operation_authority::Authority>> {
+        use crate::changes::operation_authority::{self, Presence};
+        let presence = if super::selector::has_activation_evidence(&self.fs)? {
+            Presence::Required
+        } else {
+            Presence::LegacyMayBeAbsent
+        };
+        operation_authority::load(&self.fs, &self.vault_id, presence)
+    }
+    /// Until each legacy path is migrated, never read or publish the predecessor
+    /// database behind an activated normalized catalog.
+    pub(crate) fn require_legacy_catalog(&self) -> Result<()> {
+        if self.operation_state()?.is_some() {
+            return Err(WikiError::new(
+                ErrorCode::CapabilityUnavailable,
+                "this command is not yet available with the normalized catalog",
+            ));
+        }
+        Ok(())
+    }
+    pub(crate) fn guard_query(&self) -> Result<()> {
+        let engine = ChangeEngine::new(self.fs.clone())?;
+        if engine.vault_id() != &self.vault_id {
+            return Err(WikiError::invalid("catalog vault identity changed"));
+        }
+        if self.operation_state()?.is_some() {
+            // Selected evidence is authenticated independently of unrelated
+            // updates. The reader enforces the floor observed at acquisition.
+            Ok(())
+        } else {
+            self.guard_current(None)
+        }
+    }
     pub fn new(fs: VaultFs, vault_id: RecordId) -> Self {
         Self {
             fs,
@@ -34,6 +69,7 @@ impl Catalog {
             .resolve(&VaultRelativePath::new(".wiki/cache/index.sqlite")?)
     }
     pub fn check_available(&self) -> Result<()> {
+        self.require_legacy_catalog()?;
         if self.options.busy_timeout_ms > 30_000 {
             return Err(WikiError::new(
                 ErrorCode::ConfigInvalid,
@@ -52,6 +88,15 @@ impl Catalog {
         let engine = ChangeEngine::new(self.fs.clone())?;
         if engine.vault_id() != &self.vault_id {
             return Err(WikiError::invalid("catalog vault identity changed"));
+        }
+        if let Some(authority) = self.operation_state()? {
+            if exempt.is_some() {
+                return Err(WikiError::new(
+                    ErrorCode::CapabilityUnavailable,
+                    "legacy publication cannot update an activated normalized catalog",
+                ));
+            }
+            return authority.require_publication(authority.publication());
         }
         for id in engine.change_ids()? {
             let i = engine.inspect_history(&id)?;
@@ -92,6 +137,7 @@ impl Catalog {
     }
     fn index(&self, writer: &WriterPermit, rebuild: bool) -> Result<SyncReport> {
         writer.require_root(self.fs.root())?;
+        self.require_legacy_catalog()?;
         self.guard_current(None)?;
         sql::capability()?;
         if !rebuild {
@@ -163,14 +209,15 @@ impl Catalog {
             .map_err(sql::sql_error)?;
         result?;
         self.checkpoint(PublicationCheckpoint::AfterCommit)?;
-        Ok(ReadSnapshot {
-            generation: 1,
-            parser_fingerprint: p.parser_fingerprint.clone(),
-            control_manifest: p.control_manifest.clone(),
-        })
+        Ok(ReadSnapshot::canonical(
+            1,
+            p.parser_fingerprint.clone(),
+            p.control_manifest.clone(),
+        ))
     }
     fn writer_connection(&self, writer: &WriterPermit) -> Result<Connection> {
         writer.require_root(self.fs.root())?;
+        self.require_legacy_catalog()?;
         self.fs
             .ensure_directory(&VaultRelativePath::new(".wiki/cache")?, writer)?;
         self.fs
@@ -203,10 +250,12 @@ impl Catalog {
             return Err(WikiError::invalid("projection belongs to another vault"));
         }
         sql::validate(c)?;
-        let snapshot_for = |generation: u64| ReadSnapshot {
-            generation,
-            parser_fingerprint: p.parser_fingerprint.clone(),
-            control_manifest: p.control_manifest.clone(),
+        let snapshot_for = |generation: u64| {
+            ReadSnapshot::canonical(
+                generation,
+                p.parser_fingerprint.clone(),
+                p.control_manifest.clone(),
+            )
         };
         let existing:Option<(i64,String)>=c.query_row("SELECT g.gen,g.projection_json FROM generations g JOIN index_meta m ON g.gen=m.published_gen WHERE g.state='complete'",[],|r|Ok((r.get(0)?,r.get(1)?))).optional().map_err(sql::sql_error)?;
         if let Some((generation, serialized)) = existing {

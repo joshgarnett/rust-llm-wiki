@@ -8,6 +8,7 @@ use super::{
     query_types::{QueryCatalog, QueryReadLimits, QueryReadUsage},
     scan, selector, sql,
 };
+use crate::changes::operation_authority::{Authority, Publication};
 use crate::domain::{
     Blake3Hash, ErrorCode, ReadSnapshot, RecordId, Result, VaultRelativePath, WikiError,
 };
@@ -42,6 +43,7 @@ pub(crate) struct QuerySnapshot {
     verification: SnapshotVerification,
     usage: Cell<QueryReadUsage>,
     limits: QueryReadLimits,
+    operation_authority: Option<Authority>,
 }
 
 impl Catalog {
@@ -54,6 +56,7 @@ impl Catalog {
                 "catalog busy timeout exceeds 30 seconds",
             ));
         }
+        let operation_authority = self.operation_state()?;
         let timeout = self.options.busy_timeout_ms.min(limits.max_elapsed_ms);
         let mut selected_header = None;
         if let Some(selected) = selector::acquire(
@@ -84,14 +87,38 @@ impl Catalog {
                 Ok(connection)
             },
         )? {
+            let snapshot = selected_header.expect("successful selection reads its header");
+            let authority = operation_authority.as_ref().ok_or_else(|| {
+                WikiError::new(
+                    ErrorCode::RecoveryRequired,
+                    "selected normalized catalog has no captured operation authority",
+                )
+            })?;
+            authority.require_read_publication(&Publication {
+                file_id: selected.selection().file_id.clone(),
+                epoch: snapshot.generation,
+            })?;
+            self.operation_state()?.ok_or_else(|| {
+                WikiError::new(
+                    ErrorCode::RecoveryRequired,
+                    "selected operation authority disappeared",
+                )
+            })?;
             return Ok(QuerySnapshot {
-                snapshot: selected_header.expect("successful selection reads its header"),
+                snapshot,
                 connection: QueryConnection::Normalized(selected),
                 vault_id: self.vault_id.clone(),
                 verification: SnapshotVerification::IndexSnapshot,
                 usage: Cell::new(QueryReadUsage::default()),
                 limits,
+                operation_authority,
             });
+        }
+        if operation_authority.is_some() {
+            return Err(WikiError::new(
+                ErrorCode::RecoveryRequired,
+                "operation authority exists without a selected normalized catalog",
+            ));
         }
         let path = self.cache_path()?;
         if !path.exists() {
@@ -144,11 +171,7 @@ impl Catalog {
                 "catalog parser fingerprint changed; run index sync or rebuild",
             ));
         }
-        let snapshot = ReadSnapshot {
-            generation: generation as u64,
-            parser_fingerprint: parser,
-            control_manifest: manifest,
-        };
+        let snapshot = ReadSnapshot::canonical(generation as u64, parser, manifest);
         drop(rows);
         drop(statement);
         Ok(QuerySnapshot {
@@ -160,6 +183,7 @@ impl Catalog {
             verification: SnapshotVerification::IndexSnapshot,
             usage: Cell::new(QueryReadUsage::default()),
             limits,
+            operation_authority: None,
         })
     }
 }
@@ -223,6 +247,51 @@ fn header_hash(row: &Row<'_>, column: usize) -> Result<Blake3Hash> {
 }
 
 impl QuerySnapshot {
+    pub(crate) fn verify_operations(&self, catalog: &Catalog) -> Result<()> {
+        if let Some(captured) = &self.operation_authority {
+            catalog.operation_state()?.ok_or_else(|| {
+                WikiError::new(
+                    ErrorCode::RecoveryRequired,
+                    "selected operation authority disappeared",
+                )
+            })?;
+            let QueryConnection::Normalized(selected) = &self.connection else {
+                return Err(corrupt(
+                    "operation authority requires a normalized selected catalog",
+                ));
+            };
+            // The floor observed at query start remains the read contract.
+            // New operations may advance authority while this SQL transaction
+            // stays coherent; selected canonical dependencies are checked later.
+            captured.require_read_publication(&Publication {
+                file_id: selected.selection().file_id.clone(),
+                epoch: self.snapshot.generation,
+            })?;
+            return Ok(());
+        }
+        if self.normalized_layout() {
+            return Err(WikiError::new(
+                ErrorCode::RecoveryRequired,
+                "normalized selected catalog lacks captured operation authority",
+            ));
+        }
+        catalog.guard_current(None)?;
+        if catalog.operation_state()?.is_some() {
+            return Err(WikiError::new(
+                ErrorCode::RecoveryRequired,
+                "normalized authority activated while a legacy reader was held",
+            ));
+        }
+        Ok(())
+    }
+
+    pub(crate) fn pending_operation_at_start(&self) -> Option<RecordId> {
+        self.operation_authority
+            .as_ref()
+            .and_then(Authority::active)
+            .map(|active| active.change.change_id.clone())
+    }
+
     pub(crate) fn usage(&self) -> QueryReadUsage {
         self.usage.get()
     }
@@ -838,16 +907,183 @@ mod tests {
         }
     }
 
+    fn operation_change() -> crate::changes::PreparedChange {
+        crate::changes::PreparedChange {
+            change_id: id("change_query_authority"),
+            manifest_hash: Blake3Hash::digest("query operation"),
+        }
+    }
+
     #[test]
-    fn selected_v2_old_reader_holds_lease_and_physical_identity_survives_same_epoch() {
+    fn selected_v2_does_not_enumerate_unrelated_history_after_activation() {
+        let (temp, _root, catalog) = unsynced();
+        publish_normalized(&catalog, 1);
+        let history = temp.path().join("changes");
+        for n in 0..512 {
+            let directory = history.join(format!("invalid-history-{n}"));
+            fs::create_dir_all(&directory).unwrap();
+            fs::write(directory.join("manifest.json"), b"invalid JSON").unwrap();
+            fs::write(directory.join("journal.bin"), b"invalid journal").unwrap();
+        }
+        #[cfg(unix)]
+        let unreadable = {
+            use std::os::unix::fs::PermissionsExt;
+            let path = history.join("invalid-history-0");
+            let permissions = fs::metadata(&path).unwrap().permissions();
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o000)).unwrap();
+            (path, permissions)
+        };
+        let reader = defaults(&catalog);
+        reader.verify_operations(&catalog).unwrap();
+        assert_eq!(
+            reader.document(&path("page.md")).unwrap().unwrap().title,
+            "Old selected title"
+        );
+        #[cfg(unix)]
+        fs::set_permissions(unreadable.0, unreadable.1).unwrap();
+    }
+
+    #[test]
+    fn selected_v2_missing_authority_and_authority_without_selector_refuse() {
+        let (temp, _root, catalog) = unsynced();
+        publish_normalized(&catalog, 1);
+        let held = defaults(&catalog);
+        fs::remove_file(temp.path().join(".wiki/state/operations.json")).unwrap();
+        assert_eq!(
+            catalog
+                .query_snapshot(QueryReadLimits::default())
+                .err()
+                .unwrap()
+                .code,
+            ErrorCode::RecoveryRequired
+        );
+        assert_eq!(
+            held.verify_operations(&catalog).unwrap_err().code,
+            ErrorCode::RecoveryRequired
+        );
+
+        let (temp, _root, catalog) = unsynced();
+        publish_normalized(&catalog, 1);
+        for name in [
+            "catalog-current.json",
+            "catalog-v2-active.json",
+            "catalog-acquisition.lock",
+        ] {
+            fs::remove_file(temp.path().join(".wiki/cache").join(name)).unwrap();
+        }
+        assert_eq!(
+            catalog
+                .query_snapshot(QueryReadLimits::default())
+                .err()
+                .unwrap()
+                .code,
+            ErrorCode::RecoveryRequired
+        );
+    }
+
+    #[test]
+    fn selected_v2_active_and_cancelled_operations_preserve_coherent_held_reader() {
+        use crate::changes::operation_authority;
+        let (_temp, root, catalog) = unsynced();
+        publish_normalized(&catalog, 1);
+        let held = defaults(&catalog);
+        let idle = catalog.operation_state().unwrap().unwrap();
+        let writer = WriterPermit::acquire(&root, Duration::from_secs(1)).unwrap();
+        let intended = Publication {
+            file_id: idle.publication().file_id.clone(),
+            epoch: 2,
+        };
+        let active =
+            operation_authority::begin(&catalog.fs, &writer, &idle, operation_change(), intended)
+                .unwrap();
+        let during = defaults(&catalog);
+        assert_eq!(during.snapshot(), held.snapshot());
+        assert_eq!(held.pending_operation_at_start(), None);
+        assert_eq!(
+            during.pending_operation_at_start(),
+            Some(operation_change().change_id)
+        );
+        held.verify_operations(&catalog).unwrap();
+        during.verify_operations(&catalog).unwrap();
+        operation_authority::cancel(&catalog.fs, &writer, &active, &operation_change()).unwrap();
+        held.verify_operations(&catalog).unwrap();
+        during.verify_operations(&catalog).unwrap();
+        assert_eq!(
+            during.pending_operation_at_start(),
+            Some(operation_change().change_id)
+        );
+        defaults(&catalog).verify_operations(&catalog).unwrap();
+    }
+
+    #[test]
+    fn selected_v2_acknowledged_floor_applies_at_start_and_preserves_preack_reader() {
+        use crate::changes::operation_authority;
+        let (_temp, root, catalog) = unsynced();
+        publish_normalized(&catalog, 1);
+        let held = defaults(&catalog);
+        let idle = catalog.operation_state().unwrap().unwrap();
+        let writer = WriterPermit::acquire(&root, Duration::from_secs(1)).unwrap();
+        let intended = Publication {
+            file_id: idle.publication().file_id.clone(),
+            epoch: 2,
+        };
+        let active = operation_authority::begin(
+            &catalog.fs,
+            &writer,
+            &idle,
+            operation_change(),
+            intended.clone(),
+        )
+        .unwrap();
+        operation_authority::acknowledge(
+            &catalog.fs,
+            &writer,
+            &active,
+            &operation_change(),
+            intended,
+        )
+        .unwrap();
+        // A unit adversary advances only the authority; the still-selected SQL
+        // epoch must be rejected even before canonical evidence is requested.
+        assert_eq!(
+            catalog
+                .query_snapshot(QueryReadLimits::default())
+                .err()
+                .unwrap()
+                .code,
+            ErrorCode::RecoveryRequired
+        );
+        held.verify_operations(&catalog).unwrap();
+    }
+
+    #[test]
+    fn legacy_held_reader_rejects_normalized_activation_race() {
+        let (_temp, _root, catalog) = fixture();
+        let held = defaults(&catalog);
+        assert!(!held.normalized_layout());
+        held.verify_operations(&catalog).unwrap();
+        publish_normalized(&catalog, 1);
+        assert_eq!(
+            held.verify_operations(&catalog).unwrap_err().code,
+            ErrorCode::RecoveryRequired
+        );
+    }
+
+    #[test]
+    fn selected_v2_old_reader_holds_lease_and_rebuild_advances_epoch() {
         let (temp, root, catalog) = unsynced();
         let first = publish_normalized(&catalog, 1);
         let held = defaults(&catalog);
         let fingerprint = held.dependency_fingerprint().unwrap();
         fs::write(temp.path().join("page.md"), page("New selected title")).unwrap();
-        let second = publish_normalized(&catalog, 1);
+        let second = publish_normalized(&catalog, 2);
         let current = defaults(&catalog);
-        assert_eq!(held.snapshot().generation, current.snapshot().generation);
+        assert_eq!(
+            held.snapshot().generation + 1,
+            current.snapshot().generation
+        );
+        held.verify_operations(&catalog).unwrap();
+        current.verify_operations(&catalog).unwrap();
         assert_ne!(held.publication_id(), current.publication_id());
         assert_ne!(fingerprint, current.dependency_fingerprint().unwrap());
         assert_eq!(

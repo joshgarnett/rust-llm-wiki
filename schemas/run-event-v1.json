@@ -170,14 +170,63 @@
         },
         "control_manifest": {
           "$ref": "#/$defs/Blake3Hash"
+        },
+        "publication": {
+          "type": "object",
+          "properties": {
+            "version": {
+              "const": 1
+            },
+            "file_id": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{32}$"
+            },
+            "publication_hash": {
+              "$ref": "#/$defs/Blake3Hash"
+            }
+          },
+          "required": [
+            "version",
+            "file_id",
+            "publication_hash"
+          ],
+          "additionalProperties": false
         }
       },
       "required": [
         "generation",
-        "parser_fingerprint",
-        "control_manifest"
+        "parser_fingerprint"
       ],
-      "additionalProperties": false
+      "additionalProperties": false,
+      "oneOf": [
+        {
+          "required": [
+            "control_manifest"
+          ],
+          "not": {
+            "required": [
+              "publication"
+            ]
+          }
+        },
+        {
+          "required": [
+            "publication"
+          ],
+          "properties": {
+            "generation": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9223372036854775807
+            }
+          },
+          "not": {
+            "required": [
+              "control_manifest"
+            ]
+          }
+        }
+      ]
     },
     "Blake3Hash": {
       "type": "string",

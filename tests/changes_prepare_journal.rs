@@ -378,11 +378,11 @@ fn origin_build_once_reuse_all_terminal_states_and_different_response() {
         &permit,
         &second.change,
         ChangeEvent::Indexed {
-            snapshot: ReadSnapshot {
-                generation: 1,
-                parser_fingerprint: Blake3Hash::digest(b"parser"),
-                control_manifest: Blake3Hash::digest(b"scan"),
-            },
+            snapshot: ReadSnapshot::canonical(
+                1,
+                Blake3Hash::digest(b"parser"),
+                Blake3Hash::digest(b"scan"),
+            ),
         },
     );
     append(&engine, &permit, &second.change, ChangeEvent::Committed);
@@ -805,11 +805,11 @@ fn recovery_applying_epoch_resets_completions_and_pending_intent() {
                     &permit,
                     &change,
                     ChangeEvent::Indexed {
-                        snapshot: ReadSnapshot {
+                        snapshot: ReadSnapshot::canonical(
                             generation,
-                            parser_fingerprint: Blake3Hash::digest(b"parser"),
-                            control_manifest: Blake3Hash::digest(b"scan"),
-                        },
+                            Blake3Hash::digest(b"parser"),
+                            Blake3Hash::digest(b"scan"),
+                        ),
                     },
                 );
             }
@@ -915,11 +915,11 @@ fn journal_rejects_unknown_nested_snapshot_fields_and_wrong_binding() {
         &change,
         3,
         ChangeEvent::Indexed {
-            snapshot: ReadSnapshot {
-                generation: 1,
-                parser_fingerprint: Blake3Hash::digest(b"parser"),
-                control_manifest: Blake3Hash::digest(b"scan"),
-            },
+            snapshot: ReadSnapshot::canonical(
+                1,
+                Blake3Hash::digest(b"parser"),
+                Blake3Hash::digest(b"scan"),
+            ),
         },
     );
     let mut value = serde_json::to_value(&indexed).unwrap();

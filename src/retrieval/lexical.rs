@@ -1285,11 +1285,11 @@ mod indexed_source_tests {
         }
         Reader {
             connection,
-            snapshot: ReadSnapshot {
-                generation: 1,
-                parser_fingerprint: Blake3Hash::digest(b"parser"),
-                control_manifest: Blake3Hash::digest(b"manifest"),
-            },
+            snapshot: ReadSnapshot::canonical(
+                1,
+                Blake3Hash::digest(b"parser"),
+                Blake3Hash::digest(b"manifest"),
+            ),
             vault: RecordId::new("vault_source_sql").unwrap(),
             decoded: Cell::new(0),
         }
@@ -1338,8 +1338,12 @@ mod indexed_source_tests {
         };
         let writer =
             WriterPermit::acquire(catalog.fs.root(), std::time::Duration::from_secs(1)).unwrap();
+        let epoch = catalog
+            .operation_state()
+            .unwrap()
+            .map_or(1, |authority| authority.publication().epoch + 1);
         let identity = BuildIdentity {
-            selection: CatalogSelection::new(catalog.vault_id.clone(), 1).unwrap(),
+            selection: CatalogSelection::new(catalog.vault_id.clone(), epoch).unwrap(),
             origin: None,
             vector_cache_lost: false,
             vector_loss_unknown: false,
@@ -1593,7 +1597,7 @@ mod indexed_source_tests {
     }
 
     #[test]
-    fn normalized_cursors_reject_new_physical_file_even_with_identical_logical_snapshot() {
+    fn normalized_cursors_reject_new_physical_file_and_advanced_rebuild_epoch() {
         let legacy = reader();
         let alpha = source(&legacy, "alpha", "Captured title");
         let beta = source(&legacy, "beta", "Captured title");
@@ -1618,8 +1622,14 @@ mod indexed_source_tests {
         let new = catalog
             .query_snapshot(crate::catalog::query_types::QueryReadLimits::default())
             .unwrap();
-        assert_eq!(old.snapshot(), new.snapshot());
+        assert_eq!(old.snapshot().generation + 1, new.snapshot().generation);
+        assert_eq!(
+            old.snapshot().parser_fingerprint,
+            new.snapshot().parser_fingerprint
+        );
         assert_ne!(old.publication_id(), new.publication_id());
+        old.verify_operations(&catalog).unwrap();
+        new.verify_operations(&catalog).unwrap();
         let plan = QueryPlan {
             cursor: Some(cursor),
             ..plan

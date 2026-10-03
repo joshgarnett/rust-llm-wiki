@@ -3,6 +3,7 @@ pub mod apply;
 pub mod history;
 pub(crate) mod immutable;
 pub mod journal;
+pub(crate) mod operation_authority;
 pub use history::CommittedOutputProof;
 pub mod outcome;
 pub mod prepare;

@@ -21,6 +21,26 @@ hardening. Formatting passed. The lint gate still reports unused entry points
 because publication and explicit auditing are not connected yet. These are
 component results, not CLI workflow, update-latency or large-vault qualification.
 
+The next checkpoint adds a small durable operation record and an acknowledged
+publication floor. Normalized readers consult that record instead of enumerating
+completed change history. A query keeps the floor observed when it starts:
+unrelated updates may proceed while its selected evidence is checked. New queries
+must see at least the acknowledged epoch; missing or corrupt required operation
+state is an error. Legacy commands cannot publish behind a selected normalized
+catalog. Public activation remains deferred until those commands are migrated.
+
+Snapshot metadata distinguishes a published epoch from a canonical manifest;
+the former does not claim a whole-vault audit. Existing canonical receipt encoding
+is preserved. This establishes the recovery and read boundaries for incremental
+updates; it does not yet implement the fast refresh workflow or establish its
+latency.
+
+The operation/read checkpoint passed 272 non-job unit tests (four ignored),
+four persisted-journal tests and the produced-run/event/receipt schema test.
+The repaired selector fault adapter also verifies that each intended injected
+failure is reached. The independent architecture review found no checkpoint
+blocker; it did not approve activation or large-vault capacity.
+
 ## Why a redesign is necessary
 
 A public 299-source corpus exposed an operational failure before answer quality
@@ -90,6 +110,13 @@ results or a replacement for the existing mandatory scale gates. Time the public
 update command through durable publication and immediate discovery by a new
 query, not just its SQL transaction. Keep a reader open during the update to
 verify that it retains a coherent earlier epoch without delaying new readers.
+
+Refresh planning is part of that budget. Look up the selected source, current
+revision, matching retained revision identity and affected dependents by index.
+Authenticate the selected inputs and any revision actually reused; inspecting
+every unrelated historical payload belongs to explicit auditing. A no-op should
+return after those selected checks, without preparing a changeset or rebuilding
+the graph. This still requires changes to the current planner and apply path.
 
 Use independently addressable catalog records, source manifests, reverse
 dependencies and retrieval units. Query only required rows and bounded candidate

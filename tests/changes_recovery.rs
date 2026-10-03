@@ -362,15 +362,15 @@ impl PublicationBackend for Publisher {
             fs.replace(stage, &expected, permit.writer())?,
             DirectorySync::Supported
         );
-        Ok(ReadSnapshot {
-            generation: self.calls.load(Ordering::SeqCst) as u64,
-            parser_fingerprint: permit.graph().parser_fingerprint.clone(),
-            control_manifest: if self.mismatch.load(Ordering::SeqCst) {
+        Ok(ReadSnapshot::canonical(
+            self.calls.load(Ordering::SeqCst) as u64,
+            permit.graph().parser_fingerprint.clone(),
+            if self.mismatch.load(Ordering::SeqCst) {
                 Blake3Hash::digest(b"wrong")
             } else {
                 permit.graph().control_manifest.clone()
             },
-        })
+        ))
     }
 }
 struct FaultIo {
