@@ -47,6 +47,41 @@ must use independently addressable rows.
 
 ## Chosen direction
 
+The ordinary workflow is fast search and incremental updates. Full integrity
+auditing belongs in a separate, explicitly requested maintenance command, suitable
+for occasional checks or troubleshooting. It must not run implicitly before or
+after routine searches or single-document updates. This is the target behavior;
+the existing strict default and whole-generation publisher have not yet been
+replaced.
+
+Use the existing `lwiki check` command for that explicit full audit, extending it
+to cover the selected index. Keep `doctor` lightweight, `index sync` for discovering
+external edits, and `index rebuild` for reconstruction. Currently `check` scans
+canonical data only, and `doctor` invokes it; those implementations still need
+to change. Do not introduce another overlapping audit command.
+
+Ordinary search uses a published index epoch and validates the evidence returned.
+A successful managed update must make its changes discoverable by subsequent
+queries. External edits require synchronization for discovery; returned metadata
+must explain that freshness boundary. Whole-vault discovery, cache completeness
+and full integrity are separate guarantees supplied by explicit maintenance.
+
+A single-document update must do work proportional to the changed content and
+its affected dependencies. Update the relevant ordinary rows, FTS entries and
+changed retrieval units atomically; preserve reusable embeddings. Do not rebuild
+the database, enumerate completed change history or validate unrelated documents.
+Measure both latency and work as vault size and completed history grow. The
+existing single-edit acceptance ceiling is a failure limit, not a satisfactory
+interactive latency target.
+
+For a 100 KiB managed refresh with fixed dependency fanout, target warm end-to-end
+p95 of one second and every operation within five seconds on the declared test
+host; target a no-op p95 of 250 ms. These are prospective UX targets, not measured
+results or a replacement for the existing mandatory scale gates. Time the public
+update command through durable publication and immediate discovery by a new
+query, not just its SQL transaction. Keep a reader open during the update to
+verify that it retains a coherent earlier epoch without delaying new readers.
+
 Use independently addressable catalog records, source manifests, reverse
 dependencies and retrieval units. Query only required rows and bounded candidate
 sets. Replace full read-time reconstruction with selected-row checks plus an
