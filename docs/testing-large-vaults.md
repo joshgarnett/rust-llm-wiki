@@ -118,6 +118,16 @@ the successful 1k directory; keep all runs beneath the same account root. The
 supervisor refuses 10k unless the frozen time, memory and disk admission margins
 fit. It never runs full projection at 10k. Failed and refused runs remain on disk.
 
+To retest an unchanged fixture after a fix, add `--reuse-fixture-from` pointing
+to its previous run directory and choose a new output directory. This separate
+inspection protocol verifies the retained inventory against the previous report
+and performs no generation. Establish a fresh 1k baseline with the new binary
+before admitting 10k. Existing fixture allocation counts toward the same disk
+ceiling, with an additional 256 MiB reserved for reports; this replaces the
+new-fixture allocation forecast, not the time, memory or disk limits. A prior
+validation failure is preserved and does not prevent reuse of an audited,
+unchanged fixture.
+
 Each source has exactly 100,000 UTF-8 content bytes plus a separate original
 copy. All tiers retain 1,000 pages and one fixed small graph, so this measures
 source-count growth, not graph-fanout growth. Caps are 900 seconds per child

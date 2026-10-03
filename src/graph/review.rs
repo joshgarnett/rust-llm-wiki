@@ -7,7 +7,7 @@ use crate::{
     sources::{
         EvidenceStance, SourceView,
         evidence::{evidence_reference, note_quote},
-        revision::{common, record_bytes, timestamp},
+        revision::{canonical_path, common, record_bytes, timestamp},
     },
     vault::{ExpectedState, VaultFs, WriterPermit},
 };
@@ -692,6 +692,12 @@ pub fn relevant_decision_ids(
 fn receipts(
     notes: &BTreeMap<VaultRelativePath, ParsedNote>,
 ) -> Result<BTreeMap<RecordId, ReviewReceiptV1>> {
+    // A large ordinary catalog does not become a review capture merely because
+    // receipt policy is consulted by global eligibility. Actual (even malformed)
+    // review fences still enter the existing bounded receipt path.
+    if !notes.values().any(has_fence) {
+        return Ok(BTreeMap::new());
+    }
     if notes.len() > MAX_REVIEW_CAPTURE_FILES
         || notes
             .values()
@@ -1362,6 +1368,26 @@ pub fn verify_review_overlay(
     input: &ValidationInput,
     witness: Option<&RetainedGraphInput>,
 ) -> Result<Option<VerifiedReviewOverlay>> {
+    // Inspect one canonical note at a time before constructing/cloning a closed
+    // source view. Match its exact parse_note + Markdown fence semantics, rather
+    // than searching raw text: info strings can contain escapes/entities.
+    // Baseline notes count even when replaced/deleted, so removing a receipt
+    // cannot make a potentially applicable review escape capture/authority checks.
+    // Source payloads are not canonical receipts and never enter SourceView.notes.
+    if witness.is_none()
+        && !input.documents.iter().any(|document| {
+            canonical_path(&document.path) && has_fence(&parse_note(&document.bytes))
+        })
+        && !input.overlay.iter().any(|target| {
+            canonical_path(&target.path)
+                && target
+                    .bytes
+                    .as_ref()
+                    .is_some_and(|bytes| has_fence(&parse_note(bytes)))
+        })
+    {
+        return Ok(None);
+    }
     bounded(input)?;
     if witness.is_some_and(|w| w.origin().operation != OriginOperation::GraphReview) {
         return Ok(None);

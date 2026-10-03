@@ -1462,3 +1462,279 @@ fn authentic_review_inverse_refuses_author_edits_extra_writes_and_missing_parent
         }
     }
 }
+
+fn applicability_page(name: &str, body: &[u8]) -> Vec<u8> {
+    let mut bytes = format!(
+        "---\nwiki_schema: \"1\"\nwiki_id: {name}\nwiki_kind: page\ntitle: {name}\nwiki_status: reviewed\n---\n"
+    )
+    .into_bytes();
+    bytes.extend_from_slice(body);
+    bytes
+}
+fn applicability_document(name: &str, bytes: Vec<u8>) -> ScanDocument {
+    ScanDocument {
+        path: VaultRelativePath::new(name).unwrap(),
+        hash: Blake3Hash::digest(&bytes),
+        bytes,
+    }
+}
+fn applicability_input() -> (tempfile::TempDir, VaultFs, ValidationInput) {
+    let temp = tempfile::tempdir().unwrap();
+    let marker = b"---\nwiki_schema: \"1\"\nwiki_id: vault_review_applicability\nwiki_kind: vault\ntitle: Review applicability fixture\n---\n";
+    fs::write(temp.path().join("WIKI.md"), marker).unwrap();
+    let fs = VaultFs::new(VaultRoot::explicit(temp.path()).unwrap());
+    let mut documents = vec![applicability_document("WIKI.md", marker.to_vec())];
+    // Complete captured canonical controls, with individually valid adopted records.
+    // No managed-import work or physical payload reads are needed for these pages.
+    for ordinal in 0..=MAX_REVIEW_CAPTURE_FILES {
+        documents.push(applicability_document(
+            &format!("pages/ordinary_{ordinal:05}.md"),
+            applicability_page(
+                &format!("ordinary_{ordinal:05}"),
+                b"Ordinary reviewed note. Inline `lwiki-graph-review-v1` is not a fence.\n",
+            ),
+        ));
+    }
+    let input = ValidationInput {
+        vault_id: id("vault_review_applicability"),
+        documents,
+        overlay: vec![],
+    };
+    (temp, fs, input)
+}
+
+#[test]
+fn large_nonreview_changes_do_not_inherit_review_capture_limits() {
+    let (_temp, fs, mut input) = applicability_input();
+    assert!(input.documents.len() > MAX_REVIEW_CAPTURE_FILES);
+    assert!(verify_review_overlay(&fs, &input, None).unwrap().is_none());
+    CatalogGraphValidator.validate(&fs, &input).unwrap();
+    for (target, bytes) in [
+        (
+            "pages/new.md",
+            Some(applicability_page("ordinary_new", b"New ordinary page\n")),
+        ),
+        (
+            "pages/ordinary_00000.md",
+            Some(applicability_page(
+                "ordinary_00000",
+                b"Edited ordinary page\n",
+            )),
+        ),
+        ("pages/ordinary_00000.md", None),
+    ] {
+        input.overlay = vec![ProposedTarget {
+            path: VaultRelativePath::new(target).unwrap(),
+            bytes,
+        }];
+        assert!(verify_review_overlay(&fs, &input, None).unwrap().is_none());
+        CatalogGraphValidator.validate(&fs, &input).unwrap();
+    }
+    // The early return belongs only to review analysis. Canonical input errors
+    // still reach the normal validation pipeline and must fail.
+    input.overlay.clear();
+    let mut bad_hash = input.clone();
+    bad_hash.documents[1].hash = Blake3Hash::digest(b"incorrect captured hash");
+    assert_eq!(
+        CatalogGraphValidator
+            .validate(&fs, &bad_hash)
+            .unwrap_err()
+            .code,
+        ErrorCode::SourceIntegrity
+    );
+    input.documents.push(input.documents[1].clone());
+    assert_eq!(
+        CatalogGraphValidator
+            .validate(&fs, &input)
+            .unwrap_err()
+            .code,
+        ErrorCode::RecordInvalid
+    );
+}
+
+#[test]
+fn nonreview_source_overlay_ignores_review_fences_in_captured_payloads() {
+    let (_temp, fs, mut input) = applicability_input();
+    let payload =
+        format!("# Captured text\n```{GRAPH_REVIEW_FENCE}\n{{malformed receipt text}}\n```\n")
+            .into_bytes();
+    let hash = Blake3Hash::digest(&payload);
+    let source = "---\nwiki_schema: \"1\"\nwiki_id: ordinary_source\nwiki_kind: source\ntitle: Ordinary source\nwiki_status: active\nwiki_origin_kind: local-file\nwiki_origin: fixture\nwiki_current_revision: ordinary_revision\nwiki_revisions: [ordinary_revision]\n---\nSource\n".as_bytes().to_vec();
+    let revision = format!("---\nwiki_schema: \"1\"\nwiki_id: ordinary_revision\nwiki_kind: revision\ntitle: Ordinary revision\nwiki_source_id: ordinary_source\nwiki_captured_at: \"2026-09-28T00:00:00Z\"\nwiki_original_path: original.bin\nwiki_original_hash: {hash}\nwiki_extractor: fixture\nwiki_extractor_fingerprint: {}\nwiki_extraction_status: complete\nwiki_content_path: content.md\nwiki_content_hash: {hash}\n---\nRevision\n", Blake3Hash::digest(b"fixture-v1")).into_bytes();
+    input.overlay = [
+        ("sources/ordinary_source/source.md", source),
+        (
+            "sources/ordinary_source/revisions/ordinary_revision/revision.md",
+            revision,
+        ),
+        (
+            "sources/ordinary_source/revisions/ordinary_revision/original.bin",
+            payload.clone(),
+        ),
+        (
+            "sources/ordinary_source/revisions/ordinary_revision/content.md",
+            payload,
+        ),
+    ]
+    .into_iter()
+    .map(|(path, bytes)| ProposedTarget {
+        path: VaultRelativePath::new(path).unwrap(),
+        bytes: Some(bytes),
+    })
+    .collect();
+    assert!(verify_review_overlay(&fs, &input, None).unwrap().is_none());
+    let result = CatalogGraphValidator.validate(&fs, &input).unwrap();
+    assert!(result.dependencies.iter().any(|dependency| {
+        dependency.path.as_str() == "sources/ordinary_source/revisions/ordinary_revision/content.md"
+            && dependency.expected == ExpectedState::Hash(hash.clone())
+    }));
+}
+
+#[test]
+fn nonreview_policy_and_overlay_skip_irrelevant_byte_ceiling() {
+    let (_temp, fs, mut input) = applicability_input();
+    input.documents.truncate(1);
+    let body = vec![b'x'; 4 * 1024 * 1024];
+    for ordinal in 0..17 {
+        input.documents.push(applicability_document(
+            &format!("pages/wide_{ordinal}.md"),
+            applicability_page(&format!("wide_{ordinal}"), &body),
+        ));
+    }
+    assert!(
+        input
+            .documents
+            .iter()
+            .map(|document| document.bytes.len())
+            .sum::<usize>()
+            > MAX_REVIEW_CAPTURE_BYTES
+    );
+    input.overlay = vec![ProposedTarget {
+        path: VaultRelativePath::new("pages/add.md").unwrap(),
+        bytes: Some(applicability_page("add", b"Ordinary addition\n")),
+    }];
+    assert!(verify_review_overlay(&fs, &input, None).unwrap().is_none());
+    let notes: BTreeMap<_, _> = input
+        .documents
+        .iter()
+        .map(|document| (document.path.clone(), parse_note(&document.bytes)))
+        .collect();
+    assert!(verify_review_policy(&notes).unwrap().is_none());
+}
+
+#[test]
+fn malformed_encoded_and_deleted_canonical_review_fences_keep_capture_bounds() {
+    let (_temp, fs, mut input) = applicability_input();
+    let notes: BTreeMap<_, _> = input
+        .documents
+        .iter()
+        .map(|document| (document.path.clone(), parse_note(&document.bytes)))
+        .collect();
+    assert!(verify_review_policy(&notes).unwrap().is_none());
+    for info in [
+        GRAPH_REVIEW_FENCE,
+        "lwiki&#x2d;graph&#x2d;review&#x2d;v1",
+        r"lwiki\-graph\-review\-v1",
+    ] {
+        let bytes = applicability_page(
+            "receipt_wrong_kind",
+            format!("```{info}\ninvalid JSON\n```\n").as_bytes(),
+        );
+        let mut policy_notes = notes.clone();
+        policy_notes.insert(
+            VaultRelativePath::new("pages/receipt.md").unwrap(),
+            parse_note(&bytes),
+        );
+        assert!(
+            relevant_decision_ids(&policy_notes).contains(&id("receipt_wrong_kind")),
+            "{info}"
+        );
+        assert_eq!(
+            verify_review_policy(&policy_notes).unwrap_err().code,
+            ErrorCode::BudgetExceeded,
+            "{info}"
+        );
+        input.overlay = vec![ProposedTarget {
+            path: VaultRelativePath::new("pages/receipt.md").unwrap(),
+            bytes: Some(bytes.clone()),
+        }];
+        assert_eq!(
+            verify_review_overlay(&fs, &input, None).unwrap_err().code,
+            ErrorCode::BudgetExceeded,
+            "{info}"
+        );
+        // A baseline receipt remains potentially relevant after deletion or
+        // replacement, including when its envelope/receipt itself is malformed.
+        input
+            .documents
+            .push(applicability_document("pages/receipt.md", bytes));
+        for replacement in [
+            None,
+            Some(applicability_page(
+                "receipt_wrong_kind",
+                b"Receipt removed\n",
+            )),
+        ] {
+            input.overlay[0].bytes = replacement;
+            assert_eq!(
+                verify_review_overlay(&fs, &input, None).unwrap_err().code,
+                ErrorCode::BudgetExceeded,
+                "{info}"
+            );
+        }
+        input.documents.pop();
+    }
+}
+
+#[test]
+fn malformed_canonical_review_receipt_still_rejects_under_capture_limit() {
+    let (_temp, fs, mut input) = applicability_input();
+    input.documents.truncate(1);
+    let bytes = format!("---\nwiki_schema: \"1\"\nwiki_id: malformed_review\nwiki_kind: decision\ntitle: Malformed review\nwiki_status: active\nwiki_action: accept\nwiki_input_ids: [reviewed_assertion]\nwiki_output_ids: [reviewed_assertion]\nwiki_created_at: \"2026-09-28T00:00:00Z\"\n---\n```{GRAPH_REVIEW_FENCE}\nnot JSON\n```\n").into_bytes();
+    assert!(parse_note(&bytes).canonical.is_some());
+    input.overlay = vec![ProposedTarget {
+        path: VaultRelativePath::new("decisions/malformed.md").unwrap(),
+        bytes: Some(bytes.clone()),
+    }];
+    assert_eq!(
+        verify_review_overlay(&fs, &input, None).unwrap_err().code,
+        ErrorCode::ExtractionInvalid
+    );
+    let notes = BTreeMap::from([(
+        VaultRelativePath::new("decisions/malformed.md").unwrap(),
+        parse_note(&bytes),
+    )]);
+    assert_eq!(
+        verify_review_policy(&notes).unwrap_err().code,
+        ErrorCode::ExtractionInvalid
+    );
+}
+
+#[test]
+fn genuine_review_overlay_keeps_its_capture_limit_in_large_vault() {
+    let f = resolved();
+    let assertion_id = assertion(&f, "a1");
+    let out = review_stage(&f, &request(&f, &assertion_id, "accept", "supports")).unwrap();
+    let draft = proposed(&f, out.prepared.as_ref().unwrap());
+    let (_temp, _fs, large) = applicability_input();
+    let mut documents: Vec<_> = canonical_bytes(&f)
+        .into_iter()
+        .map(|(path, bytes)| applicability_document(&path, bytes))
+        .collect();
+    documents.extend(large.documents.into_iter().skip(1));
+    let input = ValidationInput {
+        vault_id: f.engine.vault_id().clone(),
+        documents,
+        overlay: draft
+            .operations
+            .into_iter()
+            .map(|operation| ProposedTarget {
+                path: operation.target,
+                bytes: operation.proposed,
+            })
+            .collect(),
+    };
+    let err = verify_review_overlay(f.engine.fs(), &input, None).unwrap_err();
+    assert_eq!(err.code, ErrorCode::BudgetExceeded);
+    assert_eq!(err.message, "review bounded capture exhausted");
+}

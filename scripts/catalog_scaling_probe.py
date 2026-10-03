@@ -57,6 +57,45 @@ def tree(path, hash_files=False):
     return dict(allocated_bytes=allocation, files=files) if hash_files else allocation
 
 
+def confined(path, account_root):
+    if not path.is_absolute() or not path.resolve().is_relative_to(account_root.resolve()):
+        raise ValueError('provenance path must be absolute and under account root')
+    if path.resolve() != path:
+        raise ValueError('provenance paths must be normalized and have no symlink components')
+    return path
+
+
+def prior_fixture(prior, account_root, stage):
+    prior = confined(prior, account_root)
+    summary_path = prior/'summary.json'
+    summary = json.loads(summary_path.read_text())
+    if summary.get('stage') != stage:
+        raise ValueError('prior fixture stage differs')
+    fixture = confined(Path(summary.get('fixture_path', str(prior/'fixture'))), account_root)
+    if not fixture.is_dir() or fixture.is_symlink():
+        raise ValueError('prior fixture is not a regular directory')
+    commands = summary.get('commands', [])
+    audited = any(c.get('name') in ('audit', 'audit-after') and c.get('passed') and
+                  not c.get('expected_failure') for c in commands)
+    generated = any(c.get('name') == 'generate' and c.get('passed') and
+                    not c.get('expected_failure') for c in commands)
+    replayed = isinstance(summary.get('fixture_provenance'), dict)
+    if not audited or not (generated or replayed):
+        raise ValueError('prior run lacks successful generation/replay provenance and audit')
+    inventory = tree(fixture, True)
+    if inventory != summary.get('fixture'):
+        raise ValueError('prior fixture inventory/hash/size/allocation changed')
+    manifest = fixture/'fixture-manifest.json'
+    if json.loads(manifest.read_text()).get('sources') != int(stage):
+        raise ValueError('prior fixture manifest source count differs')
+    provenance = dict(prior_run=str(prior), prior_summary_sha256=digest(summary_path),
+                      fixture_path=str(fixture), manifest_sha256=digest(manifest),
+                      inventory=inventory, prior_status=summary.get('status'),
+                      prior_pins=summary.get('pins'),
+                      interpretation='Reuse authenticates retained bytes; previous binary pins may differ. Fresh inspections use current frozen pins.')
+    return fixture, provenance
+
+
 def pins(binary):
     paths = [binary, Path(__file__).resolve(), REPO/'examples/catalog_scaling_probe.rs']
     # Pin all Rust and manifest inputs; no Git subprocess or credential access.
@@ -255,20 +294,25 @@ class Runner:
         summary = json.loads((baseline/'summary.json').read_text())
         if summary['stage'] != '1000' or summary['status'] != 'passed' or summary['pins'] != self.frozen:
             raise ValueError('baseline is not passed 1000 with identical pins')
-        if tree(baseline/'fixture', True) != summary['fixture']:
+        baseline_fixture = confined(Path(summary.get('fixture_path', str(baseline/'fixture'))), self.args.account_root)
+        if tree(baseline_fixture, True) != summary['fixture']:
             raise ValueError('baseline fixture pins changed')
         validate = next(c for c in summary['commands'] if c['name'] == 'validate')
         if validate['native_peak_bytes'] is None:
             raise ValueError('baseline native RSS unavailable')
         resource = self.resources()
         allocation = summary['fixture']['allocated_bytes']
+        reserve = 256*1024*1024 if self.args.reuse_fixture_from else 12*allocation
         checks = dict(time=30*validate['external_elapsed_seconds'] < 900,
                       rss=20*max(validate['native_peak_bytes'], validate['sampled_tree_peak_bytes']) < 8*GIB,
-                      disk=12*allocation+resource['allocated_bytes'] < 4*GIB,
-                      free=resource['free_bytes']-12*allocation >= 32*GIB)
+                      disk=reserve+resource['allocated_bytes'] < 4*GIB,
+                      free=resource['free_bytes']-reserve >= 32*GIB)
         admission = dict(checks=checks, admitted=all(checks.values()), baseline=str(baseline),
                          validation=validate, baseline_fixture_allocated_bytes=allocation,
-                         current=resource, interpretation='Conservative safety admission only; no scaling claim.')
+                         current=resource, additional_disk_reserve_bytes=reserve,
+                         variant='inspect-existing' if self.args.reuse_fixture_from else 'generate-new',
+                         disk_interpretation='Reuse counts existing fixture in current allocation plus 256MiB log reserve; original generation extrapolation is not claimed passed.' if self.args.reuse_fixture_from else '12x new fixture allocation forecast.',
+                         interpretation='Conservative safety admission only; no scaling claim.')
         write_json(self.out/'admission.json', admission)
         return admission['admitted']
 
@@ -280,10 +324,18 @@ def main():
     p.add_argument('--account-root', type=Path, required=True)
     p.add_argument('--stage', choices=['smoke', '1000', '10000'], required=True)
     p.add_argument('--baseline', type=Path)
+    p.add_argument('--reuse-fixture-from', type=Path)
     args = p.parse_args()
     for value in [args.binary, args.output, args.account_root] + ([args.baseline] if args.baseline else []):
         if not value.is_absolute():
             p.error('all paths must be absolute')
+    if args.reuse_fixture_from and args.stage == 'smoke':
+        p.error('reuse is allowed only for 1000/10000 stages')
+    if args.reuse_fixture_from:
+        try:
+            confined(args.reuse_fixture_from, args.account_root)
+        except ValueError as exc:
+            p.error(str(exc))
     if sys.platform != 'darwin':
         p.error('requires macOS /usr/bin/time -l')
     if args.stage == '10000' and not args.baseline:
@@ -294,7 +346,17 @@ def main():
         p.error('baseline must lie under --account-root')
     args.output.mkdir()  # refuses existing artifacts, including partial previous attempts
     runner = Runner(args)
-    protocol = dict(schema='lwiki.metadata-probe-protocol.v1', stage=args.stage, limits=LIMITS,
+    fixture = args.output/'fixture'
+    provenance = None
+    if args.reuse_fixture_from:
+        try:
+            fixture, provenance = prior_fixture(args.reuse_fixture_from, args.account_root, args.stage)
+        except Exception as exc:
+            write_json(args.output/'summary.json', dict(stage=args.stage, status='failed', error=str(exc), commands=[]))
+            print(json.dumps(dict(status='failed', error=str(exc), output=str(args.output))))
+            return 2
+    protocol = dict(variant='inspect-existing' if provenance else 'generate-new',
+                    fixture_provenance=provenance, schema='lwiki.metadata-probe-protocol.v1', stage=args.stage, limits=LIMITS,
                     sequence={'smoke':'generate1 audit validate project audit failures',
                               '1000':'generate1000 audit validate project audit',
                               '10000':'admission generate10000 audit validate audit'}[args.stage],
@@ -302,10 +364,13 @@ def main():
                     manifest='fixture-manifest.json inside fixture, noncanonical, included in pins and allocation',
                     source_revision='Source content SHA256 map is authoritative; no Git process used.',
                     pins=runner.frozen)
+    if provenance:
+        protocol['sequence'] = 'audit validate project audit' if args.stage == '1000' else 'admission audit validate audit'
+        protocol['admission_10000'] = '30*time<900;20*max(native,treeRSS)<8GiB;accountAllocation+256MiB<4GiB;free-256MiB>=32GiB'
+        protocol['admission_explanation'] = 'Existing fixture is already counted in account allocation; 256MiB reserves log growth. This is a separately frozen inspect-existing protocol and does not claim original generation admission passed.'
     write_json(args.output/'protocol.json', protocol)
     runner.protocol_hash = digest(args.output/'protocol.json')
     write_json(args.output/'protocol-pin.json', {'sha256': runner.protocol_hash})
-    fixture = args.output/'fixture'
     status = 'failed'
     error = None
     try:
@@ -315,7 +380,8 @@ def main():
             runner.smoke(fixture)
             status = 'passed'
         else:
-            runner.run('generate', 'generate', fixture, int(args.stage))
+            if not provenance:
+                runner.run('generate', 'generate', fixture, int(args.stage))
             runner.run('audit', 'audit', fixture)
             runner.run('validate', 'validate', fixture)
             if args.stage == '1000':
@@ -335,7 +401,10 @@ def main():
     if runner.protocol_hash != digest(args.output/'protocol.json') or pins(args.binary) != runner.frozen:
         status = 'failed'
         error = error or 'final protocol/source/binary pins changed'
-    summary = dict(stage=args.stage, status=status, error=error, pins=runner.frozen,
+    if provenance and digest(args.reuse_fixture_from/'summary.json') != provenance['prior_summary_sha256']:
+        status = 'failed'
+        error = error or 'prior summary changed during replay'
+    summary = dict(fixture_path=str(fixture), fixture_provenance=provenance, stage=args.stage, status=status, error=error, pins=runner.frozen,
                    commands=runner.commands, fixture=final_fixture,
                    protocol_sha256=digest(args.output/'protocol.json'), resource_final=final_resource)
     write_json(args.output/'summary.json', summary)
