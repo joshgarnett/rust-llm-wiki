@@ -18,8 +18,6 @@ Commit coherent, tested milestones as work progresses. Record the commit, valida
 
 Keep session checkpoints and detailed agent/run reports local under the ignored execution paths or `.artifacts/`. Keep reusable instructions, implementation decisions and curated validation summaries tracked. Promote stable findings into those maintained documents; do not add raw logs, per-attempt reports or temporary state to Git. Preserve local evidence when changing tracking, and ensure tracked documentation works in a fresh checkout without ignored files.
 
-Keep user-specific background, work details and motivations out of committed files unless explicitly authorized. Explain dataset choices through their technical coverage, provenance and limitations.
-
 ## Delegate for independent judgment
 
 Use subagents when a task benefits from independent research, a bounded implementation, adversarial testing or a fresh architectural perspective. Give each agent a concrete question, relevant files, exclusive write paths, constraints and a required evidence artifact. Prefer fresh context for critics and broad design reviews; implementation history can anchor their judgment. Respect available slots, serialize shared builds and keep integration with the orchestrator. Do not create parallel workers for tightly dependent edits or let a worker's self-review substitute for independent acceptance.
