@@ -2,6 +2,8 @@
 
 The offline [context evaluator](../scripts/context_eval.py) measures whether retrieved citations cover annotated evidence locations. It does not generate answers or judge semantic completeness. A correct source hit and an exact citation can still omit the facts a user needs. Use an independent critic or human assessment alongside its scores, following [testing-usability.md](testing-usability.md).
 
+The [complementary dataset plan](eval-datasets.md) adds conditional answers, multi-source technical support, missing reasoning steps, contradiction and versioned CLI documentation. It records pinned downloads, licensing, adapter requirements and which samples are development data. Downloaded samples do not count as executed or accepted evaluations.
+
 ## Public baseline and retained inputs
 
 The first public baseline is QASPER v0.3: natural questions over long NLP papers, reference answers, paragraph evidence, selected sentence highlights and unanswerable annotations. [The original paper](https://aclanthology.org/2021.naacl-main.365/) explains the collection; [the official dataset card](https://huggingface.co/datasets/allenai/qasper) specifies CC BY 4.0. Paper text was extracted from S2ORC; retain upstream notices and attribution when copying artifacts. Figure/table images are outside this text benchmark.
