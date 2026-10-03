@@ -1,5 +1,11 @@
 # Context evaluation research and implementation
 
+## Compatibility after the traversal repair
+
+The repaired candidate reproduced all 32 development selector packets byte for byte and all 96 baseline/control/host result envelopes after excluding only two verification timestamps and three proof-work counters. Independent audits checked 411 citations. The previous semantic judgments can therefore be reused as compatibility evidence; this is not a new quality score or unseen acceptance result.
+
+The replay runner itself failed its whole-tree byte comparison because the writer lock's diagnostic PID text changed. The original failed result remains recorded. All 1,420 other wiki files, including physical database files, and 389 public input pins were unchanged. Independent review accepted a separate compatibility-only adjudication: the held OS lock and its inode remain synchronization authority, while the changed PID text is diagnostic. No selector was rerun and no failed gate was retrospectively relabeled as passed.
+
 ## Public scale failure and first structural repair
 
 Importing 299 public development source texts (1,339,673 UTF-8 bytes) exposed a capacity defect: all 64 prospectively selected lexical-context questions failed at the hard 65,536-entry proof ceiling. These are operational failures, not semantic grades. The original import also exceeded its 1,800-second experiment deadline after 250 successful sources; a separately recorded finite continuation imported the remaining 49 without replacing the failed attempt.
