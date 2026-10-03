@@ -24,6 +24,8 @@ Use subagents when a task benefits from independent research, a bounded implemen
 
 For consequential quality work, establish a critic before implementing. Agree on representative user tasks, observable success criteria, correctness blockers and an acceptance threshold before seeing candidate results. Have the critic assess actual commands and returned content, document missing facts or failed tasks, and replay fixes. Keep task completion, citation correctness, retrieval relevance and answer completeness separate. If the user requires a high critic score, keep the goal active until the declared gate passes; do not lower the gate or inflate claims to finish.
 
+Before consequential architecture decisions, ask an independent Astra reviewer to challenge the measured problem, expected user benefit, simpler alternatives, scaling costs and migration path. Revisit the decision when evidence or constraints change. Require a concrete experiment for uncertain tradeoffs and prioritize an integrated user workflow over additional disconnected components. Passing component tests and scoped critic scores do not establish that the architecture is useful or that integration is complete. Routine local edits do not need another architecture review.
+
 ## Research failures and reassess the architecture
 
 When an unexpected failure appears, identify which pipeline stage loses the required information. Research how comparable tools address that failure using primary documentation, source code and original papers. Record the mechanism, fit, tradeoffs and testable hypothesis in the relevant report or decision log. A vendor's benchmark is evidence for investigating an approach, not proof it will work here or permission to add a conflicting dependency.

@@ -63,6 +63,29 @@ incremental merging; the application must maintain row/index consistency.
 Measure delta publication before adopting another lexical engine.
 [SQLite FTS5](https://www.sqlite.org/fts5.html)
 
+The current migration candidate builds a private normalized database in bounded
+batches and switches a durable selector after sealing it. Existing readers retain
+the old file through a lifetime lease. This topology is for full rebuilds; normal
+source updates still need bounded deltas. Normalization alone does not require
+multiple files, so the extra selector, lease and retirement machinery must justify
+its resource and concurrency costs in actual workflow tests before activation.
+
+Owned-cache lookups must use bounded, direct generated paths. Enumerating sibling
+filenames on every acquisition makes query work grow with publication history,
+especially when lease inodes persist. A directory-entry ceiling only changes that
+growth into refusal. Preserve canonical user-path validation separately, and test
+cache acquisition work with increasing retired-file history and unrelated names.
+
+Strict audit requires canonical equality and actual index consistency on the same
+pinned publication. The audit mechanism remains provisional. Compare a bounded
+private [SQLite backup](https://sqlite.org/backup.html) followed by native FTS
+integrity checks with the contentless-reference approach using identical corruption
+cases and measured time, memory and scratch allocation. The backup adds a complete
+database copy; the reference adds postings and retokenization work. Include any
+old database retained by a reader in disk admission. Neither an earlier audit
+receipt nor a clean reconstructed compatibility index proves the selected index
+is correct.
+
 Separate graph validation from retrieval-text emission before replacing storage.
 Measure control-record, graph-snapshot and dependency memory at the 1k and 10k
 tiers; raw envelope size alone cannot establish whether the graph fits in memory.
