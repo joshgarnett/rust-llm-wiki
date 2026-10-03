@@ -19,6 +19,12 @@ pub enum Target {
 pub struct ContextArguments {
     #[command(flatten)]
     pub search: SearchArguments,
+    /// Prepare a bounded candidate packet for one host-agent selection; does not run a model.
+    #[arg(long, conflicts_with = "selection")]
+    pub prepare_selection: bool,
+    /// Apply an ID-only host reply to the exact current candidate packet (file or - for stdin).
+    #[arg(long, value_name = "FILE")]
+    pub selection: Option<std::path::PathBuf>,
     /// Evidence scope: verified current, historical, or unverified index snapshot.
     #[arg(long, value_enum, default_value = "current")]
     pub scope: Scope,
@@ -78,6 +84,58 @@ pub struct ContextArguments {
     pub verification_max_elapsed_ms: u64,
 }
 impl ContextArguments {
+    pub fn selection_action(
+        &self,
+    ) -> crate::domain::Result<context_selection_packet::SelectionAction> {
+        use crate::domain::{ErrorCode, WikiError};
+        use context_selection_packet::{SelectionAction, parse_reply};
+        use std::io::Read;
+        if self.prepare_selection {
+            return Ok(SelectionAction::Prepare);
+        }
+        let Some(path) = &self.selection else {
+            return Ok(SelectionAction::Automatic);
+        };
+        let mut bytes = Vec::new();
+        let read = if path == std::path::Path::new("-") {
+            std::io::stdin().lock().take(4097).read_to_end(&mut bytes)
+        } else {
+            let metadata = std::fs::symlink_metadata(path).map_err(|_| {
+                WikiError::new(ErrorCode::Usage, "cannot inspect context selection reply")
+            })?;
+            if !metadata.is_file() {
+                return Err(WikiError::new(
+                    ErrorCode::Usage,
+                    "context selection reply must be a regular file or stdin",
+                ));
+            }
+            let mut open = std::fs::OpenOptions::new();
+            open.read(true);
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::OpenOptionsExt;
+                open.custom_flags(libc::O_NONBLOCK | libc::O_NOFOLLOW);
+            }
+            let file = open.open(path).map_err(|_| {
+                WikiError::new(ErrorCode::Usage, "cannot open context selection reply")
+            })?;
+            if !file
+                .metadata()
+                .map_err(|_| {
+                    WikiError::new(ErrorCode::Usage, "cannot inspect context selection reply")
+                })?
+                .is_file()
+            {
+                return Err(WikiError::new(
+                    ErrorCode::Usage,
+                    "context selection reply must be a regular file or stdin",
+                ));
+            }
+            file.take(4097).read_to_end(&mut bytes)
+        };
+        read.map_err(|_| WikiError::new(ErrorCode::Usage, "cannot read context selection reply"))?;
+        Ok(SelectionAction::Apply(parse_reply(&bytes)?))
+    }
     pub fn request(&self) -> ContextRequest {
         let mut documents = self.search.plan();
         // Context needs enough surrounding prose to support an answer; search

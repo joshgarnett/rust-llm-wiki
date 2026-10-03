@@ -380,6 +380,8 @@ fn semantic_hit_and_context_keep_two_disjoint_passages_for_one_owner() {
     assert!(long.len() >= 4);
     let first = long.first().unwrap().unit_id.clone();
     let last = long.last().unwrap().unit_id.clone();
+    let first_span = long.first().unwrap().source_span.unwrap();
+    let last_span = long.last().unwrap().source_span.unwrap();
     let vectors = units
         .iter()
         .map(|u| {
@@ -441,17 +443,289 @@ fn semantic_hit_and_context_keep_two_disjoint_passages_for_one_owner() {
         .offline()
         .semantic_context("two passages", &request, None, false, false)
         .unwrap();
-    assert_eq!(
+    let passages = context
+        .passages()
+        .iter()
+        .filter(|p| p.locator.path.as_str().ends_with("long.md"))
+        .collect::<Vec<_>>();
+    assert!((2..=4).contains(&passages.len()));
+    for span in [first_span, last_span] {
+        assert!(
+            passages
+                .iter()
+                .any(|p| p.span.start() < span.end() && span.start() < p.span.end())
+        );
+    }
+    assert!(!context.network_used);
+    assert!(
         context
-            .passages()
+            .warnings()
             .iter()
-            .filter(|p| p.locator.path.as_str().ends_with("long.md"))
-            .count(),
-        2
+            .any(|warning| warning.contains("cached unit affinities"))
     );
     assert!(context.usage().rendered_bytes <= request.budget.max_bytes);
     assert!(context.usage().estimated_tokens <= request.budget.max_tokens);
 }
+#[test]
+fn cached_unit_affinity_prefers_distant_paraphrase_over_exact_word_distractor() {
+    let f = Fixture::new();
+    let query = "quasarbreak termination";
+    let distractor =
+        "quasarbreak termination is a printed glossary label, not an operational guarantee.";
+    let answer = "When one job fails, its caller receives a recoverable error. Sibling tasks keep running, and the enclosing process stays alive.";
+    let filler = "Ordinary appendix material discusses release labels, edition numbering, and directory layouts.\n\n";
+    let body = format!(
+        "# Worker failure guide\n\n{distractor}\n\n{}## Behaviour\n\n{answer}\n",
+        filler.repeat(40)
+    );
+    // Only the irrelevant glossary repeats the content query terms. The
+    // deliberately assigned vectors test selection mechanics, not whether
+    // an embedding model understands this paraphrase.
+    assert!(!answer.contains("quasarbreak") && !answer.contains("termination"));
+    f.page("distant", &body);
+    let mut spec = f.spec();
+    spec.settings.max_input_bytes = 384;
+    let reader = f.reader();
+    let document = reader
+        .projection()
+        .documents
+        .iter()
+        .find(|document| document.path.as_str().ends_with("distant.md"))
+        .unwrap();
+    let raw = document.raw_text.clone();
+    let path = document.path.clone();
+    let observed_hash = document.hash.clone();
+    let answer_start = raw.find(answer).unwrap() as u64;
+    let answer_span = ByteSpan::new(answer_start, answer_start + answer.len() as u64).unwrap();
+    assert!(answer_start > 3000);
+    let units = render::corpus(&reader, &spec.settings).unwrap();
+    assert!(units.len() >= 4);
+    assert!(units.iter().all(|unit| unit.owner == path));
+    let overlaps_answer = |unit: &render::RenderedUnit| {
+        let span = unit.source_span.unwrap();
+        span.start() < answer_span.end() && answer_span.start() < span.end()
+    };
+    assert!(units.iter().any(overlaps_answer));
+    assert!(units.iter().any(|unit| !overlaps_answer(unit)));
+    let hashes = units
+        .iter()
+        .map(|unit| unit.input_hash.clone())
+        .collect::<Vec<_>>();
+    let vectors = units
+        .iter()
+        .map(|unit| {
+            if overlaps_answer(unit) {
+                vec![1.0, 0.0]
+            } else {
+                vec![0.0, 1.0]
+            }
+        })
+        .collect::<Vec<_>>();
+    let writer = f.writer();
+    let mut store = VectorStore::open(&f.fs, Some(&writer)).unwrap();
+    let space = store.prepare_space(&spec).unwrap();
+    store
+        .put_batch(&space, &hashes, &vectors, true, &Blake3Hash::digest([]))
+        .unwrap();
+    store
+        .memberships(&space, reader.snapshot(), &units, true)
+        .unwrap();
+    // An incompatible model has the same dimensions and deliberately opposite
+    // affinities. Cached passage guidance must use the active exact space.
+    let mut inactive = spec.clone();
+    inactive.model = "inactive-opposite-model".into();
+    let other_space = store.prepare_space(&inactive).unwrap();
+    assert_ne!(space, other_space);
+    let opposite = vectors
+        .iter()
+        .map(|vector| vec![vector[1], vector[0]])
+        .collect::<Vec<_>>();
+    store
+        .put_batch(
+            &other_space,
+            &hashes,
+            &opposite,
+            true,
+            &Blake3Hash::digest([]),
+        )
+        .unwrap();
+    store
+        .memberships(&other_space, reader.snapshot(), &units, false)
+        .unwrap();
+    assert_eq!(store.active().unwrap().unwrap().id, space);
+    drop(store);
+    drop(reader);
+    drop(writer);
+    f.query_seed(&spec, query, vec![1.0, 0.0]);
+    let responses = Arc::new(Responses::new());
+    let dispatch = dispatcher(&f.fs, responses.clone());
+    let runtime = runtime(&f.service, &dispatch);
+    let request = ContextRequest {
+        documents: QueryPlan {
+            mode: SearchMode::Lexical,
+            limits: SearchLimits {
+                candidates: 8,
+                hits: 1,
+                excerpt_bytes: 192,
+            },
+            ..Default::default()
+        },
+        budget: ContextBudget {
+            max_bytes: 400,
+            max_tokens: 100,
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let offline = f.offline();
+    let lexical = offline
+        .semantic_context(query, &request, Some(&runtime), false, false)
+        .unwrap();
+    assert!(
+        lexical
+            .passages()
+            .first()
+            .unwrap()
+            .text
+            .contains(distractor)
+    );
+    assert!(!lexical.passages().first().unwrap().text.contains(answer));
+    for mode in [SearchMode::Semantic, SearchMode::Hybrid] {
+        let mut semantic = request.clone();
+        semantic.documents.mode = mode;
+        let context = offline
+            .semantic_context(query, &semantic, Some(&runtime), false, false)
+            .unwrap();
+        let first = context.passages().first().unwrap();
+        assert!(first.text.contains(answer), "{mode:?}: {:?}", first.text);
+        assert!(!first.text.contains("quasarbreak"));
+        assert!(
+            first
+                .rank_contributions
+                .iter()
+                .any(|rank| { rank.channel == "context_unit_dense" && rank.score == Some(1.0) })
+        );
+        assert_eq!(
+            first
+                .rank_contributions
+                .iter()
+                .filter(|rank| { rank.channel == "direct_document_owner" })
+                .count(),
+            1
+        );
+        assert!(matches!(
+            context.verification(),
+            lwiki::catalog::SnapshotVerification::VerifiedSnapshot { .. }
+        ));
+        for passage in context.passages() {
+            assert_eq!(passage.locator.path, path);
+            assert_eq!(passage.locator.observed_hash, observed_hash);
+            assert_eq!(
+                passage.locator.record.as_ref().unwrap().record_id.as_str(),
+                "page_distant"
+            );
+            assert_eq!(passage.span.slice(&raw).unwrap(), passage.text);
+        }
+        assert!(!context.network_used);
+        assert!(context.usage().rendered_bytes <= request.budget.max_bytes);
+        assert!(context.usage().estimated_tokens <= request.budget.max_tokens);
+        assert!(
+            context
+                .warnings()
+                .iter()
+                .any(|warning| warning.contains("cached unit affinities"))
+        );
+    }
+    // The explicit host stage selects the same exact answer from authenticated
+    // cards without making a provider request or rewriting the returned bytes.
+    let mut semantic = request.clone();
+    semantic.documents.mode = SearchMode::Hybrid;
+    let prepared = offline
+        .semantic_context_with_selection(
+            query,
+            &semantic,
+            Some(&runtime),
+            false,
+            false,
+            &lwiki::retrieval::context_selection_packet::SelectionAction::Prepare,
+        )
+        .unwrap();
+    let packet = prepared.selection_packet().unwrap();
+    let card = packet
+        .cards
+        .iter()
+        .find(|card| card.passage.text.contains(answer))
+        .unwrap();
+    let selected = offline
+        .semantic_context_with_selection(
+            query,
+            &semantic,
+            Some(&runtime),
+            false,
+            false,
+            &lwiki::retrieval::context_selection_packet::SelectionAction::Apply(
+                lwiki::retrieval::context_selection_packet::SelectionReply {
+                    packet_fingerprint: packet.fingerprint.clone(),
+                    ordered_ids: vec![card.id.clone()],
+                },
+            ),
+        )
+        .unwrap();
+    assert_eq!(selected.passages()[0].text, card.passage.text);
+    assert!(
+        selected.passages()[0]
+            .rank_contributions
+            .iter()
+            .any(|rank| rank.channel == "host_selection")
+    );
+    assert!(!prepared.network_used && !selected.network_used);
+    // Lose a lexical region's cached vector while the distant semantic answer
+    // remains available. Partial coverage must not silently discard that region.
+    let missing = units
+        .iter()
+        .find(|unit| {
+            unit.source_span
+                .unwrap()
+                .slice(&raw)
+                .unwrap()
+                .contains(distractor)
+        })
+        .unwrap();
+    let connection =
+        rusqlite::Connection::open(f.fs.root().path().join(".wiki/cache/embeddings.sqlite3"))
+            .unwrap();
+    connection
+        .execute(
+            "UPDATE embedding_vectors SET blob=?1 WHERE input=?2",
+            rusqlite::params![f32::NAN.to_le_bytes().to_vec(), missing.input_hash.as_str()],
+        )
+        .unwrap();
+    drop(connection);
+    let mut hybrid = request.clone();
+    hybrid.documents.mode = SearchMode::Hybrid;
+    let partial = offline
+        .semantic_context(query, &hybrid, Some(&runtime), false, false)
+        .unwrap();
+    assert!(
+        partial
+            .passages()
+            .iter()
+            .any(|p| p.text.contains(distractor))
+    );
+    assert!(
+        partial
+            .warnings()
+            .iter()
+            .any(|warning| warning.contains("unit coverage is incomplete"))
+    );
+    assert!(!partial.network_used);
+    assert_eq!(responses.calls.load(Ordering::SeqCst), 0);
+    assert_eq!(
+        std::fs::read_to_string(f.fs.root().path().join(path.as_str())).unwrap(),
+        raw
+    );
+}
+
 #[test]
 fn offline_missing_query_vector_no_remote() {
     let f = Fixture::new();

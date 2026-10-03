@@ -54,13 +54,14 @@
   "files": {
     "SKILL.md": "1bd5ce9e2e6614c32da481611bda61bca2d7bfd72130c1d922af20d5ab173eb8",
     "agents/openai.yaml": "307ad222dc5d27d563d54b0a0466264fd035378ce2d103bcbf8de4ed2ea1b144",
-    "references/commands.md": "47802f037e5c32d15cb9d2fcd9cc386b745da6b5c8927022c4fd29b888698b39",
+    "references/commands.md": "eaa696c1a09d6c196adf6253f0fb05c0d5a175fbaca61b4c8406b21f44ff0876",
     "references/examples.json": "094b0c0347788127dbf124464d03b1405b81272755c20ddf6696cf04f85f45e1",
-    "references/workflows.md": "13c77d78d7590503612a751902ab5d7b7e0518154c9687bc10cff39b9fd29a58"
+    "references/workflows.md": "f8d3ac3971556b8de5efa1430d6f125c4452d2b66bc86a6668e063f914463dc5"
   },
-  "package_checksum": "5595564e13f04acfddf1549a96a222b26c541b9fea98ea24986ecdf6e72ce88a",
+  "package_checksum": "115c63bc92b56bf1f5726b84b979d9e1b32aadf58157834254247de8c1c94586",
   "schema": "lwiki.skill-manifest.v1",
   "schemas": [
+    "context-selection",
     "output",
     "record",
     "page",

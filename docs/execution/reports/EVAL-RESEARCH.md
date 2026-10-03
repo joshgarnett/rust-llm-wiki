@@ -1,5 +1,13 @@
 # Context evaluation research and implementation
 
+## Development checkpoint: host selection
+
+The context-completeness goal remains open. On the same fine-grained embedding cache, the automatic candidate reaches 15 complete, 12 partial and one bad result across 28 answerable development questions, versus baseline 7/20/1. Three previously complete cases regress. All four absent-information cases remain unsupported. These results do not meet the independent acceptance gate.
+
+An explicit host-assisted workflow now prepares exact candidate passages, accepts one bounded ID-only selection, and locally verifies and packs the selected original evidence. Four deliberately selected difficult development pilots received independent final-context grades of three complete and one partial, versus zero complete, three partial and one bad from the automatic candidate on those same cases. The missing fact in the partial pilot is absent from its supplied candidate packet; selection cannot recover evidence it never receives. Two early task-transport failures remain recorded, and a revised transport succeeded. These selected pilots are not a representative acceptance score. Private acceptance questions and public QASPER test questions remain untouched.
+
+Mechanics passed 11 packet unit tests and the CLI, context-freshness and semantic-retrieval integration targets. Format, strict Clippy, contract, machine-schema and exported-skill checks also passed after fixing module ordering and two test-only lint findings. The evaluator and QASPER adapter passed 23 and seven Python tests. Live embedding caches establish provider-backed retrieval behavior; mock tests establish invariants, not model quality. Actual host token usage and cost are unavailable. The original one-command embedding-only quality gate remains unmet.
+
 Detailed session reports, machine checks and `.artifacts` paths mentioned below are optional local evidence; fresh clones contain the curated summaries and tracked reproduction scripts. Recorded checks describe the identified historical source, not a new verification of the current checkout.
 
 **Recommendation implemented:** use QASPER v0.3 as the first public context-location baseline, retain a separate private critic for semantic completeness, and add MuSiQue-Full for multihop/absent-bridge coverage later. [QASPER's paper](https://aclanthology.org/2021.naacl-main.365/) and [official CC BY 4.0 card](https://huggingface.co/datasets/allenai/qasper) provide human questions, answers, paragraph evidence and unanswerability over long research papers. This fits passage selection; paper-title query transformation and image exclusions are explicit.

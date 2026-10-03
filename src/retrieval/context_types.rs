@@ -7,6 +7,23 @@ use crate::{
     sources::EvidenceStance,
 };
 use serde::{Deserialize, Serialize};
+
+/// Local ranking hints derived from the retained embedding space. These are
+/// never evidence, citation authority, or a completeness/confidence estimate.
+#[derive(Debug, Clone)]
+pub(crate) struct ContextSemanticCue {
+    pub owner: VaultRelativePath,
+    pub observed_hash: Blake3Hash,
+    pub span: ByteSpan,
+    pub cosine: f64,
+}
+
+#[derive(Debug, Clone, Default)]
+pub(crate) struct ContextSelectionSignals {
+    pub semantic: Vec<ContextSemanticCue>,
+    pub semantic_complete: bool,
+    pub warnings: Vec<String>,
+}
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ContextScope {
@@ -147,9 +164,14 @@ pub struct ContextResult {
     pub(crate) dependency_fingerprint: Blake3Hash,
     pub(crate) truncated: bool,
     pub(crate) warnings: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) selection_packet: Option<super::context_selection_packet::SelectionPacket>,
 }
 
 impl ContextResult {
+    pub fn selection_packet(&self) -> Option<&super::context_selection_packet::SelectionPacket> {
+        self.selection_packet.as_ref()
+    }
     pub fn text(&self) -> &str {
         &self.text
     }
@@ -184,6 +206,7 @@ impl ContextResult {
 #[derive(Clone, Default)]
 pub struct ContextOptions {
     pub fault: Option<std::sync::Arc<dyn ContextFault>>,
+    pub selection: super::context_selection_packet::SelectionAction,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ContextCheckpoint {

@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "lwiki.context-selection.v1",
+  "title": "Bounded host context selection reply",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["packet_fingerprint", "ordered_ids"],
+  "properties": {
+    "packet_fingerprint": {"type": "string", "pattern": "^blake3:[0-9a-f]{64}$"},
+    "ordered_ids": {
+      "type": "array",
+      "maxItems": 20,
+      "uniqueItems": true,
+      "items": {"type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[A-Za-z0-9_-]+$"}
+    }
+  },
+  "$comment": "The CLI additionally enforces a 4096-byte raw reply ceiling, duplicate-key rejection, exact packet binding and ID membership. Source citation and freshness checks remain local."
+}

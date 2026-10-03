@@ -273,6 +273,7 @@ fn seal(
         dependency_fingerprint: draft.dependency_fingerprint,
         truncated: draft.truncated,
         warnings: draft.warnings,
+        selection_packet: draft.selection_packet,
     }
 }
 pub fn context_with_options(
@@ -308,16 +309,60 @@ where
         &ContextRequest,
     ) -> Result<(super::HitSet, Option<crate::graph::GraphResult>)>,
 {
+    context_with_scored_retrieval(
+        catalog,
+        writer,
+        query,
+        request,
+        options,
+        |reader, normalized| {
+            let (hits, graph) = retrieve(reader, normalized)?;
+            Ok((
+                hits,
+                graph,
+                super::context_types::ContextSelectionSignals::default(),
+            ))
+        },
+    )
+}
+
+pub(crate) fn context_with_scored_retrieval<F>(
+    catalog: &Catalog,
+    writer: Option<&WriterPermit>,
+    query: &str,
+    request: &ContextRequest,
+    options: &ContextOptions,
+    mut retrieve: F,
+) -> Result<ContextResult>
+where
+    F: FnMut(
+        &ReaderSnapshot,
+        &ContextRequest,
+    ) -> Result<(
+        super::HitSet,
+        Option<crate::graph::GraphResult>,
+        super::context_types::ContextSelectionSignals,
+    )>,
+{
     // The caller's held-writer acquisition is outside this function. The deadline
     // starts before validation, reader opens, operational guards and maintenance.
     let mut meter = Meter::new(&request.verification_budget);
     let request = context::validate_request(query, request)?;
+    context::validate_selection_action(&request, &options.selection)?;
     meter.check()?;
     if request.scope == ContextScope::Snapshot {
         let reader = catalog.index_snapshot()?;
         meter.check()?;
-        let (hits, graph) = retrieve(&reader, &request)?;
-        let draft = context::assemble(&reader, &request, &hits, graph.as_ref())?;
+        let (hits, graph, signals) = retrieve(&reader, &request)?;
+        let draft = context::assemble_for_query(
+            &reader,
+            &request,
+            &hits,
+            graph.as_ref(),
+            query,
+            &signals,
+            &options.selection,
+        )?;
         meter.check()?;
         return Ok(seal(draft, SnapshotVerification::IndexSnapshot, &meter));
     }
@@ -373,8 +418,16 @@ where
                     "initial control membership or dependency bytes differ from pinned index",
                 ));
             }
-            let (hits, graph) = retrieve(&reader, &request)?;
-            let assembled = context::assemble(&reader, &request, &hits, graph.as_ref())?;
+            let (hits, graph, signals) = retrieve(&reader, &request)?;
+            let assembled = context::assemble_for_query(
+                &reader,
+                &request,
+                &hits,
+                graph.as_ref(),
+                query,
+                &signals,
+                &options.selection,
+            )?;
             meter.check()?;
             let view = SourceView::from_closed_input(catalog.fs(), &captured.input)?;
             let scope = if request.scope == ContextScope::Current {
@@ -383,7 +436,7 @@ where
                 CitationScope::Historical
             };
             let mut selected_dependencies = BTreeMap::new();
-            for passage in assembled.passages() {
+            for passage in assembled.verification_passages() {
                 for citation in &passage.citations {
                     meter.check()?;
                     let verified = view.verify(citation, scope)?;

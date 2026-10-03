@@ -14,6 +14,8 @@ During an authorized implementation goal, continue through M0–M4 without routi
 
 Update the execution state after integration, before compaction, and before stopping. Report actual checks and their limits. Never claim a mock demonstrates live-provider compatibility or a cross-build demonstrates native crash safety.
 
+Commit coherent, tested milestones as work progresses. Record the commit, validation evidence, unresolved findings and next step in the local checkpoint; promote stable conclusions into tracked summaries. A checkpoint commit preserves progress and does not imply that an unfinished quality goal has passed acceptance.
+
 Keep session checkpoints and detailed agent/run reports local under the ignored execution paths or `.artifacts/`. Keep reusable instructions, implementation decisions and curated validation summaries tracked. Promote stable findings into those maintained documents; do not add raw logs, per-attempt reports or temporary state to Git. Preserve local evidence when changing tracking, and ensure tracked documentation works in a fresh checkout without ignored files.
 
 ## Delegate for independent judgment

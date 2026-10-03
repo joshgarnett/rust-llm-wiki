@@ -148,6 +148,7 @@ fn new_decision_or_copied_id_before_emit_is_detected() {
             &graph_request(),
             &ContextOptions {
                 fault: Some(hook.clone()),
+                ..Default::default()
             },
         )
         .unwrap();
@@ -186,7 +187,8 @@ fn second_change_fails_without_a_third_attempt() {
             PAGE,
             &ContextRequest::default(),
             &ContextOptions {
-                fault: Some(hook.clone())
+                fault: Some(hook.clone()),
+                ..Default::default()
             }
         )
         .unwrap_err()
@@ -237,7 +239,10 @@ fn freshness_budget_cannot_claim_verified() {
             Some(&writer),
             "uses",
             &r,
-            &ContextOptions { fault: Some(hook) },
+            &ContextOptions {
+                fault: Some(hook),
+                ..Default::default()
+            },
         )
         .unwrap_err(),
         "--verification-max-elapsed-ms",
@@ -268,7 +273,10 @@ fn both_attempts_share_the_file_budget() {
             Some(&writer),
             CLAIM,
             &request,
-            &ContextOptions { fault: Some(hook) }
+            &ContextOptions {
+                fault: Some(hook),
+                ..Default::default()
+            }
         )
         .unwrap_err()
         .code,
@@ -998,4 +1006,242 @@ fn context_eligibility_filters_precede_literal_and_lexical_candidate_caps() {
         assert!(result.text().contains("reviewed body"));
         assert!(!result.text().contains("excluded body"));
     }
+}
+
+fn capture_context_fixture(f: &Fixture, body: &str) -> RecordId {
+    let writer = f.writer();
+    let plan = SourceStore::new(f.catalog.fs().clone())
+        .plan_capture(CaptureRequest {
+            title: "Operations reference".into(),
+            origin_kind: SourceOrigin::LocalFile,
+            origin: "operations.md".into(),
+            original: body.as_bytes().to_vec(),
+            extraction: ExtractionInput::Utf8Preserve,
+            media_type: Some("text/markdown".into()),
+        })
+        .unwrap();
+    let engine = ChangeEngine::new(f.catalog.fs().clone()).unwrap();
+    let prepared = engine
+        .prepare(&writer, plan.draft.unwrap())
+        .unwrap()
+        .prepared;
+    engine
+        .apply(&writer, &prepared, &CatalogGraphValidator, &f.catalog)
+        .unwrap();
+    plan.source_id
+}
+
+#[test]
+fn context_expands_beyond_discovery_anchor_with_exact_complete_commands() {
+    let f = Fixture::new();
+    let body = format!(
+        "# Operations\n\nanchoronly introduction.\n\n{}\n## Audit archived records\n\nAudit archived records before restoring them:\n\n```sh\nvaultctl audit --archived\n```\n\n{}\n## Restore records\n\nRestore archived records while preserving UTF-8 café names:\n\n```sh\nvaultctl restore --preserve-names\n```\n",
+        "Unrelated setup instructions.\n\n".repeat(40),
+        "Unrelated deployment details.\n\n".repeat(40),
+    );
+    let source = capture_context_fixture(&f, &body);
+    let writer = f.writer();
+    let mut request = ContextRequest::default();
+    request.documents.limits.excerpt_bytes = 512;
+    request.documents.filters.source_ids = vec![source];
+    request.budget.max_bytes = 6000;
+    request.budget.max_tokens = 1500;
+    let result = context_with_retrieval(
+        &f.catalog,
+        Some(&writer),
+        "audit archived records and restore preserving names",
+        &request,
+        &ContextOptions::default(),
+        |reader, normalized| {
+            let mut plan = normalized.documents.clone();
+            plan.mode = SearchMode::Literal;
+            plan.limits.excerpt_bytes = 80;
+            let hits = search(reader, "anchoronly", &plan)?;
+            assert_eq!(hits.hits.len(), 1);
+            assert!(!hits.hits[0].excerpt.text.contains("vaultctl"));
+            Ok((hits, None))
+        },
+    )
+    .unwrap();
+    assert!(
+        result.text().contains("vaultctl audit --archived"),
+        "{}",
+        result.text()
+    );
+    assert!(
+        result.text().contains("vaultctl restore --preserve-names"),
+        "{}",
+        result.text()
+    );
+    assert!(result.text().len() <= 6000);
+    assert!(result.passages().len() <= 4);
+    for passage in result.passages() {
+        assert!(passage.text.len() <= 512);
+        assert_eq!(passage.span.slice(&body).unwrap(), passage.text);
+        assert_eq!(passage.text.matches("```").count() % 2, 0);
+        assert_eq!(passage.citations.len(), 1);
+        for citation in &passage.citations {
+            let CitationRef::Source(reference) = citation else {
+                panic!("expected direct source citation")
+            };
+            assert_eq!(reference.span, passage.span);
+            assert_eq!(
+                reference.quote_hash,
+                Blake3Hash::digest(reference.span.slice(&body).unwrap().as_bytes())
+            );
+        }
+    }
+}
+
+#[test]
+fn source_aware_mirrored_content_retains_each_revision_once() {
+    let f = Fixture::new();
+    let body = "# Mirror instructions\n\nAudit archived records before restoration.\n\nRestore archived records with vaultctl restore --preserve-names.\n";
+    let first = capture_context_fixture(&f, body);
+    let second = capture_context_fixture(&f, body);
+    assert_ne!(first, second);
+    let mut request = ContextRequest::default();
+    request.documents.filters.source_ids = vec![first.clone(), second.clone()];
+    request.budget.max_bytes = 6000;
+    request.budget.max_tokens = 1500;
+    let result = f.run("audit archived records restore preserve names", &request);
+    assert!(!result.passages().is_empty());
+    let mut cited = std::collections::BTreeSet::new();
+    for passage in result.passages() {
+        let mut revisions = std::collections::BTreeSet::new();
+        assert!(passage.contributors.is_empty());
+        assert_eq!(passage.span.slice(body).unwrap(), passage.text);
+        for citation in &passage.citations {
+            let CitationRef::Source(reference) = citation else {
+                panic!("expected direct source citation")
+            };
+            assert!(revisions.insert((
+                reference.source_id.clone(),
+                reference.source_revision.clone()
+            )));
+            cited.insert(reference.source_id.clone());
+            assert_eq!(reference.span, passage.span);
+            assert_eq!(
+                reference.quote_hash,
+                Blake3Hash::digest(passage.text.as_bytes())
+            );
+        }
+    }
+    assert_eq!(cited, [first, second].into_iter().collect());
+}
+
+#[test]
+fn source_aware_context_respects_small_bounds_reservations_and_snapshot_scope() {
+    let f = Fixture::new();
+    let body = format!(
+        "# Bounded reference\n\n{}",
+        "restore café records safely with backups. ".repeat(80)
+    );
+    let source = capture_context_fixture(&f, &body);
+    let mut request = ContextRequest::default();
+    request.documents.filters.source_ids = vec![source];
+    request.documents.limits.excerpt_bytes = 64;
+    request.budget.max_bytes = 1800;
+    request.budget.max_tokens = 450;
+    request.budget.instruction_bytes = 200;
+    request.budget.instruction_tokens = 50;
+    let result = f.run("restore café", &request);
+    assert!(!result.passages().is_empty());
+    assert!(result.text().len() + 200 <= 1800);
+    assert!(result.usage().estimated_tokens + 50 <= 450);
+    for p in result.passages() {
+        assert!(p.text.len() <= 64);
+        assert_eq!(p.span.slice(&body).unwrap(), p.text);
+    }
+    request.scope = ContextScope::Snapshot;
+    let snapshot = f.run("restore café", &request);
+    assert!(matches!(
+        snapshot.verification(),
+        SnapshotVerification::IndexSnapshot
+    ));
+    assert!(snapshot.passages().iter().all(|p| p.citations.is_empty()));
+    assert!(
+        snapshot
+            .text()
+            .starts_with("[context index_snapshot; unverified]")
+    );
+}
+
+#[test]
+fn host_selection_replays_exact_current_cards_and_rejects_changed_bindings() {
+    use context_selection_packet::{SelectionAction, SelectionReply};
+    let f = Fixture::new();
+    let request = ContextRequest::default();
+    let prepared = {
+        let writer = f.writer();
+        context_with_options(
+            &f.catalog,
+            Some(&writer),
+            "uses",
+            &request,
+            &ContextOptions {
+                selection: SelectionAction::Prepare,
+                ..Default::default()
+            },
+        )
+        .unwrap()
+    };
+    assert!(prepared.passages().is_empty());
+    assert!(matches!(
+        prepared.verification(),
+        SnapshotVerification::VerifiedSnapshot { .. }
+    ));
+    let packet = prepared.selection_packet().unwrap();
+    assert!(packet.input_bytes <= 131072 && packet.estimated_tokens <= 32768);
+    let card = packet
+        .cards
+        .iter()
+        .find(|card| {
+            card.passage
+                .citations
+                .iter()
+                .any(|c| matches!(c, CitationRef::Source(_)))
+        })
+        .unwrap();
+    let reply = SelectionReply {
+        packet_fingerprint: packet.fingerprint.clone(),
+        ordered_ids: vec![card.id.clone()],
+    };
+    let options = ContextOptions {
+        selection: SelectionAction::Apply(reply.clone()),
+        ..Default::default()
+    };
+    let selected = context_with_options(&f.catalog, None, "uses", &request, &options).unwrap();
+    assert!(selected.selection_packet().is_none());
+    assert_eq!(selected.passages().len(), 1);
+    assert_eq!(selected.passages()[0].text, card.passage.text);
+    assert_eq!(selected.passages()[0].span, card.passage.span);
+    assert!(selected.text().len() <= request.budget.max_bytes);
+    assert!(selected.usage().estimated_tokens <= request.budget.max_tokens);
+    assert!(!selected.network_used);
+    assert!(context_with_options(&f.catalog, None, "uses North", &request, &options).is_err());
+    let mut smaller = request.clone();
+    smaller.budget.max_bytes -= 1;
+    assert!(context_with_options(&f.catalog, None, "uses", &smaller, &options).is_err());
+    let empty = ContextOptions {
+        selection: SelectionAction::Apply(SelectionReply {
+            packet_fingerprint: packet.fingerprint.clone(),
+            ordered_ids: vec![],
+        }),
+        ..Default::default()
+    };
+    let result = context_with_options(&f.catalog, None, "uses", &request, &empty).unwrap();
+    assert!(result.passages().is_empty() && result.text().is_empty());
+    let source = card
+        .passage
+        .citations
+        .iter()
+        .find_map(|citation| match citation {
+            CitationRef::Source(reference) => Some(reference.source_id.clone()),
+            _ => None,
+        })
+        .unwrap();
+    f.withdraw(source.as_str());
+    let writer = f.writer();
+    assert!(context_with_options(&f.catalog, Some(&writer), "uses", &request, &options).is_err());
 }

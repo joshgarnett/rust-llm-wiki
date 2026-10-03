@@ -75,6 +75,7 @@ pub const COMMANDS: &[&str] = &[
     "migrate",
 ];
 pub const SCHEMAS: &[&str] = &[
+    "context-selection",
     "output",
     "record",
     "page",
@@ -166,6 +167,7 @@ fn execute_inner(args: &Arguments) -> Result<Envelope> {
         }
         Command::Schema { name } => {
             let schema = match name.as_str() {
+                "context-selection" => include_str!("../../schemas/context-selection-v1.json"),
                 "output" => include_str!("../../schemas/output-v1.json"),
                 "research-packet" => include_str!("../../schemas/research-packet-v1.json"),
                 "research-submission" => include_str!("../../schemas/research-submission-v1.json"),
@@ -712,6 +714,8 @@ fn execute_inner(args: &Arguments) -> Result<Envelope> {
         }
         Command::Context(context) => {
             let request = context.request();
+            let selection = context.selection_action()?;
+            retrieval::context::validate_selection_action(&request, &selection)?;
             if matches!(
                 request.documents.mode,
                 retrieval::SearchMode::Semantic | retrieval::SearchMode::Hybrid
@@ -749,12 +753,13 @@ fn execute_inner(args: &Arguments) -> Result<Envelope> {
                         &context.search.remote,
                         context.search.lexical_fallback,
                         |runtime, fallback| {
-                            app.semantic_context(
+                            app.semantic_context_with_selection(
                                 &context.search.query,
                                 &request,
                                 runtime,
                                 context.search.no_sync,
                                 fallback,
+                                &selection,
                             )
                         },
                     )?
@@ -775,11 +780,15 @@ fn execute_inner(args: &Arguments) -> Result<Envelope> {
                             Duration::from_millis(app.options().lock_timeout_ms),
                         )?)
                     };
-                    retrieval::verification::context(
+                    retrieval::verification::context_with_options(
                         &catalog,
                         writer.as_ref(),
                         &context.search.query,
                         &request,
+                        &retrieval::ContextOptions {
+                            selection: selection.clone(),
+                            ..Default::default()
+                        },
                     )?
                 };
                 envelope.meta.network_used = result.network_used;
@@ -1364,6 +1373,18 @@ fn present_inner(
             "{}",
             envelope.data["body"].as_str().unwrap_or_default()
         ),
+        OutputFormat::Human
+            if envelope.command == "context"
+                && envelope.data["selection_packet"]["selector_input"].is_string() =>
+        {
+            write!(
+                output,
+                "{}",
+                envelope.data["selection_packet"]["selector_input"]
+                    .as_str()
+                    .unwrap_or_default()
+            )
+        }
         OutputFormat::Human
             if envelope.command == "context" && envelope.data["text"].is_string() =>
         {

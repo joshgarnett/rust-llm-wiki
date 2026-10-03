@@ -683,3 +683,125 @@ fn context_default_retains_surrounding_explanation_and_explicit_excerpt_bounds_w
     );
     assert!(default["data"]["text"].as_str().unwrap().len() <= 12000);
 }
+
+#[test]
+fn host_selection_cli_prepare_dry_run_and_reply_validation_are_offline() {
+    let f = fixture();
+    ok(f.path(), &["context", "uses"]);
+    let before = tree(f.path());
+    let dry = ok(
+        f.path(),
+        &["--dry-run", "context", "uses", "--prepare-selection"],
+    );
+    assert_eq!(dry["data"]["dry_run"], true);
+    assert_eq!(before, tree(f.path()));
+    let prepared = ok(f.path(), &["context", "uses", "--prepare-selection"]);
+    assert_eq!(prepared["meta"]["freshness"], "verified_snapshot");
+    let packet = &prepared["data"]["selection_packet"];
+    let task = packet["selector_input"].as_str().unwrap();
+    assert_eq!(task.len() as u64, packet["input_bytes"].as_u64().unwrap());
+    assert!(task.len() <= 131072);
+    assert!(packet["candidate_count"].as_u64().unwrap() > 0);
+    assert!(prepared["data"]["passages"].as_array().unwrap().is_empty());
+    let replay = ok(f.path(), &["context", "uses", "--prepare-selection"]);
+    assert_eq!(replay["data"]["selection_packet"], *packet);
+    let reply_dir = tempfile::tempdir().unwrap();
+    let reply_path = reply_dir.path().join("selection.json");
+    fs::write(
+        &reply_path,
+        serde_json::to_vec(&serde_json::json!({
+            "packet_fingerprint": packet["fingerprint"], "ordered_ids": []
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let result = ok(
+        f.path(),
+        &[
+            "context",
+            "uses",
+            "--selection",
+            reply_path.to_str().unwrap(),
+        ],
+    );
+    assert!(result["data"]["text"].as_str().unwrap().is_empty());
+    assert!(result["data"]["passages"].as_array().unwrap().is_empty());
+    fs::write(
+        &reply_path,
+        serde_json::to_vec(&serde_json::json!({
+            "packet_fingerprint": packet["fingerprint"], "ordered_ids": ["not-a-card"]
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let (exit, rejected) = invoke(
+        f.path(),
+        &[
+            "context",
+            "uses",
+            "--selection",
+            reply_path.to_str().unwrap(),
+        ],
+    );
+    assert_ne!(exit, 0);
+    assert_eq!(rejected["ok"], false);
+    fs::write(&reply_path, vec![b' '; 4097]).unwrap();
+    assert_ne!(
+        invoke(
+            f.path(),
+            &[
+                "context",
+                "uses",
+                "--selection",
+                reply_path.to_str().unwrap()
+            ]
+        )
+        .0,
+        0
+    );
+    let output = Command::new(test_paths::binary(env!("CARGO_BIN_EXE_lwiki")))
+        .arg("--wiki")
+        .arg(f.path())
+        .args(["--offline", "context", "uses", "--prepare-selection"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    assert_eq!(String::from_utf8(output.stdout).unwrap(), task);
+}
+
+#[cfg(unix)]
+#[test]
+fn host_selection_rejects_fifo_without_waiting_for_a_writer() {
+    use std::{
+        ffi::CString,
+        os::unix::ffi::OsStrExt,
+        time::{Duration, Instant},
+    };
+    let f = fixture();
+    let input = tempfile::tempdir().unwrap();
+    let fifo = input.path().join("reply.fifo");
+    let name = CString::new(fifo.as_os_str().as_bytes()).unwrap();
+    assert_eq!(unsafe { libc::mkfifo(name.as_ptr(), 0o600) }, 0);
+    let mut child = Command::new(test_paths::binary(env!("CARGO_BIN_EXE_lwiki")))
+        .arg("--wiki")
+        .arg(f.path())
+        .args(["--json", "--offline", "context", "uses", "--selection"])
+        .arg(fifo)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .unwrap();
+    let start = Instant::now();
+    loop {
+        if let Some(status) = child.try_wait().unwrap() {
+            assert!(!status.success());
+            break;
+        }
+        if start.elapsed() > Duration::from_secs(2) {
+            child.kill().unwrap();
+            child.wait().unwrap();
+            panic!("selection input blocked on a FIFO");
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}

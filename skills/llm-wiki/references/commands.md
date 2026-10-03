@@ -1308,6 +1308,12 @@ Options:
       --no-sync
           Read the existing index snapshot without syncing; freshness is not verified
 
+      --prepare-selection
+          Prepare a bounded candidate packet for one host-agent selection; does not run a model
+
+      --selection <FILE>
+          Apply an ID-only host reply to the exact current candidate packet (file or - for stdin)
+
       --scope <SCOPE>
           Evidence scope: verified current, historical, or unverified index snapshot
 
@@ -3480,6 +3486,7 @@ Options:
 
 ## Implemented schemas
 
+- `lwiki --json schema context-selection`
 - `lwiki --json schema output`
 - `lwiki --json schema record`
 - `lwiki --json schema page`

@@ -2005,6 +2005,122 @@ impl OfflineApp {
             "semantic graph failed final proof",
         ))
     }
+    fn context_selection_signals(
+        &self,
+        reader: &ReaderSnapshot,
+        request: &ContextRequest,
+        hits: &HitSet,
+        state: &SpaceState,
+        query: &[f32],
+    ) -> Result<ContextSelectionSignals> {
+        let mut signals = ContextSelectionSignals::default();
+        if request.target == ContextTarget::Graph
+            || !matches!(
+                request.documents.mode,
+                SearchMode::Semantic | SearchMode::Hybrid
+            )
+        {
+            return Ok(signals);
+        }
+        self.require_active_space(state)?;
+        let store = VectorStore::open(&self.fs, None)?;
+        let mut scanned_bytes = 0usize;
+        let mut scanned_units = 0usize;
+        let vector_width = query
+            .len()
+            .checked_mul(std::mem::size_of::<f32>())
+            .ok_or_else(|| fail(ErrorCode::BudgetExceeded, "context vector width overflow"))?;
+        let mut vector_bytes = 0usize;
+        let mut missing = 0usize;
+        let mut capped = false;
+        let mut seen = BTreeSet::new();
+        for hit in &hits.hits {
+            if !seen.insert(hit.locator.path.clone()) {
+                continue;
+            }
+            let document = reader
+                .projection()
+                .documents
+                .iter()
+                .find(|document| {
+                    document.path == hit.locator.path && document.hash == hit.locator.observed_hash
+                })
+                .ok_or_else(|| {
+                    fail(
+                        ErrorCode::FreshnessConflict,
+                        "context semantic owner changed",
+                    )
+                })?;
+            if document.raw_text.len() > 1024 * 1024
+                || scanned_bytes.saturating_add(document.raw_text.len()) > 4 * 1024 * 1024
+            {
+                capped = true;
+                continue;
+            }
+            scanned_bytes += document.raw_text.len();
+            for unit in render::render_document_iter(reader, document, &state.spec.settings)? {
+                if scanned_units == 4096 {
+                    capped = true;
+                    break;
+                }
+                scanned_units += 1;
+                let unit = unit?;
+                if !retrieval::fusion::unit_allowed(
+                    reader,
+                    &unit,
+                    &request.documents.filters,
+                    Some(request.scope != ContextScope::Current),
+                    None,
+                )? {
+                    continue;
+                }
+                let Some(span) = unit.source_span.filter(|span| !span.is_empty()) else {
+                    continue;
+                };
+                if vector_width > 64 * 1024 * 1024 - vector_bytes {
+                    capped = true;
+                    break;
+                }
+                // Reserve even a missing/corrupt lookup. The source scan bound
+                // alone cannot bound work for unusually wide vector spaces.
+                vector_bytes += vector_width;
+                let Some(vector) = store.vector(&state.id, &unit.input_hash)? else {
+                    missing += 1;
+                    continue;
+                };
+                signals.semantic.push(ContextSemanticCue {
+                    owner: unit.owner,
+                    observed_hash: unit.source_hash,
+                    span,
+                    cosine: retrieval::vectors::cosine(query, &vector)?,
+                });
+            }
+            if scanned_units == 4096 || vector_width > 64 * 1024 * 1024 - vector_bytes {
+                capped = true;
+                break;
+            }
+        }
+        signals.warnings.push(format!(
+            "context reused {} cached unit affinities from {} inspected source bytes, {} units and {} reserved vector bytes; unit affinity is coarse ranking guidance, not passage confidence or answer completeness",
+            signals.semantic.len(), scanned_bytes, scanned_units, vector_bytes));
+        signals.semantic_complete = !capped
+            && missing == 0
+            && seen
+                .iter()
+                .all(|path| signals.semantic.iter().any(|cue| &cue.owner == path));
+        if !signals.semantic_complete {
+            signals.warnings.push("context unit coverage is incomplete; context selection uses bounded lexical source passages for every retrieved owner".into());
+        }
+        if missing > 0 {
+            signals.warnings.push(format!("{missing} context unit vectors unavailable; those passages retain local selection guidance"));
+        }
+        if capped {
+            signals.warnings.push("context semantic scoring reached its 1 MiB owner source, 4 MiB total source, 4096-unit or 64 MiB vector-read reservation cap; unscored passages retain local selection guidance".into());
+        }
+        self.require_active_space(state)?;
+        Ok(signals)
+    }
+
     pub fn semantic_context(
         &self,
         text: &str,
@@ -2013,6 +2129,29 @@ impl OfflineApp {
         no_sync: bool,
         fallback: bool,
     ) -> Result<ContextResult> {
+        self.semantic_context_with_selection(
+            text,
+            request,
+            runtime,
+            no_sync,
+            fallback,
+            &retrieval::context_selection_packet::SelectionAction::Automatic,
+        )
+    }
+    pub fn semantic_context_with_selection(
+        &self,
+        text: &str,
+        request: &ContextRequest,
+        runtime: Option<&EmbeddingRuntime<'_>>,
+        no_sync: bool,
+        fallback: bool,
+        selection: &retrieval::context_selection_packet::SelectionAction,
+    ) -> Result<ContextResult> {
+        retrieval::context::validate_selection_action(request, selection)?;
+        let options = ContextOptions {
+            selection: selection.clone(),
+            ..Default::default()
+        };
         let (state, query, network) = match self.embedding_query(text, runtime) {
             Ok(value) => value,
             Err(e)
@@ -2035,8 +2174,13 @@ impl OfflineApp {
                 } else {
                     Some(self.embedding_writer()?)
                 };
-                let mut context =
-                    retrieval::verification::context(&catalog, writer.as_ref(), text, &lexical)?;
+                let mut context = retrieval::verification::context_with_options(
+                    &catalog,
+                    writer.as_ref(),
+                    text,
+                    &lexical,
+                    &options,
+                )?;
                 context
                     .warnings
                     .push(format!("explicit lexical context fallback: {:?}", e.code));
@@ -2050,12 +2194,12 @@ impl OfflineApp {
         } else {
             Some(self.embedding_writer()?)
         };
-        let mut result = retrieval::verification::context_with_retrieval(
+        let mut result = retrieval::verification::context_with_scored_retrieval(
             &catalog,
             writer.as_ref(),
             text,
             request,
-            &ContextOptions::default(),
+            &options,
             |reader, normalized| {
                 let hits = if matches!(
                     normalized.documents.mode,
@@ -2090,7 +2234,9 @@ impl OfflineApp {
                         crate::graph::query::query(reader, text, plan)?
                     })
                 };
-                Ok((hits, graph))
+                let signals =
+                    self.context_selection_signals(reader, normalized, &hits, &state, &query)?;
+                Ok((hits, graph, signals))
             },
         )?;
         result.network_used = network;

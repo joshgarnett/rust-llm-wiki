@@ -182,7 +182,7 @@ pub fn corpus(reader: &ReaderSnapshot, settings: &EmbeddingSettings) -> Result<V
     });
     Ok(result)
 }
-fn render_document_iter<'a>(
+pub(crate) fn render_document_iter<'a>(
     reader: &'a ReaderSnapshot,
     document: &'a DocumentRow,
     settings: &'a EmbeddingSettings,
