@@ -1,6 +1,9 @@
 //! Authored status is preserved; only derived eligibility is computed here.
 use super::{
-    scan::{diagnostic, input_notes, isolated_fields, list, project, project_closed, readable_id},
+    scan::{
+        diagnostic, input_notes, isolated_fields, list, project_validation,
+        project_validation_closed, readable_id,
+    },
     types::*,
 };
 use crate::{
@@ -12,7 +15,7 @@ use crate::{
         Blake3Hash, CanonicalRecord, CitationRef, Eligibility, ErrorCode, RecordId, RecordKind,
         Result, VaultRelativePath, WikiError,
     },
-    records::{LinkResolution, ParsedNote, RegistryEntry, resolve_typed, resolve_untyped},
+    records::{LinkResolution, ParsedNote, RegistryEntry, links::IndexedRegistry},
     sources::{CitationScope, SourceView, evidence::evidence_reference, revision::canonical_path},
     vault::VaultFs,
 };
@@ -105,7 +108,11 @@ fn validate_projection(
             "entity decision activation requires authenticated GraphDecide origin and allocations",
         ));
     }
-    let projector = if closed { project_closed } else { project };
+    let projector = if closed {
+        project_validation_closed
+    } else {
+        project_validation
+    };
     let proposed = projector(fs, input)?;
     let baseline = projector(
         fs,
@@ -403,15 +410,17 @@ pub(crate) fn compute(
     records: &mut BTreeMap<RecordId, RecordRow>,
     diagnostics: &mut Vec<CatalogDiagnostic>,
 ) -> Result<()> {
-    let registry: Vec<_> = records
-        .values()
-        .map(|r| RegistryEntry {
-            id: r.record.id().clone(),
-            kind: r.record.kind(),
-            path: r.path.clone(),
-            aliases: list(&r.record, "aliases"),
-        })
-        .collect();
+    let registry = IndexedRegistry::new(
+        records
+            .values()
+            .map(|r| RegistryEntry {
+                id: r.record.id().clone(),
+                kind: r.record.kind(),
+                path: r.path.clone(),
+                aliases: list(&r.record, "aliases"),
+            })
+            .collect(),
+    );
     let snapshot = records.clone();
     let mut edges: BTreeMap<RecordId, BTreeSet<RecordId>> = BTreeMap::new();
     let mut declared: BTreeMap<RecordId, BTreeSet<RecordId>> = BTreeMap::new();
@@ -420,7 +429,7 @@ pub(crate) fn compute(
         let record = row.record.clone();
         if record.kind() == RecordKind::Assertion {
             for link in list(&record, "wiki_evidence") {
-                let reason = match resolve_untyped(&registry, &link) {
+                let reason = match registry.resolve_untyped(&link) {
                     LinkResolution::Resolved { id: target, .. } => match snapshot.get(&target) {
                         Some(evidence) if evidence.record.kind() == RecordKind::Evidence => {
                             if evidence.record.string("wiki_assertion_id") == Some(id.as_str()) {
@@ -450,12 +459,7 @@ pub(crate) fn compute(
                 let target = RecordId::new(value)?;
                 edges.entry(id.clone()).or_default().insert(target.clone());
                 if !matches!(
-                    resolve_typed(
-                        &registry,
-                        &target,
-                        kind,
-                        companion.and_then(|k| record.string(k))
-                    ),
+                    registry.resolve_typed(&target, kind, companion.and_then(|k| record.string(k))),
                     LinkResolution::Resolved { .. }
                 ) {
                     mark_invalid(
@@ -478,7 +482,7 @@ pub(crate) fn compute(
                 .or_default()
                 .insert(target.clone());
             if !matches!(
-                resolve_typed(&registry, &target, RecordKind::Assertion, None),
+                registry.resolve_typed(&target, RecordKind::Assertion, None),
                 LinkResolution::Resolved { .. }
             ) {
                 mark_invalid(

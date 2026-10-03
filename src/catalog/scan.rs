@@ -7,8 +7,8 @@ use crate::{
         WikiError,
     },
     records::{
-        LinkResolution, ParsedNote, RegistryEntry, extract_links, parse_note, resolve_typed,
-        resolve_untyped,
+        LinkResolution, ParsedNote, RegistryEntry, extract_links, links::IndexedRegistry,
+        parse_note,
     },
     sources::{SourceView, identity::readable_ids, revision::canonical_path},
     vault::{ExpectedState, VaultFs},
@@ -152,15 +152,64 @@ pub(crate) fn diagnostic(
 }
 
 pub fn project(fs: &VaultFs, input: &ValidationInput) -> Result<CatalogProjection> {
-    project_input(fs, input, false)
+    project_catalog(fs, input, false)
 }
 
 /// Reconstruct derived authority using only a complete, caller-metered input.
 pub(crate) fn project_closed(fs: &VaultFs, input: &ValidationInput) -> Result<CatalogProjection> {
-    project_input(fs, input, true)
+    project_catalog(fs, input, true)
 }
 
-fn project_input(fs: &VaultFs, input: &ValidationInput, closed: bool) -> Result<CatalogProjection> {
+/// Validation retains complete graph authority and observed dependencies without
+/// constructing retrieval rows. Existing input/view buffers still retain bytes;
+/// this skips the additional corpus of raw and normalized retrieval text.
+pub(crate) fn project_validation(
+    fs: &VaultFs,
+    input: &ValidationInput,
+) -> Result<ValidationProjection> {
+    project_input(fs, input, false, None)
+}
+
+pub(crate) fn project_validation_closed(
+    fs: &VaultFs,
+    input: &ValidationInput,
+) -> Result<ValidationProjection> {
+    project_input(fs, input, true, None)
+}
+
+#[derive(Default)]
+struct RetrievalProjection {
+    documents: Vec<DocumentRow>,
+    links: Vec<LinkRow>,
+    graph: Vec<GraphRow>,
+}
+
+fn project_catalog(
+    fs: &VaultFs,
+    input: &ValidationInput,
+    closed: bool,
+) -> Result<CatalogProjection> {
+    let mut retrieval = RetrievalProjection::default();
+    let validation = project_input(fs, input, closed, Some(&mut retrieval))?;
+    Ok(CatalogProjection {
+        vault_id: validation.vault_id,
+        parser_fingerprint: validation.parser_fingerprint,
+        control_manifest: validation.control_manifest,
+        documents: retrieval.documents,
+        records: validation.records,
+        graph: retrieval.graph,
+        links: retrieval.links,
+        diagnostics: validation.diagnostics,
+        dependencies: validation.dependencies,
+    })
+}
+
+fn project_input(
+    fs: &VaultFs,
+    input: &ValidationInput,
+    closed: bool,
+    mut retrieval: Option<&mut RetrievalProjection>,
+) -> Result<ValidationProjection> {
     let notes = input_notes(input)?;
     let mut memberships: BTreeMap<RecordId, Vec<VaultRelativePath>> = BTreeMap::new();
     for (path, note) in &notes {
@@ -223,133 +272,143 @@ fn project_input(fs: &VaultFs, input: &ValidationInput, closed: bool) -> Result<
         SourceView::from_input(fs, input)?
     };
     super::eligibility::compute(&source_view, &notes, &mut records, &mut diagnostics)?;
-    let registry: Vec<_> = records
-        .values()
-        .map(|row| RegistryEntry {
-            id: row.record.id().clone(),
-            kind: row.record.kind(),
-            path: row.path.clone(),
-            aliases: list(&row.record, "aliases"),
-        })
-        .collect();
-    let mut documents = Vec::new();
-    let mut links = Vec::new();
-    let mut graph = Vec::new();
     let mut dependencies: BTreeMap<VaultRelativePath, ExpectedState> = notes
         .iter()
         .map(|(p, n)| (p.clone(), ExpectedState::Hash(n.source_hash.clone())))
         .collect();
-    for (path, note) in &notes {
-        let row = note
-            .canonical
-            .as_ref()
-            .and_then(|record| records.get(record.id()))
-            .filter(|row| &row.path == path);
-        let raw_text = note.literal_text().unwrap_or_default().to_owned();
-        let body = std::str::from_utf8(note.body()).unwrap_or_default();
-        let bookkeeping = declared_bookkeeping_kind(note);
-        let excluded = bookkeeping.is_some_and(|kind| kind != RecordKind::Decision)
-            || row.is_some_and(|r| {
-                matches!(
-                    r.record.kind(),
-                    RecordKind::Evidence | RecordKind::Extraction | RecordKind::ExtractionPacket
-                )
-            });
-        let (headings, normalized) = if excluded {
-            (String::new(), String::new())
-        } else {
-            normalized_markdown(body)
-        };
-        let title = row.map_or_else(
-            || first_heading(body).unwrap_or_else(|| path.as_str().to_owned()),
-            |r| r.record.title().to_owned(),
+    if let Some(retrieval) = retrieval.as_deref_mut() {
+        let registry = IndexedRegistry::new(
+            records
+                .values()
+                .map(|row| RegistryEntry {
+                    id: row.record.id().clone(),
+                    kind: row.record.kind(),
+                    path: row.path.clone(),
+                    aliases: list(&row.record, "aliases"),
+                })
+                .collect(),
         );
-        documents.push(DocumentRow {
-            path: path.clone(),
-            hash: note.source_hash.clone(),
-            record_id: row.map(|r| r.record.id().clone()),
-            kind: row.map(|r| r.record.kind()).or(bookkeeping),
-            title,
-            aliases: row.map_or_else(Vec::new, |r| list(&r.record, "aliases")),
-            headings,
-            tags: row.map_or_else(Vec::new, |r| list(&r.record, "tags")),
-            body: normalized,
-            raw_text,
-            source_id: None,
-            owner_revision: None,
-            eligibility: row.map_or_else(
-                || {
-                    if note.canonical.is_some()
-                        || readable_id(note).is_some()
-                        || !note.diagnostics.is_empty()
-                    {
-                        Eligibility::Invalid
-                    } else {
-                        Eligibility::Current
-                    }
-                },
-                |r| r.eligibility,
-            ),
-            reasons: row.map_or_else(
-                || {
-                    if note.canonical.is_some() || !note.diagnostics.is_empty() {
-                        vec!["unadopted_or_invalid".into()]
-                    } else {
-                        vec!["note_text".into()]
-                    }
-                },
-                |r| r.reasons.clone(),
-            ),
-        });
-        let body_offset = note.raw.len() - note.body().len();
-        for link in extract_links(body) {
-            let resolution = resolve_untyped(&registry, &link.destination);
-            let (target_id, target_path) = match &resolution {
-                LinkResolution::Resolved { id, path, .. } => (Some(id.clone()), Some(path.clone())),
-                _ => (None, None),
+        let documents = &mut retrieval.documents;
+        let links = &mut retrieval.links;
+        for (path, note) in &notes {
+            let row = note
+                .canonical
+                .as_ref()
+                .and_then(|record| records.get(record.id()))
+                .filter(|row| &row.path == path);
+            let raw_text = note.literal_text().unwrap_or_default().to_owned();
+            let body = std::str::from_utf8(note.body()).unwrap_or_default();
+            let bookkeeping = declared_bookkeeping_kind(note);
+            let excluded = bookkeeping.is_some_and(|kind| kind != RecordKind::Decision)
+                || row.is_some_and(|r| {
+                    matches!(
+                        r.record.kind(),
+                        RecordKind::Evidence
+                            | RecordKind::Extraction
+                            | RecordKind::ExtractionPacket
+                    )
+                });
+            let (headings, normalized) = if excluded {
+                (String::new(), String::new())
+            } else {
+                normalized_markdown(body)
             };
-            links.push(LinkRow {
-                from_path: path.clone(),
-                byte_start: (body_offset + link.range.start) as u64,
-                target_id,
-                target_path,
-                resolution: format!("{resolution:?}"),
+            let title = row.map_or_else(
+                || first_heading(body).unwrap_or_else(|| path.as_str().to_owned()),
+                |r| r.record.title().to_owned(),
+            );
+            documents.push(DocumentRow {
+                path: path.clone(),
+                hash: note.source_hash.clone(),
+                record_id: row.map(|r| r.record.id().clone()),
+                kind: row.map(|r| r.record.kind()).or(bookkeeping),
+                title,
+                aliases: row.map_or_else(Vec::new, |r| list(&r.record, "aliases")),
+                headings,
+                tags: row.map_or_else(Vec::new, |r| list(&r.record, "tags")),
+                body: normalized,
+                raw_text,
+                source_id: None,
+                owner_revision: None,
+                eligibility: row.map_or_else(
+                    || {
+                        if note.canonical.is_some()
+                            || readable_id(note).is_some()
+                            || !note.diagnostics.is_empty()
+                        {
+                            Eligibility::Invalid
+                        } else {
+                            Eligibility::Current
+                        }
+                    },
+                    |r| r.eligibility,
+                ),
+                reasons: row.map_or_else(
+                    || {
+                        if note.canonical.is_some() || !note.diagnostics.is_empty() {
+                            vec!["unadopted_or_invalid".into()]
+                        } else {
+                            vec!["note_text".into()]
+                        }
+                    },
+                    |r| r.reasons.clone(),
+                ),
             });
-        }
-        if let Some(row) = row {
-            for (field, kind, companion) in super::eligibility::references(&row.record) {
-                let Some(companion) = companion else {
-                    continue;
-                };
-                let Some(destination) = row.record.string(companion) else {
-                    continue;
-                };
-                let Some(value) = row.record.string(field) else {
-                    continue;
-                };
-                let target = RecordId::new(value)?;
-                let resolution = resolve_typed(&registry, &target, kind, Some(destination));
+            let body_offset = note.raw.len() - note.body().len();
+            for link in extract_links(body) {
+                let resolution = registry.resolve_untyped(&link.destination);
                 let (target_id, target_path) = match &resolution {
                     LinkResolution::Resolved { id, path, .. } => {
                         (Some(id.clone()), Some(path.clone()))
                     }
                     _ => (None, None),
                 };
-                let line = note.field_starts.get(companion).copied().unwrap_or(0);
-                let tail = std::str::from_utf8(&note.raw[line..]).unwrap_or_default();
-                let start = line
-                    + tail
-                        .lines()
-                        .next()
-                        .and_then(|line| line.find("[["))
-                        .unwrap_or(0);
                 links.push(LinkRow {
                     from_path: path.clone(),
-                    byte_start: start as u64,
+                    byte_start: (body_offset + link.range.start) as u64,
                     target_id,
                     target_path,
                     resolution: format!("{resolution:?}"),
                 });
+            }
+            if let Some(row) = row {
+                for (field, kind, companion) in super::eligibility::references(&row.record) {
+                    let Some(companion) = companion else {
+                        continue;
+                    };
+                    let Some(destination) = row.record.string(companion) else {
+                        continue;
+                    };
+                    let Some(value) = row.record.string(field) else {
+                        continue;
+                    };
+                    // Shared eligibility::compute already checks every reference
+                    // ID, including fields without companions; this cannot add a
+                    // validation failure when retrieval emission is enabled.
+                    let target = RecordId::new(value)?;
+                    let resolution = registry.resolve_typed(&target, kind, Some(destination));
+                    let (target_id, target_path) = match &resolution {
+                        LinkResolution::Resolved { id, path, .. } => {
+                            (Some(id.clone()), Some(path.clone()))
+                        }
+                        _ => (None, None),
+                    };
+                    let line = note.field_starts.get(companion).copied().unwrap_or(0);
+                    let tail = std::str::from_utf8(&note.raw[line..]).unwrap_or_default();
+                    let start = line
+                        + tail
+                            .lines()
+                            .next()
+                            .and_then(|line| line.find("[["))
+                            .unwrap_or(0);
+                    links.push(LinkRow {
+                        from_path: path.clone(),
+                        byte_start: start as u64,
+                        target_id,
+                        target_path,
+                        resolution: format!("{resolution:?}"),
+                    });
+                }
             }
         }
     }
@@ -358,8 +417,10 @@ fn project_input(fs: &VaultFs, input: &ValidationInput, closed: bool) -> Result<
             dependencies.insert(dependency.path.clone(), dependency.expected.clone());
         }
         let record = &row.record;
-        if matches!(record.kind(), RecordKind::Entity | RecordKind::Assertion) {
-            graph.push(GraphRow {
+        if let Some(retrieval) = retrieval.as_deref_mut()
+            && matches!(record.kind(), RecordKind::Entity | RecordKind::Assertion)
+        {
+            retrieval.graph.push(GraphRow {
                 target_id: record.id().clone(),
                 target_kind: record.kind(),
                 name: if record.kind() == RecordKind::Entity {
@@ -423,11 +484,14 @@ fn project_input(fs: &VaultFs, input: &ValidationInput, closed: bool) -> Result<
                         .string("wiki_content_path")
                         .expect("complete content")
                 ))?;
+                // Reading remains shared: even failed/invalid payloads may add
+                // dependencies. Only retrieval owns decoded and normalized text.
                 if let Ok(content) = source_view.read(&path, &mut deps)
+                    && let Some(retrieval) = retrieval.as_deref_mut()
                     && let Ok(raw_text) = String::from_utf8(content)
                 {
                     let (headings, body) = normalized_markdown(&raw_text);
-                    documents.push(DocumentRow {
+                    retrieval.documents.push(DocumentRow {
                         path,
                         hash: Blake3Hash::digest(raw_text.as_bytes()),
                         record_id: None,
@@ -449,8 +513,14 @@ fn project_input(fs: &VaultFs, input: &ValidationInput, closed: bool) -> Result<
             dependencies.extend(deps);
         }
     }
-    documents.sort_by(|a, b| a.path.as_str().as_bytes().cmp(b.path.as_str().as_bytes()));
-    links.sort_by(|a, b| (&a.from_path, a.byte_start).cmp(&(&b.from_path, b.byte_start)));
+    if let Some(retrieval) = retrieval {
+        retrieval
+            .documents
+            .sort_by(|a, b| a.path.as_str().as_bytes().cmp(b.path.as_str().as_bytes()));
+        retrieval
+            .links
+            .sort_by(|a, b| (&a.from_path, a.byte_start).cmp(&(&b.from_path, b.byte_start)));
+    }
     diagnostics.sort_by(|a, b| {
         (&a.path, format!("{:?}", a.code), a.details.to_string()).cmp(&(
             &b.path,
@@ -459,14 +529,11 @@ fn project_input(fs: &VaultFs, input: &ValidationInput, closed: bool) -> Result<
         ))
     });
     let control_manifest = manifest_hash(&notes);
-    Ok(CatalogProjection {
+    Ok(ValidationProjection {
         vault_id: input.vault_id.clone(),
         parser_fingerprint: parser_fingerprint(),
         control_manifest,
-        documents,
         records,
-        graph,
-        links,
         diagnostics,
         dependencies: dependencies
             .into_iter()
@@ -476,14 +543,16 @@ fn project_input(fs: &VaultFs, input: &ValidationInput, closed: bool) -> Result<
 }
 
 pub(crate) fn manifest_hash(notes: &BTreeMap<VaultRelativePath, ParsedNote>) -> Blake3Hash {
-    let mut bytes = b"lwiki-canonical-control-v1\0".to_vec();
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(b"lwiki-canonical-control-v1\0");
     for (path, note) in notes {
-        bytes.extend_from_slice(&(path.as_str().len() as u64).to_le_bytes());
-        bytes.extend_from_slice(path.as_str().as_bytes());
-        bytes.extend_from_slice(&(note.raw.len() as u64).to_le_bytes());
-        bytes.extend_from_slice(&note.raw);
+        hasher.update(&(path.as_str().len() as u64).to_le_bytes());
+        hasher.update(path.as_str().as_bytes());
+        hasher.update(&(note.raw.len() as u64).to_le_bytes());
+        hasher.update(&note.raw);
     }
-    Blake3Hash::digest(bytes)
+    Blake3Hash::new(format!("blake3:{}", hasher.finalize().to_hex()))
+        .expect("BLAKE3 emits 64 lowercase hexadecimal digits")
 }
 
 pub(crate) fn list(record: &crate::domain::CanonicalRecord, key: &str) -> Vec<String> {
@@ -533,7 +602,14 @@ fn qualifiers(record: &crate::domain::CanonicalRecord) -> BTreeMap<String, serde
     fields
 }
 
+#[cfg(test)]
+thread_local! {
+    static NORMALIZATION_CALLS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 pub(crate) fn normalized_markdown(markdown: &str) -> (String, String) {
+    #[cfg(test)]
+    NORMALIZATION_CALLS.with(|calls| calls.set(calls.get() + 1));
     let mut text = String::new();
     let mut headings = Vec::new();
     let mut heading = None;
@@ -565,4 +641,602 @@ fn first_heading(body: &str) -> Option<String> {
         .lines()
         .next()
         .map(str::to_owned)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        changes::{GraphValidator, ProposedTarget},
+        domain::CanonicalRecord,
+        sources::evidence::exact_quote_body,
+        vault::VaultRoot,
+    };
+    use serde_json::{Value, json};
+    use std::{fs, path::Path};
+
+    const CONTENT: &[u8] = b"# Captured source\nA uses B.\n";
+    const CONTENT_PATH: &str = "sources/source_a/revisions/revision_a/content.md";
+    const ORIGINAL_PATH: &str = "sources/source_a/revisions/revision_a/original.bin";
+
+    fn id(value: &str) -> RecordId {
+        RecordId::new(value).unwrap()
+    }
+    fn path(value: &str) -> VaultRelativePath {
+        VaultRelativePath::new(value).unwrap()
+    }
+    fn envelope(kind: &str, name: &str, extra: Value, body: &[u8]) -> Vec<u8> {
+        let mut fields = BTreeMap::from([
+            ("wiki_schema".into(), json!("1")),
+            ("wiki_id".into(), json!(name)),
+            ("wiki_kind".into(), json!(kind)),
+            ("title".into(), json!(name)),
+        ]);
+        fields.extend(
+            extra
+                .as_object()
+                .unwrap()
+                .iter()
+                .map(|(key, value)| (key.clone(), value.clone())),
+        );
+        CanonicalRecord::new(fields.clone()).unwrap();
+        let mut bytes = b"---\n".to_vec();
+        for (key, value) in fields {
+            bytes.extend_from_slice(format!("{key}: {value}\n").as_bytes());
+        }
+        bytes.extend_from_slice(b"---\n");
+        bytes.extend_from_slice(body);
+        bytes
+    }
+    fn write(root: &Path, name: &str, bytes: &[u8]) {
+        let target = root.join(name);
+        fs::create_dir_all(target.parent().unwrap()).unwrap();
+        fs::write(target, bytes).unwrap();
+    }
+    fn fixture() -> (tempfile::TempDir, VaultFs, ValidationInput) {
+        let temp = tempfile::tempdir().unwrap();
+        write(
+            temp.path(),
+            "WIKI.md",
+            &envelope("vault", "vault_projection", json!({}), b"Wiki\n"),
+        );
+        // Reuse the tracked P08 identity corpus, including unsupported descriptions.
+        for (name, bytes) in [
+            (
+                "a",
+                include_bytes!("../../tests/fixtures/p08/a.md").as_slice(),
+            ),
+            (
+                "b",
+                include_bytes!("../../tests/fixtures/p08/b.md").as_slice(),
+            ),
+            (
+                "c",
+                include_bytes!("../../tests/fixtures/p08/c.md").as_slice(),
+            ),
+        ] {
+            write(temp.path(), &format!("entities/{name}.md"), bytes);
+        }
+        write(
+            temp.path(),
+            "assertions/use.md",
+            &envelope(
+                "assertion",
+                "use",
+                json!({
+                    "wiki_status":"accepted", "wiki_subject_id":"a", "wiki_subject":"[[entities/a]]",
+                    "wiki_object_id":"b", "wiki_predicate":"uses"
+                }),
+                b"A uses B.\n",
+            ),
+        );
+        write(
+            temp.path(),
+            "page.md",
+            &envelope(
+                "page",
+                "page",
+                json!({
+                    "wiki_status":"reviewed", "wiki_depends_on_ids":["use"]
+                }),
+                b"# Supported page\n[[entities/a]]\n",
+            ),
+        );
+        write(
+            temp.path(),
+            "sources/source_a/source.md",
+            &envelope(
+                "source",
+                "source_a",
+                json!({
+                    "wiki_status":"active", "wiki_origin_kind":"local-file", "wiki_origin":"fixture",
+                    "wiki_current_revision":"revision_a", "wiki_revisions":["revision_a"]
+                }),
+                b"Source\n",
+            ),
+        );
+        write(
+            temp.path(),
+            "sources/source_a/revisions/revision_a/revision.md",
+            &envelope(
+                "revision",
+                "revision_a",
+                json!({
+                    "wiki_source_id":"source_a", "wiki_captured_at":"2026-09-28T00:00:00Z",
+                    "wiki_original_path":"original.bin", "wiki_original_hash":Blake3Hash::digest(CONTENT),
+                    "wiki_extractor":"fixture", "wiki_extractor_fingerprint":Blake3Hash::digest(b"fixture-v1"),
+                    "wiki_extraction_status":"complete", "wiki_content_path":"content.md",
+                    "wiki_content_hash":Blake3Hash::digest(CONTENT)
+                }),
+                b"Revision\n",
+            ),
+        );
+        write(temp.path(), CONTENT_PATH, CONTENT);
+        write(temp.path(), ORIGINAL_PATH, CONTENT);
+        let quote = b"A uses B.";
+        for (name, stance) in [("support", "supports"), ("opposition", "contradicts")] {
+            write(
+                temp.path(),
+                &format!("evidence/{name}.md"),
+                &envelope(
+                    "evidence",
+                    name,
+                    json!({
+                        "wiki_status":"active", "wiki_assertion_id":"use", "wiki_source_id":"source_a",
+                        "wiki_source_revision":"revision_a", "wiki_stance":stance, "wiki_locator_kind":"utf8-bytes",
+                        "wiki_span_start":18, "wiki_span_end":18 + quote.len(), "wiki_quote_hash":Blake3Hash::digest(quote)
+                    }),
+                    &exact_quote_body(quote, "\n", "Explanation").unwrap(),
+                ),
+            );
+        }
+        let fs = VaultFs::new(VaultRoot::explicit(temp.path()).unwrap());
+        let input = scan_input(&fs, &id("vault_projection")).unwrap();
+        (temp, fs, input)
+    }
+    fn assert_differential(
+        fs: &VaultFs,
+        input: &ValidationInput,
+        closed: bool,
+    ) -> ValidationProjection {
+        let full = if closed {
+            project_closed(fs, input)
+        } else {
+            project(fs, input)
+        }
+        .unwrap();
+        let validation = if closed {
+            project_validation_closed(fs, input)
+        } else {
+            project_validation(fs, input)
+        }
+        .unwrap();
+        assert_eq!(
+            validation,
+            ValidationProjection {
+                vault_id: full.vault_id,
+                parser_fingerprint: full.parser_fingerprint,
+                control_manifest: full.control_manifest,
+                records: full.records,
+                diagnostics: full.diagnostics,
+                dependencies: full.dependencies,
+            }
+        );
+        validation
+    }
+    fn dependency<'a>(
+        projection: &'a ValidationProjection,
+        name: &str,
+    ) -> Option<&'a ExpectedState> {
+        projection
+            .dependencies
+            .iter()
+            .find(|dependency| dependency.path.as_str() == name)
+            .map(|dependency| &dependency.expected)
+    }
+
+    #[test]
+    fn validation_projection_matches_existing_graph_fixture() {
+        let (_temp, fs, input) = fixture();
+        let validation = assert_differential(&fs, &input, false);
+        assert_eq!(
+            validation.records[&id("use")].eligibility,
+            Eligibility::Current
+        );
+        assert!(validation.records[&id("use")].disputed);
+        assert_eq!(
+            validation.records[&id("page")].eligibility,
+            Eligibility::Current
+        );
+        assert_eq!(
+            validation.records[&id("a")].description_eligibility,
+            Some(Eligibility::Unsupported)
+        );
+        assert_eq!(
+            dependency(&validation, CONTENT_PATH),
+            Some(&ExpectedState::Hash(Blake3Hash::digest(CONTENT)))
+        );
+        let full = project(&fs, &input).unwrap();
+        assert_eq!(full.graph.len(), 4);
+        assert_eq!(
+            full.documents
+                .iter()
+                .filter(|row| row.owner_revision.is_some())
+                .count(),
+            1
+        );
+        assert_eq!(
+            full.documents
+                .iter()
+                .find(|row| row.path.as_str() == CONTENT_PATH)
+                .unwrap()
+                .raw_text
+                .as_bytes(),
+            CONTENT
+        );
+        assert!(full.links.len() >= 2);
+        let graph = CatalogGraphValidator.validate(&fs, &input).unwrap();
+        assert_eq!(graph.dependencies, validation.dependencies);
+        assert_eq!(graph.control_manifest, validation.control_manifest);
+    }
+
+    #[test]
+    fn validation_projection_preserves_malformed_duplicate_and_companion_diagnostics() {
+        let (_temp, fs, mut input) = fixture();
+        for (name, bytes) in [
+            (
+                "copy.md",
+                include_bytes!("../../tests/fixtures/p08/a.md").to_vec(),
+            ),
+            (
+                "malformed.md",
+                b"---\nwiki_id: broken\nwiki_kind: entity\nwiki_status: [\n---\nReadable body\n"
+                    .to_vec(),
+            ),
+        ] {
+            input.overlay.push(ProposedTarget {
+                path: path(name),
+                bytes: Some(bytes),
+            });
+        }
+        let assertion = input
+            .documents
+            .iter()
+            .find(|document| document.path.as_str() == "assertions/use.md")
+            .unwrap();
+        let invalid_id = String::from_utf8(assertion.bytes.clone())
+            .unwrap()
+            .replace("wiki_subject_id: \"a\"", "wiki_subject_id: \"bad id\"");
+        input.overlay.push(ProposedTarget {
+            path: path("assertions/use.md"),
+            bytes: Some(invalid_id.into_bytes()),
+        });
+        for closed in [false, true] {
+            let validation = assert_differential(&fs, &input, closed);
+            assert!(!validation.records.contains_key(&id("a")));
+            assert!(!validation.records.contains_key(&id("use")));
+            assert!(
+                validation
+                    .diagnostics
+                    .iter()
+                    .any(|diagnostic| diagnostic.code == ErrorCode::ReferenceAmbiguous)
+            );
+            assert!(
+                validation
+                    .diagnostics
+                    .iter()
+                    .any(|diagnostic| diagnostic.path.as_str() == "malformed.md")
+            );
+        }
+    }
+
+    #[test]
+    fn validation_projection_preserves_failed_payload_read_dependencies() {
+        for damaged in [
+            "missing_original",
+            "missing_content",
+            "changed_original",
+            "changed_content",
+            "invalid_utf8",
+        ] {
+            let (temp, fs, input) = fixture();
+            match damaged {
+                "missing_original" => fs::remove_file(temp.path().join(ORIGINAL_PATH)).unwrap(),
+                "missing_content" => fs::remove_file(temp.path().join(CONTENT_PATH)).unwrap(),
+                "changed_original" => write(temp.path(), ORIGINAL_PATH, b"Changed original\n"),
+                "changed_content" => write(temp.path(), CONTENT_PATH, b"Changed content\n"),
+                "invalid_utf8" => write(temp.path(), CONTENT_PATH, &[0xff]),
+                _ => unreachable!(),
+            }
+            let validation = assert_differential(&fs, &input, false);
+            assert_eq!(
+                validation.records[&id("revision_a")].eligibility,
+                Eligibility::Invalid,
+                "{damaged}"
+            );
+            for name in [ORIGINAL_PATH, CONTENT_PATH] {
+                let expected = fs::read(temp.path().join(name))
+                    .ok()
+                    .map_or(ExpectedState::Absent, |bytes| {
+                        ExpectedState::Hash(Blake3Hash::digest(bytes))
+                    });
+                assert_eq!(
+                    dependency(&validation, name),
+                    Some(&expected),
+                    "{damaged}: {name}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn validation_projection_preserves_overlay_deletion_and_closed_view_semantics() {
+        let (_temp, fs, mut input) = fixture();
+        // A closed view never falls through to the fixture's existing disk assets.
+        let uncaptured = assert_differential(&fs, &input, true);
+        assert_eq!(
+            uncaptured.records[&id("revision_a")].eligibility,
+            Eligibility::Invalid
+        );
+        assert_eq!(dependency(&uncaptured, ORIGINAL_PATH), None);
+        assert_eq!(dependency(&uncaptured, CONTENT_PATH), None);
+        for name in [ORIGINAL_PATH, CONTENT_PATH] {
+            input.documents.push(ScanDocument {
+                path: path(name),
+                bytes: CONTENT.to_vec(),
+                hash: Blake3Hash::digest(CONTENT),
+            });
+        }
+        let captured = assert_differential(&fs, &input, true);
+        assert_eq!(
+            captured.records[&id("use")].eligibility,
+            Eligibility::Current
+        );
+        // Proposed bytes and explicit absence take precedence over captured bytes.
+        for bytes in [Some(b"Changed overlay\n".to_vec()), None] {
+            input.overlay = vec![ProposedTarget {
+                path: path(CONTENT_PATH),
+                bytes: bytes.clone(),
+            }];
+            for closed in [false, true] {
+                let validation = assert_differential(&fs, &input, closed);
+                let expected = bytes.as_ref().map_or(ExpectedState::Absent, |bytes| {
+                    ExpectedState::Hash(Blake3Hash::digest(bytes))
+                });
+                assert_eq!(dependency(&validation, CONTENT_PATH), Some(&expected));
+                assert_eq!(
+                    validation.records[&id("revision_a")].eligibility,
+                    Eligibility::Invalid
+                );
+            }
+        }
+        input.overlay = vec![ProposedTarget {
+            path: path("evidence/support.md"),
+            bytes: None,
+        }];
+        for closed in [false, true] {
+            let validation = assert_differential(&fs, &input, closed);
+            assert!(!validation.records.contains_key(&id("support")));
+            assert_ne!(
+                validation.records[&id("use")].eligibility,
+                Eligibility::Current
+            );
+        }
+    }
+
+    #[test]
+    fn validation_projection_and_full_projection_reject_identical_bad_inputs() {
+        let (_temp, fs, input) = fixture();
+        for duplicate in [false, true] {
+            let mut invalid = input.clone();
+            if duplicate {
+                invalid.documents.push(invalid.documents[0].clone());
+            } else {
+                invalid.documents[0].hash = Blake3Hash::digest(b"wrong scan hash");
+            }
+            for closed in [false, true] {
+                let full = if closed {
+                    project_closed(&fs, &invalid)
+                } else {
+                    project(&fs, &invalid)
+                }
+                .unwrap_err();
+                let validation = if closed {
+                    project_validation_closed(&fs, &invalid)
+                } else {
+                    project_validation(&fs, &invalid)
+                }
+                .unwrap_err();
+                assert_eq!(
+                    (full.code, full.message, full.details),
+                    (validation.code, validation.message, validation.details)
+                );
+            }
+        }
+        let mut invalid_note = input;
+        let bytes = b"---\nwiki_schema: \"1\"\nwiki_id: orphan\nwiki_kind: entity\nwiki_status: []\n---\nReadable\n".to_vec();
+        invalid_note.documents.push(ScanDocument {
+            path: path("orphan.md"),
+            hash: Blake3Hash::digest(&bytes),
+            bytes: bytes.clone(),
+        });
+        // An existing independent invalid envelope is tolerated unchanged.
+        CatalogGraphValidator.validate(&fs, &invalid_note).unwrap();
+        invalid_note.documents.pop();
+        invalid_note.overlay.push(ProposedTarget {
+            path: path("orphan.md"),
+            bytes: Some(bytes),
+        });
+        let error = CatalogGraphValidator
+            .validate(&fs, &invalid_note)
+            .unwrap_err();
+        assert_eq!(error.code, ErrorCode::RecordInvalid);
+        assert_eq!(
+            error.message,
+            "proposed adopted envelope is invalid: orphan.md"
+        );
+    }
+
+    #[test]
+    fn validation_projection_skips_normalization_on_source_payloads() {
+        let (temp, fs, input) = fixture();
+        let mut payload = CONTENT.to_vec();
+        payload.resize(256 * 1024, b'x');
+        write(temp.path(), CONTENT_PATH, &payload);
+        NORMALIZATION_CALLS.with(|calls| calls.set(0));
+        let validation = project_validation(&fs, &input).unwrap();
+        assert_eq!(NORMALIZATION_CALLS.with(std::cell::Cell::get), 0);
+        assert_eq!(
+            dependency(&validation, CONTENT_PATH),
+            Some(&ExpectedState::Hash(Blake3Hash::digest(&payload)))
+        );
+        NORMALIZATION_CALLS.with(|calls| calls.set(0));
+        let full = project(&fs, &input).unwrap();
+        assert!(NORMALIZATION_CALLS.with(std::cell::Cell::get) > 0);
+        assert_eq!(
+            full.documents
+                .iter()
+                .find(|row| row.path.as_str() == CONTENT_PATH)
+                .unwrap()
+                .raw_text
+                .len(),
+            payload.len()
+        );
+        NORMALIZATION_CALLS.with(|calls| calls.set(0));
+        project_validation_closed(&fs, &input).unwrap();
+        assert_eq!(NORMALIZATION_CALLS.with(std::cell::Cell::get), 0);
+    }
+
+    /// Root runs this bounded diagnostic in a fresh process per mode/size and
+    /// captures process RSS externally. It is not a capacity benchmark.
+    #[test]
+    #[ignore = "bounded full-versus-validation resource diagnostic"]
+    fn validation_projection_resource_diagnostic() {
+        let mode = std::env::var("LWIKI_PROJECTION_DIAGNOSTIC_MODE").unwrap();
+        assert!(matches!(mode.as_str(), "full" | "validation"));
+        let size: usize = std::env::var("LWIKI_PROJECTION_DIAGNOSTIC_BYTES")
+            .unwrap()
+            .parse()
+            .unwrap();
+        assert!((1024..=8 * 1024 * 1024).contains(&size));
+        let (temp, fs, input) = fixture();
+        let mut payload = CONTENT.to_vec();
+        payload.resize(size, b'x');
+        write(temp.path(), CONTENT_PATH, &payload);
+        write(temp.path(), ORIGINAL_PATH, &payload);
+        let revision_path = "sources/source_a/revisions/revision_a/revision.md";
+        let old = fs::read(temp.path().join(revision_path)).unwrap();
+        let updated = String::from_utf8(old).unwrap().replace(
+            Blake3Hash::digest(CONTENT).as_str(),
+            Blake3Hash::digest(&payload).as_str(),
+        );
+        write(temp.path(), revision_path, updated.as_bytes());
+        let payload_hash = Blake3Hash::digest(&payload);
+        drop(payload);
+        let input = scan_input(&fs, &input.vault_id).unwrap();
+        NORMALIZATION_CALLS.with(|calls| calls.set(0));
+        let started = std::time::Instant::now();
+        let (records, source_rows, retained_retrieval_bytes) = if mode == "full" {
+            let result = project(&fs, &input).unwrap();
+            assert_eq!(result.records[&id("use")].eligibility, Eligibility::Current);
+            (
+                result.records.len(),
+                result
+                    .documents
+                    .iter()
+                    .filter(|row| row.owner_revision.is_some())
+                    .count(),
+                result
+                    .documents
+                    .iter()
+                    .map(|row| row.raw_text.len() + row.body.len() + row.headings.len())
+                    .sum::<usize>(),
+            )
+        } else {
+            let result = project_validation(&fs, &input).unwrap();
+            assert_eq!(result.records[&id("use")].eligibility, Eligibility::Current);
+            assert_eq!(
+                dependency(&result, CONTENT_PATH),
+                Some(&ExpectedState::Hash(payload_hash))
+            );
+            (result.records.len(), 0, 0)
+        };
+        let elapsed = started.elapsed().as_secs_f64();
+        let normalization_calls = NORMALIZATION_CALLS.with(std::cell::Cell::get);
+        if mode == "validation" {
+            assert_eq!(normalization_calls, 0);
+        }
+        println!(
+            "{}",
+            json!({"mode":mode,"source_payload_bytes":size,"records":records,"source_rows":source_rows,"retained_retrieval_bytes":retained_retrieval_bytes,"normalization_calls":normalization_calls,"elapsed_seconds":elapsed,"clock":"std::time::Instant process-local monotonic"})
+        );
+    }
+
+    #[test]
+    fn streamed_manifest_matches_old_framing_for_empty_unicode_and_binary_notes() {
+        fn old_hash(notes: &BTreeMap<VaultRelativePath, ParsedNote>) -> Blake3Hash {
+            let mut bytes = b"lwiki-canonical-control-v1\0".to_vec();
+            for (path, note) in notes {
+                bytes.extend_from_slice(&(path.as_str().len() as u64).to_le_bytes());
+                bytes.extend_from_slice(path.as_str().as_bytes());
+                bytes.extend_from_slice(&(note.raw.len() as u64).to_le_bytes());
+                bytes.extend_from_slice(&note.raw);
+            }
+            Blake3Hash::digest(bytes)
+        }
+        let mut notes = BTreeMap::new();
+        assert_eq!(manifest_hash(&notes), old_hash(&notes));
+        for (name, bytes) in [
+            ("empty.md", b"".as_slice()),
+            (
+                "pages/\u{00e9}\u{65e5}.md",
+                "# \u{65e5}\u{672c}\n\u{00e9}\u{1f642}\n".as_bytes(),
+            ),
+            ("binary.md", &[0xff, 0, 0x80]),
+            (
+                "malformed.md",
+                b"---\nwiki_id: duplicate\nwiki_id: duplicate\n---\n",
+            ),
+        ] {
+            notes.insert(path(name), parse_note(bytes));
+            assert_eq!(manifest_hash(&notes), old_hash(&notes));
+        }
+        let mut input = ValidationInput {
+            vault_id: id("vault_manifest"),
+            documents: notes
+                .iter()
+                .map(|(path, note)| ScanDocument {
+                    path: path.clone(),
+                    bytes: note.raw.clone(),
+                    hash: note.source_hash.clone(),
+                })
+                .collect(),
+            overlay: vec![],
+        };
+        input.documents.reverse();
+        assert_eq!(
+            manifest_hash(&input_notes(&input).unwrap()),
+            old_hash(&notes)
+        );
+        let same_size = b"different same-sized value".to_vec();
+        let before = same_size.iter().map(|_| b'x').collect::<Vec<_>>();
+        input.documents.push(ScanDocument {
+            path: path("edit.md"),
+            hash: Blake3Hash::digest(&before),
+            bytes: before,
+        });
+        let before_notes = input_notes(&input).unwrap();
+        input.overlay.push(ProposedTarget {
+            path: path("edit.md"),
+            bytes: Some(same_size),
+        });
+        input.overlay.push(ProposedTarget {
+            path: path("empty.md"),
+            bytes: None,
+        });
+        let after_notes = input_notes(&input).unwrap();
+        assert_eq!(manifest_hash(&after_notes), old_hash(&after_notes));
+        assert_ne!(manifest_hash(&after_notes), manifest_hash(&before_notes));
+        assert!(!after_notes.contains_key(&path("empty.md")));
+    }
 }

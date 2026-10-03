@@ -2,7 +2,6 @@
 use crate::{
     changes::{ChangeDraft, ReadDependency},
     domain::{Blake3Hash, ByteSpan, CitationRef, EvidenceRef, RecordId, VaultRelativePath},
-    records::ParsedNote,
     vault::VaultFs,
 };
 use serde::{Deserialize, Serialize};
@@ -15,7 +14,7 @@ pub struct SourceStore {
 /// A read-only canonical view; proposed payloads can be verified before activation.
 pub struct SourceView<'a> {
     pub(crate) fs: &'a VaultFs,
-    pub(crate) notes: BTreeMap<VaultRelativePath, ParsedNote>,
+    pub(crate) notes: super::lookup::SourceNotes,
     pub(crate) overlay: BTreeMap<VaultRelativePath, Option<Vec<u8>>>,
     /// Closed proof inputs forbid falling back to unmetered filesystem reads.
     pub(crate) closed: bool,

@@ -1,5 +1,15 @@
 # Context evaluation research and implementation
 
+## Validation and lookup preparation
+
+Graph validation now computes its complete metadata, eligibility and dependencies without constructing the additional retrieval document, link and graph display rows. Full catalog projection uses the same validation core. Source reads, failed-read dependencies, closed-input behavior and the canonical manifest digest remain covered by exact comparisons. The manifest hash streams its original byte framing. Immutable source views and catalog passes also build reusable ID/path/stem/alias indexes; 314,145 comparisons against the original resolvers check lookup semantics, including ambiguity and exact case-sensitive aliases.
+
+The preparation gate passed all 15 targets: **478 Rust tests passed, five were ignored**, and formatting/Clippy passed. This includes the full unit suite, source/graph/decision/inverse validation, change recovery, catalog generations, lexical retrieval and context CLI/freshness tests. Source hashes were unchanged throughout the gate. The only subsequent Rust change clarified a comment about retained input buffers.
+
+Independent review verified the logs, final source hashes, comment-only change and six raw diagnostic results, and rated this preparatory milestone **9/10 with no blockers**. The broader streaming-storage, 100k/10GB and unseen semantic gates remain unmet.
+
+A separately executed ignored diagnostic compared full and validation projections in fresh processes at 256 KiB, 1 MiB and 4 MiB source sizes. All six cases passed; validation performed zero retrieval normalization and retained no retrieval rows. At 4 MiB, observed process peak RSS was 78.55 MiB versus 69.77 MiB, and projection intervals were 1.258 versus 1.216 seconds. These are single observations on one padded source with a small graph, not a throughput benchmark or capacity result. Input, source-read and graph allocations remain. The first diagnostic harness failed to parse JSON prefixed by the Rust test runner; its successful product-test output and failed harness outcome remain preserved separately from the corrected run. Local evidence: `.artifacts/large-vault-design/m2-validation`.
+
 ## Bounded indexed-source milestone
 
 Commit `709ffa3` adds the opt-in [indexed-evidence workflow](../../indexed-context.md): bounded catalog reads and verification of selected captured-source bytes, with an explicit published generation and no claim of global membership verification. Existing strict behavior remains available. Independent review scored this implementation milestone **9/10**, with no remaining milestone correctness blockers. This does not award the overall quality or large-vault goal a passing score.

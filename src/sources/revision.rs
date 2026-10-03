@@ -1,5 +1,4 @@
 //! Read-only canonical and projected source views. Payloads never become records.
-use super::identity::readable_ids;
 use super::types::*;
 use crate::{
     changes::{ReadDependency, ValidationInput},
@@ -7,7 +6,7 @@ use crate::{
         Blake3Hash, CanonicalRecord, ErrorCode, RecordId, RecordKind, Result, VaultRelativePath,
         WikiError,
     },
-    records::{LinkResolution, ParsedNote, RegistryEntry, parse_note, resolve_typed},
+    records::{LinkResolution, ParsedNote, parse_note},
     vault::{ExpectedState, VaultFs},
 };
 use std::collections::{BTreeMap, BTreeSet};
@@ -147,7 +146,7 @@ impl<'a> SourceView<'a> {
         }
         Ok(Self {
             fs,
-            notes,
+            notes: notes.into(),
             overlay: BTreeMap::new(),
             closed: false,
         })
@@ -166,7 +165,7 @@ impl<'a> SourceView<'a> {
         }
         Ok(SourceView {
             fs,
-            notes,
+            notes: notes.into(),
             overlay: BTreeMap::new(),
             closed: false,
         })
@@ -212,7 +211,7 @@ impl<'a> SourceView<'a> {
         }
         Ok(SourceView {
             fs,
-            notes,
+            notes: notes.into(),
             overlay,
             closed: false,
         })
@@ -229,31 +228,13 @@ impl<'a> SourceView<'a> {
         kind: RecordKind,
         companion: Option<&str>,
     ) -> Result<(&VaultRelativePath, &ParsedNote)> {
-        if self
-            .notes
-            .values()
-            .filter(|note| readable_ids(note).contains(id))
-            .count()
-            > 1
-        {
+        if self.notes.ambiguous(id) {
             return Err(WikiError::new(
                 ErrorCode::ReferenceAmbiguous,
                 format!("duplicate ID {id}, including malformed records"),
             ));
         }
-        let registry: Vec<_> = self
-            .notes
-            .iter()
-            .filter_map(|(path, note)| {
-                note.canonical.as_ref().map(|record| RegistryEntry {
-                    id: record.id().clone(),
-                    kind: record.kind(),
-                    path: path.clone(),
-                    aliases: vec![],
-                })
-            })
-            .collect();
-        match resolve_typed(&registry, id, kind, companion) {
+        match self.notes.resolve_typed(id, kind, companion) {
             LinkResolution::Resolved { path, .. } => self
                 .notes
                 .get_key_value(&path)

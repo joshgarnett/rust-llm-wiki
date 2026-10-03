@@ -22,7 +22,7 @@ work addresses one defect, but cannot establish large-vault support.
 
 Several other operations still depend on the entire corpus:
 
-- Opening a catalog checks the database, deserializes a complete projection and
+- Opening a strict catalog reader checks the database, deserializes a complete projection and
   reconstructs another catalog and both search tables in memory to compare rows.
 - Current-context verification captures canonical files and revision assets
   twice. For 10 GB of captured text, original/content duplication alone implies
@@ -54,6 +54,27 @@ Keep SQLite first. FTS5 already supports row updates, internal segments and
 incremental merging; the application must maintain row/index consistency.
 Measure delta publication before adopting another lexical engine.
 [SQLite FTS5](https://www.sqlite.org/fts5.html)
+
+Separate graph validation from retrieval-text emission before replacing storage.
+Measure control-record, graph-snapshot and dependency memory at the 1k and 10k
+tiers; raw envelope size alone cannot establish whether the graph fits in memory.
+A streamed document sink should serve an actual rebuild path. Move graph state
+to a disk workspace when the measured resource requirements demand it.
+
+Avoid persisting raw and normalized text again inside row JSON, whole-catalog JSON
+and FTS content tables. External-content FTS can index the stored text, but the
+application must keep postings and content consistent, including during migration
+and deletion. Its integrity check must explicitly compare external content.
+[SQLite external-content tables](https://www.sqlite.org/fts5.html#external_content_tables),
+[FTS integrity checks](https://www.sqlite.org/fts5.html#the_integrity_check_command)
+
+The rebuild publication topology still requires a separate contract and tests.
+Building a sibling catalog in bounded transactions and then publishing a durable
+selector can control rebuild WAL growth, but introduces selector recovery and
+reader-retirement obligations. That filesystem commit point differs from the
+SQL transaction used for an in-place delta. Do not combine their atomicity claims
+or replace an open database file. Measure old/new catalog and WAL peaks before
+qualifying the full tier.
 
 Persist retrieval units and eliminate per-unit lookup overhead before selecting
 an approximate vector index. Compare any embedded ANN candidate index with exact

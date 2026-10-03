@@ -95,6 +95,19 @@ pub struct CatalogProjection {
     pub dependencies: Vec<ReadDependency>,
 }
 
+/// Complete validation authority without retrieval text or display rows.
+/// Kept distinct from `CatalogProjection` so an omitted retrieval projection
+/// cannot accidentally be published or treated as a complete catalog.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct ValidationProjection {
+    pub vault_id: RecordId,
+    pub parser_fingerprint: Blake3Hash,
+    pub control_manifest: Blake3Hash,
+    pub records: BTreeMap<RecordId, RecordRow>,
+    pub diagnostics: Vec<CatalogDiagnostic>,
+    pub dependencies: Vec<ReadDependency>,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RecordRow {
     pub record: CanonicalRecord,
