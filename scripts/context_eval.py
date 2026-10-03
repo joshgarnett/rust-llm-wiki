@@ -294,6 +294,75 @@ def verify_inputs(args, metadata, docs, mapping, hashes):
     require(load_dataset(args.dataset, args.split)[3] == hashes, "Dataset changed during evaluation")
 
 
+def validate_compact_cards(payload, args, mapping, docs):
+    """Audit displayed v2 evidence, not the unavailable full citation authority."""
+    commitment = payload["authority_commitment"]
+    require(isinstance(commitment, str) and re.fullmatch(r"blake3:[0-9a-f]{64}", commitment),
+            "Invalid selector authority commitment")
+    sources = payload["sources"]
+    require(type(sources) is list, "Selector sources must be an array")
+    require(len(sources) <= 80, "Selector source count exceeds bound")
+    by_path = {row["vault_content_path"]: doc_id for doc_id, row in mapping["documents"].items()}
+    by_source, owner_content, path_owner = {}, {}, {}
+    for source in sources:
+        require(type(source) is dict and set(source) == {"id", "owner", "title", "path", "label", "eligibility"},
+                "Compact selector source fields differ from v2 schema")
+        for field in ("id", "owner"):
+            require(isinstance(source[field], str) and re.fullmatch(r"[A-Za-z0-9_-]{1,128}", source[field]),
+                    "Invalid selector source or owner ID")
+        require(source["id"] not in by_source, "Duplicate selector source ID")
+        require(isinstance(source["title"], str) and len(source["title"].encode("utf-8")) <= 4096,
+                "Selector source title exceeds UTF-8 byte bound")
+        require(isinstance(source["path"], str) and source["path"] in by_path,
+                "Selector source path absent from frozen mapping")
+        require(source["label"] == "captured_source" and source["eligibility"] == "current",
+                "Selector source is not a current captured source")
+        blob = docs[by_path[source["path"]]]["blob"]
+        owner = source["owner"]
+        # Identical captured content can share a canonical owner across paths.
+        # Opaque display aliases must not merge unrelated documents to evade
+        # the owner bound, or split one path into multiple owners.
+        require(owner not in owner_content or owner_content[owner] == blob,
+                "Selector owner merges different frozen content")
+        require(source["path"] not in path_owner or path_owner[source["path"]] == owner,
+                "Selector source path has inconsistent owners")
+        owner_content[owner] = blob
+        path_owner[source["path"]] = owner
+        by_source[source["id"]] = blob
+    require(len(owner_content) <= args.limit, "Selector owner bound exceeded")
+    referenced = set()
+    for card in payload["cards"]:
+        require(set(card) == {"id", "source", "span", "child_span", "text", "rendered_bytes"},
+                "Compact selector card fields differ from v2 schema")
+        require(isinstance(card["source"], str) and card["source"] in by_source,
+                "Selector card refers to an unknown source")
+        referenced.add(card["source"])
+        blob = by_source[card["source"]]
+        span = card["span"]
+        require(type(span) is dict and set(span) == {"start", "end"}, "Invalid selector passage span")
+        start, end = span["start"], span["end"]
+        require(type(start) is int and type(end) is int and 0 <= start < end <= len(blob),
+                "Selector passage span out of bounds")
+        require(isinstance(card["text"], str), "Selector passage text is not a string")
+        text = card["text"].encode("utf-8")
+        require(len(text) <= args.excerpt_bytes and len(text) <= 2048,
+                "Selector passage exceeds excerpt bound")
+        require(blob[start:end] == text, "Selector passage differs from original UTF-8 bytes")
+        require(type(card["rendered_bytes"]) is int and len(text) <= card["rendered_bytes"] <= SELECTOR_INPUT_MAX_BYTES,
+                "Invalid selector standalone rendered byte estimate")
+        child = card["child_span"]
+        if child is not None:
+            require(type(child) is dict and set(child) == {"start", "end"}, "Invalid selector child span")
+            left, right = child["start"], child["end"]
+            require(type(left) is int and type(right) is int and start <= left < right <= end,
+                    "Selector child span outside passage")
+            try:
+                blob[left:right].decode("utf-8")
+            except UnicodeDecodeError as error:
+                raise ValueError("Selector child span splits a UTF-8 code point") from error
+    require(referenced == set(by_source), "Selector source table contains unused sources")
+
+
 def validate_preparation(envelope, query, args, mapping, docs, label):
     data = envelope["data"]
     require(data["network_used"] is False and envelope["meta"]["freshness"] == "verified_snapshot"
@@ -307,10 +376,20 @@ def validate_preparation(envelope, query, args, mapping, docs, label):
     require(type(packet["candidate_count"]) is int and 0 <= packet["candidate_count"] <= 80, "Selector candidate count mismatch")
     require(type(packet["omitted_candidates"]) is int and packet["omitted_candidates"] >= 0, "Invalid omitted candidate count")
     parsed = strict_json(task)
-    require(parsed["packet_fingerprint"] == packet["fingerprint"] and re.fullmatch(r"blake3:[0-9a-f]{64}", packet["fingerprint"]), "Selector packet fingerprint mismatch")
-    require(parsed["payload"]["binding"]["query"] == query, "Selector task belongs to another query")
-    cards = parsed["payload"]["cards"]
+    require(type(parsed) is dict and type(parsed.get("payload")) is dict, "Invalid selector task payload")
+    require(parsed["packet_fingerprint"] == packet["fingerprint"] and isinstance(packet["fingerprint"], str)
+            and re.fullmatch(r"blake3:[0-9a-f]{64}", packet["fingerprint"]), "Selector packet fingerprint mismatch")
+    payload = parsed["payload"]
+    version = payload.get("version")
+    require(version in ("lwiki.context-selection.v1", "lwiki.context-selection.v2"), "Unsupported selector payload version")
+    require(payload["binding"]["query"] == query, "Selector task belongs to another query")
+    cards = payload["cards"]
+    require(type(cards) is list and all(type(card) is dict and isinstance(card.get("id"), str)
+            and re.fullmatch(r"[A-Za-z0-9_-]{1,128}", card["id"]) for card in cards), "Invalid selector card IDs")
     require(len(cards) == packet["candidate_count"] and len({card["id"] for card in cards}) == len(cards), "Selector card count or ID mismatch")
+    if version == "lwiki.context-selection.v2":
+        validate_compact_cards(payload, args, mapping, docs)
+        return packet, task
     passages = [card["passage"] for card in cards]
     require(len({p["locator"]["path"] for p in passages}) <= args.limit, "Selector owner bound exceeded")
     for passage in passages:

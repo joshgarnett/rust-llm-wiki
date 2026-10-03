@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Offline evidence evaluator contract tests; no model/provider compatibility claim."""
 import importlib.util
+import copy
 import json
 from pathlib import Path
 import subprocess
@@ -216,10 +217,30 @@ class HostSelectionTests(unittest.TestCase):
 
     def packet(self, query):
         task = json.dumps({"instructions": "Use only supplied evidence; no tools.", "packet_fingerprint": self.fingerprint,
-                           "payload": {"binding": {"query": query}, "cards": [{"id": "c0000", "passage": self.passage}]}}, ensure_ascii=False)
+                           "payload": {"version": "lwiki.context-selection.v1", "binding": {"query": query},
+                                       "cards": [{"id": "c0000", "passage": self.passage}]}}, ensure_ascii=False)
         size = len(task.encode())
         return {"fingerprint": self.fingerprint, "selector_input": task, "candidate_count": 1,
                 "input_bytes": size, "estimated_tokens": (size + 3) // 4, "omitted_candidates": 0}
+
+    def compact_payload(self):
+        return {"version": "lwiki.context-selection.v2", "binding": {"query": "fixture query"},
+                "authority_commitment": self.fingerprint,
+                "sources": [{"id": "s0", "owner": "o0", "title": "Fixture source", "path": "content.md",
+                             "label": "captured_source", "eligibility": "current"}],
+                "cards": [{"id": "c0000", "source": "s0", "span": dict(self.passage["span"]),
+                           "child_span": {"start": self.blob.index("🐦".encode()), "end": len(self.blob)},
+                           "text": self.blob.decode(), "rendered_bytes": len(self.blob) + 300}]}
+
+    def preparation_for(self, payload):
+        task = json.dumps({"instructions": "Use only supplied evidence; no tools.",
+                           "packet_fingerprint": self.fingerprint, "payload": payload}, ensure_ascii=False)
+        size = len(task.encode())
+        return self.envelope({"network_used": False, "verification": {"mode": "verified_snapshot"},
+                              "text": "", "passages": [], "selection_packet": {
+                                  "fingerprint": self.fingerprint, "selector_input": task,
+                                  "candidate_count": len(payload["cards"]), "input_bytes": size,
+                                  "estimated_tokens": (size + 3) // 4, "omitted_candidates": 0}})
 
     def envelope(self, data):
         return {"ok": True, "meta": {"freshness": "verified_snapshot", "network_used": False}, "data": data}
@@ -270,6 +291,117 @@ class HostSelectionTests(unittest.TestCase):
         packet["input_bytes"] = len(packet["selector_input"].encode())
         with self.assertRaisesRegex(ValueError, "byte bound"):
             EVAL.validate_preparation(env, "other", self.args, self.mapping, self.docs, "large")
+
+    def test_compact_preparation_checks_exact_bytes_without_inventing_citations(self):
+        env = self.preparation_for(self.compact_payload())
+        packet, task = EVAL.validate_preparation(env, "fixture query", self.args, self.mapping, self.docs, "v2")
+        self.assertEqual(task, packet["selector_input"].encode())
+        self.assertNotIn(b'"citations"', task)
+        self.assertNotIn(b'"source_revision"', task)
+        self.mock_hash.assert_not_called()
+        # Preparation writes only the immutable supplied task. Final-context
+        # citation_intervals remains responsible for full authority auditing.
+        self.assertFalse(self.args.output.exists())
+
+    def test_compact_preparation_export_keeps_exact_task(self):
+        def compact(binary, wiki, command, output, label, timeout):
+            payload = self.compact_payload()
+            payload["binding"]["query"] = command[1]
+            return self.preparation_for(payload), 0.1
+        with patch.object(EVAL, "invoke", side_effect=compact):
+            self.assertEqual(EVAL.run_prepare_selection(self.args, self.manifest, self.docs, self.questions, self.hashes), 0)
+        self.mock_hash.assert_not_called()
+        tasks = json.loads((self.args.output / "tasks.json").read_text())
+        for row, question in zip(tasks, self.questions):
+            payload = self.compact_payload()
+            payload["binding"]["query"] = question["query"]
+            expected = self.preparation_for(payload)["data"]["selection_packet"]["selector_input"].encode()
+            self.assertEqual((self.args.output / row["task_path"]).read_bytes(), expected)
+
+    def test_v1_preparation_retains_citation_hash_audit(self):
+        self.args.output.mkdir()
+        env, _ = self.mock_invoke(None, None, ["context", "fixture query", "--prepare-selection"], None, None, None)
+        EVAL.validate_preparation(env, "fixture query", self.args, self.mapping, self.docs, "v1")
+        self.mock_hash.assert_called_once()
+        self.assertEqual(self.mock_hash.call_args.kwargs["input"], self.blob)
+
+    def test_preparation_rejects_unknown_and_missing_payload_versions(self):
+        for version in (None, "lwiki.context-selection.v3", 2):
+            payload = self.compact_payload()
+            if version is None:
+                del payload["version"]
+            else:
+                payload["version"] = version
+            with self.subTest(version=version), self.assertRaisesRegex(ValueError, "payload version"):
+                EVAL.validate_preparation(self.preparation_for(payload), "fixture query", self.args, self.mapping, self.docs, "version")
+
+    def test_compact_preparation_rejects_corrupted_metadata_and_evidence(self):
+        mutations = [
+            ("unknown source", lambda p: p["cards"][0].update(source="missing")),
+            ("Duplicate selector source ID", lambda p: p["sources"].append(copy.deepcopy(p["sources"][0]))),
+            ("card count or ID", lambda p: p["cards"].append(copy.deepcopy(p["cards"][0]))),
+            ("Invalid selector card IDs", lambda p: p["cards"][0].update(id="bad id")),
+            ("source or owner ID", lambda p: p["sources"][0].update(owner=True)),
+            ("frozen mapping", lambda p: p["sources"][0].update(path="../elsewhere.md")),
+            ("current captured source", lambda p: p["sources"][0].update(eligibility="historical")),
+            ("current captured source", lambda p: p["sources"][0].update(label="note_text")),
+            ("title exceeds UTF-8", lambda p: p["sources"][0].update(title="🐦" * 1025)),
+            ("authority commitment", lambda p: p.update(authority_commitment="blake3:invalid")),
+            ("original UTF-8 bytes", lambda p: p["cards"][0].update(text="café 🐦 false support")),
+            ("span out of bounds", lambda p: p["cards"][0]["span"].update(start=True)),
+            ("span out of bounds", lambda p: p["cards"][0]["span"].update(end=len(self.blob) + 1)),
+            ("child span outside passage", lambda p: p["cards"][0].update(child_span={"start": 0, "end": 0})),
+            ("child span outside passage", lambda p: p["cards"][0].update(child_span={"start": 0, "end": len(self.blob) + 1})),
+            ("UTF-8", lambda p: p["cards"][0].update(child_span={"start": self.blob.index("🐦".encode()) + 1, "end": len(self.blob)})),
+            ("rendered byte estimate", lambda p: p["cards"][0].update(rendered_bytes=True)),
+            ("rendered byte estimate", lambda p: p["cards"][0].update(rendered_bytes=len(self.blob) - 1)),
+            ("rendered byte estimate", lambda p: p["cards"][0].update(rendered_bytes=EVAL.SELECTOR_INPUT_MAX_BYTES + 1)),
+            ("card fields", lambda p: p["cards"][0].update(citations=[])),
+            ("unused sources", lambda p: p["sources"].append(dict(p["sources"][0], id="s1"))),
+        ]
+        for message, mutate in mutations:
+            payload = self.compact_payload()
+            mutate(payload)
+            with self.subTest(message=message), self.assertRaisesRegex(ValueError, message):
+                EVAL.validate_preparation(self.preparation_for(payload), "fixture query", self.args, self.mapping, self.docs, "corrupt")
+        self.mock_hash.assert_not_called()
+
+    def test_compact_preparation_caps_source_table_before_iteration(self):
+        payload = self.compact_payload()
+        payload["sources"] = [dict(payload["sources"][0], id=f"s{i}") for i in range(81)]
+        with self.assertRaisesRegex(ValueError, "source count exceeds bound"):
+            EVAL.validate_preparation(self.preparation_for(payload), "fixture query", self.args, self.mapping, self.docs, "sources")
+
+    def test_compact_preparation_rejects_character_offsets_and_excerpt_overflow(self):
+        payload = self.compact_payload()
+        payload["cards"][0]["span"]["end"] = len(self.blob.decode())
+        with self.assertRaisesRegex(ValueError, "original UTF-8 bytes"):
+            EVAL.validate_preparation(self.preparation_for(payload), "fixture query", self.args, self.mapping, self.docs, "offset")
+        self.args.excerpt_bytes = len(self.blob) - 1
+        with self.assertRaisesRegex(ValueError, "excerpt bound"):
+            EVAL.validate_preparation(self.preparation_for(self.compact_payload()), "fixture query", self.args, self.mapping, self.docs, "excerpt")
+
+    def test_compact_preparation_owner_aliases_cannot_evade_limit(self):
+        self.mapping["documents"]["other"] = {"source_id": "other", "revision_id": "other-rev", "vault_content_path": "other.md"}
+        self.docs["other"] = {"blob": b"unrelated document"}
+        payload = self.compact_payload()
+        payload["sources"].append(dict(payload["sources"][0], id="s1", path="other.md"))
+        payload["cards"].append(dict(payload["cards"][0], id="c0001", source="s1", span={"start": 0, "end": 18},
+                                     child_span=None, text="unrelated document"))
+        with self.assertRaisesRegex(ValueError, "merges different frozen content"):
+            EVAL.validate_preparation(self.preparation_for(payload), "fixture query", self.args, self.mapping, self.docs, "alias")
+        payload["sources"][1]["owner"] = "o1"
+        self.args.limit = 1
+        with self.assertRaisesRegex(ValueError, "owner bound"):
+            EVAL.validate_preparation(self.preparation_for(payload), "fixture query", self.args, self.mapping, self.docs, "owners")
+        # Equivalent immutable content at two paths legitimately shares one owner.
+        self.docs["other"]["blob"] = self.blob
+        payload["sources"][1]["owner"] = "o0"
+        payload["cards"][1] = dict(payload["cards"][0], id="c0001", source="s1")
+        EVAL.validate_preparation(self.preparation_for(payload), "fixture query", self.args, self.mapping, self.docs, "equivalent")
+        payload["sources"][1].update(path="content.md", owner="o1")
+        with self.assertRaisesRegex(ValueError, "inconsistent owners"):
+            EVAL.validate_preparation(self.preparation_for(payload), "fixture query", self.args, self.mapping, self.docs, "split")
 
     def test_strict_reply_rejects_duplicate_keys_fields_ids_and_bounds(self):
         good = {"packet_fingerprint": self.fingerprint, "ordered_ids": []}

@@ -38,6 +38,8 @@ The examples use the historical evaluation budget of 6,000 bytes / 1,500 estimat
 
 The task contains at most 80 candidate cards and 130,048 UTF-8 bytes, with 1,024 additional bytes reserved by the evaluation protocol for transport instructions. Byte limits include metadata and JSON escaping. Owners are interleaved before truncation to preserve source coverage; a bounded pool can still omit required evidence. The byte/4 token estimate is not actual model usage.
 
+The v2 task shows a shared source table and exact passage text, spans, IDs and rendered costs. Full citations and ranking metadata remain local. An authority commitment binds those retained details; the packet fingerprint also binds the displayed task and instructions. This removes repeated metadata from model input without changing evidence bytes or final verification. Local preparation separately limits supplied authority to 1,600 cards, 8 MiB of serialized metadata in total and 130,048 bytes per card, including candidates later omitted. These are work bounds, not model token or peak-memory guarantees.
+
 A reply may contain at most 20 unique supplied IDs and 4,096 bytes. Unknown IDs, duplicate fields or IDs, extra fields and malformed replies fail validation. `--selection -` reads a reply from standard input. File input must be a regular file.
 
 Changes to the question, request limits, candidate evidence or snapshot invalidate an old reply. Prepare a new task and select again after an intentional change; editing the fingerprint cannot make a stale selection valid. Keep the old failure in evaluation records rather than silently replacing it with a retry.
