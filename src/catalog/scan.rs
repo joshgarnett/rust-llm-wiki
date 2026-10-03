@@ -178,10 +178,45 @@ pub(crate) fn project_validation_closed(
 }
 
 #[derive(Default)]
-struct RetrievalProjection {
+struct CollectingRetrievalSink {
     documents: Vec<DocumentRow>,
     links: Vec<LinkRow>,
     graph: Vec<GraphRow>,
+}
+
+impl RetrievalSink for CollectingRetrievalSink {
+    fn document(&mut self, row: DocumentRow) -> Result<()> {
+        self.documents.push(row);
+        Ok(())
+    }
+    fn graph(&mut self, row: GraphRow) -> Result<()> {
+        self.graph.push(row);
+        Ok(())
+    }
+    fn link(&mut self, row: LinkRow) -> Result<()> {
+        self.links.push(row);
+        Ok(())
+    }
+}
+impl CollectingRetrievalSink {
+    fn sort(&mut self) {
+        self.documents
+            .sort_by(|a, b| a.path.as_str().as_bytes().cmp(b.path.as_str().as_bytes()));
+        self.links
+            .sort_by(|a, b| (&a.from_path, a.byte_start).cmp(&(&b.from_path, b.byte_start)));
+    }
+}
+
+/// Emit owned retrieval rows while retaining complete validation authority.
+/// Rows are provisional until this returns successfully and the caller seals
+/// its publication. Emission order is deterministic, but not globally sorted.
+pub(crate) fn project_with_sink(
+    fs: &VaultFs,
+    input: &ValidationInput,
+    closed: bool,
+    sink: &mut dyn RetrievalSink,
+) -> Result<ValidationProjection> {
+    project_input(fs, input, closed, Some(sink))
 }
 
 fn project_catalog(
@@ -189,8 +224,9 @@ fn project_catalog(
     input: &ValidationInput,
     closed: bool,
 ) -> Result<CatalogProjection> {
-    let mut retrieval = RetrievalProjection::default();
-    let validation = project_input(fs, input, closed, Some(&mut retrieval))?;
+    let mut retrieval = CollectingRetrievalSink::default();
+    let validation = project_with_sink(fs, input, closed, &mut retrieval)?;
+    retrieval.sort();
     Ok(CatalogProjection {
         vault_id: validation.vault_id,
         parser_fingerprint: validation.parser_fingerprint,
@@ -208,7 +244,7 @@ fn project_input(
     fs: &VaultFs,
     input: &ValidationInput,
     closed: bool,
-    mut retrieval: Option<&mut RetrievalProjection>,
+    mut retrieval: Option<&mut dyn RetrievalSink>,
 ) -> Result<ValidationProjection> {
     let notes = input_notes(input)?;
     let mut memberships: BTreeMap<RecordId, Vec<VaultRelativePath>> = BTreeMap::new();
@@ -288,8 +324,6 @@ fn project_input(
                 })
                 .collect(),
         );
-        let documents = &mut retrieval.documents;
-        let links = &mut retrieval.links;
         for (path, note) in &notes {
             let row = note
                 .canonical
@@ -317,7 +351,7 @@ fn project_input(
                 || first_heading(body).unwrap_or_else(|| path.as_str().to_owned()),
                 |r| r.record.title().to_owned(),
             );
-            documents.push(DocumentRow {
+            retrieval.document(DocumentRow {
                 path: path.clone(),
                 hash: note.source_hash.clone(),
                 record_id: row.map(|r| r.record.id().clone()),
@@ -353,7 +387,7 @@ fn project_input(
                     },
                     |r| r.reasons.clone(),
                 ),
-            });
+            })?;
             let body_offset = note.raw.len() - note.body().len();
             for link in extract_links(body) {
                 let resolution = registry.resolve_untyped(&link.destination);
@@ -363,13 +397,13 @@ fn project_input(
                     }
                     _ => (None, None),
                 };
-                links.push(LinkRow {
+                retrieval.link(LinkRow {
                     from_path: path.clone(),
                     byte_start: (body_offset + link.range.start) as u64,
                     target_id,
                     target_path,
                     resolution: format!("{resolution:?}"),
-                });
+                })?;
             }
             if let Some(row) = row {
                 for (field, kind, companion) in super::eligibility::references(&row.record) {
@@ -401,13 +435,13 @@ fn project_input(
                             .next()
                             .and_then(|line| line.find("[["))
                             .unwrap_or(0);
-                    links.push(LinkRow {
+                    retrieval.link(LinkRow {
                         from_path: path.clone(),
                         byte_start: start as u64,
                         target_id,
                         target_path,
                         resolution: format!("{resolution:?}"),
-                    });
+                    })?;
                 }
             }
         }
@@ -420,7 +454,7 @@ fn project_input(
         if let Some(retrieval) = retrieval.as_deref_mut()
             && matches!(record.kind(), RecordKind::Entity | RecordKind::Assertion)
         {
-            retrieval.graph.push(GraphRow {
+            retrieval.graph(GraphRow {
                 target_id: record.id().clone(),
                 target_kind: record.kind(),
                 name: if record.kind() == RecordKind::Entity {
@@ -466,7 +500,7 @@ fn project_input(
                                 .unwrap_or_default()
                         })
                 },
-            });
+            })?;
         }
         if record.kind() == RecordKind::Revision
             && record.string("wiki_extraction_status") == Some("complete")
@@ -491,7 +525,7 @@ fn project_input(
                     && let Ok(raw_text) = String::from_utf8(content)
                 {
                     let (headings, body) = normalized_markdown(&raw_text);
-                    retrieval.documents.push(DocumentRow {
+                    retrieval.document(DocumentRow {
                         path,
                         hash: Blake3Hash::digest(raw_text.as_bytes()),
                         record_id: None,
@@ -506,20 +540,12 @@ fn project_input(
                         owner_revision: Some(record.id().clone()),
                         eligibility: row.eligibility,
                         reasons: row.reasons.clone(),
-                    });
+                    })?;
                 }
             }
             // Failed verification also contributes every byte observed before failure.
             dependencies.extend(deps);
         }
-    }
-    if let Some(retrieval) = retrieval {
-        retrieval
-            .documents
-            .sort_by(|a, b| a.path.as_str().as_bytes().cmp(b.path.as_str().as_bytes()));
-        retrieval
-            .links
-            .sort_by(|a, b| (&a.from_path, a.byte_start).cmp(&(&b.from_path, b.byte_start)));
     }
     diagnostics.sort_by(|a, b| {
         (&a.path, format!("{:?}", a.code), a.details.to_string()).cmp(&(
@@ -1105,6 +1131,477 @@ mod tests {
         NORMALIZATION_CALLS.with(|calls| calls.set(0));
         project_validation_closed(&fs, &input).unwrap();
         assert_eq!(NORMALIZATION_CALLS.with(std::cell::Cell::get), 0);
+    }
+
+    #[derive(Default)]
+    struct RecordingSink {
+        documents: BTreeMap<VaultRelativePath, DocumentRow>,
+        graph: Vec<GraphRow>,
+        links: Vec<LinkRow>,
+    }
+    impl RetrievalSink for RecordingSink {
+        fn document(&mut self, row: DocumentRow) -> Result<()> {
+            assert!(self.documents.insert(row.path.clone(), row).is_none());
+            Ok(())
+        }
+        fn graph(&mut self, row: GraphRow) -> Result<()> {
+            self.graph.push(row);
+            Ok(())
+        }
+        fn link(&mut self, row: LinkRow) -> Result<()> {
+            self.links.push(row);
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn streamed_sink_preserves_complete_collecting_projection_on_mixed_input() {
+        let (_temp, fs, baseline) = fixture();
+        for mixed in [false, true] {
+            let mut input = baseline.clone();
+            if mixed {
+                input.overlay = vec![
+                    ProposedTarget { path: path("plain.md"), bytes: Some(b"# Plain note\n[[entities/a]]\n".to_vec()) },
+                    ProposedTarget { path: path("malformed.md"), bytes: Some(b"---\nwiki_id: broken\nwiki_kind: page\nwiki_status: [\n---\nMalformed readable note\n".to_vec()) },
+                    ProposedTarget { path: path("copy.md"), bytes: Some(include_bytes!("../../tests/fixtures/p08/a.md").to_vec()) },
+                ];
+            }
+            for closed in [false, true] {
+                let mut captured = input.clone();
+                if closed {
+                    for name in [ORIGINAL_PATH, CONTENT_PATH] {
+                        captured.documents.push(ScanDocument {
+                            path: path(name),
+                            bytes: CONTENT.to_vec(),
+                            hash: Blake3Hash::digest(CONTENT),
+                        });
+                    }
+                }
+                let expected = if closed {
+                    project_closed(&fs, &captured)
+                } else {
+                    project(&fs, &captured)
+                }
+                .unwrap();
+                let mut sink = RecordingSink::default();
+                let validation = project_with_sink(&fs, &captured, closed, &mut sink).unwrap();
+                assert_eq!(
+                    validation,
+                    if closed {
+                        project_validation_closed(&fs, &captured)
+                    } else {
+                        project_validation(&fs, &captured)
+                    }
+                    .unwrap()
+                );
+                let source = &sink.documents[&path(CONTENT_PATH)];
+                assert_eq!(source.source_id, Some(id("source_a")));
+                assert_eq!(source.owner_revision, Some(id("revision_a")));
+                assert_eq!(source.raw_text.as_bytes(), CONTENT);
+                assert_eq!(source.hash, Blake3Hash::digest(CONTENT));
+                sink.links.sort_by(|a, b| {
+                    (&a.from_path, a.byte_start).cmp(&(&b.from_path, b.byte_start))
+                });
+                let actual = CatalogProjection {
+                    vault_id: validation.vault_id,
+                    parser_fingerprint: validation.parser_fingerprint,
+                    control_manifest: validation.control_manifest,
+                    documents: sink.documents.into_values().collect(),
+                    records: validation.records,
+                    graph: sink.graph,
+                    links: sink.links,
+                    diagnostics: validation.diagnostics,
+                    dependencies: validation.dependencies,
+                };
+                assert_eq!(actual, expected);
+            }
+        }
+    }
+
+    #[derive(Default)]
+    struct OracleSink {
+        documents: Vec<DocumentRow>,
+        graph: Vec<GraphRow>,
+        links: Vec<LinkRow>,
+        events: Vec<String>,
+    }
+    impl RetrievalSink for OracleSink {
+        fn document(&mut self, row: DocumentRow) -> Result<()> {
+            self.events.push(format!("document:{}", row.path));
+            self.documents.push(row);
+            Ok(())
+        }
+        fn graph(&mut self, row: GraphRow) -> Result<()> {
+            self.events.push(format!("graph:{}", row.target_id));
+            self.graph.push(row);
+            Ok(())
+        }
+        fn link(&mut self, row: LinkRow) -> Result<()> {
+            self.events
+                .push(format!("link:{}:{}", row.from_path, row.byte_start));
+            self.links.push(row);
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn streamed_rows_match_literal_pre_sink_fixture_oracle() {
+        let (_temp, fs, mut input) = fixture();
+        // Fixed bytes and offsets, independently inspected against pre-sink
+        // 609bdd9. The body link emits before the earlier typed companion link.
+        const ASSERTION: &[u8] = b"---\ntitle: \"use\"\nwiki_id: \"use\"\nwiki_kind: \"assertion\"\nwiki_object_id: \"b\"\nwiki_predicate: \"uses\"\nwiki_schema: \"1\"\nwiki_status: \"accepted\"\nwiki_subject: \"[[entities/a]]\"\nwiki_subject_id: \"a\"\n---\nA uses B.\n[[entities/b]]\n";
+        let assertion = input
+            .documents
+            .iter_mut()
+            .find(|document| document.path == path("assertions/use.md"))
+            .unwrap();
+        assertion.bytes = ASSERTION.to_vec();
+        assertion.hash = Blake3Hash::digest(ASSERTION);
+        assert_eq!(&ASSERTION[154..168], b"[[entities/a]]");
+        assert_eq!(&ASSERTION[205..219], b"[[entities/b]]");
+        let page = &input
+            .documents
+            .iter()
+            .find(|document| document.path == path("page.md"))
+            .unwrap()
+            .bytes;
+        assert_eq!(&page[143..157], b"[[entities/a]]");
+
+        // Expected display fields are literals, not products of normalization,
+        // parsing, resolution, eligibility or collecting-sink helpers. Raw bytes
+        // and their hashes come only from the authoritative fixture input.
+        type LiteralDocument<'a> = (
+            &'a str,
+            &'a str,
+            RecordKind,
+            &'a str,
+            &'a str,
+            Eligibility,
+            &'a [&'a str],
+        );
+        let specifications: [LiteralDocument<'_>; 10] = [
+            (
+                "WIKI.md",
+                "vault_projection",
+                RecordKind::Vault,
+                "",
+                "Wiki\n",
+                Eligibility::Current,
+                &[],
+            ),
+            (
+                "assertions/use.md",
+                "use",
+                RecordKind::Assertion,
+                "",
+                "A uses B.\n[[entities/b]]\n",
+                Eligibility::Current,
+                &["current_support", "disputed"],
+            ),
+            (
+                "entities/a.md",
+                "a",
+                RecordKind::Entity,
+                "",
+                "Identity remains searchable independently of this unsupported description.\n",
+                Eligibility::Unsupported,
+                &["description_without_support"],
+            ),
+            (
+                "entities/b.md",
+                "b",
+                RecordKind::Entity,
+                "",
+                "Identity remains searchable independently of this unsupported description.\n",
+                Eligibility::Unsupported,
+                &["description_without_support"],
+            ),
+            (
+                "entities/c.md",
+                "c",
+                RecordKind::Entity,
+                "",
+                "Identity remains searchable independently of this unsupported description.\n",
+                Eligibility::Unsupported,
+                &["description_without_support"],
+            ),
+            (
+                "evidence/opposition.md",
+                "opposition",
+                RecordKind::Evidence,
+                "",
+                "",
+                Eligibility::Current,
+                &[],
+            ),
+            (
+                "evidence/support.md",
+                "support",
+                RecordKind::Evidence,
+                "",
+                "",
+                Eligibility::Current,
+                &[],
+            ),
+            (
+                "page.md",
+                "page",
+                RecordKind::Page,
+                "Supported page",
+                "Supported page\n[[entities/a]]\n",
+                Eligibility::Current,
+                &[],
+            ),
+            (
+                "sources/source_a/revisions/revision_a/revision.md",
+                "revision_a",
+                RecordKind::Revision,
+                "",
+                "Revision\n",
+                Eligibility::Current,
+                &[],
+            ),
+            (
+                "sources/source_a/source.md",
+                "source_a",
+                RecordKind::Source,
+                "",
+                "Source\n",
+                Eligibility::Current,
+                &[],
+            ),
+        ];
+        let canonical_documents: Vec<_> = specifications
+            .into_iter()
+            .map(
+                |(name, record_id, kind, headings, body, eligibility, reasons)| {
+                    let bytes = &input
+                        .documents
+                        .iter()
+                        .find(|document| document.path.as_str() == name)
+                        .unwrap()
+                        .bytes;
+                    DocumentRow {
+                        path: path(name),
+                        hash: Blake3Hash::digest(bytes),
+                        record_id: Some(id(record_id)),
+                        kind: Some(kind),
+                        title: record_id.into(),
+                        aliases: vec![],
+                        headings: headings.into(),
+                        tags: vec![],
+                        body: body.into(),
+                        raw_text: String::from_utf8(bytes.clone()).unwrap(),
+                        source_id: None,
+                        owner_revision: None,
+                        eligibility,
+                        reasons: reasons.iter().map(|reason| (*reason).to_owned()).collect(),
+                    }
+                },
+            )
+            .collect();
+        let source_document = DocumentRow {
+            path: path(CONTENT_PATH),
+            hash: Blake3Hash::digest(CONTENT),
+            record_id: None,
+            kind: None,
+            title: "revision_a".into(),
+            aliases: vec![],
+            headings: "Captured source".into(),
+            tags: vec![],
+            body: "Captured source\nA uses B.\n".into(),
+            raw_text: "# Captured source\nA uses B.\n".into(),
+            source_id: Some(id("source_a")),
+            owner_revision: Some(id("revision_a")),
+            eligibility: Eligibility::Current,
+            reasons: vec![],
+        };
+        let mut expected_graph: Vec<_> = ["a", "b", "c"]
+            .into_iter()
+            .map(|name| GraphRow {
+                target_id: id(name),
+                target_kind: RecordKind::Entity,
+                name: name.into(),
+                aliases: vec![],
+                endpoints: String::new(),
+                predicate: String::new(),
+                qualifiers: "{}".into(),
+                description: String::new(),
+            })
+            .collect();
+        expected_graph.push(GraphRow {
+            target_id: id("use"),
+            target_kind: RecordKind::Assertion,
+            name: String::new(),
+            aliases: vec![],
+            endpoints: "a b".into(),
+            predicate: "uses".into(),
+            qualifiers: "{\"wiki_modality\":\"asserted\",\"wiki_negated\":false}".into(),
+            description: "A uses B.\n[[entities/b]]\n".into(),
+        });
+        const RESOLVED_A: &str = "Resolved { id: RecordId(\"a\"), path: VaultRelativePath(\"entities/a.md\"), fragment: None, companion_stale: false }";
+        const RESOLVED_B: &str = "Resolved { id: RecordId(\"b\"), path: VaultRelativePath(\"entities/b.md\"), fragment: None, companion_stale: false }";
+        let typed_link = LinkRow {
+            from_path: path("assertions/use.md"),
+            byte_start: 154,
+            target_id: Some(id("a")),
+            target_path: Some(path("entities/a.md")),
+            resolution: RESOLVED_A.into(),
+        };
+        let body_link = LinkRow {
+            from_path: path("assertions/use.md"),
+            byte_start: 205,
+            target_id: Some(id("b")),
+            target_path: Some(path("entities/b.md")),
+            resolution: RESOLVED_B.into(),
+        };
+        let page_link = LinkRow {
+            from_path: path("page.md"),
+            byte_start: 143,
+            target_id: Some(id("a")),
+            target_path: Some(path("entities/a.md")),
+            resolution: RESOLVED_A.into(),
+        };
+        let expected_events = [
+            "document:WIKI.md",
+            "document:assertions/use.md",
+            "link:assertions/use.md:205",
+            "link:assertions/use.md:154",
+            "document:entities/a.md",
+            "document:entities/b.md",
+            "document:entities/c.md",
+            "document:evidence/opposition.md",
+            "document:evidence/support.md",
+            "document:page.md",
+            "link:page.md:143",
+            "document:sources/source_a/revisions/revision_a/revision.md",
+            "document:sources/source_a/source.md",
+            "graph:a",
+            "graph:b",
+            "graph:c",
+            "document:sources/source_a/revisions/revision_a/content.md",
+            "graph:use",
+        ];
+        for closed in [false, true] {
+            let mut captured = input.clone();
+            if closed {
+                for name in [ORIGINAL_PATH, CONTENT_PATH] {
+                    captured.documents.push(ScanDocument {
+                        path: path(name),
+                        bytes: CONTENT.to_vec(),
+                        hash: Blake3Hash::digest(CONTENT),
+                    });
+                }
+            }
+            let mut sink = OracleSink::default();
+            project_with_sink(&fs, &captured, closed, &mut sink).unwrap();
+            assert_eq!(
+                sink.events.iter().map(String::as_str).collect::<Vec<_>>(),
+                expected_events
+            );
+            let mut expected_stream_documents = canonical_documents.clone();
+            expected_stream_documents.push(source_document.clone());
+            assert_eq!(sink.documents, expected_stream_documents);
+            assert_eq!(sink.graph, expected_graph);
+            assert_eq!(
+                sink.links,
+                vec![body_link.clone(), typed_link.clone(), page_link.clone()]
+            );
+            // Collector ordering has independent fixed expectations, not a sort
+            // applied to the actual callback rows to manufacture its oracle.
+            let projection = if closed {
+                project_closed(&fs, &captured)
+            } else {
+                project(&fs, &captured)
+            }
+            .unwrap();
+            let mut expected_sorted_documents = canonical_documents.clone();
+            expected_sorted_documents.insert(8, source_document.clone());
+            assert_eq!(projection.documents, expected_sorted_documents);
+            assert_eq!(projection.graph, expected_graph);
+            assert_eq!(
+                projection.links,
+                vec![typed_link.clone(), body_link.clone(), page_link.clone()]
+            );
+        }
+    }
+
+    struct FailingSink {
+        stage: &'static str,
+        failed: bool,
+        attempts: usize,
+        source_attempts: usize,
+    }
+    impl FailingSink {
+        fn step(&mut self, stage: &'static str) -> Result<()> {
+            assert!(!self.failed, "callback invoked after sink error");
+            self.attempts += 1;
+            if stage == self.stage {
+                self.failed = true;
+                let mut error =
+                    WikiError::new(ErrorCode::BudgetExceeded, "injected retrieval sink error");
+                error.details = serde_json::json!({"stage":stage});
+                return Err(error);
+            }
+            Ok(())
+        }
+    }
+    impl RetrievalSink for FailingSink {
+        fn document(&mut self, row: DocumentRow) -> Result<()> {
+            if row.owner_revision.is_some() {
+                self.source_attempts += 1;
+                assert_eq!(row.source_id, Some(id("source_a")));
+                assert_eq!(row.owner_revision, Some(id("revision_a")));
+                assert_eq!(row.path, path(CONTENT_PATH));
+                assert_eq!(row.hash, Blake3Hash::digest(CONTENT));
+                assert_eq!(row.raw_text.as_bytes(), CONTENT);
+                self.step("source_document")
+            } else {
+                self.step("document")
+            }
+        }
+        fn graph(&mut self, _row: GraphRow) -> Result<()> {
+            self.step("graph")
+        }
+        fn link(&mut self, _row: LinkRow) -> Result<()> {
+            self.step("link")
+        }
+    }
+
+    #[test]
+    fn streamed_sink_errors_abort_without_complete_validation_authority() {
+        let (_temp, fs, input) = fixture();
+        for closed in [false, true] {
+            let mut captured = input.clone();
+            if closed {
+                for name in [ORIGINAL_PATH, CONTENT_PATH] {
+                    captured.documents.push(ScanDocument {
+                        path: path(name),
+                        bytes: CONTENT.to_vec(),
+                        hash: Blake3Hash::digest(CONTENT),
+                    });
+                }
+            }
+            for stage in ["document", "graph", "link", "source_document"] {
+                let mut sink = FailingSink {
+                    stage,
+                    failed: false,
+                    attempts: 0,
+                    source_attempts: 0,
+                };
+                let error = project_with_sink(&fs, &captured, closed, &mut sink).unwrap_err();
+                assert_eq!(error.code, ErrorCode::BudgetExceeded);
+                assert_eq!(error.message, "injected retrieval sink error");
+                assert_eq!(error.details, serde_json::json!({"stage":stage}));
+                assert!(sink.failed);
+                if stage == "document" {
+                    assert_eq!(sink.attempts, 1);
+                }
+                if stage == "source_document" {
+                    assert_eq!(sink.source_attempts, 1);
+                }
+            }
+        }
     }
 
     /// Root runs this bounded diagnostic in a fresh process per mode/size and

@@ -1,5 +1,11 @@
 # Context evaluation research and implementation
 
+## Streaming projection preparation
+
+The projector can now hand off one owned document, graph row or link at a time to a fallible sink. Existing callers still collect their complete projection and retain the original sorting, source-dependency checks and eligibility behavior. A sink error stops emission immediately and returns no complete validation authority. This is preparation for normalized storage: the persistent publisher still uses the existing format until the new builder, publication and reader paths are integrated.
+
+The initial refactor passed the complete unit suite: **241 passed, four ignored**. Independent review identified a circular test comparison because both paths used the new sink. A subsequent literal oracle independently checks all fields of 11 documents, four graph rows, three links and 18 emission events, including source interleaving and different callback/collector link ordering. Callback failures are exercised with both open filesystem input and fully captured input. The final focused projector run passed **10 tests, one ignored**; formatting and Clippy passed. The critic verified source and evidence hashes and awarded this refactor **9.2/10 with no blockers**. No large-vault rebuild, storage reduction or new answer-quality result follows from these checks.
+
 ## Source-count diagnostic and discovered validation ceiling
 
 The [reproducible diagnostic](../../testing-large-vaults.md#development-diagnostic-for-validation-memory) passed its 12-command smoke protocol, including seven intentional rejection cases. At 1,000 sources containing 100,000,000 UTF-8 content bytes, all five diagnostic commands passed. Public graph validation checked 3,008 controls and 5,008 unique dependency guards in 21.683 seconds, with 113,311,744 bytes native peak RSS. The separate full projection retained 201,261,637 bytes of retrieval text and reached 333,217,792 bytes peak RSS. Validation performs proposed and baseline projections; full projection performs one, so their timings are not a direct speedup comparison.

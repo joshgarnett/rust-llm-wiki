@@ -108,6 +108,15 @@ pub(crate) struct ValidationProjection {
     pub dependencies: Vec<ReadDependency>,
 }
 
+/// Receives provisional retrieval rows without retaining corpus text in the projector.
+/// A failed callback aborts projection; callers must discard provisional publication
+/// state unless projection and subsequent freshness checks both succeed.
+pub(crate) trait RetrievalSink {
+    fn document(&mut self, row: DocumentRow) -> Result<()>;
+    fn graph(&mut self, row: GraphRow) -> Result<()>;
+    fn link(&mut self, row: LinkRow) -> Result<()>;
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RecordRow {
     pub record: CanonicalRecord,
