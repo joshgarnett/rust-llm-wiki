@@ -18,6 +18,8 @@ Commit coherent, tested milestones as work progresses. Record the commit, valida
 
 Keep session checkpoints and detailed agent/run reports local under the ignored execution paths or `.artifacts/`. Keep reusable instructions, implementation decisions and curated validation summaries tracked. Promote stable findings into those maintained documents; do not add raw logs, per-attempt reports or temporary state to Git. Preserve local evidence when changing tracking, and ensure tracked documentation works in a fresh checkout without ignored files.
 
+Keep user-specific background, work details and motivations out of committed files unless explicitly authorized. Explain dataset choices through their technical coverage, provenance and limitations.
+
 ## Delegate for independent judgment
 
 Use subagents when a task benefits from independent research, a bounded implementation, adversarial testing or a fresh architectural perspective. Give each agent a concrete question, relevant files, exclusive write paths, constraints and a required evidence artifact. Prefer fresh context for critics and broad design reviews; implementation history can anchor their judgment. Respect available slots, serialize shared builds and keep integration with the orchestrator. Do not create parallel workers for tightly dependent edits or let a worker's self-review substitute for independent acceptance.
@@ -37,5 +39,7 @@ Use the [critic workflow](docs/testing-usability.md) and [context evaluation pro
 Separate development from unseen acceptance questions. Freeze the binary, protocol and limits before exposing a holdout; any question used to guide a fix becomes development data. Compare baseline and candidate on the same source revisions, caches and budgets. Acquire all authorized query embeddings before paired offline evaluation, since provider history can change the index. Record every error, regression and exclusion; do not cherry-pick modes, budgets or questions. Inspect the evidence actually returned, not just source-hit rates or passing unit tests.
 
 When a solution adds an agent/model stage or changes the user workflow, declare a separate evaluation protocol before opening the holdout. Count its additional input, calls, latency and known cost; mark unavailable usage as unavailable. A selector must see only its task and candidate evidence, while the independent critic retains the expected answers. Do not present a model-assisted workflow's score as proof that the original deterministic command passed.
+
+Measure elapsed time with a monotonic clock inside the process that owns the interval. Verify clock comparability before subtracting timestamps from separate processes; use recorded UTC observation times for external agent intervals when a shared monotonic epoch is unavailable, disclose wall-clock limitations, and distinguish observed turnaround from model inference time.
 
 Local mocks test mechanics. Live calls require existing user authorization, explicit finite limits and protected credentials; never print secrets or discard unknown accounting holds to make an experiment fit. Report experimental changes and residual limitations plainly. Update contracts, user documentation and execution state only to match the behavior actually implemented and verified.

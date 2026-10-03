@@ -30,6 +30,8 @@ lwiki --wiki ./my-wiki --offline context \
 
 The final output contains original passages and citations. Selection order determines packing priority; selected passages can still be omitted when the final byte, token or per-source limits are reached. Inspect the returned omissions and use only the final verified context when answering. If it still lacks a needed fact, inspect the cited sources or explicitly broaden the research.
 
+For model input, use the final command's plain stdout, or extract `data.text` after checking a successful JSON response. That is the budgeted rendered evidence, including its citations. Retain the full JSON for application checks and audit; feeding it all to a model also includes structured copies of the passages and metadata, so it can substantially exceed the rendered-context budget. Inspect omissions and warnings separately before deciding whether the evidence is adequate. Separating model content from retained artifacts is also an explicit [LangChain tool-message pattern](https://github.com/langchain-ai/langchain/blob/master/libs/core/langchain_core/messages/tool.py); no LangChain dependency is required here.
+
 If a complete embedding cache already exists for the question and sources, use `--mode hybrid` in **both** commands. Offline operation never acquires missing vectors. Keep other filters, budget and verification options identical as well.
 
 ## Limits and failures

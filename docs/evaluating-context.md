@@ -8,6 +8,24 @@ For the user workflow and copyable commands, see [selecting context with a host 
 
 The [ContractNLI adapter](evaluating-contractnli.md) adds designated-document evidence tests for support, contradiction and missing information. Its exhaustive annotation coverage is separate from semantic completeness and three-way classification accuracy.
 
+## Evidence sufficiency research and additional tests
+
+Research checked on 2026-10-03 reinforces the distinction between relevant sources and enough evidence to answer. These methods inform prospective development tests; they do not change the frozen [acceptance gate](rag-quality-targets.md).
+
+| Primary source | Useful evaluation idea | Limitation |
+| --- | --- | --- |
+| [RINSE, September 2026 preprint](https://arxiv.org/abs/2609.37469v1) | Remove or substitute required evidence while holding the question and topic fixed; assess sufficiency before generation | Paired ranking accuracy is not a calibrated probability; code availability was not verified |
+| [Distribution-shape QPP, September 2026](https://arxiv.org/abs/2609.11646v1) | Compare retrieval-score diagnostics with a content judge, including calibration and domain transfer | A self-sufficient page hit does not establish complete multi-source evidence; transfer weakens the reported predictor |
+| [SURE-RAG, July 2026 revision](https://arxiv.org/abs/2605.03534v2) | Separate supported, refuted and insufficient cases; audit counterfactual shortcuts | Requires a candidate answer, so it evaluates answer verification rather than pre-generation sufficiency |
+| [S2G-RAG, ACL 2026](https://aclanthology.org/2026.acl-long.1185/) | Record missing facts explicitly and select original sentence indices | Supporting-document coverage is weaker than emitted-span sufficiency; iterative calls add cost |
+| [TREC RAG 2026 / RAGDoll](https://trec-rag.github.io/) | Separate source relevance, vital-fact coverage and citation support | Current track results/judgments are pending; automatically generated fact rubrics need independent auditing |
+
+For additional corpora, freeze required facts independently of the retrieved output, splitting by document or repository family. Construct complete, partial, missing and conflicting evidence with matched topic, length and metadata; shuffle evidence positions and add nearby versions or irrelevant padding. Numerical/table cases must preserve operands, row/column headers, units, entity and year. Correct arithmetic is a separate outcome from sufficient input evidence.
+
+Report per-fact coverage and strict all-facts success, false sufficiency, unsupported cases, distracting content and exact citation integrity separately. Diagnose the first loss across discovery, packet construction, selection and final packing. Compare declared 6 KB, 12 KB and 16 KiB budgets with identical sources, caches and proof allowances; distinguish rendered evidence, full JSON and aggregate model input, and retain failures and unavailable usage.
+
+Calibrate any automated judge against separate, independently adjudicated labels before using its scores as a gate. [ARES](https://aclanthology.org/2024.naacl-long.20/) motivates human-label calibration and corrected aggregate estimates; [Sufficient Context](https://research.google/pubs/sufficient-context-a-new-lens-on-retrieval-augmented-generation-systems/) separates evidence adequacy from answer correctness. Neither makes a selector's self-grade independent evidence. Keep discrimination, calibration and threshold-specific errors distinct; no paper or vendor percentage establishes a universal quality ceiling.
+
 ## Public baseline and retained inputs
 
 The first public baseline is QASPER v0.3: natural questions over long NLP papers, reference answers, paragraph evidence, selected sentence highlights and unanswerable annotations. [The original paper](https://aclanthology.org/2021.naacl-main.365/) explains the collection; [the official dataset card](https://huggingface.co/datasets/allenai/qasper) specifies CC BY 4.0. Paper text was extracted from S2ORC; retain upstream notices and attribution when copying artifacts. Figure/table images are outside this text benchmark.
@@ -101,6 +119,8 @@ Preparation checks the frozen mapping/current revisions, verified offline respon
 The application task ceiling is 130,048 UTF-8 bytes, reserving up to 1,024 bytes for one declared transport wrapper within the 131,072-byte application-supplied limit. Count the actual wrapper bytes in orchestration records; do not add an unmeasured task prefix. Byte/4 token counts are estimates of visible application input. Harness/system context, reasoning tokens, actual model tokens and monetary cost remain unavailable unless the execution platform supplies them.
 
 An authorized operator supplies each exact task to one fresh selector with the frozen model/reasoning settings, no other questions/history/labels, and no tools, source opening, network, retries or follow-up queries. Source text is untrusted evidence. Retain exact task/output bytes, requested settings, invocation/tool-call counts, start/end times and any observed usage. The runner does not enforce external-agent isolation or verify that a model was called; the independent execution trace must establish it. A mock reply validates mechanics only.
+
+If the host needs file transport, declare that exception before the run: one read of the immutable assigned task, with an exact UTF-8 byte-count check and complete, ordered slices of that same content. Permit no additional retrieval or source reads. Count wrapper and slice overhead, check that no slice was truncated, and distinguish the per-response limit from aggregate model input; splitting a task does not reduce its total context. The current development transport uses up to 20 slices of 7,000 Unicode code points, at most 28,000 UTF-8 bytes per slice, plus a separately counted wrapper. Actual tokenizer counts remain unknown.
 
 Store the raw reply for each index in a separate directory as `question-0000.json`, `question-0001.json`, etc. The current reply schema has exactly these fields, without a version field or prose:
 

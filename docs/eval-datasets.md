@@ -16,7 +16,35 @@ This is a dataset acquisition and adapter proposal, researched on 2026-10-03. Th
 
 These are proposed experiments, not declared acceptance denominators. Freeze concrete source families, task counts and thresholds before exposing a new holdout. Report each category independently and preserve the existing HIGH gate; do not use the large ContractNLI task count to mask a failing multi-source category.
 
-**Implementation priority:** first adapt ConditionalQA's scenario/evidence/condition mapping and ContractNLI's three-way labels, then add the independently labeled WixQA and scoped MuSiQue arms. The [ContractNLI adapter](evaluating-contractnli.md) now prepares an evaluator-compatible, train-only fixture from the pinned archive. The original research sample directories still use research manifests; use the supported adapter's output for evaluation. ConditionalQA's first adapter exposed HTML-source rendering and full-scenario query issues in actual CLI runs; its revised preparation is in progress. WixQA is deliberately raw corpus plus external expert answers awaiting independent proposition/span labeling. MuSiQue data acquisition and Cargo question authoring remain pending.
+**Implementation priority:** first adapt ConditionalQA's scenario/evidence/condition mapping and ContractNLI's three-way labels, then add the independently labeled WixQA and scoped MuSiQue arms. The [ContractNLI adapter](evaluating-contractnli.md) now prepares an evaluator-compatible, train-only fixture from the pinned archive. The original research sample directories still use research manifests; use the supported adapter's output for evaluation. ConditionalQA's first adapter exposed HTML-source rendering and full-scenario query issues in actual CLI runs; the [revised adapter](evaluating-conditionalqa.md) preserves mapped Markdown and full queries. WixQA is deliberately raw corpus plus external expert answers awaiting independent proposition/span labeling. MuSiQue data acquisition and Cargo question authoring remain pending.
+
+## Additional acquired development inputs
+
+The following inputs were acquired and structurally audited on 2026-10-03. They broaden evaluation capabilities without changing the frozen acceptance set. Downloaded files, original notices and acquisition failures remain local under `.artifacts/eval-2026`; no result below is a retrieval or semantic-completeness score.
+
+| Input | Retained data | What it can test / remaining work |
+| --- | --- | --- |
+| [T²-RAGBench](https://aclanthology.org/2026.eacl-long.8/), FinQA development subset | 883 questions and 299 distinct page contexts, containing 1,339,673 UTF-8 source bytes | Text/table retrieval, entity/year disambiguation and numerical evidence; independently audit question reformulations and required operands/qualifiers before grading completeness |
+| [BRIGHT](https://huggingface.co/datasets/xlangai/BRIGHT), Stack Overflow, economics and Pony subsets | 332 queries, 165,195 short documents and 2,951 long documents; all referenced gold IDs resolve | Reasoning-intensive retrieval, code/documentation and cross-domain transfer; relevance labels are not sufficient-passage labels |
+| [DevDex](https://github.com/firecrawl/benchmark-devdex), public release | 594 tasks: 201 documentation, 195 issue/PR and 198 repository lookups | Paraphrased developer search and URL/reference ranking; source pages need immutable acquisition and independent supporting-span labels before local context evaluation |
+
+T²-RAGBench was published at EACL 2026; its questions are model-reformulated, with only a subset checked by people. Its current card explicitly removes VQAonBD for poor reformulations and contains conflicting aggregate counts, so use counts from the retained bytes. The downloaded FinQA development file has no conflicting text for a shared `context_id`. Its released `context` strings are already text plus Markdown tables: source preparation preserves those bytes, keeps questions/answers outside the corpus, and treats each as a page context, not an entire financial report. The first train-file request was rejected before transfer because its advertised size exceeded the declared 50 MB cap; that failed attempt is retained rather than silently expanding the download.
+
+BRIGHT's short and long document sets are alternative retrieval settings, not independent source samples. The largest downloaded long document is 9,188,634 bytes; validate ingestion and context budgets before importing it, and never silently trim it. Keep `reasoning`, `gold_answer`, gold IDs and query exclusions outside indexed content. The official card declares CC BY 4.0, as does T²-RAGBench; preserve upstream source notices as well. DevDex's repository carries MIT, but linked external pages retain their own terms. Its August 2026 release measures reference retrieval, not answer completeness, and its vendor-authored comparisons do not establish an independent product-quality target.
+
+Acquisition retained 17 successful files totaling 114,587,939 bytes, plus metadata manifests and the bounded train-file failure. BRIGHT schema/reference auditing used isolated PyArrow 21.0.0 without changing project dependencies. No upstream benchmark code, provider API or model was run during these checks. The existing context evaluator needs dataset-specific adapters and independently frozen sufficient-evidence labels before these inputs can contribute complete-task scores.
+
+Essential immutable inputs (download into new paths, retain README/license files, then verify SHA256):
+
+| File | Bytes | SHA256 |
+| --- | ---: | --- |
+| [T² FinQA dev](https://huggingface.co/datasets/G4KMU/t2-ragbench/resolve/adf7fe1541ac37351ce1142544d8e3b43010ed92/data/FinQA/dev/metadata.jsonl) | 8,604,079 | `24048e3250d4178c7fb433aea21439dca23f62abbcbd00d415d9798902a544a5` |
+| [BRIGHT Stack Overflow queries](https://huggingface.co/datasets/xlangai/BRIGHT/resolve/3066d29c9651a576c8aba4832d249807b181ecae/examples/stackoverflow-00000-of-00001.parquet) | 250,458 | `97d417ba449ef70c9c9ae2937e9df106654a2554ce1533b090cb64b998a077e1` |
+| [BRIGHT economics queries](https://huggingface.co/datasets/xlangai/BRIGHT/resolve/3066d29c9651a576c8aba4832d249807b181ecae/examples/economics-00000-of-00001.parquet) | 219,518 | `2a79f0f3a881c7c03a258cf8ef8ac2db1ca9080963252d9a020bb45a264aa037` |
+| [BRIGHT Pony queries](https://huggingface.co/datasets/xlangai/BRIGHT/resolve/3066d29c9651a576c8aba4832d249807b181ecae/examples/pony-00000-of-00001.parquet) | 27,722 | `0c0718d3e0ef05da42f75b7c03e755d3e03d9fcdbd32b67dddd221768a8377d7` |
+| [DevDex documentation tasks](https://raw.githubusercontent.com/firecrawl/benchmark-devdex/24e60473887d33960bf155a9e73affcd07d288a3/devdex/gt/docs_public.jsonl) | 209,709 | `7bf25a95911b23cba828efc6c4920a65673d63d4233d910773c1dfd15e641b69` |
+
+At the same BRIGHT revision, replace `examples/` with `documents/` or `long_documents/` for the corresponding source files. At the same DevDex revision, `fix_public.jsonl` and `repo_public.jsonl` provide the other tracks. Use explicit download deadlines and byte caps; the completed acquisition used at most 50 MB per file and 200 MB total. Do not execute a release's model runner merely to obtain its data.
 
 ### ConditionalQA: preserve the conditions
 
