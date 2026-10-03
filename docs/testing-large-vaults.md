@@ -139,6 +139,35 @@ observed child duration are separate fields, and the latter includes polling
 delay. A validator call performs both proposed and baseline projections, so its
 time is not directly comparable to one full projection as an optimization ratio.
 
+### Actual refresh command diagnostic
+
+[benchmark_source_refresh.py](../scripts/benchmark_source_refresh.py) runs the
+public CLI on disposable captures, then measures no-op, title-only and changed
+refreshes followed immediately by indexed context. Supply an explicit binary and
+a new output directory; `--baseline-binary` compares two binaries on copies of
+the same seeded canonical state.
+
+```sh
+python3 scripts/benchmark_source_refresh.py --binary /absolute/path/to/lwiki \
+  --workdir /absolute/path/to/new-run --tier tiny --trials 1 --history-revisions 1
+```
+
+The two-document, 100 KiB smoke run passed all three refresh/context checks on
+the legacy public workflow: refresh took 0.170 seconds unchanged, 0.857 seconds
+for a title edit and 1.494 seconds for changed content; subsequent context took
+0.072–0.093 seconds. These single observations validate the harness and expose
+remaining refresh cost. They do not establish tail latency or the new normalized
+update path, which is not connected to the public command yet.
+
+Setup uses real `source add` commands and is timed separately; its current cost
+can grow quadratically, so the larger tiers may hit the explicit run ceiling.
+The harness preserves raw commands, outputs, binary hashes, resource observations
+and failures. It checks selected revision identity, immutable bytes and exact
+cited spans. Independent quote-hash recomputation requires Python's optional
+`blake3` module and is explicitly unqualified when unavailable. Held-reader and
+logical filesystem/SQL work measurements still require the separate integration
+tests. This diagnostic does not replace the full acceptance matrix below.
+
 ### Acceptance evidence
 
 Freeze the binary/tree, protocol, generator/seed, manifests, expected outcomes,
