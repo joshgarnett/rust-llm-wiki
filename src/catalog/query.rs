@@ -654,7 +654,7 @@ impl Drop for QuerySnapshot {
 mod tests {
     use super::*;
     use crate::vault::{VaultFs, VaultRoot, WriterPermit};
-    use std::{fs, time::Duration};
+    use std::{collections::BTreeMap, fs, time::Duration};
 
     fn path(value: &str) -> VaultRelativePath {
         VaultRelativePath::new(value).unwrap()
@@ -844,10 +844,10 @@ mod tests {
         ] {
             let (_temp, _root, catalog) = unsynced();
             let completed = publish_normalized(&catalog, 1);
-            Connection::open(completed.path)
-                .unwrap()
-                .execute_batch(mutation)
-                .unwrap();
+            let writer = Connection::open(completed.path).unwrap();
+            selector::configure_wal(&writer).unwrap();
+            writer.execute_batch(mutation).unwrap();
+            drop(writer);
             let reader = defaults(&catalog);
             assert_eq!(
                 reader.record(&id("page_query")).unwrap_err().code,
@@ -858,12 +858,14 @@ mod tests {
         }
         let (_temp, _root, catalog) = unsynced();
         let completed = publish_normalized(&catalog, 1);
-        Connection::open(completed.path)
-            .unwrap()
+        let writer = Connection::open(completed.path).unwrap();
+        selector::configure_wal(&writer).unwrap();
+        writer
             .execute_batch(
                 "DROP INDEX diagnostic_paths; CREATE INDEX diagnostic_paths ON diagnostics(code)",
             )
             .unwrap();
+        drop(writer);
         assert_eq!(
             defaults(&catalog)
                 .diagnostics(&BTreeSet::from([path("page.md")]))
@@ -1121,22 +1123,36 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn selected_v2_read_only_catalog_directory_is_unchanged() {
-        use std::os::unix::fs::PermissionsExt;
+    fn selected_wal_read_only_directory_preserves_data_and_sidecar_identity() {
+        use std::os::unix::fs::{MetadataExt, PermissionsExt};
         let (temp, _root, catalog) = unsynced();
         let completed = publish_normalized(&catalog, 1);
         let directory = completed.path.parent().unwrap();
-        let before: BTreeSet<_> = fs::read_dir(directory)
-            .unwrap()
-            .map(|entry| {
-                let path = entry.unwrap().path();
-                (
-                    path.clone(),
-                    fs::read(&path).unwrap(),
-                    fs::metadata(&path).unwrap().modified().unwrap(),
-                )
-            })
-            .collect();
+        let snapshot = || {
+            fs::read_dir(directory)
+                .unwrap()
+                .map(|entry| {
+                    let path = entry.unwrap().path();
+                    let metadata = fs::metadata(&path).unwrap();
+                    // SQLite readers coordinate through SHM read marks. Its bytes
+                    // and mtime may change, while DB/WAL and every file identity
+                    // remain unchanged and no directory entry is created.
+                    let content = if path.to_string_lossy().ends_with(".sqlite-shm") {
+                        None
+                    } else {
+                        Some((
+                            Blake3Hash::digest(fs::read(&path).unwrap()),
+                            metadata.modified().unwrap(),
+                        ))
+                    };
+                    (
+                        path,
+                        (metadata.ino(), metadata.len(), metadata.mode(), content),
+                    )
+                })
+                .collect::<BTreeMap<_, _>>()
+        };
+        let before = snapshot();
         let permissions = fs::metadata(directory).unwrap().permissions();
         fs::set_permissions(directory, fs::Permissions::from_mode(0o500)).unwrap();
         let reader = defaults(&catalog);
@@ -1144,18 +1160,7 @@ mod tests {
         reader.record(&id("page_query")).unwrap().unwrap();
         drop(reader);
         fs::set_permissions(directory, permissions).unwrap();
-        let after: BTreeSet<_> = fs::read_dir(directory)
-            .unwrap()
-            .map(|entry| {
-                let path = entry.unwrap().path();
-                (
-                    path.clone(),
-                    fs::read(&path).unwrap(),
-                    fs::metadata(&path).unwrap().modified().unwrap(),
-                )
-            })
-            .collect();
-        assert_eq!(before, after);
+        assert_eq!(before, snapshot());
         assert!(!temp.path().join(".wiki/cache/index.sqlite").exists());
     }
 

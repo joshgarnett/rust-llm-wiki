@@ -1508,10 +1508,10 @@ mod indexed_source_tests {
             let legacy = reader();
             let alpha = source(&legacy, "alpha", "Captured title");
             let (_temp, catalog, completed) = normalized_fixture(&[alpha]);
-            Connection::open(completed.path)
-                .unwrap()
-                .execute_batch(mutation)
-                .unwrap();
+            let writer = Connection::open(completed.path).unwrap();
+            crate::catalog::selector::configure_wal(&writer).unwrap();
+            writer.execute_batch(mutation).unwrap();
+            drop(writer);
             let normalized = catalog
                 .query_snapshot(crate::catalog::query_types::QueryReadLimits::default())
                 .unwrap();

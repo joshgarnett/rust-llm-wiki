@@ -220,7 +220,7 @@ impl<'a> NormalizedBuilder<'a> {
             .execute_batch(normalized_schema::SCHEMA)
             .map_err(build_sql_error)?;
         let selection = &identity.selection;
-        connection.execute("INSERT INTO catalog_meta VALUES(1,2,?1,?2,?3,?4,?3,NULL,NULL,NULL,'building',?5,?6,?7,?8)", params![
+        connection.execute("INSERT INTO catalog_meta(singleton,schema_version,vault_id,file_id,creation_epoch,creation_header_hash,epoch,state,origin_change_id,origin_manifest_hash,vector_cache_lost,vector_loss_unknown) VALUES(1,3,?1,?2,?3,?4,?3,'building',?5,?6,?7,?8)", params![
             selection.vault_id.as_str(), selection.file_id, sql::integer(selection.creation_epoch)?, selection.creation_header_hash.as_str(),
             identity.origin.as_ref().map(|v| v.change_id.as_str()), identity.origin.as_ref().map(|v| v.manifest_hash.as_str()),
             identity.vector_cache_lost, identity.vector_loss_unknown
@@ -573,20 +573,27 @@ impl<'a> NormalizedBuilder<'a> {
             ));
         }
         self.step(BuildCheckpoint::BeforeComplete)?;
-        self.connection().execute("UPDATE catalog_meta SET parser_hash=?1,control_hash=?2,dependency_hash=?3,state='complete' WHERE singleton=1 AND state='building'",params![projection.parser_fingerprint.as_str(),projection.control_manifest.as_str(),dependency_hash.as_str()]).map_err(build_sql_error)?;
+        // This names a publication, not a fresh full-vault proof. Subsequent
+        // deltas chain their exact changed inputs without recomputing a global
+        // digest. The full-build observations are separately epoch-bound.
+        let publication_hash = Blake3Hash::digest(sql::json(&(
+            "lwiki.catalog-publication.v3.build",
+            &self.identity.selection,
+            self.identity
+                .origin
+                .as_ref()
+                .map(|origin| (&origin.change_id, &origin.manifest_hash)),
+            &projection.parser_fingerprint,
+            &projection.control_manifest,
+            &dependency_hash,
+        ))?);
+        self.connection().execute("UPDATE catalog_meta SET parser_hash=?1,control_hash=?2,dependency_hash=?3,publication_hash=?4,audit_epoch=epoch,state='complete' WHERE singleton=1 AND state='building'",params![projection.parser_fingerprint.as_str(),projection.control_manifest.as_str(),dependency_hash.as_str(),publication_hash.as_str()]).map_err(build_sql_error)?;
         self.step(BuildCheckpoint::AfterComplete)?;
         checkpoint(self.connection())?;
         self.step(BuildCheckpoint::BeforeSeal)?;
-        let mode: String = self
-            .connection()
-            .query_row("PRAGMA journal_mode=DELETE", [], |r| r.get(0))
-            .map_err(build_sql_error)?;
-        if mode != "delete" {
-            return Err(WikiError::new(
-                ErrorCode::IndexCorrupt,
-                "catalog journal sealing failed",
-            ));
-        }
+        // Prepare normal serving before selection, so the first document delta
+        // does not have to wait for every reader to release a rollback database.
+        super::selector::configure_wal(self.connection())?;
         let connection = self.connection.take().expect("open builder connection");
         connection
             .close()
@@ -618,11 +625,12 @@ impl<'a> NormalizedBuilder<'a> {
         self.stats.elapsed_ms = self.started.elapsed().as_millis().min(u64::MAX as u128) as u64;
         Ok(CompletedCatalog {
             identity: self.identity.clone(),
-            snapshot: ReadSnapshot::canonical(
+            snapshot: ReadSnapshot::published(
                 self.identity.selection.creation_epoch,
                 projection.parser_fingerprint.clone(),
-                projection.control_manifest.clone(),
-            ),
+                self.identity.selection.file_id.clone(),
+                publication_hash,
+            )?,
             dependency_hash,
             stats: self.stats.clone(),
             path: self.path.clone(),
@@ -851,7 +859,7 @@ mod tests {
     }
 
     #[test]
-    fn sealed_rows_and_external_fts_preserve_all_document_fields() {
+    fn wal_ready_rows_and_external_fts_preserve_all_document_fields() {
         let (_temp, fs, writer, identity) = fixture();
         let mut builder = NormalizedBuilder::begin(
             &fs,
@@ -980,13 +988,14 @@ mod tests {
         assert_eq!(
             c.query_row("PRAGMA journal_mode", [], |r| r.get::<_, String>(0))
                 .unwrap(),
-            "delete"
+            "wal"
         );
-        for suffix in ["-wal", "-shm", "-journal"] {
-            assert!(!PathBuf::from(format!("{}{suffix}", complete.path.display())).exists());
+        for suffix in ["-wal", "-shm"] {
+            assert!(PathBuf::from(format!("{}{suffix}", complete.path.display())).exists());
         }
+        assert!(!PathBuf::from(format!("{}-journal", complete.path.display())).exists());
         drop(c);
-        assert!(!PathBuf::from(format!("{}-wal", complete.path.display())).exists());
+        assert!(PathBuf::from(format!("{}-wal", complete.path.display())).exists());
     }
 
     #[test]

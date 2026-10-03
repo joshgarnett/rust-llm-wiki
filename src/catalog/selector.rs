@@ -9,7 +9,7 @@ use rusqlite::{Connection, OpenFlags};
 use serde::{Deserialize, Serialize};
 use std::{
     fs::{self, File},
-    io::Read,
+    io::{Read, Seek, SeekFrom},
     path::{Path, PathBuf},
     time::{Duration, Instant},
 };
@@ -434,10 +434,10 @@ pub(crate) fn acquire<T>(
         false,
         timeout.saturating_sub(started.elapsed()),
     )?;
-    no_sidecars(fs, &selection)?;
-    let db = Checked::open(&path(fs, database_name(&selection))?, false, false)?;
-    rollback_header(&db)?;
+    let db = Checked::open(&path(fs, database_name(&selection))?, false, true)?;
+    let sidecars = checked_sidecars(fs, &selection, &db, false)?;
     let value = open(&db.path, &selection)?;
+    verify_sidecars(&sidecars)?;
     db.verify()?;
     gate.checked.verify()?;
     lease.checked.verify()?;
@@ -498,25 +498,264 @@ pub(crate) fn prepare(
     Ok(db)
 }
 
-/// Inspect the fixed SQLite header before SQLite sees the path. READ_ONLY can
-/// create sidecars for a WAL database when the directory is writable.
-fn rollback_header(checked: &Checked) -> Result<()> {
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum JournalMode {
+    Delete,
+    Wal,
+}
+
+/// Inspect before SQLite sees the path: a read-only WAL open can otherwise
+/// create sidecars when its directory is writable.
+fn journal_header(checked: &Checked) -> Result<JournalMode> {
     let mut bytes = [0u8; 100];
     let mut file = &checked.file;
+    file.seek(SeekFrom::Start(0))
+        .map_err(|e| io("seek SQLite header", e))?;
     file.read_exact(&mut bytes)
-        .map_err(|e| io("read sealed SQLite header", e))?;
+        .map_err(|e| io("read SQLite header", e))?;
     checked.verify()?;
-    if &bytes[..16] != b"SQLite format 3\0" || bytes[18] != 1 || bytes[19] != 1 {
-        return Err(corrupt("catalog SQLite header is not sealed rollback mode"));
+    if &bytes[..16] != b"SQLite format 3\0" {
+        return Err(corrupt("catalog SQLite header is invalid"));
+    }
+    match (bytes[18], bytes[19]) {
+        (1, 1) => Ok(JournalMode::Delete),
+        (2, 2) => Ok(JournalMode::Wal),
+        _ => Err(corrupt("catalog SQLite journal mode is unsupported")),
+    }
+}
+
+/// Sidecars are owned SQLite state, not arbitrary cache paths. Missing WAL
+/// SHM is reconstructible only from a retained WAL under an exclusive lifetime
+/// lease. A missing WAL always refuses: the main DB may be a predecessor.
+/// Native SQLite alone interprets or removes their contents.
+fn checked_sidecars(
+    fs: &VaultFs,
+    selected: &CatalogSelection,
+    db: &Checked,
+    allow_missing: bool,
+) -> Result<Vec<Checked>> {
+    if journal_header(db)? == JournalMode::Delete {
+        no_sidecars(fs, selected)?;
+        return Ok(Vec::new());
+    }
+    if exists(&path(
+        fs,
+        CachePath::File(&selected.file_id, FileKind::Journal),
+    )?)? {
+        return Err(corrupt("WAL catalog has unexpected rollback journal"));
+    }
+    let mut held = Vec::new();
+    for kind in [FileKind::Wal, FileKind::Shm] {
+        let name = path(fs, CachePath::File(&selected.file_id, kind))?;
+        if !exists(&name)? {
+            if allow_missing && matches!(kind, FileKind::Shm) {
+                continue;
+            }
+            return Err(WikiError::new(
+                ErrorCode::RecoveryRequired,
+                if matches!(kind, FileKind::Wal) {
+                    "catalog WAL is missing; restore the exact WAL or explicitly rebuild"
+                } else {
+                    "catalog SHM is missing; exclusive writer recovery is required"
+                },
+            ));
+        }
+        let checked = Checked::open(&name, false, true)?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            let owner = db
+                .file
+                .metadata()
+                .map_err(|e| io("inspect database owner", e))?
+                .uid();
+            let metadata = checked
+                .file
+                .metadata()
+                .map_err(|e| io("inspect sidecar owner", e))?;
+            if metadata.uid() != owner || metadata.mode() & 0o022 != 0 {
+                return Err(corrupt(
+                    "SQLite sidecar ownership or write permissions are unsafe",
+                ));
+            }
+        }
+        held.push(checked);
+    }
+    Ok(held)
+}
+fn verify_sidecars(sidecars: &[Checked]) -> Result<()> {
+    for checked in sidecars {
+        checked.verify()?;
     }
     Ok(())
 }
 
-/// Verify publication/retirement ownership, never create SQL or recover WAL.
+fn persist_wal(connection: &Connection, enabled: bool) -> Result<()> {
+    let mut flag: std::ffi::c_int = i32::from(enabled);
+    // SAFETY: the borrowed connection owns a live SQLite handle; SQLite uses
+    // this writable integer synchronously and does not retain its pointer.
+    let result = unsafe {
+        rusqlite::ffi::sqlite3_file_control(
+            connection.handle(),
+            c"main".as_ptr(),
+            rusqlite::ffi::SQLITE_FCNTL_PERSIST_WAL,
+            (&mut flag as *mut std::ffi::c_int).cast(),
+        )
+    };
+    if result != rusqlite::ffi::SQLITE_OK {
+        return Err(corrupt(format!(
+            "SQLite persistent WAL is unavailable ({result})"
+        )));
+    }
+    Ok(())
+}
+
+/// Initial construction or exclusive migration only. A real page-one write
+/// materializes WAL/SHM even when the preceding database is fully checkpointed.
+/// Callers own the writer permit and an unpublished file or exclusive lease.
+pub(crate) fn configure_wal(connection: &Connection) -> Result<()> {
+    connection
+        .execute_batch("PRAGMA synchronous=FULL;")
+        .map_err(super::sql::sql_error)?;
+    persist_wal(connection, true)?;
+    let mode: String = connection
+        .pragma_update_and_check(None, "journal_mode", "WAL", |r| r.get(0))
+        .map_err(super::sql::sql_error)?;
+    if !mode.eq_ignore_ascii_case("wal") {
+        return Err(corrupt("SQLite refused WAL mode"));
+    }
+    let version: i64 = connection
+        .pragma_query_value(None, "user_version", |r| r.get(0))
+        .map_err(super::sql::sql_error)?;
+    connection
+        .pragma_update(None, "user_version", version)
+        .map_err(super::sql::sql_error)?;
+    Ok(())
+}
+
+/// Preflight before canonical writes. Only first migration or missing-sidecar
+/// recovery of SHM needs exclusive lifetime ownership; ready WAL readers may
+/// remain. A missing WAL is never recreated by this preflight.
+pub(crate) fn ensure_delta_ready(
+    fs: &VaultFs,
+    writer: &WriterPermit,
+    selected: &CatalogSelection,
+    timeout: Duration,
+) -> Result<()> {
+    writer.require_root(fs.root())?;
+    fs.require_storage_ready()?;
+    selected.validate(&selected.vault_id)?;
+    let started = Instant::now();
+    let gate = required_lock(Checked::open(&path(fs, GATE)?, false, true)?, true, timeout)?;
+    if selection(fs, &selected.vault_id)?.as_ref() != Some(selected) {
+        return Err(corrupt("delta selection changed"));
+    }
+    let db = Checked::open(&path(fs, database_name(selected))?, false, true)?;
+    let sidecars = checked_sidecars(fs, selected, &db, true)?;
+    if journal_header(&db)? == JournalMode::Wal && sidecars.len() == 2 {
+        verify_sidecars(&sidecars)?;
+        return Ok(());
+    }
+    let lease = required_lock(
+        Checked::open(&path(fs, lease_name(selected))?, false, true)?,
+        true,
+        timeout.saturating_sub(started.elapsed()),
+    )?;
+    let connection = writable(&db.path)?;
+    super::normalized_read::header(&connection, selected)?;
+    configure_wal(&connection)?;
+    drop(connection);
+    db.verify()?;
+    let ready = checked_sidecars(fs, selected, &db, false)?;
+    for sidecar in &ready {
+        sidecar
+            .file
+            .sync_all()
+            .map_err(|e| io("sync migrated SQLite sidecar", e))?;
+    }
+    db.file
+        .sync_all()
+        .map_err(|e| io("sync migrated SQLite database", e))?;
+    durable(
+        fs.durable_io()
+            .sync_directory(db.path.parent().unwrap())
+            .map_err(|e| io("sync migrated SQLite directory", e))?,
+    )?;
+    gate.checked.verify()?;
+    lease.checked.verify()?;
+    Ok(())
+}
+fn writable(path: &Path) -> Result<Connection> {
+    let connection = Connection::open_with_flags(
+        path,
+        OpenFlags::SQLITE_OPEN_READ_WRITE
+            | OpenFlags::SQLITE_OPEN_NO_MUTEX
+            | OpenFlags::SQLITE_OPEN_NOFOLLOW,
+    )
+    .map_err(super::sql::sql_error)?;
+    connection
+        .busy_timeout(Duration::ZERO)
+        .map_err(super::sql::sql_error)?;
+    connection
+        .execute_batch("PRAGMA synchronous=FULL;")
+        .map_err(super::sql::sql_error)?;
+    persist_wal(&connection, true)?;
+    Ok(connection)
+}
+
+/// The connection cannot escape either its shared lifetime lease or the writer
+/// permit. The root adapter supplies the immediate row+FTS+epoch transaction.
+pub(crate) struct DeltaWriter<'a> {
+    selected: Selected<Connection>,
+    _writer: &'a WriterPermit,
+}
+impl DeltaWriter<'_> {
+    pub(crate) fn connection(&self) -> &Connection {
+        self.selected.value()
+    }
+    pub(crate) fn selection(&self) -> &CatalogSelection {
+        self.selected.selection()
+    }
+}
+/// Caller must verify the durable operational authority and compare its
+/// acknowledged file/epoch floor with this handle's header before applying a
+/// delta. Active-operation starting/intended epochs and receipt proof belong
+/// to that caller; selection identity alone does not establish publication.
+pub(crate) fn open_delta<'a>(
+    fs: &VaultFs,
+    writer: &'a WriterPermit,
+    selected: &CatalogSelection,
+    timeout: Duration,
+) -> Result<DeltaWriter<'a>> {
+    writer.require_root(fs.root())?;
+    fs.require_storage_ready()?;
+    let pinned = acquire(fs, &selected.vault_id, timeout, |name, current| {
+        if current != selected {
+            return Err(corrupt("delta selection changed"));
+        }
+        let connection = writable(name)?;
+        let mode: String = connection
+            .pragma_query_value(None, "journal_mode", |r| r.get(0))
+            .map_err(super::sql::sql_error)?;
+        if !mode.eq_ignore_ascii_case("wal") {
+            return Err(corrupt(
+                "delta requires WAL preflight before canonical writes",
+            ));
+        }
+        super::normalized_read::header(&connection, selected)?;
+        Ok(connection)
+    })?
+    .ok_or_else(|| corrupt("delta catalog selection is absent"))?;
+    Ok(DeltaWriter {
+        selected: pinned,
+        _writer: writer,
+    })
+}
+
+/// Verify publication/retirement ownership using a bounded read transaction.
 fn verify_sealed(fs: &VaultFs, selection: &CatalogSelection) -> Result<(Checked, u64)> {
-    no_sidecars(fs, selection)?;
-    let checked = Checked::open(&path(fs, database_name(selection))?, false, false)?;
-    rollback_header(&checked)?;
+    let checked = Checked::open(&path(fs, database_name(selection))?, false, true)?;
+    let sidecars = checked_sidecars(fs, selection, &checked, false)?;
     let connection = Connection::open_with_flags(
         &checked.path,
         OpenFlags::SQLITE_OPEN_READ_ONLY
@@ -547,32 +786,18 @@ fn verify_sealed(fs: &VaultFs, selection: &CatalogSelection) -> Result<(Checked,
     connection
         .execute_batch("PRAGMA query_only=ON; BEGIN;")
         .map_err(super::sql::sql_error)?;
-    let mode: String = connection
-        .query_row("PRAGMA journal_mode", [], |r| r.get(0))
-        .map_err(super::sql::sql_error)?;
-    let version: i64 = connection
-        .query_row("PRAGMA user_version", [], |r| r.get(0))
-        .map_err(super::sql::sql_error)?;
-    let valid:i64=connection.query_row("SELECT count(*) FROM catalog_meta WHERE singleton=1 AND schema_version=2 AND vault_id=?1 AND file_id=?2 AND creation_epoch=?3 AND creation_header_hash=?4 AND epoch>=creation_epoch AND state='complete' AND parser_hash IS NOT NULL AND control_hash IS NOT NULL AND dependency_hash IS NOT NULL",
-        rusqlite::params![selection.vault_id.as_str(),selection.file_id,selection.creation_epoch as i64,selection.creation_header_hash.as_str()],|r|r.get(0)).map_err(super::sql::sql_error)?;
+    let header = super::normalized_read::header(&connection, selection)?;
     let rows: i64 = connection
         .query_row("SELECT count(*) FROM catalog_meta", [], |r| r.get(0))
         .map_err(super::sql::sql_error)?;
-    if mode != "delete" || version != 2 || valid != 1 || rows != 1 {
-        return Err(corrupt(
-            "catalog is unsealed or selected identity does not match header",
-        ));
+    if rows != 1 {
+        return Err(corrupt("catalog header is not unique"));
     }
-    let epoch: i64 = connection
-        .query_row(
-            "SELECT epoch FROM catalog_meta WHERE singleton=1",
-            [],
-            |row| row.get(0),
-        )
-        .map_err(super::sql::sql_error)?;
+    let epoch = header.snapshot.generation;
+    verify_sidecars(&sidecars)?;
     checked.verify()?;
     drop(connection);
-    Ok((checked, epoch as u64))
+    Ok((checked, epoch))
 }
 
 /// A durable complete candidate precedes the publication floor, which precedes
@@ -653,6 +878,13 @@ pub(crate) fn publish_with_faults(
         timeout.saturating_sub(started.elapsed()),
     )?;
     let (db, epoch) = verify_sealed(fs, selected)?;
+    // WAL frames are persistent state; sync them before acknowledging a floor.
+    for sidecar in checked_sidecars(fs, selected, &db, false)? {
+        sidecar
+            .file
+            .sync_all()
+            .map_err(|e| io("sync published SQLite sidecar", e))?;
+    }
     // Re-sync a complete file observed after an interrupted build/seal.
     db.file
         .sync_all()
@@ -739,6 +971,20 @@ pub(crate) fn retire(
         return Ok(false);
     };
     let (db, _) = verify_sealed(fs, candidate)?;
+    if journal_header(&db)? == JournalMode::Wal {
+        // SQLite checkpoints and deletes its own sidecars under native locks.
+        // Never unlink a WAL that might contain committed database pages.
+        let connection = writable(&db.path)?;
+        persist_wal(&connection, false)?;
+        let mode: String = connection
+            .pragma_update_and_check(None, "journal_mode", "DELETE", |r| r.get(0))
+            .map_err(super::sql::sql_error)?;
+        if !mode.eq_ignore_ascii_case("delete") {
+            return Err(corrupt("retired catalog remains in WAL mode"));
+        }
+        drop(connection);
+        no_sidecars(fs, candidate)?;
+    }
     gate.checked.verify()?;
     lease.checked.verify()?;
     db.verify()?;
@@ -800,7 +1046,7 @@ mod tests {
             .execute_batch(super::super::normalized_schema::SCHEMA)
             .unwrap();
         let hash = Blake3Hash::digest(b"fixture");
-        connection.execute("INSERT INTO catalog_meta(singleton,schema_version,vault_id,file_id,creation_epoch,creation_header_hash,epoch,parser_hash,control_hash,dependency_hash,state,vector_cache_lost,vector_loss_unknown) VALUES(1,2,?1,?2,?3,?4,?3,?5,?5,?5,'complete',0,0)",
+        connection.execute("INSERT INTO catalog_meta(singleton,schema_version,vault_id,file_id,creation_epoch,creation_header_hash,epoch,parser_hash,publication_hash,control_hash,dependency_hash,audit_epoch,state,vector_cache_lost,vector_loss_unknown) VALUES(1,3,?1,?2,?3,?4,?3,?5,?5,?5,?5,?3,'complete',0,0)",
             rusqlite::params![vault.as_str(),selected.file_id,selected.creation_epoch as i64,selected.creation_header_hash.as_str(),hash.as_str()]).unwrap();
         connection.execute_batch("CREATE TABLE test_content(text TEXT); CREATE VIRTUAL TABLE test_fts USING fts5(text);").unwrap();
         connection
@@ -846,6 +1092,251 @@ mod tests {
     }
     fn put(fs: &VaultFs, writer: &WriterPermit, selected: &CatalogSelection) {
         publish(fs, writer, selected, Duration::ZERO).unwrap();
+    }
+
+    fn make_wal(fs: &VaultFs, selected: &CatalogSelection) {
+        let connection = Connection::open(path(fs, database_name(selected)).unwrap()).unwrap();
+        configure_wal(&connection).unwrap();
+        drop(connection);
+        let db = Checked::open(&path(fs, database_name(selected)).unwrap(), false, true).unwrap();
+        assert_eq!(checked_sidecars(fs, selected, &db, false).unwrap().len(), 2);
+    }
+
+    #[test]
+    fn wal_delta_preserves_old_snapshot_and_atomic_fts_visibility() {
+        let (_temp, fs, writer, vault) = fixture();
+        let first = build(&fs, &writer, &vault, "oldneedle");
+        make_wal(&fs, &first);
+        put(&fs, &writer, &first);
+        let old = get(&fs, &vault).unwrap().unwrap();
+        // A ready preflight and ordinary writer must not request old's
+        // exclusive lifetime lease, even with a zero wait budget.
+        ensure_delta_ready(&fs, &writer, &first, Duration::ZERO).unwrap();
+        let delta = open_delta(&fs, &writer, &first, Duration::ZERO).unwrap();
+        assert_eq!(delta.selection(), &first);
+        let transaction = rusqlite::Transaction::new_unchecked(
+            delta.connection(),
+            rusqlite::TransactionBehavior::Immediate,
+        )
+        .unwrap();
+        transaction.execute_batch("UPDATE test_content SET text='newneedle'; DELETE FROM test_fts; INSERT INTO test_fts VALUES('newneedle'); UPDATE catalog_meta SET epoch=epoch+1,control_hash=NULL,dependency_hash=NULL,audit_epoch=NULL;").unwrap();
+        let during = get(&fs, &vault).unwrap().unwrap();
+        assert_eq!(text(&during), "oldneedle");
+        transaction.commit().unwrap();
+        drop(delta);
+        let new = get(&fs, &vault).unwrap().unwrap();
+        assert_eq!(text(&old), "oldneedle");
+        assert_eq!(text(&during), "oldneedle");
+        assert_eq!(text(&new), "newneedle");
+        for (reader, token, epoch) in [
+            (&old, "oldneedle", first.creation_epoch),
+            (&new, "newneedle", first.creation_epoch + 1),
+        ] {
+            assert_eq!(
+                reader
+                    .value()
+                    .query_row(
+                        "SELECT count(*) FROM test_fts WHERE test_fts MATCH ?1",
+                        [token],
+                        |r| r.get::<_, i64>(0)
+                    )
+                    .unwrap(),
+                1
+            );
+            assert_eq!(
+                super::super::normalized_read::header(reader.value(), &first)
+                    .unwrap()
+                    .snapshot
+                    .generation,
+                epoch
+            );
+        }
+        let second = build(&fs, &writer, &vault, "replacement");
+        make_wal(&fs, &second);
+        put(&fs, &writer, &second);
+        assert!(!retire(&fs, &writer, &vault, &first, Duration::ZERO).unwrap());
+        drop(old);
+        drop(during);
+        drop(new);
+        assert!(retire(&fs, &writer, &vault, &first, Duration::ZERO).unwrap());
+        no_sidecars(&fs, &first).unwrap();
+        assert!(!path(&fs, database_name(&first)).unwrap().exists());
+    }
+
+    #[test]
+    fn first_wal_migration_refuses_held_reader_before_any_write() {
+        let (_temp, fs, writer, vault) = fixture();
+        let first = build(&fs, &writer, &vault, "unchanged");
+        put(&fs, &writer, &first);
+        let old = get(&fs, &vault).unwrap().unwrap();
+        let name = path(&fs, database_name(&first)).unwrap();
+        let before = fs::read(&name).unwrap();
+        let modified = fs::metadata(&name).unwrap().modified().unwrap();
+        assert_eq!(
+            ensure_delta_ready(&fs, &writer, &first, Duration::ZERO)
+                .unwrap_err()
+                .code,
+            ErrorCode::LockTimeout
+        );
+        assert!(open_delta(&fs, &writer, &first, Duration::ZERO).is_err());
+        assert_eq!(fs::read(&name).unwrap(), before);
+        assert_eq!(fs::metadata(&name).unwrap().modified().unwrap(), modified);
+        no_sidecars(&fs, &first).unwrap();
+        drop(old);
+        ensure_delta_ready(&fs, &writer, &first, Duration::ZERO).unwrap();
+        assert_eq!(text(&get(&fs, &vault).unwrap().unwrap()), "unchanged");
+        assert!(open_delta(&fs, &writer, &first, Duration::ZERO).is_ok());
+    }
+
+    #[test]
+    fn wal_sidecars_are_required_and_unsafe_objects_are_rejected() {
+        use std::os::unix::fs::{PermissionsExt, symlink};
+        for kind in [FileKind::Wal, FileKind::Shm] {
+            for variant in 0..5 {
+                let (_temp, fs, writer, vault) = fixture();
+                let first = build(&fs, &writer, &vault, "safe");
+                make_wal(&fs, &first);
+                put(&fs, &writer, &first);
+                let sidecar = path(&fs, CachePath::File(&first.file_id, kind)).unwrap();
+                let bytes = fs::read(&sidecar).unwrap();
+                fs::remove_file(&sidecar).unwrap();
+                let other = fs.root().path().join("unrelated");
+                fs::write(&other, &bytes).unwrap();
+                match variant {
+                    0 => {}
+                    1 => symlink(&other, &sidecar).unwrap(),
+                    2 => fs::hard_link(&other, &sidecar).unwrap(),
+                    3 => fs::create_dir(&sidecar).unwrap(),
+                    4 => {
+                        fs::write(&sidecar, &bytes).unwrap();
+                        fs::set_permissions(&sidecar, fs::Permissions::from_mode(0o666)).unwrap();
+                    }
+                    _ => unreachable!(),
+                }
+                assert!(get(&fs, &vault).is_err());
+                assert!(open_delta(&fs, &writer, &first, Duration::ZERO).is_err());
+                assert_eq!(fs::read(&other).unwrap(), bytes);
+                if variant == 0 && matches!(kind, FileKind::Shm) {
+                    // SHM can be reconstructed from the retained checked WAL.
+                    // Even a clean-looking missing WAL requires explicit rebuild.
+                    ensure_delta_ready(&fs, &writer, &first, Duration::ZERO).unwrap();
+                    assert_eq!(text(&get(&fs, &vault).unwrap().unwrap()), "safe");
+                } else {
+                    assert!(ensure_delta_ready(&fs, &writer, &first, Duration::ZERO).is_err());
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn lost_uncheckpointed_wal_refuses_without_mutating_surviving_state() {
+        let (_temp, fs, writer, vault) = fixture();
+        let selected = build(&fs, &writer, &vault, "oldcommitted");
+        make_wal(&fs, &selected);
+        put(&fs, &writer, &selected);
+        let name = path(&fs, database_name(&selected)).unwrap();
+        let old_main = fs::read(&name).unwrap();
+        let connection = writable(&name).unwrap();
+        connection
+            .set_db_config(
+                rusqlite::config::DbConfig::SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE,
+                true,
+            )
+            .unwrap();
+        connection.execute_batch("PRAGMA wal_autocheckpoint=0; BEGIN IMMEDIATE; UPDATE test_content SET text='newcommitted'; UPDATE catalog_meta SET epoch=epoch+1; COMMIT;").unwrap();
+        assert_eq!(
+            connection
+                .query_row("SELECT text FROM test_content", [], |r| r
+                    .get::<_, String>(0))
+                .unwrap(),
+            "newcommitted"
+        );
+        drop(connection);
+        assert_eq!(
+            fs::read(&name).unwrap(),
+            old_main,
+            "committed update exists only in WAL"
+        );
+        let wal = path(&fs, CachePath::File(&selected.file_id, FileKind::Wal)).unwrap();
+        assert!(fs::metadata(&wal).unwrap().len() > 32);
+        fs::remove_file(&wal).unwrap();
+        fn state(directory: &Path) -> Vec<(PathBuf, Vec<u8>, std::time::SystemTime)> {
+            let mut files = Vec::new();
+            for entry in fs::read_dir(directory).unwrap() {
+                let path = entry.unwrap().path();
+                if path.is_dir() {
+                    files.extend(state(&path));
+                } else {
+                    files.push((
+                        path.clone(),
+                        fs::read(&path).unwrap(),
+                        fs::metadata(&path).unwrap().modified().unwrap(),
+                    ));
+                }
+            }
+            files.sort_by(|a, b| a.0.cmp(&b.0));
+            files
+        }
+        let before = state(fs.root().path());
+        assert_eq!(
+            ensure_delta_ready(&fs, &writer, &selected, Duration::ZERO)
+                .unwrap_err()
+                .code,
+            ErrorCode::RecoveryRequired
+        );
+        assert!(get(&fs, &vault).is_err());
+        assert!(open_delta(&fs, &writer, &selected, Duration::ZERO).is_err());
+        assert_eq!(state(fs.root().path()), before);
+        assert!(!wal.exists());
+    }
+
+    #[test]
+    fn retained_committed_wal_reconstructs_missing_shm_at_latest_epoch() {
+        let (_temp, fs, writer, vault) = fixture();
+        let selected = build(&fs, &writer, &vault, "oldcommitted");
+        make_wal(&fs, &selected);
+        put(&fs, &writer, &selected);
+        let name = path(&fs, database_name(&selected)).unwrap();
+        let old_main = fs::read(&name).unwrap();
+        let connection = writable(&name).unwrap();
+        connection
+            .set_db_config(
+                rusqlite::config::DbConfig::SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE,
+                true,
+            )
+            .unwrap();
+        connection.execute_batch("PRAGMA wal_autocheckpoint=0; BEGIN IMMEDIATE; UPDATE test_content SET text='newcommitted'; UPDATE catalog_meta SET epoch=epoch+1; COMMIT;").unwrap();
+        drop(connection);
+        assert_eq!(
+            fs::read(&name).unwrap(),
+            old_main,
+            "committed update exists only in retained WAL"
+        );
+        let wal = path(&fs, CachePath::File(&selected.file_id, FileKind::Wal)).unwrap();
+        let committed_wal = fs::read(&wal).unwrap();
+        assert!(committed_wal.len() > 32);
+        let shm = path(&fs, CachePath::File(&selected.file_id, FileKind::Shm)).unwrap();
+        fs::remove_file(&shm).unwrap();
+        assert_eq!(
+            get(&fs, &vault).err().unwrap().code,
+            ErrorCode::RecoveryRequired
+        );
+        assert!(!shm.exists(), "query must not reconstruct SHM");
+        assert_eq!(fs::read(&name).unwrap(), old_main);
+        assert_eq!(fs::read(&wal).unwrap(), committed_wal);
+
+        ensure_delta_ready(&fs, &writer, &selected, Duration::ZERO).unwrap();
+        assert!(shm.is_file());
+        assert!(wal.is_file());
+        let reader = get(&fs, &vault).unwrap().unwrap();
+        assert_eq!(text(&reader), "newcommitted");
+        assert_eq!(
+            super::super::normalized_read::header(reader.value(), &selected)
+                .unwrap()
+                .snapshot
+                .generation,
+            selected.creation_epoch + 1
+        );
     }
 
     #[test]

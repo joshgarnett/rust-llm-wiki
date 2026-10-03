@@ -289,7 +289,7 @@ fn validate_schema(copy: &Connection) -> Result<()> {
     expected
         .execute_batch(normalized_schema::SCHEMA)
         .map_err(sql::sql_error)?;
-    if schema_rows(copy)? != schema_rows(&expected)? || sql::version(copy)? != 2 {
+    if schema_rows(copy)? != schema_rows(&expected)? || sql::version(copy)? != 3 {
         return Err(corrupt(
             "normalized schema differs from the exact catalog schema",
         ));

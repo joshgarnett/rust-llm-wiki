@@ -16,10 +16,18 @@ pub(crate) fn corrupt(message: impl Into<String>) -> WikiError {
 
 pub(crate) struct CatalogHeader {
     pub snapshot: ReadSnapshot,
-    pub dependency_hash: Blake3Hash,
+    pub audit: Option<AuditObservation>,
     pub origin: Option<ChangeBinding>,
     pub vector_cache_lost: bool,
     pub vector_loss_unknown: bool,
+}
+
+/// A full-build/audit observation is historical once its epoch is superseded.
+/// Incremental publication may clear this; it must never relabel it as current.
+pub(crate) struct AuditObservation {
+    pub epoch: u64,
+    pub control_hash: Blake3Hash,
+    pub dependency_hash: Blake3Hash,
 }
 
 /// Read inside the transaction opened while the selector acquisition gate is
@@ -29,19 +37,19 @@ pub(crate) fn header(
     selection: &CatalogSelection,
 ) -> Result<CatalogHeader> {
     selection.validate(&selection.vault_id)?;
-    if sql::version(connection)? != 2 {
-        return Err(corrupt("selected catalog schema version is not 2"));
+    if sql::version(connection)? != 3 {
+        return Err(corrupt("selected catalog schema version is not 3"));
     }
     let mode: String = connection
         .pragma_query_value(None, "journal_mode", |row| row.get(0))
         .map_err(sql::sql_error)?;
-    if !mode.eq_ignore_ascii_case("delete") {
+    if !mode.eq_ignore_ascii_case("delete") && !mode.eq_ignore_ascii_case("wal") {
         return Err(corrupt(
-            "selected catalog was not sealed in DELETE journal mode",
+            "selected catalog requires DELETE or WAL journal mode",
         ));
     }
     let mut statement = connection.prepare(
-        "SELECT schema_version,vault_id,file_id,creation_epoch,creation_header_hash,epoch,parser_hash,control_hash,dependency_hash,state,origin_change_id,origin_manifest_hash,vector_cache_lost,vector_loss_unknown FROM catalog_meta WHERE singleton=1"
+        "SELECT schema_version,vault_id,file_id,creation_epoch,creation_header_hash,epoch,parser_hash,publication_hash,state,origin_change_id,origin_manifest_hash,vector_cache_lost,vector_loss_unknown,audit_epoch,control_hash,dependency_hash FROM catalog_meta WHERE singleton=1"
     ).map_err(sql::sql_error)?;
     let mut rows = statement.query([]).map_err(sql::sql_error)?;
     let row = rows
@@ -49,7 +57,7 @@ pub(crate) fn header(
         .map_err(sql::sql_error)?
         .ok_or_else(|| corrupt("selected catalog header is absent"))?;
     let mut bytes = 0usize;
-    for index in 0..14 {
+    for index in 0..16 {
         if let ValueRef::Text(value) = row.get_ref(index).map_err(sql::sql_error)? {
             bytes = bytes
                 .checked_add(value.len())
@@ -60,20 +68,20 @@ pub(crate) fn header(
         return Err(corrupt("selected catalog header exceeds 16 KiB"));
     }
     let epoch: i64 = row.get(5).map_err(sql::sql_error)?;
-    if row.get::<_, i64>(0).map_err(sql::sql_error)? != 2
+    if row.get::<_, i64>(0).map_err(sql::sql_error)? != 3
         || text(row, 1)? != selection.vault_id.as_str()
         || text(row, 2)? != selection.file_id
         || row.get::<_, i64>(3).map_err(sql::sql_error)? != sql::integer(selection.creation_epoch)?
         || text(row, 4)? != selection.creation_header_hash.as_str()
         || epoch < sql::integer(selection.creation_epoch)?
-        || text(row, 9)? != "complete"
+        || text(row, 8)? != "complete"
     {
         return Err(corrupt(
             "selected catalog header does not match its selector",
         ));
     }
     let hash = |index| Blake3Hash::new(text(row, index)?).map_err(|e| corrupt(e.message));
-    let origin = match (optional_text(row, 10)?, optional_text(row, 11)?) {
+    let origin = match (optional_text(row, 9)?, optional_text(row, 10)?) {
         (None, None) => None,
         (Some(change_id), Some(manifest_hash)) => Some(ChangeBinding {
             change_id: RecordId::new(change_id).map_err(|e| corrupt(e.message))?,
@@ -86,12 +94,39 @@ pub(crate) fn header(
         1 => Ok(true),
         _ => Err(corrupt("catalog loss notice is not boolean")),
     };
+    let audit = match (
+        row.get::<_, Option<i64>>(13).map_err(sql::sql_error)?,
+        optional_text(row, 14)?,
+        optional_text(row, 15)?,
+    ) {
+        (None, None, None) => None,
+        (Some(audit_epoch), Some(control), Some(dependencies))
+            if audit_epoch > 0 && audit_epoch <= epoch =>
+        {
+            Some(AuditObservation {
+                epoch: audit_epoch as u64,
+                control_hash: Blake3Hash::new(control).map_err(|e| corrupt(e.message))?,
+                dependency_hash: Blake3Hash::new(dependencies).map_err(|e| corrupt(e.message))?,
+            })
+        }
+        _ => {
+            return Err(corrupt(
+                "catalog audit observation is incomplete or newer than publication",
+            ));
+        }
+    };
     let result = CatalogHeader {
-        snapshot: ReadSnapshot::canonical(epoch as u64, hash(6)?, hash(7)?),
-        dependency_hash: hash(8)?,
+        snapshot: ReadSnapshot::published(
+            epoch as u64,
+            hash(6)?,
+            selection.file_id.clone(),
+            hash(7)?,
+        )
+        .map_err(|e| corrupt(e.message))?,
+        audit,
         origin,
-        vector_cache_lost: flag(12)?,
-        vector_loss_unknown: flag(13)?,
+        vector_cache_lost: flag(11)?,
+        vector_loss_unknown: flag(12)?,
     };
     if rows.next().map_err(sql::sql_error)?.is_some() {
         return Err(corrupt("selected catalog header is not unique"));
@@ -181,6 +216,67 @@ mod tests {
     use std::cell::Cell;
 
     #[test]
+    fn published_header_keeps_audit_observations_separate_and_epoch_bound() {
+        let temp = tempfile::tempdir().unwrap();
+        let connection = Connection::open(temp.path().join("header.sqlite")).unwrap();
+        connection
+            .execute_batch(super::super::normalized_schema::SCHEMA)
+            .unwrap();
+        let selected = CatalogSelection::new(RecordId::new("vault_header").unwrap(), 1).unwrap();
+        let hash = Blake3Hash::digest("header fixture");
+        connection.execute("INSERT INTO catalog_meta(singleton,schema_version,vault_id,file_id,creation_epoch,creation_header_hash,epoch,parser_hash,publication_hash,control_hash,dependency_hash,audit_epoch,state,vector_cache_lost,vector_loss_unknown) VALUES(1,3,?1,?2,1,?3,1,?4,?4,?4,?4,1,'complete',0,0)", params![selected.vault_id.as_str(),selected.file_id,selected.creation_header_hash.as_str(),hash.as_str()]).unwrap();
+        let first = header(&connection, &selected).unwrap();
+        assert_eq!(
+            first.snapshot.publication().unwrap().file_id,
+            selected.file_id
+        );
+        assert!(first.snapshot.require_canonical_manifest().is_err());
+        assert_eq!(first.audit.as_ref().unwrap().epoch, 1);
+        assert_eq!(first.audit.as_ref().unwrap().control_hash, hash);
+
+        // A retained observation remains explicitly historical after a delta.
+        connection
+            .execute(
+                "UPDATE catalog_meta SET epoch=2,publication_hash=?1",
+                [Blake3Hash::digest("delta").as_str()],
+            )
+            .unwrap();
+        let delta = header(&connection, &selected).unwrap();
+        assert_eq!(delta.snapshot.generation, 2);
+        assert_ne!(delta.snapshot.publication(), first.snapshot.publication());
+        assert_eq!(delta.audit.unwrap().epoch, 1);
+        connection
+            .execute_batch(
+                "UPDATE catalog_meta SET audit_epoch=NULL,control_hash=NULL,dependency_hash=NULL",
+            )
+            .unwrap();
+        assert!(header(&connection, &selected).unwrap().audit.is_none());
+
+        // Deliberately bypass SQL constraints to exercise the read boundary.
+        connection
+            .execute_batch("PRAGMA ignore_check_constraints=ON")
+            .unwrap();
+        for (epoch, control, dependencies) in [
+            (Some(3), Some(hash.as_str()), Some(hash.as_str())),
+            (Some(0), Some(hash.as_str()), Some(hash.as_str())),
+            (Some(1), None, Some(hash.as_str())),
+            (None, Some(hash.as_str()), Some(hash.as_str())),
+        ] {
+            connection
+                .execute(
+                    "UPDATE catalog_meta SET audit_epoch=?1,control_hash=?2,dependency_hash=?3",
+                    params![epoch, control, dependencies],
+                )
+                .unwrap();
+            assert!(header(&connection, &selected).is_err());
+        }
+        connection
+            .execute_batch("UPDATE catalog_meta SET schema_version=2; PRAGMA user_version=2")
+            .unwrap();
+        assert!(header(&connection, &selected).is_err());
+    }
+
+    #[test]
     fn real_projector_builder_and_selector_keep_old_reader_consistent() {
         use crate::{
             catalog::{
@@ -242,7 +338,7 @@ mod tests {
             assert!(metadata.origin.is_none());
             assert!(!metadata.vector_cache_lost && !metadata.vector_loss_unknown);
             assert_eq!(
-                metadata.dependency_hash,
+                metadata.audit.as_ref().unwrap().dependency_hash,
                 if epoch == 1 {
                     first.dependency_hash.clone()
                 } else {

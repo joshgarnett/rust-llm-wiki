@@ -41,6 +41,17 @@ The repaired selector fault adapter also verifies that each intended injected
 failure is reached. The independent architecture review found no checkpoint
 blocker; it did not approve activation or large-vault capacity.
 
+The mutable catalog candidate uses schema 3 and WAL. Its publication hash is
+separate from optional, explicitly epoch-bound full-build observations. Closed
+builders retain the WAL files needed for subsequent read-only opens. Ordinary
+delta writers share the lifetime lease with readers; migration from rollback
+mode requires exclusive access before canonical changes begin. A missing WAL
+is an error because it may contain committed data. SQLite can reconstruct a
+missing shared-memory file from a retained WAL under exclusive writer recovery.
+The catalog/retrieval gate passed 148 tests (two ignored), including old-reader
+visibility, missing-WAL refusal without mutation and committed-WAL recovery after
+shared-memory loss. The public refresh workflow and its latency remain unfinished.
+
 ## Why a redesign is necessary
 
 A public 299-source corpus exposed an operational failure before answer quality
@@ -143,8 +154,8 @@ its resource and concurrency costs in actual workflow tests before activation.
 
 For ordinary updates, use a transaction on the selected database with SQLite WAL:
 old read transactions retain their snapshot, and new transactions see committed
-rows and postings together. This requires explicitly replacing the candidate's
-DELETE-only serving and no-sidecar checks; changing a pragma alone is insufficient.
+rows and postings together. The candidate now validates normal WAL sidecars and
+retains them across connection close; the public publisher still needs migration.
 Bound checkpoint and retained-WAL costs when readers remain open. The successful
 public update response must acknowledge index visibility, not merely an accepted
 background job. SQLite's [WAL documentation](https://www.sqlite.org/wal.html),

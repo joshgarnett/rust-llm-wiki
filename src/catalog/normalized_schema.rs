@@ -1,18 +1,20 @@
-//! One current normalized projection per immutable catalog sibling.
+//! One current normalized projection per catalog sibling, with mutable epochs.
 //! This schema is activated only after all serving/publication paths can use it.
 pub(crate) const SCHEMA: &str = r#"
 CREATE TABLE catalog_meta(
  singleton INTEGER PRIMARY KEY CHECK(singleton=1),
- schema_version INTEGER NOT NULL CHECK(schema_version=2),
+ schema_version INTEGER NOT NULL CHECK(schema_version=3),
  vault_id TEXT NOT NULL,file_id TEXT NOT NULL,creation_epoch INTEGER NOT NULL CHECK(creation_epoch>0),
  creation_header_hash TEXT NOT NULL,epoch INTEGER NOT NULL CHECK(epoch>=creation_epoch),
- parser_hash TEXT,control_hash TEXT,dependency_hash TEXT,
+ parser_hash TEXT,publication_hash TEXT,control_hash TEXT,dependency_hash TEXT,audit_epoch INTEGER,
  state TEXT NOT NULL CHECK(state IN ('building','complete')),
  origin_change_id TEXT,origin_manifest_hash TEXT,
  vector_cache_lost INTEGER NOT NULL CHECK(vector_cache_lost IN (0,1)),
  vector_loss_unknown INTEGER NOT NULL CHECK(vector_loss_unknown IN (0,1)),
  CHECK((origin_change_id IS NULL)=(origin_manifest_hash IS NULL)),
- CHECK(state='building' OR (parser_hash IS NOT NULL AND control_hash IS NOT NULL AND dependency_hash IS NOT NULL))
+ CHECK(state='building' OR (parser_hash IS NOT NULL AND publication_hash IS NOT NULL)),
+ CHECK((audit_epoch IS NULL AND control_hash IS NULL AND dependency_hash IS NULL) OR
+       (audit_epoch IS NOT NULL AND control_hash IS NOT NULL AND dependency_hash IS NOT NULL AND audit_epoch>0 AND audit_epoch<=epoch))
 );
 CREATE TABLE documents(
  doc_row INTEGER PRIMARY KEY,path TEXT COLLATE BINARY NOT NULL UNIQUE,
@@ -42,7 +44,7 @@ CREATE INDEX link_paths ON links(from_path,byte_start,link_row);
 CREATE TABLE diagnostics(diagnostic_row INTEGER PRIMARY KEY,path TEXT NOT NULL,record_id TEXT,code TEXT NOT NULL,details_json TEXT NOT NULL);
 CREATE INDEX diagnostic_paths ON diagnostics(path);
 CREATE TABLE dependencies(dependency_row INTEGER PRIMARY KEY,path TEXT NOT NULL UNIQUE,expected_hash TEXT);
-PRAGMA user_version=2;
+PRAGMA user_version=3;
 "#;
 
 /// Exact decoder order. Text is never embedded in an additional document JSON.
