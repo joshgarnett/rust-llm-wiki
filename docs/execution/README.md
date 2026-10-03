@@ -1,6 +1,8 @@
 # Autonomous implementation playbook
 
-Status: ready for a new implementation session, 2026-09-28. This plan authorizes work only when invoked by the user. No implementation is being started by writing these documents. Start with the goal in [START.md](START.md).
+Detailed session reports, machine checks and `.artifacts` paths mentioned below are optional local evidence; fresh clones contain the curated summaries and tracked reproduction scripts. Recorded checks describe the identified historical source, not a new verification of the current checkout.
+
+Status: the original M0–M4 implementation playbook is historical. Its reusable collaboration and checkpoint rules apply to new authorized work. Start with [the current contract map](../current-contracts.md) and [cleanup register](CLEANUP.md); [START.md](START.md) preserves the original implementation request. This document does not authorize a new run.
 
 ## Objective and completion boundary
 
@@ -10,18 +12,24 @@ Completion means every required package and local gate in [VALIDATION.md](VALIDA
 
 Technical contracts take precedence over this schedule for behavior. User instructions remain authoritative. Resolve a contract gap conservatively, record the rationale and affected contracts, and continue; do not turn an engineering choice into a user question. A simplification that removes a required capability or weakens an invariant is not an allowable default.
 
+## Fresh checkout and local session records
+
+Reusable guidance and curated validation summaries are tracked. `STATE.md`, worker reports, reviews and raw machine checks are ignored local session records. Read `STATE.md` when present. If it is absent, inspect current Git status/HEAD, the current contract map, the authorized task and relevant tracked validation summaries, then create a small local checkpoint before implementation. Do not assume historical leases or acceptance results are current. Preserve existing local records.
+
+The original bootstrap below records the M0–M4 baseline; do not recreate that run for subsequent tasks. Current model preferences and authorization come from `AGENTS.md` and the session. Promote durable findings into the relevant tracked contract or curated summary; detailed logs remain local.
+
 ## Read only what the current step needs
 
 | Artifact | When to read / owner |
 |---|---|
-| [STATE.md](STATE.md) | Every startup/resume; orchestrator maintains the small current checkpoint |
+| `STATE.md` | Every startup/resume when present; create locally when needed as described above |
 | [WORK-PACKAGES.md](WORK-PACKAGES.md) | Read dependency index, then selected package sections; worker scope and acceptance |
 | [DECISIONS.md](DECISIONS.md) | Startup defaults and when a new ambiguity/blocker arises; root records decisions |
 | [AGENT-PROMPTS.md](AGENT-PROMPTS.md) | When dispatching or reviewing a package |
 | [VALIDATION.md](VALIDATION.md) | Relevant gate rows during work; full matrix at final qualification |
 | `reports/Pxx.md` | Worker evidence and completion report; assigned worker owns it until handoff |
 | `reports/Pxx-review.md` | Independent review findings, root records their resolution |
-| `reports/FINAL.md` | Root creates final package/command/gate and external-deferral report |
+| [reports/FINAL.md](reports/FINAL.md) | Curated historical M0–M4 acceptance summary; new detailed runs remain local |
 | [Technical overview](../technical/README.md) | Shared contract router, then the relevant detailed document |
 
 Initial root reading should normally fit roughly 5,000 tokens; a worker's task plus selected contracts roughly 8,000–12,000. These are context targets, not model limits or reasons to omit a needed contract. Do not fork the full conversation into every worker. Use fresh context, explicit file references, a narrow objective, and a short completion report. Keep STATE under about 120 lines and worker summaries under 400 words; detailed evidence lives on disk. Do not repeatedly replay test logs or finished research.
@@ -69,7 +77,7 @@ If a permission/resource failure occurs, retain the exact error, try a permitted
 
 Checkpoint at each accepted package, before risky integration, before anticipated compaction, and on any interruption. STATE must identify current branch/HEAD, dirty owned paths, active leases/agents, last passing gates, outstanding findings, decisions, and the exact next command/package. Reports carry full details. Do not include secrets or transient credential output in checkpoints.
 
-After compaction/resume: reread STATE, inspect Git and the filesystem, list actual live agents if supported, reconcile unfinished work, and revalidate only what changed or whose evidence is uncertain. Reclaim a lease only after stopping the former worker or proving it is inactive. Completed code and test evidence survive the chat; do not restart from scratch because conversation history is gone.
+After compaction/resume: reread local STATE when present (otherwise reconstruct it as above), inspect Git and the filesystem, list actual live agents if supported, reconcile unfinished work, and revalidate only what changed or whose evidence is uncertain. Reclaim a lease only after stopping the former worker or proving it is inactive. Completed code and test evidence survive the chat; do not restart from scratch because conversation history is gone.
 
 When all M0–M4 implementation gates pass, write FINAL with actual commands, package commits/tree fingerprints, residual external qualification and owner decisions, and how to run the CLI. Mark completion only against [VALIDATION.md](VALIDATION.md). If the harness or user budget ends earlier, leave an accurate partial checkpoint; never shrink the objective to the work completed so far.
 

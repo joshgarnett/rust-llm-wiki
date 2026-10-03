@@ -133,9 +133,9 @@ at commit `7f1c03d829d587763a82e7f660cc7b19f2a40d57`. The
 [draft v0.1.0 release](https://github.com/joshgarnett/rust-llm-wiki/releases/tag/untagged-1fb57f8f77dbb46a0898)
 targets that commit and contains six archives plus six SHA-256 sidecars.
 Uploaded GitHub digests and downloaded copies match the verified build files.
-The [build report](execution/reports/BUILD-RELEASE.md) and
-[machine-readable checks](execution/reports/BUILD-RELEASE-checks.json) record
-the jobs, hashes and limits. These hosted gates do not run the full recovery
+The [build report](execution/reports/BUILD-RELEASE.md) records the jobs, hashes
+and limits. Detailed machine-readable checks are optional local evidence at
+`docs/execution/reports/BUILD-RELEASE-checks.json`. These hosted gates do not run the full recovery
 suite; Windows vault writes remain unsupported. Publishing, signing and
 branch-protection settings remain owner decisions.
 

@@ -28,6 +28,8 @@ The orchestrator grants exclusive file leases to implementation workers and owns
 
 ## Research and scoring
 
+Use the [context evaluation guide](evaluating-context.md) for the QASPER public baseline, offline import/replay commands, evidence-location metrics and independent semantic assessment. Source retrieval, citation correctness and complete answer support are separate gates.
+
 [CLI Guidelines](https://clig.dev/) supplies concrete help, output, error and composability checks. [Diátaxis](https://diataxis.fr/quality/) separates functional correctness from whether documentation fits the reader's need; organize learning, task instructions, reference and explanation accordingly. [Write the Docs](https://www.writethedocs.org/guide/writing/docs-principles/) motivates useful, discoverable, maintainable examples. [NN/g's task-success guidance](https://www.nngroup.com/articles/success-rate-the-simplest-usability-metric/) supports testing concrete outcomes and fixing/retesting observed problems; [severity guidance](https://www.nngroup.com/articles/how-to-rate-the-severity-of-usability-problems/) motivates prioritizing impact, frequency and persistence.
 
 Report blocked, completed-with-friction and completed tasks separately. For retrieval, report expected-source hit@1/@5, reciprocal rank and source recall alongside passage usefulness; exclude known-unanswerable questions from positive recall denominators and report them separately. Do not average ordinal usefulness labels into a fabricated satisfaction percentage. Keep equal result/candidate/context budgets across modes, disclose changes to excerpt size, and distinguish cold live-query latency from cached offline latency.

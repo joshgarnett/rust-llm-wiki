@@ -1,5 +1,7 @@
 # Start the autonomous implementation session
 
+Historical M0–M4 request: the original run is complete. For subsequent work, use [the current contract map](../current-contracts.md), current `AGENTS.md` model preferences and the [execution playbook](README.md). Local `STATE.md` is optional on a fresh checkout; reconstruct it from the authorized task and current repository before implementation. Do not restart P00 solely because no checkpoint exists.
+
 Open this repository in a new session with **`gpt-6-sol` selected as the root model**. The original “gpg-6-sol” spelling is treated as a typo. A prompt cannot switch an already-running root model. The goal below explicitly requests Sol workers and Astra specialists, subject to available tools/slots.
 
 Paste the following as the new session's goal/request. If its interface has a persistent goal feature, use this objective there; otherwise paste it as an ordinary task. Do not invent a `/goal` shell command. No new API account or orchestration framework is required.
@@ -7,7 +9,8 @@ Paste the following as the new session's goal/request. If its interface has a pe
 ```text
 Implement the Rust LLM wiki CLI in this repository through M0–M4, following
 AGENTS.md and docs/execution/README.md. Start by reading
-docs/execution/STATE.md, the defaults in docs/execution/DECISIONS.md, and the
+docs/execution/STATE.md when present (create a local checkpoint if absent),
+the defaults in docs/execution/DECISIONS.md, and the
 dependency index plus P00 in docs/execution/WORK-PACKAGES.md. Read remaining
 technical contracts only as each package requires them.
 

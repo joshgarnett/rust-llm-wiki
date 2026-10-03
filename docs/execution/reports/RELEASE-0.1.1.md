@@ -1,5 +1,7 @@
 # lwiki 0.1.1 release verification
 
+Detailed session reports and machine checks named below are optional local evidence. Fresh clones retain this summary and the tracked scripts and test-agent guide; historical results do not verify the current checkout.
+
 The [draft v0.1.1 release](https://github.com/joshgarnett/rust-llm-wiki/releases/tag/untagged-2e63cc6c5ce4b7acd4d4) contains twelve assets: six native archives and six SHA-256 files. Annotated tag `v0.1.1` points to **258689d90d301f3b1ed4f7e12cf8b4f71a296141**, the implementation commit pushed to main. The final documentation-only evidence commit does not change the tagged product source. Existing draft v0.1.0 was left unchanged.
 
 [Release build 36631455854](https://github.com/joshgarnett/rust-llm-wiki/actions/runs/36631455854) passed native Linux GNU, macOS and Windows builds for x64 and ARM64. [CI 36631438819](https://github.com/joshgarnett/rust-llm-wiki/actions/runs/36631438819) passed all three jobs on the same commit. Unix jobs ran format, lint, CLI/tooling smoke checks and the optimized skill recipe; Windows compiled all source/test targets and exercised copied-binary version/capability output. These short platform gates are distinct from the complete local recovery suite.

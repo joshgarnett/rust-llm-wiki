@@ -1,5 +1,7 @@
 # Implementation evidence and completion gates
 
+This matrix preserves the historical M0–M4 gates. For current behavior use [the current contract map](../current-contracts.md) and [cleanup validation summary](reports/CLEANUP-VALIDATION.md). Detailed gate coverage and local run logs are ignored session records; a fresh checkout reconstructs fixtures from tracked tests and scripts.
+
 All gates are **pending** at planning time. This matrix defines the evidence needed for M0–M4 local implementation completion. The work-package reports record actual results. External qualification is tracked separately in [DECISIONS.md](DECISIONS.md), never silently converted into a pass.
 
 ## Gate matrix

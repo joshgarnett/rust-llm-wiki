@@ -1,8 +1,12 @@
 # M0–M4 implementation work packages
 
+Historical M0–M4 package plan. For current behavior and new work use [the current contract map](../current-contracts.md); local `STATE.md` is read when present and reconstructed on a fresh checkout using the [playbook](README.md).
+
+Detailed session reports, machine checks and `.artifacts` paths mentioned below are optional local evidence; fresh clones contain the curated summaries and tracked reproduction scripts. Recorded checks describe the identified historical source, not a new verification of the current checkout.
+
 Status: execution plan, not implemented behavior or passing test evidence. The [technical baseline](../technical/README.md) and [implementation handoff](../technical/implementation-handoff.md) remain authoritative. M5 extensions are out of scope. Package IDs are permanent; splitting a package creates suffixes such as `P16.a`, never renumbers later work.
 
-The orchestrator is `gpt-6-sol`. Leaf implementation uses `gpt-6-sol`; `gpt-6-astra` reviews the difficult storage, evidence, identity, accounting, and network invariants identified below. The orchestrator integrates, validates, updates [STATE.md](STATE.md), and records evidence against [VALIDATION.md](VALIDATION.md). A package is complete only when its code, named local tests, review findings, and integration evidence meet its done criteria. Planning text does not pass a gate.
+The orchestrator is `gpt-6-sol`. Leaf implementation uses `gpt-6-sol`; `gpt-6-astra` reviews the difficult storage, evidence, identity, accounting, and network invariants identified below. The orchestrator integrates, validates, updates STATE.md (optional local `STATE.md`), and records evidence against [VALIDATION.md](VALIDATION.md). A package is complete only when its code, named local tests, review findings, and integration evidence meet its done criteria. Planning text does not pass a gate.
 
 Reviewer labels identify the needed expertise, not a demand for redundant full reviews. Combine bounded gate reviews where appropriate: P01/P02; P03/P05/P09 with prerequisite-specific findings resolved before dependents proceed; P11–P13; P15/P16; P17–P20; and the final integrated exit. Review the newly changed invariant and its evidence, reusing accepted earlier findings. The [execution playbook](README.md) controls model fallback and disclosure; substitution preserves every gate.
 

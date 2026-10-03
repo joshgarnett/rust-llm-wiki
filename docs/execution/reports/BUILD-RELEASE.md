@@ -1,5 +1,7 @@
 # Just, Bazel and the first GitHub release
 
+Detailed session reports, machine checks and `.artifacts` paths mentioned below are optional local evidence; fresh clones contain the curated summaries and tracked reproduction scripts. Recorded checks describe the identified historical source, not a new verification of the current checkout.
+
 Status: six-platform draft release verified, 2026-09-29. This follow-up implements the owner's explicit
 Just + Bazel choice and authorization to commit, push and create a **draft**
 `v0.1.0` release for six native targets. It does not change the frozen P21
@@ -117,7 +119,7 @@ returned the twelve archive/checksum paths only after all six passed.
 The [draft v0.1.0 release](https://github.com/joshgarnett/rust-llm-wiki/releases/tag/untagged-1fb57f8f77dbb46a0898)
 targets the exact validated commit. All twelve assets have matching GitHub
 SHA-256 digests and sizes; downloading them back from the draft produced
-identical hashes. [BUILD-RELEASE-checks.json](BUILD-RELEASE-checks.json) records
+identical hashes. BUILD-RELEASE-checks.json (optional local `BUILD-RELEASE-checks.json`) records
 job IDs, asset sizes and archive/binary hashes. No failed-job artifact was
 promoted. Subsequent documentation and CI time-limit commits do not change the
 release source or build commands.

@@ -1,10 +1,10 @@
 # Bounded agent task templates
 
-Use the actual collaboration tool schema in the running session. Exact model IDs are `gpt-6-sol` and `gpt-6-astra`; the user chooses the root model before starting. This document does not install a new agent service or require API keys.
+Use current `AGENTS.md` model preferences and the actual collaboration tool schema in the running session. Exact model IDs are `gpt-6-sol` and `gpt-6-astra`; the user chooses the root model before starting. This document does not install a new agent service or require API keys.
 
 ## Implementation packet
 
-Root fills the fields, records the lease in STATE, then launches one Sol worker with fresh context. Provide only the selected package section and links; do not attach all designs or previous messages.
+Root fills the fields, creates local `STATE.md` if absent using the [playbook](README.md), records the lease there, then launches one Sol worker with fresh context. Provide only the selected package section and links; do not attach all designs or previous messages.
 
 ```text
 Role: implementation worker, model gpt-6-sol.

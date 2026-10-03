@@ -3,3 +3,15 @@
 __pycache__/
 /.build-cache/
 /bazel-*
+
+# Local session state and detailed agent/run evidence. Keep reusable guidance
+# and curated, user-facing validation summaries in version control.
+/docs/execution/STATE.md
+/docs/execution/reports/*
+!/docs/execution/reports/FINAL.md
+!/docs/execution/reports/BUILD-RELEASE.md
+!/docs/execution/reports/RELEASE-0.1.1.md
+!/docs/execution/reports/RELEASE-0.1.2.md
+!/docs/execution/reports/UX-VALIDATION.md
+!/docs/execution/reports/EVAL-RESEARCH.md
+!/docs/execution/reports/CLEANUP-VALIDATION.md

@@ -1,6 +1,6 @@
 # Opt-in external qualification
 
-Local automated checks use disposable vaults and deterministic providers. The [local qualification script](../scripts/qualify-local.sh) records tests, a release-profile skill recipe, copied-artifact smoke checks, linkage and locked dependency metadata. The [current cleanup evidence](execution/reports/CLEANUP-checks.json) records results; running this procedure alone does not establish live interoperability or other-platform durability.
+Local automated checks use disposable vaults and deterministic providers. The [local qualification script](../scripts/qualify-local.sh) records tests, a release-profile skill recipe, copied-artifact smoke checks, linkage and locked dependency metadata. The [current cleanup evidence](execution/reports/CLEANUP-VALIDATION.md) records results; running this procedure alone does not establish live interoperability or other-platform durability.
 
 ## E01: actual provider contracts
 

@@ -52,11 +52,12 @@ The [six native GitHub release jobs](https://github.com/joshgarnett/rust-llm-wik
 ## Documentation
 
 - [End-user quality and critic workflow](docs/testing-usability.md): repeatable CLI, documentation and retrieval evaluation.
+- [Context evaluation](docs/evaluating-context.md): reproducible public datasets, exact evidence coverage and independent completeness assessment.
 
 - [Getting started](docs/getting-started.md): an offline tutorial and practical capture, page, refresh and agent-export examples.
 - [Provider setup](docs/providers.md): Responses, compatible gateways and bounded probes.
 - [Current contract map](docs/current-contracts.md), [cleanup register](docs/execution/CLEANUP.md), and [test-agent guide](docs/testing-cleanup.md): current capabilities, work and local/external gates.
-- [Execution playbook](docs/execution/README.md): scoped delegation, checkpoints and evidence; its original M0–M4 sequence is historical.
+- [Execution playbook](docs/execution/README.md): scoped delegation and fresh-checkout guidance; its original M0–M4 sequence is historical. Reusable guidance and curated validation summaries are tracked; checkpoints and detailed run reports remain local.
 - [Opt-in external qualification](docs/qualification.md): exact follow-up procedures for provider, host, platform, corpus and publication checks.
 - [Technical design](docs/technical/README.md): storage, retrieval, providers/jobs, CLI contracts, and an ordered implementation handoff.
 - [Architecture proposal](docs/architecture.md): storage, retrieval, provenance, human and agent workflows.

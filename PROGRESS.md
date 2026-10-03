@@ -105,7 +105,7 @@ Research uses current project documentation and papers. No project has been benc
 
 ## Next step
 
-Start a new `gpt-6-sol` session with the [implementation goal](docs/execution/START.md). It begins at P00 in the [work packages](docs/execution/WORK-PACKAGES.md), preserves the existing planning baseline, and proceeds through M4 using [STATE.md](docs/execution/STATE.md) and the validation/decision records. The [format](docs/wiki-format.md), [graph design](docs/knowledge-graph.md), [milestones](docs/implementation-plan.md), and [embedding contract](docs/embeddings.md) remain the product requirements baseline; the technical documents resolve implementation details.
+Start a new `gpt-6-sol` session with the [implementation goal](docs/execution/START.md). It begins at P00 in the [work packages](docs/execution/WORK-PACKAGES.md), preserves the existing planning baseline, and proceeds through M4 using local `docs/execution/STATE.md` (when present) and the validation/decision records. The [format](docs/wiki-format.md), [graph design](docs/knowledge-graph.md), [milestones](docs/implementation-plan.md), and [embedding contract](docs/embeddings.md) remain the product requirements baseline; the technical documents resolve implementation details.
 
 ## Authorized implementation run
 
@@ -121,7 +121,7 @@ Start a new `gpt-6-sol` session with the [implementation goal](docs/execution/ST
 - P06 offline application/CLI and P07 literal/lexical retrieval accepted after139 selected integration tests,10 CLI workflows,13 retrieval tests and independent review; retained error IDs and identity-only excerpts corrected. Strict dry-run tree invariance, real recovery coordinator, JSON/JSONL and lossless migration pass.
 - P08 graph retrieval accepted:17 graph/3 CLI/6 machine tests, root Clippy/fmt/build, independent review resolving per-seed caps/fairness/direct-ID order and explicit navigation depth omissions.
 - P09 verified context/M1 accepted:210 parent all-target tests plus34 final context/CLI/M1/machine tests, full native fault/SQLite interruption regressions, Clippy/fmt/build/seed; independent overlap/lifecycle findings closed. Exact131 file hashes in P09-checks.json.
-- P12–P21 and V01–V17 final integrated completion remain pending; see [checkpoint](docs/execution/STATE.md) and [coverage](docs/execution/reports/coverage.md).
+- P12–P21 and V01–V17 final integrated completion remain pending; see local checkpoint `docs/execution/STATE.md` (when present) and [current coverage](docs/current-contracts.md).
 - External provider/host/platform/release qualification E01–E05 remains unrun; no live spending, real-vault edits or publishing.
 
 - P10 durable packets/strict import locally accepted: persisted deterministic tasks, reserved source-local maps, explicit stage/apply, canonical restoration and109 final integration tests. M2 identity/review/skill and M3–M4 remain required.
