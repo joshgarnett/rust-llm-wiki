@@ -89,197 +89,16 @@ impl ChangeEngine {
         {
             return self.revision_failure(permit, manifest, &change.manifest_hash, initial, error);
         }
-        let mut state = initial.clone();
-        if state.status.is_none() {
-            state = journal::append_event(
-                &self.fs,
-                permit,
-                manifest,
-                &change.manifest_hash,
-                ChangeEvent::Prepared,
-            )?;
-        }
-        if state.status == Some(ChangeStatus::Prepared) {
-            state = journal::append_event(
-                &self.fs,
-                permit,
-                manifest,
-                &change.manifest_hash,
-                ChangeEvent::Applying,
-            )?;
-        }
-        let replay = matches!(
-            state.status,
-            Some(ChangeStatus::FilesApplied | ChangeStatus::Indexed)
-        ) && observations.iter().any(|o| o.observed == o.before)
-            || state.status == Some(ChangeStatus::Applying)
-                && state
-                    .frames
-                    .iter()
-                    .filter_map(|f| match f.event {
-                        ChangeEvent::Done { op } => Some(op),
-                        _ => None,
-                    })
-                    .any(|op| observations[op].observed == observations[op].before);
-        if replay {
-            state = journal::append_event(
-                &self.fs,
-                permit,
-                manifest,
-                &change.manifest_hash,
-                ChangeEvent::Applying,
-            )?;
-        }
-        if state.status == Some(ChangeStatus::Applying) {
-            let epoch = state
-                .frames
-                .iter()
-                .rposition(|f| {
-                    matches!(
-                        f.event,
-                        ChangeEvent::Applying
-                            | ChangeEvent::ResolutionAccepted {
-                                mode: ConflictResolutionMode::Resume,
-                                ..
-                            }
-                    )
-                })
-                .expect("applying epoch");
-            let completed: BTreeSet<_> = state.frames[epoch..]
-                .iter()
-                .filter_map(|f| match f.event {
-                    ChangeEvent::Done { op } => Some(op),
-                    _ => None,
-                })
-                .collect();
-            let mut intent = None;
-            for frame in &state.frames[epoch..] {
-                match frame.event {
-                    ChangeEvent::Intent { op } => intent = Some(op),
-                    ChangeEvent::Done { .. } => intent = None,
-                    _ => {}
-                }
-            }
-            let dependencies: Vec<_> = manifest
-                .operations
-                .iter()
-                .map(|o| o.apply_after.clone())
-                .collect();
-            for index in topological_order(&dependencies)? {
-                self.verify_read_preconditions(permit, manifest, &change.manifest_hash)?;
-                self.guard_revision_trees(permit, manifest, &change.manifest_hash, false)?;
-                let operation = &manifest.operations[index];
-                let observed = self.target_state(&operation.target)?;
-                if observed != operation.before && observed != operation.after {
-                    return self.conflict(
-                        permit,
-                        manifest,
-                        &change.manifest_hash,
-                        "operation recheck",
-                        self.observe(manifest)?,
-                    );
-                }
-                let already_done = completed.contains(&index);
-                // A completed target may have reverted to its old state after the interruption.
-                // Its existing durable intent authorizes redoing it; its flag is never evidence of bytes.
-                let staged = if observed == operation.before {
-                    if let Some(bytes) = self.verify_payload(
-                        &manifest.change_id,
-                        index,
-                        "proposed",
-                        &operation.target,
-                        &operation.after,
-                        &operation.after_payload,
-                    )? {
-                        if let Some((parent, _)) = operation.target.as_str().rsplit_once('/') {
-                            journal::require_sync(
-                                self.fs
-                                    .ensure_directory(&VaultRelativePath::new(parent)?, permit)?,
-                            )?;
-                        }
-                        Some(self.fs.stage(&operation.target, &bytes, permit)?)
-                    } else {
-                        None
-                    }
-                } else {
-                    None
-                };
-                if !already_done && intent != Some(index) {
-                    if intent.is_some() {
-                        return Err(WikiError::invalid(
-                            "journal intent conflicts with application order",
-                        ));
-                    }
-                    journal::append_event(
-                        &self.fs,
-                        permit,
-                        manifest,
-                        &change.manifest_hash,
-                        ChangeEvent::Intent { op: index },
-                    )?;
-                }
-                self.guard_revision_trees(permit, manifest, &change.manifest_hash, false)?;
-                self.verify_read_preconditions(permit, manifest, &change.manifest_hash)?;
-                let result = if observed == operation.before {
-                    match staged {
-                        Some(staged) => self.fs.replace(staged, &operation.before, permit),
-                        None => self.fs.delete(&operation.target, &operation.before, permit),
-                    }
-                } else {
-                    self.fs.sync_target(&operation.target, permit)
-                };
-                match result {
-                    Ok(sync) => journal::require_sync(sync)?,
-                    Err(error) if error.code == ErrorCode::ContentConflict => {
-                        return self.conflict(
-                            permit,
-                            manifest,
-                            &change.manifest_hash,
-                            "guarded mutation",
-                            self.observe(manifest)?,
-                        );
-                    }
-                    Err(error) => return Err(error),
-                }
-                self.guard_revision_trees(permit, manifest, &change.manifest_hash, false)?;
-                self.verify_read_preconditions(permit, manifest, &change.manifest_hash)?;
-                if self.target_state(&operation.target)? != operation.after {
-                    return self.conflict(
-                        permit,
-                        manifest,
-                        &change.manifest_hash,
-                        "post-mutation",
-                        self.observe(manifest)?,
-                    );
-                }
-                if !already_done {
-                    journal::append_event(
-                        &self.fs,
-                        permit,
-                        manifest,
-                        &change.manifest_hash,
-                        ChangeEvent::Done { op: index },
-                    )?;
-                    intent = None;
-                }
-            }
-            self.guard_revision_trees(permit, manifest, &change.manifest_hash, true)?;
-            self.verify_read_preconditions(permit, manifest, &change.manifest_hash)?;
-            self.require_all_after(permit, manifest, &change.manifest_hash)?;
-            state = journal::append_event(
-                &self.fs,
-                permit,
-                manifest,
-                &change.manifest_hash,
-                ChangeEvent::FilesApplied,
-            )?;
-        }
-        if !matches!(
-            state.status,
-            Some(ChangeStatus::FilesApplied | ChangeStatus::Indexed)
-        ) {
-            return Err(recovery_error("change cannot publish in its current state"));
-        }
+        self.apply_files_to_files_applied(
+            permit,
+            change,
+            manifest,
+            initial,
+            &observations,
+            &|complete| {
+                self.guard_revision_trees(permit, manifest, &change.manifest_hash, complete)
+            },
+        )?;
         self.require_all_after(permit, manifest, &change.manifest_hash)?;
         self.require_no_other_unresolved(change)?;
         let final_input = self.validation_input(manifest)?;
@@ -359,6 +178,212 @@ impl ChangeEngine {
             &change.manifest_hash,
             ChangeStatus::Committed,
         )
+    }
+
+    /// Common mutation/journal path. Callers establish and retain their typed
+    /// validation baseline before entering, and supply the matching immutable
+    /// tree guard. Publication and whole-graph validation stay with the caller.
+    fn apply_files_to_files_applied(
+        &self,
+        permit: &WriterPermit,
+        change: &PreparedChange,
+        manifest: &ChangeManifest,
+        initial: &JournalState,
+        observations: &[TargetObservation],
+        guard_revision_trees: &dyn Fn(bool) -> Result<()>,
+    ) -> Result<JournalState> {
+        let mut state = initial.clone();
+        if state.status.is_none() {
+            state = journal::append_event(
+                &self.fs,
+                permit,
+                manifest,
+                &change.manifest_hash,
+                ChangeEvent::Prepared,
+            )?;
+        }
+        if state.status == Some(ChangeStatus::Prepared) {
+            state = journal::append_event(
+                &self.fs,
+                permit,
+                manifest,
+                &change.manifest_hash,
+                ChangeEvent::Applying,
+            )?;
+        }
+        let replay = matches!(
+            state.status,
+            Some(ChangeStatus::FilesApplied | ChangeStatus::Indexed)
+        ) && observations.iter().any(|o| o.observed == o.before)
+            || state.status == Some(ChangeStatus::Applying)
+                && state
+                    .frames
+                    .iter()
+                    .filter_map(|f| match f.event {
+                        ChangeEvent::Done { op } => Some(op),
+                        _ => None,
+                    })
+                    .any(|op| observations[op].observed == observations[op].before);
+        if replay {
+            state = journal::append_event(
+                &self.fs,
+                permit,
+                manifest,
+                &change.manifest_hash,
+                ChangeEvent::Applying,
+            )?;
+        }
+        if state.status == Some(ChangeStatus::Applying) {
+            let epoch = state
+                .frames
+                .iter()
+                .rposition(|f| {
+                    matches!(
+                        f.event,
+                        ChangeEvent::Applying
+                            | ChangeEvent::ResolutionAccepted {
+                                mode: ConflictResolutionMode::Resume,
+                                ..
+                            }
+                    )
+                })
+                .expect("applying epoch");
+            let completed: BTreeSet<_> = state.frames[epoch..]
+                .iter()
+                .filter_map(|f| match f.event {
+                    ChangeEvent::Done { op } => Some(op),
+                    _ => None,
+                })
+                .collect();
+            let mut intent = None;
+            for frame in &state.frames[epoch..] {
+                match frame.event {
+                    ChangeEvent::Intent { op } => intent = Some(op),
+                    ChangeEvent::Done { .. } => intent = None,
+                    _ => {}
+                }
+            }
+            let dependencies: Vec<_> = manifest
+                .operations
+                .iter()
+                .map(|o| o.apply_after.clone())
+                .collect();
+            for index in topological_order(&dependencies)? {
+                self.verify_read_preconditions(permit, manifest, &change.manifest_hash)?;
+                guard_revision_trees(false)?;
+                let operation = &manifest.operations[index];
+                let observed = self.target_state(&operation.target)?;
+                if observed != operation.before && observed != operation.after {
+                    return self.conflict(
+                        permit,
+                        manifest,
+                        &change.manifest_hash,
+                        "operation recheck",
+                        self.observe(manifest)?,
+                    );
+                }
+                let already_done = completed.contains(&index);
+                // A completed target may have reverted to its old state after the interruption.
+                // Its existing durable intent authorizes redoing it; its flag is never evidence of bytes.
+                let staged = if observed == operation.before {
+                    if let Some(bytes) = self.verify_payload(
+                        &manifest.change_id,
+                        index,
+                        "proposed",
+                        &operation.target,
+                        &operation.after,
+                        &operation.after_payload,
+                    )? {
+                        if let Some((parent, _)) = operation.target.as_str().rsplit_once('/') {
+                            journal::require_sync(
+                                self.fs
+                                    .ensure_directory(&VaultRelativePath::new(parent)?, permit)?,
+                            )?;
+                        }
+                        Some(self.fs.stage(&operation.target, &bytes, permit)?)
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
+                if !already_done && intent != Some(index) {
+                    if intent.is_some() {
+                        return Err(WikiError::invalid(
+                            "journal intent conflicts with application order",
+                        ));
+                    }
+                    journal::append_event(
+                        &self.fs,
+                        permit,
+                        manifest,
+                        &change.manifest_hash,
+                        ChangeEvent::Intent { op: index },
+                    )?;
+                }
+                guard_revision_trees(false)?;
+                self.verify_read_preconditions(permit, manifest, &change.manifest_hash)?;
+                let result = if observed == operation.before {
+                    match staged {
+                        Some(staged) => self.fs.replace(staged, &operation.before, permit),
+                        None => self.fs.delete(&operation.target, &operation.before, permit),
+                    }
+                } else {
+                    self.fs.sync_target(&operation.target, permit)
+                };
+                match result {
+                    Ok(sync) => journal::require_sync(sync)?,
+                    Err(error) if error.code == ErrorCode::ContentConflict => {
+                        return self.conflict(
+                            permit,
+                            manifest,
+                            &change.manifest_hash,
+                            "guarded mutation",
+                            self.observe(manifest)?,
+                        );
+                    }
+                    Err(error) => return Err(error),
+                }
+                guard_revision_trees(false)?;
+                self.verify_read_preconditions(permit, manifest, &change.manifest_hash)?;
+                if self.target_state(&operation.target)? != operation.after {
+                    return self.conflict(
+                        permit,
+                        manifest,
+                        &change.manifest_hash,
+                        "post-mutation",
+                        self.observe(manifest)?,
+                    );
+                }
+                if !already_done {
+                    journal::append_event(
+                        &self.fs,
+                        permit,
+                        manifest,
+                        &change.manifest_hash,
+                        ChangeEvent::Done { op: index },
+                    )?;
+                    intent = None;
+                }
+            }
+            guard_revision_trees(true)?;
+            self.verify_read_preconditions(permit, manifest, &change.manifest_hash)?;
+            self.require_all_after(permit, manifest, &change.manifest_hash)?;
+            state = journal::append_event(
+                &self.fs,
+                permit,
+                manifest,
+                &change.manifest_hash,
+                ChangeEvent::FilesApplied,
+            )?;
+        }
+        if !matches!(
+            state.status,
+            Some(ChangeStatus::FilesApplied | ChangeStatus::Indexed)
+        ) {
+            return Err(recovery_error("change cannot publish in its current state"));
+        }
+        Ok(state)
     }
 
     fn guard_revision_trees(

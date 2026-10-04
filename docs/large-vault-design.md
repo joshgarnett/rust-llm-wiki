@@ -60,6 +60,9 @@ The catalog/source/authority gate passed 122 tests (two ignored), including
 no-op, title-only, historical reuse, malformed identities, changed selected bytes
 and invalid retained positions. These tests cover planning and lookup behavior;
 the public command still needs bounded apply, dependency updates and publication.
+The shared file-application loop preserves existing journaling and tree guards;
+71 native recovery, journal and source-evidence tests passed (one ignored),
+including injected failures before and after durable file-operation boundaries.
 
 ## Why a redesign is necessary
 
@@ -151,6 +154,16 @@ Use independently addressable catalog records, source manifests, reverse
 dependencies and retrieval units. Query only required rows and bounded candidate
 sets. Replace full read-time reconstruction with selected-row checks plus an
 explicit full integrity audit. Selected-row checks cannot rule out cache omissions.
+
+The normalized projection must distinguish semantic dependencies from history
+inventory. The legacy eligibility projection expands all decision dependencies
+and retained revision history into many records. Persisting that expansion, or
+merely repeating it during a query, would preserve the same scaling problem.
+Store expected file state once per epoch and assemble proofs for selected records
+through relevant support and policy relationships. The captured-source reader
+already uses a separate selected proof; authored and graph modes still need that
+coverage before the default changes. Preserve the legacy full-audit contract while
+introducing an explicit normalized proof format.
 
 Publish changed rows, affected dependency closures and search-index changes in a
 single SQLite transaction. Reader transactions must retain a coherent published
