@@ -156,8 +156,9 @@ The two-document, 100 KiB smoke run passed all three refresh/context checks on
 the legacy public workflow: refresh took 0.170 seconds unchanged, 0.857 seconds
 for a title edit and 1.494 seconds for changed content; subsequent context took
 0.072–0.093 seconds. These single observations validate the harness and expose
-remaining refresh cost. They do not establish tail latency or the new normalized
-update path, which is not connected to the public command yet.
+remaining refresh cost. They do not establish tail latency. The normalized update
+path is now connected for an already selected normalized catalog; the measurements
+above describe the earlier legacy path.
 
 Setup uses real `source add` commands and is timed separately; its current cost
 can grow quadratically, so the larger tiers may hit the explicit run ceiling.
@@ -167,6 +168,60 @@ cited spans. Independent quote-hash recomputation requires Python's optional
 `blake3` module and is explicitly unqualified when unavailable. Held-reader and
 logical filesystem/SQL work measurements still require the separate integration
 tests. This diagnostic does not replace the full acceptance matrix below.
+
+For the normalized path, [export_refresh_fixture.py](../scripts/export_refresh_fixture.py)
+supervises an explicitly supplied, SHA-256-pinned unit-test executable. Its ignored
+export test formats real capture records, builds and publishes the normalized
+catalog once, closes its handles, then hashes every vault file including SQLite
+sidecars. This avoids running legacy import repeatedly just to prepare a diagnostic;
+it does not measure public import throughput. Build `//:unit_tests` and `//:lwiki`
+from the same source, copy both executables into a new disposable account directory,
+and retain their hashes and build provenance.
+
+```sh
+python3 scripts/export_refresh_fixture.py \
+  --unit-test-binary /absolute/account/bin/unit_tests \
+  --binary-sha256 ACTUAL_SHA256 \
+  --workdir /absolute/account/export-1k --source-count 1000
+python3 scripts/benchmark_source_refresh.py \
+  --binary /absolute/account/bin/lwiki \
+  --preseed /absolute/account/export-1k/fixture \
+  --account-root /absolute/account --workdir /absolute/account/run-1k \
+  --tier 1000 --bytes-per-source 100000 --trials 5 \
+  --command-seconds 120 --run-seconds 1800 --max-disk-gib 8
+```
+
+The preseed route requires Python `blake3` (the recorded run used 1.0.8), verifies
+every pinned file before use, checks the clone before opening SQLite, and rechecks
+the untouched original afterward. Account-root allocation includes seeds, clones,
+binaries and reports. Output directories must be new and separate from the seed.
+Run a two-source export and `--tier tiny --trials 1` first. Admit 10k only after
+measuring 1k time, memory and allocation with headroom; use new directories and an
+explicit disk ceiling. Export supervision bounds its own workdir, while benchmark
+supervision accounts for the entire account root. Both preserve failures and
+enforce a 32 GiB free-space floor. Resource sampling can overshoot its limits.
+
+The 1,000-source normalized diagnostic (100,000 content bytes per source, zero
+initial history and no authored fanout) passed all 15 measured refresh/context
+pairs on the development M1 Max. Exact current and retained bytes, revision reuse,
+publication epochs, cited spans and Blake3 quote hashes passed. Five warm trials
+per case produced these whole-command times:
+
+| Command | Median | Maximum / sample p95 |
+|---|---:|---:|
+| Unchanged refresh | 36 ms | 39 ms |
+| Title-only refresh | 403 ms | 430 ms |
+| Changed-content refresh | 844 ms | 891 ms |
+| Following context, across cases | 47–48 ms | 51–52 ms |
+
+Fixture export took 37.4 seconds with 150 MB native peak RSS and 533 MB summed
+allocated blocks. The complete benchmark took 35.0 seconds, including cloning and
+verification, and left 1.25 GB allocated across the account. Measured refresh and
+context peaks were 35.5 MB and 28.0 MB respectively. No timed inventory sweep
+overlapped these commands. Five samples provide no tail-confidence claim; changed
+trials accumulate retained history. Filesystem metadata and index pages are warm.
+These results meet the prospective one-second update target at 1k, but do not
+qualify 100k capacity, logical-work scaling, all query modes or semantic quality.
 
 ### Acceptance evidence
 

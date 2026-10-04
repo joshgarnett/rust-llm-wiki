@@ -12,6 +12,9 @@ mod review;
 #[cfg(test)]
 mod indexed_cli_tests;
 
+#[cfg(test)]
+mod refresh_fixture_export;
+
 mod pages;
 pub mod probe;
 pub use pages::{PageBatchRequest, PageUpdate};
