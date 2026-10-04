@@ -1,0 +1,57 @@
+{
+  "version": 1,
+  "scope": "Native macOS public normalized rebuild, full check, cited retrieval, and managed source refresh at 1,000 and 10,000 current 100,000-byte sources, with 133 authored/graph records and a held predecessor snapshot. This does not establish 100,000-document capacity or unseen answer completeness.",
+  "limits": {
+    "account_allocated_bytes": 107374182400,
+    "minimum_free_bytes": 34359738368,
+    "bulk_process_tree_rss_bytes": 8589934592,
+    "query_process_tree_rss_bytes": 1073741824,
+    "check_plus_cited_query_seconds": 1800,
+    "each_rebuild_watchdog_seconds": 1800,
+    "each_query_seconds": 15,
+    "managed_refresh_watchdog_seconds": 120,
+    "whole_tier_seconds": 14400,
+    "holder_ready_seconds": 30,
+    "holder_total_watchdog_seconds": 7200,
+    "stdout_stderr_bytes_per_command": 16777216,
+    "production_check_limits": "Use existing defaults unchanged:30min,32GiB scratch main pages,32MiB perconnection caches and existing row/history/VM/posting/IO ceilings. No override to manufacture pass. Rebuild30min watchdog is this finite control-run stop; documented full-tier rebuild4h remains unchanged. Refresh observed UX retained; this control does not replace frozen60s full-tier change gate."
+  },
+  "tiny_rehearsal": {
+    "accepted": true,
+    "source_count": 2,
+    "original_seed_count": 1000,
+    "subset_rehearsal": true,
+    "source_selection": "First two sources from the verified 1,000-source export, preserving IDs and the matching 133-file overlay. Rehearsal only; full tiers use entire exports."
+  },
+  "measurement": {
+    "tiny_sampling_seconds": 0.05,
+    "full_tier_sampling_seconds": 1,
+    "pair": "Monotonic interval from check launch through cited-query completion. Full inventories, fixture hashing, and executable pin checks occur outside that interval. Monitoring and bounded output processing remain included.",
+    "scratch": "Report observed physical allocation separately from returned logical SQLite scratch bytes. Sampled peaks are lower bounds. Tiny must observe a reference.sqlite path inside its owned command TMPDIR.",
+    "holder": "Real QuerySnapshot retained across rebuild, checks, and refresh. The test-only final three document reads rearm a cumulative 30-second/10-million-VM-step budget on the same connection and transaction; production query limits remain unchanged.",
+    "native_memory": "Retain native CLI and holder peak RSS; enforce the conservative sum as well as sampled concurrent process memory."
+  },
+  "admission": {
+    "order": [
+      "tiny",
+      "1000",
+      "10000"
+    ],
+    "prerequisite": "Completed previous tier with identical executable, supervisor, validator, and protocol pins.",
+    "ten_k_projection": "Multiply the larger 1k pair time, peak check memory, and scratch measure by 20 (10x corpus and 2x uncertainty). Refuse if any projected limit is exceeded.",
+    "disk_forecast": "Current account allocation + 3x complete selected export allocation + 32 GiB scratch reservation + 2 GiB headroom; also preserve the free-space floor after forecast growth."
+  },
+  "required_outcomes": [
+    "Two public normalized rebuilds; second publication has a newer epoch and a distinct file while the held predecessor remains present.",
+    "Complete zero-diagnostic full checks before and after a real second-source refresh, followed by exact-snapshot cited context and authored-ID search.",
+    "Exact citation spans/hashes and retained old payload bytes; canonical/control/catalog files unchanged by read-only operations, excluding SQLite SHM read marks and writer-lock diagnostics.",
+    "Holder verifies its original rows and snapshot before release; successful command scratch directories are empty.",
+    "Final original-seed, overlay, executable, supervisor, validator, and protocol bindings match. Preserve all failed attempts."
+  ],
+  "interpretation": [
+    "No statistical p95 claim from two check pairs.",
+    "The first post-refresh query is separated from refresh by untimed harness verification; its command duration is not acknowledgment-to-answer latency.",
+    "Whole-run time includes fixture/account verification and must be reported separately from CLI timings.",
+    "No qualification of broad history churn, import throughput, semantic/hybrid modes, Windows, or unseen answer completeness."
+  ]
+}

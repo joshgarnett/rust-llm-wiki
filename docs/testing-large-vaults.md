@@ -577,12 +577,61 @@ python3 scripts/bazel.py -- test //:unit_tests //:check_cli_test //:offline_cli_
   --test_arg=doctor --test_output=errors
 ```
 
-Native 1k/10k check resource qualification and the full 100k/~10 GB lifecycle
-remain pending. The diagnostic limit bounds accepted output after projection;
+The full 100k/~10 GB lifecycle remains pending. The diagnostic limit bounds accepted output after projection;
 it does not bound peak diagnostic allocation. Duplicate matching charges every
 visited candidate but can rescan prefixes. These costs require measurement before
 claiming large-vault audit usability. The remaining modes/default activation and
 unseen semantic-completeness gate are also still open.
+
+### Public full-check resource controls
+
+The native macOS rehearsal and 1k control passed with the implementation at
+`bdfd8ad` and the test-only held-reader helper committed as `ae73b16`. Each run
+copies canonical files from a verified closed export, adds the existing 133-file
+authored/graph overlay, and invokes two public normalized rebuilds. No seed SQLite
+connection or copied derived cache substitutes for either rebuild. A real
+`QuerySnapshot` remains open on the first publication while the second is built.
+The run then checks and queries the second publication before and after a real
+100,000-byte refresh of its second source.
+
+| 1,000-source control (100 MB current content) | Measured result |
+| --- | --- |
+| Two public rebuilds | 33.502 / 32.503 seconds |
+| Full check plus cited query, before / after refresh | 39.919 / 40.897 seconds |
+| Managed content refresh | 0.812 seconds |
+| Largest sampled concurrent audit and held-reader RSS | 211,861,504 bytes |
+| Conservative sum of native audit and holder peak RSS | 212,025,344 bytes |
+| Largest sampled scratch allocation | 84,475,904 bytes |
+| Returned logical scratch size, before / after refresh | 81,735,680 / 81,866,752 bytes |
+| Whole supervised run, including fixture/account verification | 493.160 seconds |
+
+All ten CLI calls succeeded. Both checks reported complete canonical/cache
+agreement with zero diagnostics at the expected publication. Citation spans and
+hashes matched the selected revisions, including the refreshed content. The
+pre/post read-only inventories matched for canonical files, control files and
+both catalog generations, excluding SQLite SHM read marks and writer-lock
+diagnostics. The held reader verified its original complete document rows and
+snapshot before closing; temporary scratch was cleaned. Original fixture and
+executable bindings were revalidated. Independent Astra review checked the raw
+outputs, citations, inventories and holder result and accepted this control.
+
+The [resource protocol](full-check-resource-protocol.json) keeps whole-account
+inventories and executable/fixture hashing outside the measured check/query
+interval. Monitoring overhead remains included. Physical allocation and process
+samples are lower bounds on transient peaks; native peak RSS and logical SQLite
+scratch sizes are separate evidence. The first post-refresh query follows
+untimed harness verification, so its command duration does not measure the full
+acknowledgment-to-answer delay. Two observations do not establish statistical
+tail latency. The test helper rearms a bounded final read on the same retained
+transaction; it does not extend production query deadlines.
+
+The frozen 20× projection from the larger 1k measurements gives 817.932 seconds
+per check/query pair, 4,237,230,080 bytes of memory and 1,689,518,080 bytes of
+scratch for 10k. These are conservative admission estimates, not measured 10k
+results. The 10k control and full-tier acceptance remain pending. In particular,
+the 1k result alone does not establish the 100k audit-time target, import
+throughput, history-heavy workloads, other retrieval modes or unseen answer
+completeness.
 
 ### Acceptance evidence
 
