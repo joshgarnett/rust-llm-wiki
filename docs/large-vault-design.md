@@ -199,9 +199,33 @@ scenarios verify refreshed Unicode citations, no-op/title/history behavior,
 read-only dry-run, staged apply/retry, and rejection of damaged payloads, replay
 proofs and required indexes. Connected recovery checks cover both sides of SQL
 commit and historical retries after old payloads expire. The general `read`
-command still reports an explicit capability limitation on normalized fixtures;
-this gate does not qualify default activation, all query modes or large-vault
-latency.
+command was outside that integration gate; that gate does not qualify default
+activation, all query modes or large-vault latency.
+
+On a selected normalized catalog, `read --no-sync` now uses a pinned bounded
+lookup for the requested ID or path, followed by that document, its optional
+record and its diagnostics. It returns the published cached Markdown with
+`index_snapshot` freshness, including when canonical bytes have changed outside
+the tool. It does not verify current canonical content or return an evidence
+citation. Context retrieval continues to verify selected evidence independently.
+Dry-run uses the same read-only path while retaining its existing unknown-freshness
+warning. The legacy fallback refuses a result if normalized activation occurs
+while its reader is held.
+
+Cached reads preserve malformed-note diagnostics, unsupported schema metadata,
+raw bookkeeping Markdown and UTF-8 range/continuation behavior. The existing
+non-UTF-8 canonical-note representation remains empty cached text plus its parse
+diagnostic. The normalized reader's 8 MiB row admission limit counts both raw and
+search text plus metadata; the CLI's 16 MiB output ceiling does not override that
+admission limit. Synchronized normalized reads and remaining query modes still
+require migration before default activation.
+
+The cached-read gate passed 48 bounded-query and CLI unit tests plus all 16
+offline CLI integration tests. Coverage includes paired legacy/normalized output,
+stale canonical edits, malformed and duplicate identities, raw Markdown, UTF-8
+continuations, read-only dry-run, and rejection of legacy results after activation.
+Identity lookup tests retain identical decoded work after adding 4,096 unrelated
+claims. These checks qualify the cached-read route, not default activation.
 
 ## Incremental validation and navigation
 

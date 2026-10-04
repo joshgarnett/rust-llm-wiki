@@ -2,7 +2,10 @@ use super::arguments::*;
 use crate::{
     app::*,
     catalog::{
-        Catalog, CatalogGraphValidator, CatalogOptions, ReaderSnapshot, SnapshotVerification,
+        Catalog, CatalogDiagnostic, CatalogGraphValidator, CatalogOptions, DocumentRow,
+        ReaderSnapshot, SnapshotVerification,
+        query::QuerySnapshot,
+        query_types::{QueryCatalog, QueryReadLimits},
     },
     changes::ChangeEngine,
     config::{self, PreferenceOptions},
@@ -285,13 +288,37 @@ fn execute_inner(args: &Arguments) -> Result<Envelope> {
                 range,
                 max_bytes: preferences.read_max_bytes,
             };
-            let outcome = if args.dry_run {
+            let catalog = Catalog::with_options(
+                app.fs().clone(),
+                app.vault_id().clone(),
+                CatalogOptions {
+                    busy_timeout_ms: app.options().lock_timeout_ms,
+                    fault: None,
+                },
+            );
+            let outcome = if *no_sync && catalog.operation_state()?.is_some() {
+                catalog.guard_query()?;
+                let reader = catalog.query_snapshot(QueryReadLimits::default())?;
+                if !reader.normalized_layout() {
+                    return Err(WikiError::new(
+                        ErrorCode::IndexCorrupt,
+                        "normalized read selected another catalog layout",
+                    ));
+                }
+                let outcome = cached_query_read(&reader, request)?;
+                reader.verify_operations(&catalog)?;
+                if !args.dry_run {
+                    envelope.meta.index_generation = Some(reader.snapshot().generation);
+                    envelope.meta.freshness = Some("index_snapshot".into());
+                }
+                outcome
+            } else if args.dry_run {
                 app.read(request)?
             } else {
                 let (_writer, reader) = reader(&app, *no_sync)?;
                 snapshot_metadata(&mut envelope.meta, &reader);
                 if *no_sync {
-                    cached_read(&reader, request)?
+                    cached_legacy_read(&catalog, &reader, request)?
                 } else {
                     let outcome = app.read(request)?;
                     if !reader
@@ -1112,6 +1139,20 @@ fn snapshot_metadata(meta: &mut Metadata, reader: &ReaderSnapshot) {
         }
     }
 }
+fn cached_legacy_read(
+    catalog: &Catalog,
+    reader: &ReaderSnapshot,
+    request: ReadRequest,
+) -> Result<ReadOutcome> {
+    let outcome = cached_read(reader, request)?;
+    if catalog.operation_state()?.is_some() {
+        return Err(WikiError::new(
+            ErrorCode::RecoveryRequired,
+            "normalized authority activated while a legacy reader was held",
+        ));
+    }
+    Ok(outcome)
+}
 fn cached_read(reader: &ReaderSnapshot, request: ReadRequest) -> Result<ReadOutcome> {
     let projection = reader.projection();
     let path = match &request.selector {
@@ -1166,6 +1207,140 @@ fn cached_read(reader: &ReaderSnapshot, request: ReadRequest) -> Result<ReadOutc
         .ok_or_else(|| {
             WikiError::new(ErrorCode::RecordNotFound, "path absent from index snapshot")
         })?;
+    format_cached_read(
+        document,
+        document
+            .record_id
+            .as_ref()
+            .and_then(|id| projection.records.get(id))
+            .map(|r| r.record.clone()),
+        projection
+            .diagnostics
+            .iter()
+            .filter(|d| d.path == path)
+            .cloned()
+            .collect(),
+        request,
+    )
+}
+
+/// Reads one published cached document. No claim about current canonical bytes
+/// or corpus-wide freshness follows from this explicitly no-sync operation.
+fn cached_query_read(reader: &QuerySnapshot, request: ReadRequest) -> Result<ReadOutcome> {
+    let corrupt = |message| WikiError::new(ErrorCode::IndexCorrupt, message);
+    let claim = match &request.selector {
+        RecordSelector::Id(id) => {
+            let claim = reader.unique_identity_claim(id)?;
+            if claim.is_none() {
+                if reader.record(id)?.is_some() {
+                    return Err(corrupt("adopted cached record has no identity claim"));
+                }
+                return Err(WikiError::new(
+                    ErrorCode::RecordNotFound,
+                    "ID absent from index snapshot",
+                ));
+            }
+            claim
+        }
+        RecordSelector::Path(_) => None,
+    };
+    let path = claim
+        .as_ref()
+        .map(|c| c.path.clone())
+        .unwrap_or_else(|| match &request.selector {
+            RecordSelector::Path(path) => path.clone(),
+            RecordSelector::Id(_) => unreachable!("ID was resolved above"),
+        });
+    let document = reader.document(&path)?.ok_or_else(|| {
+        if claim.is_some() {
+            corrupt("cached identity claim has no document")
+        } else {
+            WikiError::new(ErrorCode::RecordNotFound, "path absent from index snapshot")
+        }
+    })?;
+    let diagnostics = reader.diagnostics(&std::collections::BTreeSet::from([path.clone()]))?;
+    let note = parse_note(document.raw_text.as_bytes());
+    // The existing projection represents non-UTF8 notes as empty cached text
+    // plus their original hash and parse diagnostic; keep that representation.
+    let unreadable_note = document.owner_revision.is_none()
+        && document.record_id.is_none()
+        && document.source_id.is_none()
+        && document.raw_text.is_empty()
+        && diagnostics.iter().any(|d| {
+            d.code == ErrorCode::RecordInvalid
+                && d.details.get("message").and_then(Value::as_str) == Some("note is not UTF-8")
+        });
+    if note.source_hash != document.hash && !unreadable_note {
+        return Err(corrupt("cached document text differs from its stored hash"));
+    }
+    if let Some(claim) = &claim {
+        if claim.path != document.path
+            || claim.hash != document.hash
+            || document.owner_revision.is_some()
+        {
+            return Err(corrupt("cached identity claim differs from its document"));
+        }
+        if note
+            .fields
+            .as_ref()
+            .and_then(|f| f.get("wiki_id"))
+            .and_then(Value::as_str)
+            != Some(claim.id.as_str())
+        {
+            // Conservative reservations include isolated IDs in malformed YAML;
+            // those do not make an otherwise unreadable ID selectable.
+            if document.record_id.is_some() {
+                return Err(corrupt("adopted cached document has another identity"));
+            }
+            return Err(WikiError::new(
+                ErrorCode::RecordNotFound,
+                "ID absent from index snapshot",
+            ));
+        }
+    }
+    let record = if let Some(id) = &document.record_id {
+        let row = reader
+            .record(id)?
+            .ok_or_else(|| corrupt("cached document has no adopted record"))?;
+        let identity = match &claim {
+            Some(claim) => claim.clone(),
+            None => reader
+                .unique_identity_claim(id)?
+                .ok_or_else(|| corrupt("adopted cached record has no identity claim"))?,
+        };
+        if identity.id != *id
+            || identity.path != path
+            || identity.hash != document.hash
+            || identity.kind != Some(row.record.kind())
+            || row.path != path
+            || row.hash != document.hash
+            || row.record.id() != id
+            || document.kind != Some(row.record.kind())
+            || document.owner_revision.is_some()
+            || note.canonical.as_ref() != Some(&row.record)
+        {
+            return Err(corrupt(
+                "cached record, document and identity claim disagree",
+            ));
+        }
+        Some(row.record)
+    } else {
+        if let Some(claim) = &claim {
+            if reader.record(&claim.id)?.is_some() {
+                return Err(corrupt("adopted cached record is absent from its document"));
+            }
+        }
+        None
+    };
+    format_cached_read(&document, record, diagnostics, request)
+}
+
+fn format_cached_read(
+    document: &DocumentRow,
+    record: Option<CanonicalRecord>,
+    diagnostics: Vec<CatalogDiagnostic>,
+    request: ReadRequest,
+) -> Result<ReadOutcome> {
     let note = parse_note(document.raw_text.as_bytes());
     let canonical = document.owner_revision.is_none();
     let body = if canonical {
@@ -1187,20 +1362,11 @@ fn cached_read(reader: &ReaderSnapshot, request: ReadRequest) -> Result<ReadOutc
         } else {
             None
         },
-        path: path.clone(),
+        path: document.path.clone(),
         hash: document.hash.clone(),
-        record: document
-            .record_id
-            .as_ref()
-            .and_then(|id| projection.records.get(id))
-            .map(|r| r.record.clone()),
+        record,
         metadata: if canonical { note.fields.clone() } else { None },
-        diagnostics: projection
-            .diagnostics
-            .iter()
-            .filter(|d| d.path == path)
-            .cloned()
-            .collect(),
+        diagnostics,
         body: body[start..end].to_owned(),
         range: ByteSpan::new(start as u64, end as u64)?,
         truncated: end < wanted_end,
@@ -1656,4 +1822,50 @@ fn with_network_activity<T>(
         error.network_used |= dispatcher.is_some_and(|d| d.network_used());
         error
     })
+}
+
+#[cfg(test)]
+mod cached_read_tests {
+    use super::*;
+
+    #[test]
+    fn cached_legacy_read_refuses_activation_after_reader_acquisition() {
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::write(temp.path().join("WIKI.md"), b"---\nwiki_schema: '1'\nwiki_kind: vault\nwiki_id: vault_read_race\ntitle: Read race\n---\n").unwrap();
+        std::fs::write(temp.path().join("page.md"), b"Before activation").unwrap();
+        let fs = VaultFs::new(crate::vault::VaultRoot::explicit(temp.path()).unwrap());
+        let vault = RecordId::new("vault_read_race").unwrap();
+        let catalog = Catalog::new(fs.clone(), vault.clone());
+        let writer = WriterPermit::acquire(fs.root(), Duration::ZERO).unwrap();
+        catalog.sync(&writer).unwrap();
+        let held = catalog.index_snapshot().unwrap();
+        let request = || ReadRequest {
+            selector: RecordSelector::Path(VaultRelativePath::new("page.md").unwrap()),
+            range: None,
+            max_bytes: 1024,
+        };
+        assert_eq!(
+            cached_legacy_read(&catalog, &held, request()).unwrap().body,
+            "Before activation"
+        );
+        // Authority becomes visible before selection publication during activation.
+        // A held v1 reader must not escape through that transition window.
+        crate::changes::operation_authority::activate(
+            &fs,
+            &writer,
+            &vault,
+            crate::changes::operation_authority::Publication {
+                file_id: "a".repeat(32),
+                epoch: 1,
+            },
+            crate::changes::operation_authority::Presence::LegacyMayBeAbsent,
+        )
+        .unwrap();
+        assert_eq!(
+            cached_legacy_read(&catalog, &held, request())
+                .unwrap_err()
+                .code,
+            ErrorCode::RecoveryRequired
+        );
+    }
 }

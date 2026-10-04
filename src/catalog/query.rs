@@ -298,6 +298,111 @@ impl QuerySnapshot {
         Ok(())
     }
 
+    /// Select a conservative identity reservation without requiring adoption or
+    /// canonical freshness. Only the requested key and two ambiguity witnesses
+    /// are decoded; the caller checks the selected document/record binding.
+    pub(crate) fn unique_identity_claim(
+        &self,
+        id: &RecordId,
+    ) -> Result<Option<super::IdentityClaimRow>> {
+        self.require_refresh_publication()?;
+        self.reserve_fact_input(id.as_str().len())?;
+        self.require_identity_claim_access()?;
+        let mut statement = self.connection.prepare(
+            "SELECT record_id,path,file_hash,kind FROM identity_claims INDEXED BY sqlite_autoindex_identity_claims_1 WHERE record_id=?1 ORDER BY path LIMIT 2",
+        ).map_err(sql::sql_error)?;
+        let mut rows = statement.query([id.as_str()]).map_err(sql::sql_error)?;
+        let mut selected: Option<super::IdentityClaimRow> = None;
+        while let Some(row) = rows.next().map_err(sql::sql_error)? {
+            self.reserve_refresh_row(row, 4)?;
+            let claimed_id =
+                RecordId::new(utf8(text_bytes(row, 0)?)?).map_err(|e| corrupt(e.message))?;
+            let path = VaultRelativePath::new(utf8(text_bytes(row, 1)?)?)
+                .map_err(|e| corrupt(e.message))?;
+            let hash =
+                Blake3Hash::new(utf8(text_bytes(row, 2)?)?).map_err(|e| corrupt(e.message))?;
+            let kind = match row.get_ref(3).map_err(sql::sql_error)? {
+                ValueRef::Null => None,
+                ValueRef::Text(bytes) => Some(
+                    utf8(bytes)?
+                        .parse::<RecordKind>()
+                        .map_err(|_| corrupt("identity claim kind is invalid"))?,
+                ),
+                _ => return Err(corrupt("identity claim kind is not text or NULL")),
+            };
+            if &claimed_id != id {
+                return Err(corrupt("identity claim key differs from requested ID"));
+            }
+            if let Some(first) = &selected {
+                if first.path == path {
+                    return Err(corrupt(
+                        "identity claim primary key returned duplicate paths",
+                    ));
+                }
+                return Err(WikiError::new(
+                    ErrorCode::ReferenceAmbiguous,
+                    "record ID has multiple canonical identity claims",
+                ));
+            }
+            selected = Some(super::IdentityClaimRow {
+                id: claimed_id,
+                path,
+                hash,
+                kind,
+            });
+        }
+        Ok(selected)
+    }
+
+    fn require_identity_claim_access(&self) -> Result<()> {
+        let unavailable = || {
+            let mut error = WikiError::new(
+                ErrorCode::CapabilityUnavailable,
+                "catalog lacks the bounded identity claim primary key",
+            );
+            error.hint = Some("run index rebuild".into());
+            error
+        };
+        // An exact bounded schema witness rejects alternative collations,
+        // partial substitutes and extra key columns before preparing the probe.
+        let mut statement = self.connection.prepare(
+            "SELECT sql FROM sqlite_schema WHERE type='table' AND name='identity_claims' LIMIT 2",
+        ).map_err(sql::sql_error)?;
+        let mut rows = statement.query([]).map_err(sql::sql_error)?;
+        let Some(row) = rows.next().map_err(sql::sql_error)? else {
+            return Err(unavailable());
+        };
+        self.reserve_refresh_row(row, 1)?;
+        let sql = utf8(text_bytes(row, 0)?)?;
+        if sql.len() > 4096
+            || sql
+                .chars()
+                .filter(|c| !c.is_whitespace())
+                .flat_map(char::to_lowercase)
+                .collect::<String>()
+                != "createtableidentity_claims(record_idtextnotnull,pathtextnotnull,file_hashtextnotnull,kindtext,primarykey(record_id,path))"
+            || rows.next().map_err(sql::sql_error)?.is_some()
+        {
+            return Err(unavailable());
+        }
+        let mut statement = self.connection.prepare(
+            "SELECT name='sqlite_autoindex_identity_claims_1',\"unique\",origin='pk',partial FROM pragma_index_list('identity_claims') WHERE name='sqlite_autoindex_identity_claims_1' LIMIT 2",
+        ).map_err(sql::sql_error)?;
+        let mut rows = statement.query([]).map_err(sql::sql_error)?;
+        let Some(row) = rows.next().map_err(sql::sql_error)? else {
+            return Err(unavailable());
+        };
+        self.reserve_refresh_row(row, 4)?;
+        let valid = row.get::<_, bool>(0).map_err(sql::sql_error)?
+            && row.get::<_, bool>(1).map_err(sql::sql_error)?
+            && row.get::<_, bool>(2).map_err(sql::sql_error)?
+            && !row.get::<_, bool>(3).map_err(sql::sql_error)?;
+        if !valid || rows.next().map_err(sql::sql_error)?.is_some() {
+            return Err(unavailable());
+        }
+        Ok(())
+    }
+
     pub(crate) fn pending_operation_at_start(&self) -> Option<RecordId> {
         self.operation_authority
             .as_ref()
@@ -1726,6 +1831,155 @@ mod tests {
             content_hash: Some(Blake3Hash::digest(b"repeat")),
             extractor_fingerprint: fingerprint,
         }
+    }
+
+    #[test]
+    fn cached_identity_claim_accepts_unadopted_and_reserves_malformed_duplicates() {
+        for duplicate in [false, true] {
+            let (temp, _root, catalog) = unsynced();
+            fs::write(
+                temp.path().join("broken.md"),
+                "---\nwiki_id: isolated_id\ntitle: [broken\n---\n",
+            )
+            .unwrap();
+            if duplicate {
+                fs::write(
+                    temp.path().join("other.md"),
+                    "---\nwiki_id: isolated_id\ntitle: [broken\n---\n",
+                )
+                .unwrap();
+            }
+            publish_normalized(&catalog, 1);
+            let reader = defaults(&catalog);
+            if duplicate {
+                assert_eq!(
+                    reader
+                        .unique_identity_claim(&id("isolated_id"))
+                        .unwrap_err()
+                        .code,
+                    ErrorCode::ReferenceAmbiguous
+                );
+            } else {
+                let claim = reader
+                    .unique_identity_claim(&id("isolated_id"))
+                    .unwrap()
+                    .unwrap();
+                assert_eq!(claim.path, path("broken.md"));
+                assert_eq!(claim.kind, None);
+                assert!(reader.record(&id("isolated_id")).unwrap().is_none());
+            }
+            assert!(
+                reader
+                    .unique_identity_claim(&id("absent_id"))
+                    .unwrap()
+                    .is_none()
+            );
+        }
+    }
+
+    #[test]
+    fn cached_identity_claim_meters_corruption_before_decode() {
+        for mutation in [
+            "UPDATE identity_claims SET file_hash='invalid' WHERE record_id='page_query'",
+            "UPDATE identity_claims SET path='../bad.md' WHERE record_id='page_query'",
+            "UPDATE identity_claims SET kind='invalid' WHERE record_id='page_query'",
+            "UPDATE identity_claims SET kind=x'ff' WHERE record_id='page_query'",
+        ] {
+            let (_temp, _root, catalog) = unsynced();
+            let completed = publish_normalized(&catalog, 1);
+            let database = Connection::open(&completed.path).unwrap();
+            selector::configure_wal(&database).unwrap();
+            database.execute_batch(mutation).unwrap();
+            let reader = defaults(&catalog);
+            assert_eq!(
+                reader
+                    .unique_identity_claim(&id("page_query"))
+                    .unwrap_err()
+                    .code,
+                ErrorCode::IndexCorrupt,
+                "{mutation}"
+            );
+            assert_eq!(reader.usage().rows, 3); // table, PK, selected claim
+            assert!(reader.usage().bytes > id("page_query").as_str().len());
+        }
+    }
+
+    #[test]
+    fn cached_identity_claim_requires_exact_complete_primary_key() {
+        for definition in [
+            "",
+            "CREATE TABLE identity_claims(record_id TEXT NOT NULL,path TEXT NOT NULL,file_hash TEXT NOT NULL,kind TEXT)",
+            "CREATE TABLE identity_claims(record_id TEXT COLLATE NOCASE NOT NULL,path TEXT NOT NULL,file_hash TEXT NOT NULL,kind TEXT,PRIMARY KEY(record_id,path))",
+            "CREATE TABLE identity_claims(record_id TEXT NOT NULL,path TEXT NOT NULL,file_hash TEXT NOT NULL,kind TEXT,PRIMARY KEY(path,record_id))",
+        ] {
+            let (_temp, _root, catalog) = unsynced();
+            let completed = publish_normalized(&catalog, 1);
+            let database = Connection::open(&completed.path).unwrap();
+            selector::configure_wal(&database).unwrap();
+            database
+                .execute_batch("DROP TABLE identity_claims")
+                .unwrap();
+            database.execute_batch(definition).unwrap();
+            let error = defaults(&catalog)
+                .unique_identity_claim(&id("absent_id"))
+                .unwrap_err();
+            assert_eq!(error.code, ErrorCode::CapabilityUnavailable);
+            assert_eq!(error.hint.as_deref(), Some("run index rebuild"));
+        }
+    }
+
+    #[test]
+    fn cached_identity_claim_duplicate_witness_cannot_escape_budget() {
+        let (temp, _root, catalog) = unsynced();
+        fs::write(temp.path().join("duplicate.md"), page("Duplicate")).unwrap();
+        publish_normalized(&catalog, 1);
+        let reader = catalog
+            .query_snapshot(QueryReadLimits {
+                max_rows: 3,
+                ..QueryReadLimits::default()
+            })
+            .unwrap();
+        assert_eq!(
+            reader
+                .unique_identity_claim(&id("page_query"))
+                .unwrap_err()
+                .code,
+            ErrorCode::BudgetExceeded
+        );
+        assert_eq!(reader.usage().rows, 3);
+        let reader = catalog
+            .query_snapshot(QueryReadLimits {
+                max_bytes: 1,
+                ..QueryReadLimits::default()
+            })
+            .unwrap();
+        assert_eq!(
+            reader
+                .unique_identity_claim(&id("page_query"))
+                .unwrap_err()
+                .code,
+            ErrorCode::BudgetExceeded
+        );
+        assert_eq!(reader.usage(), QueryReadUsage::default());
+    }
+
+    #[test]
+    fn cached_identity_claim_work_is_independent_of_unrelated_claims() {
+        let (_temp, _root, catalog) = unsynced();
+        let completed = publish_normalized(&catalog, 1);
+        let before = defaults(&catalog);
+        let expected = before.unique_identity_claim(&id("page_query")).unwrap();
+        let usage = before.usage();
+        drop(before);
+        let database = Connection::open(&completed.path).unwrap();
+        selector::configure_wal(&database).unwrap();
+        database.execute_batch("WITH RECURSIVE n(x) AS (SELECT 1 UNION ALL SELECT x+1 FROM n WHERE x<4096) INSERT INTO identity_claims SELECT 'unrelated_'||x,'other_'||x||'.md','malformed','invalid' FROM n").unwrap();
+        let after = defaults(&catalog);
+        assert_eq!(
+            after.unique_identity_claim(&id("page_query")).unwrap(),
+            expected
+        );
+        assert_eq!(after.usage(), usage);
     }
 
     #[test]

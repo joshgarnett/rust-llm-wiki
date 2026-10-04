@@ -42,6 +42,9 @@ struct Fixture {
 }
 impl Fixture {
     fn new() -> Self {
+        Self::with_notes(&[], true)
+    }
+    fn with_notes(notes: &[(&str, &[u8])], normalized: bool) -> Self {
         let temp = tempfile::tempdir().unwrap();
         let root = temp.path().join("normalized vault with spaces");
         let outside = temp.path().join("outside working directory");
@@ -69,31 +72,39 @@ impl Fixture {
             fs::create_dir_all(target.parent().unwrap()).unwrap();
             fs::write(target, op.proposed.unwrap()).unwrap();
         }
+        for (path, bytes) in notes {
+            let target = root.join(path);
+            fs::create_dir_all(target.parent().unwrap()).unwrap();
+            fs::write(target, bytes).unwrap();
+        }
         let vault = RecordId::new("vault_indexed_cli").unwrap();
         let selection = CatalogSelection::new(vault.clone(), 1).unwrap();
-        selector::prepare(&handle, &writer, &selection).unwrap();
-        let identity = BuildIdentity {
-            selection: selection.clone(),
-            origin: None,
-            vector_cache_lost: false,
-            vector_loss_unknown: false,
-        };
-        let mut builder =
-            NormalizedBuilder::begin(&handle, &writer, identity, BuildLimits::default()).unwrap();
-        let input_projection = scan::scan_input(&handle, &vault).unwrap();
-        let projection =
-            scan::project_normalized_with_sink(&handle, &input_projection, false, &mut builder)
-                .unwrap();
-        let completed = builder.finish_normalized(&projection).unwrap();
-        selector::publish(
-            &handle,
-            &writer,
-            &completed.identity.selection,
-            Duration::ZERO,
-        )
-        .unwrap();
+        if normalized {
+            selector::prepare(&handle, &writer, &selection).unwrap();
+            let identity = BuildIdentity {
+                selection: selection.clone(),
+                origin: None,
+                vector_cache_lost: false,
+                vector_loss_unknown: false,
+            };
+            let mut builder =
+                NormalizedBuilder::begin(&handle, &writer, identity, BuildLimits::default())
+                    .unwrap();
+            let input_projection = scan::scan_input(&handle, &vault).unwrap();
+            let projection =
+                scan::project_normalized_with_sink(&handle, &input_projection, false, &mut builder)
+                    .unwrap();
+            let completed = builder.finish_normalized(&projection).unwrap();
+            selector::publish(
+                &handle,
+                &writer,
+                &completed.identity.selection,
+                Duration::ZERO,
+            )
+            .unwrap();
+        }
         drop(writer);
-        Self {
+        let fixture = Self {
             _temp: temp,
             root,
             outside,
@@ -101,7 +112,11 @@ impl Fixture {
             source: first.source_id.to_string(),
             first: first.revision_id.to_string(),
             file_id: selection.file_id,
+        };
+        if !normalized {
+            fixture.cli(&["index", "rebuild"]);
         }
+        fixture
     }
     fn cli(&self, args: &[&str]) -> Value {
         self.cli_result(args, true)
@@ -320,12 +335,15 @@ fn indexed_cli_refresh_noop_title_and_history_are_immediately_cited() {
         .join(format!("sources/{}/source.md", fixture.source));
     let source = crate::records::parse_note(&fs::read(source_path).unwrap());
     assert_eq!(source.canonical.unwrap().string("title"), Some(TITLE));
-    // General read remains a separate migration requirement. This refresh slice
-    // must expose its explicit fence rather than silently full-scan the vault.
-    fixture.cli_error(
-        &["read", "--id", &fixture.source, "--no-sync"],
-        "CAPABILITY_UNAVAILABLE",
-    );
+    let read = fixture.cli(&["read", "--id", &fixture.source, "--no-sync"]);
+    assert_eq!(read["data"]["metadata"]["title"], TITLE);
+    assert_eq!(read["meta"]["freshness"], "index_snapshot");
+    assert_eq!(read["meta"]["index_generation"], initial + 2);
+    assert!(read["meta"]["verified_at"].is_null());
+    let content_path = format!("sources/{}/revisions/{second}/content.md", fixture.source);
+    let content = fixture.cli(&["read", "--path", &content_path, "--no-sync"]);
+    assert_eq!(content["data"]["body"], SECOND);
+    assert!(content["data"]["record"].is_null());
     assert_eq!(fixture.context(&second, SECOND), initial + 2);
     let reused = fixture.refresh(FIRST, None, None);
     assert_eq!(reused["data"]["reused"], true);
@@ -526,4 +544,121 @@ fn indexed_cli_refresh_missing_required_index_refuses_before_canonical_writes() 
         assert_eq!(after, epoch);
     }
     assert!(!fixture.root.join("changes").exists());
+}
+
+#[test]
+fn indexed_cli_cached_read_matches_legacy_for_notes_and_ranges() {
+    let notes: &[(&str, &[u8])] = &[
+        ("pages/normal.md", b"---\nwiki_schema: '1'\nwiki_kind: page\nwiki_id: page_cached\ntitle: Cached\n---\n**Markdown** stays raw.\n"),
+        ("pages/future.md", b"---\nwiki_schema: '99'\nwiki_kind: page\nwiki_id: page_future\ntitle: Future\n---\nFuture body\n"),
+        ("pages/malformed.md", b"---\nwiki_schema: '1'\nwiki_id: page_isolated\nbroken: [\n---\nRaw malformed body\n"),
+        ("pages/duplicate-a.md", b"---\nwiki_schema: '1'\nwiki_kind: page\nwiki_id: page_duplicate\ntitle: A\n---\nA\n"),
+        ("pages/duplicate-b.md", b"---\nwiki_schema: '1'\nwiki_kind: page\nwiki_id: page_duplicate\ntitle: B\n---\nB\n"),
+        ("pages/invalid-utf8.md", b"bad\xffbody"),
+        ("pages/bookkeeping.md", b"---\nwiki_schema: '1'\nwiki_kind: extraction\nwiki_id: extraction_invalid\ntitle: Invalid bookkeeping\n---\n**Bookkeeping** body must stay visible.\n"),
+        ("pages/plain.md", "\u{feff}# Plain\r\nCafé 東京 🦀\r\n".as_bytes()),
+    ];
+    let legacy = Fixture::with_notes(notes, false);
+    let normalized = Fixture::with_notes(notes, true);
+    for (path, _) in notes {
+        let args = ["read", "--path", *path, "--no-sync"];
+        let expected = legacy.cli(&args);
+        let actual = normalized.cli(&args);
+        assert_eq!(actual["data"], expected["data"], "{path}");
+        assert_eq!(actual["meta"]["freshness"], "index_snapshot");
+    }
+    for id in ["page_cached", "page_future"] {
+        let args = ["read", "--id", id, "--no-sync"];
+        assert_eq!(normalized.cli(&args)["data"], legacy.cli(&args)["data"]);
+    }
+    for (id, code) in [
+        ("page_isolated", "RECORD_NOT_FOUND"),
+        ("page_missing", "RECORD_NOT_FOUND"),
+        ("page_duplicate", "REFERENCE_AMBIGUOUS"),
+    ] {
+        let args = ["read", "--id", id, "--no-sync"];
+        legacy.cli_error(&args, code);
+        normalized.cli_error(&args, code);
+    }
+    let args = [
+        "read",
+        "--path",
+        "pages/plain.md",
+        "--no-sync",
+        "--max-bytes",
+        "14",
+    ];
+    let actual = normalized.cli(&args);
+    assert_eq!(actual["data"], legacy.cli(&args)["data"]);
+    assert_eq!(actual["data"]["truncated"], true);
+    let continuation = &actual["data"]["continuation"];
+    let start = continuation["start"].to_string();
+    let end = continuation["end"].to_string();
+    let args = [
+        "read",
+        "--path",
+        "pages/plain.md",
+        "--no-sync",
+        "--start",
+        &start,
+        "--end",
+        &end,
+    ];
+    assert_eq!(normalized.cli(&args)["data"], legacy.cli(&args)["data"]);
+    normalized.cli_error(
+        &[
+            "read",
+            "--path",
+            "pages/plain.md",
+            "--no-sync",
+            "--start",
+            "1",
+            "--end",
+            "2",
+        ],
+        "USAGE",
+    );
+}
+
+#[test]
+fn indexed_cli_cached_read_is_stale_by_contract_and_never_writes() {
+    let fixture = Fixture::new();
+    let path = format!(
+        "sources/{}/revisions/{}/content.md",
+        fixture.source, fixture.first
+    );
+    let before = tree(&fixture.root);
+    for dry_run in [false, true] {
+        let mut args = vec!["read", "--path", &path, "--no-sync"];
+        if dry_run {
+            args.insert(0, "--dry-run");
+        }
+        let read = fixture.cli(&args);
+        assert_eq!(read["data"]["body"], FIRST);
+        if dry_run {
+            assert!(read["meta"]["freshness"].is_null());
+        } else {
+            assert_eq!(read["meta"]["freshness"], "index_snapshot");
+        }
+    }
+    same_read_tree(&fixture, before);
+    fs::write(fixture.root.join(&path), SECOND).unwrap();
+    let read = fixture.cli(&["read", "--path", &path, "--no-sync"]);
+    assert_eq!(read["data"]["body"], FIRST);
+    let result = fixture.cli_result(
+        &[
+            "context",
+            "IndexedSignal",
+            "--scope",
+            "indexed-evidence",
+            "--no-sync",
+            "--mode",
+            "lexical",
+        ],
+        false,
+    );
+    assert!(
+        !result["error"].is_null(),
+        "stale selected canonical bytes must not be cited: {result}"
+    );
 }
