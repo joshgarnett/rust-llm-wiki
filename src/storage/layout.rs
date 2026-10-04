@@ -46,8 +46,31 @@ pub(crate) fn raw_read(
     }
     Ok(Some(bytes))
 }
+pub(crate) type RawReader<'a> =
+    dyn FnMut(&VaultRelativePath, usize) -> Result<Option<Vec<u8>>> + 'a;
+
+// Enforce the validator's own per-read ceiling even for supplied readers.
+pub(crate) fn read_with_reader(
+    reader: &mut RawReader<'_>,
+    path: &VaultRelativePath,
+    max: usize,
+) -> Result<Option<Vec<u8>>> {
+    let bytes = reader(path, max)?;
+    if bytes.as_ref().is_some_and(|bytes| bytes.len() > max) {
+        return Err(WikiError::new(
+            ErrorCode::BudgetExceeded,
+            "storage read exceeds bound",
+        ));
+    }
+    Ok(bytes)
+}
+
 pub(crate) fn vault(root: &VaultRoot) -> Result<(RecordId, u32)> {
-    let bytes = raw_read(root, &VaultRelativePath::new("WIKI.md")?, 1024 * 1024)?
+    vault_with_reader(&mut |path, max| raw_read(root, path, max))
+}
+
+pub(crate) fn vault_with_reader(reader: &mut RawReader<'_>) -> Result<(RecordId, u32)> {
+    let bytes = read_with_reader(reader, &VaultRelativePath::new("WIKI.md")?, 1024 * 1024)?
         .ok_or_else(|| WikiError::invalid("storage vault marker missing"))?;
     let record = parse_note(&bytes)
         .canonical
@@ -64,14 +87,80 @@ pub(crate) fn vault(root: &VaultRoot) -> Result<(RecordId, u32)> {
         },
     ))
 }
+/// A validated mapping bound to one canonical vault root. Freshness of the raw
+/// observations belongs to the caller; mapping never performs additional reads.
+#[derive(Debug)]
+pub(crate) struct ValidatedLayout {
+    root: VaultRoot,
+    retained: bool,
+}
+impl ValidatedLayout {
+    pub(crate) fn capture_with_reader(
+        root: &VaultRoot,
+        reader: &mut RawReader<'_>,
+    ) -> Result<Self> {
+        Self::capture_with_reader_budgeted(root, reader, &mut || Ok(()))
+    }
+    pub(crate) fn capture_with_reader_budgeted(
+        root: &VaultRoot,
+        reader: &mut RawReader<'_>,
+        on_step: &mut dyn FnMut() -> Result<()>,
+    ) -> Result<Self> {
+        let retained = active_with_reader(root, reader, on_step)?;
+        Ok(Self {
+            root: root.clone(),
+            retained,
+        })
+    }
+    fn require_root(&self, root: &VaultRoot) -> Result<()> {
+        if &self.root != root {
+            return Err(WikiError::invalid(
+                "validated layout belongs to a different vault root",
+            ));
+        }
+        Ok(())
+    }
+    pub(crate) fn map(
+        &self,
+        root: &VaultRoot,
+        logical: &VaultRelativePath,
+    ) -> Result<VaultRelativePath> {
+        self.require_root(root)?;
+        Ok(if self.retained {
+            managed_path(logical).unwrap_or_else(|| logical.clone())
+        } else {
+            logical.clone()
+        })
+    }
+    pub(crate) fn retained(&self, root: &VaultRoot) -> Result<bool> {
+        self.require_root(root)?;
+        Ok(self.retained)
+    }
+}
+
 pub fn active(root: &VaultRoot) -> Result<bool> {
-    let Some(bytes) = raw_read(root, &VaultRelativePath::new(ACTIVE)?, 4096)? else {
-        if raw_read(root, &VaultRelativePath::new("WIKI.md")?, 1024 * 1024)?.is_none() {
+    active_with_reader(
+        root,
+        &mut |path, max| raw_read(root, path, max),
+        &mut || Ok(()),
+    )
+}
+
+fn active_with_reader(
+    root: &VaultRoot,
+    reader: &mut RawReader<'_>,
+    on_step: &mut dyn FnMut() -> Result<()>,
+) -> Result<bool> {
+    let Some(bytes) = read_with_reader(reader, &VaultRelativePath::new(ACTIVE)?, 4096)? else {
+        if read_with_reader(reader, &VaultRelativePath::new("WIKI.md")?, 1024 * 1024)?.is_none() {
             // Initialization validates/creates empty managed directories before
             // publishing its first marker. Missing markers never waive retained
             // history: only an empty authority namespace (plus writer lock) fits.
             for name in [".wiki/retained", ".wiki/state/storage"] {
-                if root.resolve_raw(&VaultRelativePath::new(name)?)?.exists() {
+                if root
+                    .resolve_raw_budgeted(&VaultRelativePath::new(name)?, on_step)?
+                    .exists()
+                {
                     return Err(WikiError::new(
                         ErrorCode::RecoveryRequired,
                         "missing vault marker with retained storage authority",
@@ -79,10 +168,13 @@ pub fn active(root: &VaultRoot) -> Result<bool> {
                 }
             }
             for name in ["changes", "runs", ".wiki/state"] {
-                let directory = root.resolve_raw(&VaultRelativePath::new(name)?)?;
+                let directory =
+                    root.resolve_raw_budgeted(&VaultRelativePath::new(name)?, on_step)?;
+                on_step()?;
                 match std::fs::read_dir(directory) {
                     Ok(entries) => {
                         for entry in entries {
+                            on_step()?;
                             let entry = entry
                                 .map_err(|e| WikiError::new(ErrorCode::Internal, e.to_string()))?;
                             let writer_lock = name == ".wiki/state"
@@ -107,7 +199,9 @@ pub fn active(root: &VaultRoot) -> Result<bool> {
             }
             return Ok(false);
         }
-        if vault(root)?.1 == 2 && !super::cleanup::pending_activation_matches(root)? {
+        if vault_with_reader(reader)?.1 == 2
+            && !super::cleanup::pending_activation_matches_with_reader(reader)?
+        {
             return Err(WikiError::new(
                 ErrorCode::RecoveryRequired,
                 "vault format 2 requires retained storage activation; restore the complete vault backup including .wiki",
@@ -116,14 +210,14 @@ pub fn active(root: &VaultRoot) -> Result<bool> {
         return Ok(false);
     };
     let layout: Layout = decode(&bytes)?;
-    let (id, schema) = vault(root)?;
+    let (id, schema) = vault_with_reader(reader)?;
     if layout.version != 2 || layout.vault_id != id || schema != 2 {
         return Err(WikiError::new(
             ErrorCode::RecoveryRequired,
             "storage activation differs from vault format",
         ));
     }
-    super::cleanup::verify_activation(root, &layout)?;
+    super::cleanup::verify_activation_with_reader(&layout, reader)?;
     Ok(true)
 }
 pub fn managed_path(path: &VaultRelativePath) -> Option<VaultRelativePath> {
@@ -312,3 +406,7 @@ fn legacy_payload_lookup(
     }
     Ok(Some(bytes))
 }
+
+#[cfg(test)]
+#[path = "layout_binding_tests.rs"]
+mod layout_binding_tests;

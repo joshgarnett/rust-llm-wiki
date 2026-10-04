@@ -483,6 +483,13 @@ marker exists. Charge retained path bytes during scanning, before accumulating
 an unbounded path list. Additional full-payload passes or new path bypasses need
 measured justification; they are not consequences of the note-sharing change.
 
+Retained-layout mapping previously revalidated the original migration receipt
+for each managed path. Explicit maintenance should validate that receipt once
+through the same metered reader, bind the mapping to the operation, and recheck
+its exact raw inputs before publication. Mapping reuse must preserve physical
+ancestor and nested-vault checks. Include receipt bytes in input accounting;
+payload-only counters do not establish a bound on the entire input phase.
+
 An unchanged explicit sync can preserve the published epoch after comparing the
 complete current input commitments and parser/layout compatibility. It need not
 audit SQLite internals. Changed external input may initially use full
@@ -492,6 +499,16 @@ unperformed audits labeled. The current in-memory audit backup must also be
 replaced or resource-qualified. Forecast scratch together with current and
 reader-pinned old databases before choosing a disk-backed copy. These are
 implementation requirements, not completed large-vault qualification.
+
+Retries must not accumulate full unacknowledged siblings. Dispose only the exact
+owned candidate after proving it is neither selected nor acknowledged, and try
+to retire the known predecessor after publication. A held reader can defer that
+retirement. SQLite documents that long readers can prevent WAL checkpoint
+progress, while ordinary VACUUM can require up to twice the original database
+size in free space. These costs belong in capacity planning; automatic compaction
+is not a substitute for candidate ownership and retirement.
+[SQLite WAL](https://www.sqlite.org/wal.html),
+[SQLite VACUUM](https://www.sqlite.org/lang_vacuum.html).
 
 Keep SQLite first. FTS5 already supports row updates, internal segments and
 incremental merging; the application must maintain row/index consistency.

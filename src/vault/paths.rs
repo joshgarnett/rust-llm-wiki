@@ -457,9 +457,38 @@ impl VaultRoot {
         max_files: usize,
         on_entry: &mut dyn FnMut() -> Result<()>,
     ) -> Result<Vec<VaultRelativePath>> {
+        self.scan_markdown_admitted(max_files, on_entry, &mut |_| Ok(()))
+    }
+    /// Maintenance can account for path bytes before the scan retains them.
+    pub(crate) fn scan_markdown_admitted(
+        &self,
+        max_files: usize,
+        on_entry: &mut dyn FnMut() -> Result<()>,
+        on_path: &mut dyn FnMut(&VaultRelativePath) -> Result<()>,
+    ) -> Result<Vec<VaultRelativePath>> {
+        let retained = crate::storage::layout::active(self)?;
+        self.scan_markdown_layout(max_files, on_entry, on_path, retained)
+    }
+    /// Reuse an operation's validated layout; retain all physical path checks.
+    pub(crate) fn scan_markdown_with_layout(
+        &self,
+        max_files: usize,
+        on_entry: &mut dyn FnMut() -> Result<()>,
+        on_path: &mut dyn FnMut(&VaultRelativePath) -> Result<()>,
+        layout: &crate::storage::layout::ValidatedLayout,
+    ) -> Result<Vec<VaultRelativePath>> {
+        self.scan_markdown_layout(max_files, on_entry, on_path, layout.retained(self)?)
+    }
+    fn scan_markdown_layout(
+        &self,
+        max_files: usize,
+        on_entry: &mut dyn FnMut() -> Result<()>,
+        on_path: &mut dyn FnMut(&VaultRelativePath) -> Result<()>,
+        retained: bool,
+    ) -> Result<Vec<VaultRelativePath>> {
         let mut out = Vec::new();
-        Self::scan_dir(&self.path, "", &mut out, max_files, on_entry)?;
-        if crate::storage::layout::active(self)? {
+        Self::scan_dir(&self.path, "", &mut out, max_files, on_entry, on_path)?;
+        if retained {
             // Old physical copies may survive interrupted unlink. Only the active
             // logical namespace supplies canonical identity after activation.
             out.retain(|path| crate::storage::layout::managed_path(path).is_none());
@@ -467,9 +496,10 @@ impl VaultRoot {
                 (".wiki/retained/packets", "knowledge/extractions/packets"),
                 (".wiki/retained/runs", "runs"),
             ] {
-                let directory = self.resolve_raw(&VaultRelativePath::new(physical)?)?;
+                let directory =
+                    self.resolve_raw_budgeted(&VaultRelativePath::new(physical)?, on_entry)?;
                 if directory.is_dir() {
-                    Self::scan_dir(&directory, logical, &mut out, max_files, on_entry)?;
+                    Self::scan_dir(&directory, logical, &mut out, max_files, on_entry, on_path)?;
                 }
             }
         }
@@ -482,6 +512,7 @@ impl VaultRoot {
         out: &mut Vec<VaultRelativePath>,
         max_files: usize,
         on_entry: &mut dyn FnMut() -> Result<()>,
+        on_path: &mut dyn FnMut(&VaultRelativePath) -> Result<()>,
     ) -> Result<()> {
         on_entry()?;
         for entry in fs::read_dir(directory).map_err(|e| io_error("scan directory", e))? {
@@ -517,7 +548,7 @@ impl VaultRoot {
                 if exact_marker_budgeted(&entry.path(), on_entry)? {
                     continue;
                 }
-                Self::scan_dir(&entry.path(), &relative, out, max_files, on_entry)?;
+                Self::scan_dir(&entry.path(), &relative, out, max_files, on_entry, on_path)?;
             } else if kind.is_file() && name.ends_with(".md") && name != "index.md" {
                 if out.len() >= max_files {
                     return Err(WikiError::new(
@@ -525,7 +556,9 @@ impl VaultRoot {
                         "canonical scan file ceiling",
                     ));
                 }
-                out.push(VaultRelativePath::new(relative)?);
+                let path = VaultRelativePath::new(relative)?;
+                on_path(&path)?;
+                out.push(path);
             }
         }
         Ok(())

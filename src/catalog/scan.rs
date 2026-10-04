@@ -223,12 +223,58 @@ fn project_input(
     fs: &VaultFs,
     input: &ValidationInput,
     closed: bool,
+    retrieval: Option<&mut dyn RetrievalSink>,
+    normalized: Option<&mut super::eligibility_facts::NormalizedEligibilityFacts>,
+) -> Result<ValidationProjection> {
+    let notes = input_notes(input)?;
+    let source_view = if closed {
+        SourceView::from_closed_input(fs, input)?
+    } else {
+        SourceView::from_input(fs, input)?
+    };
+    project_notes(
+        fs,
+        &input.vault_id,
+        &notes,
+        &source_view,
+        retrieval,
+        normalized,
+    )
+}
+
+/// Maintenance keeps one parsed authority and observes payloads lazily through
+/// its input reader. The semantic and retrieval algorithms remain shared.
+pub(crate) fn project_maintenance_with_sink(
+    input: &super::maintenance_input::MaintenanceInput,
+    sink: &mut dyn RetrievalSink,
+) -> Result<NormalizedValidationProjection> {
+    input.require_clean()?;
+    let source_view =
+        SourceView::from_shared_maintenance(input.fs(), input.notes().shared(), input);
+    let mut facts = super::eligibility_facts::NormalizedEligibilityFacts::new();
+    let result = project_notes(
+        input.fs(),
+        input.vault_id(),
+        input.notes(),
+        &source_view,
+        Some(sink),
+        Some(&mut facts),
+    );
+    input.require_clean()?;
+    let validation = result?;
+    Ok(NormalizedValidationProjection { validation, facts })
+}
+
+fn project_notes(
+    _fs: &VaultFs,
+    vault_id: &RecordId,
+    notes: &BTreeMap<VaultRelativePath, ParsedNote>,
+    source_view: &SourceView<'_>,
     mut retrieval: Option<&mut dyn RetrievalSink>,
     mut normalized: Option<&mut super::eligibility_facts::NormalizedEligibilityFacts>,
 ) -> Result<ValidationProjection> {
-    let notes = input_notes(input)?;
     let mut memberships: BTreeMap<RecordId, Vec<VaultRelativePath>> = BTreeMap::new();
-    for (path, note) in &notes {
+    for (path, note) in notes {
         for id in readable_ids(note) {
             if let Some(sink) = retrieval.as_deref_mut() {
                 sink.identity_claim(IdentityClaimRow {
@@ -243,7 +289,7 @@ fn project_input(
     }
     let mut diagnostics = Vec::new();
     let mut records = BTreeMap::new();
-    for (path, note) in &notes {
+    for (path, note) in notes {
         let id = readable_id(note);
         for claimed in readable_ids(note) {
             if let Some(paths) = memberships.get(&claimed).filter(|paths| paths.len() > 1) {
@@ -290,21 +336,17 @@ fn project_input(
             );
         }
     }
-    let source_view = if closed {
-        SourceView::from_closed_input(fs, input)?
-    } else {
-        SourceView::from_input(fs, input)?
-    };
     if let Some(facts) = normalized.as_deref_mut() {
         *facts = super::eligibility::compute_normalized(
-            &source_view,
-            &notes,
+            source_view,
+            notes,
             &mut records,
             &mut diagnostics,
         )?;
     } else {
-        super::eligibility::compute(&source_view, &notes, &mut records, &mut diagnostics)?;
+        super::eligibility::compute(source_view, notes, &mut records, &mut diagnostics)?;
     }
+    source_view.require_consistent()?;
     let mut dependencies: BTreeMap<VaultRelativePath, ExpectedState> = notes
         .iter()
         .map(|(p, n)| (p.clone(), ExpectedState::Hash(n.source_hash.clone())))
@@ -343,7 +385,7 @@ fn project_input(
                 })
                 .collect(),
         );
-        for (path, note) in &notes {
+        for (path, note) in notes {
             let row = note
                 .canonical
                 .as_ref()
@@ -506,6 +548,7 @@ fn project_input(
             }
         }
     }
+    source_view.require_consistent()?;
     diagnostics.sort_by(|a, b| {
         (&a.path, format!("{:?}", a.code), a.details.to_string()).cmp(&(
             &b.path,
@@ -513,9 +556,9 @@ fn project_input(
             b.details.to_string(),
         ))
     });
-    let control_manifest = manifest_hash(&notes);
+    let control_manifest = manifest_hash(notes);
     Ok(ValidationProjection {
-        vault_id: input.vault_id.clone(),
+        vault_id: vault_id.clone(),
         parser_fingerprint: parser_fingerprint(),
         control_manifest,
         records,
@@ -1663,3 +1706,7 @@ mod tests {
         assert!(!after_notes.contains_key(&path("empty.md")));
     }
 }
+
+#[cfg(test)]
+#[path = "maintenance_projection_tests.rs"]
+mod maintenance_projection_tests;

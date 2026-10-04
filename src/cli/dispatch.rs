@@ -458,7 +458,11 @@ fn execute_inner(args: &Arguments) -> Result<Envelope> {
             app.evidence_revalidate(id.clone(), to_revision.clone(), if_match.clone())?,
         )?,
         Command::Index { command } => {
-            let outcome = app.index_sync(matches!(command, IndexCommand::Rebuild))?;
+            let outcome = match command {
+                IndexCommand::Rebuild { normalized: true } => app.index_rebuild_normalized()?,
+                IndexCommand::Rebuild { normalized: false } => app.index_sync(true)?,
+                IndexCommand::Sync => app.index_sync(false)?,
+            };
             if let Some(report) = &outcome.report {
                 envelope.meta.index_generation = Some(report.snapshot.generation);
                 if report.vector_cache_lost {

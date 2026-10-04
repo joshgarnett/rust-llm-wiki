@@ -450,6 +450,39 @@ diagnostic results do not
 qualify public normalized rebuild/sync/check, all retrieval modes, the 100k/10 GB
 workload or unseen semantic completeness.
 
+### Public reconstruction checkpoint
+
+The opt-in `index rebuild --normalized` route now uses shared parsed notes,
+streamed retrieval rows and metered named source/layout reads. After activation,
+plain `index rebuild` keeps that layout and explicit `index sync` preserves an
+unchanged current publication. Compatibility checks include proof/ownership
+versions and exact bounded schema definitions; sync does not run an integrity
+audit or trust a historical full-build digest.
+
+The broader local gate passed **730 tests**: 542 unit and 188 integration tests
+across CLI, retrieval/context, graph, storage cleanup and source evidence.
+Eight tests remained ignored and two unchanged accounting stress matrices were
+excluded. A subsequent cleanup-reporting correction passed **32 focused unit
+tests and one real CLI test**. Both gates retained unchanged source pins during
+execution. An earlier missing-payload diagnostic mismatch and a missing test
+import were retained as failures, corrected and retested.
+
+Independent Astra review accepted this rebuild/sync/recovery checkpoint at
+**9.1/10 with zero scoped blockers**, checking the ten broad logs, final focused
+results and final source pins. That score applies only to this checkpoint.
+
+Coverage includes exact interrupted-candidate recovery, an external edit during
+rebuild, readers held across publication, source title/revision updates followed
+by unchanged sync and authenticated citations, missing-cache reconstruction,
+older capability layouts, partial-build disposal and dry-run filesystem equality.
+Retained-layout tests use a real migration and confirm that 100 mapped reads do
+not reread its plan. Unsafe cache paths still refuse reconstruction; damaged
+predecessors and reader-held files can remain, with deferred cleanup reported.
+
+This checkpoint does not qualify native rebuild throughput or RSS, automatic
+collection of every abandoned file, complete normalized `check`, bounded
+`doctor`, all command modes, 100k/10 GB capacity or unseen semantic completeness.
+
 ### Acceptance evidence
 
 Freeze the binary/tree, protocol, generator/seed, manifests, expected outcomes,

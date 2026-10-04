@@ -3,19 +3,32 @@ use crate::{
     domain::{RecordId, RecordKind, VaultRelativePath},
     records::{LinkResolution, ParsedNote, RegistryEntry, links::IndexedRegistry},
 };
-use std::{collections::BTreeMap, ops::Deref};
+use std::{collections::BTreeMap, ops::Deref, sync::Arc};
 
 /// Notes and indexes move together. No mutable dereference is exposed: callers
 /// construct a new view after applying an overlay, so indexes cannot go stale.
 pub(crate) struct SourceNotes {
+    inner: Arc<SourceNotesInner>,
+}
+
+struct SourceNotesInner {
     notes: BTreeMap<VaultRelativePath, ParsedNote>,
     claims: BTreeMap<RecordId, usize>,
     registry: IndexedRegistry,
 }
 
 impl SourceNotes {
+    /// Share immutable notes and lookup indexes without copying parsed bodies.
+    /// Keep this explicit: existing overlay code clones the dereferenced map
+    /// because it needs a separate mutable projection.
+    pub(crate) fn shared(&self) -> Self {
+        Self {
+            inner: Arc::clone(&self.inner),
+        }
+    }
+
     pub(super) fn ambiguous(&self, id: &RecordId) -> bool {
-        self.claims.get(id).is_some_and(|count| *count > 1)
+        self.inner.claims.get(id).is_some_and(|count| *count > 1)
     }
 
     pub(super) fn resolve_typed(
@@ -24,7 +37,7 @@ impl SourceNotes {
         kind: RecordKind,
         companion: Option<&str>,
     ) -> LinkResolution {
-        self.registry.resolve_typed(id, kind, companion)
+        self.inner.registry.resolve_typed(id, kind, companion)
     }
 }
 
@@ -48,9 +61,11 @@ impl From<BTreeMap<VaultRelativePath, ParsedNote>> for SourceNotes {
             }
         }
         Self {
-            notes,
-            claims,
-            registry: IndexedRegistry::new(entries),
+            inner: Arc::new(SourceNotesInner {
+                notes,
+                claims,
+                registry: IndexedRegistry::new(entries),
+            }),
         }
     }
 }
@@ -59,7 +74,7 @@ impl Deref for SourceNotes {
     type Target = BTreeMap<VaultRelativePath, ParsedNote>;
 
     fn deref(&self) -> &Self::Target {
-        &self.notes
+        &self.inner.notes
     }
 }
 
@@ -68,7 +83,7 @@ impl<'a> IntoIterator for &'a SourceNotes {
     type IntoIter = std::collections::btree_map::Iter<'a, VaultRelativePath, ParsedNote>;
 
     fn into_iter(self) -> Self::IntoIter {
-        self.notes.iter()
+        self.inner.notes.iter()
     }
 }
 
@@ -97,13 +112,13 @@ mod tests {
             parse_note(repeated),
         )]);
         let notes = SourceNotes::from(one.clone());
-        assert_eq!(notes.claims.get(&id), Some(&1));
+        assert_eq!(notes.inner.claims.get(&id), Some(&1));
         let mut two = one;
         two.insert(
             VaultRelativePath::new("entity.md").unwrap(),
             parse_note(&entity(id.as_str())),
         );
-        assert_eq!(SourceNotes::from(two).claims.get(&id), Some(&2));
+        assert_eq!(SourceNotes::from(two).inner.claims.get(&id), Some(&2));
     }
 
     #[test]
@@ -133,8 +148,8 @@ mod tests {
         };
         let duplicate = SourceView::from_closed_input(&fs, &input).unwrap();
         let other = RecordId::new("entity_other").unwrap();
-        assert_eq!(duplicate.notes.claims.get(&id), Some(&2));
-        assert_eq!(duplicate.notes.claims.get(&other), Some(&1));
+        assert_eq!(duplicate.notes.inner.claims.get(&id), Some(&2));
+        assert_eq!(duplicate.notes.inner.claims.get(&other), Some(&1));
         assert_eq!(
             duplicate
                 .resolve(&other, RecordKind::Entity, None)
@@ -158,7 +173,7 @@ mod tests {
             repaired.resolve(&id, RecordKind::Entity, None).unwrap().0,
             &original_path
         );
-        assert!(!repaired.notes.claims.contains_key(&other));
+        assert!(!repaired.notes.inner.claims.contains_key(&other));
         input.overlay = vec![
             ProposedTarget {
                 path: original_path,

@@ -400,8 +400,11 @@ fn lease_name(selection: &CatalogSelection) -> CachePath<'_> {
     CachePath::File(&selection.file_id, FileKind::Lease)
 }
 fn no_sidecars(fs: &VaultFs, selection: &CatalogSelection) -> Result<()> {
+    no_file_sidecars(fs, &selection.file_id)
+}
+fn no_file_sidecars(fs: &VaultFs, file_id: &str) -> Result<()> {
     for kind in [FileKind::Wal, FileKind::Shm, FileKind::Journal] {
-        if exists(&path(fs, CachePath::File(&selection.file_id, kind))?)? {
+        if exists(&path(fs, CachePath::File(file_id, kind))?)? {
             return Err(corrupt("sealed catalog has unexpected SQLite sidecar"));
         }
     }
@@ -534,21 +537,37 @@ fn checked_sidecars(
     db: &Checked,
     allow_missing: bool,
 ) -> Result<Vec<Checked>> {
+    checked_file_sidecars(fs, &selected.file_id, db, allow_missing)
+}
+fn checked_file_sidecars(
+    fs: &VaultFs,
+    file_id: &str,
+    db: &Checked,
+    allow_missing: bool,
+) -> Result<Vec<Checked>> {
+    checked_file_sidecars_with_missing(fs, file_id, db, allow_missing, false)
+}
+fn checked_file_sidecars_with_missing(
+    fs: &VaultFs,
+    file_id: &str,
+    db: &Checked,
+    allow_missing_shm: bool,
+    allow_missing_wal: bool,
+) -> Result<Vec<Checked>> {
     if journal_header(db)? == JournalMode::Delete {
-        no_sidecars(fs, selected)?;
+        no_file_sidecars(fs, file_id)?;
         return Ok(Vec::new());
     }
-    if exists(&path(
-        fs,
-        CachePath::File(&selected.file_id, FileKind::Journal),
-    )?)? {
+    if exists(&path(fs, CachePath::File(file_id, FileKind::Journal))?)? {
         return Err(corrupt("WAL catalog has unexpected rollback journal"));
     }
     let mut held = Vec::new();
     for kind in [FileKind::Wal, FileKind::Shm] {
-        let name = path(fs, CachePath::File(&selected.file_id, kind))?;
+        let name = path(fs, CachePath::File(file_id, kind))?;
         if !exists(&name)? {
-            if allow_missing && matches!(kind, FileKind::Shm) {
+            if (allow_missing_shm && matches!(kind, FileKind::Shm))
+                || (allow_missing_wal && matches!(kind, FileKind::Wal))
+            {
                 continue;
             }
             return Err(WikiError::new(
@@ -772,12 +791,10 @@ pub(crate) fn open_delta<'a>(
     })
 }
 
-/// Verify publication/retirement ownership using a bounded read transaction.
-fn verify_sealed(fs: &VaultFs, selection: &CatalogSelection) -> Result<(Checked, u64)> {
-    let checked = Checked::open(&path(fs, database_name(selection))?, false, true)?;
-    let sidecars = checked_sidecars(fs, selection, &checked, false)?;
+/// A physical-header read has a finite VM, elapsed and row-length ceiling.
+fn maintenance_connection(name: &Path) -> Result<Connection> {
     let connection = Connection::open_with_flags(
-        &checked.path,
+        name,
         OpenFlags::SQLITE_OPEN_READ_ONLY
             | OpenFlags::SQLITE_OPEN_NO_MUTEX
             | OpenFlags::SQLITE_OPEN_NOFOLLOW,
@@ -806,6 +823,14 @@ fn verify_sealed(fs: &VaultFs, selection: &CatalogSelection) -> Result<(Checked,
     connection
         .execute_batch("PRAGMA query_only=ON; BEGIN;")
         .map_err(super::sql::sql_error)?;
+    Ok(connection)
+}
+
+/// Verify publication/retirement ownership using a bounded read transaction.
+fn verify_sealed(fs: &VaultFs, selection: &CatalogSelection) -> Result<(Checked, u64)> {
+    let checked = Checked::open(&path(fs, database_name(selection))?, false, true)?;
+    let sidecars = checked_sidecars(fs, selection, &checked, false)?;
+    let connection = maintenance_connection(&checked.path)?;
     let header = super::normalized_read::header(&connection, selection)?;
     let rows: i64 = connection
         .query_row("SELECT count(*) FROM catalog_meta", [], |r| r.get(0))
@@ -818,6 +843,216 @@ fn verify_sealed(fs: &VaultFs, selection: &CatalogSelection) -> Result<(Checked,
     checked.verify()?;
     drop(connection);
     Ok((checked, epoch))
+}
+
+/// Read selected physical metadata without parser or general-query admission.
+/// The transaction and file lease remain alive through header validation.
+pub(crate) fn maintenance_header(
+    fs: &VaultFs,
+    vault: &RecordId,
+    timeout: Duration,
+) -> Result<Option<(CatalogSelection, super::normalized_read::CatalogHeader)>> {
+    let mut header = None;
+    let selected = acquire(fs, vault, timeout, |name, selection| {
+        let connection = maintenance_connection(name)?;
+        header = Some(super::normalized_read::header(&connection, selection)?);
+        let rows: i64 = connection
+            .query_row("SELECT count(*) FROM catalog_meta", [], |r| r.get(0))
+            .map_err(super::sql::sql_error)?;
+        if rows != 1 {
+            return Err(corrupt("catalog header is not unique"));
+        }
+        Ok(connection)
+    })?;
+    match selected {
+        None => Ok(None),
+        Some(selected) => Ok(Some((
+            selected.selection().clone(),
+            header.ok_or_else(|| corrupt("acquisition did not validate header"))?,
+        ))),
+    }
+}
+
+/// Admit canonical reconstruction of corrupt/missing cache content only after
+/// validating publication control identity and every present owned file path.
+/// Missing data/sidecars are repairable; unsafe bindings and lost locks are not.
+pub(crate) fn validate_rebuild_predecessor(
+    fs: &VaultFs,
+    writer: &WriterPermit,
+    vault: &RecordId,
+    timeout: Duration,
+) -> Result<CatalogSelection> {
+    use crate::changes::operation_authority::{self as operations, Presence};
+    writer.require_root(fs.root())?;
+    fs.require_storage_ready()?;
+    let authority = operations::load(fs, vault, Presence::Required)?
+        .ok_or_else(|| corrupt("rebuild predecessor authority is absent"))?;
+    authority.require_publication(authority.publication())?;
+    let started = Instant::now();
+    let gate = required_lock(
+        Checked::open(&path(fs, GATE)?, false, true)?,
+        false,
+        timeout,
+    )?;
+    if !marker(fs, vault)? {
+        return Err(corrupt("rebuild predecessor activation marker is absent"));
+    }
+    let selected =
+        selection(fs, vault)?.ok_or_else(|| corrupt("rebuild predecessor selector is absent"))?;
+    if selected.file_id != authority.publication().file_id {
+        return Err(WikiError::new(
+            ErrorCode::RecoveryRequired,
+            "unfinished catalog publication requires exact acknowledged recovery",
+        ));
+    }
+    let lease = required_lock(
+        Checked::open(&path(fs, lease_name(&selected))?, false, true)?,
+        false,
+        timeout.saturating_sub(started.elapsed()),
+    )?;
+    let mut held = Vec::new();
+    for kind in [
+        FileKind::Database,
+        FileKind::Wal,
+        FileKind::Shm,
+        FileKind::Journal,
+    ] {
+        let name = path(fs, CachePath::File(&selected.file_id, kind))?;
+        if exists(&name)? {
+            held.push(Checked::open(&name, false, true)?);
+        }
+    }
+    verify_sidecars(&held)?;
+    gate.checked.verify()?;
+    lease.checked.verify()?;
+    Ok(selected)
+}
+
+/// Complete only the exact idle-authority publication interrupted before its
+/// marker/selector switch. A coherent pointer needs no physical-cache read;
+/// cache reconstruction is the explicit rebuild coordinator's responsibility.
+pub(crate) fn resume_acknowledged_rebuild(
+    fs: &VaultFs,
+    writer: &WriterPermit,
+    vault: &RecordId,
+    timeout: Duration,
+) -> Result<bool> {
+    use crate::changes::operation_authority::{self as operations, Presence};
+    writer.require_root(fs.root())?;
+    fs.require_storage_ready()?;
+    let authority = operations::load(
+        fs,
+        vault,
+        if has_activation_evidence(fs)? {
+            Presence::Required
+        } else {
+            Presence::LegacyMayBeAbsent
+        },
+    )?;
+    let Some(authority) = authority else {
+        return Ok(false);
+    };
+    authority.require_publication(authority.publication())?; // requires idle
+    let started = Instant::now();
+    let gate = required_lock(
+        Checked::open(&path(fs, GATE)?, false, true)?,
+        false,
+        timeout,
+    )?;
+    let active = marker(fs, vault)?;
+    // Missing CURRENT is legitimate after the first marker became durable.
+    // Malformed/foreign CURRENT remains a refusal, never an implicit repair.
+    let current = read(fs, CURRENT)?
+        .map(|bytes| -> Result<CatalogSelection> {
+            let selected: CatalogSelection = serde_json::from_slice(&bytes)
+                .map_err(|_| corrupt("catalog selector malformed; explicit rebuild required"))?;
+            selected.validate(vault)?;
+            Ok(selected)
+        })
+        .transpose()?;
+    if active && current.is_some_and(|s| s.file_id == authority.publication().file_id) {
+        gate.checked.verify()?;
+        return Ok(false);
+    }
+    let file_id = &authority.publication().file_id;
+    let lease = required_lock(
+        Checked::open(
+            &path(fs, CachePath::File(file_id, FileKind::Lease))?,
+            false,
+            true,
+        )?,
+        false,
+        timeout.saturating_sub(started.elapsed()),
+    )?;
+    let db = Checked::open(
+        &path(fs, CachePath::File(file_id, FileKind::Database))?,
+        false,
+        true,
+    )?;
+    let sidecars = checked_file_sidecars(fs, file_id, &db, false)?;
+    let connection = maintenance_connection(&db.path)?;
+    // Read immutable identity from this one authority-named physical file;
+    // its mutable epoch must not be substituted for creation_epoch.
+    let candidate = {
+        let mut statement = connection
+            .prepare("SELECT vault_id,file_id,creation_epoch,creation_header_hash FROM catalog_meta WHERE singleton=1")
+            .map_err(super::sql::sql_error)?;
+        let mut rows = statement.query([]).map_err(super::sql::sql_error)?;
+        let row = rows
+            .next()
+            .map_err(super::sql::sql_error)?
+            .ok_or_else(|| corrupt("acknowledged candidate header is absent"))?;
+        let mut bytes = 0usize;
+        for index in [0, 1, 3] {
+            let value = row.get_ref(index).map_err(super::sql::sql_error)?;
+            let text = value.as_str().map_err(|e| corrupt(e.to_string()))?;
+            bytes = bytes
+                .checked_add(text.len())
+                .ok_or_else(|| corrupt("candidate identity byte count overflow"))?;
+        }
+        if bytes > 16 * 1024 {
+            return Err(corrupt("candidate identity exceeds header limit"));
+        }
+        let epoch: i64 = row.get(2).map_err(super::sql::sql_error)?;
+        CatalogSelection {
+            version: super::file_types::CATALOG_FILE_VERSION,
+            vault_id: RecordId::new(row.get::<_, String>(0).map_err(super::sql::sql_error)?)
+                .map_err(|e| corrupt(e.message))?,
+            file_id: row.get(1).map_err(super::sql::sql_error)?,
+            creation_epoch: u64::try_from(epoch)
+                .map_err(|_| corrupt("invalid candidate creation epoch"))?,
+            creation_header_hash: Blake3Hash::new(
+                row.get::<_, String>(3).map_err(super::sql::sql_error)?,
+            )
+            .map_err(|e| corrupt(e.message))?,
+        }
+    };
+    candidate.validate(vault)?;
+    let header = super::normalized_read::header(&connection, &candidate)?;
+    if candidate.file_id != *file_id
+        || header.snapshot.generation != authority.publication().epoch
+        || header.origin.is_some()
+    {
+        return Err(corrupt(
+            "acknowledged rebuild candidate differs from its authority",
+        ));
+    }
+    verify_sidecars(&sidecars)?;
+    db.verify()?;
+    gate.checked.verify()?;
+    lease.checked.verify()?;
+    drop(connection);
+    drop(lease);
+    drop(gate);
+    // Existing publication revalidates the exact sealed file and unchanged
+    // authority under exclusive locks before restoring marker/CURRENT.
+    publish(
+        fs,
+        writer,
+        &candidate,
+        timeout.saturating_sub(started.elapsed()),
+    )?;
+    Ok(true)
 }
 
 /// A durable complete candidate precedes the publication floor, which precedes
@@ -950,12 +1185,107 @@ pub(crate) fn publish_with_faults(
     fault(PublishPoint::SelectorDurable)
 }
 
+/// Authenticate only immutable ownership and a recognized build state; a
+/// failed provisional catalog need not contain complete serving fingerprints.
+fn verify_unpublished_identity(
+    connection: &Connection,
+    candidate: &CatalogSelection,
+) -> Result<()> {
+    let started = Instant::now();
+    let mut ticks = 0usize;
+    connection
+        .progress_handler(
+            1000,
+            Some(move || {
+                ticks += 1;
+                ticks > 1000 || started.elapsed() > Duration::from_secs(2)
+            }),
+        )
+        .map_err(super::sql::sql_error)?;
+    connection
+        .set_limit(
+            rusqlite::limits::Limit::SQLITE_LIMIT_LENGTH,
+            8 * 1024 * 1024,
+        )
+        .map_err(super::sql::sql_error)?;
+    if super::sql::version(connection)? != 3 {
+        return Err(corrupt("unpublished catalog schema version is not 3"));
+    }
+    let mut statement = connection.prepare(
+        "SELECT schema_version,vault_id,file_id,creation_epoch,creation_header_hash,epoch,state FROM catalog_meta WHERE singleton=1"
+    ).map_err(super::sql::sql_error)?;
+    let mut rows = statement.query([]).map_err(super::sql::sql_error)?;
+    let row = rows
+        .next()
+        .map_err(super::sql::sql_error)?
+        .ok_or_else(|| corrupt("unpublished catalog header is absent"))?;
+    let text = |column| -> Result<&str> {
+        row.get_ref(column)
+            .map_err(super::sql::sql_error)?
+            .as_str()
+            .map_err(|e| corrupt(e.to_string()))
+    };
+    let mut bytes = 0usize;
+    for column in [1, 2, 4, 6] {
+        bytes = bytes
+            .checked_add(text(column)?.len())
+            .ok_or_else(|| corrupt("unpublished header byte count overflow"))?;
+    }
+    if bytes > 16 * 1024
+        || row.get::<_, i64>(0).map_err(super::sql::sql_error)? != 3
+        || text(1)? != candidate.vault_id.as_str()
+        || text(2)? != candidate.file_id
+        || row.get::<_, i64>(3).map_err(super::sql::sql_error)?
+            != super::sql::integer(candidate.creation_epoch)?
+        || text(4)? != candidate.creation_header_hash.as_str()
+        || row.get::<_, i64>(5).map_err(super::sql::sql_error)?
+            < super::sql::integer(candidate.creation_epoch)?
+        || !matches!(text(6)?, "building" | "complete")
+    {
+        return Err(corrupt(
+            "unpublished catalog immutable identity does not match owner",
+        ));
+    }
+    drop(rows);
+    drop(statement);
+    let count: i64 = connection
+        .query_row("SELECT count(*) FROM catalog_meta", [], |r| r.get(0))
+        .map_err(super::sql::sql_error)?;
+    if count != 1 {
+        return Err(corrupt("unpublished catalog header is not unique"));
+    }
+    Ok(())
+}
+
 pub(crate) fn retire(
     fs: &VaultFs,
     writer: &WriterPermit,
     vault: &RecordId,
     candidate: &CatalogSelection,
     timeout: Duration,
+) -> Result<bool> {
+    retire_candidate(fs, writer, vault, candidate, timeout, false)
+}
+
+/// Caller owns a candidate whose builder successfully began and has dropped.
+/// Never use this after a failed begin, which could be an identity collision.
+pub(crate) fn retire_unpublished(
+    fs: &VaultFs,
+    writer: &WriterPermit,
+    vault: &RecordId,
+    candidate: &CatalogSelection,
+    timeout: Duration,
+) -> Result<bool> {
+    retire_candidate(fs, writer, vault, candidate, timeout, true)
+}
+
+fn retire_candidate(
+    fs: &VaultFs,
+    writer: &WriterPermit,
+    vault: &RecordId,
+    candidate: &CatalogSelection,
+    timeout: Duration,
+    unpublished: bool,
 ) -> Result<bool> {
     writer.require_root(fs.root())?;
     fs.require_storage_ready()?;
@@ -990,8 +1320,34 @@ pub(crate) fn retire(
     else {
         return Ok(false);
     };
-    let (db, _) = verify_sealed(fs, candidate)?;
-    if journal_header(&db)? == JournalMode::Wal {
+    let db = if unpublished {
+        let db = Checked::open(&path(fs, database_name(candidate))?, false, true)?;
+        // A dropped builder can checkpoint and remove nonpersistent WAL/SHM.
+        // Only this exact owned-abort path may admit their absence.
+        let sidecars = checked_file_sidecars_with_missing(fs, &candidate.file_id, &db, true, true)?;
+        let connection = writable(&db.path)?;
+        verify_unpublished_identity(&connection, candidate)?;
+        verify_sidecars(&sidecars)?;
+        db.verify()?;
+        // Checked sidecar handles must close before native SQLite removes them
+        // (Windows deliberately denies deletion while those handles are held).
+        drop(sidecars);
+        persist_wal(&connection, false)?;
+        let mode: String = connection
+            .pragma_update_and_check(None, "journal_mode", "DELETE", |r| r.get(0))
+            .map_err(super::sql::sql_error)?;
+        if !mode.eq_ignore_ascii_case("delete") {
+            return Err(corrupt("unpublished catalog remains in WAL mode"));
+        }
+        connection
+            .close()
+            .map_err(|(_, error)| super::sql::sql_error(error))?;
+        no_sidecars(fs, candidate)?;
+        db
+    } else {
+        verify_sealed(fs, candidate)?.0
+    };
+    if !unpublished && journal_header(&db)? == JournalMode::Wal {
         // SQLite checkpoints and deletes its own sidecars under native locks.
         // Never unlink a WAL that might contain committed database pages.
         let connection = writable(&db.path)?;
@@ -1024,6 +1380,10 @@ pub(crate) fn retire(
 
 #[cfg(all(test, unix))]
 mod tests {
+    mod maintenance_selector_tests {
+        include!("maintenance_selector_tests.rs");
+    }
+
     use super::*;
     use crate::vault::{DurableIo, NativeIo, VaultRoot};
     use std::sync::{

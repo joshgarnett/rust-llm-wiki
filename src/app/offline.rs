@@ -872,12 +872,16 @@ impl OfflineApp {
         self.execute_draft(plan.draft, true)
     }
     pub fn index_sync(&self, rebuild: bool) -> Result<IndexOutcome> {
+        if self.catalog().operation_state()?.is_some() {
+            return self.index_normalized(rebuild);
+        }
         if self.options.dry_run {
             self.current_projection()?;
             return Ok(IndexOutcome {
                 report: None,
                 dry_run: true,
                 cache_state_unknown: true,
+                maintenance: None,
             });
         }
         let w = self.writer()?;
@@ -885,6 +889,43 @@ impl OfflineApp {
         let report = if rebuild { c.rebuild(&w)? } else { c.sync(&w)? };
         Ok(IndexOutcome {
             report: Some(report),
+            dry_run: false,
+            cache_state_unknown: false,
+            maintenance: None,
+        })
+    }
+    pub fn index_rebuild_normalized(&self) -> Result<IndexOutcome> {
+        self.index_normalized(true)
+    }
+    fn index_normalized(&self, rebuild: bool) -> Result<IndexOutcome> {
+        let catalog = self.catalog();
+        // Dry-run describes maintenance without acquiring a writer, creating
+        // SQLite files or scanning the full corpus.
+        catalog.operation_state()?;
+        if self.options.dry_run {
+            return Ok(IndexOutcome {
+                report: None,
+                dry_run: true,
+                cache_state_unknown: true,
+                maintenance: Some(
+                    serde_json::json!({"layout":"normalized","canonical_scan_performed":false}),
+                ),
+            });
+        }
+        let writer = self.writer()?;
+        let result = if rebuild {
+            catalog.rebuild_normalized(&writer)?
+        } else {
+            catalog.sync_normalized(&writer)?
+        };
+        Ok(IndexOutcome {
+            maintenance: Some(serde_json::json!({
+                "layout":"normalized", "resumed":result.resumed,
+                "input":result.input, "build":result.build,
+                "retirement_deferred":result.retirement_deferred,
+                "cleanup_errors":result.cleanup_errors,
+            })),
+            report: Some(result.report),
             dry_run: false,
             cache_state_unknown: false,
         })

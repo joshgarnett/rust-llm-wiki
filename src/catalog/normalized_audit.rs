@@ -284,7 +284,9 @@ fn schema_rows(connection: &Connection) -> Result<Vec<SchemaRow>> {
     }
     Ok(result)
 }
-fn validate_schema(copy: &Connection) -> Result<()> {
+/// Bounded schema/configuration compatibility only; no ordinary rows, postings,
+/// backup or SQLite integrity scan. Explicit maintenance may reuse this check.
+pub(crate) fn validate_schema(copy: &Connection) -> Result<()> {
     let expected = Connection::open_in_memory().map_err(sql::sql_error)?;
     expected
         .execute_batch(normalized_schema::SCHEMA)

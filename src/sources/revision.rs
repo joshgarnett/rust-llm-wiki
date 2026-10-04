@@ -110,6 +110,25 @@ impl SourceStore {
     }
 }
 impl<'a> SourceView<'a> {
+    /// Explicit maintenance shares the captured canonical notes and observes
+    /// named assets through one caller-owned consistency boundary.
+    pub(crate) fn from_shared_maintenance(
+        fs: &'a VaultFs,
+        notes: super::SourceNotes,
+        reader: &'a dyn SourceInputReads,
+    ) -> Self {
+        Self {
+            fs,
+            notes,
+            overlay: BTreeMap::new(),
+            closed: false,
+            observed_reads: Some(reader),
+        }
+    }
+    pub(crate) fn require_consistent(&self) -> Result<()> {
+        self.observed_reads
+            .map_or(Ok(()), SourceInputReads::require_clean)
+    }
     /// Bounded canonical input for packet/import work; source assets are read
     /// separately through revision_content_bounded with their complete hashes.
     pub fn from_fs_bounded(fs: &'a VaultFs, max_bytes: usize, max_files: usize) -> Result<Self> {
@@ -149,6 +168,7 @@ impl<'a> SourceView<'a> {
             notes: notes.into(),
             overlay: BTreeMap::new(),
             closed: false,
+            observed_reads: None,
         })
     }
     pub fn from_fs(fs: &'a VaultFs) -> Result<Self> {
@@ -168,6 +188,7 @@ impl<'a> SourceView<'a> {
             notes: notes.into(),
             overlay: BTreeMap::new(),
             closed: false,
+            observed_reads: None,
         })
     }
     pub fn from_input(fs: &'a VaultFs, input: &ValidationInput) -> Result<Self> {
@@ -214,6 +235,7 @@ impl<'a> SourceView<'a> {
             notes: notes.into(),
             overlay,
             closed: false,
+            observed_reads: None,
         })
     }
     /// Source verification over a complete, caller-metered captured input only.
@@ -282,7 +304,9 @@ impl<'a> SourceView<'a> {
         // Captured source payloads share the engine's 64 MiB per-file ceiling.
         // Even ordinary integrity checks must enforce it before allocation.
         let limit = limit.unwrap_or(64 * 1024 * 1024);
-        let bytes = if let Some(value) = self.overlay.get(path) {
+        let bytes = if let Some(reader) = self.observed_reads {
+            reader.read_observed(path, limit)?
+        } else if let Some(value) = self.overlay.get(path) {
             if value.as_ref().is_some_and(|b| b.len() > limit) {
                 return Err(WikiError::new(
                     ErrorCode::BudgetExceeded,
@@ -319,7 +343,9 @@ impl<'a> SourceView<'a> {
     }
     /// Closed proof callers supply explicit absence as well as all present assets.
     pub(crate) fn expected_state(&self, path: &VaultRelativePath) -> Result<ExpectedState> {
-        if let Some(bytes) = self.overlay.get(path) {
+        if let Some(reader) = self.observed_reads {
+            reader.state_observed(path)
+        } else if let Some(bytes) = self.overlay.get(path) {
             if bytes
                 .as_ref()
                 .is_some_and(|bytes| bytes.len() > 64 * 1024 * 1024)

@@ -328,6 +328,7 @@ fn guarded_projection<'a>(
         notes: notes.into(),
         overlay,
         closed: true,
+        observed_reads: None,
     })
 }
 

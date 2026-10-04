@@ -126,6 +126,8 @@ pub struct IndexOutcome {
     pub report: Option<SyncReport>,
     pub dry_run: bool,
     pub cache_state_unknown: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub maintenance: Option<serde_json::Value>,
 }
 #[derive(Debug, Clone, Serialize)]
 pub struct RecoverOutcome {

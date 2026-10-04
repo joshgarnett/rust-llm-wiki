@@ -231,6 +231,7 @@ pub(crate) fn verify_captured_source(
         notes: notes.into(),
         overlay,
         closed: true,
+        observed_reads: None,
     };
     let content = view.revision_content(&binding.source_id, &binding.revision_id, &mut deps)?;
     if deps.len() != captured.len() || !deps.keys().eq(captured.keys()) {

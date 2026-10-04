@@ -9,6 +9,7 @@ use crate::{
         source_refresh::IndexedRefreshSession,
     },
     changes::{ChangeEngine, ChangeStatus},
+    domain::CitationRef,
     sources::{
         CaptureRequest, ExtractionInput, SourceOrigin, SourceRefreshLimits, SourceStore,
         evidence::exact_quote_body,
@@ -364,6 +365,152 @@ fn source_projector_title_new_history_empty_and_noop_match_complete_oracle() {
     fixture.apply(unsupported, None).unwrap();
     fixture.oracle();
 }
+#[test]
+fn normalized_sync_reuses_managed_title_and_revision_publications_with_cleared_audit() {
+    use crate::{
+        catalog::query_types::QueryCatalog,
+        retrieval::{
+            ContextRequest, ContextScope, QueryPlan, SearchFilters, lexical, verification,
+        },
+        sources::{CitationScope, CitationState},
+    };
+
+    let fixture = Fixture::new(false);
+    let initial = fixture
+        .catalog
+        .query_snapshot(QueryReadLimits::default())
+        .unwrap();
+    let initial_snapshot = QueryCatalog::snapshot(&initial).clone();
+    let file = initial_snapshot.publication().unwrap().file_id.clone();
+    drop(initial);
+
+    for (generation, bytes, title, query) in [
+        (
+            2,
+            b"first capture quote".as_slice(),
+            Some("Managed title after refresh"),
+            "first",
+        ),
+        (3, b"second capture quote".as_slice(), None, "second"),
+    ] {
+        let delta = fixture.apply(Fixture::request(bytes), title).unwrap();
+        let current_revision = if generation == 2 {
+            assert!(
+                delta.revisions.is_empty(),
+                "title-only refresh reuses its capture"
+            );
+            fixture.first.clone()
+        } else {
+            assert_eq!(delta.revisions.len(), 1);
+            let revision = delta.revisions[0].revision_id.clone();
+            assert_ne!(revision, fixture.first);
+            revision
+        };
+        let before_sync = fixture
+            .catalog
+            .query_snapshot(QueryReadLimits::default())
+            .unwrap();
+        let refreshed = QueryCatalog::snapshot(&before_sync).clone();
+        assert_eq!(refreshed.generation, generation);
+        assert_eq!(refreshed.publication().unwrap().file_id, file);
+        let audit_epoch: Option<i64> = before_sync
+            .connection()
+            .query_row(
+                "SELECT audit_epoch FROM catalog_meta WHERE singleton=1",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            audit_epoch, None,
+            "managed publication clears the full-build audit"
+        );
+        drop(before_sync);
+
+        let synced = fixture.catalog.sync_normalized(&fixture.writer).unwrap();
+        assert!(synced.report.reused);
+        assert!(
+            synced.build.is_none(),
+            "unchanged managed input must not rebuild"
+        );
+        assert!(!synced.resumed);
+        assert_eq!(synced.report.snapshot, refreshed);
+        let reader = fixture
+            .catalog
+            .query_snapshot(QueryReadLimits::default())
+            .unwrap();
+        assert_eq!(QueryCatalog::snapshot(&reader), &refreshed);
+        assert_eq!(
+            QueryCatalog::snapshot(&reader)
+                .publication()
+                .unwrap()
+                .file_id,
+            file
+        );
+        let source = reader.record(&fixture.source).unwrap().unwrap();
+        assert_eq!(
+            source.record.string("wiki_current_revision"),
+            Some(current_revision.as_str())
+        );
+        assert_eq!(
+            source.record.string("title"),
+            Some("Managed title after refresh")
+        );
+        let documents = QueryPlan {
+            filters: SearchFilters {
+                source_ids: vec![fixture.source.clone()],
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let hits = lexical::search_catalog(&reader, query, &documents).unwrap();
+        assert!(
+            hits.hits
+                .iter()
+                .any(|hit| hit.owner_revision.as_ref() == Some(&current_revision))
+        );
+        if generation == 3 {
+            assert!(
+                lexical::search_catalog(&reader, "first", &documents)
+                    .unwrap()
+                    .hits
+                    .is_empty()
+            );
+        }
+        drop(reader);
+        fixture.oracle();
+
+        let request = ContextRequest {
+            scope: ContextScope::IndexedEvidence,
+            documents,
+            ..Default::default()
+        };
+        let context = verification::context(&fixture.catalog, None, query, &request).unwrap();
+        assert_eq!(context.snapshot(), &refreshed);
+        let store = SourceStore::new(fixture.fs.clone());
+        let view = store.view().unwrap();
+        let mut citations = 0;
+        for passage in context.passages() {
+            for citation in &passage.citations {
+                let CitationRef::Source(reference) = citation else {
+                    panic!("capture passage needs direct source citation")
+                };
+                assert_eq!(reference.source_id, fixture.source);
+                assert_eq!(reference.source_revision, current_revision);
+                let verified = view.verify(citation, CitationScope::Current).unwrap();
+                assert_eq!(verified.state, CitationState::Current);
+                assert_eq!(verified.quote, passage.text.as_bytes());
+                assert_eq!(verified.quote, bytes);
+                citations += 1;
+            }
+        }
+        assert!(
+            citations > 0,
+            "current capture must remain citable after reused sync"
+        );
+    }
+}
+
 #[test]
 fn source_projector_preserves_alternative_support_opposition_operational_and_navigation_fanout() {
     let fixture = Fixture::new(true);

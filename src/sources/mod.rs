@@ -5,6 +5,7 @@ pub(crate) mod identity;
 pub(crate) mod indexed_refresh;
 pub mod lifecycle;
 mod lookup;
+pub(crate) use lookup::SourceNotes;
 pub mod revision;
 pub(crate) mod selected;
 pub mod types;

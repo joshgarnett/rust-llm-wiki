@@ -388,7 +388,15 @@ pub(crate) fn verify_activation(
     root: &crate::vault::VaultRoot,
     activation: &layout::Layout,
 ) -> Result<()> {
-    let bytes = layout::raw_read(root, &rel(format!(".wiki/state/storage/receipts/{}.plan.json",activation.migration_id))?, MAX_RECEIPT)?
+    verify_activation_with_reader(activation, &mut |path, max| {
+        layout::raw_read(root, path, max)
+    })
+}
+pub(crate) fn verify_activation_with_reader(
+    activation: &layout::Layout,
+    reader: &mut layout::RawReader<'_>,
+) -> Result<()> {
+    let bytes = layout::read_with_reader(reader, &rel(format!(".wiki/state/storage/receipts/{}.plan.json",activation.migration_id))?, MAX_RECEIPT)?
         .ok_or_else(|| err("storage activation lost its original migration plan; restore the complete vault backup"))?;
     if Blake3Hash::digest(&bytes) != activation.migration_hash {
         return Err(err("storage activation migration hash differs"));
@@ -415,16 +423,21 @@ pub(crate) fn verify_activation(
     Ok(())
 }
 pub(crate) fn pending_activation_matches(root: &crate::vault::VaultRoot) -> Result<bool> {
-    let Some(bytes) = layout::raw_read(root, &rel(PENDING)?, MAX_RECEIPT)? else {
+    pending_activation_matches_with_reader(&mut |path, max| layout::raw_read(root, path, max))
+}
+pub(crate) fn pending_activation_matches_with_reader(
+    reader: &mut layout::RawReader<'_>,
+) -> Result<bool> {
+    let Some(bytes) = layout::read_with_reader(reader, &rel(PENDING)?, MAX_RECEIPT)? else {
         return Ok(false);
     };
     let epoch: Epoch = layout::decode(&bytes)?;
     validate_epoch_bounds(&epoch)?;
-    let marker = layout::raw_read(root, &rel("WIKI.md")?, 1024 * 1024)?
+    let marker = layout::read_with_reader(reader, &rel("WIKI.md")?, 1024 * 1024)?
         .ok_or_else(|| err("vault marker missing"))?;
     let parsed = crate::records::parse_note(&epoch.marker_original);
-    let archive = layout::raw_read(
-        root,
+    let archive = layout::read_with_reader(
+        reader,
         &rel(format!(
             ".wiki/state/storage/receipts/{}.plan.json",
             epoch.id
@@ -438,7 +451,7 @@ pub(crate) fn pending_activation_matches(root: &crate::vault::VaultRoot) -> Resu
                 && r.string("wiki_schema") == Some("1")
         })
         && epoch.version == 1
-        && epoch.vault_id == layout::vault(root)?.0
+        && epoch.vault_id == layout::vault_with_reader(reader)?.0
         && Blake3Hash::digest(&epoch.marker_original) == epoch.marker_before
         && marker == epoch.marker_after
         && crate::records::edit::migrate_schema(&parsed, "2", &epoch.marker_before)?

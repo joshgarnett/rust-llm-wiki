@@ -220,6 +220,74 @@ fn no_sync_reads_cached_bytes_and_search_reports_freshness_and_channel() {
             == 1
     );
 }
+
+#[test]
+fn normalized_maintenance_cli_rebuild_sync_discovery_and_dry_run() {
+    let temp = fixture();
+    let root = temp.path();
+    fs::write(
+        root.join("page.md"),
+        page("Page.Maintenance", "Original apricot text"),
+    )
+    .unwrap();
+    let before = tree(root);
+    let preview = ok(
+        root,
+        &["--dry-run", "index", "rebuild", "--normalized"],
+        None,
+    );
+    assert_eq!(
+        preview["data"]["maintenance"]["canonical_scan_performed"],
+        false
+    );
+    assert_eq!(before, tree(root));
+    let first = ok(root, &["index", "rebuild", "--normalized"], None);
+    assert_eq!(first["data"]["report"]["reused"], false);
+    assert_eq!(first["data"]["maintenance"]["layout"], "normalized");
+    let snapshot = first["data"]["report"]["snapshot"].clone();
+    let same = ok(root, &["index", "sync"], None);
+    assert_eq!(same["data"]["report"]["reused"], true);
+    assert_eq!(same["data"]["report"]["snapshot"], snapshot);
+    assert!(same["data"]["maintenance"]["build"].is_null());
+    assert_eq!(
+        ok(root, &["search", "apricot", "--no-sync"], None)["data"]["hits"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    fs::write(
+        root.join("page.md"),
+        page("Page.Maintenance", "Updated blueberry text"),
+    )
+    .unwrap();
+    ok(root, &["index", "sync"], None);
+    assert!(
+        ok(root, &["search", "apricot", "--no-sync"], None)["data"]["hits"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(
+        ok(root, &["search", "blueberry", "--no-sync"], None)["data"]["hits"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    let before = tree(root);
+    for args in [
+        vec!["--dry-run", "index", "sync"],
+        vec!["--dry-run", "index", "rebuild"],
+    ] {
+        ok(root, &args, None);
+        assert_eq!(before, tree(root));
+    }
+    // Once activated, plain rebuild continues the same layout.
+    let rebuilt = ok(root, &["index", "rebuild"], None);
+    assert_eq!(rebuilt["data"]["maintenance"]["layout"], "normalized");
+    assert_eq!(rebuilt["data"]["report"]["reused"], false);
+}
 #[test]
 fn dry_run_cli_leaves_existing_vault_cache_changes_and_directories_exactly_unchanged() {
     let temp = fixture();

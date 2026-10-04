@@ -7,6 +7,8 @@ mod fact_query_tests;
 pub(crate) mod file_types;
 mod integrity;
 pub(crate) mod link_facts;
+pub(crate) mod maintenance;
+pub(crate) mod maintenance_match;
 pub(crate) mod navigation_resolution;
 #[cfg(test)]
 mod navigation_resolution_tests;
@@ -32,6 +34,8 @@ pub(crate) mod query_types;
 #[cfg(test)]
 mod revision_reservation_tests;
 pub(crate) mod row_projection;
+pub(crate) mod maintenance_input;
+pub(crate) mod maintenance_types;
 pub mod scan;
 pub(crate) mod selector;
 pub mod snapshot;

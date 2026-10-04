@@ -298,7 +298,11 @@ pub enum IndexCommand {
     /// Refresh the index from changed Markdown and source records.
     Sync,
     /// Recreate the disposable index from canonical files without provider calls.
-    Rebuild,
+    Rebuild {
+        /// Use the normalized catalog; currently supports cached lexical reads and source refresh.
+        #[arg(long)]
+        normalized: bool,
+    },
 }
 #[derive(Debug, Subcommand)]
 pub enum ChangesCommand {
@@ -700,7 +704,7 @@ impl Command {
                 command: IndexCommand::Sync,
             } => "index sync",
             Self::Index {
-                command: IndexCommand::Rebuild,
+                command: IndexCommand::Rebuild { .. },
             } => "index rebuild",
             Self::Embeddings(options) => match options.command {
                 super::embeddings::EmbeddingCommand::Check(_) => "embeddings check",

@@ -5,7 +5,7 @@ use crate::{
         Blake3Hash, ByteSpan, CanonicalRecord, CitationRef, EvidenceRef, ReadSnapshot, RecordId,
         Result, VaultRelativePath,
     },
-    vault::VaultFs,
+    vault::{ExpectedState, VaultFs},
 };
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -21,6 +21,14 @@ pub struct SourceView<'a> {
     pub(crate) overlay: BTreeMap<VaultRelativePath, Option<Vec<u8>>>,
     /// Closed proof inputs forbid falling back to unmetered filesystem reads.
     pub(crate) closed: bool,
+    /// Explicit maintenance observes named reads without changing legacy overlays.
+    pub(crate) observed_reads: Option<&'a dyn SourceInputReads>,
+}
+
+pub(crate) trait SourceInputReads {
+    fn read_observed(&self, path: &VaultRelativePath, max_bytes: usize) -> Result<Vec<u8>>;
+    fn state_observed(&self, path: &VaultRelativePath) -> Result<ExpectedState>;
+    fn require_clean(&self) -> Result<()>;
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
