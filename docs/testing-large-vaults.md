@@ -890,3 +890,40 @@ has executed, but harness success is not a quality score. Public equivalence,
 actual evidence completeness and any separately declared host-model arm require
 their own assessment. The unseen semantic HIGH gate, bulk import, remaining
 retrieval modes and mandatory 100k/~10GB lifecycle remain unfinished.
+
+### Source-add attribution and context development checkpoint (2026-10-04)
+
+A native release checkpoint added test-only source-add attribution and exact
+interval-coverage experiments. Seven focused correctness tests passed; two
+explicit profiling tests remained ignored. The preceding attempt failed with
+seven related profiler API errors and executed no tests. Compiler actions confirm
+optimization level 3 on native ARM64; the production CLI hash is unchanged.
+
+Four closed disposable controls varied Source count S, retained Change count H
+and retained object count O independently: (10,31,91), (30,31,91), (10,51,91)
+and (10,31,131). Eight actual adds, four staged applies and eight public full
+checks completed with exact new citations and unchanged old canonical bytes and
+modification times. Increasing S added no executed traversal work in these
+controls. Increasing H by 20 added 1,280 whole-add entry visits; increasing O by
+40 added 480. Counts include repeated physical and logical visits, not unique
+files. Whole-add observations were 432–454 ms; inclusive portable validation
+accounted for approximately 13%. These tiny, single-observation controls establish
+growing unrelated history/object work, not latency dominance or shipping capacity.
+Parent resource sampling overlaps the operations; filesystem sync counts and
+exact native peak RSS remain unavailable. No full-scale import is qualified.
+
+On the same six development queries and retained evidence, a frozen test-only
+interval objective improved final complete answerable tasks from 0/5 in the three
+controls to 2/5. One question lost previously supported facts. Three positive
+candidate decks displayed complete fact sets; two failed the unchanged five-second
+proof deadline after thousands of native packet serializations. All errors stay
+in the denominator. Independent audits passed exact retained/displayed evidence
+and final citations; the complete pinned input tree was unchanged. Neither
+native exact-fit replays nor host selectors ran, because the five-positive
+feasibility requirement failed. Production context policy remains unchanged.
+The unseen semantic gate, strict Clippy and the 100k/~10GB lifecycle remain open.
+
+The next bounded measurements separate durability cost from traversal and exact
+packet-building cost from semantic selection. They must preserve existing
+allocation, collision, recovery, freshness and budget contracts; a scoped
+development gain does not permit weaker acceptance limits.

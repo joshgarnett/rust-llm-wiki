@@ -65,6 +65,25 @@ pub(crate) mod profile {
             }
             Some(value) if value.starts_with("sources/") => "selected_source_tree",
             Some(value)
+                if value == ".wiki/retained/objects/blake3"
+                    || value.starts_with(".wiki/retained/objects/blake3/") =>
+            {
+                "retained_objects"
+            }
+            Some(value)
+                if value == "changes"
+                    || value.starts_with("changes/")
+                    || value == ".wiki/retained/changes"
+                    || value.starts_with(".wiki/retained/changes/") =>
+            {
+                "retained_changes"
+            }
+            Some(value)
+                if value == ".wiki/state/changes" || value.starts_with(".wiki/state/changes/") =>
+            {
+                "change_journals"
+            }
+            Some(value)
                 if value.starts_with("changes")
                     || value.starts_with(".wiki/state")
                     || value.starts_with(".wiki/retained/changes") =>

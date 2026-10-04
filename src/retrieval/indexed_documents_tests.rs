@@ -894,3 +894,1057 @@ fn normalized_selection_six_case_development_lineage_pilot() {
         }
     }
 }
+
+// One frozen development experiment. This code is in the cfg(test) leaf only;
+// it neither changes public Automatic nor emits a second approximate renderer.
+const COVERAGE_MAX_POOL: usize = 160;
+const COVERAGE_MARKER: &str = "test_only_coverage_admission";
+#[derive(Clone)]
+struct IntervalCoverageCandidate {
+    card: SelectionCard,
+    lexical: crate::retrieval::context_selection::SelectionCandidate,
+    key: String,
+    ordinal: usize,
+    owner: String,
+    coordinate: String,
+    relevance: f64,
+    owner_score: f64,
+    intervals: Vec<usize>,
+}
+struct CoverageInterval {
+    coordinate: String,
+    start: u64,
+    end: u64,
+}
+struct IntervalCoveragePool {
+    candidates: Vec<IntervalCoverageCandidate>,
+    intervals: Vec<CoverageInterval>,
+    term_weights: Vec<u64>,
+}
+#[derive(Default, serde::Serialize)]
+struct CoverageDiagnostics {
+    candidate_evaluations: usize,
+    native_packet_calls: usize,
+    trial_pack_calls: usize,
+    exact_trial_output_bytes: u64,
+    feasible_trials: usize,
+    infeasible_trials: usize,
+    zero_gain_candidates: usize,
+    packing_errors: usize,
+    internal_render_calls: Option<usize>,
+    internal_render_bytes: Option<u64>,
+    trials: Vec<Value>,
+    choices: Vec<Value>,
+    pool: Value,
+}
+impl CoverageDiagnostics {
+    fn trial(&mut self, value: Value) {
+        assert!(
+            self.trials.len() < 13_000,
+            "finite 160-candidate trial bound"
+        );
+        self.trials.push(value);
+    }
+}
+fn coverage_relevance(
+    score: f64,
+    candidate: &crate::retrieval::context_selection::SelectionCandidate,
+    weights: &[u64],
+) -> f64 {
+    assert!(score.is_finite() && score >= 0.0);
+    assert!(
+        candidate.semantic_affinity.is_none(),
+        "frozen lexical experiment only"
+    );
+    let weight = weights.iter().copied().sum::<u64>().max(1) as f64;
+    let terms = candidate
+        .covered_terms
+        .iter()
+        .map(|&term| weights[term])
+        .sum::<u64>() as f64
+        / weight;
+    let local = candidate.local_relevance as f64 / weight;
+    score
+        * (0.25 + 2.0 * terms + 0.5 * local + if candidate.seed_overlap { 0.05 } else { 0.0 })
+        * if candidate.clipped { 0.7 } else { 1.0 }
+}
+fn coverage_coordinate(passage: &ContextPassage) -> String {
+    // Includes exact path, record binding and observed full-document hash. A
+    // captured path additionally contains its immutable revision identity.
+    serde_json::to_string(&passage.locator).unwrap()
+}
+impl IntervalCoveragePool {
+    fn from_trace(trace: &[Value]) -> Self {
+        let cards = trace_cards(trace)
+            .into_iter()
+            .map(|card| (card.id.clone(), card))
+            .collect::<BTreeMap<_, _>>();
+        let weights = trace_stage(trace, "candidate_pool")["term_weights"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_u64().unwrap())
+            .collect::<Vec<_>>();
+        let rows = trace_stage(trace, "sorted_packets").as_array().unwrap();
+        assert!(
+            rows.len() <= COVERAGE_MAX_POOL,
+            "frozen five-owner lexical pool bound"
+        );
+        let mut candidates = rows
+            .iter()
+            .enumerate()
+            .map(|(index, row)| {
+                let card = cards[&format!("c{index:04}")].clone();
+                let lexical =
+                    serde_json::from_value::<TraceCandidate>(row["lexical_candidate"].clone())
+                        .unwrap()
+                        .into_candidate();
+                assert_eq!(lexical.span, card.passage.span);
+                assert_eq!(card.passage.text.len() as u64, lexical.span.len());
+                assert!(lexical.span.len() > 0);
+                assert!(
+                    card.passage
+                        .rank_contributions
+                        .iter()
+                        .all(|rank| rank.channel != COVERAGE_MARKER)
+                );
+                IntervalCoverageCandidate {
+                    relevance: coverage_relevance(
+                        row["score"].as_f64().unwrap(),
+                        &lexical,
+                        &weights,
+                    ),
+                    owner_score: row["score"].as_f64().unwrap(),
+                    coordinate: coverage_coordinate(&card.passage),
+                    owner: crate::retrieval::bundles::owner(&card.passage),
+                    key: row["key"].as_str().unwrap().into(),
+                    ordinal: row["ordinal"].as_u64().unwrap() as usize,
+                    card,
+                    lexical,
+                    intervals: Vec::new(),
+                }
+            })
+            .collect::<Vec<_>>();
+        let mut boundaries = BTreeMap::<String, BTreeSet<u64>>::new();
+        for candidate in &candidates {
+            let ends = boundaries.entry(candidate.coordinate.clone()).or_default();
+            ends.insert(candidate.lexical.span.start());
+            ends.insert(candidate.lexical.span.end());
+        }
+        let intervals = boundaries
+            .into_iter()
+            .flat_map(|(coordinate, ends)| {
+                let ends = ends.into_iter().collect::<Vec<_>>();
+                ends.windows(2)
+                    .map(|ends| CoverageInterval {
+                        coordinate: coordinate.clone(),
+                        start: ends[0],
+                        end: ends[1],
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        for candidate in &mut candidates {
+            candidate.intervals = intervals
+                .iter()
+                .enumerate()
+                .filter(|(_, interval)| {
+                    interval.coordinate == candidate.coordinate
+                        && candidate.lexical.span.start() <= interval.start
+                        && interval.end <= candidate.lexical.span.end()
+                })
+                .map(|(index, _)| index)
+                .collect();
+        }
+        Self {
+            candidates,
+            intervals,
+            term_weights: weights,
+        }
+    }
+    fn gain(&self, current: &[f64], candidate: usize) -> f64 {
+        let candidate = &self.candidates[candidate];
+        let density = candidate.relevance / candidate.lexical.span.len() as f64;
+        candidate
+            .intervals
+            .iter()
+            .map(|&index| {
+                (density - current[index]).max(0.0)
+                    * (self.intervals[index].end - self.intervals[index].start) as f64
+            })
+            .sum()
+    }
+    fn add(&self, current: &mut [f64], index: usize) {
+        let candidate = &self.candidates[index];
+        let density = candidate.relevance / candidate.lexical.span.len() as f64;
+        for &interval in &candidate.intervals {
+            current[interval] = current[interval].max(density);
+        }
+    }
+    fn objective(&self, current: &[f64]) -> f64 {
+        current
+            .iter()
+            .zip(&self.intervals)
+            .map(|(density, interval)| density * (interval.end - interval.start) as f64)
+            .sum()
+    }
+    fn tie_before(&self, left: usize, right: usize) -> bool {
+        (self.candidates[left].ordinal, &self.candidates[left].key)
+            < (self.candidates[right].ordinal, &self.candidates[right].key)
+    }
+    fn metadata(&self) -> Value {
+        json!({"term_weights":self.term_weights,"interval_count":self.intervals.len(),
+            "candidates":self.candidates.iter().map(|candidate| json!({
+                "id":candidate.card.id,"key":candidate.key,"ordinal":candidate.ordinal,
+                "owner":candidate.owner,"coordinate":candidate.coordinate,
+                "covered_terms":candidate.lexical.covered_terms,"local_relevance":candidate.lexical.local_relevance,
+                "seed_overlap":candidate.lexical.seed_overlap,"clipped":candidate.lexical.clipped,
+                "packet_score":candidate.owner_score,"W":self.term_weights.iter().copied().sum::<u64>().max(1),
+                "R":candidate.relevance,"density":candidate.relevance/candidate.lexical.span.len() as f64,
+                "authenticated_card":candidate.card,
+            })).collect::<Vec<_>>()})
+    }
+}
+fn coverage_native_packet(
+    binding: &Value,
+    pool: &IntervalCoveragePool,
+    chosen: &[usize],
+    stats: &mut CoverageDiagnostics,
+) -> Result<SelectionPacket> {
+    stats.native_packet_calls += 1;
+    let result = crate::retrieval::context_selection_packet::build_packet(
+        binding.clone(),
+        chosen
+            .iter()
+            .map(|&index| pool.candidates[index].card.clone())
+            .collect(),
+    );
+    if let Err(error) = &result {
+        stats.packing_errors += 1;
+        stats.trial(json!({"stage":"deck","status":"error","error":error}));
+    }
+    result
+}
+fn coverage_deck(
+    binding: &Value,
+    pool: &IntervalCoveragePool,
+    meter: &Meter,
+    stats: &mut CoverageDiagnostics,
+) -> Result<SelectionPacket> {
+    let mut chosen = Vec::new();
+    let mut current = vec![0.0f64; pool.intervals.len()];
+    let mut owners = Vec::new();
+    for candidate in &pool.candidates {
+        if !owners.contains(&candidate.owner) {
+            owners.push(candidate.owner.clone());
+        }
+    }
+    // Exactly one owner round. Remaining slots are global, without owner quotas.
+    let floors = owners
+        .into_iter()
+        .map(Some)
+        .chain(std::iter::repeat_n(None, 80));
+    for owner in floors {
+        meter.check()?;
+        if chosen.len() == 80 {
+            break;
+        }
+        let mut best: Option<(usize, f64)> = None;
+        for index in 0..pool.candidates.len() {
+            if chosen.contains(&index)
+                || owner
+                    .as_ref()
+                    .is_some_and(|owner| owner != &pool.candidates[index].owner)
+            {
+                continue;
+            }
+            stats.candidate_evaluations += 1;
+            meter.check()?;
+            let gain = pool.gain(&current, index);
+            if gain <= 0.0 && owner.is_none() {
+                stats.zero_gain_candidates += 1;
+                continue;
+            }
+            let mut trial = chosen.clone();
+            trial.push(index);
+            let packet = coverage_native_packet(binding, pool, &trial, stats)?;
+            meter.check()?;
+            if packet.cards.len() != trial.len() {
+                stats.infeasible_trials += 1;
+                stats.trial(json!({"candidate":pool.candidates[index].card.id,"stage":"deck","status":"native_input_cap","gain":gain,"input_bytes":packet.input_bytes}));
+                continue;
+            }
+            stats.feasible_trials += 1;
+            if best.is_none_or(|(old, old_gain)| {
+                gain.total_cmp(&old_gain).is_gt()
+                    || (gain.total_cmp(&old_gain).is_eq() && pool.tie_before(index, old))
+            }) {
+                best = Some((index, gain));
+            }
+        }
+        let Some((index, gain)) = best else {
+            if owner.is_some() {
+                stats
+                    .choices
+                    .push(json!({"stage":"owner_floor","owner":owner,"status":"no_feasible_card"}));
+                continue;
+            }
+            break;
+        };
+        chosen.push(index);
+        pool.add(&mut current, index);
+        stats.choices.push(json!({"stage":"deck","id":pool.candidates[index].card.id,"owner_floor":owner.is_some(),"gain":gain,"F":pool.objective(&current)}));
+    }
+    let packet = coverage_native_packet(binding, pool, &chosen, stats)?;
+    assert_eq!(packet.cards.len(), chosen.len());
+    assert!(packet.candidate_count <= 80 && packet.input_bytes <= 130_048);
+    // Native omitted_candidates describes supplied selected cards only. The
+    // full-pool exclusion count is separately explicit, never silently changed.
+    stats.choices.push(json!({"stage":"deck_summary","full_pool":pool.candidates.len(),"selected":chosen.len(),"selection_omitted_candidates":pool.candidates.len()-chosen.len(),"F":pool.objective(&current)}));
+    Ok(packet)
+}
+struct CoverageTrialContext<'a> {
+    reader: &'a dyn QueryCatalog,
+    request: &'a ContextRequest,
+    query: &'a str,
+    hits: &'a crate::retrieval::HitSet,
+    fingerprint: Blake3Hash,
+    omissions: Vec<crate::retrieval::ContextOmission>,
+    warnings: Vec<String>,
+}
+fn coverage_trial_pack(
+    env: &CoverageTrialContext<'_>,
+    pool: &IntervalCoveragePool,
+    chosen: &[usize],
+    stats: &mut CoverageDiagnostics,
+) -> Result<context::ContextDraft> {
+    stats.trial_pack_calls += 1;
+    let packets = chosen
+        .iter()
+        .enumerate()
+        .map(|(rank, &index)| {
+            let candidate = &pool.candidates[index];
+            let mut passage = candidate.card.passage.clone();
+            passage
+                .rank_contributions
+                .push(crate::retrieval::RankContribution {
+                    channel: COVERAGE_MARKER.into(),
+                    rank: index + 1,
+                    score: None,
+                });
+            context::Packet {
+                passages: vec![passage],
+                bundle: None,
+                navigation: None,
+                key: candidate.key.clone(),
+                score: 0.0,
+                selection_ordinal: Some(candidate.ordinal),
+                selection: Some(candidate.lexical.clone()),
+                unit_score: Some(1.0 / (rank + 1) as f64),
+                fallback: None,
+                unit_clipped: false,
+            }
+        })
+        .collect();
+    let result = context::pack(
+        env.reader,
+        env.request,
+        context::PackingInput {
+            packets,
+            omissions: env.omissions.clone(),
+            term_weights: pool.term_weights.clone(),
+            selection_warnings: env.warnings.clone(),
+            source_aware: true,
+            query: Some(env.query),
+            signals: &ContextSelectionSignals::default(),
+            selection_action: &SelectionAction::Automatic,
+            hits: env.hits,
+            graph: None,
+            dependency_fingerprint: env.fingerprint.clone(),
+        },
+    );
+    match &result {
+        Ok(draft) => stats.exact_trial_output_bytes += draft.text().len() as u64,
+        Err(_) => stats.packing_errors += 1,
+    }
+    result
+}
+fn coverage_admitted(
+    pool: &IntervalCoveragePool,
+    draft: &context::ContextDraft,
+) -> BTreeSet<usize> {
+    draft
+        .passages()
+        .iter()
+        .flat_map(|passage| {
+            passage
+                .rank_contributions
+                .iter()
+                .filter(|rank| rank.channel == COVERAGE_MARKER)
+                .map(|rank| rank.rank - 1)
+        })
+        .filter(|&index| {
+            let candidate = &pool.candidates[index];
+            draft.passages().iter().any(|passage| {
+                coverage_coordinate(passage) == candidate.coordinate
+                    && passage.span.start() <= candidate.lexical.span.start()
+                    && candidate.lexical.span.end() <= passage.span.end()
+            })
+        })
+        .collect()
+}
+fn coverage_remove_markers(draft: &mut context::ContextDraft) {
+    for passage in &mut draft.passages {
+        passage
+            .rank_contributions
+            .retain(|rank| rank.channel != COVERAGE_MARKER);
+    }
+}
+fn coverage_incremental_cost(new_bytes: usize, old_bytes: usize) -> usize {
+    new_bytes.saturating_sub(old_bytes).max(1)
+}
+fn coverage_actual_scores(pool: &IntervalCoveragePool, draft: &context::ContextDraft) -> Vec<f64> {
+    let mut scores = vec![0.0f64; pool.intervals.len()];
+    for index in coverage_admitted(pool, draft) {
+        pool.add(&mut scores, index);
+    }
+    scores
+}
+fn coverage_final(
+    env: &CoverageTrialContext<'_>,
+    pool: &IntervalCoveragePool,
+    meter: &Meter,
+    stats: &mut CoverageDiagnostics,
+) -> Result<context::ContextDraft> {
+    let mut chosen = Vec::new();
+    let mut current = vec![0.0f64; pool.intervals.len()];
+    let mut draft = coverage_trial_pack(env, pool, &chosen, stats)?;
+    while chosen.len() < pool.candidates.len() {
+        meter.check()?;
+        let mut best: Option<(usize, f64, f64, usize, Vec<f64>, context::ContextDraft)> = None;
+        for index in 0..pool.candidates.len() {
+            if chosen.contains(&index) {
+                continue;
+            }
+            stats.candidate_evaluations += 1;
+            meter.check()?;
+            let gain = pool.gain(&current, index);
+            if gain <= 0.0 {
+                stats.zero_gain_candidates += 1;
+                continue;
+            }
+            let mut trial = chosen.clone();
+            trial.push(index);
+            let trial_draft = coverage_trial_pack(env, pool, &trial, stats)?;
+            meter.check()?;
+            let admitted = coverage_admitted(pool, &trial_draft);
+            if !trial.iter().all(|index| admitted.contains(index)) {
+                stats.infeasible_trials += 1;
+                stats.trial(json!({"stage":"final","candidate":pool.candidates[index].card.id,"status":"not_admitted_at_exact_coordinates","gain":gain,"exact_rendered_bytes":trial_draft.text().len(),"admitted":admitted,"omissions":trial_draft.omissions}));
+                continue;
+            }
+            stats.feasible_trials += 1;
+            let actual_scores = coverage_actual_scores(pool, &trial_draft);
+            let gain = actual_scores
+                .iter()
+                .zip(&current)
+                .zip(&pool.intervals)
+                .map(|((next, old), interval)| {
+                    (next - old).max(0.0) * (interval.end - interval.start) as f64
+                })
+                .sum::<f64>();
+            if gain <= 0.0 {
+                stats.zero_gain_candidates += 1;
+                continue;
+            }
+            let incremental =
+                coverage_incremental_cost(trial_draft.text().len(), draft.text().len());
+            let ratio = gain / incremental as f64;
+            stats.trial(json!({"stage":"final","candidate":pool.candidates[index].card.id,"status":"feasible","gain":gain,"exact_rendered_bytes":trial_draft.text().len(),"old_rendered_bytes":draft.text().len(),"denominator":incremental,"ratio":ratio}));
+            if best.as_ref().is_none_or(|(old, old_ratio, _, _, _, _)| {
+                ratio.total_cmp(old_ratio).is_gt()
+                    || (ratio.total_cmp(old_ratio).is_eq() && pool.tie_before(index, *old))
+            }) {
+                best = Some((index, ratio, gain, incremental, actual_scores, trial_draft));
+            }
+        }
+        let Some((index, ratio, gain, incremental, actual_scores, winner)) = best else {
+            break;
+        };
+        chosen.push(index);
+        current = actual_scores;
+        draft = winner;
+        stats.choices.push(json!({"stage":"final","id":pool.candidates[index].card.id,"gain":gain,"denominator":incremental,"ratio":ratio,"F":pool.objective(&current),"exact_rendered_bytes":draft.text().len()}));
+    }
+    coverage_remove_markers(&mut draft);
+    Ok(draft)
+}
+enum CoverageAction {
+    Deck,
+    Final,
+    Apply(SelectionReply),
+}
+fn coverage_context(
+    catalog: &Catalog,
+    query: &str,
+    request: &ContextRequest,
+    action: CoverageAction,
+    options: &ContextOptions,
+    expected_pool: Option<&Value>,
+    stats: &mut CoverageDiagnostics,
+) -> Result<ContextResult> {
+    // One outer elapsed meter and one selected proof for preparation, every pure
+    // trial, final admission and final recheck. Never restart verification here.
+    let meter = Meter::new(&request.verification_budget);
+    let request = context::validate_request(query, request)?;
+    context::validate_selection_action(&request, &SelectionAction::Prepare)?;
+    assert_eq!(request.scope, ContextScope::IndexedDocuments);
+    if catalog.operation_state()?.is_none() {
+        return Err(WikiError::new(
+            ErrorCode::CapabilityUnavailable,
+            "coverage experiment requires an already normalized vault",
+        ));
+    }
+    meter.check()?;
+    catalog.guard_query()?;
+    meter.check()?;
+    let reader = catalog.cached_query_snapshot(QueryReadLimits {
+        max_elapsed_ms: meter.remaining_ms(),
+        ..QueryReadLimits::default()
+    })?;
+    let mut hits = lexical::search_context_catalog(&reader, query, &request.documents, false)?;
+    meter.check()?;
+    let paths = hits
+        .hits
+        .iter()
+        .map(|hit| hit.locator.path.clone())
+        .collect::<Vec<_>>();
+    let mut budget = request.verification_budget.clone();
+    budget.max_elapsed_ms = meter.remaining_ms();
+    let mut proof = selected_documents::authenticate(catalog, &reader, &paths, &budget)?;
+    hits.dependency_fingerprint = proof.fingerprint.clone();
+    let selected = SelectedCatalog {
+        reader: &reader,
+        proof: &proof,
+    };
+    let (prepared, trace) = context::with_candidate_ordering_trace(|| {
+        context::assemble_bounded_documents_with_selection_for_query(
+            &selected,
+            &request,
+            &hits,
+            query,
+            &SelectionAction::Prepare,
+        )
+    });
+    let mut prepared = prepared?;
+    meter.check()?;
+    if let Some(expected) = expected_pool {
+        if trace_stage(&trace, "candidate_pool") != expected {
+            return Err(WikiError::new(
+                ErrorCode::FreshnessConflict,
+                "development retained pool differs from the pinned control",
+            ));
+        }
+    }
+    let pool = IntervalCoveragePool::from_trace(&trace);
+    stats.pool = pool.metadata();
+    let original = prepared.selection_packet.as_ref().unwrap();
+    let task: Value = serde_json::from_str(&original.selector_input).unwrap();
+    let binding = &task["payload"]["binding"];
+    assert_eq!(binding["query"], json!(query));
+    assert_eq!(binding["request"], serde_json::to_value(&request).unwrap());
+    assert_eq!(
+        binding["snapshot"],
+        serde_json::to_value(reader.snapshot()).unwrap()
+    );
+    assert_eq!(
+        binding["dependency_fingerprint"],
+        serde_json::to_value(&proof.fingerprint).unwrap()
+    );
+    let draft = match action {
+        CoverageAction::Deck => {
+            let deck = coverage_deck(binding, &pool, &meter, stats)?;
+            prepared.truncated = hits.truncated
+                || !prepared.omissions.is_empty()
+                || deck.cards.len() < pool.candidates.len();
+            prepared.selection_packet = Some(deck);
+            prepared.warnings.push("test-only weighted interval deck; public Prepare is unchanged; native omitted count is over supplied selected cards, full-pool exclusions are in diagnostics".into());
+            prepared
+        }
+        action => {
+            let env = CoverageTrialContext {
+                reader:&selected, request:&request, query, hits:&hits, fingerprint:proof.fingerprint.clone(),
+                omissions:prepared.omissions.clone(),
+                warnings:prepared.warnings.iter().filter(|warning| !warning.starts_with("candidate packet for one host selector invocation;")).cloned().chain(std::iter::once("test-only exact interval coverage prototype; public Automatic and host Apply are unchanged".into())).collect(),
+            };
+            match action {
+                CoverageAction::Final => coverage_final(&env, &pool, &meter, stats)?,
+                CoverageAction::Apply(reply) => {
+                    // Oracle/host IDs never enter scoring: rebuild the same
+                    // deck first, then native reply validation and exact packing.
+                    let deck = coverage_deck(binding, &pool, &meter, stats)?;
+                    let ids =
+                        crate::retrieval::context_selection_packet::validate_reply(&deck, &reply)?;
+                    let chosen = ids
+                        .iter()
+                        .map(|id| {
+                            pool.candidates
+                                .iter()
+                                .position(|candidate| &candidate.card.id == id)
+                                .unwrap()
+                        })
+                        .collect::<Vec<_>>();
+                    let mut draft = coverage_trial_pack(&env, &pool, &chosen, stats)?;
+                    coverage_remove_markers(&mut draft);
+                    draft
+                }
+                CoverageAction::Deck => unreachable!(),
+            }
+        }
+    };
+    if let Some(fault) = &options.fault {
+        fault.check(ContextCheckpoint::BeforeFinalVerification { attempt: 0 })?;
+    }
+    meter.check()?;
+    proof.recheck(catalog, &reader)?;
+    let verification = verification(&reader)?;
+    meter.check()?;
+    Ok(seal(draft, verification, proof.meter()))
+}
+
+#[test]
+fn coverage_relevance_uses_frozen_weights_and_exact_coordinate_identity() {
+    let candidate = crate::retrieval::context_selection::SelectionCandidate {
+        owner_index: 0,
+        span: ByteSpan::new(0, 10).unwrap(),
+        covered_terms: vec![0],
+        local_relevance: 2,
+        seed_overlap: true,
+        clipped: true,
+        semantic_affinity: None,
+    };
+    assert!((coverage_relevance(0.2, &candidate, &[2, 3]) - 0.182).abs() < 1e-12);
+    let fixture = Fixture::new();
+    let prepared = fixture.prepare();
+    let mut passage = prepared.selection_packet().unwrap().cards[0]
+        .passage
+        .clone();
+    let original = coverage_coordinate(&passage);
+    passage.locator.observed_hash = Blake3Hash::digest(b"different revision bytes");
+    assert_ne!(coverage_coordinate(&passage), original);
+    passage.locator.path = path("sources/other/revisions/different/content.md");
+    assert_ne!(coverage_coordinate(&passage), original);
+}
+#[test]
+fn coverage_native_trial_pack_keeps_exact_output_and_id_reply_order() {
+    let fixture = Fixture::new();
+    let mut stats = CoverageDiagnostics::default();
+    let final_result = coverage_context(
+        &fixture.catalog,
+        QUERY,
+        &request(),
+        CoverageAction::Final,
+        &ContextOptions::default(),
+        None,
+        &mut stats,
+    )
+    .unwrap();
+    assert!(!final_result.passages().is_empty());
+    assert!(final_result.text().len() <= 6000 && final_result.usage().estimated_tokens <= 1500);
+    assert!(stats.trial_pack_calls > 1 && stats.exact_trial_output_bytes > 0);
+    assert_eq!(stats.internal_render_calls, None);
+    for passage in final_result.passages() {
+        assert!(
+            passage
+                .rank_contributions
+                .iter()
+                .all(|rank| rank.channel != COVERAGE_MARKER)
+        );
+        let bytes = fs::read(
+            fixture
+                .catalog
+                .fs()
+                .root()
+                .path()
+                .join(passage.locator.path.as_str()),
+        )
+        .unwrap();
+        assert_eq!(
+            passage
+                .span
+                .slice(std::str::from_utf8(&bytes).unwrap())
+                .unwrap(),
+            passage.text
+        );
+    }
+    let deck = coverage_context(
+        &fixture.catalog,
+        QUERY,
+        &request(),
+        CoverageAction::Deck,
+        &ContextOptions::default(),
+        None,
+        &mut CoverageDiagnostics::default(),
+    )
+    .unwrap();
+    let packet = deck.selection_packet().unwrap();
+    assert!(packet.candidate_count <= 80 && packet.input_bytes <= 130048);
+    let reply = SelectionReply {
+        packet_fingerprint: packet.fingerprint.clone(),
+        ordered_ids: packet
+            .cards
+            .iter()
+            .take(5)
+            .map(|card| card.id.clone())
+            .collect(),
+    };
+    let applied = coverage_context(
+        &fixture.catalog,
+        QUERY,
+        &request(),
+        CoverageAction::Apply(reply),
+        &ContextOptions::default(),
+        None,
+        &mut CoverageDiagnostics::default(),
+    )
+    .unwrap();
+    assert!(!applied.passages().is_empty());
+    assert!(applied.text().len() <= 6000);
+}
+#[test]
+fn coverage_all_arms_recheck_selected_dependencies_before_emission() {
+    for final_arm in [false, true] {
+        let fixture = Fixture::new();
+        let target = fixture.catalog.fs().root().path().join("decision.md");
+        let changed = String::from_utf8(fs::read(&target).unwrap())
+            .unwrap()
+            .replace("\"accept\"", "\"reject\"")
+            .into_bytes();
+        let options = ContextOptions {
+            selection: SelectionAction::Automatic,
+            fault: Some(Arc::new(EditBeforeEmission {
+                path: target.clone(),
+                bytes: changed.clone(),
+            })),
+        };
+        let error = coverage_context(
+            &fixture.catalog,
+            QUERY,
+            &request(),
+            if final_arm {
+                CoverageAction::Final
+            } else {
+                CoverageAction::Deck
+            },
+            &options,
+            None,
+            &mut CoverageDiagnostics::default(),
+        )
+        .unwrap_err();
+        assert_eq!(error.code, ErrorCode::FreshnessConflict);
+        assert_eq!(fs::read(target).unwrap(), changed);
+    }
+}
+
+#[test]
+fn coverage_interval_gain_diminishes_only_on_exact_shared_coordinates() {
+    let fixture = Fixture::new();
+    let (_, trace) = context::with_candidate_ordering_trace(|| fixture.prepare());
+    let actual = IntervalCoveragePool::from_trace(&trace);
+    let mut first = actual.candidates[0].clone();
+    first.lexical.span = ByteSpan::new(0, 10).unwrap();
+    first.relevance = 10.0;
+    first.intervals = vec![0, 1];
+    let mut overlap = first.clone();
+    overlap.lexical.span = ByteSpan::new(5, 15).unwrap();
+    overlap.intervals = vec![1, 2];
+    let mut distinct = first.clone();
+    distinct.coordinate = "independent exact locator/revision/hash".into();
+    distinct.intervals = vec![3, 4];
+    // Synthetic interval metadata tests the objective only; emitted evidence
+    // and exact packing are exercised separately on authenticated fixture bytes.
+    let pool = IntervalCoveragePool {
+        candidates: vec![first, overlap, distinct],
+        intervals: vec![
+            CoverageInterval {
+                coordinate: "original".into(),
+                start: 0,
+                end: 5,
+            },
+            CoverageInterval {
+                coordinate: "original".into(),
+                start: 5,
+                end: 10,
+            },
+            CoverageInterval {
+                coordinate: "original".into(),
+                start: 10,
+                end: 15,
+            },
+            CoverageInterval {
+                coordinate: "other".into(),
+                start: 0,
+                end: 5,
+            },
+            CoverageInterval {
+                coordinate: "other".into(),
+                start: 5,
+                end: 10,
+            },
+        ],
+        term_weights: vec![],
+    };
+    let mut scores = vec![0.0; 5];
+    assert_eq!(pool.gain(&scores, 0), 10.0);
+    pool.add(&mut scores, 0);
+    assert_eq!(pool.gain(&scores, 0), 0.0);
+    assert_eq!(pool.gain(&scores, 1), 5.0);
+    assert_eq!(pool.gain(&scores, 2), 10.0);
+    assert_eq!(coverage_incremental_cost(100, 100), 1);
+    assert_eq!(coverage_incremental_cost(90, 100), 1);
+    assert_eq!(coverage_incremental_cost(110, 100), 10);
+}
+#[test]
+fn coverage_contained_native_skip_cannot_earn_a_weighted_vote() {
+    let fixture = Fixture::new();
+    let request = request();
+    let reader = fixture
+        .catalog
+        .cached_query_snapshot(QueryReadLimits::default())
+        .unwrap();
+    let mut hits =
+        lexical::search_context_catalog(&reader, QUERY, &request.documents, false).unwrap();
+    let paths = hits
+        .hits
+        .iter()
+        .map(|hit| hit.locator.path.clone())
+        .collect::<Vec<_>>();
+    let mut proof = selected_documents::authenticate(
+        &fixture.catalog,
+        &reader,
+        &paths,
+        &request.verification_budget,
+    )
+    .unwrap();
+    hits.dependency_fingerprint = proof.fingerprint.clone();
+    let selected = SelectedCatalog {
+        reader: &reader,
+        proof: &proof,
+    };
+    let (_, trace) = context::with_candidate_ordering_trace(|| {
+        context::assemble_bounded_documents_with_selection_for_query(
+            &selected,
+            &request,
+            &hits,
+            QUERY,
+            &SelectionAction::Prepare,
+        )
+        .unwrap()
+    });
+    let mut pool = IntervalCoveragePool::from_trace(&trace);
+    let mut duplicate = pool.candidates[0].clone();
+    duplicate.card.id = "c9999".into();
+    duplicate.relevance *= 2.0;
+    let duplicate_index = pool.candidates.len();
+    pool.candidates.push(duplicate);
+    let env = CoverageTrialContext {
+        reader: &selected,
+        request: &request,
+        query: QUERY,
+        hits: &hits,
+        fingerprint: proof.fingerprint.clone(),
+        omissions: vec![],
+        warnings: vec![],
+    };
+    let draft = coverage_trial_pack(
+        &env,
+        &pool,
+        &[0, duplicate_index],
+        &mut CoverageDiagnostics::default(),
+    )
+    .unwrap();
+    let admitted = coverage_admitted(&pool, &draft);
+    assert!(admitted.contains(&0));
+    assert!(!admitted.contains(&duplicate_index));
+    let actual = coverage_actual_scores(&pool, &draft);
+    assert!((pool.objective(&actual) - pool.candidates[0].relevance).abs() < 1e-12);
+    proof.recheck(&fixture.catalog, &reader).unwrap();
+}
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CoveragePilotConfig {
+    vault: PathBuf,
+    cases: PathBuf,
+    controls: PathBuf,
+    artifacts: PathBuf,
+}
+#[test]
+#[ignore = "explicit frozen six-case coverage config required; no models or public production mode"]
+fn normalized_interval_coverage_six_case_development_pilot() {
+    let repo = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .canonicalize()
+        .unwrap();
+    let owned = repo
+        .join(".artifacts/context-ordering-002")
+        .canonicalize()
+        .unwrap();
+    let previous = repo
+        .join(".artifacts/context-ordering-001/pilot-inputs-001")
+        .canonicalize()
+        .unwrap();
+    let config_path = PathBuf::from(
+        std::env::var("LWIKI_COVERAGE_CONFIG").expect("explicit owned configuration"),
+    )
+    .canonicalize()
+    .unwrap();
+    assert!(config_path.starts_with(&owned));
+    let config: CoveragePilotConfig =
+        serde_json::from_value(bounded_json(&config_path, 8192)).unwrap();
+    let vault = config.vault.canonicalize().unwrap();
+    let cases = config.cases.canonicalize().unwrap();
+    let controls = config.controls.canonicalize().unwrap();
+    assert!(vault.starts_with(&owned) || vault == previous.join("unit-vault"));
+    assert!(cases.starts_with(&owned));
+    assert_eq!(controls, previous.join("unit-results-001"));
+    assert!(
+        config
+            .artifacts
+            .parent()
+            .unwrap()
+            .canonicalize()
+            .unwrap()
+            .starts_with(&owned)
+    );
+    let cases: Vec<PilotCase> = serde_json::from_value(bounded_json(&cases, 32 * 1024)).unwrap();
+    let allowed = bounded_json(
+        &repo.join(".artifacts/context-development-first-loss-001/manifest.json"),
+        128 * 1024,
+    );
+    assert_eq!(cases.len(), 6);
+    assert_eq!(allowed["cases"].as_array().unwrap().len(), 6);
+    let mut seen = BTreeSet::new();
+    for case in &cases {
+        assert!(
+            case.id.len() <= 64
+                && case
+                    .id
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b == b'_')
+                && seen.insert(case.id.clone())
+        );
+        assert!(
+            case.query.len() <= 4096
+                && allowed["cases"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|value| value["id"] == case.id && value["query"] == case.query)
+        );
+    }
+    let apply_case = std::env::var("LWIKI_COVERAGE_APPLY_CASE").ok();
+    let reply_path = std::env::var("LWIKI_COVERAGE_REPLY").ok();
+    assert_eq!(
+        apply_case.is_some(),
+        reply_path.is_some(),
+        "one explicit ID-replay case and reply, or neither"
+    );
+    let reply = reply_path.map(|path| {
+        let path = PathBuf::from(path).canonicalize().unwrap();
+        assert!(path.starts_with(&owned));
+        let metadata = fs::symlink_metadata(&path).unwrap();
+        assert!(metadata.is_file() && metadata.len() <= 4096);
+        crate::retrieval::context_selection_packet::parse_reply(&fs::read(&path).unwrap()).unwrap()
+    });
+    if let Some(case) = &apply_case {
+        assert!(cases.iter().any(|candidate| &candidate.id == case));
+    }
+    let handle = VaultFs::new(VaultRoot::explicit(&vault).unwrap());
+    let marker = parse_note(&fs::read(vault.join("WIKI.md")).unwrap());
+    let catalog = Catalog::new(handle, marker.canonical.as_ref().unwrap().id().clone());
+    assert!(
+        catalog.operation_state().unwrap().is_some(),
+        "no implicit activation/reconstruction"
+    );
+    fs::create_dir(&config.artifacts).expect("new attempt directory required");
+    let mut request = request();
+    request.verification_budget.max_elapsed_ms = 5000;
+    request.verification_budget.max_entries = 65_536;
+    let mut total = 0usize;
+    let mut write = |name: &str, value: Value| {
+        let bytes = serde_json::to_vec_pretty(&value).unwrap();
+        assert!(bytes.len() <= 16 * 1024 * 1024);
+        total += bytes.len();
+        assert!(total <= 128 * 1024 * 1024);
+        fs::write(config.artifacts.join(name), bytes).unwrap();
+    };
+    let mut statuses = cases
+        .iter()
+        .filter(|case| apply_case.as_ref().is_none_or(|id| id == &case.id))
+        .flat_map(|case| {
+            let arms = if apply_case.is_some() {
+                vec!["exact-id-apply"]
+            } else {
+                vec!["weighted-deck", "weighted-final"]
+            };
+            arms.into_iter()
+                .map(|arm| json!({"case":case.id,"arm":arm,"status":"UNRUN"}))
+                .collect::<Vec<_>>()
+        })
+        .collect::<Vec<_>>();
+    write("status.json", json!(statuses));
+    for case in cases {
+        if apply_case.as_ref().is_some_and(|id| id != &case.id) {
+            continue;
+        }
+        let control = bounded_json(
+            &controls.join(format!("{}-lineage.json", case.id)),
+            16 * 1024 * 1024,
+        );
+        assert_eq!(control["request"], json!(request));
+        assert_eq!(control["query"], json!(case.query));
+        let expected = trace_stage(control["trace"].as_array().unwrap(), "candidate_pool");
+        write(
+            &format!("{}-control-reference.json", case.id),
+            json!({"directory":controls,"query":case.query,"request":request,"candidate_pool":expected,"scope":"immutable old/current/A1/B1/first-five controls remain archived; no critic labels or oracle replies are scoring inputs"}),
+        );
+        let actions = if let Some(reply) = &reply {
+            vec![("exact-id-apply", CoverageAction::Apply(reply.clone()))]
+        } else {
+            vec![
+                ("weighted-deck", CoverageAction::Deck),
+                ("weighted-final", CoverageAction::Final),
+            ]
+        };
+        for (name, action) in actions {
+            let status = statuses
+                .iter_mut()
+                .find(|value| value["case"] == case.id && value["arm"] == name)
+                .unwrap();
+            status["status"] = json!("RUNNING");
+            write("status.json", json!(statuses));
+            let mut stats = CoverageDiagnostics::default();
+            let started = std::time::Instant::now();
+            let result = coverage_context(
+                &catalog,
+                &case.query,
+                &request,
+                action,
+                &ContextOptions::default(),
+                Some(expected),
+                &mut stats,
+            );
+            let outcome = if result.is_ok() { "OK" } else { "ERROR" };
+            write(
+                &format!("{}-{name}.json", case.id),
+                json!({"result":result,"diagnostics":stats,"elapsed_ms":started.elapsed().as_secs_f64()*1000.0,"scope":"test-only exact packing experiment; not public Automatic, host/model success, relevance/completeness or shipping performance qualification"}),
+            );
+            let status = statuses
+                .iter_mut()
+                .find(|value| value["case"] == case.id && value["arm"] == name)
+                .unwrap();
+            status["status"] = json!(outcome);
+            write("status.json", json!(statuses));
+        }
+    }
+}
