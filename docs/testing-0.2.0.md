@@ -1,6 +1,6 @@
 # Try the 0.2.0 candidate
 
-This build adds normalized Page authoring, individual source capture/refresh/
+This build adds [selected search citations](validation-verified-search.md), normalized Page authoring, individual source capture/refresh/
 withdrawal, bounded catalog reconstruction, context-selection replay and a
 [resumable local collection importer](source-imports.md). The first capacity
 target is now 25,000 documents / roughly 2.5 GB of text. Capacity and unseen
@@ -12,7 +12,9 @@ import, interrupted resume, refresh/withdrawal, recovery and complete-cache-loss
 rebuild succeeded. The broader frozen assessment is 8.5/10 and remains failed:
 cached search supplies no source citations, and the initial preparation preview
 was unrun. Context citations passed; two distant-fact tasks still missed required
-information after churn. This is a useful local trial with those limits visible.
+information after churn. The new explicit `search --verify-selected` workflow separately passed at 9.5/10
+with no observed correctness blocker; it preserves search contents and does not
+fix those missing facts. This is a local trial with those limits visible.
 
 The current candidate is a native macOS ARM64 release build, compiled with Rust
 optimization level 3 on macOS 26.5.2, with minimum macOS deployment target 26.5.
@@ -37,7 +39,7 @@ printf '%s\n' '{"path":"shipment.txt"}' '{"path":"inspection.txt"}' > "$DEMO/inp
 "$LWIKI" --wiki "$DEMO/wiki" --offline --json source import run \
   --manifest "$DEMO/import.jsonl" --key atlas --group-size 4
 "$LWIKI" --wiki "$DEMO/wiki" --offline --json source import status --key atlas
-"$LWIKI" --wiki "$DEMO/wiki" --offline search 'Atlas shipment'
+"$LWIKI" --wiki "$DEMO/wiki" --offline search 'Atlas shipment' --verify-selected
 "$LWIKI" --wiki "$DEMO/wiki" --offline context 'Atlas shipment' \
   --max-bytes 6000 --max-tokens 1500
 "$LWIKI" --wiki "$DEMO/wiki" --offline check

@@ -92,6 +92,41 @@ record/path/hash locators and no fabricated source citations; captured passages
 retain exact source revision/span/hash citations. Kind, tag, status, source and
 path filters use the existing document filtering rules.
 
+### Selected search citations
+
+The 0.2.0 candidate adds explicit verification to normalized lexical search:
+
+```sh
+lwiki --wiki /path/to/wiki --offline search 'release checklist' --verify-selected --no-sync
+lwiki --wiki /path/to/wiki --offline --json search 'release checklist' --verify-selected
+lwiki --wiki /path/to/wiki --offline --dry-run search 'release checklist' --verify-selected
+```
+
+`--verify-selected` preserves the published result order, excerpts, filters and
+cursors. It authenticates displayed documents and their supporting dependencies,
+then rechecks them before returning. Nonempty captured excerpts receive exact
+Source/Revision/span/hash citations. Human output shows the payload path, source
+revision and byte range; use that path with `read --path PATH --start START
+--end END` to inspect the same bytes. A Revision record ID identifies metadata,
+so reading that ID does not navigate to the captured payload. Authored and empty
+excerpts remain uncited; authored excerpt offsets address the complete file,
+while ordinary authored `read` offsets address its body.
+
+Verification has one 64 MiB, 4,096-file, 16,384-entry and 2-second bound. Selected
+edits or exhausted limits refuse the complete verified page; reduce the page or
+inspect changes before an explicit `index sync`. Plain search remains cached
+discovery. `--no-sync` can accompany verification because it selects published
+discovery without refreshing the index. This flag belongs only to search, and
+initially requires normalized lexical mode without graph expansion.
+
+Results use `indexed_evidence`, a selected dependency fingerprint and an explicit
+warning that global membership, uniqueness, completeness and unselected
+freshness are unverified. Citation integrity does not establish truth or answer
+completeness. Dry-run returns a validated request with no hits or citations;
+index opening, admission and evidence verification are unperformed, including
+when the cache is absent or corrupt. The [scoped public assessment](validation-verified-search.md) passed at 9.5/10;
+the original uncited-search assessment remains failed.
+
 For authored Markdown, context spans address the complete canonical file,
 including front matter, and the locator hash covers those full bytes. `read`
 returns front matter separately as metadata; its `--start`, `--end`, range and

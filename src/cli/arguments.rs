@@ -148,7 +148,8 @@ pub enum Command {
     /// Inspect local vector coverage or explicitly generate embeddings.
     Embeddings(super::embeddings::EmbeddingArguments),
     /// Find text with literal, lexical, semantic or hybrid retrieval.
-    Search(SearchArguments),
+    /// Normalized search uses cached discovery by default; --verify-selected adds bounded evidence verification.
+    Search(SearchCommandArguments),
     /// Assemble cited context within byte and token budgets.
     Context(Box<super::context::ContextArguments>),
     /// Extract, resolve, review and query evidence-backed assertions.
@@ -579,6 +580,16 @@ impl GraphOptions {
             cursor: self.cursor.clone(),
         }
     }
+}
+#[derive(Debug, Args)]
+pub struct SearchCommandArguments {
+    #[command(flatten)]
+    pub search: SearchArguments,
+    /// Verify displayed dependencies and cite captured excerpts (normalized lexical search only).
+    /// Compatible with --no-sync. Uses a 64 MiB/4096-file/16384-entry/2-second bound.
+    /// Dry-run validates the plan without opening the index or verifying evidence.
+    #[arg(long)]
+    pub verify_selected: bool,
 }
 #[derive(Debug, Args)]
 pub struct SearchArguments {

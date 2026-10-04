@@ -49,6 +49,10 @@ impl Meter {
             .max_elapsed_ms
             .saturating_sub(u64::try_from(self.start.elapsed().as_millis()).unwrap_or(u64::MAX))
     }
+    #[cfg(test)]
+    pub(super) fn work(&self) -> (usize, usize, usize) {
+        (self.bytes, self.files, self.entries)
+    }
     fn entry(&mut self) -> Result<()> {
         self.check()?;
         if self.entries >= self.budget.max_entries {

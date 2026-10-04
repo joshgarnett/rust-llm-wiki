@@ -200,7 +200,7 @@ fn execute_inner(args: &Arguments) -> Result<Envelope> {
         Command::Capabilities => {
             return Ok(Envelope::success(
                 command,
-                json!({"version":env!("CARGO_PKG_VERSION"),"commands":COMMANDS,"schemas":SCHEMAS,"network":true,"search_modes":["literal","lexical","semantic","hybrid"],"graph_seed_modes":["lexical","semantic"],"extraction_executors":["agent","api"],"research_executor":"agent-handoff","jsonl_commands":["index sync","index rebuild","recover","changes apply","source add","source refresh","research run","research resume","research import","doctor --probe"]}),
+                json!({"version":env!("CARGO_PKG_VERSION"),"commands":COMMANDS,"schemas":SCHEMAS,"network":true,"search_modes":["literal","lexical","semantic","hybrid"],"selected_search":{"flag":"--verify-selected","layout":"normalized","modes":["lexical"],"no_sync_compatible":true,"scope":"displayed document dependencies","global_membership_verified":false,"dry_run":"request validation only","budget":{"max_bytes":67108864,"max_files":4096,"max_entries":16384,"max_elapsed_ms":2000}},"graph_seed_modes":["lexical","semantic"],"extraction_executors":["agent","api"],"research_executor":"agent-handoff","jsonl_commands":["index sync","index rebuild","recover","changes apply","source add","source refresh","research run","research resume","research import","doctor --probe"]}),
             ));
         }
         Command::Schema { name } => {
@@ -614,8 +614,46 @@ fn execute_inner(args: &Arguments) -> Result<Envelope> {
             envelope.warnings.extend(report.warnings.iter().cloned());
             envelope.data = value(report)?;
         }
-        Command::Search(search) => {
+        Command::Search(command) => {
+            let search = &command.search;
             let plan = retrieval::lexical::validate_plan(&search.query, &search.plan())?;
+            if command.verify_selected {
+                if plan.mode != retrieval::SearchMode::Lexical || search.graph.is_some() {
+                    return Err(WikiError::new(
+                        ErrorCode::CapabilityUnavailable,
+                        "--verify-selected supports normalized lexical search without graph expansion",
+                    ));
+                }
+                if args.dry_run {
+                    envelope.data = retrieval::selected_search::preview(&search.query, &plan)?;
+                    envelope.warnings.push("Selected search preview validates the request only; index access, admission and evidence verification are unperformed.".into());
+                } else {
+                    let catalog = Catalog::with_options(
+                        app.fs().clone(),
+                        app.vault_id().clone(),
+                        CatalogOptions {
+                            busy_timeout_ms: app.options().lock_timeout_ms,
+                            fault: None,
+                        },
+                    );
+                    let hits = retrieval::selected_search::search(
+                        &catalog,
+                        &search.query,
+                        &plan,
+                        &retrieval::VerificationBudget::default(),
+                    ).map_err(|mut error| {
+                        if matches!(error.code, ErrorCode::FreshnessConflict | ErrorCode::BudgetExceeded) {
+                            error.hint = Some("Inspect selected source changes and run index sync when appropriate; reduce --limit or use plain search for explicitly unverified cached discovery.".into());
+                        }
+                        error
+                    })?;
+                    result_metadata(&mut envelope.meta, &hits.snapshot, &hits.verification);
+                    envelope.meta.partial = hits.truncated;
+                    envelope.warnings.extend(hits.warnings.iter().cloned());
+                    envelope.data = value(hits)?;
+                }
+                return Ok(envelope);
+            }
             if matches!(
                 plan.mode,
                 retrieval::SearchMode::Semantic | retrieval::SearchMode::Hybrid
@@ -1896,6 +1934,18 @@ fn present_inner(
                         hit["eligibility"].as_str().unwrap_or_default(),
                         hit["excerpt"]["text"].as_str().unwrap_or_default()
                     )?;
+                    if hit["excerpt"]["citation"]["kind"] == "source" {
+                        let reference = &hit["excerpt"]["citation"]["reference"];
+                        writeln!(
+                            output,
+                            "Source: {} revision {} bytes {}..{}\nQuote hash: {}\n",
+                            reference["source_id"].as_str().unwrap_or_default(),
+                            reference["source_revision"].as_str().unwrap_or_default(),
+                            reference["span"]["start"],
+                            reference["span"]["end"],
+                            reference["quote_hash"].as_str().unwrap_or_default()
+                        )?;
+                    }
                 }
                 if hits.is_empty() {
                     writeln!(output, "No matches.")?;
@@ -2201,6 +2251,10 @@ fn with_network_activity<T>(
         error
     })
 }
+
+#[cfg(test)]
+#[path = "selected_search_tests.rs"]
+mod selected_search_adapter_tests;
 
 #[cfg(test)]
 mod cached_read_tests {

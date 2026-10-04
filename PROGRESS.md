@@ -25,7 +25,12 @@ public search lacks citations and the initial preparation preview was unrun.
 Context completeness was 97/100 initially, then 98/100 after churn; these synthetic
 results do not replace failed realistic tasks. Main-process memory and disk were
 within observed bounds; exact process-tree peaks remain unavailable.
-Next is a coherent verified-search workflow. Full scale, whole-task quality and
+The [explicit verified-search workflow](docs/validation-verified-search.md) now
+passes scoped public acceptance at 9.5/10: 60 unchanged result pairs and 300 valid
+citations, plus navigation/update/withdrawal/refusal/preview checks. It preserves
+the existing missing-fact query and original plain-search failure. A refreshed
+0.2.0 candidate is ready. Next: retrieval completeness and 10k→25k qualification.
+Full scale, whole-task quality and
 the latest strict Clippy gate remain open. These are progress checkpoints,
 not completion of the fresh goal.
 

@@ -13,6 +13,9 @@ pub(crate) mod indexed_documents;
 pub mod lexical;
 pub mod literal;
 pub(crate) mod selected_documents;
+pub mod selected_search;
+#[cfg(test)]
+mod selected_search_experiment;
 pub mod types;
 pub mod verification;
 pub use context_types::*;
