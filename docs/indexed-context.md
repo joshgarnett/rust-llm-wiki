@@ -2,8 +2,9 @@
 
 `context --scope indexed-evidence` searches the published index for captured-source
 text and verifies the selected sources against their canonical files. It is an
-opt-in, offline lexical workflow. The default `current` scope retains whole-vault
-verification and local synchronization.
+opt-in, offline lexical workflow. On legacy indexes, the default `current` scope retains whole-vault
+verification and local synchronization. On explicitly activated normalized indexes,
+the default is `indexed-documents`, described below.
 
 ```sh
 lwiki --wiki /path/to/wiki --offline index sync
@@ -72,3 +73,45 @@ Operational safety guards still inspect retained change history outside canonica
 proof byte/file counters. Import, publication, rebuild and strict verification
 also retain whole-vault work. This milestone does **not** establish the
 [100,000-document / 10 GB target](testing-large-vaults.md).
+
+## Mixed document context on normalized indexes
+
+For an already normalized vault, use the ordinary workflow:
+
+```sh
+lwiki --wiki /path/to/wiki --offline search 'release checklist'
+lwiki --wiki /path/to/wiki --offline read --path knowledge/pages/checklist.md
+lwiki --wiki /path/to/wiki --offline context 'release checklist'
+```
+
+Search uses the published index. Read authenticates the selected file and its
+supporting dependencies. Context defaults to `--scope indexed-documents`: current
+eligible authored pages/entity descriptions and captured sources share passage
+selection and the output budget. Authored passages are `note_text` with exact
+record/path/hash locators and no fabricated source citations; captured passages
+retain exact source revision/span/hash citations. Kind, tag, status, source and
+path filters use the existing document filtering rules.
+
+For authored Markdown, context spans address the complete canonical file,
+including front matter, and the locator hash covers those full bytes. `read`
+returns front matter separately as metadata; its `--start`, `--end`, range and
+continuation offsets address the returned document body. Do not apply an authored
+context span directly to `read.body` or pass it unchanged to `read --start/--end`.
+Captured source spans address the complete captured content, whose read body has
+no stripped record front matter.
+
+JSON reports `indexed_evidence` with `selected_documents` domain and a discovery
+generation; rendered context names `indexed_documents`. Selected canonical files,
+expected absences and supporting dependencies are verified and rechecked within
+finite budgets. Unrelated external edits need not invalidate that bounded proof.
+Global membership, identity uniqueness, unselected freshness and answer
+completeness remain unverified. Run `index sync` to discover external edits and
+`check` when an explicit complete audit is needed.
+
+Explicit `--scope current` keeps its stronger meaning and remains unsupported on
+normalized indexes. `read --no-sync` and `context --scope snapshot` retain cached
+behavior. Indexed document context supports lexical document queries only;
+semantic, hybrid, literal, graph and host selection remain separate migration
+work. Dry-run previews the resolved request without running its proof. Operational
+generation-output records currently require explicit cached read because their
+selected verification is not implemented.

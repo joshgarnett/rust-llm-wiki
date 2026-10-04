@@ -299,7 +299,7 @@ fn execute_inner(args: &Arguments) -> Result<Envelope> {
                     fault: None,
                 },
             );
-            let outcome = if *no_sync && catalog.operation_state()?.is_some() {
+            let outcome = if (*no_sync || !args.dry_run) && catalog.operation_state()?.is_some() {
                 catalog.guard_query()?;
                 let reader = catalog.query_snapshot(QueryReadLimits::default())?;
                 if !reader.normalized_layout() {
@@ -309,8 +309,27 @@ fn execute_inner(args: &Arguments) -> Result<Envelope> {
                     ));
                 }
                 let outcome = cached_query_read(&reader, request)?;
+                if !*no_sync {
+                    let read_proof_error = |mut error: WikiError| {
+                        if error.code == ErrorCode::BudgetExceeded {
+                            error.hint = Some("Selected read verification exceeded its bounded budget. Context supports --verification-* controls; read --no-sync returns explicitly unverified cached bytes when those are sufficient.".into());
+                        }
+                        error
+                    };
+                    let mut proof = retrieval::selected_documents::authenticate(
+                        &catalog,
+                        &reader,
+                        std::slice::from_ref(&outcome.path),
+                        &retrieval::VerificationBudget::default(),
+                    )
+                    .map_err(read_proof_error)?;
+                    proof.recheck(&catalog, &reader).map_err(read_proof_error)?;
+                    let verification = retrieval::indexed_documents::verification(&reader)?;
+                    result_metadata(&mut envelope.meta, reader.snapshot(), &verification);
+                    envelope.warnings.push("Read verifies selected document dependencies against this discovery generation; global membership and identity uniqueness are not verified. Use index sync to discover external edits.".into());
+                }
                 reader.verify_operations(&catalog)?;
-                if !args.dry_run {
+                if *no_sync && !args.dry_run {
                     envelope.meta.index_generation = Some(reader.snapshot().generation);
                     envelope.meta.freshness = Some("index_snapshot".into());
                 }
@@ -549,13 +568,10 @@ fn execute_inner(args: &Arguments) -> Result<Envelope> {
                 },
             );
             if catalog.operation_state()?.is_some() {
-                if !search.no_sync
-                    || plan.mode != retrieval::SearchMode::Lexical
-                    || search.graph.is_some()
-                {
+                if plan.mode != retrieval::SearchMode::Lexical || search.graph.is_some() {
                     return Err(WikiError::new(
                         ErrorCode::CapabilityUnavailable,
-                        "normalized general search currently requires lexical mode and --no-sync without graph expansion",
+                        "normalized general search currently supports lexical mode without graph expansion; discovery uses the published index, and index sync discovers external edits",
                     ));
                 }
                 catalog.guard_query()?;
@@ -785,12 +801,29 @@ fn execute_inner(args: &Arguments) -> Result<Envelope> {
             }
         }
         Command::Context(context) => {
-            let request =
-                retrieval::context::validate_request(&context.search.query, &context.request())?;
-            if request.scope == retrieval::ContextScope::IndexedEvidence
-                && (context.prepare_selection || context.selection.is_some())
+            let catalog = Catalog::with_options(
+                app.fs().clone(),
+                app.vault_id().clone(),
+                CatalogOptions {
+                    busy_timeout_ms: app.options().lock_timeout_ms,
+                    fault: None,
+                },
+            );
+            let normalized_selected = catalog.operation_state()?.is_some();
+            let mut request = context.request();
+            if context.scope.is_none() && normalized_selected {
+                request.scope = retrieval::ContextScope::IndexedDocuments;
+            }
+            let request = retrieval::context::validate_request(&context.search.query, &request)?;
+            if matches!(
+                request.scope,
+                retrieval::ContextScope::IndexedEvidence
+                    | retrieval::ContextScope::IndexedDocuments
+            ) && (context.prepare_selection || context.selection.is_some())
             {
-                return Err(usage("indexed-evidence does not support host selection"));
+                return Err(usage(
+                    "indexed-evidence and indexed-documents do not support host selection",
+                ));
             }
             let selection = context.selection_action()?;
             retrieval::context::validate_selection_action(&request, &selection)?;
@@ -807,24 +840,17 @@ fn execute_inner(args: &Arguments) -> Result<Envelope> {
             if context.search.no_sync
                 && !matches!(
                     request.scope,
-                    retrieval::ContextScope::Snapshot | retrieval::ContextScope::IndexedEvidence
+                    retrieval::ContextScope::Snapshot
+                        | retrieval::ContextScope::IndexedEvidence
+                        | retrieval::ContextScope::IndexedDocuments
                 )
             {
                 return Err(WikiError::new(
                     ErrorCode::FreshnessConflict,
-                    "--no-sync requires --scope snapshot or --scope indexed-evidence",
+                    "--no-sync requires snapshot, indexed-evidence or indexed-documents scope",
                 ));
             }
             let request = retrieval::context::validate_request(&context.search.query, &request)?;
-            let catalog = Catalog::with_options(
-                app.fs().clone(),
-                app.vault_id().clone(),
-                CatalogOptions {
-                    busy_timeout_ms: app.options().lock_timeout_ms,
-                    fault: None,
-                },
-            );
-            let normalized_selected = catalog.operation_state()?.is_some();
             let cached_documents = request.scope == retrieval::ContextScope::Snapshot
                 && request.target == retrieval::ContextTarget::Documents
                 && request.documents.mode == retrieval::SearchMode::Lexical
@@ -832,12 +858,16 @@ fn execute_inner(args: &Arguments) -> Result<Envelope> {
             // Refuse before preparing embeddings or acquiring a writer for a
             // mode that cannot consume the selected normalized catalog.
             if normalized_selected
-                && request.scope != retrieval::ContextScope::IndexedEvidence
+                && !matches!(
+                    request.scope,
+                    retrieval::ContextScope::IndexedEvidence
+                        | retrieval::ContextScope::IndexedDocuments
+                )
                 && !cached_documents
             {
                 return Err(WikiError::new(
                     ErrorCode::CapabilityUnavailable,
-                    "normalized context currently supports lexical document snapshots and indexed-evidence only",
+                    "normalized context supports lexical indexed-documents, indexed-evidence and snapshot scopes; omit --scope for selected document verification. Strict current/historical context is not yet available on normalized vaults; check performs a separate full audit",
                 ));
             }
             let cached_dry_run =
@@ -877,6 +907,7 @@ fn execute_inner(args: &Arguments) -> Result<Envelope> {
                         request.scope,
                         retrieval::ContextScope::Snapshot
                             | retrieval::ContextScope::IndexedEvidence
+                            | retrieval::ContextScope::IndexedDocuments
                     ) {
                         None
                     } else {

@@ -1159,7 +1159,7 @@ Options:
           Continuation cursor from an identical query on the same index generation
 
       --no-sync
-          Read the existing index snapshot without syncing; freshness is not verified
+          Use published discovery without synchronization; context scope determines evidence verification
 
   -h, --help
           Print help
@@ -1309,7 +1309,7 @@ Options:
           Continuation cursor from an identical query on the same index generation
 
       --no-sync
-          Read the existing index snapshot without syncing; freshness is not verified
+          Use published discovery without synchronization; context scope determines evidence verification
 
       --prepare-selection
           Prepare a bounded candidate packet for one host-agent selection; does not run a model
@@ -1318,10 +1318,9 @@ Options:
           Apply an ID-only host reply to the exact current candidate packet (file or - for stdin)
 
       --scope <SCOPE>
-          Evidence scope: current, historical, snapshot, or indexed-evidence (captured sources only)
+          Evidence scope. Defaults to indexed-documents on normalized vaults, current otherwise. Indexed-documents verifies selected authored/captured dependencies; indexed-evidence is captured-only
 
-          [default: current]
-          [possible values: current, historical, snapshot, indexed-evidence]
+          [possible values: current, historical, snapshot, indexed-evidence, indexed-documents]
 
       --target <TARGET>
           Retrieve document passages, graph evidence or both

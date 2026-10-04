@@ -9,6 +9,8 @@ pub mod cursor;
 pub mod excerpts;
 pub mod filters;
 pub(crate) mod indexed_context;
+pub(crate) mod indexed_documents;
+pub(crate) mod selected_documents;
 pub mod lexical;
 pub mod literal;
 pub mod types;

@@ -715,3 +715,41 @@ These results qualify this explicit-audit control at 1k and 10k. They retain the
 measurement limitations above: no cold-cache or tail distribution claim, no
 acknowledgment-to-answer timing claim, and no qualification of 100k, import,
 history-heavy workloads, remaining query modes or unseen answer completeness.
+
+### Mixed normalized document workflow checkpoint
+
+On an already activated normalized vault, ordinary lexical `search` uses published
+discovery, `read` verifies the selected canonical dependency closure, and omitted
+context scope resolves to `indexed-documents`. Authored text and captured source
+passages share the existing selection and output budgets. Explicit full audits
+remain separate. See [scope and citation details](indexed-context.md).
+
+The release integration run executed 20 test targets: 19 passed, while the context
+CLI target reported 19 passes and one error-message compatibility failure. Across
+those targets there were 869 passing test executions, including 583 unit tests and
+all 29 freshness tests. Nine unit tests were ignored and two unchanged accounting
+fault matrices were excluded. The compatibility failure was corrected by restoring
+the literal scope names in the unsupported-host-selection error. A subsequent
+release run passed all 20 context CLI tests and all eight normalized workflow
+tests; its only production change from the broad run was that message. Both runs
+retained unchanged source hashes during execution. The broad run took 924.72 s;
+the affected CLI rerun took 57.55 s. These are validation durations, not command
+latency measurements.
+
+Coverage includes selected authored/support/decision edits, removed files and
+newly present expected-absent files, final rechecks, damaged cache facts, historical
+captured revisions, verification-budget refusal, authored files over 1 MiB,
+legacy default-scope compatibility and exact source citations. Public assembly
+cannot bypass the selected-document proof to claim this scope. The public refresh
+workflow checks immediate new-revision retrieval and unchanged historical bytes.
+
+Independent Astra review accepted this workflow slice at **9.2/10** with zero
+correctness blockers. It checked 24 assertions across 20 public commands, then
+replayed all four affected scope-rejection cases on the final pinned executable.
+The review verified exact authored/source spans and hashes, selected-file tamper
+refusal, scope labels, refresh results and immutable historical captures.
+
+This checkpoint does not qualify new source import or authored mutations after
+normalized activation, remaining retrieval modes, default storage activation,
+100k/10 GB capacity or unseen answer completeness. Its functional fixtures import
+sources before activation; they do not substitute for the remaining import path.

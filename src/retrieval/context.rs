@@ -72,6 +72,18 @@ pub fn validate_selection_action(request: &ContextRequest, action: &SelectionAct
     Ok(())
 }
 fn normalize_request(request: &ContextRequest) -> Result<ContextRequest> {
+    if request.scope == ContextScope::IndexedDocuments
+        && (request.target != ContextTarget::Documents
+            || request.graph.is_some()
+            || request.documents.mode != SearchMode::Lexical
+            || request.documents.filters.include_historical
+            || request.documents.filters.include_proposed)
+    {
+        return Err(WikiError::new(
+            ErrorCode::Usage,
+            "indexed-documents supports current eligible documents in lexical mode only",
+        ));
+    }
     if request.scope == ContextScope::IndexedEvidence
         && (request.target != ContextTarget::Documents
             || request.graph.is_some()
@@ -137,12 +149,6 @@ fn normalize_request(request: &ContextRequest) -> Result<ContextRequest> {
         g.filters.include_proposed = false;
     }
     Ok(normalized)
-}
-pub(super) fn dependencies(reader: &ReaderSnapshot) -> Result<Blake3Hash> {
-    Ok(Blake3Hash::digest(
-        serde_json::to_vec(&reader.projection().dependencies)
-            .map_err(|e| WikiError::invalid(e.to_string()))?,
-    ))
 }
 // One fallible lookup per admitted owner, reused by every selected window.
 struct DocumentOwner {
@@ -240,21 +246,24 @@ fn document_owner(
         .map(|id| reader.record(id))
         .transpose()?
         .flatten();
+    let current = matches!(
+        request.scope,
+        ContextScope::Current | ContextScope::IndexedDocuments
+    );
     let allowed = if d.owner_revision.is_some() {
-        d.eligibility != Eligibility::Invalid
-            && (request.scope != ContextScope::Current || d.eligibility == Eligibility::Current)
+        d.eligibility != Eligibility::Invalid && (!current || d.eligibility == Eligibility::Current)
     } else {
         canonical.as_ref().is_some_and(|r| match r.record.kind() {
             RecordKind::Page => {
                 r.authored_status.as_deref() != Some("draft")
                     && r.eligibility != Eligibility::Invalid
-                    && (request.scope != ContextScope::Current
+                    && (!current
                         || r.eligibility == Eligibility::Current
                             && r.authored_status.as_deref() == Some("reviewed"))
             }
             RecordKind::Entity => {
                 matches!(r.description_eligibility, Some(Eligibility::Current))
-                    || (request.scope != ContextScope::Current
+                    || (!current
                         && matches!(
                             r.description_eligibility,
                             Some(Eligibility::Historical | Eligibility::Stale)
@@ -512,6 +521,10 @@ fn render(
             "[context indexed_evidence; discovery generation {}; captured sources only; selected canonical bytes verified; global membership, identity uniqueness and completeness not verified]\n\n",
             reader.snapshot().generation
         ),
+        ContextScope::IndexedDocuments => format!(
+            "[context indexed_documents; discovery generation {}; selected document dependencies verified; global membership, identity uniqueness and completeness not verified]\n\n",
+            reader.snapshot().generation
+        ),
         _ => String::new(),
     };
     let mut graph_bytes = 0;
@@ -629,22 +642,25 @@ pub(crate) fn assemble_for_query(
     )
 }
 
-/// Cached document context shares selection and packing without constructing a
-/// partial projection or granting access to strict graph operations.
-pub(crate) fn assemble_snapshot_for_query(
+/// Bounded document context shares selection and packing without a partial
+/// projection or strict graph access. IndexedDocuments callers must supply the
+/// closed authenticated catalog from the selected verification coordinator.
+pub(crate) fn assemble_bounded_documents_for_query(
     reader: &dyn QueryCatalog,
     request: &ContextRequest,
     hits: &HitSet,
     query: &str,
 ) -> Result<ContextDraft> {
-    if request.scope != ContextScope::Snapshot
-        || request.target != ContextTarget::Documents
+    if !matches!(
+        request.scope,
+        ContextScope::Snapshot | ContextScope::IndexedDocuments
+    ) || request.target != ContextTarget::Documents
         || request.documents.mode != SearchMode::Lexical
         || request.graph.is_some()
     {
         return Err(WikiError::new(
             ErrorCode::Usage,
-            "cached context supports lexical document snapshots only",
+            "bounded document assembly requires snapshot or authenticated indexed-documents lexical context",
         ));
     }
     assemble_inner(
@@ -670,10 +686,12 @@ fn assemble_inner(
     selection_action: &SelectionAction,
 ) -> Result<ContextDraft> {
     let request = normalize_request(request)?;
-    if request.scope == ContextScope::IndexedEvidence {
+    if request.scope == ContextScope::IndexedEvidence
+        || (request.scope == ContextScope::IndexedDocuments && strict_reader.is_some())
+    {
         return Err(WikiError::new(
             ErrorCode::Usage,
-            "indexed-evidence requires the selected-source verification coordinator",
+            "indexed scopes require their selected canonical verification coordinator",
         ));
     }
     let request = &request;

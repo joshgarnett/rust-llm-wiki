@@ -318,7 +318,8 @@ fn cached_assembly_authenticates_identity_hash_filters_and_protocol() {
     assert!(!hits.hits.is_empty());
     let before = reader.usage();
     let baseline =
-        assemble_snapshot_for_query(&reader, &normalized, &hits, "authoredneedle").unwrap();
+        assemble_bounded_documents_for_query(&reader, &normalized, &hits, "authoredneedle")
+            .unwrap();
     assert!(!baseline.passages().is_empty());
     let decoded = reader.usage().rows - before.rows;
     assert!(
@@ -328,21 +329,25 @@ fn cached_assembly_authenticates_identity_hash_filters_and_protocol() {
     let mut bad_hash = hits.clone();
     bad_hash.hits[0].locator.observed_hash = Blake3Hash::digest("wrong");
     assert!(
-        assemble_snapshot_for_query(&reader, &normalized, &bad_hash, "authoredneedle").is_err()
+        assemble_bounded_documents_for_query(&reader, &normalized, &bad_hash, "authoredneedle")
+            .is_err()
     );
     let mut bad_identity = hits.clone();
     bad_identity.hits[0].locator.record = None;
     assert!(
-        assemble_snapshot_for_query(&reader, &normalized, &bad_identity, "authoredneedle").is_err()
+        assemble_bounded_documents_for_query(&reader, &normalized, &bad_identity, "authoredneedle")
+            .is_err()
     );
     let mut bad_protocol = hits.clone();
     bad_protocol.dependency_fingerprint = Blake3Hash::digest("wrong domain");
     assert!(
-        assemble_snapshot_for_query(&reader, &normalized, &bad_protocol, "authoredneedle").is_err()
+        assemble_bounded_documents_for_query(&reader, &normalized, &bad_protocol, "authoredneedle")
+            .is_err()
     );
     let mut filtered = normalized;
     filtered.documents.filters.path_prefix = Some("absent/".into());
-    let draft = assemble_snapshot_for_query(&reader, &filtered, &hits, "authoredneedle").unwrap();
+    let draft =
+        assemble_bounded_documents_for_query(&reader, &filtered, &hits, "authoredneedle").unwrap();
     assert!(draft.passages().is_empty());
     assert!(!draft.omissions().is_empty());
 }

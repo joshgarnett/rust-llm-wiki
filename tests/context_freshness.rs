@@ -1528,15 +1528,67 @@ fn indexed_evidence_cannot_be_assembled_with_only_an_unverified_legacy_reader() 
     f.catalog.sync(&writer).unwrap();
     let reader = f.catalog.index_snapshot().unwrap();
     let hits = lwiki::retrieval::search(&reader, "uses", &QueryPlan::default()).unwrap();
-    let request = ContextRequest {
-        scope: ContextScope::IndexedEvidence,
-        ..Default::default()
-    };
-    assert_eq!(
-        assembly::assemble(&reader, &request, &hits, None)
-            .err()
-            .unwrap()
-            .code,
-        ErrorCode::Usage
-    );
+    for scope in [
+        ContextScope::IndexedEvidence,
+        ContextScope::IndexedDocuments,
+    ] {
+        let request = ContextRequest {
+            scope,
+            ..Default::default()
+        };
+        assert_eq!(
+            assembly::assemble(&reader, &request, &hits, None)
+                .err()
+                .unwrap()
+                .code,
+            ErrorCode::Usage
+        );
+    }
+}
+
+#[test]
+fn indexed_documents_recheck_selected_authored_support_and_marker_before_emission() {
+    for changed in [
+        "WIKI.md",
+        "knowledge/pages/architecture.md",
+        "knowledge/evidence/forward_short.md",
+    ] {
+        let f = Fixture::new();
+        let output = std::process::Command::new(test_paths::binary(env!("CARGO_BIN_EXE_lwiki")))
+            .args(["--offline", "--json", "--wiki"])
+            .arg(f.temp.path())
+            .args(["index", "rebuild", "--normalized"])
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stdout)
+        );
+        let hook = Arc::new(IndexedFileFault {
+            path: f.temp.path().join(changed),
+            replacement: None,
+            calls: AtomicUsize::new(0),
+        });
+        let error = context_with_options(
+            &f.catalog,
+            None,
+            "Architecture summary",
+            &ContextRequest {
+                scope: ContextScope::IndexedDocuments,
+                ..Default::default()
+            },
+            &ContextOptions {
+                fault: Some(hook.clone()),
+                ..Default::default()
+            },
+        )
+        .unwrap_err();
+        assert_eq!(
+            error.code,
+            ErrorCode::FreshnessConflict,
+            "{changed}: {error:?}"
+        );
+        assert_eq!(hook.calls.load(Ordering::SeqCst), 1, "{changed}");
+    }
 }

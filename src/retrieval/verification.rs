@@ -296,6 +296,9 @@ pub fn context_with_options(
     if request.scope == ContextScope::IndexedEvidence {
         return super::indexed_context::context(catalog, query, request, options);
     }
+    if request.scope == ContextScope::IndexedDocuments {
+        return super::indexed_documents::context(catalog, query, request, options);
+    }
     if catalog.operation_state()?.is_some() {
         let meter = Meter::new(&request.verification_budget);
         let request = context::validate_request(query, request)?;
@@ -316,7 +319,7 @@ pub fn context_with_options(
         let reader = catalog.cached_query_snapshot(QueryReadLimits::default())?;
         let hits =
             super::lexical::search_context_catalog(&reader, query, &request.documents, true)?;
-        let draft = context::assemble_snapshot_for_query(&reader, &request, &hits, query)?;
+        let draft = context::assemble_bounded_documents_for_query(&reader, &request, &hits, query)?;
         meter.check()?;
         if let Some(fault) = &options.fault {
             fault.check(ContextCheckpoint::BeforeFinalVerification { attempt: 0 })?;
@@ -392,10 +395,13 @@ where
     let request = context::validate_request(query, request)?;
     context::validate_selection_action(&request, &options.selection)?;
     meter.check()?;
-    if request.scope == ContextScope::IndexedEvidence {
+    if matches!(
+        request.scope,
+        ContextScope::IndexedEvidence | ContextScope::IndexedDocuments
+    ) {
         return Err(WikiError::new(
             ErrorCode::Usage,
-            "indexed-evidence requires its bounded lexical coordinator",
+            "indexed evidence scopes require their bounded lexical coordinator",
         ));
     }
     if request.scope == ContextScope::Snapshot {

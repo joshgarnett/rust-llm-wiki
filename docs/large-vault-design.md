@@ -252,8 +252,9 @@ raw bookkeeping Markdown and UTF-8 range/continuation behavior. The existing
 non-UTF-8 canonical-note representation remains empty cached text plus its parse
 diagnostic. The normalized reader's 8 MiB row admission limit counts both raw and
 search text plus metadata; the CLI's 16 MiB output ceiling does not override that
-admission limit. Synchronized normalized reads and remaining query modes still
-require migration before default activation.
+admission limit. Plain normalized reads now verify selected dependencies as described below;
+strict global read semantics and remaining query modes still require migration
+before default activation.
 
 The cached-read gate passed 48 bounded-query and CLI unit tests plus all 16
 offline CLI integration tests. Coverage includes paired legacy/normalized output,
@@ -264,7 +265,7 @@ claims. These checks qualify the cached-read route, not default activation.
 
 ### General cached discovery
 
-On a selected normalized catalog, `search QUERY --no-sync --mode lexical` now
+On a selected normalized catalog, `search QUERY --mode lexical` now
 searches authored notes and captured text through the same exact ID, title,
 alias and lexical ranking channels as the legacy index. Filters apply before
 candidate limits. Entity identity remains searchable independently of an
@@ -642,3 +643,35 @@ Neither a fast synthetic benchmark nor a correct citation establishes answer
 completeness. The existing [quality gate](rag-quality-targets.md) remains separate;
 large-vault support requires an independent critic to assess the complete workflow
 at the declared tier, not just isolated query timing.
+
+### Selected document workflow
+
+On an explicitly activated normalized index, plain lexical search uses published
+metadata, plain read verifies its selected canonical dependency closure, and an
+omitted context scope resolves to `indexed-documents`. The latter combines current
+eligible authored passages and captured source text through the existing passage
+selection and packing rules. Authored text carries its record/path/hash locator;
+only captured source text receives source-span citations. `--scope indexed-evidence`
+retains captured-only behavior, and `snapshot` remains unverified cached context.
+
+Selected verification binds exact canonical hashes and expected absences, follows
+bounded eligibility/support dependencies, authenticates selected cached rows, and
+rechecks its dependencies before returning. It performs no full-vault audit,
+implicit sync or retained-history census. Discovery still belongs to the pinned
+generation: new external files require explicit sync, and neither selected proof
+nor an earlier full `check` establishes current global membership or uniqueness.
+Explicit `--scope current` retains its strict meaning and currently refuses on
+normalized catalogs. This workflow does not activate the layout by default or
+qualify the remaining query/write modes, full scale or unseen completeness.
+
+The selected-proof design follows an established incremental-validation principle:
+reuse a derived result only after checking its recorded inputs. Rustc describes
+traversing a query's dependencies before reusing its cached result; Salsa likewise
+validates prior query inputs. The application here is narrower: authenticate the
+selected generation's relevant canonical dependencies, including successful review
+decisions that produced no error effect, then replay shared local eligibility
+rules. This does not infer that newly added files are absent or rerun the complete
+validator over a partial vault. The critical regression is an indexed successful
+decision edited from accept to reject: selected context must refuse without a
+whole-vault scan. [Rustc incremental queries](https://rustc-dev-guide.rust-lang.org/queries/incremental-compilation-in-detail.html),
+[Salsa algorithm](https://salsa-rs.github.io/salsa/reference/algorithm.html).

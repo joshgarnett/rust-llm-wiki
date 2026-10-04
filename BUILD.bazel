@@ -169,6 +169,7 @@ test_suite(
         ":api_extraction_test",
         ":catalog_scan_eligibility_test",
         ":context_cli_test",
+        ":normalized_document_workflow_test",
         ":context_freshness_test",
         ":graph_queries_test",
         ":provider_dispatch_test",

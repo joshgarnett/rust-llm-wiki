@@ -739,8 +739,9 @@ fn indexed_cli_general_search_preserves_authored_results_filters_and_cached_dry_
     .unwrap();
     let stale = normalized.cli(&["search", "page_general_a", "--no-sync"]);
     assert_eq!(stale["data"]["hits"][0]["title"], "PlanningSignal Handbook");
+    let plain = normalized.cli(&["search", "page_general_a"]);
+    assert_eq!(plain["data"], stale["data"]);
     for words in [
-        vec!["search", "PlanningSignal"],
         vec!["search", "PlanningSignal", "--no-sync", "--mode", "literal"],
         vec![
             "search",

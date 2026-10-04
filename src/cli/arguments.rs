@@ -626,7 +626,7 @@ pub struct SearchArguments {
     /// Continuation cursor from an identical query on the same index generation.
     #[arg(long)]
     pub cursor: Option<String>,
-    /// Read the existing index snapshot without syncing; freshness is not verified.
+    /// Use published discovery without synchronization; context scope determines evidence verification.
     #[arg(long)]
     pub no_sync: bool,
 }

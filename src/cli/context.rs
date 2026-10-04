@@ -9,6 +9,7 @@ pub enum Scope {
     Historical,
     Snapshot,
     IndexedEvidence,
+    IndexedDocuments,
 }
 #[derive(Debug, Clone, Copy, ValueEnum)]
 pub enum Target {
@@ -26,9 +27,10 @@ pub struct ContextArguments {
     /// Apply an ID-only host reply to the exact current candidate packet (file or - for stdin).
     #[arg(long, value_name = "FILE")]
     pub selection: Option<std::path::PathBuf>,
-    /// Evidence scope: current, historical, snapshot, or indexed-evidence (captured sources only).
-    #[arg(long, value_enum, default_value = "current")]
-    pub scope: Scope,
+    /// Evidence scope. Defaults to indexed-documents on normalized vaults, current otherwise.
+    /// Indexed-documents verifies selected authored/captured dependencies; indexed-evidence is captured-only.
+    #[arg(long, value_enum)]
+    pub scope: Option<Scope>,
     /// Retrieve document passages, graph evidence or both.
     #[arg(long, value_enum, default_value = "documents")]
     pub target: Target,
@@ -176,11 +178,12 @@ impl ContextArguments {
             })
         };
         ContextRequest {
-            scope: match self.scope {
+            scope: match self.scope.unwrap_or(Scope::Current) {
                 Scope::Current => ContextScope::Current,
                 Scope::Historical => ContextScope::Historical,
                 Scope::Snapshot => ContextScope::Snapshot,
                 Scope::IndexedEvidence => ContextScope::IndexedEvidence,
+                Scope::IndexedDocuments => ContextScope::IndexedDocuments,
             },
             target,
             documents,
