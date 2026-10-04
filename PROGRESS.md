@@ -17,10 +17,17 @@ four-input comparison reduced intercepted sync calls by about 37%. Independent
 public workflow assessment reached 9.5/10 with no observed correctness blocker
 after replaying the preserved recovery failure. A native macOS ARM64 0.2.0
 candidate and [disposable walkthrough](docs/testing-0.2.0.md) are available.
-Peak-memory and launch-resource observations remain unavailable. Retrieval
-experiments have not passed whole-task acceptance, and full scale and the latest
-strict Clippy gate remain open. These are progress checkpoints, not completion
-of the fresh goal.
+The subsequent [1k collection control](docs/validation-1k-collection.md) imported
+100.3 MB, resumed a real interruption, updated/withdrew sources and rebuilt after
+complete cache loss. All 2,898 context citations validated; warm context p95 was
+0.355 seconds initially. Its broader frozen assessment is 8.5/10 and failed:
+public search lacks citations and the initial preparation preview was unrun.
+Context completeness was 97/100 initially, then 98/100 after churn; these synthetic
+results do not replace failed realistic tasks. Main-process memory and disk were
+within observed bounds; exact process-tree peaks remain unavailable.
+Next is a coherent verified-search workflow. Full scale, whole-task quality and
+the latest strict Clippy gate remain open. These are progress checkpoints,
+not completion of the fresh goal.
 
 The 2026-10-03 context-completeness goal remains open. Independent development review found that relevant sources still lost required facts during passage selection. The [evaluation summary](docs/execution/reports/EVAL-RESEARCH.md) records measured gains, regressions and the unmet acceptance gate. The [host-selection workflow](docs/context-selection.md) now preserves verified source evidence while allowing an agent to select complementary passages; it has additional latency and unavailable model-usage accounting.
 

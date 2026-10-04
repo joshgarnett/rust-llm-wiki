@@ -1,5 +1,12 @@
 # Current contracts and local coverage
 
+The 0.2.0 trial candidate has a [1,000-document collection control](validation-1k-collection.md)
+covering interrupted import, updates, recovery and complete-cache-loss rebuild.
+Its broader frozen assessment is 8.5/10 and failed; cached search has no source
+citations and the initial preparation preview was unrun. Context citations passed,
+with remaining completeness failures. The earlier 9.5/10 small importer assessment
+and the still-unrun 25k/HIGH gates remain separate.
+
 This is the current capability router for the cleanup of 0.1.2. It records implemented surfaces and the checks that can establish local correctness; local cleanup is accepted by [the exact-source aggregate evidence](execution/reports/CLEANUP-VALIDATION.md). Historical milestone plans and research designs are preserved as history. Use the running binary's `capabilities`, `schema NAME`, and command help for exact syntax.
 
 | Area | Current contract | Local evidence and limit |

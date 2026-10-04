@@ -7,6 +7,13 @@ target is now 25,000 documents / roughly 2.5 GB of text. Capacity and unseen
 retrieval completeness remain unqualified; the version number does not certify
 those gates.
 
+The candidate now has an actual [1,000-document collection control](validation-1k-collection.md):
+import, interrupted resume, refresh/withdrawal, recovery and complete-cache-loss
+rebuild succeeded. The broader frozen assessment is 8.5/10 and remains failed:
+cached search supplies no source citations, and the initial preparation preview
+was unrun. Context citations passed; two distant-fact tasks still missed required
+information after churn. This is a useful local trial with those limits visible.
+
 The current candidate is a native macOS ARM64 release build, compiled with Rust
 optimization level 3 on macOS 26.5.2, with minimum macOS deployment target 26.5.
 Other native platforms require their own qualification. Windows vault writes
