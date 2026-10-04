@@ -111,6 +111,12 @@ pub struct ChangePayload {
 pub struct CheckOutcome {
     pub diagnostics: Vec<CatalogDiagnostic>,
     pub error_count: usize,
+    pub canonical_check_performed: bool,
+    pub cache_integrity_check_performed: bool,
+    pub cache_matches_canonical: Option<bool>,
+    pub complete: bool,
+    pub checked_snapshot: Option<ReadSnapshot>,
+    pub audit: Option<serde_json::Value>,
 }
 #[derive(Debug, Clone, Serialize)]
 pub struct DoctorOutcome {

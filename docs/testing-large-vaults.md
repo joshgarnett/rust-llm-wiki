@@ -522,8 +522,67 @@ python3 scripts/bazel.py -- test //:unit_tests //:offline_cli_test //:skill_expo
   --test_output=errors --nofetch
 ```
 
-Complete normalized `check`, remaining modes/default activation, the full large-vault
-workflow and the unseen completeness gate remain outstanding.
+At this doctor checkpoint, complete normalized `check`, remaining modes/default
+activation, the full large-vault workflow and the unseen completeness gate were
+still outstanding. The following checkpoint adds explicit checking.
+
+### Explicit normalized check checkpoint
+
+`check` now reaches a read-only reconciliation of current canonical input with
+all 18 normalized record/fact/owner families and the complete document and graph
+search indexes. It holds the writer permit, pins the selected read transaction,
+reconstructs retained revision owners, then rechecks input and publication
+authority. Canonical diagnostics remain separate from cache agreement. It does
+not synchronize, repair, publish, or inspect every unused historical payload.
+
+The temporary reference contains contentless FTS postings and consumed row IDs,
+not copied document bodies or an in-memory backup of the full database. Complete
+term/row/column/position streams, per-document token counts and native totals are checked,
+including empty and zero-token rows. Source SQL uses native read-only structural
+integrity checking. Fixed comparison plans refuse temporary sort operators;
+the exact schema's three-literal CHECK membership is a bounded native exception.
+The 32 GiB scratch cap limits growth rather than requiring that much free space
+for small vaults. Per-connection cache, input, row, history, posting and elapsed
+limits are cooperative admission controls, not measured peak process memory.
+
+The focused native gate passed 20 tests, including 54 changed/missing/extra-row
+mutations across every family, 17 search-index corruptions checked against the
+small-fixture native oracle, resource failures and exact scratch cleanup. The
+expanded broad gate passed 692 tests with three failures, eight ignored tests
+and two unchanged ledger fault matrices excluded. Its 573 passing unit tests
+include duplicate multiplicity, replacement surrogate IDs, and a held predecessor
+reader: canonical/control/index/WAL bytes and modification times stayed unchanged,
+with SQLite SHM read marks explicitly excluded. The three failures identified an
+old stale-index expectation, a macOS temporary-path alias in a test helper, and
+a misleading partial-output warning for intentional dry runs.
+
+After those corrections, the final focused gate passed **44 tests**: 31 unit
+tests, all six public check workflows and seven doctor CLI tests. It confirmed
+managed title and new-revision updates at the current publication even after
+historical build-audit fields become null, external-edit refusal, faithful invalid
+document diagnostics, dry-run preservation and human output outside a vault with
+spaces in its path. Source pins stayed unchanged during each gate. Between the
+broad and focused gates, only CLI preview handling and the two CLI test files
+changed. Changed Rust formatting and whitespace checks passed.
+
+Independent Astra review found no blockers to this tested implementation
+checkpoint and verified the final source pins, failure corrections and actual
+test logs. It awarded no package, capacity or overall-goal score; those require
+the remaining native qualification.
+
+```sh
+python3 scripts/bazel.py -- test //:unit_tests //:check_cli_test //:offline_cli_test \
+  --test_arg=full_check --test_arg=compact_audit --test_arg=normalized_metadata \
+  --test_arg=check_cli --test_arg=managed_source_title --test_arg=human_check \
+  --test_arg=doctor --test_output=errors
+```
+
+Native 1k/10k check resource qualification and the full 100k/~10 GB lifecycle
+remain pending. The diagnostic limit bounds accepted output after projection;
+it does not bound peak diagnostic allocation. Duplicate matching charges every
+visited candidate but can rescan prefixes. These costs require measurement before
+claiming large-vault audit usability. The remaining modes/default activation and
+unseen semantic-completeness gate are also still open.
 
 ### Acceptance evidence
 

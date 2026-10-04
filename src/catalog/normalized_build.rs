@@ -2,8 +2,7 @@
 use super::{file_types::BuildIdentity, normalized_schema, sql, types::*};
 use crate::{
     domain::{
-        Blake3Hash, Eligibility, ErrorCode, ReadSnapshot, RecordId, RecordKind, Result,
-        VaultRelativePath, WikiError,
+        Blake3Hash, Eligibility, ErrorCode, ReadSnapshot, Result, VaultRelativePath, WikiError,
     },
     vault::{ExpectedState, VaultFs, WriterPermit},
 };
@@ -469,151 +468,7 @@ impl<'a> NormalizedBuilder<'a> {
         projection: &ValidationProjection,
         facts: &super::eligibility_facts::NormalizedEligibilityFacts,
     ) -> Result<()> {
-        if facts.version != 2
-            || facts.records.keys().ne(projection.records.keys())
-            || projection
-                .records
-                .values()
-                .any(|row| !row.dependencies.is_empty())
-        {
-            return Err(WikiError::new(
-                ErrorCode::IndexCorrupt,
-                "normalized proof layout or record scope is incomplete",
-            ));
-        }
-        let expected: std::collections::BTreeMap<_, _> = projection
-            .dependencies
-            .iter()
-            .map(|dependency| (&dependency.path, &dependency.expected))
-            .collect();
-        for (path, observed) in &facts.observed {
-            self.guard()?;
-            if expected.get(path).copied() != Some(observed) {
-                return Err(WikiError::new(
-                    ErrorCode::IndexCorrupt,
-                    "normalized observation differs from complete dependency inventory",
-                ));
-            }
-        }
-        for (id, fact) in &facts.records {
-            let record = &projection.records[id];
-            let own = ExpectedState::Hash(record.hash.clone());
-            if !fact.direct_paths.contains(&record.path)
-                || expected.get(&record.path).copied() != Some(&own)
-            {
-                return Err(WikiError::new(
-                    ErrorCode::IndexCorrupt,
-                    "normalized record lacks its exact own canonical state",
-                ));
-            }
-            if record.record.kind() == RecordKind::Assertion {
-                let mut seen = std::collections::BTreeSet::new();
-                for destination in super::scan::list(&record.record, "wiki_evidence") {
-                    let resolution = match crate::records::links::untyped_lookup(&destination) {
-                        crate::records::links::UntypedLookup::External => {
-                            crate::records::LinkResolution::External
-                        }
-                        _ => crate::records::LinkResolution::Missing,
-                    };
-                    let fact = super::link_facts::untyped_fact(
-                        &record.path,
-                        0,
-                        &destination,
-                        &resolution,
-                    )?;
-                    for key in fact.keys {
-                        self.guard()?;
-                        if !seen.insert(key.clone()) {
-                            continue;
-                        }
-                        self.admit(checked_sum(&[
-                            256,
-                            id.as_str().len() as u64,
-                            key.value.len() as u64,
-                        ])?)?;
-                        self.connection()
-                            .execute(
-                                "INSERT INTO assertion_navigation_keys VALUES(?1,?2,?3)",
-                                params![link_key_kind(key.kind), key.value, id.as_str()],
-                            )
-                            .map_err(build_sql_error)?;
-                        self.commit_lookup("assertion_navigation_key", &(id, &key))?;
-                        self.stats.assertion_navigation_keys += 1;
-                    }
-                }
-            }
-            if record.record.kind() == RecordKind::Assertion
-                && record.record.string("wiki_status") == Some("accepted")
-                && let Some((key, negated)) = super::eligibility::opposition_key(&record.record)
-            {
-                let bytes = counted_json(&key, self.limits.max_row_bytes)?;
-                self.admit(checked_sum(&[256, id.as_str().len() as u64, bytes])?)?;
-                self.connection().execute("INSERT INTO opposition_members(key_json,negated,assertion_id) VALUES(?1,?2,?3)", params![sql::json(&key)?,negated,id.as_str()]).map_err(build_sql_error)?;
-                self.commit_lookup("opposition_member", &(&key, negated, id))?;
-                self.stats.opposition_members += 1;
-            }
-            let bytes = counted_json(
-                &(&fact.baseline, &fact.structural),
-                self.limits.max_row_bytes,
-            )?;
-            self.admit(checked_sum(&[256, id.as_str().len() as u64, bytes])?)?;
-            self.connection()
-                .execute(
-                    "INSERT INTO record_eligibility_facts(record_id,baseline_json,structural_json) VALUES(?1,?2,?3)",
-                    params![id.as_str(), sql::json(&fact.baseline)?, sql::json(&fact.structural)?],
-                )
-                .map_err(build_sql_error)?;
-            self.commit_lookup("baseline", &(id, &fact.baseline, &fact.structural))?;
-            self.stats.eligibility_facts += 1;
-            for path in &fact.direct_paths {
-                if !expected.contains_key(path)
-                    || (path != &record.path && crate::sources::revision::canonical_path(path))
-                {
-                    return Err(WikiError::new(
-                        ErrorCode::IndexCorrupt,
-                        "normalized direct path lacks state or captures another canonical note",
-                    ));
-                }
-                self.admit(checked_sum(&[
-                    256,
-                    id.as_str().len() as u64,
-                    path.as_str().len() as u64,
-                ])?)?;
-                self.connection()
-                    .execute(
-                        "INSERT INTO record_direct_paths(owner_id,path) VALUES(?1,?2)",
-                        params![id.as_str(), path.as_str()],
-                    )
-                    .map_err(build_sql_error)?;
-                self.commit_lookup("direct_path", &(id, path))?;
-                self.stats.direct_paths += 1;
-            }
-        }
-        for edge in &facts.edges {
-            if !projection.records.contains_key(&edge.owner_id) {
-                return Err(WikiError::new(
-                    ErrorCode::IndexCorrupt,
-                    "normalized semantic edge has unknown owner",
-                ));
-            }
-            // Missing targets remain explicit facts for structurally invalid
-            // records. They must not be silently removed during reconstruction.
-            let bytes = counted_json(edge, self.limits.max_row_bytes)?;
-            self.admit(checked_sum(&[256, bytes])?)?;
-            self.connection()
-                .execute(
-                    "INSERT INTO semantic_edges(owner_id,target_id,role_json) VALUES(?1,?2,?3)",
-                    params![
-                        edge.owner_id.as_str(),
-                        edge.target_id.as_str(),
-                        sql::json(&edge.role)?
-                    ],
-                )
-                .map_err(build_sql_error)?;
-            self.commit_lookup("semantic_edge", edge)?;
-            self.stats.semantic_edges += 1;
-        }
-        Ok(())
+        super::normalized_metadata::visit_eligibility_rows(projection, facts, self)
     }
 
     fn insert_link_fact(&mut self, row: &super::link_facts::OwnedLinkFact) -> Result<()> {
@@ -727,86 +582,7 @@ impl<'a> NormalizedBuilder<'a> {
     }
 
     fn insert_refresh_lookups(&mut self, projection: &ValidationProjection) -> Result<()> {
-        // Rebuild work may inspect complete metadata once. Refresh queries use
-        // these source-local indexes instead of reading historical payloads.
-        for source in projection.records.values().filter(|row| {
-            row.record.kind() == RecordKind::Source && row.eligibility != Eligibility::Invalid
-        }) {
-            let revisions = source
-                .record
-                .field("wiki_revisions")
-                .and_then(serde_json::Value::as_array)
-                .ok_or_else(|| {
-                    WikiError::new(
-                        ErrorCode::IndexCorrupt,
-                        "source revision list missing from validated projection",
-                    )
-                })?;
-            for (ordinal, value) in revisions.iter().enumerate() {
-                let revision_id = RecordId::new(value.as_str().ok_or_else(|| {
-                    WikiError::new(
-                        ErrorCode::IndexCorrupt,
-                        "source revision identity is not text",
-                    )
-                })?)?;
-                let row = projection
-                    .records
-                    .get(&revision_id)
-                    .filter(|row| {
-                        row.record.kind() == RecordKind::Revision
-                            && row.record.string("wiki_source_id")
-                                == Some(source.record.id().as_str())
-                    })
-                    .ok_or_else(|| {
-                        WikiError::new(
-                            ErrorCode::IndexCorrupt,
-                            "validated retained revision identity is missing or foreign",
-                        )
-                    })?;
-                let required = |field| {
-                    row.record.string(field).ok_or_else(|| {
-                        WikiError::new(
-                            ErrorCode::IndexCorrupt,
-                            format!("validated revision lacks {field}"),
-                        )
-                    })
-                };
-                let original = required("wiki_original_hash")?;
-                let content = row.record.string("wiki_content_hash");
-                let fingerprint = required("wiki_extractor_fingerprint")?;
-                let status = required("wiki_extraction_status")?;
-                self.admit(checked_sum(&[
-                    256,
-                    source.record.id().as_str().len() as u64,
-                    revision_id.as_str().len() as u64,
-                    original.len() as u64,
-                    content.map_or(0, str::len) as u64,
-                    fingerprint.len() as u64,
-                    status.len() as u64,
-                ])?)?;
-                self.connection().execute("INSERT INTO source_revision_identity(source_id,revision_id,retained_ordinal,original_hash,content_hash,extractor_fingerprint,extraction_status) VALUES(?1,?2,?3,?4,?5,?6,?7)",params![source.record.id().as_str(),revision_id.as_str(),sql::integer(ordinal as u64)?,original,content,fingerprint,status]).map_err(build_sql_error)?;
-            }
-        }
-        for row in projection
-            .records
-            .values()
-            .filter(|row| row.record.kind() == RecordKind::Evidence)
-        {
-            let source = row.record.string("wiki_source_id").ok_or_else(|| {
-                WikiError::new(ErrorCode::IndexCorrupt, "evidence lacks source identity")
-            })?;
-            let assertion = row.record.string("wiki_assertion_id").ok_or_else(|| {
-                WikiError::new(ErrorCode::IndexCorrupt, "evidence lacks assertion identity")
-            })?;
-            self.admit(checked_sum(&[
-                256,
-                source.len() as u64,
-                row.record.id().as_str().len() as u64,
-                assertion.len() as u64,
-            ])?)?;
-            self.connection().execute("INSERT INTO source_evidence(source_id,evidence_id,assertion_id) VALUES(?1,?2,?3)",params![source,row.record.id().as_str(),assertion]).map_err(build_sql_error)?;
-        }
-        Ok(())
+        super::normalized_metadata::visit_refresh_rows(projection, self)
     }
 
     pub fn finish(self, projection: &ValidationProjection) -> Result<CompletedCatalog> {
@@ -1076,6 +852,124 @@ impl<'a> NormalizedBuilder<'a> {
         })
     }
 }
+impl super::normalized_metadata::MetadataSink for NormalizedBuilder<'_> {
+    fn progress(&mut self) -> Result<()> {
+        self.guard()
+    }
+
+    fn row(&mut self, row: super::normalized_metadata::MetadataRow<'_>) -> Result<()> {
+        use super::normalized_metadata::MetadataRow;
+        match row {
+            MetadataRow::AssertionNavigation { assertion: id, key } => {
+                self.admit(checked_sum(&[
+                    256,
+                    id.as_str().len() as u64,
+                    key.value.len() as u64,
+                ])?)?;
+                self.connection()
+                    .execute(
+                        "INSERT INTO assertion_navigation_keys VALUES(?1,?2,?3)",
+                        params![link_key_kind(key.kind), key.value, id.as_str()],
+                    )
+                    .map_err(build_sql_error)?;
+                self.commit_lookup("assertion_navigation_key", &(id, &key))?;
+                self.stats.assertion_navigation_keys += 1;
+            }
+            MetadataRow::Opposition {
+                assertion: id,
+                key,
+                negated,
+            } => {
+                let bytes = counted_json(&key, self.limits.max_row_bytes)?;
+                self.admit(checked_sum(&[256, id.as_str().len() as u64, bytes])?)?;
+                self.connection().execute("INSERT INTO opposition_members(key_json,negated,assertion_id) VALUES(?1,?2,?3)",
+                    params![sql::json(&key)?, negated, id.as_str()]).map_err(build_sql_error)?;
+                self.commit_lookup("opposition_member", &(&key, negated, id))?;
+                self.stats.opposition_members += 1;
+            }
+            MetadataRow::Baseline {
+                id,
+                baseline,
+                structural,
+            } => {
+                let bytes = counted_json(&(baseline, structural), self.limits.max_row_bytes)?;
+                self.admit(checked_sum(&[256, id.as_str().len() as u64, bytes])?)?;
+                self.connection().execute("INSERT INTO record_eligibility_facts(record_id,baseline_json,structural_json) VALUES(?1,?2,?3)",
+                    params![id.as_str(), sql::json(baseline)?, sql::json(structural)?]).map_err(build_sql_error)?;
+                self.commit_lookup("baseline", &(id, baseline, structural))?;
+                self.stats.eligibility_facts += 1;
+            }
+            MetadataRow::DirectPath { owner: id, path } => {
+                self.admit(checked_sum(&[
+                    256,
+                    id.as_str().len() as u64,
+                    path.as_str().len() as u64,
+                ])?)?;
+                self.connection()
+                    .execute(
+                        "INSERT INTO record_direct_paths(owner_id,path) VALUES(?1,?2)",
+                        params![id.as_str(), path.as_str()],
+                    )
+                    .map_err(build_sql_error)?;
+                self.commit_lookup("direct_path", &(id, path))?;
+                self.stats.direct_paths += 1;
+            }
+            MetadataRow::SemanticEdge(edge) => {
+                let bytes = counted_json(edge, self.limits.max_row_bytes)?;
+                self.admit(checked_sum(&[256, bytes])?)?;
+                self.connection()
+                    .execute(
+                        "INSERT INTO semantic_edges(owner_id,target_id,role_json) VALUES(?1,?2,?3)",
+                        params![
+                            edge.owner_id.as_str(),
+                            edge.target_id.as_str(),
+                            sql::json(&edge.role)?
+                        ],
+                    )
+                    .map_err(build_sql_error)?;
+                self.commit_lookup("semantic_edge", edge)?;
+                self.stats.semantic_edges += 1;
+            }
+            MetadataRow::SourceRevision {
+                source,
+                revision,
+                ordinal,
+                original,
+                content,
+                fingerprint,
+                status,
+            } => {
+                self.admit(checked_sum(&[
+                    256,
+                    source.as_str().len() as u64,
+                    revision.as_str().len() as u64,
+                    original.len() as u64,
+                    content.map_or(0, str::len) as u64,
+                    fingerprint.len() as u64,
+                    status.len() as u64,
+                ])?)?;
+                self.connection().execute("INSERT INTO source_revision_identity(source_id,revision_id,retained_ordinal,original_hash,content_hash,extractor_fingerprint,extraction_status) VALUES(?1,?2,?3,?4,?5,?6,?7)",
+                    params![source.as_str(), revision.as_str(), sql::integer(ordinal as u64)?, original, content, fingerprint, status]).map_err(build_sql_error)?;
+            }
+            MetadataRow::SourceEvidence {
+                source,
+                evidence,
+                assertion,
+            } => {
+                self.admit(checked_sum(&[
+                    256,
+                    source.len() as u64,
+                    evidence.as_str().len() as u64,
+                    assertion.len() as u64,
+                ])?)?;
+                self.connection().execute("INSERT INTO source_evidence(source_id,evidence_id,assertion_id) VALUES(?1,?2,?3)",
+                    params![source, evidence.as_str(), assertion]).map_err(build_sql_error)?;
+            }
+        }
+        Ok(())
+    }
+}
+
 impl RetrievalSink for NormalizedBuilder<'_> {
     fn link_fact(&mut self, row: super::link_facts::OwnedLinkFact) -> Result<()> {
         let result = self.insert_link_fact(&row);
@@ -1226,7 +1120,7 @@ impl Write for CountWriter {
         Ok(())
     }
 }
-fn counted_json<T: Serialize + ?Sized>(value: &T, limit: u64) -> Result<u64> {
+pub(crate) fn counted_json<T: Serialize + ?Sized>(value: &T, limit: u64) -> Result<u64> {
     let mut writer = CountWriter {
         bytes: 0,
         limit,

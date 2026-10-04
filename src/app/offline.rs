@@ -931,11 +931,49 @@ impl OfflineApp {
         })
     }
     pub fn check(&self) -> Result<CheckOutcome> {
+        if self.options.dry_run {
+            return Ok(CheckOutcome {
+                diagnostics: Vec::new(),
+                error_count: 0,
+                canonical_check_performed: false,
+                cache_integrity_check_performed: false,
+                cache_matches_canonical: None,
+                complete: false,
+                checked_snapshot: None,
+                audit: None,
+            });
+        }
+        let catalog = self.catalog();
+        if catalog.operation_state()?.is_some() {
+            let writer = self.writer()?;
+            let result = catalog.check_normalized(&writer)?;
+            return Ok(CheckOutcome {
+                error_count: result.diagnostics.len(),
+                diagnostics: result.diagnostics,
+                canonical_check_performed: true,
+                cache_integrity_check_performed: true,
+                cache_matches_canonical: Some(true),
+                complete: true,
+                checked_snapshot: Some(result.snapshot),
+                audit: Some(serde_json::json!({
+                    "layout":"normalized", "input":result.input, "work":result.work,
+                    "search_index":result.search_index, "scratch_bytes":result.scratch_bytes,
+                    "scratch_cleaned":true, "revision_owner_history_checked":true,
+                    "unused_retained_payloads_checked":false,
+                })),
+            });
+        }
         let p = scan::scan(&self.fs, &self.vault_id)?;
         let error_count = p.diagnostics.len();
         Ok(CheckOutcome {
             diagnostics: p.diagnostics,
             error_count,
+            canonical_check_performed: true,
+            cache_integrity_check_performed: false,
+            cache_matches_canonical: None,
+            complete: true,
+            checked_snapshot: None,
+            audit: None,
         })
     }
     pub fn doctor(&self) -> Result<DoctorOutcome> {

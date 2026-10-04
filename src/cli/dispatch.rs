@@ -120,6 +120,9 @@ fn failure(command: &str, error: WikiError) -> Envelope {
     if error.details.get("partial_export").and_then(Value::as_bool) == Some(true) {
         envelope.meta.partial = true;
     }
+    if command == "check" && error.details.get("complete").and_then(Value::as_bool) == Some(false) {
+        envelope.meta.partial = true;
+    }
     envelope.error = Some(error_output(error));
     envelope
 }
@@ -921,6 +924,9 @@ fn execute_inner(args: &Arguments) -> Result<Envelope> {
         Command::Check => {
             let outcome = app.check()?;
             let count = outcome.error_count;
+            // A successful preview intentionally skips checking; it is not
+            // truncated output or retained partial work.
+            envelope.meta.partial = !outcome.complete && !args.dry_run;
             envelope.data = value(outcome)?;
             if count != 0 {
                 envelope.ok = false;
@@ -1664,6 +1670,24 @@ fn present_inner(
                 "Canonical, history and cache-integrity audits: not performed. Canonical freshness: unknown."
             )?;
             writeln!(output, "Canonical diagnostics: {command_prefix} check")
+        }
+        OutputFormat::Human if envelope.command == "check" => {
+            if envelope.data["canonical_check_performed"] != true {
+                writeln!(
+                    output,
+                    "Dry run: canonical and cache checks were not performed."
+                )
+            } else if envelope.data["cache_matches_canonical"] == true {
+                writeln!(
+                    output,
+                    "Check complete: canonical documents and selected index agree; no knowledge diagnostics."
+                )
+            } else {
+                writeln!(
+                    output,
+                    "Canonical check complete: no knowledge diagnostics. Cache integrity was not checked (legacy catalog)."
+                )
+            }
         }
         OutputFormat::Human if envelope.command == "read" => write!(
             output,

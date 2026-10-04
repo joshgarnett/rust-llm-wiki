@@ -252,7 +252,7 @@ fn graph_unindexed_sizes_are_zero(mut blob: &[u8]) -> bool {
 type SchemaRow = (String, String, String, Option<String>);
 fn schema_rows(connection: &Connection) -> Result<Vec<SchemaRow>> {
     let mut statement = connection
-        .prepare("SELECT type,name,tbl_name,sql FROM sqlite_schema ORDER BY type,name,tbl_name")
+        .prepare("SELECT type,name,tbl_name,sql FROM sqlite_schema")
         .map_err(sql::sql_error)?;
     let mut rows = statement.query([]).map_err(sql::sql_error)?;
     let mut result = Vec::new();
@@ -282,6 +282,8 @@ fn schema_rows(connection: &Connection) -> Result<Vec<SchemaRow>> {
             row.get(3).map_err(sql::sql_error)?,
         ));
     }
+    // Bound objects/bytes before sorting, including a hostile source schema.
+    result.sort();
     Ok(result)
 }
 /// Bounded schema/configuration compatibility only; no ordinary rows, postings,

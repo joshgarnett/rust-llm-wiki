@@ -118,6 +118,32 @@ Stderr is for concise diagnostics/progress. With JSON/JSONL, it never carries a 
 
 Limit truncation during ordinary discovery is a successful bounded query, with `partial: true`. A requested complete operation that stops at its budget returns exit 7 with its durable partial result. `check` reports diagnostics as data and returns 9 for error-level invalid records; warnings alone do not fail it. `doctor` does not probe providers unless `--probe` is explicit.
 
+With a normalized catalog, explicit `check` holds the writer permit and compares
+current canonical input with every stored record family, retained revision-owner
+authority and the complete document/graph search indexes. It reads the selected
+database without repairing, synchronizing or publishing it. A private temporary
+database stores search postings and consumed row identities, without another copy
+of document bodies. Source input and publication authority are rechecked before
+success. Managed writes wait while this maintenance command holds the permit;
+ordinary reads can continue.
+
+The result separates `canonical_check_performed`,
+`cache_integrity_check_performed`, `cache_matches_canonical`, `complete` and
+`checked_snapshot`. A faithful cache can agree with invalid canonical documents;
+those diagnostics still produce exit 9. A partial, corrupt or resource-limited
+audit cannot report agreement. Error details identify the failed phase, known
+snapshot and scratch cleanup result; cleanup failures preserve their owned path.
+Legacy `check` retains canonical diagnostics with cache checking explicitly
+unperformed. Dry-run skips both scans and returns `complete: false`.
+
+Normalized checks have a cooperative 30-minute deadline, finite input/work limits,
+32 MiB SQLite caches per connection and a 32 GiB temporary-database growth cap.
+The cap does not require 32 GiB free for a small vault. Fixed comparison query
+plans refuse temporary sorting. These are admission limits, not measured peak
+RSS or large-vault throughput guarantees. Retained owner checking does not audit
+every unused historical payload. Use `index sync` for external edits or
+`index rebuild` to replace a corrupt cache.
+
 `doctor` is a bounded status observation. Its `check` is null; canonical, history
 and cache-integrity checks are marked unperformed, with canonical freshness
 unknown. `cache_state: header_available` means the selected header was read,

@@ -1147,7 +1147,7 @@ fn poison_unrelated_doctor_inputs(root: &Path) {
 }
 
 #[test]
-fn doctor_cli_ignores_unrelated_malformed_canonical_and_history_but_check_finds_canonical() {
+fn doctor_cli_ignores_unrelated_malformed_inputs_but_explicit_check_refuses() {
     for normalized in [false, true] {
         let temp = doctor_fixture(normalized);
         let root = temp.path();
@@ -1187,15 +1187,24 @@ fn doctor_cli_ignores_unrelated_malformed_canonical_and_history_but_check_finds_
             assert_eq!(fs::read(root.join(name)).unwrap(), bytes);
         }
         let (exit, checked) = invoke(Some(root), &["check"], None);
-        assert_eq!(exit, 9, "{checked}");
-        assert!(
-            checked["data"]["diagnostics"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .any(|diagnostic| diagnostic["path"] == "broken.md"),
-            "{checked}"
-        );
+        if normalized {
+            // The newly added malformed note also makes the selected index
+            // stale. Full reconciliation refuses before claiming completeness.
+            assert_eq!(exit, 5, "{checked}");
+            assert_eq!(checked["error"]["code"], "INDEX_CORRUPT");
+            assert_eq!(checked["error"]["details"]["complete"], false);
+            assert_eq!(checked["meta"]["partial"], true);
+        } else {
+            assert_eq!(exit, 9, "{checked}");
+            assert!(
+                checked["data"]["diagnostics"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|diagnostic| diagnostic["path"] == "broken.md"),
+                "{checked}"
+            );
+        }
     }
 }
 
