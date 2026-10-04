@@ -466,15 +466,22 @@ generation. Reconciliation and rebuild must stream bounded batches, with durable
 checkpoints and interrupted-publication recovery. Batch source capture must avoid
 one full publication per document while preserving individual immutable revisions.
 
-The next public lifecycle package must remove whole-corpus memory retention
-before exposing normalized rebuild/sync/check. The current maintenance
-`scan_input` retains every Markdown payload, and `SourceView::from_input`
-copies captured content into an overlay. Streaming SQL inserts does not remove
-those allocations. Use a bounded membership/hash/size manifest, authenticated
-named reads and one shared canonical-note authority; consume and release captured
-payloads individually. Budget retained authored notes, graph state and temporary
-copies separately. Legacy closed-input change validation keeps its current
-semantics.
+The next public lifecycle package must bound retained canonical-note state while
+connecting normalized rebuild/sync/check. The scanner excludes captured revision
+payloads such as `content.md`; ordinary captures are read individually through
+named source reads. It does **not** retain the entire captured corpus in
+`scan_input`. That input does retain scanned canonical/authored Markdown, and
+`input_notes` plus `SourceView::from_input` parse separate copies. Share one
+immutable parsed-note authority and account for retained authored bytes, graph
+state and temporary projections. Preserve legacy closed-input validation.
+
+Maintenance also needs consistent named reads and a final input recheck before
+publication. Detect conflicting observations even if an eligibility check handles
+a read error as an invalid source. Use the existing budgeted path resolution;
+ordinary ancestor checks already avoid full sibling enumeration when no vault
+marker exists. Charge retained path bytes during scanning, before accumulating
+an unbounded path list. Additional full-payload passes or new path bypasses need
+measured justification; they are not consequences of the note-sharing change.
 
 An unchanged explicit sync can preserve the published epoch after comparing the
 complete current input commitments and parser/layout compatibility. It need not
