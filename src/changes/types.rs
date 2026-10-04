@@ -77,13 +77,15 @@ pub struct PreparedChange {
 
 /// Namespace words are folded by the immutable-tree parser; identity path
 /// components keep their exact spelling, including legacy non-RecordId names.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct RevisionTreeKey {
     pub source_component: String,
     pub revision_component: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct RevisionOwnerRow {
     pub key: RevisionTreeKey,
     pub change: PreparedChange,

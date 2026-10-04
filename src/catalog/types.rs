@@ -120,7 +120,8 @@ pub(crate) trait RetrievalSink {
     fn link(&mut self, row: LinkRow) -> Result<()>;
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct IdentityClaimRow {
     pub id: RecordId,
     pub path: VaultRelativePath,

@@ -183,7 +183,7 @@ impl ChangeEngine {
     /// Common mutation/journal path. Callers establish and retain their typed
     /// validation baseline before entering, and supply the matching immutable
     /// tree guard. Publication and whole-graph validation stay with the caller.
-    fn apply_files_to_files_applied(
+    pub(super) fn apply_files_to_files_applied(
         &self,
         permit: &WriterPermit,
         change: &PreparedChange,
@@ -399,7 +399,7 @@ impl ChangeEngine {
         }
         Ok(())
     }
-    fn revision_failure<T>(
+    pub(super) fn revision_failure<T>(
         &self,
         permit: &WriterPermit,
         manifest: &ChangeManifest,
@@ -544,7 +544,7 @@ impl ChangeEngine {
             format!("change conflict during {phase}; unfamiliar bytes preserved"),
         ))
     }
-    fn require_all_after(
+    pub(super) fn require_all_after(
         &self,
         permit: &WriterPermit,
         manifest: &ChangeManifest,

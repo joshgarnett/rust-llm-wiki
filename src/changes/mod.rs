@@ -2,6 +2,7 @@
 pub mod apply;
 pub mod history;
 pub(crate) mod immutable;
+pub(crate) mod indexed_refresh;
 pub mod journal;
 pub(crate) mod operation_authority;
 pub use history::CommittedOutputProof;

@@ -64,6 +64,27 @@ The shared file-application loop preserves existing journaling and tree guards;
 71 native recovery, journal and source-evidence tests passed (one ignored),
 including injected failures before and after durable file-operation boundaries.
 
+The internal refresh publisher now retains the exact versioned row-change plan
+before canonical writes. Its publication hash binds the starting snapshot,
+prepared manifest and retained plan. Rows, search postings, revision ownership
+and the next epoch commit in one transaction. Recovery recognizes that exact
+publication before opening a starting snapshot that may already be obsolete.
+Historical completed retries use the retained outcome before constructing a
+session for the current catalog.
+
+The connected catalog/source/recovery gate passed 157 tests (two ignored).
+Coverage includes source-title and new-revision publication, held readers,
+failures before and after SQL commit, interrupted acknowledgement, retained
+terminal receipts with shortened operational journals, and immutable ownership.
+An interrupted SQL write preserves its original budget error and rolls back
+ordinary rows and search postings together.
+
+This integration is not public activation. Direct admission of a raw row plan is
+limited to tests: structural validity and matching checksums do not prove that a plan
+updates every affected record. Production admission still requires the bounded
+semantic projector, including dependent eligibility and link resolution, and
+the selected-proof layout must support authored documents and graph modes.
+
 ## Why a redesign is necessary
 
 A public 299-source corpus exposed an operational failure before answer quality
@@ -153,8 +174,9 @@ registry reconstruction and bounded guard passed 112 catalog/authority tests
 (two ignored) and eight existing native revision-recovery regressions. Coverage
 includes removed committed trees, aborted changes, conflicting retained histories
 and interrupted publication. Reconstruction checks cooperative deadlines and a
-separate history-work limit even when history emits no ownership rows. Finalizing
-an already committed delta after a crash still requires separate integration.
+separate history-work limit even when history emits no ownership rows. The internal
+refresh session uses a separate finalization guard after verifying the intended
+publication and its exact owner rows; it does not broaden the starting-epoch guard.
 
 Use independently addressable catalog records, source manifests, reverse
 dependencies and retrieval units. Query only required rows and bounded candidate

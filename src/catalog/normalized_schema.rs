@@ -42,6 +42,7 @@ CREATE VIRTUAL TABLE graph_vocab USING fts5vocab(graph_fts,'instance');
 CREATE TABLE records(id TEXT PRIMARY KEY,kind TEXT NOT NULL,path TEXT NOT NULL,hash TEXT NOT NULL,authored_status TEXT,eligibility TEXT NOT NULL,identity_eligibility TEXT,description_eligibility TEXT,disputed INTEGER NOT NULL CHECK(disputed IN (0,1)),row_json TEXT NOT NULL);
 CREATE UNIQUE INDEX record_paths ON records(path);
 CREATE TABLE identity_claims(record_id TEXT NOT NULL,path TEXT NOT NULL,file_hash TEXT NOT NULL,kind TEXT,PRIMARY KEY(record_id,path));
+CREATE INDEX identity_claim_paths ON identity_claims(path);
 CREATE TABLE source_revision_identity(source_id TEXT NOT NULL,revision_id TEXT NOT NULL,retained_ordinal INTEGER NOT NULL CHECK(retained_ordinal>=0),original_hash TEXT NOT NULL,content_hash TEXT,extractor_fingerprint TEXT NOT NULL,extraction_status TEXT NOT NULL,PRIMARY KEY(source_id,revision_id),UNIQUE(source_id,retained_ordinal));
 CREATE INDEX source_revision_matches ON source_revision_identity(source_id,original_hash,content_hash,extractor_fingerprint,retained_ordinal);
 CREATE TABLE source_evidence(source_id TEXT NOT NULL,evidence_id TEXT NOT NULL,assertion_id TEXT NOT NULL,PRIMARY KEY(source_id,evidence_id));

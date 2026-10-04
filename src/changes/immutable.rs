@@ -130,6 +130,50 @@ fn conflict(message: impl Into<String>) -> WikiError {
 }
 
 impl ChangeEngine {
+    /// Exact manifest-owned roots, without enumerating unrelated retained changes.
+    /// This is a structural inventory; callers still prove completed membership.
+    pub(crate) fn manifest_revision_owners(
+        &self,
+        change: &PreparedChange,
+    ) -> Result<Vec<RevisionOwnerRow>> {
+        let (manifest, hash) = self.load_manifest_structure(&change.change_id)?;
+        if hash != change.manifest_hash {
+            return Err(super::apply::recovery_error(
+                "revision inventory manifest changed",
+            ));
+        }
+        Ok(tree_inventory(&manifest)?
+            .iter()
+            .map(|tree| owner_row(tree, change))
+            .collect())
+    }
+
+    /// The seal is only constructible after verification of the exact intended
+    /// SQL publication and its complete owner rows. Starting-epoch guards remain
+    /// separate and cannot authorize this post-publication recovery phase.
+    pub(super) fn verify_indexed_finalization(
+        &self,
+        writer: &WriterPermit,
+        seal: &super::indexed_refresh::VerifiedIndexedRefreshPublication,
+    ) -> Result<()> {
+        seal.require_for(self, writer)?;
+        let change = &seal.proof().change;
+        let (manifest, hash) = self.load_manifest_structure(&change.change_id)?;
+        if hash != change.manifest_hash {
+            return Err(super::apply::recovery_error(
+                "finalization manifest changed",
+            ));
+        }
+        self.verify_revision_trees_with(writer, &manifest, &hash, true, &|ownership| {
+            if ownership.change != *change {
+                return Err(super::apply::recovery_error(
+                    "finalization ownership changed",
+                ));
+            }
+            seal.require_for(self, writer)
+        })
+    }
+
     /// Abandonment cannot release ownership of a tree with unplanned members.
     /// Conservatively require the complete original revision namespace absent.
     pub(crate) fn require_abandoned_revision_trees(&self, manifest: &ChangeManifest) -> Result<()> {

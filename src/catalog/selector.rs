@@ -633,6 +633,26 @@ pub(crate) fn configure_wal(connection: &Connection) -> Result<()> {
     Ok(())
 }
 
+/// Read only the selected physical identity under the acquisition gate so WAL
+/// preflight can run before a missing SHM would prevent opening a query reader.
+/// This grants no header or canonical publication authority.
+pub(crate) fn delta_selection(
+    fs: &VaultFs,
+    writer: &WriterPermit,
+    vault: &RecordId,
+    timeout: Duration,
+) -> Result<CatalogSelection> {
+    writer.require_root(fs.root())?;
+    let gate = required_lock(
+        Checked::open(&path(fs, GATE)?, false, true)?,
+        false,
+        timeout,
+    )?;
+    let selected = selection(fs, vault)?.ok_or_else(|| corrupt("delta selection is absent"))?;
+    gate.checked.verify()?;
+    Ok(selected)
+}
+
 /// Preflight before canonical writes. Only first migration or missing-sidecar
 /// recovery of SHM needs exclusive lifetime ownership; ready WAL readers may
 /// remain. A missing WAL is never recreated by this preflight.
