@@ -223,6 +223,20 @@ trials accumulate retained history. Filesystem metadata and index pages are warm
 These results meet the prospective one-second update target at 1k, but do not
 qualify 100k capacity, logical-work scaling, all query modes or semantic quality.
 
+The same pinned binary and protocol subsequently passed all 15 pairs at 10,000
+sources (1 GB current content). Unchanged refresh had median/max 41/43 ms,
+title-only 692/699 ms, and changed content 1.604/1.722 seconds. Following context
+had medians 49–51 ms and maximum 54 ms. **Changed refresh missed the prospective
+one-second target**, despite meeting the frozen acceptance ceiling. This warrants
+investigating update-path work before extrapolating to 100k; a passing diagnostic
+status does not mean every UX target passed.
+
+The 10k export took 415.3 seconds, with 781 MB native peak RSS and 5.18 GB allocated;
+the benchmark took 319.2 seconds including setup and verification. The complete
+account, including earlier fixtures, used 11.64 GB. Export time grew 11.1× for 10×
+content. These fixture and warm-command measurements remain development evidence,
+with the same exclusions as the 1k result.
+
 ### Acceptance evidence
 
 Freeze the binary/tree, protocol, generator/seed, manifests, expected outcomes,
