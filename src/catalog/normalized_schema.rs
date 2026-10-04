@@ -27,6 +27,7 @@ CREATE TABLE documents(
 );
 CREATE UNIQUE INDEX document_record_ids ON documents(record_id) WHERE record_id IS NOT NULL;
 CREATE INDEX document_titles ON documents(title,record_id,path);
+CREATE INDEX document_candidate_metadata ON documents(doc_row,path,record_id,kind,eligibility,source_id,owner_revision);
 CREATE INDEX source_document_ids ON documents(source_id,path) WHERE owner_revision IS NOT NULL AND source_id IS NOT NULL AND eligibility='current';
 CREATE INDEX source_revision_ids ON documents(owner_revision,path) WHERE owner_revision IS NOT NULL AND source_id IS NOT NULL AND eligibility='current';
 CREATE INDEX source_document_titles ON documents(title,path) WHERE owner_revision IS NOT NULL AND source_id IS NOT NULL AND eligibility='current';

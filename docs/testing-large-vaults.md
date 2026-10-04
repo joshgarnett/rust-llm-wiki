@@ -379,8 +379,44 @@ reports, caps combined account allocation at 40 GiB, requires 32 GiB free, and
 limits each query to 15 seconds and 1 GiB native RSS. Query timing excludes
 inventory scans. The two measured runs used runner SHA-256
 `cb93e29d76fb6056a2bb15fac10c1e0e68cdbda15a6db1e6298287cfc23de67d`.
-The 10k latency failure requires diagnosis and a fresh fixed-version test before
-this package can receive performance approval.
+The 10k latency failure remains failed; a fresh fixed-version test is required
+before this package can receive performance approval.
+
+A subsequent read-only mechanism probe isolated eligibility access from FTS
+matching and early metadata access. It used the existing owned fixtures after
+refresh (epoch 2), the same bundled SQLite with mmap disabled and an 8 MiB pager
+cache, fresh connections, and two counterbalanced query orders. All scalar
+match/rank checks and production candidate-order comparisons agreed.
+
+| Matching captured revisions | Early metadata pager misses | With eligibility | Additional misses per capture |
+| --- | ---: | ---: | ---: |
+| 1,001 | 1,062 | 49,112 | 48.002 |
+| 10,001 | 10,162 | 490,217 | 48.001 |
+
+Both orders produced the same counts. The eligibility column follows large body
+and raw-text values in the SQLite record, so reading that small field traversed
+payload overflow pages for every matching capture. The production FTS candidate
+leg showed comparable demand: 490,223 misses before selected payload consumption
+at 10k. This establishes avoidable pager work, not physical disk reads or the
+precise contribution to the original 7.37-second delay. The experiment's first
+10k eligibility scan took 7.31 seconds and its reverse-order scan 0.57 seconds,
+despite identical pager counts; OS cache and waiting remain relevant.
+
+The critic approved a candidate metadata index for implementation, followed by
+focused no-tag/tag-filter pager tests and the unchanged public CLI benchmark.
+It excludes document bodies, raw text and tag arrays. Ranking, eligibility and
+pre-limit filtering must remain identical. This approval is a design decision,
+not a passing performance result.
+
+The implemented candidate passed a 644-test correctness gate (505 unit and 139
+integration tests; eight ignored and the same two unchanged ledger stress
+matrices excluded). A focused real-builder regression reduced pager misses from
+4,062 to 20 without a tag filter, and from 4,062 to 33 with a shared 4 KiB tag.
+Selected keys, scores and ordering stayed identical. SQLite bytecode confirmed
+that tag filtering reads only the table's tag column while eligibility and kind
+come from the index. VM steps increased slightly; this is page-access reduction,
+not uniformly reduced SQL work. Public title-only and new-revision refresh tests
+also passed. Fresh end-user benchmark qualification remains pending.
 
 ### Acceptance evidence
 

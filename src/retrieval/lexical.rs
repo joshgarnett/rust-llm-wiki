@@ -579,6 +579,7 @@ const SOURCE_INDEXES: [(&str, &str); 3] = [
 ];
 
 const GENERAL_TITLE_INDEX: &str = "CREATE INDEX document_titles ON documents(title,record_id,path)";
+const GENERAL_CANDIDATE_INDEX: &str = "CREATE INDEX document_candidate_metadata ON documents(doc_row,path,record_id,kind,eligibility,source_id,owner_revision)";
 
 fn validate_general_indexes(connection: &Connection) -> Result<()> {
     // Layout 0/1 builders did not publish the complete registry/fact membership
@@ -597,22 +598,31 @@ fn validate_general_indexes(connection: &Connection) -> Result<()> {
             "all-document normalized retrieval requires complete proof layout 2",
         ));
     }
-    let mut statement = connection.prepare(
-        "SELECT sql FROM sqlite_schema WHERE type='index' AND name='document_titles' AND tbl_name='documents' LIMIT 2",
-    ).map_err(sql_error)?;
-    let mut rows = statement.query([]).map_err(sql_error)?;
-    let valid = if let Some(row) = rows.next().map_err(sql_error)? {
-        let actual = sql_text(row, 0)?;
-        actual.len() <= 4096
-            && normalize_index_sql(actual) == normalize_index_sql(GENERAL_TITLE_INDEX)
-    } else {
-        false
-    };
-    if !valid || rows.next().map_err(sql_error)?.is_some() {
-        return Err(WikiError::new(
-            ErrorCode::CapabilityUnavailable,
+    for (name, expected, message) in [
+        (
+            "document_titles",
+            GENERAL_TITLE_INDEX,
             "catalog lacks the bounded all-document exact-title search index",
-        ));
+        ),
+        (
+            "document_candidate_metadata",
+            GENERAL_CANDIDATE_INDEX,
+            "catalog lacks the bounded all-document FTS candidate metadata index",
+        ),
+    ] {
+        let mut statement = connection.prepare(
+            "SELECT sql FROM sqlite_schema WHERE type='index' AND name=?1 AND tbl_name='documents' LIMIT 2",
+        ).map_err(sql_error)?;
+        let mut rows = statement.query([name]).map_err(sql_error)?;
+        let valid = if let Some(row) = rows.next().map_err(sql_error)? {
+            let actual = sql_text(row, 0)?;
+            actual.len() <= 4096 && normalize_index_sql(actual) == normalize_index_sql(expected)
+        } else {
+            false
+        };
+        if !valid || rows.next().map_err(sql_error)?.is_some() {
+            return Err(WikiError::new(ErrorCode::CapabilityUnavailable, message));
+        }
     }
     Ok(())
 }
@@ -663,7 +673,7 @@ fn normalized_candidate_query(
             "k.kind='alias' AND k.value=?1 AND d.path=k.path AND d.record_id=k.record_id",
         ),
         _ => (
-            "documents_fts JOIN documents d ON d.doc_row=documents_fts.rowid",
+            "documents_fts JOIN documents d INDEXED BY document_candidate_metadata ON d.doc_row=documents_fts.rowid",
             "documents_fts MATCH ?1",
         ),
     };
@@ -2309,3 +2319,7 @@ mod indexed_source_tests {
 #[cfg(test)]
 #[path = "general_lexical_tests.rs"]
 mod general_lexical_tests;
+
+#[cfg(test)]
+#[path = "candidate_metadata_tests.rs"]
+mod candidate_metadata_tests;

@@ -243,6 +243,16 @@ fn metadata_only_changes_neither_text_nor_fts_even_when_text_exceeds_decode_budg
     assert_eq!(eligibility, "historical");
     assert_eq!(reasons, "[\"not_current_head\"]");
     assert_eq!(bytes, 9 * 1024 * 1024);
+    // Candidate admission reads this covering index after metadata-only deltas.
+    // It must observe the new lifecycle without reading the oversized payload.
+    let indexed: (String, String) = c
+        .query_row(
+            "SELECT path,eligibility FROM documents INDEXED BY document_candidate_metadata WHERE doc_row=?1",
+            [old],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(indexed, ("old.md".into(), "historical".into()));
 }
 
 #[test]

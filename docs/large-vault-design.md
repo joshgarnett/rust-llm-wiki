@@ -284,8 +284,21 @@ The query opens the published catalog read-only, checks selected cached rows,
 and rechecks operation authority before returning. It performs no full-vault
 audit, synchronization or index repair. Dry-run performs the same cached query
 with an explicit cache warning; SQLite shared-memory coordination may still
-change. Complete proof layout 2 and the general title index are required.
+change. Complete proof layout 2, the general title index and the candidate
+metadata index are required.
 Missing capabilities refuse rather than create indexes or scan canonical files.
+
+FTS candidate selection reads path, identity, kind, eligibility and source ownership
+through a SQLite-maintained index keyed by document row. It excludes body/raw text
+and tag arrays, avoiding traversal of large document overflow chains merely to
+read eligibility. Optional tag filters read the earlier tag column from the
+selected table row; they still incur the cost of parsing the actual tag values.
+SQLite maintains the index in the same transaction as document deltas. Older
+layouts without the index require explicit reconstruction; query code never
+creates it opportunistically. Exact ID/title/alias ranking channels are unchanged.
+SQLite describes this table-read avoidance in its
+[covering-index documentation](https://www.sqlite.org/optoverview.html#covering_indexes);
+the actual tag and no-tag access paths are checked separately in regression tests.
 
 The result cap bounds selected payload, not all query work. FTS scoring and
 restrictive filters can depend on matching population; source filters can parse
@@ -453,6 +466,26 @@ generation. Reconciliation and rebuild must stream bounded batches, with durable
 checkpoints and interrupted-publication recovery. Batch source capture must avoid
 one full publication per document while preserving individual immutable revisions.
 
+The next public lifecycle package must remove whole-corpus memory retention
+before exposing normalized rebuild/sync/check. The current maintenance
+`scan_input` retains every Markdown payload, and `SourceView::from_input`
+copies captured content into an overlay. Streaming SQL inserts does not remove
+those allocations. Use a bounded membership/hash/size manifest, authenticated
+named reads and one shared canonical-note authority; consume and release captured
+payloads individually. Budget retained authored notes, graph state and temporary
+copies separately. Legacy closed-input change validation keeps its current
+semantics.
+
+An unchanged explicit sync can preserve the published epoch after comparing the
+complete current input commitments and parser/layout compatibility. It need not
+audit SQLite internals. Changed external input may initially use full
+reconstruction, clearly reported as such. Full canonical/index/FTS comparison
+belongs to `check`; `doctor` reports bounded publication/capability status with
+unperformed audits labeled. The current in-memory audit backup must also be
+replaced or resource-qualified. Forecast scratch together with current and
+reader-pinned old databases before choosing a disk-backed copy. These are
+implementation requirements, not completed large-vault qualification.
+
 Keep SQLite first. FTS5 already supports row updates, internal segments and
 incremental merging; the application must maintain row/index consistency.
 Measure delta publication before adopting another lexical engine.
@@ -460,15 +493,16 @@ Measure delta publication before adopting another lexical engine.
 
 The current migration candidate builds a private normalized database in bounded
 batches and switches a durable selector after sealing it. Existing readers retain
-the old file through a lifetime lease. This topology is for full rebuilds; normal
-source updates still need bounded deltas. Normalization alone does not require
+the old file through a lifetime lease. This topology is for full rebuilds;
+admitted source refreshes already use bounded deltas. Normalization alone does not require
 multiple files, so the extra selector, lease and retirement machinery must justify
 its resource and concurrency costs in actual workflow tests before activation.
 
 For ordinary updates, use a transaction on the selected database with SQLite WAL:
 old read transactions retain their snapshot, and new transactions see committed
 rows and postings together. The candidate now validates normal WAL sidecars and
-retains them across connection close; the public publisher still needs migration.
+retains them across connection close. Public source refresh uses this path;
+public full reconstruction and other writers still need integration.
 Bound checkpoint and retained-WAL costs when readers remain open. The successful
 public update response must acknowledge index visibility, not merely an accepted
 background job. SQLite's [WAL documentation](https://www.sqlite.org/wal.html),
