@@ -909,3 +909,23 @@ struct ValidationReceipt {
     proof: ValidationProof,
     checksum: Blake3Hash,
 }
+
+/// Dispatch may recognize a legacy receipt only after its complete typed
+/// envelope and binding have been verified. This grants no replay authority.
+pub(super) fn verify_legacy_validation_receipt(
+    bytes: &[u8],
+    change: &PreparedChange,
+) -> Result<()> {
+    let receipt: ValidationReceipt = super::prepare::strict_json(bytes)?;
+    let checksum = Blake3Hash::digest(
+        serde_json::to_vec(&receipt.proof)
+            .map_err(|error| WikiError::invalid(error.to_string()))?,
+    );
+    if receipt.proof.version != 1 || receipt.proof.change != *change || checksum != receipt.checksum
+    {
+        return Err(recovery_error(
+            "invalid legacy validation receipt binding/checksum",
+        ));
+    }
+    Ok(())
+}

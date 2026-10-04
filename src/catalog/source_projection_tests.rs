@@ -558,6 +558,204 @@ fn admitted_new_revision_recovers_on_both_sides_of_sql_commit() {
 }
 
 #[test]
+fn application_replays_indexed_interruptions_and_historical_results_without_payloads() {
+    use crate::app::{OfflineApp, OperationOptions};
+    use crate::catalog::{CatalogOptions, PublicationCheckpoint, PublicationFault};
+    struct FailAt(PublicationCheckpoint);
+    impl PublicationFault for FailAt {
+        fn check(&self, point: PublicationCheckpoint) -> Result<()> {
+            if point == self.0 {
+                return Err(WikiError::new(
+                    ErrorCode::RecoveryRequired,
+                    "application replay fixture",
+                ));
+            }
+            Ok(())
+        }
+    }
+    for checkpoint in [
+        PublicationCheckpoint::AfterPointer,
+        PublicationCheckpoint::AfterCommit,
+    ] {
+        for maintenance in [false, true] {
+            let fixture = Fixture::new(false);
+            let (reader, plan) = fixture.plan(
+                Fixture::request(b"changed capture for application replay"),
+                None,
+            );
+            let projected = project_refresh(
+                &fixture.fs,
+                &reader,
+                plan,
+                &RefreshProjectionLimits::default(),
+            )
+            .unwrap()
+            .unwrap();
+            let faulty = Catalog::with_options(
+                fixture.fs.clone(),
+                id("vault_projector"),
+                CatalogOptions {
+                    busy_timeout_ms: 1000,
+                    fault: Some(std::sync::Arc::new(FailAt(checkpoint))),
+                },
+            );
+            let engine = ChangeEngine::new(fixture.fs.clone()).unwrap();
+            let mut session =
+                IndexedRefreshSession::prepare_projected(&faulty, &fixture.writer, projected)
+                    .unwrap();
+            let proof = session.proof().clone();
+            assert!(
+                engine
+                    .apply_indexed_refresh(&fixture.writer, &mut session)
+                    .is_err()
+            );
+            drop(session);
+            drop(reader);
+            if checkpoint == PublicationCheckpoint::AfterCommit && !maintenance {
+                let journal_path = fixture
+                    .fs
+                    .root()
+                    .resolve(
+                        &crate::changes::journal::journal_path(&proof.change.change_id).unwrap(),
+                    )
+                    .unwrap();
+                let original = fs::read(&journal_path).unwrap();
+                let (manifest, hash) = engine
+                    .load_manifest_structure(&proof.change.change_id)
+                    .unwrap();
+                crate::changes::journal::append_event(
+                    &fixture.fs,
+                    &fixture.writer,
+                    &manifest,
+                    &hash,
+                    crate::changes::ChangeEvent::Indexed {
+                        snapshot: proof.base.clone(),
+                    },
+                )
+                .unwrap();
+                let forged = fs::read(&journal_path).unwrap();
+                let dry = OfflineApp::new(
+                    fixture.fs.clone(),
+                    OperationOptions {
+                        dry_run: true,
+                        ..Default::default()
+                    },
+                )
+                .unwrap();
+                let error = dry
+                    .changes_apply(proof.change.change_id.clone())
+                    .unwrap_err();
+                assert_eq!(error.code, ErrorCode::RecoveryRequired);
+                assert!(error.message.contains("journal names another publication"));
+                assert_eq!(fs::read(&journal_path).unwrap(), forged);
+                fs::write(journal_path, original).unwrap();
+            }
+            drop(fixture.writer);
+            let source_path = fixture
+                .fs
+                .root()
+                .path()
+                .join(format!("sources/{}/source.md", fixture.source));
+            let bytes = fs::read(&source_path).unwrap();
+            let modified = fs::metadata(&source_path).unwrap().modified().unwrap();
+            let dry = OfflineApp::new(
+                fixture.fs.clone(),
+                OperationOptions {
+                    dry_run: true,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+            let preview = dry.changes_apply(proof.change.change_id.clone()).unwrap();
+            assert_eq!(preview.change, Some(proof.change.clone()));
+            assert!(preview.snapshot.is_none());
+            assert!(
+                fixture
+                    .catalog
+                    .operation_state()
+                    .unwrap()
+                    .unwrap()
+                    .active()
+                    .is_some()
+            );
+            let app = OfflineApp::new(fixture.fs.clone(), OperationOptions::default()).unwrap();
+            if maintenance {
+                let recovered = app.recover().unwrap();
+                assert!(recovered.pending.contains(&proof.change.change_id));
+                assert!(
+                    recovered
+                        .report
+                        .unwrap()
+                        .changes
+                        .iter()
+                        .any(|report| report.change == proof.change
+                            && report.snapshot.as_ref() == Some(&proof.intended))
+                );
+            } else {
+                let recovered = app.changes_apply(proof.change.change_id.clone()).unwrap();
+                assert_eq!(recovered.snapshot, Some(proof.intended.clone()));
+            }
+            assert_eq!(fs::read(&source_path).unwrap(), bytes);
+            assert_eq!(
+                fs::metadata(&source_path).unwrap().modified().unwrap(),
+                modified
+            );
+            assert!(
+                fixture
+                    .catalog
+                    .operation_state()
+                    .unwrap()
+                    .unwrap()
+                    .active()
+                    .is_none()
+            );
+            app.source_refresh(fixture.source.clone(), Fixture::request(b"a later epoch"))
+                .unwrap();
+            let (manifest, _) = engine
+                .load_manifest_structure(&proof.change.change_id)
+                .unwrap();
+            for payload in manifest
+                .operations
+                .iter()
+                .flat_map(|operation| [&operation.before_payload, &operation.after_payload])
+                .flatten()
+            {
+                let target = fixture.fs.root().path().join(payload.path.as_str());
+                if target.exists() {
+                    fs::remove_file(target).unwrap();
+                }
+            }
+            fs::remove_file(fixture.fs.root().path().join(format!(
+                "changes/{}/indexed-delta.json",
+                proof.change.change_id
+            )))
+            .unwrap();
+            for replay in [&dry, &app] {
+                let historical = replay
+                    .changes_apply(proof.change.change_id.clone())
+                    .unwrap();
+                assert_eq!(historical.snapshot, Some(proof.intended.clone()));
+                assert_eq!(historical.status, Some(ChangeStatus::Committed));
+                assert!(historical.reused);
+            }
+            // Even without delta/payloads, the PublishedEpoch terminal evidence
+            // prevents missing indexed baseline from being dispatched as legacy.
+            fs::remove_file(fixture.fs.root().path().join(format!(
+                "changes/{}/validation.json",
+                proof.change.change_id
+            )))
+            .unwrap();
+            assert_eq!(
+                app.changes_apply(proof.change.change_id.clone())
+                    .unwrap_err()
+                    .code,
+                ErrorCode::RecoveryRequired
+            );
+        }
+    }
+}
+
+#[test]
 fn generic_and_exact_navigation_refresh_work_is_independent_of_candidate_population() {
     let mut selected_work = Vec::new();
     for population in [16, 4100] {

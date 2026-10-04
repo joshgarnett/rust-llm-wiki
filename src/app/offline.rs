@@ -336,7 +336,14 @@ impl OfflineApp {
         ChangeEngine::new(self.fs.clone())
     }
     fn catalog(&self) -> Catalog {
-        Catalog::new(self.fs.clone(), self.vault_id.clone())
+        Catalog::with_options(
+            self.fs.clone(),
+            self.vault_id.clone(),
+            crate::catalog::CatalogOptions {
+                busy_timeout_ms: self.options.lock_timeout_ms,
+                ..Default::default()
+            },
+        )
     }
     fn writer(&self) -> Result<WriterPermit> {
         WriterPermit::acquire(
@@ -754,11 +761,78 @@ impl OfflineApp {
         title: Option<&str>,
     ) -> Result<MutationOutcome> {
         capture_bounds(&request)?;
+        let catalog = self.catalog();
+        if catalog.operation_state()?.is_some() {
+            return self.indexed_source_refresh(&catalog, id, request, title);
+        }
         let p = self.current_projection()?;
         self.resolve_path(&RecordSelector::Id(id.clone()), &p)?;
         self.source_plan(
             SourceStore::new(self.fs.clone()).plan_refresh_with_title(&id, request, title)?,
         )
+    }
+    fn indexed_source_refresh(
+        &self,
+        catalog: &Catalog,
+        id: RecordId,
+        request: CaptureRequest,
+        title: Option<&str>,
+    ) -> Result<MutationOutcome> {
+        use crate::catalog::{
+            query_types::QueryReadLimits,
+            source_projection::{RefreshProjectionLimits, project_refresh},
+            source_refresh::IndexedRefreshSession,
+        };
+        catalog.guard_query()?;
+        let reader = catalog.query_snapshot(QueryReadLimits::default())?;
+        reader.require_fact_layout()?;
+        let plan = SourceStore::new(self.fs.clone()).plan_refresh_indexed(
+            &reader,
+            &id,
+            request,
+            title,
+            &crate::sources::SourceRefreshLimits::default(),
+        )?;
+        let mut outcome = MutationOutcome {
+            source_capture: plan.plan.capture_state.clone(),
+            plan: summarize("Unchanged source", &plan.plan.dependencies, &[]),
+            allocated_ids: BTreeMap::from([
+                ("source".into(), plan.plan.source_id.clone()),
+                ("revision".into(), plan.plan.revision_id.clone()),
+            ]),
+            change: None,
+            status: None,
+            snapshot: None,
+            reused: plan.plan.reused,
+        };
+        let Some(projected) =
+            project_refresh(&self.fs, &reader, plan, &RefreshProjectionLimits::default())?
+        else {
+            return Ok(outcome);
+        };
+        let draft = projected.draft();
+        outcome.plan = summarize(&draft.title, &draft.read_preconditions, &draft.operations);
+        if self.options.dry_run {
+            return Ok(outcome);
+        }
+        let writer = self.writer()?;
+        catalog.guard_current(None)?;
+        // The sealed projection retains its pinned base. Preparation refuses a
+        // concurrent publication rather than replanning an already reviewed draft.
+        let mut session = IndexedRefreshSession::prepare_projected(catalog, &writer, projected)?;
+        let change = session.proof().change.clone();
+        outcome.change = Some(change.clone());
+        if self.options.stage_only {
+            outcome.status = Some(ChangeStatus::Prepared);
+            return Ok(outcome);
+        }
+        let report = self
+            .engine()?
+            .apply_indexed_refresh(&writer, &mut session)
+            .map_err(|error| retained_error(error, &change))?;
+        outcome.status = Some(report.status);
+        outcome.snapshot = report.snapshot;
+        Ok(outcome)
     }
     pub fn source_withdraw(&self, id: RecordId, reason: &str) -> Result<MutationOutcome> {
         let p = self.current_projection()?;
@@ -906,12 +980,90 @@ impl OfflineApp {
     }
     pub fn changes_apply(&self, id: RecordId) -> Result<MutationOutcome> {
         let engine = self.engine()?;
-        let i = engine.inspect(&id)?;
-        let draft = self.retained_draft(&engine, &i)?;
-        let summary = summarize(&draft.title, &draft.read_preconditions, &draft.operations);
-        let allocated_ids = draft.allocated_ids.clone();
+        let catalog = self.catalog();
+        let authority = catalog.operation_state()?;
+        let (manifest, manifest_hash) = engine.load_manifest_structure(&id)?;
+        let change = PreparedChange {
+            change_id: id,
+            manifest_hash,
+        };
+        let proof = engine.indexed_replay_proof(&manifest, &change, authority.as_ref())?;
+        let mut outcome = MutationOutcome {
+            source_capture: None,
+            plan: summarize_manifest(&manifest),
+            allocated_ids: manifest.allocated_ids.clone(),
+            change: Some(change.clone()),
+            status: None,
+            snapshot: None,
+            reused: false,
+        };
+        if let Some(proof) = proof {
+            use crate::catalog::source_refresh::IndexedRefreshSession;
+            if self.options.dry_run {
+                if let Some(report) = engine.indexed_refresh_terminal_outcome(&change)? {
+                    outcome.status = Some(report.status);
+                    outcome.snapshot = report.snapshot;
+                    outcome.reused = true;
+                } else {
+                    IndexedRefreshSession::check_replay(&catalog, &proof)?;
+                    outcome.status = Some(
+                        journal::load_journal(&self.fs, &manifest, &change.manifest_hash)?
+                            .status
+                            .unwrap_or(ChangeStatus::Prepared),
+                    );
+                }
+                return Ok(outcome);
+            }
+            let writer = self.writer()?;
+            let report =
+                if let Some(report) = engine.indexed_refresh_terminal_report(&writer, &change)? {
+                    outcome.reused = true;
+                    report
+                } else {
+                    let mut session = IndexedRefreshSession::resume(&catalog, &writer, proof)
+                        .map_err(|error| retained_error(error, &change))?;
+                    engine
+                        .apply_indexed_refresh(&writer, &mut session)
+                        .map_err(|error| retained_error(error, &change))?
+                };
+            outcome.status = Some(report.status);
+            outcome.snapshot = report.snapshot;
+            return Ok(outcome);
+        }
+        // A retained terminal result is historical evidence, even after its
+        // payloads expire. Report it without reopening obsolete canonical state.
+        if let Some(report) =
+            crate::changes::outcome::terminal_report(&self.fs, &manifest, &change.manifest_hash)?
+        {
+            if !self.options.dry_run {
+                let writer = self.writer()?;
+                crate::changes::outcome::sync_receipt(&self.fs, &writer, &change.change_id)?;
+                if crate::changes::outcome::terminal_report(
+                    &self.fs,
+                    &manifest,
+                    &change.manifest_hash,
+                )?
+                .as_ref()
+                    != Some(&report)
+                {
+                    return Err(WikiError::new(
+                        ErrorCode::RecoveryRequired,
+                        "terminal change outcome changed during retry",
+                    ));
+                }
+            }
+            outcome.status = Some(report.status);
+            outcome.snapshot = report.snapshot;
+            outcome.reused = true;
+            return Ok(outcome);
+        }
+        // Never invoke the whole-vault legacy validator behind an activated
+        // normalized catalog, including in dry-run.
+        catalog.require_legacy_catalog()?;
+        let inspection = engine.inspect(&change.change_id)?;
         if self.options.dry_run {
-            if i.observations
+            if inspection
+                .observations
                 .iter()
                 .any(|o| o.observed != o.before && o.observed != o.after)
             {
@@ -920,30 +1072,21 @@ impl OfflineApp {
                     "change targets contain unfamiliar edits",
                 ));
             }
-            engine.validate_prepared_graph(&i.prepared, &CatalogGraphValidator)?;
-            return Ok(MutationOutcome {
-                source_capture: None,
-                plan: summary,
-                allocated_ids,
-                change: Some(i.prepared),
-                status: Some(i.status),
-                snapshot: None,
-                reused: false,
-            });
+            engine.validate_prepared_graph(&change, &CatalogGraphValidator)?;
+            outcome.status = Some(inspection.status);
+            return Ok(outcome);
         }
-        let w = self.writer()?;
+        let writer = self.writer()?;
         let report = engine
-            .apply(&w, &i.prepared, &CatalogGraphValidator, &self.catalog())
-            .map_err(|error| retained_error(error, &i.prepared))?;
-        Ok(MutationOutcome {
-            source_capture: None,
-            plan: summary,
-            allocated_ids,
-            change: Some(report.change),
-            status: Some(report.status),
-            snapshot: report.snapshot,
-            reused: matches!(i.status, ChangeStatus::Committed | ChangeStatus::Aborted),
-        })
+            .apply(&writer, &change, &CatalogGraphValidator, &catalog)
+            .map_err(|error| retained_error(error, &change))?;
+        outcome.status = Some(report.status);
+        outcome.snapshot = report.snapshot;
+        outcome.reused = matches!(
+            inspection.status,
+            ChangeStatus::Committed | ChangeStatus::Aborted
+        );
+        Ok(outcome)
     }
     pub fn changes_abort(&self, id: RecordId) -> Result<MutationOutcome> {
         let engine = self.engine()?;
@@ -988,7 +1131,7 @@ impl OfflineApp {
     fn pending(&self, engine: &ChangeEngine) -> Result<Vec<RecordId>> {
         let mut pending = Vec::new();
         for id in engine.change_ids()? {
-            let i = engine.inspect(&id)?;
+            let i = engine.inspect_history(&id)?;
             if matches!(
                 i.status,
                 ChangeStatus::Applying
@@ -1005,7 +1148,15 @@ impl OfflineApp {
     }
     pub fn recover(&self) -> Result<RecoverOutcome> {
         let engine = self.engine()?;
-        let pending = self.pending(&engine)?;
+        let catalog = self.catalog();
+        let authority = catalog.operation_state()?;
+        let mut pending = self.pending(&engine)?;
+        if let Some(active) = authority.as_ref().and_then(|state| state.active()) {
+            if !pending.contains(&active.change.change_id) {
+                pending.push(active.change.change_id.clone());
+                pending.sort();
+            }
+        }
         if self.options.dry_run {
             return Ok(RecoverOutcome {
                 report: None,
@@ -1014,7 +1165,11 @@ impl OfflineApp {
             });
         }
         let w = self.writer()?;
-        let report = engine.recover(&w, &CatalogGraphValidator, &self.catalog())?;
+        let report = if catalog.operation_state()?.is_some() {
+            engine.recover_indexed(&w, &catalog)?
+        } else {
+            engine.recover(&w, &CatalogGraphValidator, &catalog)?
+        };
         Ok(RecoverOutcome {
             report: Some(report),
             pending,
@@ -1057,6 +1212,30 @@ impl OfflineApp {
             ),
             true,
         )
+    }
+}
+fn summarize_manifest(manifest: &ChangeManifest) -> PlanSummary {
+    PlanSummary {
+        title: manifest.title.clone(),
+        read_preconditions: manifest.read_preconditions.clone(),
+        operations: manifest
+            .operations
+            .iter()
+            .map(|op| PlannedOperation {
+                path: op.target.clone(),
+                before: op.before.clone(),
+                after: op.after.clone(),
+                byte_len: op
+                    .after_payload
+                    .as_ref()
+                    .map_or(0, |payload| payload.byte_len),
+                apply_after: op
+                    .apply_after
+                    .iter()
+                    .map(|index| manifest.operations[*index].target.clone())
+                    .collect(),
+            })
+            .collect(),
     }
 }
 fn summarize(

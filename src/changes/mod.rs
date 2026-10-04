@@ -9,6 +9,7 @@ pub use history::CommittedOutputProof;
 pub mod outcome;
 pub mod prepare;
 pub mod recover;
+pub(crate) mod replay;
 pub mod resolve;
 pub mod rollback;
 pub mod types;

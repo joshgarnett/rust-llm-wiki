@@ -242,6 +242,38 @@ impl ChangeEngine {
         receipt.proof.validate(&self.vault_id, change)?;
         Ok(Some(receipt.proof))
     }
+    /// Retain a staged baseline without activating a canonical operation.
+    /// Successful preparation must survive a process boundary before first apply.
+    pub(crate) fn stage_indexed_refresh_proof(
+        &self,
+        writer: &WriterPermit,
+        proof: &IndexedRefreshProof,
+    ) -> Result<()> {
+        writer.require_root(self.fs.root())?;
+        self.require_binding()?;
+        let (manifest, hash) = self.load_manifest_structure(&proof.change.change_id)?;
+        if hash != proof.change.manifest_hash {
+            return Err(recovery("staged indexed refresh manifest binding changed"));
+        }
+        proof.validate_manifest(&manifest)?;
+        let state = journal::load_journal(&self.fs, &manifest, &hash)?;
+        if !matches!(state.status, None | Some(ChangeStatus::Prepared))
+            || outcome::terminal_report(&self.fs, &manifest, &hash)?.is_some()
+        {
+            return Err(recovery(
+                "indexed baseline staging requires an unapplied proposal",
+            ));
+        }
+        let authority = required_authority(self)?;
+        let base = publication(&proof.base)?;
+        authority.require_publication(&base)?;
+        if authority.publication() != &base {
+            return Err(recovery(
+                "staged indexed refresh differs from acknowledged base",
+            ));
+        }
+        self.retain_indexed_refresh_proof(writer, proof, true)
+    }
     fn retain_indexed_refresh_proof(
         &self,
         writer: &WriterPermit,
@@ -371,12 +403,10 @@ impl ChangeEngine {
     /// Historical terminal retries must run before constructing a live session:
     /// the original base/intended epoch may have been superseded. This proves
     /// only the retained outcome, never current canonical freshness.
-    pub(crate) fn indexed_refresh_terminal_report(
+    pub(crate) fn indexed_refresh_terminal_outcome(
         &self,
-        writer: &WriterPermit,
         change: &PreparedChange,
     ) -> Result<Option<ApplyReport>> {
-        writer.require_root(self.fs.root())?;
         self.require_binding()?;
         let Some(proof) = self.load_indexed_refresh_proof(change)? else {
             return Ok(None);
@@ -417,8 +447,20 @@ impl ChangeEngine {
                 "historical refresh outcome exceeds acknowledged publication",
             ));
         }
+        Ok(Some(report))
+    }
+
+    pub(crate) fn indexed_refresh_terminal_report(
+        &self,
+        writer: &WriterPermit,
+        change: &PreparedChange,
+    ) -> Result<Option<ApplyReport>> {
+        writer.require_root(self.fs.root())?;
+        let Some(report) = self.indexed_refresh_terminal_outcome(change)? else {
+            return Ok(None);
+        };
         outcome::sync_receipt(&self.fs, writer, &change.change_id)?;
-        if outcome::terminal_report(&self.fs, &manifest, &hash)?.as_ref() != Some(&report) {
+        if self.indexed_refresh_terminal_outcome(change)?.as_ref() != Some(&report) {
             return Err(recovery("historical refresh receipt changed while syncing"));
         }
         Ok(Some(report))

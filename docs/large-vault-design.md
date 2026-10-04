@@ -180,6 +180,29 @@ matrices excluded as described above. Full-build candidate enumeration, actual
 100,000-document performance, public activation and unseen answer quality remain
 unqualified.
 
+For an already selected normalized catalog, the application routes source refresh
+through the indexed planner and sealed projector. An authenticated no-op creates
+no changeset or publication. Dry-run remains read-only; staging retains the exact
+proof and row changes needed for later application. This does not activate the
+normalized catalog by default or migrate the remaining query modes.
+
+`changes apply ID` replays one retained operation and recognizes historical
+terminal results before opening old payloads or a superseded catalog epoch.
+`recover` remains an explicit maintenance command that enumerates complete
+history and staged proposals. Ordinary refresh and query do not invoke that
+enumeration. Portable-path validation still examines sibling directories; its
+end-to-end scaling cost remains to be measured and addressed.
+
+The connected CLI gate passed 458 unit tests and 124 integration tests, with six
+ignored and the two unchanged ledger matrices excluded. Six real-executable
+scenarios verify refreshed Unicode citations, no-op/title/history behavior,
+read-only dry-run, staged apply/retry, and rejection of damaged payloads, replay
+proofs and required indexes. Connected recovery checks cover both sides of SQL
+commit and historical retries after old payloads expire. The general `read`
+command still reports an explicit capability limitation on normalized fixtures;
+this gate does not qualify default activation, all query modes or large-vault
+latency.
+
 ## Incremental validation and navigation
 
 A cached final eligibility state is insufficient for incremental repair. A record

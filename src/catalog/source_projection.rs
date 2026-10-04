@@ -65,6 +65,10 @@ pub(super) struct ProjectedRefreshParts {
     pub delta: CatalogDelta,
 }
 impl ProjectedSourceRefresh {
+    pub(crate) fn draft(&self) -> &ChangeDraft {
+        &self.parts.draft
+    }
+
     pub(super) fn into_parts(self) -> ProjectedRefreshParts {
         self.parts
     }

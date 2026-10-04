@@ -9,6 +9,9 @@ pub mod embeddings;
 pub mod remote;
 mod review;
 
+#[cfg(test)]
+mod indexed_cli_tests;
+
 mod pages;
 pub mod probe;
 pub use pages::{PageBatchRequest, PageUpdate};

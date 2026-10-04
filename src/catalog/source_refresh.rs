@@ -65,6 +65,16 @@ fn recovery(message: &str) -> WikiError {
 fn budget(message: &str) -> WikiError {
     WikiError::new(ErrorCode::BudgetExceeded, message)
 }
+fn retained_error(mut error: WikiError, change: &PreparedChange) -> WikiError {
+    let reference =
+        serde_json::json!({"change_id":change.change_id,"manifest_hash":change.manifest_hash});
+    if let Some(details) = error.details.as_object_mut() {
+        details.insert("change".into(), reference);
+    } else {
+        error.details = serde_json::json!({"change":reference,"cause_details":error.details});
+    }
+    error
+}
 fn publication(snapshot: &ReadSnapshot) -> Result<Publication> {
     let binding = snapshot
         .publication()
@@ -104,6 +114,66 @@ fn intended(
     )
 }
 
+impl RetainedDelta {
+    fn require_bound(
+        &self,
+        catalog: &Catalog,
+        engine: &ChangeEngine,
+        proof: &IndexedRefreshProof,
+    ) -> Result<()> {
+        let (manifest, hash) = engine.load_manifest_structure(&proof.change.change_id)?;
+        proof.validate_manifest(&manifest)?;
+        if hash != proof.change.manifest_hash
+            || (self.version != DELTA_VERSION && !(cfg!(test) && self.version == 1))
+            || (self.version == DELTA_VERSION && self.rows.version != 2)
+            || proof.vault_id != catalog.vault_id
+            || self.vault_id != proof.vault_id
+            || self.source_id != proof.source_id
+            || self.change != proof.change
+            || self.base != proof.base
+            || self.before != proof.before
+            || self.after != proof.after
+            || proof.base.parser_fingerprint != scan::parser_fingerprint()
+            || intended(&proof.base, &proof.change, &proof.delta_hash)? != proof.intended
+        {
+            return Err(recovery(
+                "refresh delta, manifest, or replay version differs from retained proof",
+            ));
+        }
+        self.rows.validate()?;
+        if self.rows.owners != engine.manifest_revision_owners(&proof.change)? {
+            return Err(recovery(
+                "refresh delta owners differ from exact manifest roots",
+            ));
+        }
+        let after: BTreeMap<_, _> = proof
+            .after
+            .iter()
+            .map(|dep| (&dep.path, &dep.expected))
+            .collect();
+        if self
+            .rows
+            .dependencies
+            .iter()
+            .any(|dep| after.get(&dep.path).copied() != Some(&dep.expected))
+        {
+            return Err(recovery(
+                "refresh catalog dependency is outside the selected after state",
+            ));
+        }
+        Ok(())
+    }
+}
+
+fn load_delta(catalog: &Catalog, proof: &IndexedRefreshProof) -> Result<RetainedDelta> {
+    let bytes = read_bounded(&catalog.fs, &delta_path(&proof.change)?, MAX_DELTA_BYTES)?
+        .ok_or_else(|| recovery("retained refresh delta is missing"))?;
+    if Blake3Hash::digest(&bytes) != proof.delta_hash {
+        return Err(recovery("retained refresh delta hash changed"));
+    }
+    strict_json(&bytes)
+}
+
 impl<'a> IndexedRefreshSession<'a> {
     /// Prepare and retain only a complete semantic projection. The private
     /// capability cannot be constructed from caller-supplied row actions.
@@ -133,18 +203,24 @@ impl<'a> IndexedRefreshSession<'a> {
         drop(query);
         let engine = ChangeEngine::new(catalog.fs.clone())?;
         let change = engine.prepare(writer, parts.draft)?.prepared;
-        parts.delta.owners = engine.manifest_revision_owners(&change)?;
-        Self::retain_bound(
-            catalog,
-            writer,
-            parts.source_id,
-            change,
-            parts.base,
-            parts.before,
-            parts.after,
-            parts.delta,
-            DELTA_VERSION,
-        )
+        let retained_change = change.clone();
+        let result: Result<Self> = (|| {
+            parts.delta.owners = engine.manifest_revision_owners(&change)?;
+            let session = Self::retain_bound(
+                catalog,
+                writer,
+                parts.source_id,
+                change,
+                parts.base,
+                parts.before,
+                parts.after,
+                parts.delta,
+                DELTA_VERSION,
+            )?;
+            engine.stage_indexed_refresh_proof(writer, session.proof())?;
+            Ok(session)
+        })();
+        result.map_err(|error| retained_error(error, &retained_change))
     }
 
     /// Raw row actions are only a recovery-mechanics fixture constructor.
@@ -244,13 +320,147 @@ impl<'a> IndexedRefreshSession<'a> {
         writer: &'a WriterPermit,
         proof: IndexedRefreshProof,
     ) -> Result<Self> {
-        let bytes = read_bounded(&catalog.fs, &delta_path(&proof.change)?, MAX_DELTA_BYTES)?
-            .ok_or_else(|| recovery("retained refresh delta is missing"))?;
-        if Blake3Hash::digest(&bytes) != proof.delta_hash {
-            return Err(recovery("retained refresh delta hash changed"));
-        }
-        let delta = strict_json(&bytes)?;
+        let delta = load_delta(catalog, &proof)?;
         Self::open(catalog, writer, proof, delta)
+    }
+
+    /// Read-only live replay admission for dry-run. Historical terminal outcomes
+    /// must be checked first: they need neither obsolete SQL nor retained payloads.
+    pub(crate) fn check_replay(
+        catalog: &Catalog,
+        proof: &IndexedRefreshProof,
+    ) -> Result<IndexedRefreshPhase> {
+        let engine = ChangeEngine::new(catalog.fs.clone())?;
+        if engine.load_indexed_refresh_proof(&proof.change)?.as_ref() != Some(proof) {
+            return Err(recovery(
+                "refresh replay lost or changed its exact baseline",
+            ));
+        }
+        let delta = load_delta(catalog, proof)?;
+        if delta.version != DELTA_VERSION || delta.rows.version != 2 {
+            return Err(recovery(
+                "read-only refresh replay requires production delta version two",
+            ));
+        }
+        delta.require_bound(catalog, &engine, proof)?;
+        let query = catalog.query_snapshot(QueryReadLimits::default())?;
+        query.require_fact_layout()?;
+        RevisionOwnershipLookup::require_ready(&query)?;
+        delta
+            .rows
+            .require_layout(QueryCatalog::connection(&query))?;
+        QueryCatalog::connection(&query).prepare(
+            "SELECT record_id FROM identity_claims INDEXED BY identity_claim_paths WHERE path=?1 LIMIT 1",
+        ).map_err(sql::sql_error)?;
+        let phase = if QueryCatalog::snapshot(&query) == &proof.intended {
+            // Query acquisition already bounded/validated the whole header.
+            // Compare provenance in SQL without allocating another owned header.
+            let origin: Option<bool> = QueryCatalog::connection(&query).query_row(
+                "SELECT origin_change_id=?1 AND origin_manifest_hash=?2 FROM catalog_meta WHERE singleton=1",
+                params![proof.change.change_id.as_str(), proof.change.manifest_hash.as_str()],
+                |row| row.get(0),
+            ).map_err(sql::sql_error)?;
+            if origin != Some(true) {
+                return Err(recovery("intended refresh publication origin changed"));
+            }
+            IndexedRefreshPhase::AlreadyPublished
+        } else if QueryCatalog::snapshot(&query) == &proof.base {
+            IndexedRefreshPhase::AtBase
+        } else {
+            return Err(recovery(
+                "refresh catalog is neither exact base nor intended publication",
+            ));
+        };
+        let authority = catalog
+            .operation_state()?
+            .ok_or_else(|| recovery("refresh authority is absent"))?;
+        let (manifest, hash) = engine.load_manifest_structure(&proof.change.change_id)?;
+        proof.validate_manifest(&manifest)?;
+        if hash != proof.change.manifest_hash {
+            return Err(recovery("refresh replay manifest changed"));
+        }
+        let state = journal::load_journal(&catalog.fs, &manifest, &hash)?;
+        let terminal = crate::changes::outcome::terminal_report(&catalog.fs, &manifest, &hash)?;
+        if phase == IndexedRefreshPhase::AtBase && terminal.is_none() {
+            // Live application still needs its retained file payloads. A dry-run
+            // must not approve a proposal that the canonical executor cannot read.
+            engine.validate_manifest(&manifest, &proof.change.change_id)?;
+        }
+        if terminal.is_none()
+            && state.status == Some(ChangeStatus::Indexed)
+            && state
+                .frames
+                .iter()
+                .rev()
+                .find_map(|frame| match &frame.event {
+                    crate::changes::ChangeEvent::Indexed { snapshot } => Some(snapshot),
+                    _ => None,
+                })
+                != Some(&proof.intended)
+        {
+            return Err(recovery(
+                "indexed refresh journal names another publication",
+            ));
+        }
+        let (after_only, mixed, needs_active) = match terminal {
+            Some(report)
+                if report.status == ChangeStatus::Committed
+                    && report.snapshot.as_ref() == Some(&proof.intended)
+                    && phase == IndexedRefreshPhase::AlreadyPublished =>
+            {
+                (true, false, false)
+            }
+            Some(report)
+                if report.status == ChangeStatus::Aborted
+                    && phase == IndexedRefreshPhase::AtBase =>
+            {
+                (false, false, false)
+            }
+            Some(_) => {
+                return Err(recovery(
+                    "refresh terminal outcome differs from retained replay",
+                ));
+            }
+            None => match (phase, state.status) {
+                (IndexedRefreshPhase::AtBase, None | Some(ChangeStatus::Prepared)) => {
+                    (false, false, false)
+                }
+                (IndexedRefreshPhase::AtBase, Some(ChangeStatus::Applying)) => (false, true, true),
+                (IndexedRefreshPhase::AtBase, Some(ChangeStatus::FilesApplied)) => {
+                    (true, false, true)
+                }
+                (
+                    IndexedRefreshPhase::AlreadyPublished,
+                    Some(ChangeStatus::FilesApplied | ChangeStatus::Indexed),
+                ) => (true, false, true),
+                _ => return Err(recovery("refresh journal lacks trustworthy replay intent")),
+            },
+        };
+        require_authority(&authority, proof, phase, needs_active)?;
+        if phase == IndexedRefreshPhase::AlreadyPublished {
+            for owner in &delta.rows.owners {
+                if RevisionOwnershipLookup::revision_owner(&query, &owner.key)?.as_ref()
+                    != Some(&owner.change)
+                {
+                    return Err(recovery(
+                        "published refresh owner row differs from exact change",
+                    ));
+                }
+            }
+        }
+        let remaining = Cell::new(MAX_SELECTED_BYTES);
+        verify_dependencies(
+            catalog,
+            if after_only {
+                &proof.after
+            } else {
+                &proof.before
+            },
+            mixed.then_some(proof.after.as_slice()),
+            &remaining,
+        )?;
+        query.verify_operations(catalog)?;
+        Ok(phase)
     }
 
     fn open(
@@ -264,46 +474,7 @@ impl<'a> IndexedRefreshSession<'a> {
             return Err(recovery("refresh timeout exceeds ceiling"));
         }
         let engine = ChangeEngine::new(catalog.fs.clone())?;
-        let (manifest, hash) = engine.load_manifest_structure(&proof.change.change_id)?;
-        proof.validate_manifest(&manifest)?;
-        if hash != proof.change.manifest_hash
-            || (delta.version != DELTA_VERSION && !(cfg!(test) && delta.version == 1))
-            || (delta.version == DELTA_VERSION && delta.rows.version != 2)
-            || proof.vault_id != catalog.vault_id
-            || delta.vault_id != proof.vault_id
-            || delta.source_id != proof.source_id
-            || delta.change != proof.change
-            || delta.base != proof.base
-            || delta.before != proof.before
-            || delta.after != proof.after
-            || proof.base.parser_fingerprint != scan::parser_fingerprint()
-            || intended(&proof.base, &proof.change, &proof.delta_hash)? != proof.intended
-        {
-            return Err(recovery(
-                "refresh delta, manifest, or replay version differs from retained proof",
-            ));
-        }
-        delta.rows.validate()?;
-        if delta.rows.owners != engine.manifest_revision_owners(&proof.change)? {
-            return Err(recovery(
-                "refresh delta owners differ from exact manifest roots",
-            ));
-        }
-        let after: BTreeMap<_, _> = proof
-            .after
-            .iter()
-            .map(|dep| (&dep.path, &dep.expected))
-            .collect();
-        if delta
-            .rows
-            .dependencies
-            .iter()
-            .any(|dep| after.get(&dep.path).copied() != Some(&dep.expected))
-        {
-            return Err(recovery(
-                "refresh catalog dependency is outside the selected after state",
-            ));
-        }
+        delta.require_bound(catalog, &engine, &proof)?;
         let timeout = Duration::from_millis(catalog.options.busy_timeout_ms);
         let selection = selector::delta_selection(&catalog.fs, writer, &catalog.vault_id, timeout)?;
         selector::ensure_delta_ready(&catalog.fs, writer, &selection, timeout)?;

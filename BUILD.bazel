@@ -37,7 +37,7 @@ owned_crate_test(
     name = "unit_tests",
     crate = ":lwiki_lib",
     compile_data = [":compile_assets"],
-    data = [":test_assets"],
+    data = [":test_assets", ":lwiki"],
     # The full local recovery matrix can take roughly thirteen minutes.
     timeout = "eternal",
 )
