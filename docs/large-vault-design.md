@@ -24,7 +24,12 @@ transaction. Ordinary normalized queries consult a small publication record;
 they do not audit completed operation history. Selected evidence still requires
 verification before it becomes a citation.
 
-Literal, semantic, hybrid and graph queries, host context selection,
+Lexical mixed-document context supports fingerprint-bound host preparation and
+application with the same selected-dependency proof. Explicit complete-cache-loss
+reconstruction preserves outside operation authority and uses a bounded candidate
+reservation; see the [user workflow and limits](indexed-context.md).
+
+Literal, semantic, hybrid and graph queries,
 page rename and public default activation are not fully migrated. These
 are required integration work, not optional omissions. Large-vault capacity and
 unseen context completeness remain unqualified. See the

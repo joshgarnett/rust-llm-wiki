@@ -60,13 +60,17 @@ pub fn validate_request(query: &str, request: &ContextRequest) -> Result<Context
 }
 pub fn validate_selection_action(request: &ContextRequest, action: &SelectionAction) -> Result<()> {
     if !matches!(action, SelectionAction::Automatic)
-        && (request.scope != ContextScope::Current
-            || request.target != ContextTarget::Documents
-            || request.documents.mode == SearchMode::Literal)
+        && (!matches!(
+            request.scope,
+            ContextScope::Current | ContextScope::IndexedDocuments
+        ) || request.target != ContextTarget::Documents
+            || request.documents.mode == SearchMode::Literal
+            || (request.scope == ContextScope::IndexedDocuments
+                && request.documents.mode != SearchMode::Lexical))
     {
         return Err(WikiError::new(
             ErrorCode::Usage,
-            "host selection requires current document context in lexical, semantic or hybrid mode",
+            "host selection requires current document context; indexed-documents supports lexical mode only",
         ));
     }
     Ok(())
@@ -405,10 +409,114 @@ pub(super) struct Packet {
     pub(super) navigation: Option<NavigationEdge>,
     pub(super) key: String,
     pub(super) score: f64,
+    /// The source proposal's position before byte-span keys are constructed.
+    /// Used only for host packet admission; automatic utility stays unchanged.
+    pub(super) selection_ordinal: Option<usize>,
     pub(super) selection: Option<super::context_selection::SelectionCandidate>,
     pub(super) unit_score: Option<f64>,
     pub(super) fallback: Option<ContextPassage>,
     pub(super) unit_clipped: bool,
+}
+
+fn sort_packets(packets: &mut [Packet], preserve_selection_order: bool) {
+    packets.sort_by(|a, b| {
+        b.score
+            .total_cmp(&a.score)
+            .then_with(|| {
+                if preserve_selection_order {
+                    a.selection_ordinal
+                        .unwrap_or(usize::MAX)
+                        .cmp(&b.selection_ordinal.unwrap_or(usize::MAX))
+                } else {
+                    std::cmp::Ordering::Equal
+                }
+            })
+            .then(a.key.cmp(&b.key))
+    });
+}
+
+// Opt-in lineage for development/test replay. It contains only work already
+// performed by assembly, has no production or selector-input representation,
+// and adds no source reads. Each traced pool has the existing bounded size.
+#[cfg(test)]
+std::thread_local! {
+    static CANDIDATE_ORDERING_TRACE: std::cell::RefCell<Option<Vec<serde_json::Value>>> = const {
+        std::cell::RefCell::new(None)
+    };
+}
+
+#[cfg(test)]
+pub(super) fn with_candidate_ordering_trace<T>(
+    run: impl FnOnce() -> T,
+) -> (T, Vec<serde_json::Value>) {
+    struct ClearTrace;
+    impl Drop for ClearTrace {
+        fn drop(&mut self) {
+            CANDIDATE_ORDERING_TRACE.with(|trace| {
+                trace.borrow_mut().take();
+            });
+        }
+    }
+    CANDIDATE_ORDERING_TRACE.with(|trace| {
+        assert!(trace.borrow().is_none(), "ordering trace cannot be nested");
+        *trace.borrow_mut() = Some(Vec::new());
+    });
+    let _clear = ClearTrace;
+    let result = run();
+    let trace = CANDIDATE_ORDERING_TRACE.with(|trace| trace.borrow_mut().take().unwrap());
+    (result, trace)
+}
+
+#[cfg(test)]
+fn record_candidate_ordering_trace(stage: &str, rows: impl FnOnce() -> serde_json::Value) {
+    CANDIDATE_ORDERING_TRACE.with(|trace| {
+        if let Some(trace) = trace.borrow_mut().as_mut() {
+            assert!(trace.len() < 16, "bounded ordering trace stage count");
+            trace.push(serde_json::json!({"stage": stage, "rows": rows()}));
+        }
+    });
+}
+
+#[cfg(test)]
+fn passage_ordering_row(passage: &ContextPassage) -> serde_json::Value {
+    serde_json::json!({
+        "owner": bundles::owner(passage), "locator": passage.locator,
+        "span": passage.span, "text_hash": Blake3Hash::digest(passage.text.as_bytes()),
+        "citations": passage.citations,
+    })
+}
+
+#[cfg(test)]
+fn packet_ordering_rows(packets: &[Packet]) -> Vec<serde_json::Value> {
+    packets
+        .iter()
+        .map(|packet| {
+            serde_json::json!({
+                "key": packet.key, "ordinal": packet.selection_ordinal, "score": packet.score,
+                "passages": packet.passages.iter().map(passage_ordering_row).collect::<Vec<_>>(),
+                "lexical_candidate": packet.selection.as_ref().map(|candidate| serde_json::json!({
+                    "owner_index": candidate.owner_index, "span": candidate.span,
+                    "covered_terms": candidate.covered_terms, "local_relevance": candidate.local_relevance,
+                    "seed_overlap": candidate.seed_overlap, "clipped": candidate.clipped,
+                    "semantic_affinity": candidate.semantic_affinity,
+                })),
+            })
+        })
+        .collect()
+}
+
+#[cfg(test)]
+fn card_ordering_rows(cards: &[SelectionCard]) -> serde_json::Value {
+    serde_json::json!(
+        cards
+            .iter()
+            .map(|card| serde_json::json!({
+                "id": card.id, "passage": passage_ordering_row(&card.passage),
+                "rendered_bytes": card.rendered_bytes,
+                "authenticated_card": card,
+            }))
+            .collect::<Vec<_>>()
+    )
 }
 fn navigation_end<'a>(
     reader: &'a ReaderSnapshot,
@@ -651,6 +759,23 @@ pub(crate) fn assemble_bounded_documents_for_query(
     hits: &HitSet,
     query: &str,
 ) -> Result<ContextDraft> {
+    assemble_bounded_documents_with_selection_for_query(
+        reader,
+        request,
+        hits,
+        query,
+        &SelectionAction::Automatic,
+    )
+}
+
+pub(crate) fn assemble_bounded_documents_with_selection_for_query(
+    reader: &dyn QueryCatalog,
+    request: &ContextRequest,
+    hits: &HitSet,
+    query: &str,
+    selection: &SelectionAction,
+) -> Result<ContextDraft> {
+    validate_selection_action(request, selection)?;
     if !matches!(
         request.scope,
         ContextScope::Snapshot | ContextScope::IndexedDocuments
@@ -671,7 +796,7 @@ pub(crate) fn assemble_bounded_documents_for_query(
         None,
         Some(query),
         &ContextSelectionSignals::default(),
-        &SelectionAction::Automatic,
+        selection,
     )
 }
 
@@ -796,7 +921,7 @@ fn assemble_inner(
             "source-aware context inspected {} bytes in {} blocks; query overlap guides passage selection, not answer completeness",
             selection.scanned_bytes, selection.scanned_blocks,
         ));
-            for candidate in selection.candidates {
+            for (selection_ordinal, candidate) in selection.candidates.into_iter().enumerate() {
                 let hit = &hits.hits[candidate.owner_index];
                 let excerpt = SearchExcerpt {
                     text: String::new(),
@@ -828,6 +953,7 @@ fn assemble_inner(
                         bundle: None,
                         navigation: None,
                         score: 0.,
+                        selection_ordinal: Some(selection_ordinal),
                         selection: Some(candidate),
                         unit_score: None,
                         fallback: None,
@@ -865,7 +991,7 @@ fn assemble_inner(
                 });
             }
             selection_warnings.push(format!("context retained ranked evidence units and mapped unique structural parents over {} source bytes and {} blocks; retrieval rank does not establish answer completeness", selected.scanned_bytes, selected.scanned_blocks));
-            for candidate in selected.candidates {
+            for (selection_ordinal, candidate) in selected.candidates.into_iter().enumerate() {
                 let hit = &hits.hits[candidate.owner_index];
                 let passage = |span| -> Result<Option<ContextPassage>> {
                     let excerpt = SearchExcerpt {
@@ -911,6 +1037,7 @@ fn assemble_inner(
                         bundle: None,
                         navigation: None,
                         score: 0.0,
+                        selection_ordinal: Some(selection_ordinal),
                         selection: None,
                         unit_score: Some(candidate.score),
                         fallback,
@@ -938,6 +1065,7 @@ fn assemble_inner(
                         bundle: None,
                         navigation: None,
                         score: 0.,
+                        selection_ordinal: None,
                         selection: None,
                         unit_score: None,
                         fallback: None,
@@ -1016,6 +1144,7 @@ fn assemble_inner(
                     navigation: None,
                     key: format!("assertion:{}", edge.record_ref.record_id),
                     score: 0.,
+                    selection_ordinal: None,
                     selection: None,
                     unit_score: None,
                     fallback: None,
@@ -1061,6 +1190,7 @@ fn assemble_inner(
                     navigation: Some(edge.clone()),
                     key: format!("navigation:{rank}:{}:{}", edge.from.path, edge.to.path),
                     score: 0.,
+                    selection_ordinal: None,
                     selection: None,
                     unit_score: None,
                     fallback: None,
@@ -1185,7 +1315,28 @@ pub(super) fn pack(
         graph,
         dependency_fingerprint,
     } = input;
-    packets.sort_by(|a, b| b.score.total_cmp(&a.score).then(a.key.cmp(&b.key)));
+    let preserve_selection_order = !matches!(selection_action, SelectionAction::Automatic);
+    #[cfg(test)]
+    record_candidate_ordering_trace("candidate_pool", || {
+        let mut legacy_order = (0..packets.len()).collect::<Vec<_>>();
+        legacy_order.sort_by(|&a, &b| {
+            packets[b]
+                .score
+                .total_cmp(&packets[a].score)
+                .then(packets[a].key.cmp(&packets[b].key))
+        });
+        serde_json::json!({
+            "proposals": packet_ordering_rows(&packets),
+            "legacy_order": legacy_order.into_iter().map(|index| &packets[index].key).collect::<Vec<_>>(),
+            "preserve_selection_order": preserve_selection_order,
+            "term_weights": term_weights,
+        })
+    });
+    sort_packets(&mut packets, preserve_selection_order);
+    #[cfg(test)]
+    record_candidate_ordering_trace("sorted_packets", || {
+        serde_json::json!(packet_ordering_rows(&packets))
+    });
     let reserved_bytes = request.budget.instruction_bytes + request.budget.output_bytes;
     let reserved_tokens = request.budget.instruction_tokens + request.budget.output_tokens;
     let available_bytes = request.budget.max_bytes - reserved_bytes;
@@ -1232,14 +1383,27 @@ pub(super) fn pack(
                 })
             })
             .collect::<Result<Vec<_>>>()?;
+        let cards = context_selection_packet::interleave_by_owner(cards);
+        #[cfg(test)]
+        record_candidate_ordering_trace("pre_card_cap", || card_ordering_rows(&cards));
         let packet = context_selection_packet::build_packet(
             serde_json::json!({
                 "query": query.expect("selection requires query"), "request": request,
                 "snapshot": reader.snapshot(), "dependency_fingerprint": dependency_fingerprint,
                 "max_passages_per_owner": 4,
             }),
-            context_selection_packet::interleave_by_owner(cards),
+            cards,
         )?;
+        #[cfg(test)]
+        record_candidate_ordering_trace("displayed_cards", || {
+            serde_json::json!({
+                "fingerprint": packet.fingerprint,
+                "candidate_count": packet.candidate_count,
+                "omitted_candidates": packet.omitted_candidates,
+                "input_bytes": packet.input_bytes,
+                "cards": card_ordering_rows(&packet.cards),
+            })
+        });
         if matches!(selection_action, SelectionAction::Prepare) {
             let mut warnings = hits.warnings.clone();
             warnings.extend(signals.warnings.iter().cloned());
@@ -1473,6 +1637,7 @@ pub(super) fn pack(
                     navigation: None,
                     key: format!("{}:child", packet.key),
                     score: packet.score,
+                    selection_ordinal: packet.selection_ordinal,
                     selection: None,
                     unit_score: packet.unit_score,
                     fallback: None,

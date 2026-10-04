@@ -111,10 +111,27 @@ completeness remain unverified. Run `index sync` to discover external edits and
 Explicit `--scope current` keeps its stronger meaning and remains unsupported on
 normalized indexes. `read --no-sync` and `context --scope snapshot` retain cached
 behavior. Indexed document context supports lexical document queries only;
-semantic, hybrid, literal, graph and host selection remain separate migration
+semantic, hybrid, literal and graph queries remain separate migration
 work. Dry-run previews the resolved request without running its proof. Operational
 generation-output records currently require explicit cached read because their
 selected verification is not implemented.
+
+Lexical indexed-document context also supports the existing host-selection
+workflow. Prepare with the same query, filters and budgets you will apply:
+
+```sh
+lwiki --json --wiki /path/to/wiki --offline context 'release checklist' --prepare-selection
+lwiki --json --wiki /path/to/wiki --offline context 'release checklist' --selection reply.json
+```
+
+Preparation returns a candidate packet, not final answer context. Pass only its
+`selector_input` to the host agent and save the fingerprint-bound ID-only reply
+as `reply.json`. Applying reconstructs the exact packet and rechecks selected
+canonical dependencies; changed pages, source refreshes or withdrawals invalidate
+the old reply. The host cannot supply replacement quotation text. Candidate order
+retains the passage selector's complementary-evidence priority before the card
+cap; automatic context keeps its existing selection policy. Neither route proves
+answer completeness. The CLI makes no model call and cannot observe host usage.
 
 ## Editing Pages on normalized indexes
 
@@ -212,3 +229,22 @@ modes are still separate work. Source-root probe behavior alone is not import
 throughput evidence: retained object/change namespaces and durable publication
 also contribute work. This workflow does not qualify 100k capacity or semantic
 answer completeness.
+
+## Rebuilding after complete derived-cache loss
+
+For a previously activated normalized vault whose entire `.wiki/cache` is absent,
+run `index rebuild --normalized`. Keep `.wiki/state` and retained history intact:
+they are operation authority, not derived indexes. Reconstruction requires idle,
+valid authority and reserves one fresh catalog identity in the bounded
+`.wiki/state/catalog-rebuild.json` record before creating cache files. A retry
+resumes an acknowledged publication or builds under a new reserved identity;
+it never reuses an unacknowledged SQLite file.
+
+Authenticated unpublished candidates can be retired through their existing
+leases. Unclassified small files are preserved and listed in
+`abandoned_rebuild_candidates`; admission allows at most eight such candidates
+and 1 MiB of actual database/sidecar bytes. Excess, unfamiliar files, unsafe paths,
+partial cache loss or missing authority cause refusal. This explicit recovery
+route does not repair arbitrary cache contents. Readers already holding the old
+catalog retain its transaction and must still recheck selected canonical bytes.
+Dry-run only previews the request and creates no reservation or cache files.

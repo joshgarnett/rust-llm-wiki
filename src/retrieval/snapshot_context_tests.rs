@@ -18,6 +18,220 @@ use std::{fs, path::Path, sync::Arc, time::Duration};
 
 const VAULT: &str = "vault_00000000-0000-7000-8000-00000000001b";
 const CLAIM: &str = "assertion_00000000-0000-7000-8000-00000000000a";
+
+#[test]
+fn complementary_lexical_priority_survives_host_packet_card_cap() {
+    // Five real owners each produce the bounded 32-proposal pool. Forty short
+    // early paragraphs create many overlapping windows; one distant rare term
+    // earns priority from the existing complementary selection algorithm.
+    let temp = tempfile::tempdir().unwrap();
+    copy(
+        &Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/bootstrap/vault"),
+        temp.path(),
+    );
+    let vaultfs = VaultFs::new(VaultRoot::explicit(temp.path()).unwrap());
+    let store = SourceStore::new(vaultfs.clone());
+    let mut sources = Vec::new();
+    for owner in 0..5 {
+        // Equal-width owner headers make these independently captured content
+        // groups. Identical payloads correctly share one mirrored owner.
+        let mut body = format!("# Repeated operation {owner:02}\n\n");
+        for paragraph in 0..40 {
+            body.push_str(&format!(
+                "orderneedle routine {paragraph:02}: retain ordinary neighboring details.\n\n"
+            ));
+        }
+        body.push_str("# Distant exception\n\ncomplementneedle: require the violet permit before restarting.\n");
+        let plan = store
+            .plan_capture(capture(&format!("Priority owner {owner}"), &body))
+            .unwrap();
+        sources.push(plan.source_id.clone());
+        apply_fixture(temp.path(), plan.draft.unwrap());
+    }
+    let catalog = Catalog::new(vaultfs, id(VAULT));
+    let writer = WriterPermit::acquire(catalog.fs().root(), Duration::from_secs(1)).unwrap();
+    catalog.sync(&writer).unwrap();
+    let mut request = ContextRequest::default();
+    request.documents.filters.source_ids = sources;
+    request.documents.limits.hits = 5;
+    request.documents.limits.candidates = 80;
+    request.documents.limits.excerpt_bytes = 320;
+    request.budget.max_bytes = 6000;
+    request.budget.max_tokens = 1500;
+    request.verification_budget.max_elapsed_ms = 30_000;
+    let query = "orderneedle complementneedle";
+    let (automatic_before, automatic_trace) = with_candidate_ordering_trace(|| {
+        verification::context(&catalog, Some(&writer), query, &request).unwrap()
+    });
+    let prepare = ContextOptions {
+        selection: SelectionAction::Prepare,
+        ..Default::default()
+    };
+    let (prepared, trace) = with_candidate_ordering_trace(|| {
+        verification::context_with_options(&catalog, Some(&writer), query, &request, &prepare)
+            .unwrap()
+    });
+    let stage = |name: &str| &trace.iter().find(|row| row["stage"] == name).unwrap()["rows"];
+    let proposals = stage("candidate_pool")["proposals"].as_array().unwrap();
+    assert_eq!(proposals.len(), 160, "fixture must cross the 80-card cap");
+    let by_key = proposals
+        .iter()
+        .map(|row| (row["key"].as_str().unwrap(), row))
+        .collect::<BTreeMap<_, _>>();
+    // Reconstruct the former byte-key order from the identical pre-sort pool.
+    // Its owner interleaving gives each owner sixteen early windows, evicting
+    // the distant complement despite that complement's retained keep ordinal.
+    let mut groups = Vec::<std::collections::VecDeque<&serde_json::Value>>::new();
+    let mut owners = BTreeMap::new();
+    for key in stage("candidate_pool")["legacy_order"].as_array().unwrap() {
+        let proposal = by_key[key.as_str().unwrap()];
+        let owner = proposal["passages"][0]["owner"].as_str().unwrap();
+        let index = *owners.entry(owner).or_insert_with(|| {
+            groups.push(Default::default());
+            groups.len() - 1
+        });
+        groups[index].push_back(proposal);
+    }
+    assert_eq!(groups.len(), 5);
+    assert!(groups.iter().all(|group| group.len() == 32));
+    let mut pending = std::collections::VecDeque::from(groups);
+    let mut legacy_pre_cap = Vec::new();
+    while let Some(mut group) = pending.pop_front() {
+        legacy_pre_cap.push(group.pop_front().unwrap());
+        if !group.is_empty() {
+            pending.push_back(group);
+        }
+    }
+    let packet = prepared.selection_packet().unwrap();
+    assert_eq!(packet.cards.len(), 80);
+    assert_eq!(packet.omitted_candidates, 80);
+    assert!(packet.input_bytes <= 130_048);
+    assert!(
+        packet.cards[..5]
+            .iter()
+            .all(|card| { card.passage.text.contains("complementneedle") })
+    );
+    for card in &packet.cards[..5] {
+        let owner = bundles::owner(&card.passage);
+        let target_hash = Blake3Hash::digest(card.passage.text.as_bytes());
+        let priority = proposals
+            .iter()
+            .find(|proposal| {
+                proposal["passages"][0]["owner"] == owner
+                    && proposal["passages"][0]["text_hash"] == target_hash.as_str()
+            })
+            .unwrap();
+        let early_overlap = proposals
+            .iter()
+            .find(|proposal| {
+                proposal["passages"][0]["owner"] == owner
+                    && proposal["passages"][0]["span"]["start"].as_u64().unwrap()
+                        < card.passage.span.start()
+                    && proposal["ordinal"].as_u64().unwrap() > priority["ordinal"].as_u64().unwrap()
+            })
+            .unwrap();
+        assert!(
+            early_overlap["passages"][0]["span"]["end"]
+                .as_u64()
+                .unwrap()
+                < card.passage.span.start()
+        );
+        let early_start = early_overlap["passages"][0]["span"]["start"]
+            .as_u64()
+            .unwrap();
+        let early_end = early_overlap["passages"][0]["span"]["end"]
+            .as_u64()
+            .unwrap();
+        assert!(
+            proposals.iter().any(|proposal| {
+                proposal["key"] != early_overlap["key"]
+                    && proposal["passages"][0]["owner"] == owner
+                    && proposal["passages"][0]["span"]["start"].as_u64().unwrap() < early_end
+                    && proposal["passages"][0]["span"]["end"].as_u64().unwrap() > early_start
+            }),
+            "fixture must include overlapping early proposals"
+        );
+        assert!(
+            !legacy_pre_cap[..80].iter().any(|proposal| {
+                proposal["passages"][0]["owner"] == owner
+                    && proposal["passages"][0]["text_hash"] == target_hash.as_str()
+            }),
+            "legacy span sorting must exclude the ranked distant complement"
+        );
+    }
+    // All exact proposal identities remain joinable through both admission
+    // orders. The output is evaluation-only and never enters selector input.
+    eprintln!(
+        "context_ordering_lineage={}",
+        serde_json::json!({
+            "trace": trace,
+            "legacy_pre_card_cap": legacy_pre_cap,
+            "automatic_trace": automatic_trace,
+        })
+    );
+    let repeated =
+        verification::context_with_options(&catalog, Some(&writer), query, &request, &prepare)
+            .unwrap();
+    assert_eq!(prepared.selection_packet(), repeated.selection_packet());
+    let reply = super::super::context_selection_packet::SelectionReply {
+        packet_fingerprint: packet.fingerprint.clone(),
+        ordered_ids: packet.cards[..5]
+            .iter()
+            .map(|card| card.id.clone())
+            .collect(),
+    };
+    let selected = verification::context_with_options(
+        &catalog,
+        Some(&writer),
+        query,
+        &request,
+        &ContextOptions {
+            selection: SelectionAction::Apply(reply),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(selected.passages().len(), 5);
+    assert!(
+        selected
+            .passages()
+            .iter()
+            .all(|passage| passage.text.contains("complementneedle"))
+    );
+    assert!(selected.usage().rendered_bytes <= 6000);
+    for passage in selected.passages() {
+        let card = packet
+            .cards
+            .iter()
+            .find(|card| {
+                card.passage.locator == passage.locator && card.passage.span == passage.span
+            })
+            .unwrap();
+        assert_eq!(passage.text, card.passage.text);
+        assert_eq!(passage.citations, card.passage.citations);
+    }
+    let automatic_pool = &automatic_trace
+        .iter()
+        .find(|row| row["stage"] == "candidate_pool")
+        .unwrap()["rows"];
+    let automatic_sorted = &automatic_trace
+        .iter()
+        .find(|row| row["stage"] == "sorted_packets")
+        .unwrap()["rows"];
+    assert_eq!(
+        automatic_sorted
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|row| row["key"].clone())
+            .collect::<Vec<_>>(),
+        *automatic_pool["legacy_order"].as_array().unwrap(),
+    );
+    let automatic_after = verification::context(&catalog, Some(&writer), query, &request).unwrap();
+    assert_eq!(automatic_before.text(), automatic_after.text());
+    assert_eq!(automatic_before.passages(), automatic_after.passages());
+    assert_eq!(automatic_before.omissions(), automatic_after.omissions());
+}
 fn id(value: &str) -> RecordId {
     RecordId::new(value).unwrap()
 }

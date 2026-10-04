@@ -822,6 +822,71 @@ The independent public-command critic recovered the exact failed withdrawal from
 the preceding candidate, verified unchanged immutable bytes and modification times,
 and completed a fresh add → cited context → refresh → staged withdrawal → history
 workflow, including sole/shared support invalidation. Complete cache-loss rebuild
-remains an identified maintenance blocker, so broader lifecycle acceptance is still
-withheld. No semantic, bulk-import or 100k/~10GB acceptance claim follows from these
+was an identified maintenance blocker at this checkpoint; the following checkpoint
+records its repair and separate acceptance. No semantic, bulk-import or 100k/~10GB acceptance claim follows from these
 results. Compiler warnings remain; Clippy was not run at this checkpoint.
+
+
+### Complete-cache-loss maintenance checkpoint (2026-10-04)
+
+A previously activated normalized vault with its entire derived cache removed can
+now reconstruct from intact idle operation authority. A bounded outside-cache
+reservation fixes its starting publication and next candidate identity. Retry
+rotates unacknowledged identities, retires authenticated candidates through leases,
+and preserves at most eight unclassified candidates totaling 1 MiB of actual
+SQLite and sidecar bytes. Unknown or unsafe paths and missing authority refuse;
+publication cannot recreate authority through a legacy fallback. This is an
+explicit complete-loss workflow, not general cache repair.
+
+The grouped correction checkpoint passed 356 native release tests (three
+ignored), in 188.22 seconds overall with source pins unchanged. Ninety-eight
+unchanged passing retrieval checks from the first checkpoint were reused;
+454 distinct successful test names cover the combined slice. The first attempt
+retains three fixture failures: empty migrated storage had activation but no
+payload directory yet, identical source contents intentionally shared an owner,
+and real maintenance updated writer-lock diagnostics. All were corrected and
+replayed together. Final CLI targets passed 24 offline, seven machine-contract,
+five schema-contract and six full-check tests. Compiler actions confirm native
+ARM64 Rust optimization level 3. These are correctness checks, not capacity data.
+
+Independent Astra acceptance scored **9.3/10** across all nine prospectively
+specified maintenance tasks. It repaired the original failed cache-loss fixture,
+and separately completed a genuinely migrated retained-layout workflow. Forty-seven
+public commands verified unchanged canonical/history bytes and modification times,
+identical citations, historical reads, subsequent source updates, refusal controls
+and pure previews. Native tests cover actual reservation, creation, retirement,
+acknowledgment and publication cuts, preservation bounds, foreign controls and a
+held selected reader's final freshness recheck. They inject returned errors and
+reopen in one process; they do not qualify process-kill or power-loss recovery.
+A real active-operation refusal changed only writer diagnostics and an existing
+SQLite shared-memory modification time with identical bytes; dry-run had no
+whole-tree changes. Full-scale reconstruction remains unqualified.
+
+### Normalized host-selection mechanics checkpoint (2026-10-04)
+
+Lexical indexed-document context supports preparation and fingerprint-bound
+ID-only replies while retaining its closed selected canonical proof. Host packets
+preserve the existing passage selector's retained priority before owner interleaving
+and the 80-card cap. Automatic context retains its previous policy. Exact source
+citations, authored locators, final budgets and stale-reply rejection apply to both.
+Preparation is a task for a host agent, not final answer context; CLI accounting
+cannot observe that external agent's input, usage or cost.
+
+Independent Astra mechanical acceptance scored **9.5/10** with all 12 declared
+tasks complete and no correctness blocker. Six fixed development queries retained
+exact Automatic baseline outputs. Public mixed-source/Page preparation and reply
+application, unrelated unindexed growth, staged/committed source refresh,
+withdrawal, Page replacement, altered canonical bytes, bad replies, unsupported
+modes and proof limits behaved as specified. The review audited 18 context outputs,
+61 passages, 55 source citations and 16 packets. A targeted replay fixed misleading
+plain preparation output while preserving the original task's exact 4,027 bytes
+and fingerprint. Header-only empty-result hints and stale-reply continuation
+remain presentation follow-ups.
+
+Bazel formatting and final CLI compilation passed. Strict Clippy remains failing
+on unused adapters and style findings; its complete diagnostics are retained locally,
+with no lint waiver or clean-lint claim. A six-case development lineage harness
+has executed, but harness success is not a quality score. Public equivalence,
+actual evidence completeness and any separately declared host-model arm require
+their own assessment. The unseen semantic HIGH gate, bulk import, remaining
+retrieval modes and mandatory 100k/~10GB lifecycle remain unfinished.

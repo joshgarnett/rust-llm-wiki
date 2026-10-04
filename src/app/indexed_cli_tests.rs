@@ -1321,6 +1321,9 @@ fn indexed_cli_general_context_refuses_unsupported_modes_before_provider_setup()
 
 impl Fixture {
     fn empty_public() -> Self {
+        Self::empty_public_with_layout(false)
+    }
+    fn empty_public_with_layout(retained: bool) -> Self {
         let temp = tempfile::tempdir().unwrap();
         let root = temp.path().join("public source vault with spaces");
         let outside = temp.path().join("outside working directory");
@@ -1347,6 +1350,39 @@ impl Fixture {
             first: String::new(),
             file_id: String::new(),
         };
+        if retained {
+            fn copy_tree(from: &Path, to: &Path) {
+                fs::create_dir(to).unwrap();
+                for entry in fs::read_dir(from).unwrap() {
+                    let entry = entry.unwrap();
+                    if entry.file_type().unwrap().is_dir() {
+                        copy_tree(&entry.path(), &to.join(entry.file_name()));
+                    } else {
+                        fs::copy(entry.path(), to.join(entry.file_name())).unwrap();
+                    }
+                }
+            }
+            copy_tree(
+                &fixture.root,
+                &fixture.outside.join("backup before retained migration"),
+            );
+            let plan = fixture.cli(&["storage", "plan"]);
+            assert!(plan["data"]["blockers"].as_array().unwrap().is_empty());
+            fixture.cli(&[
+                "storage",
+                "cleanup",
+                "--expected-plan",
+                plan["data"]["plan_hash"].as_str().unwrap(),
+            ]);
+            // An empty migrated vault has no retained payload directory yet;
+            // activation is authoritative before its first retained write.
+            assert!(
+                fixture
+                    .root
+                    .join(".wiki/state/storage/layout.json")
+                    .is_file()
+            );
+        }
         let built = fixture.cli(&["index", "rebuild", "--normalized"]);
         fixture.file_id = built["data"]["report"]["snapshot"]["publication"]["file_id"]
             .as_str()
@@ -1549,4 +1585,333 @@ fn indexed_cli_staged_capture_refuses_externally_occupied_source_parent() {
     assert!(occupied.is_dir());
     fixture.cli(&["index", "sync"]);
     fixture.cli(&["check"]);
+}
+
+#[test]
+fn indexed_cli_whole_cache_loss_rebuild_preserves_capture_history_and_resumes_updates() {
+    for migrate in [false, true] {
+        let mut fixture = Fixture::empty_public_with_layout(migrate);
+        let added = fixture.cli(&["source", "add", fixture.input.to_str().unwrap()]);
+        fixture.source = added["data"]["allocated_ids"]["source"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        fixture.first = added["data"]["allocated_ids"]["revision"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let first_epoch = fixture.context(&fixture.first, FIRST);
+        let refresh = fixture.refresh(SECOND, None, None);
+        let second = refresh["data"]["allocated_ids"]["revision"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let epoch = fixture.context(&second, SECOND);
+        assert_eq!(epoch, first_epoch + 1);
+        let epoch = fixture.context(&second, SECOND);
+        let canonical = canonical_tree(&fixture.root);
+        let retained = fixture
+            .root
+            .join(if migrate { ".wiki/retained" } else { "changes" });
+        let retained_before = tree(&retained);
+        let old_cache = fixture.outside.join("preserved old cache");
+        fs::rename(fixture.root.join(".wiki/cache"), &old_cache).unwrap();
+        let preview_before = tree(&fixture.root);
+        fixture.cli(&["--dry-run", "index", "rebuild", "--normalized"]);
+        assert_eq!(tree(&fixture.root), preview_before);
+        let rebuilt = fixture.cli(&["index", "rebuild", "--normalized"]);
+        let snapshot = &rebuilt["data"]["report"]["snapshot"];
+        assert_eq!(snapshot["generation"], epoch + 1);
+        assert_ne!(snapshot["publication"]["file_id"], fixture.file_id);
+        assert_eq!(canonical_tree(&fixture.root), canonical);
+        assert_eq!(tree(&retained), retained_before);
+        assert!(
+            !fixture
+                .root
+                .join(".wiki/state/catalog-rebuild.json")
+                .exists()
+        );
+        assert_eq!(
+            rebuilt["data"]["maintenance"]["abandoned_rebuild_candidates"],
+            serde_json::json!([])
+        );
+        fixture.file_id = snapshot["publication"]["file_id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        assert_eq!(fixture.context(&second, SECOND), epoch + 1);
+        let historical = format!(
+            "sources/{}/revisions/{}/content.md",
+            fixture.source, fixture.first
+        );
+        assert_eq!(
+            fixture.cli(&["read", "--path", &historical])["data"]["body"],
+            FIRST
+        );
+        let check = fixture.cli(&["check"]);
+        assert_eq!(check["data"]["complete"], true);
+        let reused = fixture.refresh(SECOND, None, None);
+        assert_eq!(reused["data"]["reused"], true);
+        fixture.cli(&[
+            "source",
+            "withdraw",
+            &fixture.source,
+            "--reason",
+            "Rebuild retained history",
+        ]);
+        let hits = fixture.cli(&["search", "IndexedSignal", "--source-id", &fixture.source]);
+        assert!(hits["data"]["hits"].as_array().unwrap().is_empty());
+        fixture.cli(&["recover"]);
+        fixture.cli(&["check"]);
+        assert!(old_cache.exists());
+    }
+}
+
+#[test]
+fn indexed_cli_rebuild_does_not_adopt_partially_lost_acquisition_gate() {
+    let fixture = Fixture::empty_public();
+    fs::remove_file(fixture.root.join(".wiki/cache/catalog-acquisition.lock")).unwrap();
+    let before = tree(&fixture.root);
+    fixture.cli_error(&["index", "rebuild", "--normalized"], "INDEX_CORRUPT");
+    let mut after = tree(&fixture.root);
+    let mut expected = before;
+    // A real maintenance request acquires the writer permit before refusal.
+    // Its diagnostic PID may change; no authority, cache or other file may.
+    let lock = Path::new(".wiki/state/writer.lock");
+    assert!(!after.remove(lock).unwrap().directory);
+    assert!(!expected.remove(lock).unwrap().directory);
+    assert_eq!(after, expected);
+    assert!(
+        !fixture
+            .root
+            .join(".wiki/state/catalog-rebuild.json")
+            .exists()
+    );
+}
+
+fn selection_reply(fixture: &Fixture, prepared: &Value) -> PathBuf {
+    let packet = &prepared["data"]["selection_packet"];
+    let task: Value = serde_json::from_str(packet["selector_input"].as_str().unwrap()).unwrap();
+    assert_eq!(
+        task["payload"]["binding"]["request"]["scope"],
+        "indexed_documents"
+    );
+    let cards = task["payload"]["cards"].as_array().unwrap();
+    assert!(!cards.is_empty());
+    let selected = cards
+        .iter()
+        .take(20)
+        .map(|card| card["id"].clone())
+        .collect::<Vec<_>>();
+    let reply = fixture.outside.join("host selection reply.json");
+    fs::write(
+        &reply,
+        serde_json::to_vec(
+            &serde_json::json!({"packet_fingerprint":packet["fingerprint"],"ordered_ids":selected}),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    reply
+}
+
+#[test]
+fn indexed_cli_selection_mixed_evidence_rechecks_changes_and_uncached_growth() {
+    let fixture = Fixture::new();
+    let page = authored_page(
+        "page_selection",
+        "IndexedSignal reviewed companion explains the amber ledger.",
+    );
+    fs::write(&fixture.input, &page).unwrap();
+    fixture.cli(&[
+        "page",
+        "put",
+        "--file",
+        fixture.input.to_str().unwrap(),
+        "--path",
+        "pages/selection.md",
+    ]);
+    let args = [
+        "context",
+        "IndexedSignal",
+        "--max-bytes",
+        "6000",
+        "--max-tokens",
+        "1500",
+        "--prepare-selection",
+    ];
+    let before = canonical_tree(&fixture.root);
+    let prepared = fixture.cli(&args);
+    assert_eq!(prepared["meta"]["freshness"], "indexed_evidence");
+    assert!(prepared["data"]["text"].as_str().unwrap().is_empty());
+    assert_eq!(canonical_tree(&fixture.root), before);
+    let reply = selection_reply(&fixture, &prepared);
+    let replay = fixture.cli(&args);
+    assert_eq!(
+        replay["data"]["selection_packet"],
+        prepared["data"]["selection_packet"]
+    );
+    // Newly observed unindexed files are outside this selected proof. The
+    // command still authenticates its actual owners, never a partial full audit.
+    let unselected = fixture.root.join("unindexed");
+    fs::create_dir(&unselected).unwrap();
+    for n in 0..100 {
+        fs::write(
+            unselected.join(format!("unrelated-{n}.md")),
+            "unrelated external text",
+        )
+        .unwrap();
+    }
+    let selected = fixture.cli(&[
+        "context",
+        "IndexedSignal",
+        "--max-bytes",
+        "6000",
+        "--max-tokens",
+        "1500",
+        "--selection",
+        reply.to_str().unwrap(),
+    ]);
+    let text = selected["data"]["text"].as_str().unwrap();
+    assert!(
+        text.contains("17 amber") && text.contains("reviewed companion"),
+        "{selected}"
+    );
+    assert!(text.len() <= 6000);
+    let passages = selected["data"]["passages"].as_array().unwrap();
+    assert!(
+        passages
+            .iter()
+            .any(|passage| passage["locator"]["record"]["record_id"] == "page_selection")
+    );
+    assert!(passages.iter().any(|passage| {
+        passage["citations"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|citation| {
+                citation["kind"] == "source" && citation["reference"]["source_id"] == fixture.source
+            })
+    }));
+    let source_path = fixture
+        .root
+        .join(format!("sources/{}/source.md", fixture.source));
+    let source_bytes = fs::read(&source_path).unwrap();
+    let changed = String::from_utf8(source_bytes.clone())
+        .unwrap()
+        .replace("Original source title", "External source title");
+    fs::write(&source_path, changed).unwrap();
+    fixture.cli_error(
+        &[
+            "context",
+            "IndexedSignal",
+            "--max-bytes",
+            "6000",
+            "--max-tokens",
+            "1500",
+            "--selection",
+            reply.to_str().unwrap(),
+        ],
+        "FRESHNESS_CONFLICT",
+    );
+    fs::write(source_path, source_bytes).unwrap();
+    let changed_page = authored_page(
+        "page_selection",
+        "IndexedSignal revised companion uses violet instead.",
+    );
+    fs::write(&fixture.input, &changed_page).unwrap();
+    fixture.cli(&[
+        "page",
+        "put",
+        "--file",
+        fixture.input.to_str().unwrap(),
+        "--if-match",
+        Blake3Hash::digest(page.as_bytes()).as_str(),
+    ]);
+    fixture.cli_error(
+        &[
+            "context",
+            "IndexedSignal",
+            "--max-bytes",
+            "6000",
+            "--max-tokens",
+            "1500",
+            "--selection",
+            reply.to_str().unwrap(),
+        ],
+        "FRESHNESS_CONFLICT",
+    );
+}
+
+#[test]
+fn indexed_cli_selection_staged_source_is_current_until_apply_and_withdrawal_rejects_reply() {
+    let fixture = Fixture::new();
+    let prepared = fixture.cli(&["context", "IndexedSignal", "--prepare-selection"]);
+    let reply = selection_reply(&fixture, &prepared);
+    let staged = fixture.refresh(SECOND, None, Some("--stage"));
+    let before = canonical_tree(&fixture.root);
+    let selected = fixture.cli(&[
+        "context",
+        "IndexedSignal",
+        "--selection",
+        reply.to_str().unwrap(),
+    ]);
+    assert!(
+        selected["data"]["text"]
+            .as_str()
+            .unwrap()
+            .contains("17 amber")
+    );
+    assert_eq!(canonical_tree(&fixture.root), before);
+    let change = staged["data"]["change"]["change_id"].as_str().unwrap();
+    fixture.cli(&["changes", "apply", change]);
+    fixture.cli_error(
+        &[
+            "context",
+            "IndexedSignal",
+            "--selection",
+            reply.to_str().unwrap(),
+        ],
+        "FRESHNESS_CONFLICT",
+    );
+    let refreshed = fixture.cli(&["context", "IndexedSignal", "--prepare-selection"]);
+    let reply = selection_reply(&fixture, &refreshed);
+    fixture.cli(&[
+        "source",
+        "withdraw",
+        &fixture.source,
+        "--reason",
+        "Selected source retired",
+    ]);
+    fixture.cli_error(
+        &[
+            "context",
+            "IndexedSignal",
+            "--selection",
+            reply.to_str().unwrap(),
+        ],
+        "FRESHNESS_CONFLICT",
+    );
+    let empty = fixture.cli(&["context", "IndexedSignal", "--prepare-selection"]);
+    assert_eq!(empty["data"]["selection_packet"]["candidate_count"], 0);
+    fixture.cli_error(
+        &[
+            "context",
+            "IndexedSignal",
+            "--scope",
+            "snapshot",
+            "--prepare-selection",
+        ],
+        "USAGE",
+    );
+    fixture.cli_error(
+        &[
+            "context",
+            "IndexedSignal",
+            "--scope",
+            "indexed-evidence",
+            "--prepare-selection",
+        ],
+        "USAGE",
+    );
 }

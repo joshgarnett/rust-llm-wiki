@@ -21,10 +21,10 @@ pub enum Target {
 pub struct ContextArguments {
     #[command(flatten)]
     pub search: SearchArguments,
-    /// Prepare a bounded candidate packet for one host-agent selection; does not run a model.
+    /// Prepare a bounded candidate packet for one host-agent selection; current context or lexical indexed-documents.
     #[arg(long, conflicts_with = "selection")]
     pub prepare_selection: bool,
-    /// Apply an ID-only host reply to the exact current candidate packet (file or - for stdin).
+    /// Apply an ID-only host reply to its exact candidate packet (file or - for stdin).
     #[arg(long, value_name = "FILE")]
     pub selection: Option<std::path::PathBuf>,
     /// Evidence scope. Defaults to indexed-documents on normalized vaults, current otherwise.

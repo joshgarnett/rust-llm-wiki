@@ -19,6 +19,7 @@ pub(crate) mod maintenance;
 pub(crate) mod maintenance_input;
 pub(crate) mod maintenance_match;
 pub(crate) mod maintenance_types;
+pub(crate) mod missing_cache;
 pub(crate) mod navigation_resolution;
 #[cfg(test)]
 mod navigation_resolution_tests;

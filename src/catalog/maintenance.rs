@@ -24,6 +24,7 @@ pub(crate) struct MaintenanceReport {
     pub resumed: bool,
     pub retirement_deferred: bool,
     pub cleanup_errors: Vec<WikiError>,
+    pub abandoned_rebuild_candidates: Vec<super::missing_cache::Abandoned>,
 }
 
 impl MaintenanceLimits {
@@ -82,6 +83,8 @@ impl Catalog {
             ));
         }
         let timeout = Duration::from_millis(self.options.busy_timeout_ms);
+        let reconstruction =
+            super::missing_cache::prepare(&self.fs, writer, &self.vault_id, force, timeout)?;
         // Optional discovery for exact predecessor retirement only. The recovery
         // and admission below independently propagate all control/binding errors.
         let mut predecessors: Vec<_> =
@@ -93,32 +96,42 @@ impl Catalog {
                 .collect();
         // Finish only a previously acknowledged exact sibling. A canonical
         // operation in progress must use changes recovery instead.
-        let resumed =
-            selector::resume_acknowledged_rebuild(&self.fs, writer, &self.vault_id, timeout)?;
-        self.guard_current(None)?;
-        let authority = self.operation_state()?;
-        let previous = match selector::maintenance_header(&self.fs, &self.vault_id, timeout) {
-            Ok(header) => header,
-            Err(error)
-                if force
-                    && authority.is_some()
-                    && matches!(
-                        error.code,
-                        ErrorCode::IndexCorrupt | ErrorCode::OfflineUnavailable
-                    ) =>
-            {
-                let selected = selector::validate_rebuild_predecessor(
+        let resumed = reconstruction.resumed
+            || (reconstruction.candidate.is_none()
+                && selector::resume_acknowledged_rebuild(
                     &self.fs,
                     writer,
                     &self.vault_id,
                     timeout,
-                )?;
-                if !predecessors.contains(&selected) {
-                    predecessors.push(selected);
+                )?);
+        self.guard_current(None)?;
+        let authority = self.operation_state()?;
+        let previous = if reconstruction.candidate.is_some() {
+            None
+        } else {
+            match selector::maintenance_header(&self.fs, &self.vault_id, timeout) {
+                Ok(header) => header,
+                Err(error)
+                    if force
+                        && authority.is_some()
+                        && matches!(
+                            error.code,
+                            ErrorCode::IndexCorrupt | ErrorCode::OfflineUnavailable
+                        ) =>
+                {
+                    let selected = selector::validate_rebuild_predecessor(
+                        &self.fs,
+                        writer,
+                        &self.vault_id,
+                        timeout,
+                    )?;
+                    if !predecessors.contains(&selected) {
+                        predecessors.push(selected);
+                    }
+                    None
                 }
-                None
+                Err(error) => return Err(error),
             }
-            Err(error) => return Err(error),
         };
         if let Some((selected, _)) = &previous
             && !predecessors.iter().any(|old| old == selected)
@@ -139,6 +152,7 @@ impl Catalog {
                     input: captured.usage(),
                     build: None,
                     resumed,
+                    abandoned_rebuild_candidates: reconstruction.abandoned.clone(),
                 });
             }
             input = Some(captured);
@@ -193,7 +207,18 @@ impl Catalog {
             None => MaintenanceInput::capture(&self.fs, &self.vault_id, input_limits)?,
         };
         let identity = BuildIdentity {
-            selection: CatalogSelection::new(self.vault_id.clone(), epoch)?,
+            selection: match reconstruction.candidate.clone() {
+                Some(candidate) => {
+                    if candidate.creation_epoch != epoch {
+                        return Err(WikiError::new(
+                            ErrorCode::RecoveryRequired,
+                            "cache rebuild reservation epoch changed",
+                        ));
+                    }
+                    candidate
+                }
+                None => CatalogSelection::new(self.vault_id.clone(), epoch)?,
+            },
             origin: None,
             vector_cache_lost,
             vector_loss_unknown,
@@ -213,6 +238,11 @@ impl Catalog {
             input.final_recheck()?;
             self.guard_current(None)?;
             selector::publish(&self.fs, writer, &completed.identity.selection, timeout)?;
+            let mut abandoned_rebuild_candidates =
+                super::missing_cache::finish(&self.fs, writer, &self.vault_id)?;
+            if abandoned_rebuild_candidates.is_empty() {
+                abandoned_rebuild_candidates = reconstruction.abandoned.clone();
+            }
             let (retirement_deferred, cleanup_errors) =
                 self.retire_maintenance_predecessor(writer, &predecessors, &completed.snapshot);
             Ok(MaintenanceReport {
@@ -227,6 +257,7 @@ impl Catalog {
                 input: input.usage(),
                 build: Some(completed.stats),
                 resumed,
+                abandoned_rebuild_candidates,
             })
         })();
         result.map_err(|mut error: WikiError| {

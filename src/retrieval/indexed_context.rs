@@ -558,6 +558,7 @@ pub(super) fn context(
             navigation: None,
             score: 1.0 / (60.0 + rank as f64),
             selection: Some(candidate),
+            selection_ordinal: None,
             unit_score: None,
             fallback: None,
             unit_clipped: false,

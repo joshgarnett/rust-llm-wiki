@@ -110,7 +110,15 @@ fn main() {
             );
         }
         if envelope.ok && envelope.command == "context" && envelope.data["text"].is_string() {
-            if envelope.data["text"] == "" {
+            if let Some(packet) = envelope.data["selection_packet"].as_object() {
+                eprintln!(
+                    "Selection task: {} candidate cards, not final context. Save the host agent's ID-only reply, then repeat this request with --selection FILE.",
+                    packet
+                        .get("candidate_count")
+                        .and_then(serde_json::Value::as_u64)
+                        .unwrap_or(0)
+                );
+            } else if envelope.data["text"] == "" {
                 eprintln!(
                     "{}",
                     if envelope.meta.partial {

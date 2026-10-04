@@ -842,14 +842,11 @@ fn execute_inner(args: &Arguments) -> Result<Envelope> {
                 request.scope = retrieval::ContextScope::IndexedDocuments;
             }
             let request = retrieval::context::validate_request(&context.search.query, &request)?;
-            if matches!(
-                request.scope,
-                retrieval::ContextScope::IndexedEvidence
-                    | retrieval::ContextScope::IndexedDocuments
-            ) && (context.prepare_selection || context.selection.is_some())
+            if request.scope == retrieval::ContextScope::IndexedEvidence
+                && (context.prepare_selection || context.selection.is_some())
             {
                 return Err(usage(
-                    "indexed-evidence and indexed-documents do not support host selection",
+                    "indexed-evidence does not support host selection; use lexical indexed-documents",
                 ));
             }
             let selection = context.selection_action()?;

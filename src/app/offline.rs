@@ -1160,6 +1160,7 @@ impl OfflineApp {
                 "input":result.input, "build":result.build,
                 "retirement_deferred":result.retirement_deferred,
                 "cleanup_errors":result.cleanup_errors,
+                "abandoned_rebuild_candidates": result.abandoned_rebuild_candidates,
             })),
             report: Some(result.report),
             dry_run: false,

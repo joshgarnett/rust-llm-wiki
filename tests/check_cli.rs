@@ -218,7 +218,8 @@ fn check_cli_dry_run_performs_no_scan_audit_or_scratch_and_preserves_all_layouts
     }
 }
 
-fn selected_metadata(root: &Path) -> (Value, (Option<i64>, Option<String>, Option<String>)) {
+type SelectedMetadata = (Value, (Option<i64>, Option<String>, Option<String>));
+fn selected_metadata(root: &Path) -> SelectedMetadata {
     // Match VaultRoot: macOS temporary roots can use the /var symlink alias.
     let root = fs::canonicalize(root).unwrap();
     let selected: Value =

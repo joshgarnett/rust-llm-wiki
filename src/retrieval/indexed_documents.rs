@@ -119,8 +119,13 @@ pub(crate) fn context(
         reader: &reader,
         proof: &proof,
     };
-    let mut draft =
-        context::assemble_bounded_documents_for_query(&selected, &request, &hits, query)?;
+    let mut draft = context::assemble_bounded_documents_with_selection_for_query(
+        &selected,
+        &request,
+        &hits,
+        query,
+        &options.selection,
+    )?;
     draft.warnings.push("Discovery uses the published generation; selected document dependencies are verified. Global membership, identity uniqueness, completeness and unselected freshness are not verified. Use index sync to discover external edits.".into());
     if let Some(fault) = &options.fault {
         fault.check(ContextCheckpoint::BeforeFinalVerification { attempt: 0 })?;
@@ -130,3 +135,7 @@ pub(crate) fn context(
     meter.check()?;
     Ok(seal(draft, verification, proof.meter()))
 }
+
+#[cfg(test)]
+#[path = "indexed_documents_tests.rs"]
+mod tests;

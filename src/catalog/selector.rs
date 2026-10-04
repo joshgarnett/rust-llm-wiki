@@ -35,6 +35,8 @@ enum CachePath<'a> {
     Gate,
     Catalogs,
     StateWriter,
+    RebuildState,
+    CacheRoot,
     File(&'a str, FileKind),
     Legacy(FileKind),
 }
@@ -46,6 +48,8 @@ impl CachePath<'_> {
             Self::Gate => ".wiki/cache/catalog-acquisition.lock".into(),
             Self::Catalogs => ".wiki/cache/catalogs".into(),
             Self::StateWriter => ".wiki/state/writer.lock".into(),
+            Self::RebuildState => ".wiki/state/catalog-rebuild.json".into(),
+            Self::CacheRoot => ".wiki/cache".into(),
             Self::Legacy(kind) => {
                 let suffix = match kind {
                     FileKind::Database => "",
@@ -143,7 +147,8 @@ fn path(fs: &VaultFs, entry: CachePath<'_>) -> Result<PathBuf> {
     let mut path = fs.root().path().to_path_buf();
     for (index, component) in components.enumerate() {
         path.push(component);
-        let directory = index + 1 < count || matches!(entry, CachePath::Catalogs);
+        let directory =
+            index + 1 < count || matches!(entry, CachePath::Catalogs | CachePath::CacheRoot);
         match inspect_path(&path) {
             Ok(metadata)
                 if metadata.file_type().is_symlink()
@@ -388,7 +393,9 @@ fn marker(fs: &VaultFs, vault: &RecordId) -> Result<bool> {
 /// Any retained activation evidence requires operational authority, including
 /// an interrupted selector replacement. Never interpret corruption as legacy.
 pub(crate) fn has_activation_evidence(fs: &VaultFs) -> Result<bool> {
-    Ok(read(fs, ACTIVE)?.is_some() || read(fs, CURRENT)?.is_some())
+    Ok(read(fs, ACTIVE)?.is_some()
+        || read(fs, CURRENT)?.is_some()
+        || read_rebuild_record(fs)?.is_some())
 }
 fn selection(fs: &VaultFs, vault: &RecordId) -> Result<Option<CatalogSelection>> {
     let active = marker(fs, vault)?;
@@ -1332,7 +1339,15 @@ fn acknowledge_candidate(
         }
         Some(authority) => {
             let current = selection(fs, &candidate.vault_id)?;
-            if !current.is_some_and(|selected| selected.file_id == authority.publication().file_id)
+            let reserved_reconstruction = super::missing_cache::authorize_publication(
+                fs,
+                &candidate.vault_id,
+                candidate,
+                &authority,
+            )?;
+            if !reserved_reconstruction
+                && !current
+                    .is_some_and(|selected| selected.file_id == authority.publication().file_id)
             {
                 return Err(WikiError::new(
                     ErrorCode::RecoveryRequired,
@@ -2544,4 +2559,289 @@ mod tests {
             assert!(exists(&path(&fs, database_name(&selected)).unwrap()).unwrap());
         }
     }
+}
+
+pub(super) fn read_rebuild_record(fs: &VaultFs) -> Result<Option<Vec<u8>>> {
+    read(fs, CachePath::RebuildState)
+}
+pub(super) fn store_rebuild_record(
+    fs: &VaultFs,
+    writer: &WriterPermit,
+    expected: &ExpectedState,
+    bytes: Option<&[u8]>,
+) -> Result<()> {
+    let name = VaultRelativePath::new(CachePath::RebuildState.relative()?)?;
+    // Validate the exact control ancestry and present file before CAS.
+    let _ = read_rebuild_record(fs)?;
+    if let Some(bytes) = bytes {
+        if bytes.len() > JSON_LIMIT {
+            return Err(corrupt("rebuild witness exceeds 4096 bytes"));
+        }
+        let staged = fs.stage(&name, bytes, writer)?;
+        durable(fs.replace(staged, expected, writer)?)
+    } else {
+        durable(fs.delete(&name, expected, writer)?)
+    }
+}
+pub(super) fn cache_root_absent(fs: &VaultFs) -> Result<bool> {
+    Ok(!exists(&path(fs, CachePath::CacheRoot)?)?)
+}
+pub(super) fn require_unselected_rebuild(fs: &VaultFs, vault: &RecordId) -> Result<()> {
+    let _ = vault;
+    if read(fs, CURRENT)?.is_some() || read(fs, ACTIVE)?.is_some() {
+        return Err(corrupt(
+            "unacknowledged cache reconstruction has publication controls",
+        ));
+    }
+    Ok(())
+}
+/// Measure only fixed witness-reserved artifacts, with checked no-follow handles.
+/// Missing members are not recreated; caller must enforce cumulative limits.
+pub(super) fn measure_abandoned_candidate(
+    fs: &VaultFs,
+    candidate: &CatalogSelection,
+) -> Result<u64> {
+    candidate.validate(&candidate.vault_id)?;
+    let mut total = 0u64;
+    for kind in [
+        FileKind::Database,
+        FileKind::Wal,
+        FileKind::Shm,
+        FileKind::Journal,
+        FileKind::Lease,
+    ] {
+        let name = path(fs, CachePath::File(&candidate.file_id, kind))?;
+        if !exists(&name)? {
+            continue;
+        }
+        let checked = Checked::open(&name, false, matches!(kind, FileKind::Lease))?;
+        let size = checked
+            .file
+            .metadata()
+            .map_err(|e| io("measure rebuild artifact", e))?
+            .len();
+        if matches!(kind, FileKind::Lease) {
+            if size != 0 {
+                return Err(corrupt("rebuild lease is not an empty reservation"));
+            }
+        } else {
+            total = total
+                .checked_add(size)
+                .ok_or_else(|| corrupt("rebuild artifact bytes overflow"))?;
+        }
+        checked.verify()?;
+    }
+    let _ = checkpointed_rebuild_identity(fs, candidate)?;
+    Ok(total)
+}
+fn checkpointed_rebuild_identity(fs: &VaultFs, candidate: &CatalogSelection) -> Result<bool> {
+    let name = path(fs, database_name(candidate))?;
+    if !exists(&name)? {
+        return Ok(false);
+    }
+    let db = Checked::open(&name, false, false)?;
+    let authenticated = match rebuild_identity_connection(&name) {
+        Ok(connection) => {
+            let header = connection.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_schema WHERE type='table' AND name='catalog_meta')", [], |row| row.get::<_, bool>(0));
+            match header {
+                Ok(true) => {
+                    verify_unpublished_identity(&connection, candidate)?;
+                    true
+                }
+                Ok(false) | Err(_) => false,
+            }
+        }
+        Err(_) => false,
+    };
+    db.verify()?;
+    Ok(authenticated)
+}
+/// Immutable SQLite inspection cannot create sidecars or recover/edit a candidate.
+/// It intentionally sees only the main file's checkpointed header; an unfinished
+/// initialization remains preserved under the witness's small-file ceiling.
+fn rebuild_identity_connection(name: &Path) -> Result<Connection> {
+    let name = name
+        .to_str()
+        .ok_or_else(|| corrupt("catalog path is not UTF-8"))?;
+    let mut uri = String::from("file:");
+    for byte in name.bytes() {
+        if byte.is_ascii_alphanumeric() || matches!(byte, b'/' | b'-' | b'_' | b'.' | b'~') {
+            uri.push(char::from(byte));
+        } else {
+            uri.push_str(&format!("%{byte:02X}"));
+        }
+    }
+    uri.push_str("?immutable=1");
+    let connection = Connection::open_with_flags(
+        uri,
+        OpenFlags::SQLITE_OPEN_READ_ONLY
+            | OpenFlags::SQLITE_OPEN_URI
+            | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )
+    .map_err(super::sql::sql_error)?;
+    connection
+        .set_limit(
+            rusqlite::limits::Limit::SQLITE_LIMIT_LENGTH,
+            8 * 1024 * 1024,
+        )
+        .map_err(super::sql::sql_error)?;
+    let started = Instant::now();
+    let mut ticks = 0usize;
+    connection
+        .progress_handler(
+            1000,
+            Some(move || {
+                ticks += 1;
+                ticks > 1000 || started.elapsed() > Duration::from_secs(2)
+            }),
+        )
+        .map_err(super::sql::sql_error)?;
+    Ok(connection)
+}
+pub(super) fn inspect_unacknowledged_candidate(
+    fs: &VaultFs,
+    writer: &WriterPermit,
+    vault: &RecordId,
+    candidate: &CatalogSelection,
+    timeout: Duration,
+) -> Result<super::missing_cache::CandidateDisposition> {
+    use super::missing_cache::CandidateDisposition;
+    writer.require_root(fs.root())?;
+    require_unselected_rebuild(fs, vault)?;
+    let bytes = measure_abandoned_candidate(fs, candidate)?;
+    let db_name = path(fs, database_name(candidate))?;
+    let has_db = exists(&db_name)?;
+    let any_sidecar = [FileKind::Wal, FileKind::Shm, FileKind::Journal]
+        .into_iter()
+        .map(|kind| {
+            path(fs, CachePath::File(&candidate.file_id, kind)).and_then(|name| exists(&name))
+        })
+        .collect::<Result<Vec<_>>>()?
+        .into_iter()
+        .any(|exists| exists);
+    if !has_db && !any_sidecar {
+        return Ok(CandidateDisposition::Retired);
+    }
+    // Every database creation follows durable gate/lease reservation. Never
+    // classify an independently supplied file without those exact reservations.
+    let gate = required_lock(Checked::open(&path(fs, GATE)?, false, true)?, true, timeout)?;
+    let lease = required_lock(
+        Checked::open(&path(fs, lease_name(candidate))?, false, true)?,
+        true,
+        timeout,
+    )?;
+    let authenticated = checkpointed_rebuild_identity(fs, candidate)?;
+    gate.checked.verify()?;
+    lease.checked.verify()?;
+    drop(lease);
+    drop(gate);
+    if authenticated {
+        if !retire_unpublished(fs, writer, vault, candidate, timeout)? {
+            return Err(corrupt(
+                "unacknowledged rebuild candidate could not be retired",
+            ));
+        }
+        Ok(CandidateDisposition::Retired)
+    } else {
+        Ok(CandidateDisposition::Preserved { bytes })
+    }
+}
+
+/// This census runs only during explicit reconstruction, never ordinary queries.
+/// Its finite inventory authorizes no deletion and never adopts unrelated files.
+pub(super) fn validate_unselected_rebuild_namespace(
+    fs: &VaultFs,
+    candidates: &[CatalogSelection],
+) -> Result<()> {
+    require_unselected_rebuild(
+        fs,
+        &candidates
+            .first()
+            .ok_or_else(|| corrupt("rebuild reservation is absent"))?
+            .vault_id,
+    )?;
+    if cache_root_absent(fs)? {
+        return Ok(());
+    }
+    let cache = path(fs, CachePath::CacheRoot)?;
+    let mut steps = 0usize;
+    let mut inspect = |directory: &Path| -> Result<Vec<(String, PathBuf)>> {
+        let mut entries = vec![];
+        for entry in
+            std::fs::read_dir(directory).map_err(|e| io("read reserved rebuild namespace", e))?
+        {
+            steps += 1;
+            if steps > 4096 {
+                return Err(WikiError::new(
+                    ErrorCode::BudgetExceeded,
+                    "rebuild namespace exceeds 4096 entries",
+                ));
+            }
+            let entry = entry.map_err(|e| io("read rebuild member", e))?;
+            let name = entry
+                .file_name()
+                .into_string()
+                .map_err(|_| corrupt("rebuild namespace contains a non-UTF-8 name"))?;
+            entries.push((name, entry.path()));
+        }
+        Ok(entries)
+    };
+    for (name, entry) in inspect(&cache)? {
+        match name.as_str() {
+            "catalogs" => {
+                let _ = path(fs, DIRECTORY)?;
+                let allowed = candidates
+                    .iter()
+                    .flat_map(|candidate| {
+                        [
+                            ".sqlite",
+                            ".sqlite-wal",
+                            ".sqlite-shm",
+                            ".sqlite-journal",
+                            ".lock",
+                        ]
+                        .map(|suffix| format!("{}{suffix}", candidate.file_id))
+                    })
+                    .collect::<std::collections::BTreeSet<_>>();
+                for (name, entry) in inspect(&entry)? {
+                    let tombstone = name.strip_suffix(".lock").is_some_and(|id| {
+                        id.len() == 32
+                            && id
+                                .bytes()
+                                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+                    });
+                    if !allowed.contains(&name) && !tombstone {
+                        return Err(corrupt("rebuild namespace contains an unreserved member"));
+                    }
+                    let checked = Checked::open(&entry, false, tombstone)?;
+                    if tombstone
+                        && checked
+                            .file
+                            .metadata()
+                            .map_err(|e| io("inspect rebuild tombstone", e))?
+                            .len()
+                            != 0
+                    {
+                        return Err(corrupt("rebuild tombstone is not empty"));
+                    }
+                    checked.verify()?;
+                }
+            }
+            "catalog-acquisition.lock" => {
+                let checked = Checked::open(&entry, false, true)?;
+                if checked
+                    .file
+                    .metadata()
+                    .map_err(|e| io("inspect rebuild gate", e))?
+                    .len()
+                    != 0
+                {
+                    return Err(corrupt("rebuild gate is not empty"));
+                }
+                checked.verify()?;
+            }
+            _ => return Err(corrupt("rebuild cache root contains an unreserved member")),
+        }
+    }
+    Ok(())
 }
