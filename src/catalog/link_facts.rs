@@ -1,5 +1,6 @@
 //! Finite lookup dependencies for navigation, including unresolved destinations.
 //! Keys discover possible affected links; they do not establish a resolution.
+use super::navigation_resolution::NavigationResolution;
 use crate::{
     domain::{ErrorCode, RecordId, RecordKind, Result, VaultRelativePath, WikiError},
     records::{
@@ -49,15 +50,29 @@ pub(crate) fn untyped_fact(
     destination: &str,
     resolution: &LinkResolution,
 ) -> Result<OwnedLinkFact> {
+    untyped_navigation_fact(
+        from_path,
+        byte_start,
+        destination,
+        &NavigationResolution::from(resolution),
+    )
+}
+
+pub(crate) fn untyped_navigation_fact(
+    from_path: &VaultRelativePath,
+    byte_start: u64,
+    destination: &str,
+    resolution: &NavigationResolution,
+) -> Result<OwnedLinkFact> {
     let mut keys = KeySet::new(from_path.as_str(), destination)?;
     match untyped_lookup(destination) {
         UntypedLookup::External => {
-            if !matches!(resolution, LinkResolution::External) {
+            if !matches!(resolution, NavigationResolution::External) {
                 return Err(invalid("external destination has inconsistent resolution"));
             }
         }
         UntypedLookup::Missing => {
-            if !matches!(resolution, LinkResolution::Missing) {
+            if !matches!(resolution, NavigationResolution::Missing) {
                 return Err(invalid(
                     "invalid local destination has inconsistent resolution",
                 ));
@@ -76,11 +91,13 @@ pub(crate) fn untyped_fact(
                 keys.add(MatchKeyKind::Alias, basename)?;
             }
             match resolution {
-                LinkResolution::Resolved { id, .. } => keys.add(MatchKeyKind::Id, id.as_str())?,
+                NavigationResolution::Resolved { id, .. } => {
+                    keys.add(MatchKeyKind::Id, id.as_str())?
+                }
                 // Candidate membership changes are discovered by the raw
                 // destination keys above. Do not copy an unbounded ambiguity
                 // list into every referring link's dependency keys.
-                LinkResolution::Ambiguous { .. } | LinkResolution::Missing => {}
+                NavigationResolution::Ambiguous | NavigationResolution::Missing => {}
                 _ => {
                     return Err(invalid(
                         "local untyped destination has inconsistent resolution",

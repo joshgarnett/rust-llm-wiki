@@ -135,6 +135,55 @@ fact-stage rollback, corrupt selected records, lookup budgets and zero source-wi
 assertion queries during indexed planning. These results qualify the internal
 rules and publication boundary, not the unfinished production projector or CLI.
 
+The internal source projector now supplies a sealed admission capability to the
+publisher. Its connected tests cover title changes, new and reused revisions,
+empty and unsupported content, alternative support, opposition, navigation and
+interruption on both sides of SQL commit. Recovery preserves held readers and
+does not rewrite completed canonical files.
+
+Normalized proof layout 2 stores structural validation effects separately from
+the final baseline and requires rebuilding older layouts. Full validation and
+incremental code share reference and propagation rules; the full evaluator checks
+that recorded effects reproduce its baseline. This is the foundation for repairing
+previously invalid references, not a completed repair implementation: bounded
+Decision-group evaluation and affected-reference recomputation remain necessary.
+
+Normalized navigation now records an exact compact ambiguity state. Bounded
+candidate probes preserve path precedence and public resolver behavior. A connected
+update regression with 16 versus 4,100 matching filenames used identical selected
+row work and matched the full normalized oracle. The combined gate passed 434 unit
+and 54 related integration tests, with five ignored and the two unchanged ledger
+matrices excluded as described above. Full-build candidate enumeration, actual
+100,000-document performance, public activation and unseen answer quality remain
+unqualified.
+
+## Incremental validation and navigation
+
+A cached final eligibility state is insufficient for incremental repair. A record
+can be invalid because a referenced ID was absent, because its own evidence is
+corrupt, or because an independent policy check failed. Adopting the missing ID
+must recompute the affected reference and integrity checks while retaining other
+failures. Store the necessary stage provenance and traverse the complete affected
+dependency closure; compare incremental results with a fresh full projection.
+Do not replace this with an ordinary-update requirement to run a full audit.
+
+This follows the dependency-graph approach used by
+[TypeScript incremental compilation](https://www.typescriptlang.org/docs/handbook/release-notes/typescript-3-4.html).
+Its optional [direct-dependencies-only shortcut](https://www.typescriptlang.org/tsconfig/assumeChangesOnlyAffectDirectDependencies.html)
+explicitly trades complete checking for speed; that tradeoff is unsuitable for
+eligibility and citation correctness here. These are design precedents, not
+performance evidence for this implementation.
+
+Navigation needs the exact resolution outcome, but ordinary indexing does not
+need every candidate ID to report ambiguity. Resolve direct paths before extension
+fallbacks, and only then consider basename and alias matches. A bounded indexed
+probe can establish ambiguity from two distinct adopted entries; keep that compact
+outcome distinct from public APIs promising a complete candidate list. New entries
+must participate in the same precedence rules. Verify indexed access and work with
+large matching buckets, not only unrelated rows; SQLite documents the relevant
+[index access paths](https://www.sqlite.org/queryplanner.html) and
+[EXPLAIN QUERY PLAN output](https://sqlite.org/eqp.html).
+
 ## Why a redesign is necessary
 
 A public 299-source corpus exposed an operational failure before answer quality

@@ -98,17 +98,22 @@ fn complete_normalized_fact_lookup_reads_named_baseline_and_direct_states() {
     );
 }
 #[test]
-fn layout_zero_and_missing_selected_fact_refuse_without_fallback() {
+fn old_layouts_and_missing_selected_fact_refuse_without_fallback() {
     let (_temp, catalog, database) = fixture();
+    for old_layout in [0, 1] {
+        database
+            .execute(
+                "UPDATE catalog_meta SET proof_layout_version=?1",
+                [old_layout],
+            )
+            .unwrap();
+        assert_eq!(
+            reader(&catalog).require_fact_layout().unwrap_err().code,
+            ErrorCode::OfflineUnavailable
+        );
+    }
     database
-        .execute("UPDATE catalog_meta SET proof_layout_version=0", [])
-        .unwrap();
-    assert_eq!(
-        reader(&catalog).require_fact_layout().unwrap_err().code,
-        ErrorCode::OfflineUnavailable
-    );
-    database
-        .execute("UPDATE catalog_meta SET proof_layout_version=1", [])
+        .execute("UPDATE catalog_meta SET proof_layout_version=2", [])
         .unwrap();
     database
         .execute(
@@ -125,7 +130,7 @@ fn layout_zero_and_missing_selected_fact_refuse_without_fallback() {
     );
     database
         .execute(
-            "INSERT INTO record_eligibility_facts VALUES('page_fact_query','{}')",
+            "INSERT INTO record_eligibility_facts VALUES('page_fact_query','{}','{}')",
             [],
         )
         .unwrap();
@@ -177,7 +182,7 @@ fn role_scopes_and_unrelated_growth_preserve_selected_row_usage() {
             .unwrap();
         database
             .execute(
-                "INSERT INTO record_eligibility_facts VALUES(?1,'invalid unrelated JSON')",
+                "INSERT INTO record_eligibility_facts VALUES(?1,'invalid unrelated JSON','invalid unrelated JSON')",
                 [format!("unrelated_owner_{n}")],
             )
             .unwrap();

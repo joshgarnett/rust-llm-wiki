@@ -30,7 +30,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-const DELTA_VERSION: u32 = 1;
+const DELTA_VERSION: u32 = 2;
 const MAX_DELTA_BYTES: usize = 256 * 1024 * 1024;
 const MAX_SELECTED_BYTES: usize = 256 * 1024 * 1024;
 
@@ -105,9 +105,50 @@ fn intended(
 }
 
 impl<'a> IndexedRefreshSession<'a> {
-    /// Integration fixture constructor. Production admission requires the
-    /// affected-row projector's semantic capability, which is not implemented
-    /// yet. Raw structurally valid row actions cannot activate the CLI path.
+    /// Prepare and retain only a complete semantic projection. The private
+    /// capability cannot be constructed from caller-supplied row actions.
+    pub(crate) fn prepare_projected(
+        catalog: &Catalog,
+        writer: &'a WriterPermit,
+        projected: super::source_projection::ProjectedSourceRefresh,
+    ) -> Result<Self> {
+        writer.require_root(catalog.fs.root())?;
+        let mut parts = projected.into_parts();
+        if parts.delta.version != 2 || !parts.delta.owners.is_empty() {
+            return Err(recovery(
+                "projected refresh has an invalid publication envelope",
+            ));
+        }
+        parts.delta.validate()?;
+        let query = catalog.query_snapshot(QueryReadLimits::default())?;
+        if QueryCatalog::snapshot(&query) != &parts.base {
+            return Err(recovery(
+                "projected refresh base changed before preparation",
+            ));
+        }
+        RevisionOwnershipLookup::require_ready(&query)?;
+        parts
+            .delta
+            .require_layout(QueryCatalog::connection(&query))?;
+        drop(query);
+        let engine = ChangeEngine::new(catalog.fs.clone())?;
+        let change = engine.prepare(writer, parts.draft)?.prepared;
+        parts.delta.owners = engine.manifest_revision_owners(&change)?;
+        Self::retain_bound(
+            catalog,
+            writer,
+            parts.source_id,
+            change,
+            parts.base,
+            parts.before,
+            parts.after,
+            parts.delta,
+            DELTA_VERSION,
+        )
+    }
+
+    /// Raw row actions are only a recovery-mechanics fixture constructor.
+    /// Their legacy envelope is never accepted by production replay.
     #[cfg(test)]
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn retain(
@@ -120,10 +161,27 @@ impl<'a> IndexedRefreshSession<'a> {
         after: Vec<ReadDependency>,
         rows: CatalogDelta,
     ) -> Result<Self> {
+        Self::retain_bound(
+            catalog, writer, source_id, change, base, before, after, rows, 1,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn retain_bound(
+        catalog: &Catalog,
+        writer: &'a WriterPermit,
+        source_id: RecordId,
+        change: PreparedChange,
+        base: ReadSnapshot,
+        before: Vec<ReadDependency>,
+        after: Vec<ReadDependency>,
+        rows: CatalogDelta,
+        version: u32,
+    ) -> Result<Self> {
         writer.require_root(catalog.fs.root())?;
         rows.validate()?;
         let delta = RetainedDelta {
-            version: DELTA_VERSION,
+            version,
             vault_id: catalog.vault_id.clone(),
             source_id,
             change,
@@ -209,7 +267,8 @@ impl<'a> IndexedRefreshSession<'a> {
         let (manifest, hash) = engine.load_manifest_structure(&proof.change.change_id)?;
         proof.validate_manifest(&manifest)?;
         if hash != proof.change.manifest_hash
-            || delta.version != DELTA_VERSION
+            || (delta.version != DELTA_VERSION && !(cfg!(test) && delta.version == 1))
+            || (delta.version == DELTA_VERSION && delta.rows.version != 2)
             || proof.vault_id != catalog.vault_id
             || delta.vault_id != proof.vault_id
             || delta.source_id != proof.source_id

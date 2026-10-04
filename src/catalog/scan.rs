@@ -365,7 +365,14 @@ fn project_input(
                     byte_start: (body_offset + link.range.start) as u64,
                     target_id,
                     target_path,
-                    resolution: format!("{resolution:?}"),
+                    resolution: if normalized.is_some() {
+                        format!(
+                            "{:?}",
+                            super::navigation_resolution::NavigationResolution::from(&resolution)
+                        )
+                    } else {
+                        format!("{resolution:?}")
+                    },
                 })?;
                 if normalized.is_some() {
                     retrieval.link_fact(super::link_facts::untyped_fact(
@@ -411,7 +418,16 @@ fn project_input(
                         byte_start: start as u64,
                         target_id,
                         target_path,
-                        resolution: format!("{resolution:?}"),
+                        resolution: if normalized.is_some() {
+                            format!(
+                                "{:?}",
+                                super::navigation_resolution::NavigationResolution::from(
+                                    &resolution
+                                )
+                            )
+                        } else {
+                            format!("{resolution:?}")
+                        },
                     })?;
                     if normalized.is_some() {
                         retrieval.link_fact(super::link_facts::typed_fact(

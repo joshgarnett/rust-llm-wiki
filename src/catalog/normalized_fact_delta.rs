@@ -86,7 +86,10 @@ impl FactDelta {
         let mut owners = BTreeSet::new();
         for row in &self.records {
             unique(&mut owners, &row.record_id)?;
-            admit_new(&(&row.record_id, &row.fact.baseline), count)?;
+            admit_new(
+                &(&row.record_id, &row.fact.baseline, &row.fact.structural),
+                count,
+            )?;
             for path in &row.fact.direct_paths {
                 admit_new(&(&row.record_id, path), count)?;
             }
@@ -281,9 +284,9 @@ impl FactDelta {
             }
             admit_old(
                 c,
-                "SELECT record_id,baseline_json FROM record_eligibility_facts WHERE record_id=?1",
+                "SELECT record_id,baseline_json,structural_json FROM record_eligibility_facts WHERE record_id=?1",
                 item.record_id.as_str(),
-                2,
+                3,
                 stats,
             )?;
             admit_old(
@@ -293,7 +296,7 @@ impl FactDelta {
                 2,
                 stats,
             )?;
-            c.execute("INSERT INTO record_eligibility_facts VALUES(?1,?2) ON CONFLICT(record_id) DO UPDATE SET baseline_json=excluded.baseline_json",params![item.record_id.as_str(),sql::json(&item.fact.baseline)?]).map_err(sql::sql_error)?;
+            c.execute("INSERT INTO record_eligibility_facts VALUES(?1,?2,?3) ON CONFLICT(record_id) DO UPDATE SET baseline_json=excluded.baseline_json,structural_json=excluded.structural_json",params![item.record_id.as_str(),sql::json(&item.fact.baseline)?,sql::json(&item.fact.structural)?]).map_err(sql::sql_error)?;
             c.execute(
                 "DELETE FROM record_direct_paths WHERE owner_id=?1",
                 [item.record_id.as_str()],

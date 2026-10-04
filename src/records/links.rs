@@ -354,6 +354,10 @@ pub(crate) fn companion_paths(destination: &str) -> ExactPaths<'_> {
     // or its invalid/external-target gate. The typed ID determines identity.
     exact_paths(target(destination).0)
 }
+pub(crate) fn companion_target(destination: &str) -> (ExactPaths<'_>, Option<String>) {
+    let (path, fragment) = target(destination);
+    (exact_paths(path), fragment)
+}
 fn target(destination: &str) -> (&str, Option<String>) {
     let destination = destination
         .strip_prefix("[[")

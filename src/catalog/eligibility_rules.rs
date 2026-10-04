@@ -706,8 +706,20 @@ pub(crate) fn evidence_navigation_reason(
     resolution: &crate::records::LinkResolution,
     target: Option<&CanonicalRecord>,
 ) -> Option<&'static str> {
+    compact_evidence_navigation_reason(
+        assertion,
+        &super::navigation_resolution::NavigationResolution::from(resolution),
+        target,
+    )
+}
+
+pub(crate) fn compact_evidence_navigation_reason(
+    assertion: &RecordId,
+    resolution: &super::navigation_resolution::NavigationResolution,
+    target: Option<&CanonicalRecord>,
+) -> Option<&'static str> {
     match resolution {
-        crate::records::LinkResolution::Resolved { .. } => match target {
+        super::navigation_resolution::NavigationResolution::Resolved { .. } => match target {
             Some(evidence) if evidence.kind() == RecordKind::Evidence => {
                 if evidence.string("wiki_assertion_id") == Some(assertion.as_str()) {
                     None
@@ -718,7 +730,9 @@ pub(crate) fn evidence_navigation_reason(
             Some(_) => Some("evidence_link_wrong_kind"),
             None => Some("evidence_link_missing"),
         },
-        crate::records::LinkResolution::Ambiguous { .. } => Some("evidence_link_ambiguous"),
+        super::navigation_resolution::NavigationResolution::Ambiguous => {
+            Some("evidence_link_ambiguous")
+        }
         _ => Some("evidence_link_missing"),
     }
 }

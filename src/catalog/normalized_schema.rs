@@ -12,7 +12,7 @@ CREATE TABLE catalog_meta(
  vector_cache_lost INTEGER NOT NULL CHECK(vector_cache_lost IN (0,1)),
  vector_loss_unknown INTEGER NOT NULL CHECK(vector_loss_unknown IN (0,1)),
  revision_ownership_version INTEGER NOT NULL DEFAULT 0 CHECK(revision_ownership_version IN (0,1)),
- proof_layout_version INTEGER NOT NULL DEFAULT 0 CHECK(proof_layout_version IN (0,1)),
+ proof_layout_version INTEGER NOT NULL DEFAULT 0 CHECK(proof_layout_version IN (0,1,2)),
  CHECK((origin_change_id IS NULL)=(origin_manifest_hash IS NULL)),
  CHECK(state='building' OR (parser_hash IS NOT NULL AND publication_hash IS NOT NULL)),
  CHECK((audit_epoch IS NULL AND control_hash IS NULL AND dependency_hash IS NULL) OR
@@ -54,7 +54,7 @@ CREATE TABLE links(link_row INTEGER PRIMARY KEY,from_path TEXT NOT NULL,byte_sta
 CREATE INDEX link_paths ON links(from_path,byte_start,link_row);
 CREATE TABLE assertion_navigation_keys(kind TEXT NOT NULL,value TEXT NOT NULL,assertion_id TEXT NOT NULL,PRIMARY KEY(kind,value,assertion_id));
 CREATE TABLE opposition_members(key_json TEXT NOT NULL,negated INTEGER NOT NULL CHECK(negated IN (0,1)),assertion_id TEXT NOT NULL,PRIMARY KEY(key_json,negated,assertion_id));
-CREATE TABLE record_eligibility_facts(record_id TEXT PRIMARY KEY,baseline_json TEXT NOT NULL);
+CREATE TABLE record_eligibility_facts(record_id TEXT PRIMARY KEY,baseline_json TEXT NOT NULL,structural_json TEXT NOT NULL);
 CREATE TABLE record_direct_paths(owner_id TEXT NOT NULL,path TEXT NOT NULL,PRIMARY KEY(owner_id,path));
 CREATE INDEX direct_path_owners ON record_direct_paths(path,owner_id);
 CREATE TABLE semantic_edges(owner_id TEXT NOT NULL,target_id TEXT NOT NULL,role_json TEXT NOT NULL,PRIMARY KEY(owner_id,target_id,role_json));

@@ -469,7 +469,7 @@ impl<'a> NormalizedBuilder<'a> {
         projection: &ValidationProjection,
         facts: &super::eligibility_facts::NormalizedEligibilityFacts,
     ) -> Result<()> {
-        if facts.version != 1
+        if facts.version != 2
             || facts.records.keys().ne(projection.records.keys())
             || projection
                 .records
@@ -552,15 +552,18 @@ impl<'a> NormalizedBuilder<'a> {
                 self.commit_lookup("opposition_member", &(&key, negated, id))?;
                 self.stats.opposition_members += 1;
             }
-            let bytes = counted_json(&fact.baseline, self.limits.max_row_bytes)?;
+            let bytes = counted_json(
+                &(&fact.baseline, &fact.structural),
+                self.limits.max_row_bytes,
+            )?;
             self.admit(checked_sum(&[256, id.as_str().len() as u64, bytes])?)?;
             self.connection()
                 .execute(
-                    "INSERT INTO record_eligibility_facts(record_id,baseline_json) VALUES(?1,?2)",
-                    params![id.as_str(), sql::json(&fact.baseline)?],
+                    "INSERT INTO record_eligibility_facts(record_id,baseline_json,structural_json) VALUES(?1,?2,?3)",
+                    params![id.as_str(), sql::json(&fact.baseline)?, sql::json(&fact.structural)?],
                 )
                 .map_err(build_sql_error)?;
-            self.commit_lookup("baseline", &(id, &fact.baseline))?;
+            self.commit_lookup("baseline", &(id, &fact.baseline, &fact.structural))?;
             self.stats.eligibility_facts += 1;
             for path in &fact.direct_paths {
                 if !expected.contains_key(path)
@@ -1017,11 +1020,11 @@ impl<'a> NormalizedBuilder<'a> {
             // This additional commitment names the proof layout and exact facts;
             // legacy full-proof builds retain their existing publication encoding.
             publication_hash = Blake3Hash::digest(sql::json(&(
-                "lwiki.normalized-proof-layout.v1",
+                "lwiki.normalized-proof-layout.v2",
                 &publication_hash,
                 self.lookup_hash.finalize().to_hex().to_string(),
             ))?);
-            self.connection().execute("UPDATE catalog_meta SET proof_layout_version=1 WHERE singleton=1 AND state='building'", []).map_err(build_sql_error)?;
+            self.connection().execute("UPDATE catalog_meta SET proof_layout_version=2 WHERE singleton=1 AND state='building'", []).map_err(build_sql_error)?;
         }
         self.connection().execute("UPDATE catalog_meta SET parser_hash=?1,control_hash=?2,dependency_hash=?3,publication_hash=?4,audit_epoch=epoch,state='complete' WHERE singleton=1 AND state='building'",params![projection.parser_fingerprint.as_str(),projection.control_manifest.as_str(),dependency_hash.as_str(),publication_hash.as_str()]).map_err(build_sql_error)?;
         self.step(BuildCheckpoint::AfterComplete)?;

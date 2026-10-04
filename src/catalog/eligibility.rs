@@ -1,11 +1,12 @@
 //! Authored status is preserved; only derived eligibility is computed here.
 use super::{
     eligibility_facts::{EligibilityRole, NormalizedEligibilityFacts},
-    eligibility_rules::{self as rules, GenerationContext, entity_identity_invalid},
+    eligibility_rules::{self as rules, GenerationContext},
     scan::{
         diagnostic, input_notes, isolated_fields, list, project_validation,
         project_validation_closed, readable_id,
     },
+    structural_rules::{self, StructuralRecorder, StructuralStage, invalidate as mark_invalid},
     types::*,
 };
 use crate::{
@@ -305,25 +306,6 @@ fn proposition(record: &CanonicalRecord) -> BTreeMap<String, serde_json::Value> 
 
 pub(crate) use super::eligibility_rules::{OppositionKey, eligible_opposition, opposition_key};
 
-fn mark_invalid(
-    row: &mut RecordRow,
-    reason: impl Into<String>,
-    diagnostics: &mut Vec<CatalogDiagnostic>,
-    details: serde_json::Value,
-) {
-    let reason = reason.into();
-    row.eligibility = Eligibility::Invalid;
-    if !row.reasons.contains(&reason) {
-        row.reasons.push(reason.clone());
-    }
-    diagnostics.push(diagnostic(
-        &row.path,
-        Some(row.record.id()),
-        ErrorCode::RecordInvalid,
-        serde_json::json!({"reason":reason,"details":details}),
-    ));
-}
-
 pub(crate) fn references(
     record: &CanonicalRecord,
 ) -> Vec<(&'static str, RecordKind, Option<&'static str>)> {
@@ -391,6 +373,7 @@ fn compute_inner(
     diagnostics: &mut Vec<CatalogDiagnostic>,
     mut facts: Option<&mut NormalizedEligibilityFacts>,
 ) -> Result<()> {
+    let mut recorder = StructuralRecorder::new(facts.is_some());
     let registry = IndexedRegistry::new(
         records
             .values()
@@ -427,190 +410,25 @@ fn compute_inner(
                 }
             }
         }
-        for (field, kind, companion) in references(&record) {
-            if let Some(value) = record.string(field) {
-                let target = RecordId::new(value)?;
-                edges.entry(id.clone()).or_default().insert(target.clone());
-                if let Some(facts) = facts.as_deref_mut() {
-                    facts.edge(
-                        id,
-                        &target,
-                        EligibilityRole::TypedReference {
-                            field: field.into(),
-                        },
-                    );
-                }
-                if !matches!(
-                    registry.resolve_typed(&target, kind, companion.and_then(|k| record.string(k))),
-                    LinkResolution::Resolved { .. }
-                ) {
-                    mark_invalid(
-                        row,
-                        format!("invalid_reference:{field}"),
-                        diagnostics,
-                        serde_json::json!({"target":target,"expected_kind":kind}),
-                    );
-                }
-                if matches!(field, "wiki_supersedes_id" | "wiki_superseded_by_id") {
-                    supersession.entry(id.clone()).or_default().insert(target);
-                }
-            }
+        let result = structural_rules::evaluate_references(
+            row,
+            &registry,
+            &structural_rules::ReferenceBoundary::complete(&snapshot),
+            diagnostics,
+            &mut recorder,
+        )?;
+        edges.insert(id.clone(), result.targets);
+        if !result.declared.is_empty() {
+            declared.insert(id.clone(), result.declared);
         }
-        for value in list(&record, "wiki_depends_on_ids") {
-            let target = RecordId::new(value)?;
-            edges.entry(id.clone()).or_default().insert(target.clone());
-            if let Some(facts) = facts.as_deref_mut() {
-                facts.edge(id, &target, EligibilityRole::DeclaredSupport);
-            }
-            declared
-                .entry(id.clone())
-                .or_default()
-                .insert(target.clone());
-            if !matches!(
-                registry.resolve_typed(&target, RecordKind::Assertion, None),
-                LinkResolution::Resolved { .. }
-            ) {
-                mark_invalid(
-                    row,
-                    "invalid_dependency_reference",
-                    diagnostics,
-                    serde_json::json!({"target":target}),
-                );
-            }
+        if !result.supersession.is_empty() {
+            supersession.insert(id.clone(), result.supersession);
         }
-        for (field, kind) in match record.kind() {
-            RecordKind::Source => vec![("wiki_revisions", Some(RecordKind::Revision))],
-            RecordKind::Extraction => vec![
-                ("wiki_source_ids", Some(RecordKind::Source)),
-                ("wiki_source_revision_ids", Some(RecordKind::Revision)),
-            ],
-            RecordKind::Decision => vec![("wiki_input_ids", None), ("wiki_output_ids", None)],
-            _ => vec![],
-        } {
-            let values = list(&record, field);
-            let unique: BTreeSet<_> = values.iter().collect();
-            if unique.len() != values.len() {
-                mark_invalid(
-                    row,
-                    format!("duplicate_reference:{field}"),
-                    diagnostics,
-                    serde_json::Value::Null,
-                );
-            }
-            for value in values {
-                let target = RecordId::new(value)?;
-                edges.entry(id.clone()).or_default().insert(target.clone());
-                if let Some(facts) = facts.as_deref_mut() {
-                    let role = match field {
-                        "wiki_revisions" => EligibilityRole::SourceInventory,
-                        "wiki_source_ids" => EligibilityRole::ExtractionSource,
-                        "wiki_source_revision_ids" => EligibilityRole::ExtractionRevision,
-                        "wiki_input_ids" => EligibilityRole::DecisionInput,
-                        "wiki_output_ids" => EligibilityRole::DecisionOutput,
-                        _ => unreachable!("fixed list reference vocabulary"),
-                    };
-                    facts.edge(id, &target, role);
-                }
-                if snapshot
-                    .get(&target)
-                    .is_none_or(|r| kind.is_some_and(|kind| r.record.kind() != kind))
-                {
-                    mark_invalid(
-                        row,
-                        format!("invalid_reference:{field}"),
-                        diagnostics,
-                        serde_json::json!({"target":target}),
-                    );
-                }
-                if record.kind() == RecordKind::Source
-                    && snapshot
-                        .get(&target)
-                        .is_some_and(|r| r.record.string("wiki_source_id") != Some(id.as_str()))
-                {
-                    mark_invalid(
-                        row,
-                        "revision_ownership_mismatch",
-                        diagnostics,
-                        serde_json::json!({"target":target}),
-                    );
-                }
-            }
-        }
-        if record.kind() == RecordKind::Source
-            && !list(&record, "wiki_revisions")
-                .iter()
-                .any(|r| Some(r.as_str()) == record.string("wiki_current_revision"))
-        {
-            mark_invalid(
-                row,
-                "head_not_retained",
-                diagnostics,
-                serde_json::Value::Null,
-            );
-        }
-        if record.kind() == RecordKind::Extraction {
-            let source_set: BTreeSet<_> = list(&record, "wiki_source_ids").into_iter().collect();
-            let owner_set: BTreeSet<_> = list(&record, "wiki_source_revision_ids")
-                .iter()
-                .filter_map(|id| RecordId::new(id).ok())
-                .filter_map(|id| snapshot.get(&id))
-                .filter_map(|r| r.record.string("wiki_source_id"))
-                .map(str::to_owned)
-                .collect();
-            if source_set != owner_set {
-                mark_invalid(
-                    row,
-                    "extraction_ownership_set_mismatch",
-                    diagnostics,
-                    serde_json::Value::Null,
-                );
-            }
-        }
-        if record.kind() == RecordKind::ExtractionPacket
-            && snapshot
-                .get(&RecordId::new(
-                    record.string("wiki_source_revision").expect("revision"),
-                )?)
-                .is_some_and(|r| {
-                    r.record.string("wiki_source_id") != record.string("wiki_source_id")
-                })
-        {
-            mark_invalid(
-                row,
-                "packet_revision_ownership_mismatch",
-                diagnostics,
-                serde_json::Value::Null,
-            );
-        }
-        if record.kind() == RecordKind::Evidence
-            && let Some(predecessor) = record
-                .string("wiki_supersedes_id")
-                .and_then(|id| RecordId::new(id).ok())
-                .and_then(|id| snapshot.get(&id))
-        {
-            let same_chain = ["wiki_assertion_id", "wiki_source_id"]
-                .iter()
-                .all(|field| record.field(field) == predecessor.record.field(field));
-            let same_revision = record.string("wiki_source_revision")
-                == predecessor.record.string("wiki_source_revision");
-            let same_span = [
-                "wiki_locator_kind",
-                "wiki_span_start",
-                "wiki_span_end",
-                "wiki_quote_hash",
-            ]
-            .iter()
-            .all(|field| record.field(field) == predecessor.record.field(field));
-            if !same_chain || same_revision && !same_span {
-                mark_invalid(
-                    row,
-                    "evidence_successor_chain_disagreement",
-                    diagnostics,
-                    serde_json::json!({"predecessor":predecessor.record.id()}),
-                );
-            }
+        if let Some(facts) = facts.as_deref_mut() {
+            facts.edges.extend(result.semantic);
         }
     }
+    recorder.phase(StructuralStage::Invariant);
     let decision_policy = match crate::graph::remap::verify_decision_policy(notes) {
         Ok(policy) => policy,
         Err(error) => {
@@ -621,6 +439,7 @@ fn compute_inner(
                         "entity_decision_receipt_invalid",
                         diagnostics,
                         serde_json::json!({"error":error}),
+                        &mut recorder,
                     );
                 }
             }
@@ -637,6 +456,7 @@ fn compute_inner(
                         "review_receipt_invalid",
                         diagnostics,
                         serde_json::json!({"error":error}),
+                        &mut recorder,
                     );
                 }
             }
@@ -674,6 +494,7 @@ fn compute_inner(
                 "dependency_cycle",
                 diagnostics,
                 serde_json::Value::Null,
+                &mut recorder,
             );
         }
     }
@@ -684,6 +505,7 @@ fn compute_inner(
                 "supersession_cycle",
                 diagnostics,
                 serde_json::Value::Null,
+                &mut recorder,
             );
         }
     }
@@ -694,17 +516,21 @@ fn compute_inner(
                 "supersession_chain_over_limit",
                 diagnostics,
                 serde_json::Value::Null,
+                &mut recorder,
             );
         }
     }
+    recorder.phase(StructuralStage::Decision);
     apply_decisions(
         notes,
         records,
         diagnostics,
         decision_policy.as_ref(),
         &review_edges,
+        &mut recorder,
     )?;
 
+    recorder.phase(StructuralStage::RevisionIntegrity);
     // Verify all original assets, including unsupported captures; failed checks retain
     // dependencies read before failure so later verification cannot overlook tampering.
     let snapshot = records.clone();
@@ -774,11 +600,19 @@ fn compute_inner(
                 "revision_integrity",
                 diagnostics,
                 serde_json::json!({"error":error}),
+                &mut recorder,
             );
         }
     }
     // Structural errors follow typed references, independently from support freshness.
-    propagate_invalid(records, &edges, diagnostics);
+    recorder.phase(StructuralStage::Propagation);
+    let missing = edges
+        .values()
+        .flatten()
+        .filter(|id| !records.contains_key(*id))
+        .map(|id| (id.clone(), false))
+        .collect();
+    structural_rules::propagate_invalid(records, &edges, diagnostics, &missing, &mut recorder)?;
     if let Some(facts) = facts.as_deref_mut() {
         facts.capture_baseline(records);
     }
@@ -850,6 +684,7 @@ fn compute_inner(
         }
     }
     let snapshot = records.clone();
+    recorder.phase(StructuralStage::EvidenceIntegrity);
     for (id, row) in records
         .iter_mut()
         .filter(|(_, r)| r.record.kind() == RecordKind::Evidence)
@@ -898,6 +733,7 @@ fn compute_inner(
                     "evidence_integrity",
                     diagnostics,
                     serde_json::json!({"error":error}),
+                    &mut recorder,
                 );
                 continue;
             }
@@ -956,6 +792,7 @@ fn compute_inner(
         }
     }
     if let Some(facts) = facts.as_deref_mut() {
+        facts.install_structural(recorder.finish())?;
         facts.capture_direct(records)?;
     } else {
         // All related bytes form an over-approximated closure. This intentionally
@@ -1000,58 +837,6 @@ fn compute_inner(
     // Retain unused read-only argument as a reminder that eligibility does not infer prose.
     let _ = notes;
     Ok(())
-}
-
-fn set(row: &mut RecordRow, eligibility: Eligibility, reason: &str) {
-    row.eligibility = eligibility;
-    row.reasons.push(reason.into());
-}
-
-fn propagate_invalid(
-    records: &mut BTreeMap<RecordId, RecordRow>,
-    edges: &BTreeMap<RecordId, BTreeSet<RecordId>>,
-    diagnostics: &mut Vec<CatalogDiagnostic>,
-) {
-    loop {
-        let invalid: BTreeSet<_> = records
-            .iter()
-            .filter(|(_, r)| {
-                r.eligibility == Eligibility::Invalid
-                    && (r.record.kind() != RecordKind::Entity || entity_identity_invalid(r))
-            })
-            .map(|(id, _)| id.clone())
-            .collect();
-        let mut changed = false;
-        for (id, row) in records.iter_mut() {
-            if row.eligibility != Eligibility::Invalid
-                && edges
-                    .get(id)
-                    .is_some_and(|targets| targets.iter().any(|target| invalid.contains(target)))
-            {
-                // Declared description support invalidity never erases an otherwise
-                // valid entity identity. The description pass handles that channel.
-                if row.record.kind() == RecordKind::Entity
-                    && references(&row.record).iter().all(|(field, _, _)| {
-                        row.record.string(field).is_none_or(|target| {
-                            RecordId::new(target).is_ok_and(|target| !invalid.contains(&target))
-                        })
-                    })
-                {
-                    continue;
-                }
-                mark_invalid(
-                    row,
-                    "invalid_referenced_record",
-                    diagnostics,
-                    serde_json::Value::Null,
-                );
-                changed = true;
-            }
-        }
-        if !changed {
-            break;
-        }
-    }
 }
 
 fn apply_dependency_eligibility(
@@ -1280,6 +1065,7 @@ fn apply_decisions(
     diagnostics: &mut Vec<CatalogDiagnostic>,
     decision_policy: Option<&crate::graph::remap::VerifiedDecisionPolicy>,
     review_edges: &BTreeSet<(RecordId, RecordId)>,
+    recorder: &mut StructuralRecorder,
 ) -> Result<()> {
     let decisions: Vec<_> = records
         .values()
@@ -1289,6 +1075,7 @@ fn apply_decisions(
     // A malformed/cyclic superseder has no authority to disable its predecessor.
     let mut affected: BTreeMap<RecordId, Vec<&RecordRow>> = BTreeMap::new();
     for decision in &decisions {
+        recorder.producer(Some(decision.record.id().clone()));
         if decision.record.string("wiki_status") != Some("active")
             || decision.eligibility == Eligibility::Invalid
         {
@@ -1477,7 +1264,12 @@ fn apply_decisions(
                 .any(|target| target.record.string("wiki_status") == Some("superseded"))
             && let Some(row) = records.get_mut(decision.record.id())
         {
-            set(row, Eligibility::Historical, "alias_identity_superseded");
+            structural_rules::state(
+                row,
+                Eligibility::Historical,
+                "alias_identity_superseded",
+                recorder,
+            );
         }
         for (id, reason) in disagreements {
             if let Some(row) = records.get_mut(&id) {
@@ -1486,6 +1278,7 @@ fn apply_decisions(
                     reason,
                     diagnostics,
                     serde_json::json!({"decision":decision.record.id()}),
+                    recorder,
                 );
             }
             if let Some(row) = records.get_mut(decision.record.id()) {
@@ -1494,6 +1287,7 @@ fn apply_decisions(
                     "decision_outcome_disagreement",
                     diagnostics,
                     serde_json::json!({"target":id,"reason":reason}),
+                    recorder,
                 );
             }
         }
@@ -1508,6 +1302,7 @@ fn apply_decisions(
         .collect();
     explicitly_superseded.extend(review_edges.iter().map(|(before, _)| before.to_string()));
     for decision in &decisions {
+        recorder.producer(Some(decision.record.id().clone()));
         if decision.record.string("wiki_status") == Some("active")
             && explicitly_superseded.contains(decision.record.id().as_str())
             && let Some(row) = records.get_mut(decision.record.id())
@@ -1517,10 +1312,12 @@ fn apply_decisions(
                 "active_superseded_decision",
                 diagnostics,
                 serde_json::Value::Null,
+                recorder,
             );
         }
     }
     for (id, decisions) in affected {
+        recorder.producer(Some(id.clone()));
         let actions: BTreeSet<_> = decisions
             .iter()
             .map(|r| {
@@ -1560,6 +1357,7 @@ fn apply_decisions(
                     "conflicting_active_decisions",
                     diagnostics,
                     serde_json::json!({"decisions":decisions.iter().map(|r|r.record.id()).collect::<Vec<_>>()}),
+                    recorder,
                 );
             }
             for decision in &decisions {
@@ -1569,6 +1367,7 @@ fn apply_decisions(
                         "conflicting_active_decisions",
                         diagnostics,
                         serde_json::json!({"target":id}),
+                        recorder,
                     );
                 }
             }

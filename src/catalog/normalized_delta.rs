@@ -241,12 +241,12 @@ impl CatalogDelta {
                 |row| row.get(0),
             )
             .map_err(sql::sql_error)?;
-        if layout != if self.version == 2 { 1 } else { 0 } {
+        if layout != if self.version == 2 { 2 } else { 0 } {
             return Err(invalid("catalog delta and selected proof layout disagree"));
         }
         if self.version == 2 {
             for query in [
-                "SELECT baseline_json FROM record_eligibility_facts WHERE record_id=?1",
+                "SELECT baseline_json,structural_json FROM record_eligibility_facts WHERE record_id=?1",
                 "SELECT path FROM record_direct_paths WHERE owner_id=?1",
                 "SELECT target_id FROM semantic_edges INDEXED BY semantic_outgoing WHERE owner_id=?1 AND role_json=?2",
                 "SELECT owner_id FROM semantic_edges INDEXED BY semantic_dependents WHERE target_id=?1 AND role_json=?2",

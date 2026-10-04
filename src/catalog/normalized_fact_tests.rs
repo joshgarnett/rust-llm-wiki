@@ -127,7 +127,7 @@ fn full_normalized_build_persists_central_states_baselines_and_local_paths_witho
             row.get::<_, i64>(0)
         })
         .unwrap(),
-        1
+        2
     );
     assert_eq!(
         db.query_row("SELECT count(*) FROM record_eligibility_facts", [], |row| {

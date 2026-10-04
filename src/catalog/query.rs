@@ -391,8 +391,8 @@ impl QuerySnapshot {
             .ok_or_else(|| corrupt("normalized proof layout header absent"))?;
         self.reserve_refresh_row(row, 1)?;
         match row.get::<_, i64>(0).map_err(sql::sql_error)? {
-            1 => Ok(()),
-            0 => Err(WikiError::new(
+            2 => Ok(()),
+            0 | 1 => Err(WikiError::new(
                 ErrorCode::OfflineUnavailable,
                 "normalized proof layout requires explicit rebuild",
             )),
@@ -429,14 +429,17 @@ impl QuerySnapshot {
         &self,
         id: &RecordId,
     ) -> Result<Option<super::eligibility_facts::EligibilityFact>> {
-        use super::eligibility_facts::{EligibilityBaseline, EligibilityFact};
+        use super::{
+            eligibility_facts::{EligibilityBaseline, EligibilityFact},
+            structural_rules::StructuralFact,
+        };
         self.require_fact_layout()?;
-        let mut statement = self.connection.prepare("SELECT r.id,f.baseline_json,r.path FROM records r INDEXED BY sqlite_autoindex_records_1 LEFT JOIN record_eligibility_facts f ON f.record_id=r.id WHERE r.id=?1").map_err(sql::sql_error)?;
+        let mut statement = self.connection.prepare("SELECT r.id,f.baseline_json,r.path,f.structural_json FROM records r INDEXED BY sqlite_autoindex_records_1 LEFT JOIN record_eligibility_facts f ON f.record_id=r.id WHERE r.id=?1").map_err(sql::sql_error)?;
         let mut rows = statement.query([id.as_str()]).map_err(sql::sql_error)?;
         let Some(row) = rows.next().map_err(sql::sql_error)? else {
             return Ok(None);
         };
-        self.reserve_refresh_row(row, 3)?;
+        self.reserve_refresh_row(row, 4)?;
         if utf8(text_bytes(row, 0)?)? != id.as_str() {
             return Err(corrupt("eligibility fact ID differs from requested record"));
         }
@@ -444,6 +447,8 @@ impl QuerySnapshot {
             serde_json::from_slice(text_bytes(row, 1)?).map_err(|e| corrupt(e.to_string()))?;
         let own_path =
             VaultRelativePath::new(utf8(text_bytes(row, 2)?)?).map_err(|e| corrupt(e.message))?;
+        let structural: StructuralFact =
+            serde_json::from_slice(text_bytes(row, 3)?).map_err(|e| corrupt(e.to_string()))?;
         drop(rows);
         drop(statement);
         let mut statement = self.connection.prepare("SELECT owner_id,path FROM record_direct_paths INDEXED BY sqlite_autoindex_record_direct_paths_1 WHERE owner_id=?1 ORDER BY path").map_err(sql::sql_error)?;
@@ -465,6 +470,7 @@ impl QuerySnapshot {
         Ok(Some(EligibilityFact {
             baseline,
             direct_paths,
+            structural,
         }))
     }
     pub(crate) fn direct_path_states(
@@ -849,6 +855,64 @@ impl QuerySnapshot {
                 return Err(corrupt("registry match key differs from adopted record"));
             }
             result.push(entry);
+        }
+        Ok(result)
+    }
+    /// Complete saturated cardinality, rather than a truncated candidate list.
+    /// Two distinct adopted entry witnesses suffice to prove ambiguity.
+    pub(crate) fn registry_probe_for_key(
+        &self,
+        key: &super::link_facts::MatchKey,
+    ) -> Result<super::navigation_resolution::RegistryProbe> {
+        use super::{
+            link_facts::MatchKeyKind,
+            navigation_resolution::{RegistryCandidate, RegistryProbe},
+        };
+        self.require_fact_layout()?;
+        self.reserve_fact_input(key.value.len())?;
+        let mut statement = self.connection.prepare("SELECT k.kind,k.value,k.record_id,k.path,r.id,r.kind,r.path FROM registry_match_keys k INDEXED BY sqlite_autoindex_registry_match_keys_1 LEFT JOIN records r INDEXED BY sqlite_autoindex_records_1 ON r.id=k.record_id WHERE k.kind=?1 AND k.value=?2 ORDER BY k.record_id,k.path LIMIT 2").map_err(sql::sql_error)?;
+        let mut rows = statement
+            .query(params![fact_key_name(key.kind), key.value])
+            .map_err(sql::sql_error)?;
+        let mut result = RegistryProbe::Zero;
+        while let Some(row) = rows.next().map_err(sql::sql_error)? {
+            self.reserve_refresh_row(row, 7)?;
+            if fact_key_kind(utf8(text_bytes(row, 0)?)?)? != key.kind
+                || utf8(text_bytes(row, 1)?)? != key.value
+                || text_bytes(row, 2)? != text_bytes(row, 4)?
+                || text_bytes(row, 3)? != text_bytes(row, 6)?
+            {
+                return Err(corrupt("registry witness differs from its adopted record"));
+            }
+            let id = RecordId::new(utf8(text_bytes(row, 2)?)?).map_err(|e| corrupt(e.message))?;
+            let path = VaultRelativePath::new(utf8(text_bytes(row, 3)?)?)
+                .map_err(|e| corrupt(e.message))?;
+            let kind = utf8(text_bytes(row, 5)?)?
+                .parse()
+                .map_err(|e: WikiError| corrupt(e.message))?;
+            let valid = match key.kind {
+                MatchKeyKind::Id => key.value == id.as_str(),
+                MatchKeyKind::Path => key.value == path.as_str(),
+                MatchKeyKind::Basename => {
+                    key.value == crate::records::links::registry_basename(path.as_str())
+                }
+                MatchKeyKind::Alias => {
+                    // Alias membership lives in canonical metadata. Decode at
+                    // most two selected records, never the entire alias bucket.
+                    let adopted = QueryCatalog::record(self, &id)?
+                        .ok_or_else(|| corrupt("alias witness lacks adopted record"))?;
+                    if adopted.path != path || adopted.record.kind() != kind {
+                        return Err(corrupt("alias witness differs from adopted record"));
+                    }
+                    scan::list(&adopted.record, "aliases")
+                        .iter()
+                        .any(|alias| alias == &key.value)
+                }
+            };
+            if !valid {
+                return Err(corrupt("registry witness key differs from adopted record"));
+            }
+            result.insert(RegistryCandidate { id, kind, path })?;
         }
         Ok(result)
     }

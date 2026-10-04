@@ -1,6 +1,6 @@
 //! Direct observed facts for normalized serving. These do not constitute a
 //! selected proof or permission to run the full validator over a partial graph.
-use super::types::RecordRow;
+use super::{structural_rules::StructuralFact, types::RecordRow};
 use crate::{
     domain::{Eligibility, ErrorCode, RecordId, Result, VaultRelativePath, WikiError},
     sources::revision::canonical_path,
@@ -38,6 +38,8 @@ pub(crate) struct EligibilityFact {
     /// Policy and structural state before lifecycle/support computation. Evidence
     /// integrity is retained independently even though verified later in compute.
     pub baseline: EligibilityBaseline,
+    /// Actual structural-stage effects; mandatory in the new proof layout.
+    pub structural: StructuralFact,
     /// Own canonical path and noncanonical observed assets/absences only.
     /// Related notes are resolved by typed edges, not stale captured head paths.
     /// Resolve expected states from the same pinned epoch, never copied hashes.
@@ -80,7 +82,7 @@ pub(crate) struct NormalizedEligibilityFacts {
 impl NormalizedEligibilityFacts {
     pub(super) fn new() -> Self {
         Self {
-            version: 1,
+            version: 2,
             records: BTreeMap::new(),
             observed: BTreeMap::new(),
             edges: BTreeSet::new(),
@@ -101,11 +103,33 @@ impl NormalizedEligibilityFacts {
                     id.clone(),
                     EligibilityFact {
                         baseline: EligibilityBaseline::from_row(row),
+                        structural: StructuralFact::default(),
                         direct_paths: BTreeSet::new(),
                     },
                 )
             })
             .collect();
+    }
+    pub(super) fn install_structural(
+        &mut self,
+        mut effects: BTreeMap<RecordId, StructuralFact>,
+    ) -> Result<()> {
+        for (id, fact) in &mut self.records {
+            fact.structural = effects.remove(id).unwrap_or_default();
+            if fact.structural.baseline() != fact.baseline {
+                return Err(WikiError::new(
+                    ErrorCode::IndexCorrupt,
+                    format!("structural provenance differs from computed baseline for {id}"),
+                ));
+            }
+        }
+        if !effects.is_empty() {
+            return Err(WikiError::new(
+                ErrorCode::IndexCorrupt,
+                "structural effect owner absent",
+            ));
+        }
+        Ok(())
     }
     pub(super) fn evidence_integrity_failure(&mut self, id: &RecordId) {
         let baseline = &mut self
@@ -260,6 +284,19 @@ mod tests {
         assert_eq!(diagnostics, legacy_diagnostics);
         for (id, row) in &normalized {
             assert!(row.dependencies.is_empty());
+            assert_eq!(
+                facts.records[id].structural.baseline(),
+                facts.records[id].baseline
+            );
+            let retained = serde_json::to_vec(&facts.records[id].structural).unwrap();
+            let decoded: StructuralFact = serde_json::from_slice(&retained).unwrap();
+            assert_eq!(decoded, facts.records[id].structural);
+            for emitted in decoded.diagnostics(row) {
+                assert!(
+                    diagnostics.contains(&emitted),
+                    "retained structural diagnostic differs for {id}"
+                );
+            }
             let mut original = legacy[id].clone();
             original.dependencies.clear();
             assert_eq!(
