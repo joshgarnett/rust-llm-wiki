@@ -106,8 +106,34 @@ checkpoint; these are correctness tests, not a large-vault performance result.
 
 These facts are inputs to the affected-record projector. They do not replace
 selected evidence verification or authorize a partial graph to pass as a complete
-validation. Atomic maintenance of these tables, production refresh admission and
-all-mode query integration remain required before public activation.
+validation. Production refresh admission and all-mode query integration remain
+required before public activation.
+
+Version 2 row deltas now maintain local facts, exact semantic edges, raw links and
+registry keys in the same transaction as records and search postings. Existing
+authored canonical records remain immutable during a source refresh; lifecycle
+changes may reuse their facts. New revisions require complete local facts and
+registry entries. Old and new rows share finite accounting, and layout/index
+preflight runs before canonical file changes. Version 1 plans cannot leave the
+new fact tables stale.
+
+Full rebuild and incremental recomputation share the lifecycle, evidence support,
+declared dependency and opposition rules. Compact indexes include every authored
+accepted opposition member, regardless of eligibility, and potential matches for
+all assertions' frontmatter evidence links. Those navigation keys have no invented
+byte offsets or candidate-list expansion. Metadata lookups avoid decoding document
+bodies. The indexed source planner also no longer enumerates every source assertion,
+including on title-only changes; the projector must discover complete affected
+groups before applying an update.
+
+The connected gate passed 419 unit tests and 54 catalog-eligibility, source-evidence
+and graph-query integration tests, with five unit tests ignored. Two long ledger
+recovery matrices passed in the preceding full run; that run's only failure was a
+new fixture using an unsupported predicate, corrected before the connected gate.
+Tests cover retained v2 recovery before and after SQL commit, held readers,
+fact-stage rollback, corrupt selected records, lookup budgets and zero source-wide
+assertion queries during indexed planning. These results qualify the internal
+rules and publication boundary, not the unfinished production projector or CLI.
 
 ## Why a redesign is necessary
 

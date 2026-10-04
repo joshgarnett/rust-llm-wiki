@@ -52,6 +52,8 @@ CREATE INDEX assertion_evidence ON source_evidence(assertion_id,evidence_id);
 CREATE TABLE revision_tree_owners(source_component TEXT COLLATE BINARY NOT NULL,revision_component TEXT COLLATE BINARY NOT NULL,change_id TEXT NOT NULL,manifest_hash TEXT NOT NULL,PRIMARY KEY(source_component,revision_component));
 CREATE TABLE links(link_row INTEGER PRIMARY KEY,from_path TEXT NOT NULL,byte_start INTEGER NOT NULL CHECK(byte_start>=0),target_id TEXT,target_path TEXT,resolution TEXT NOT NULL);
 CREATE INDEX link_paths ON links(from_path,byte_start,link_row);
+CREATE TABLE assertion_navigation_keys(kind TEXT NOT NULL,value TEXT NOT NULL,assertion_id TEXT NOT NULL,PRIMARY KEY(kind,value,assertion_id));
+CREATE TABLE opposition_members(key_json TEXT NOT NULL,negated INTEGER NOT NULL CHECK(negated IN (0,1)),assertion_id TEXT NOT NULL,PRIMARY KEY(key_json,negated,assertion_id));
 CREATE TABLE record_eligibility_facts(record_id TEXT PRIMARY KEY,baseline_json TEXT NOT NULL);
 CREATE TABLE record_direct_paths(owner_id TEXT NOT NULL,path TEXT NOT NULL,PRIMARY KEY(owner_id,path));
 CREATE INDEX direct_path_owners ON record_direct_paths(path,owner_id);

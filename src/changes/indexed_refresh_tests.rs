@@ -280,6 +280,7 @@ struct ConnectedFixture {
     writer: WriterPermit,
     catalog: Catalog,
     source: RecordId,
+    normalized_facts: bool,
 }
 impl ConnectedFixture {
     fn request() -> CaptureRequest {
@@ -293,6 +294,9 @@ impl ConnectedFixture {
         }
     }
     fn new() -> Self {
+        Self::new_layout(false)
+    }
+    fn new_layout(normalized_facts: bool) -> Self {
         let temp = tempfile::tempdir().unwrap();
         fs::write(temp.path().join("WIKI.md"), "---\nwiki_schema: '1'\nwiki_id: vault_connected_refresh\nwiki_kind: vault\ntitle: Connected refresh fixture\n---\n").unwrap();
         let fs_handle = VaultFs::new(VaultRoot::explicit(temp.path()).unwrap());
@@ -319,8 +323,16 @@ impl ConnectedFixture {
             NormalizedBuilder::begin(&fs_handle, &writer, identity, BuildLimits::default())
                 .unwrap();
         let input = scan::scan_input(&fs_handle, &engine.vault_id).unwrap();
-        let projection = scan::project_with_sink(&fs_handle, &input, false, &mut builder).unwrap();
-        let completed = builder.finish(&projection).unwrap();
+        let completed = if normalized_facts {
+            let projection =
+                scan::project_normalized_with_sink(&fs_handle, &input, false, &mut builder)
+                    .unwrap();
+            builder.finish_normalized(&projection).unwrap()
+        } else {
+            let projection =
+                scan::project_with_sink(&fs_handle, &input, false, &mut builder).unwrap();
+            builder.finish(&projection).unwrap()
+        };
         selector::publish(
             &fs_handle,
             &writer,
@@ -335,6 +347,7 @@ impl ConnectedFixture {
             writer,
             catalog,
             source,
+            normalized_facts,
         }
     }
     fn title_session<'a>(&'a self, catalog: &Catalog, title: &str) -> IndexedRefreshSession<'a> {
@@ -396,7 +409,16 @@ impl ConnectedFixture {
             kind: Some(RecordKind::Source),
         };
         let delta = CatalogDelta {
-            version: 1,
+            facts: self.normalized_facts.then(|| {
+                crate::catalog::normalized_fact_delta::FactDelta {
+                    records: vec![],
+                    edge_inserts: vec![],
+                    edge_deletes: vec![],
+                    links: vec![],
+                    registry: vec![],
+                }
+            }),
+            version: if self.normalized_facts { 2 } else { 1 },
             records: vec![row.clone()],
             documents: vec![DocumentMutation::Put { row: document }],
             graph: vec![],
@@ -910,6 +932,7 @@ fn connected_new_revision_commits_and_recovers_exact_immutable_owner() {
         })
         .collect();
     let delta = CatalogDelta {
+        facts: None,
         version: 1,
         records,
         documents: projected
@@ -1001,4 +1024,111 @@ fn connected_new_revision_commits_and_recovers_exact_immutable_owner() {
             .unwrap(),
         modified
     );
+}
+
+#[test]
+fn normalized_fact_layout_survives_retained_precommit_and_postcommit_recovery() {
+    for committed in [false, true] {
+        let fixture = ConnectedFixture::new_layout(true);
+        let old = fixture
+            .catalog
+            .query_snapshot(QueryReadLimits::default())
+            .unwrap();
+        let old_row = old.record(&fixture.source).unwrap().unwrap();
+        let old_fact = old.eligibility_fact(&fixture.source).unwrap().unwrap();
+        let faulty = Catalog::with_options(
+            fixture.engine.fs.clone(),
+            fixture.engine.vault_id.clone(),
+            CatalogOptions {
+                busy_timeout_ms: 1000,
+                fault: Some(if committed {
+                    std::sync::Arc::new(FailAfterSqlCommit)
+                } else {
+                    std::sync::Arc::new(FailBeforeSqlCommit)
+                }),
+            },
+        );
+        // Same byte length preserves source-owned link offsets in this narrow
+        // retained-plan recovery fixture. Actual projector handles moved offsets.
+        let title = "Updated source title!";
+        assert_eq!(title.len(), old_row.record.title().len());
+        let mut session = fixture.title_session(&faulty, title);
+        let proof = session.proof().clone();
+        assert!(
+            fixture
+                .engine
+                .apply_indexed_refresh(&fixture.writer, &mut session)
+                .is_err()
+        );
+        assert_eq!(
+            session.phase(),
+            if committed {
+                IndexedRefreshPhase::AlreadyPublished
+            } else {
+                IndexedRefreshPhase::AtBase
+            }
+        );
+        drop(session);
+        let mut recovered =
+            IndexedRefreshSession::resume(&fixture.catalog, &fixture.writer, proof.clone())
+                .unwrap();
+        let report = fixture
+            .engine
+            .apply_indexed_refresh(&fixture.writer, &mut recovered)
+            .unwrap();
+        assert_eq!(report.status, ChangeStatus::Committed);
+        fixture.assert_idle(2);
+        let current = fixture
+            .catalog
+            .query_snapshot(QueryReadLimits::default())
+            .unwrap();
+        let row = current.record(&fixture.source).unwrap().unwrap();
+        assert_eq!(row.record.title(), title);
+        assert_eq!(
+            current.eligibility_fact(&fixture.source).unwrap().unwrap(),
+            old_fact
+        );
+        assert_eq!(
+            current
+                .direct_path_states(std::slice::from_ref(&row.path))
+                .unwrap()[0]
+                .expected,
+            ExpectedState::Hash(row.hash)
+        );
+        assert_eq!(
+            old.direct_path_states(std::slice::from_ref(&old_row.path))
+                .unwrap()[0]
+                .expected,
+            ExpectedState::Hash(old_row.hash)
+        );
+    }
+}
+
+#[test]
+fn normalized_replay_refuses_missing_fact_index_before_canonical_writes() {
+    let fixture = ConnectedFixture::new_layout(true);
+    let source_path = fixture
+        .engine
+        .fs
+        .root()
+        .path()
+        .join(format!("sources/{}/source.md", fixture.source));
+    let before = fs::read(&source_path).unwrap();
+    let session = fixture.title_session(&fixture.catalog, "Updated source title!");
+    let proof = session.proof().clone();
+    drop(session);
+    let binding = proof.base.publication().unwrap();
+    let db = rusqlite::Connection::open(
+        fixture
+            .engine
+            .fs
+            .root()
+            .path()
+            .join(format!(".wiki/cache/catalogs/{}.sqlite", binding.file_id)),
+    )
+    .unwrap();
+    db.execute_batch("DROP INDEX registry_match_owners")
+        .unwrap();
+    assert!(IndexedRefreshSession::resume(&fixture.catalog, &fixture.writer, proof).is_err());
+    assert_eq!(fs::read(source_path).unwrap(), before);
 }

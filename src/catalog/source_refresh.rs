@@ -256,6 +256,7 @@ impl<'a> IndexedRefreshSession<'a> {
         sql_writer.connection().prepare(
             "SELECT record_id FROM identity_claims INDEXED BY identity_claim_paths WHERE path=?1 LIMIT 1",
         ).map_err(sql::sql_error)?;
+        delta.rows.require_layout(sql_writer.connection())?;
         let header = normalized_read::header(sql_writer.connection(), &selection)?;
         // Inspect exact intended origin FIRST. Never open the obsolete base in
         // the committed-SQL recovery case.

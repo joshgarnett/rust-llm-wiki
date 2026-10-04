@@ -18,6 +18,7 @@ fn id(value: &str) -> RecordId {
 }
 fn empty() -> CatalogDelta {
     CatalogDelta {
+        facts: None,
         version: 1,
         records: vec![],
         documents: vec![],
@@ -33,6 +34,7 @@ fn empty() -> CatalogDelta {
 fn db() -> Connection {
     let c = Connection::open_in_memory().unwrap();
     c.execute_batch(normalized_schema::SCHEMA).unwrap();
+    c.execute("INSERT INTO catalog_meta(singleton,schema_version,vault_id,file_id,creation_epoch,creation_header_hash,epoch,state,vector_cache_lost,vector_loss_unknown) VALUES(1,3,'vault_delta','file_delta',1,'test',1,'building',0,0)",[]).unwrap();
     c.execute_batch("BEGIN IMMEDIATE").unwrap();
     c
 }

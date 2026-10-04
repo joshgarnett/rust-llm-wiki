@@ -171,7 +171,7 @@ mod tests {
         assertion_calls: Cell<usize>,
         ambiguous: Option<RecordId>,
         claimed: bool,
-        mutate_on_assertions: Option<PathBuf>,
+        mutate_on_claim: Option<PathBuf>,
     }
     impl SourceRefreshLookup for Lookup {
         fn snapshot(&self) -> &ReadSnapshot {
@@ -191,6 +191,9 @@ mod tests {
             Ok(self.records.get(id).cloned())
         }
         fn id_is_claimed(&self, _: &RecordId) -> Result<bool> {
+            if let Some(path) = &self.mutate_on_claim {
+                fs::write(path, b"concurrent selected edit").unwrap();
+            }
             Ok(self.claimed)
         }
         fn record_at_path(&self, path: &VaultRelativePath) -> Result<Option<RefreshRecord>> {
@@ -228,9 +231,6 @@ mod tests {
         }
         fn source_assertions(&self, _: &RecordId) -> Result<Vec<RecordId>> {
             self.assertion_calls.set(self.assertion_calls.get() + 1);
-            if let Some(path) = &self.mutate_on_assertions {
-                fs::write(path, b"concurrent selected edit").unwrap();
-            }
             Ok(vec![RecordId::new("assertion_selected").unwrap(); 2])
         }
     }
@@ -382,7 +382,7 @@ mod tests {
                 assertion_calls: Cell::new(0),
                 ambiguous: None,
                 claimed: false,
-                mutate_on_assertions: None,
+                mutate_on_claim: None,
             }
         }
         fn plan(
@@ -476,7 +476,8 @@ mod tests {
         assert_eq!(note.canonical.unwrap().title(), "Explicit title");
         assert!(draft.allocated_ids.is_empty());
         assert_eq!(title.previous_revision, head);
-        assert_eq!(title.plan.invalidation.assertion_ids.len(), 1);
+        assert!(title.plan.invalidation.assertion_ids.is_empty());
+        assert_eq!(lookup.assertion_calls.get(), 0);
         let history = fixture.plan(&lookup, request(b"original"), None).unwrap();
         assert_eq!(history.plan.revision_id, fixture.initial);
         assert!(history.plan.reused);
@@ -484,6 +485,8 @@ mod tests {
         assert_eq!(history.captured.len(), 8);
         assert_eq!(history.previous_revision, head);
         assert_eq!(history.base_snapshot, lookup.snapshot);
+        assert!(history.plan.invalidation.assertion_ids.is_empty());
+        assert_eq!(lookup.assertion_calls.get(), 0);
     }
 
     #[test]
@@ -492,6 +495,8 @@ mod tests {
         let lookup = fixture.lookup();
         let plan = fixture.plan(&lookup, request(b"new"), None).unwrap();
         assert!(!plan.plan.reused);
+        assert!(plan.plan.invalidation.assertion_ids.is_empty());
+        assert_eq!(lookup.assertion_calls.get(), 0);
         let draft = plan.plan.draft.unwrap();
         assert_eq!(draft.operations.len(), 4);
         assert!(
@@ -642,7 +647,7 @@ mod tests {
     fn final_selected_dependency_edit_refuses() {
         let fixture = Fixture::new(request(b"original"));
         let mut lookup = fixture.lookup();
-        lookup.mutate_on_assertions = Some(fixture.asset(&fixture.initial, "content.md"));
+        lookup.mutate_on_claim = Some(fixture.asset(&fixture.initial, "content.md"));
         assert_eq!(
             fixture
                 .plan(&lookup, request(b"new"), None)
@@ -1058,12 +1063,11 @@ impl SourceStore {
                 proposed: Some(edit_note(&source_note, &changes, None, &source.hash)?),
                 apply_after: operations.iter().map(|op| op.target.clone()).collect(),
             });
-            let mut assertions = lookup.source_assertions(source_id)?;
-            if assertions.len() > limits.max_retained_revisions {
-                return Err(budget("selected source invalidation seeds exceed ceiling"));
-            }
-            assertions.sort();
-            assertions.dedup();
+            // The semantic projector discovers complete affected groups from
+            // old/new-head relationships. Enumerating all source assertions here
+            // would read unrelated historical support even for a title edit.
+            // Empty is an unpopulated hint, never proof that fanout is empty.
+            let assertions = Vec::new();
             (
                 Some(draft(
                     format!("Refresh {}", source.record.title()),

@@ -14,8 +14,8 @@ use serde::{Deserialize, Serialize};
 use std::{collections::BTreeSet, io::Write};
 
 pub(crate) const MAX_ROWS: usize = 4096;
-const MAX_ROW_BYTES: usize = 8 * 1024 * 1024;
-const MAX_DELTA_BYTES: usize = 256 * 1024 * 1024;
+pub(super) const MAX_ROW_BYTES: usize = 8 * 1024 * 1024;
+pub(super) const MAX_DELTA_BYTES: usize = 256 * 1024 * 1024;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -30,6 +30,8 @@ pub(crate) struct CatalogDelta {
     pub revisions: Vec<RevisionIdentityRow>,
     pub dependencies: Vec<ReadDependency>,
     pub owners: Vec<RevisionOwnerRow>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub facts: Option<super::normalized_fact_delta::FactDelta>,
 }
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
@@ -85,12 +87,19 @@ pub(crate) struct DeltaStats {
     pub owners: usize,
     pub old_rows: usize,
     pub old_fts_bytes: usize,
+    pub old_fact_bytes: usize,
+    pub fact_rows: usize,
 }
 
 impl CatalogDelta {
     pub fn validate(&self) -> Result<()> {
-        if self.version != 1 {
-            return Err(invalid("unsupported catalog delta version"));
+        if !matches!((self.version, self.facts.is_some()), (1, false) | (2, true)) {
+            return Err(invalid(
+                "catalog delta version and normalized facts disagree",
+            ));
+        }
+        if self.version == 2 && self.records.iter().any(|row| !row.dependencies.is_empty()) {
+            return Err(invalid("normalized delta carries flattened record proofs"));
         }
         let mut count = 0usize;
         let mut admit = |value: &dyn SizedJson| -> Result<()> {
@@ -215,7 +224,41 @@ impl CatalogDelta {
                 }
             }
         }
+        if let Some(facts) = &self.facts {
+            facts.validate(self, &mut count)?;
+        }
         counted(self, MAX_DELTA_BYTES)?;
+        Ok(())
+    }
+
+    /// Check the exact fact layout and access paths before canonical mutation,
+    /// and again in the SQL transaction. A v1 plan cannot leave v1 facts stale.
+    pub(super) fn require_layout(&self, connection: &Connection) -> Result<()> {
+        let layout: i64 = connection
+            .query_row(
+                "SELECT proof_layout_version FROM catalog_meta WHERE singleton=1",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(sql::sql_error)?;
+        if layout != if self.version == 2 { 1 } else { 0 } {
+            return Err(invalid("catalog delta and selected proof layout disagree"));
+        }
+        if self.version == 2 {
+            for query in [
+                "SELECT baseline_json FROM record_eligibility_facts WHERE record_id=?1",
+                "SELECT path FROM record_direct_paths WHERE owner_id=?1",
+                "SELECT target_id FROM semantic_edges INDEXED BY semantic_outgoing WHERE owner_id=?1 AND role_json=?2",
+                "SELECT owner_id FROM semantic_edges INDEXED BY semantic_dependents WHERE target_id=?1 AND role_json=?2",
+                "SELECT raw_destination FROM link_facts WHERE from_path=?1",
+                "SELECT value FROM link_match_keys INDEXED BY link_match_owners WHERE from_path=?1",
+                "SELECT value FROM registry_match_keys INDEXED BY registry_match_owners WHERE record_id=?1",
+                "SELECT assertion_id FROM opposition_members WHERE key_json=?1",
+                "SELECT assertion_id FROM assertion_navigation_keys WHERE kind=?1 AND value=?2",
+            ] {
+                connection.prepare(query).map_err(sql::sql_error)?;
+            }
+        }
         Ok(())
     }
 
@@ -225,6 +268,7 @@ impl CatalogDelta {
     /// must discard failed publication transactions in either case.
     pub fn apply(&self, connection: &Connection) -> Result<DeltaStats> {
         self.validate()?;
+        self.require_layout(connection)?;
         if connection.is_autocommit() {
             return Err(invalid("catalog delta requires a publication transaction"));
         }
@@ -259,6 +303,9 @@ impl CatalogDelta {
     }
     fn apply_rows(&self, c: &Connection) -> Result<DeltaStats> {
         let mut stats = DeltaStats::default();
+        if let Some(facts) = &self.facts {
+            facts.check_before(c, self, &mut stats)?;
+        }
         for row in &self.records {
             let same: Option<bool> = c
                 .query_row(
@@ -392,6 +439,9 @@ impl CatalogDelta {
             }
             stats.owners += 1;
         }
+        if let Some(facts) = &self.facts {
+            facts.apply(c, self, &mut stats)?;
+        }
         Ok(stats)
     }
 }
@@ -473,7 +523,10 @@ fn admit_old(
     stats.old_fts_bytes = stats
         .old_fts_bytes
         .checked_add(bytes)
-        .filter(|n| *n <= MAX_DELTA_BYTES)
+        .filter(|n| {
+            n.checked_add(stats.old_fact_bytes)
+                .is_some_and(|total| total <= MAX_DELTA_BYTES)
+        })
         .ok_or_else(|| budget("old derivatives exceed byte ceiling"))?;
     stats.old_rows = stats
         .old_rows

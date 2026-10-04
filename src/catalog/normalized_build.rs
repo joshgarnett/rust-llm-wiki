@@ -109,6 +109,8 @@ pub(crate) struct BuildStats {
     pub eligibility_facts: u64,
     pub direct_paths: u64,
     pub semantic_edges: u64,
+    pub opposition_members: u64,
+    pub assertion_navigation_keys: u64,
     pub records: u64,
     pub dependencies: u64,
     pub diagnostics: u64,
@@ -503,6 +505,52 @@ impl<'a> NormalizedBuilder<'a> {
                     ErrorCode::IndexCorrupt,
                     "normalized record lacks its exact own canonical state",
                 ));
+            }
+            if record.record.kind() == RecordKind::Assertion {
+                let mut seen = std::collections::BTreeSet::new();
+                for destination in super::scan::list(&record.record, "wiki_evidence") {
+                    let resolution = match crate::records::links::untyped_lookup(&destination) {
+                        crate::records::links::UntypedLookup::External => {
+                            crate::records::LinkResolution::External
+                        }
+                        _ => crate::records::LinkResolution::Missing,
+                    };
+                    let fact = super::link_facts::untyped_fact(
+                        &record.path,
+                        0,
+                        &destination,
+                        &resolution,
+                    )?;
+                    for key in fact.keys {
+                        self.guard()?;
+                        if !seen.insert(key.clone()) {
+                            continue;
+                        }
+                        self.admit(checked_sum(&[
+                            256,
+                            id.as_str().len() as u64,
+                            key.value.len() as u64,
+                        ])?)?;
+                        self.connection()
+                            .execute(
+                                "INSERT INTO assertion_navigation_keys VALUES(?1,?2,?3)",
+                                params![link_key_kind(key.kind), key.value, id.as_str()],
+                            )
+                            .map_err(build_sql_error)?;
+                        self.commit_lookup("assertion_navigation_key", &(id, &key))?;
+                        self.stats.assertion_navigation_keys += 1;
+                    }
+                }
+            }
+            if record.record.kind() == RecordKind::Assertion
+                && record.record.string("wiki_status") == Some("accepted")
+                && let Some((key, negated)) = super::eligibility::opposition_key(&record.record)
+            {
+                let bytes = counted_json(&key, self.limits.max_row_bytes)?;
+                self.admit(checked_sum(&[256, id.as_str().len() as u64, bytes])?)?;
+                self.connection().execute("INSERT INTO opposition_members(key_json,negated,assertion_id) VALUES(?1,?2,?3)", params![sql::json(&key)?,negated,id.as_str()]).map_err(build_sql_error)?;
+                self.commit_lookup("opposition_member", &(&key, negated, id))?;
+                self.stats.opposition_members += 1;
             }
             let bytes = counted_json(&fact.baseline, self.limits.max_row_bytes)?;
             self.admit(checked_sum(&[256, id.as_str().len() as u64, bytes])?)?;

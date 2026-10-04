@@ -10,7 +10,8 @@ use super::{
 };
 use crate::changes::operation_authority::{Authority, Publication};
 use crate::domain::{
-    Blake3Hash, ErrorCode, ReadSnapshot, RecordId, Result, VaultRelativePath, WikiError,
+    Blake3Hash, Eligibility, ErrorCode, ReadSnapshot, RecordId, RecordKind, Result,
+    VaultRelativePath, WikiError,
 };
 use rusqlite::{Connection, OpenFlags, Row, limits::Limit, params, types::ValueRef};
 use serde::de::DeserializeOwned;
@@ -44,6 +45,18 @@ pub(crate) struct QuerySnapshot {
     usage: Cell<QueryReadUsage>,
     limits: QueryReadLimits,
     operation_authority: Option<Authority>,
+}
+
+/// Lifecycle-only access deliberately excludes document and FTS text.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct DocumentMetadata {
+    pub path: VaultRelativePath,
+    pub record_id: Option<RecordId>,
+    pub kind: Option<RecordKind>,
+    pub source_id: Option<RecordId>,
+    pub owner_revision: Option<RecordId>,
+    pub eligibility: Eligibility,
+    pub reasons: Vec<String>,
 }
 
 impl Catalog {
@@ -490,6 +503,123 @@ impl QuerySnapshot {
             );
         }
         Ok(result.into_values().collect())
+    }
+    pub(crate) fn opposition_members(
+        &self,
+        key: &super::eligibility::OppositionKey,
+    ) -> Result<Vec<(RecordId, bool)>> {
+        self.require_fact_layout()?;
+        self.reserve_fact_input(fact_json_size(key, self.limits.max_row_bytes)?)?;
+        let encoded = sql::json(key)?;
+        let mut statement = self.connection.prepare("SELECT key_json,negated,assertion_id FROM opposition_members INDEXED BY sqlite_autoindex_opposition_members_1 WHERE key_json=?1 ORDER BY negated,assertion_id").map_err(sql::sql_error)?;
+        let mut rows = statement.query([&encoded]).map_err(sql::sql_error)?;
+        let mut result = Vec::new();
+        while let Some(row) = rows.next().map_err(sql::sql_error)? {
+            self.reserve_refresh_row(row, 3)?;
+            if utf8(text_bytes(row, 0)?)? != encoded {
+                return Err(corrupt(
+                    "selected opposition key differs from requested proposition",
+                ));
+            }
+            let negated = match row.get::<_, i64>(1).map_err(sql::sql_error)? {
+                0 => false,
+                1 => true,
+                _ => return Err(corrupt("opposition polarity must be zero or one")),
+            };
+            let id = RecordId::new(utf8(text_bytes(row, 2)?)?).map_err(|e| corrupt(e.message))?;
+            result.push((id, negated));
+        }
+        Ok(result)
+    }
+    pub(crate) fn owned_link_facts(
+        &self,
+        path: &VaultRelativePath,
+    ) -> Result<Vec<super::link_facts::OwnedLinkFact>> {
+        self.require_fact_layout()?;
+        let mut statement = self.connection.prepare("SELECT from_path,byte_start FROM link_facts INDEXED BY sqlite_autoindex_link_facts_1 WHERE from_path=?1 ORDER BY byte_start").map_err(sql::sql_error)?;
+        let mut rows = statement.query([path.as_str()]).map_err(sql::sql_error)?;
+        let mut result = Vec::new();
+        while let Some(row) = rows.next().map_err(sql::sql_error)? {
+            self.reserve_refresh_row(row, 2)?;
+            if utf8(text_bytes(row, 0)?)? != path.as_str() {
+                return Err(corrupt("owned link location differs from requested owner"));
+            }
+            let offset = u64::try_from(row.get::<_, i64>(1).map_err(sql::sql_error)?)
+                .map_err(|_| corrupt("owned link has negative byte offset"))?;
+            let fact = self
+                .link_fact(path, offset)?
+                .ok_or_else(|| corrupt("owned link fact disappeared from pinned publication"))?;
+            result.push(fact);
+        }
+        Ok(result)
+    }
+    pub(crate) fn document_metadata(
+        &self,
+        path: &VaultRelativePath,
+    ) -> Result<Option<DocumentMetadata>> {
+        self.require_fact_layout()?;
+        let mut statement = self.connection.prepare("SELECT path,record_id,kind,source_id,owner_revision,eligibility,reasons_json FROM documents INDEXED BY sqlite_autoindex_documents_1 WHERE path=?1").map_err(sql::sql_error)?;
+        let mut rows = statement.query([path.as_str()]).map_err(sql::sql_error)?;
+        let Some(row) = rows.next().map_err(sql::sql_error)? else {
+            return Ok(None);
+        };
+        self.reserve_refresh_row(row, 7)?;
+        if utf8(text_bytes(row, 0)?)? != path.as_str() {
+            return Err(corrupt("document metadata differs from requested path"));
+        }
+        let optional = |column| -> Result<Option<&str>> {
+            match row.get_ref(column).map_err(sql::sql_error)? {
+                ValueRef::Null => Ok(None),
+                ValueRef::Text(bytes) => utf8(bytes).map(Some),
+                _ => Err(corrupt(
+                    "document metadata optional field is not text or NULL",
+                )),
+            }
+        };
+        let record_id = optional(1)?
+            .map(RecordId::new)
+            .transpose()
+            .map_err(|e| corrupt(e.message))?;
+        let kind = optional(2)?
+            .map(str::parse::<RecordKind>)
+            .transpose()
+            .map_err(|_| corrupt("document metadata kind is invalid"))?;
+        let source_id = optional(3)?
+            .map(RecordId::new)
+            .transpose()
+            .map_err(|e| corrupt(e.message))?;
+        let owner_revision = optional(4)?
+            .map(RecordId::new)
+            .transpose()
+            .map_err(|e| corrupt(e.message))?;
+        if source_id.is_some() != owner_revision.is_some()
+            || (record_id.is_some() && kind.is_none())
+            || (owner_revision.is_some() && (record_id.is_some() || kind.is_some()))
+        {
+            return Err(corrupt(
+                "document metadata identity or captured ownership is inconsistent",
+            ));
+        }
+        let eligibility = match utf8(text_bytes(row, 5)?)? {
+            "current" => Eligibility::Current,
+            "historical" => Eligibility::Historical,
+            "stale" => Eligibility::Stale,
+            "invalid" => Eligibility::Invalid,
+            "withdrawn" => Eligibility::Withdrawn,
+            "unsupported" => Eligibility::Unsupported,
+            _ => return Err(corrupt("document metadata eligibility is invalid")),
+        };
+        let reasons =
+            serde_json::from_slice(text_bytes(row, 6)?).map_err(|e| corrupt(e.to_string()))?;
+        Ok(Some(DocumentMetadata {
+            path: path.clone(),
+            record_id,
+            kind,
+            source_id,
+            owner_revision,
+            eligibility,
+            reasons,
+        }))
     }
     pub(crate) fn outgoing_edges(
         &self,
@@ -2755,5 +2885,37 @@ mod tests {
             })
             .unwrap_err();
         assert_eq!(sql::sql_error(error).code, ErrorCode::BudgetExceeded);
+    }
+}
+
+impl QuerySnapshot {
+    pub(crate) fn affected_assertion_navigation(
+        &self,
+        keys: &[super::link_facts::MatchKey],
+    ) -> Result<Vec<RecordId>> {
+        self.fact_requests(keys.len(), false)?;
+        self.require_fact_layout()?;
+        let mut statement=self.connection.prepare("SELECT kind,value,assertion_id FROM assertion_navigation_keys WHERE kind=?1 AND value=?2 ORDER BY assertion_id").map_err(sql::sql_error)?;
+        let mut owners = BTreeSet::new();
+        for key in keys {
+            self.reserve_fact_input(key.value.len())?;
+            let mut rows = statement
+                .query(params![fact_key_name(key.kind), key.value])
+                .map_err(sql::sql_error)?;
+            while let Some(row) = rows.next().map_err(sql::sql_error)? {
+                self.reserve_refresh_row(row, 3)?;
+                if utf8(text_bytes(row, 0)?)? != fact_key_name(key.kind)
+                    || utf8(text_bytes(row, 1)?)? != key.value
+                {
+                    return Err(corrupt(
+                        "assertion navigation key differs from requested scope",
+                    ));
+                }
+                owners.insert(
+                    RecordId::new(utf8(text_bytes(row, 2)?)?).map_err(|e| corrupt(e.message))?,
+                );
+            }
+        }
+        Ok(owners.into_iter().collect())
     }
 }

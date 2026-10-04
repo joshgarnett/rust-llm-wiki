@@ -144,6 +144,8 @@ impl Default for SourceRefreshLimits {
 /// Exact selected before-images and dependencies accompany the ordinary draft.
 /// Only the indexed apply validator can authorize their bounded publication.
 pub(crate) struct IndexedSourceRefreshPlan {
+    /// Assertion invalidation IDs remain unpopulated hints here. The semantic
+    /// projector discovers complete affected groups; empty never proves no fanout.
     pub plan: SourcePlan,
     pub base_snapshot: ReadSnapshot,
     pub previous_revision: RecordId,

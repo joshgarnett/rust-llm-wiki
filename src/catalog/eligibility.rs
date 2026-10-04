@@ -1,6 +1,7 @@
 //! Authored status is preserved; only derived eligibility is computed here.
 use super::{
     eligibility_facts::{EligibilityRole, NormalizedEligibilityFacts},
+    eligibility_rules::{self as rules, GenerationContext, entity_identity_invalid},
     scan::{
         diagnostic, input_notes, isolated_fields, list, project_validation,
         project_validation_closed, readable_id,
@@ -302,51 +303,7 @@ fn proposition(record: &CanonicalRecord) -> BTreeMap<String, serde_json::Value> 
     fields
 }
 
-/// The exact authored proposition apart from polarity. This is deliberately
-/// narrower than a semantic contradiction: dates and modality must be equal.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub(crate) struct OppositionKey {
-    subject: String,
-    predicate: String,
-    object_id: Option<String>,
-    literal_type: Option<String>,
-    literal_value: Option<String>,
-    property: Option<String>,
-    unit: Option<String>,
-    modality: String,
-    valid_from: Option<String>,
-    valid_until: Option<String>,
-}
-
-pub(crate) fn opposition_key(record: &CanonicalRecord) -> Option<(OppositionKey, bool)> {
-    if record.kind() != RecordKind::Assertion {
-        return None;
-    }
-    Some((
-        OppositionKey {
-            subject: record.string("wiki_subject_id")?.into(),
-            predicate: record.string("wiki_predicate")?.into(),
-            object_id: record.string("wiki_object_id").map(str::to_owned),
-            literal_type: record.string("wiki_literal_type").map(str::to_owned),
-            literal_value: record.string("wiki_literal_value").map(str::to_owned),
-            property: record.string("wiki_property").map(str::to_owned),
-            unit: record.string("wiki_unit").map(str::to_owned),
-            modality: record.string("wiki_modality").unwrap_or("asserted").into(),
-            valid_from: record.string("wiki_valid_from").map(str::to_owned),
-            valid_until: record.string("wiki_valid_until").map(str::to_owned),
-        },
-        record
-            .field("wiki_negated")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false),
-    ))
-}
-
-pub(crate) fn eligible_opposition(row: &RecordRow) -> bool {
-    row.record.kind() == RecordKind::Assertion
-        && row.record.string("wiki_status") == Some("accepted")
-        && row.eligibility == Eligibility::Current
-}
+pub(crate) use super::eligibility_rules::{OppositionKey, eligible_opposition, opposition_key};
 
 fn mark_invalid(
     row: &mut RecordRow,
@@ -453,21 +410,13 @@ fn compute_inner(
         let record = row.record.clone();
         if record.kind() == RecordKind::Assertion {
             for link in list(&record, "wiki_evidence") {
-                let reason = match registry.resolve_untyped(&link) {
-                    LinkResolution::Resolved { id: target, .. } => match snapshot.get(&target) {
-                        Some(evidence) if evidence.record.kind() == RecordKind::Evidence => {
-                            if evidence.record.string("wiki_assertion_id") == Some(id.as_str()) {
-                                None
-                            } else {
-                                Some("evidence_link_wrong_assertion")
-                            }
-                        }
-                        Some(_) => Some("evidence_link_wrong_kind"),
-                        None => Some("evidence_link_missing"),
-                    },
-                    LinkResolution::Ambiguous { .. } => Some("evidence_link_ambiguous"),
-                    _ => Some("evidence_link_missing"),
+                let resolution = registry.resolve_untyped(&link);
+                let target = match &resolution {
+                    LinkResolution::Resolved { id, .. } => snapshot.get(id).map(|row| &row.record),
+                    _ => None,
                 };
+                let reason =
+                    super::eligibility_rules::evidence_navigation_reason(id, &resolution, target);
                 if let Some(reason) = reason {
                     diagnostics.push(diagnostic(
                         &row.path,
@@ -838,186 +787,66 @@ fn compute_inner(
         if row.eligibility == Eligibility::Invalid {
             continue;
         }
-        let record = &row.record;
-        match record.kind() {
-            RecordKind::Source if record.string("wiki_status") == Some("withdrawn") => {
-                set(row, Eligibility::Withdrawn, "source_withdrawn")
-            }
-            RecordKind::Revision => {
-                let source = snapshot
-                    .get(&RecordId::new(
-                        record.string("wiki_source_id").expect("source"),
-                    )?)
-                    .expect("valid reference");
-                if source.record.string("wiki_status") == Some("withdrawn") {
-                    set(row, Eligibility::Withdrawn, "source_withdrawn");
-                } else if source.record.string("wiki_current_revision")
-                    != Some(record.id().as_str())
-                {
-                    set(row, Eligibility::Historical, "older_revision");
-                } else if record.string("wiki_extraction_status") != Some("complete") {
-                    set(row, Eligibility::Unsupported, "unsupported_extraction");
-                }
-            }
-            RecordKind::ExtractionPacket => {
-                // A retained extraction task is operational history. Its source
-                // window is never a second current note or independent evidence.
-                let source = snapshot
-                    .get(&RecordId::new(
-                        record.string("wiki_source_id").expect("source"),
-                    )?)
-                    .expect("valid reference");
-                if source.record.string("wiki_status") == Some("withdrawn") {
-                    set(row, Eligibility::Withdrawn, "source_withdrawn");
-                } else if source.record.string("wiki_current_revision")
-                    != record.string("wiki_source_revision")
-                {
-                    set(row, Eligibility::Historical, "older_revision");
-                } else {
-                    set(row, Eligibility::Unsupported, "operational_packet");
-                }
-            }
-            RecordKind::Extraction => {
-                // The retained response repeats source text, but is never an
-                // independent current source. Its declared revision ownership
-                // determines the state exposed by explicit historical audit.
-                let revisions = list(record, "wiki_source_revision_ids");
-                if revisions.is_empty() {
-                    set(row, Eligibility::Unsupported, "operational_extraction");
-                } else {
-                    let mut withdrawn = false;
-                    let mut older = false;
-                    for revision_id in revisions {
-                        let revision = snapshot
-                            .get(&RecordId::new(&revision_id)?)
-                            .expect("valid extraction revision");
-                        let source = snapshot
-                            .get(&RecordId::new(
-                                revision.record.string("wiki_source_id").expect("source"),
-                            )?)
-                            .expect("valid extraction source");
-                        withdrawn |= source.record.string("wiki_status") == Some("withdrawn");
-                        older |= source.record.string("wiki_current_revision")
-                            != Some(revision_id.as_str());
-                    }
-                    if withdrawn {
-                        set(row, Eligibility::Withdrawn, "source_withdrawn");
-                    } else if older {
-                        set(row, Eligibility::Historical, "older_revision");
-                    } else {
-                        set(row, Eligibility::Unsupported, "operational_extraction");
-                    }
-                }
-            }
-            RecordKind::RunEvent
-                if record.string("wiki_event_type") == Some("generation_output") =>
-            {
-                // The canonical run event has no source fields. Only the exact
-                // bounded output body can bind it to a retained packet/source.
-                let output = notes
-                    .get(&row.path)
-                    .and_then(|note| {
-                        crate::graph::packet::fenced_json(
-                            note,
-                            "lwiki-api-extraction-output-v1",
-                            crate::graph::MAX_ARTIFACT_BYTES,
-                        )
-                        .ok()
-                    })
-                    .and_then(|json| {
-                        crate::graph::packet::decode::<
+        let generation = if row.record.kind() == RecordKind::RunEvent
+            && row.record.string("wiki_event_type") == Some("generation_output")
+        {
+            // Body/run/fingerprint binding is structural authority, not a
+            // dynamic lifecycle rule. Preserve its exact legacy verification.
+            let record = &row.record;
+            let output = notes
+                .get(&row.path)
+                .and_then(|note| {
+                    crate::graph::packet::fenced_json(
+                        note,
+                        "lwiki-api-extraction-output-v1",
+                        crate::graph::MAX_ARTIFACT_BYTES,
+                    )
+                    .ok()
+                })
+                .and_then(|json| {
+                    crate::graph::packet::decode::<
                             crate::graph::generation_cache::GenerationOutput,
                         >(json, crate::graph::MAX_ARTIFACT_BYTES)
                         .ok()
-                    });
-                let packet = output.as_ref().and_then(|out| snapshot.get(&out.packet_id));
-                let bound = output.as_ref().zip(packet).filter(|(out, packet)| {
-                    out.version == 1
-                        && out.attempt.run_id.as_str()
-                            == record.string("wiki_run_id").unwrap_or_default()
-                        && out.attempt.task_key == out.task_key
-                        && Blake3Hash::digest(out.response.as_bytes()) == out.response_hash
-                        && packet.record.kind() == RecordKind::ExtractionPacket
-                        && packet.record.string("wiki_packet_fingerprint")
-                            == Some(out.packet_fingerprint.as_str())
                 });
-                if let Some((_, packet)) = bound {
-                    if let Some(facts) = facts.as_deref_mut() {
-                        facts.edge(
-                            row.record.id(),
-                            packet.record.id(),
-                            EligibilityRole::GenerationPacket,
-                        );
-                    }
-                    let source = packet
-                        .record
-                        .string("wiki_source_id")
-                        .and_then(|id| RecordId::new(id).ok())
-                        .and_then(|id| snapshot.get(&id))
-                        .filter(|source| source.record.kind() == RecordKind::Source);
-                    if let Some(source) = source {
-                        if source.record.string("wiki_status") == Some("withdrawn") {
-                            set(row, Eligibility::Withdrawn, "source_withdrawn");
-                        } else if source.record.string("wiki_current_revision")
-                            != packet.record.string("wiki_source_revision")
-                        {
-                            set(row, Eligibility::Historical, "older_revision");
-                        } else {
-                            set(
-                                row,
-                                Eligibility::Unsupported,
-                                "operational_generation_output",
-                            );
-                        }
-                    } else {
-                        set(
-                            row,
-                            Eligibility::Unsupported,
-                            "generation_output_source_unresolved",
-                        );
-                        diagnostics.push(diagnostic(
-                            &row.path,
-                            Some(row.record.id()),
-                            ErrorCode::RecordInvalid,
-                            serde_json::json!({"reason":"generation_output_source_unresolved","packet":packet.record.id()}),
-                        ));
-                    }
-                } else {
-                    set(row, Eligibility::Unsupported, "unbound_generation_output");
+            let packet = output.as_ref().and_then(|out| snapshot.get(&out.packet_id));
+            let bound = output.as_ref().zip(packet).filter(|(out, packet)| {
+                out.version == 1
+                    && out.attempt.run_id.as_str()
+                        == record.string("wiki_run_id").unwrap_or_default()
+                    && out.attempt.task_key == out.task_key
+                    && Blake3Hash::digest(out.response.as_bytes()) == out.response_hash
+                    && packet.record.kind() == RecordKind::ExtractionPacket
+                    && packet.record.string("wiki_packet_fingerprint")
+                        == Some(out.packet_fingerprint.as_str())
+            });
+            if let Some((_, packet)) = bound {
+                if let Some(facts) = facts.as_deref_mut() {
+                    facts.edge(
+                        row.record.id(),
+                        packet.record.id(),
+                        EligibilityRole::GenerationPacket,
+                    );
                 }
-            }
-            RecordKind::Run | RecordKind::RunEvent | RecordKind::Change => {
-                set(row, Eligibility::Unsupported, "operational_record");
-            }
-            RecordKind::Entity => {
-                let identity = if record.string("wiki_status") == Some("superseded") {
-                    Eligibility::Historical
-                } else {
-                    Eligibility::Current
-                };
-                row.identity_eligibility = Some(identity);
-                if identity == Eligibility::Historical {
-                    set(row, Eligibility::Historical, "identity_superseded");
-                } else if list(record, "wiki_depends_on_ids").is_empty() {
-                    set(row, Eligibility::Unsupported, "description_without_support");
+                let source = packet
+                    .record
+                    .string("wiki_source_id")
+                    .and_then(|id| RecordId::new(id).ok())
+                    .and_then(|id| snapshot.get(&id))
+                    .filter(|source| source.record.kind() == RecordKind::Source)
+                    .map(|source| &source.record);
+                GenerationContext::Bound {
+                    packet: &packet.record,
+                    source,
                 }
+            } else {
+                GenerationContext::Unbound
             }
-            RecordKind::Assertion => match record.string("wiki_status").expect("status") {
-                "proposed" => set(row, Eligibility::Unsupported, "proposed"),
-                "rejected" | "superseded" => set(
-                    row,
-                    Eligibility::Historical,
-                    "assertion_rejected_or_superseded",
-                ),
-                _ => {}
-            },
-            RecordKind::Page if record.string("wiki_status") == Some("deprecated") => {
-                set(row, Eligibility::Historical, "page_deprecated")
-            }
-            RecordKind::Decision if record.string("wiki_status") == Some("superseded") => {
-                set(row, Eligibility::Historical, "decision_superseded")
-            }
-            _ => {}
+        } else {
+            GenerationContext::NotGeneration
+        };
+        if let Some(diagnostic) = rules::lifecycle(row, &snapshot, generation)? {
+            diagnostics.push(diagnostic);
         }
     }
     let snapshot = records.clone();
@@ -1076,16 +905,13 @@ fn compute_inner(
         if row.eligibility == Eligibility::Invalid {
             continue;
         }
-        let source = snapshot.get(&reference.source_id).expect("valid source");
-        if row.record.string("wiki_status") == Some("retracted") {
-            set(row, Eligibility::Historical, "evidence_retracted");
-        } else if source.record.string("wiki_status") == Some("withdrawn") {
-            set(row, Eligibility::Withdrawn, "source_withdrawn");
-        } else if source.record.string("wiki_current_revision")
-            != Some(reference.source_revision.as_str())
-        {
-            set(row, Eligibility::Historical, "older_revision");
-        }
+        let source = snapshot.get(&reference.source_id).ok_or_else(|| {
+            WikiError::new(
+                ErrorCode::IndexCorrupt,
+                "missing evidence lifecycle source boundary",
+            )
+        })?;
+        rules::evidence_lifecycle(row, &source.record)?;
     }
     // Invalid evidence suppresses its own support; one damaged historical/support
     // record must not poison an assertion that still has intact current support.
@@ -1107,47 +933,13 @@ fn compute_inner(
             .iter()
             .filter(|r| r.record.string("wiki_assertion_id") == Some(row.record.id().as_str()))
             .collect();
-        row.disputed = associated.iter().any(|r| {
-            r.eligibility == Eligibility::Current
-                && r.record.string("wiki_stance") == Some("contradicts")
-        });
-        let support: Vec<_> = associated
+        let expected = associated
             .iter()
-            .filter(|r| r.record.string("wiki_stance") == Some("supports"))
+            .map(|row| row.record.id().clone())
             .collect();
-        if support
-            .iter()
-            .any(|r| r.eligibility == Eligibility::Current)
-        {
-            set(row, Eligibility::Current, "current_support");
-        } else if support.iter().any(|r| {
-            r.eligibility == Eligibility::Historical
-                && r.reasons.iter().any(|reason| reason == "older_revision")
-        }) {
-            set(row, Eligibility::Stale, "only_historical_support");
-        } else {
-            set(row, Eligibility::Unsupported, "no_current_support");
-            for cause in [
-                "source_withdrawn",
-                "evidence_retracted",
-                "evidence_integrity",
-            ] {
-                if support
-                    .iter()
-                    .any(|r| r.reasons.iter().any(|reason| reason == cause))
-                {
-                    row.reasons.push(cause.into());
-                }
-            }
-            if support.is_empty() {
-                row.reasons.push("support_absent".into());
-            }
-        }
-        if row.disputed {
-            row.reasons.push("disputed".into());
-        }
+        rules::assertion_support(row, &expected, &associated)?;
     }
-    apply_dependency_eligibility(records, &declared);
+    apply_dependency_eligibility(records, &declared)?;
     let mut opposing: BTreeMap<OppositionKey, [Vec<RecordId>; 2]> = BTreeMap::new();
     for row in records.values().filter(|row| eligible_opposition(row)) {
         if let Some((key, negated)) = opposition_key(&row.record) {
@@ -1160,9 +952,7 @@ fn compute_inner(
     {
         for id in sides[0].iter().chain(&sides[1]) {
             let row = records.get_mut(id).expect("grouped assertion");
-            row.disputed = true;
-            row.reasons.push("opposing_accepted_assertion".into());
-            row.reasons.push("disputed".into());
+            rules::mark_opposition(row);
         }
     }
     if let Some(facts) = facts.as_deref_mut() {
@@ -1205,18 +995,7 @@ fn compute_inner(
         }
     }
     for row in records.values_mut() {
-        row.reasons.sort();
-        row.reasons.dedup();
-        if row.record.kind() == RecordKind::Entity {
-            row.description_eligibility = Some(row.eligibility);
-            row.identity_eligibility = Some(if entity_identity_invalid(row) {
-                Eligibility::Invalid
-            } else if row.record.string("wiki_status") == Some("superseded") {
-                Eligibility::Historical
-            } else {
-                Eligibility::Current
-            });
-        }
+        rules::finalize(row);
     }
     // Retain unused read-only argument as a reminder that eligibility does not infer prose.
     let _ = notes;
@@ -1275,24 +1054,12 @@ fn propagate_invalid(
     }
 }
 
-fn entity_identity_invalid(row: &RecordRow) -> bool {
-    row.eligibility == Eligibility::Invalid
-        && row.reasons.iter().any(|reason| {
-            !matches!(
-                reason.as_str(),
-                "invalid_dependency_reference"
-                    | "dependency_cycle"
-                    | "invalid_dependency"
-                    | "ineligible_dependency"
-            )
-        })
-}
-
 fn apply_dependency_eligibility(
     records: &mut BTreeMap<RecordId, RecordRow>,
     declared: &BTreeMap<RecordId, BTreeSet<RecordId>>,
-) {
-    // At most one transition per node along a finite acyclic support graph.
+) -> Result<()> {
+    // Preserve full-compute snapshot rounds. The bounded projector can use the
+    // same single-row rule with its explicitly complete selected boundaries.
     for _ in 0..records.len() {
         let snapshot = records.clone();
         let mut changed = false;
@@ -1306,34 +1073,22 @@ fn apply_dependency_eligibility(
             let Some(targets) = declared.get(id) else {
                 continue;
             };
-            let invalid = targets.iter().any(|target| {
-                snapshot
-                    .get(target)
-                    .is_none_or(|r| r.eligibility == Eligibility::Invalid)
-            });
-            let stale = targets.iter().any(|target| {
-                snapshot
-                    .get(target)
-                    .is_some_and(|r| r.eligibility != Eligibility::Current)
-            });
-            let next = if invalid {
-                Some((Eligibility::Invalid, "invalid_dependency"))
-            } else if stale {
-                Some((Eligibility::Stale, "ineligible_dependency"))
-            } else {
-                None
-            };
-            if let Some((eligibility, reason)) = next {
-                if row.eligibility != eligibility {
-                    changed = true;
-                }
-                set(row, eligibility, reason);
-            }
+            let boundary = targets
+                .iter()
+                .map(|target| {
+                    (
+                        target.clone(),
+                        snapshot.get(target).map(|row| row.eligibility),
+                    )
+                })
+                .collect();
+            changed |= rules::declared_dependencies(row, &boundary)?;
         }
         if !changed {
             break;
         }
     }
+    Ok(())
 }
 
 // Supersession maps successor to predecessors. Bound the combined ordinary,
