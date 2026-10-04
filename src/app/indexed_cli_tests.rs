@@ -367,12 +367,15 @@ fn indexed_cli_dry_run_preserves_full_vault_bytes_and_timestamps() {
     ]);
     assert!(preview["data"]["change"].is_null());
     assert!(
-        !preview["data"]["plan"]["operations"]
+        preview["data"]["plan"]["operations"]
             .as_array()
             .unwrap()
             .is_empty()
     );
-    same_read_tree(&fixture, before);
+    assert_eq!(preview["data"]["dry_run"], true);
+    assert_eq!(preview["data"]["plan_complete"], false);
+    assert!(preview["data"]["reused"].is_null());
+    assert_eq!(tree(&fixture.root), before);
     assert_eq!(fixture.context(&fixture.first, FIRST), epoch);
 }
 #[test]
@@ -532,8 +535,15 @@ fn indexed_cli_refresh_missing_required_index_refuses_before_canonical_writes() 
             "--file",
             fixture.input.to_str().unwrap(),
         ]);
-        fixture.cli_error(&args, "INDEX_CORRUPT");
-        same_read_tree(&fixture, before);
+        if dry {
+            let preview = fixture.cli(&args);
+            assert_eq!(preview["data"]["plan_complete"], false);
+            assert!(preview["data"]["reused"].is_null());
+            assert_eq!(tree(&fixture.root), before);
+        } else {
+            fixture.cli_error(&args, "INDEX_CORRUPT");
+            same_read_tree(&fixture, before);
+        }
         let after: i64 = connection
             .query_row(
                 "SELECT epoch FROM catalog_meta WHERE singleton=1",
@@ -1307,4 +1317,236 @@ fn indexed_cli_general_context_refuses_unsupported_modes_before_provider_setup()
         }
     }
     same_read_tree(&fixture, before);
+}
+
+impl Fixture {
+    fn empty_public() -> Self {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("public source vault with spaces");
+        let outside = temp.path().join("outside working directory");
+        fs::create_dir_all(&outside).unwrap();
+        let input = outside.join("source input.md");
+        fs::write(&input, FIRST).unwrap();
+        let output = Command::new(binary())
+            .current_dir(&outside)
+            .args(["--json", "--offline", "init"])
+            .arg(&root)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stdout)
+        );
+        let mut fixture = Self {
+            _temp: temp,
+            root,
+            outside,
+            input,
+            source: String::new(),
+            first: String::new(),
+            file_id: String::new(),
+        };
+        let built = fixture.cli(&["index", "rebuild", "--normalized"]);
+        fixture.file_id = built["data"]["report"]["snapshot"]["publication"]["file_id"]
+            .as_str()
+            .expect("public normalized file identity")
+            .to_owned();
+        fixture
+    }
+}
+
+#[test]
+fn indexed_cli_public_source_capture_refresh_withdraw_retains_citable_history() {
+    let mut fixture = Fixture::empty_public();
+    let added = fixture.cli(&[
+        "source",
+        "add",
+        fixture.input.to_str().unwrap(),
+        "--title",
+        "Public capture",
+    ]);
+    assert_eq!(added["data"]["status"], "committed");
+    assert_eq!(added["data"]["citable"], true);
+    fixture.source = added["data"]["allocated_ids"]["source"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    fixture.first = added["data"]["allocated_ids"]["revision"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert_eq!(fixture.source.len(), 39);
+    assert!(fixture.source.bytes().all(|byte| byte.is_ascii_digit()));
+    fixture.context(&fixture.first, FIRST);
+    let read = fixture.cli(&["read", "--id", &fixture.source]);
+    assert_eq!(read["data"]["record"]["wiki_origin_kind"], "local-file");
+    let source_path = format!("sources/{}/source.md", fixture.source);
+    let original = fs::read(fixture.root.join(&source_path)).unwrap();
+    let old_root = format!("sources/{}/revisions/{}", fixture.source, fixture.first);
+    let old_text = fixture.root.join(format!("{old_root}/content.md"));
+    let old_original = fixture.root.join(format!("{old_root}/original.bin"));
+    let retained_text = fs::read(&old_text).unwrap();
+    let retained_original = fs::read(&old_original).unwrap();
+    let refreshed = fixture.refresh(SECOND, Some("Updated public capture"), None);
+    let revision = refreshed["data"]["allocated_ids"]["revision"]
+        .as_str()
+        .unwrap();
+    fixture.context(revision, SECOND);
+    assert_eq!(fs::read(&old_text).unwrap(), retained_text);
+    assert_eq!(fs::read(&old_original).unwrap(), retained_original);
+    let source_before_withdraw = fs::read(fixture.root.join(&source_path)).unwrap();
+    let withdrawn = fixture.cli(&[
+        "source",
+        "withdraw",
+        &fixture.source,
+        "--reason",
+        "Superseded by author",
+    ]);
+    assert_eq!(withdrawn["data"]["status"], "committed");
+    let source_after_withdraw = fs::read(fixture.root.join(&source_path)).unwrap();
+    assert_ne!(source_after_withdraw, source_before_withdraw);
+    let old_note = crate::records::parse_note(&original);
+    let new_note = crate::records::parse_note(&source_after_withdraw);
+    assert_eq!(
+        old_note.canonical.unwrap().string("wiki_origin"),
+        new_note.canonical.as_ref().unwrap().string("wiki_origin")
+    );
+    let search = fixture.cli(&["search", "IndexedSignal", "--source-id", &fixture.source]);
+    assert!(
+        search["data"]["hits"].as_array().unwrap().is_empty(),
+        "{search}"
+    );
+    let context = fixture.cli(&["context", "IndexedSignal", "--source-id", &fixture.source]);
+    assert!(
+        context["data"]["passages"].as_array().unwrap().is_empty(),
+        "{context}"
+    );
+    let historical = fixture.cli(&[
+        "search",
+        "IndexedSignal",
+        "--source-id",
+        &fixture.source,
+        "--include-historical",
+    ]);
+    assert!(
+        !historical["data"]["hits"].as_array().unwrap().is_empty(),
+        "{historical}"
+    );
+    for hit in historical["data"]["hits"].as_array().unwrap() {
+        assert_ne!(hit["eligibility"], "current", "{hit}");
+    }
+    let read_history = fixture.cli(&["read", "--path", &format!("{old_root}/content.md")]);
+    assert_eq!(read_history["data"]["body"], FIRST);
+    let canonical = canonical_tree(&fixture.root);
+    let repeated = fixture.cli(&[
+        "source",
+        "withdraw",
+        &fixture.source,
+        "--reason",
+        "Different later reason",
+    ]);
+    assert_eq!(repeated["data"]["reused"], true);
+    assert_eq!(canonical_tree(&fixture.root), canonical);
+    assert_eq!(fs::read(&old_text).unwrap(), retained_text);
+    assert_eq!(fs::read(&old_original).unwrap(), retained_original);
+    fixture.cli(&["check"]);
+}
+
+#[test]
+fn indexed_cli_public_source_stage_apply_retry_and_unavailable_text() {
+    let fixture = Fixture::empty_public();
+    let before = canonical_tree(&fixture.root);
+    let staged = fixture.cli(&["--stage", "source", "add", fixture.input.to_str().unwrap()]);
+    assert_eq!(staged["data"]["status"], "prepared");
+    assert_eq!(canonical_tree(&fixture.root), before);
+    let change = staged["data"]["change"]["change_id"].as_str().unwrap();
+    let applied = fixture.cli(&["changes", "apply", change]);
+    assert_eq!(applied["data"]["status"], "committed");
+    let after = canonical_tree(&fixture.root);
+    let repeated = fixture.cli(&["changes", "apply", change]);
+    assert_eq!(repeated["data"]["snapshot"], applied["data"]["snapshot"]);
+    assert_eq!(canonical_tree(&fixture.root), after);
+    let empty = fixture.outside.join("empty.txt");
+    fs::write(&empty, []).unwrap();
+    let added = fixture.cli(&["source", "add", empty.to_str().unwrap()]);
+    assert_eq!(added["data"]["citable"], false);
+    assert_eq!(added["data"]["extraction_status"], "complete");
+    let unsupported = fixture.outside.join("original.pdf");
+    fs::write(&unsupported, b"%PDF-unsupported\0").unwrap();
+    let added = fixture.cli(&["source", "add", unsupported.to_str().unwrap()]);
+    assert_eq!(added["data"]["citable"], false);
+    assert_eq!(added["data"]["extraction_status"], "unsupported");
+    fixture.cli(&["check"]);
+}
+
+#[test]
+fn indexed_cli_source_request_previews_preserve_full_tree_and_mark_unknowns() {
+    let fixture = Fixture::new();
+    for args in [
+        vec![
+            "--dry-run",
+            "source",
+            "add",
+            fixture.input.to_str().unwrap(),
+        ],
+        vec![
+            "--dry-run",
+            "source",
+            "refresh",
+            &fixture.source,
+            "--file",
+            fixture.input.to_str().unwrap(),
+        ],
+        vec![
+            "--dry-run",
+            "source",
+            "withdraw",
+            &fixture.source,
+            "--reason",
+            "Preview reason",
+        ],
+        vec![
+            "--dry-run",
+            "--stage",
+            "source",
+            "add",
+            fixture.input.to_str().unwrap(),
+        ],
+    ] {
+        let before = tree(&fixture.root);
+        let preview = fixture.cli(&args);
+        assert_eq!(tree(&fixture.root), before);
+        assert_eq!(preview["data"]["plan_complete"], false);
+        assert!(preview["data"]["reused"].is_null());
+        assert_eq!(
+            preview["data"]["validation"]["indexed_admission_checked"],
+            false
+        );
+        assert_eq!(preview["data"]["validation"]["identities_reserved"], false);
+        assert!(preview["data"]["change"].is_null());
+    }
+    fixture.cli_error(
+        &["source", "withdraw", &fixture.source, "--reason", "   "],
+        "RECORD_INVALID",
+    );
+}
+
+#[test]
+fn indexed_cli_staged_capture_refuses_externally_occupied_source_parent() {
+    let fixture = Fixture::empty_public();
+    let staged = fixture.cli(&["--stage", "source", "add", fixture.input.to_str().unwrap()]);
+    let source = staged["data"]["allocated_ids"]["source"].as_str().unwrap();
+    let change = staged["data"]["change"]["change_id"].as_str().unwrap();
+    let occupied = fixture.root.join(format!("sources/{source}"));
+    fs::create_dir(&occupied).unwrap();
+    let before = canonical_tree(&fixture.root);
+    fixture.cli_error(&["changes", "apply", change], "CONTENT_CONFLICT");
+    assert_eq!(canonical_tree(&fixture.root), before);
+    assert!(occupied.is_dir());
+    assert_eq!(fs::read_dir(&occupied).unwrap().count(), 0);
+    fixture.cli(&["changes", "abort", change]);
+    assert!(occupied.is_dir());
+    fixture.cli(&["index", "sync"]);
+    fixture.cli(&["check"]);
 }

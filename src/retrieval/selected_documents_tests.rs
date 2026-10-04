@@ -45,7 +45,7 @@ fn fixture_with_missing_original(missing_original: bool) -> (tempfile::TempDir, 
             fs::write(target, operation.proposed.unwrap()).unwrap();
         }
     }
-    let mut evidence = format!("---\nwiki_schema: '1'\nwiki_id: evidence_support\nwiki_kind: evidence\ntitle: Support evidence\nwiki_status: active\nwiki_assertion_id: assertion_support\nwiki_source_id: {source_id}\nwiki_source_revision: {revision_id}\nwiki_stance: supports\nwiki_locator_kind: utf8-bytes\nwiki_span_start: 0\nwiki_span_end: {}\nwiki_quote_hash: {}\n---\n", content.len(), Blake3Hash::digest(content)).into_bytes();
+    let mut evidence = format!("---\nwiki_schema: '1'\nwiki_id: evidence_support\nwiki_kind: evidence\ntitle: Support evidence\nwiki_status: active\nwiki_assertion_id: assertion_support\nwiki_source_id: '{source_id}'\nwiki_source_revision: '{revision_id}'\nwiki_stance: supports\nwiki_locator_kind: utf8-bytes\nwiki_span_start: 0\nwiki_span_end: {}\nwiki_quote_hash: {}\n---\n", content.len(), Blake3Hash::digest(content)).into_bytes();
     evidence.extend(crate::sources::evidence::exact_quote_body(content, "\n", "Support").unwrap());
     fs::write(temp.path().join("evidence.md"), evidence).unwrap();
     // A broken secondary support member must not poison intact current support.

@@ -1,4 +1,5 @@
 //! Rebuildable catalog generations and complete graph eligibility.
+pub(crate) mod capture_projection;
 pub(crate) mod compact_audit;
 mod decision_rules;
 pub(crate) mod doctor;
@@ -57,5 +58,6 @@ pub mod sql;
 mod structural_projection;
 pub(crate) mod structural_rules;
 pub mod types;
+pub(crate) mod withdraw_projection;
 pub(crate) mod write_projection;
 pub use types::*;

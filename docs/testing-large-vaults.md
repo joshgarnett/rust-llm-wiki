@@ -799,3 +799,29 @@ power-loss qualification.
 This checkpoint covers Page authoring only. New-source capture/withdrawal,
 collection import, remaining query modes, default activation, 100k/10 GB capacity
 and unseen semantic completeness remain separate acceptance requirements.
+
+### Captured-source lifecycle checkpoint (2026-10-04)
+
+Explicit normalized vaults now support ordinary source add, refresh and withdrawal,
+including staged apply, exact retained replay and historical inspection. New Source
+IDs encode the full UUIDv7 value as 39 decimal digits; existing IDs remain valid.
+A compiled oracle against the pinned Unicode folding dependency checked every valid
+Unicode scalar: decimal names have no other folded inverse. Native collision,
+selected-path and 1k/10k source-root work checks passed. Those path checks are
+component measurements, not whole-import throughput or a capacity qualification.
+
+The grouped native release checkpoint passed 651 unit tests and 24 offline CLI
+tests (10 ignored, two unchanged accounting matrices excluded), in 304.64 seconds
+overall, with source pins unchanged. The three other relevant integrations had
+already passed on the preceding candidate: offline application (19), source
+Evidence (19) and machine contract (7); they were not repeated unchanged. Native
+pre/post-SQL cuts, exact full-reconstruction oracles, lifecycle field permissions,
+selected dependents, pure request previews and legacy identity compatibility passed.
+
+The independent public-command critic recovered the exact failed withdrawal from
+the preceding candidate, verified unchanged immutable bytes and modification times,
+and completed a fresh add → cited context → refresh → staged withdrawal → history
+workflow, including sole/shared support invalidation. Complete cache-loss rebuild
+remains an identified maintenance blocker, so broader lifecycle acceptance is still
+withheld. No semantic, bulk-import or 100k/~10GB acceptance claim follows from these
+results. Compiler warnings remain; Clippy was not run at this checkpoint.

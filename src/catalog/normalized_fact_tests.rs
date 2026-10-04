@@ -497,7 +497,7 @@ fn compatibility_finish_retains_layout_zero_and_fact_lookup_requires_explicit_re
 fn dangling_evidence_preserves_invalid_row_without_inventing_support_owner() {
     let fixture = Fixture::new();
     let quote = b"second immutable capture";
-    let mut bytes = format!("---\nwiki_schema: '1'\nwiki_id: evidence_dangling\nwiki_kind: evidence\ntitle: Dangling evidence\nwiki_status: active\nwiki_assertion_id: assertion_absent\nwiki_source_id: {}\nwiki_source_revision: {}\nwiki_stance: supports\nwiki_locator_kind: utf8-bytes\nwiki_span_start: 0\nwiki_span_end: {}\nwiki_quote_hash: {}\n---\n", fixture.source, fixture.head, quote.len(), Blake3Hash::digest(quote)).into_bytes();
+    let mut bytes = format!("---\nwiki_schema: '1'\nwiki_id: evidence_dangling\nwiki_kind: evidence\ntitle: Dangling evidence\nwiki_status: active\nwiki_assertion_id: assertion_absent\nwiki_source_id: '{}'\nwiki_source_revision: '{}'\nwiki_stance: supports\nwiki_locator_kind: utf8-bytes\nwiki_span_start: 0\nwiki_span_end: {}\nwiki_quote_hash: {}\n---\n", fixture.source, fixture.head, quote.len(), Blake3Hash::digest(quote)).into_bytes();
     bytes.extend(crate::sources::evidence::exact_quote_body(quote, "\n", "Fixture").unwrap());
     fixture.write("evidence.md", &bytes);
     let legacy = scan::scan(&fixture.fs, &id("vault_fact_build")).unwrap();

@@ -297,6 +297,23 @@ impl CatalogDelta {
     /// back the entire transaction on interruption or storage failure; callers
     /// must discard failed publication transactions in either case.
     pub fn apply(&self, connection: &Connection) -> Result<DeltaStats> {
+        self.apply_for_operation(connection, None)
+    }
+    pub(crate) fn check_before_operation(
+        &self,
+        connection: &Connection,
+        operation: Option<&crate::changes::indexed_refresh::IndexedWriteOperation>,
+    ) -> Result<()> {
+        if let Some(facts) = &self.facts {
+            facts.check_before(connection, self, &mut DeltaStats::default(), operation)?;
+        }
+        Ok(())
+    }
+    pub(crate) fn apply_for_operation(
+        &self,
+        connection: &Connection,
+        operation: Option<&crate::changes::indexed_refresh::IndexedWriteOperation>,
+    ) -> Result<DeltaStats> {
         self.validate()?;
         self.require_layout(connection)?;
         if connection.is_autocommit() {
@@ -305,7 +322,7 @@ impl CatalogDelta {
         connection
             .execute_batch("SAVEPOINT lwiki_catalog_delta")
             .map_err(sql::sql_error)?;
-        let result = self.apply_rows(connection);
+        let result = self.apply_rows(connection, operation);
         match result {
             Ok(stats) => {
                 connection
@@ -331,10 +348,14 @@ impl CatalogDelta {
             }
         }
     }
-    fn apply_rows(&self, c: &Connection) -> Result<DeltaStats> {
+    fn apply_rows(
+        &self,
+        c: &Connection,
+        operation: Option<&crate::changes::indexed_refresh::IndexedWriteOperation>,
+    ) -> Result<DeltaStats> {
         let mut stats = DeltaStats::default();
         if let Some(facts) = &self.facts {
-            facts.check_before(c, self, &mut stats)?;
+            facts.check_before(c, self, &mut stats, operation)?;
         }
         for row in &self.records {
             let same: Option<bool> = c

@@ -238,6 +238,12 @@ impl RecordId {
                 "extraction packet IDs require a deterministic fingerprint",
             ));
         }
+        // Decimal preserves every UUID bit and gives Source directory names a
+        // singleton Unicode fold class. Kind remains an explicit record field;
+        // existing tagged identities continue to be accepted unchanged.
+        if kind == RecordKind::Source {
+            return Self::new(format!("{:039}", uuid::Uuid::now_v7().as_u128()));
+        }
         Self::new(format!("{}_{}", kind.as_str(), uuid::Uuid::now_v7()))
     }
 

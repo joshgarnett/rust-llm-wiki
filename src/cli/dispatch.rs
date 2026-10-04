@@ -463,9 +463,11 @@ fn execute_inner(args: &Arguments) -> Result<Envelope> {
                     title,
                     media_type,
                 },
-        } => mutation(
+        } => source_mutation(
             &mut envelope,
+            &app,
             app.source_add(capture(file, title.as_deref(), media_type.clone())?)?,
+            json!({"operation":"add", "file":file, "title":title, "media_type":media_type}),
         )?,
         Command::Source {
             command:
@@ -475,17 +477,24 @@ fn execute_inner(args: &Arguments) -> Result<Envelope> {
                     title,
                     media_type,
                 },
-        } => mutation(
+        } => source_mutation(
             &mut envelope,
+            &app,
             app.source_refresh_with_title(
                 id.clone(),
                 capture(file, title.as_deref(), media_type.clone())?,
                 title.as_deref(),
             )?,
+            json!({"operation":"refresh", "source_id":id, "file":file, "title":title, "media_type":media_type}),
         )?,
         Command::Source {
             command: SourceCommand::Withdraw { id, reason },
-        } => mutation(&mut envelope, app.source_withdraw(id.clone(), reason)?)?,
+        } => source_mutation(
+            &mut envelope,
+            &app,
+            app.source_withdraw(id.clone(), reason)?,
+            json!({"operation":"withdraw", "source_id":id, "reason":reason}),
+        )?,
         Command::Evidence {
             command:
                 EvidenceCommand::Revalidate {
@@ -1227,6 +1236,34 @@ fn page_mutation(
             .is_some()
     {
         page_preview_metadata(envelope, true);
+    }
+    Ok(())
+}
+fn source_mutation(
+    envelope: &mut Envelope,
+    app: &OfflineApp,
+    outcome: MutationOutcome,
+    request: Value,
+) -> Result<()> {
+    mutation(envelope, outcome)?;
+    if app.options().dry_run
+        && Catalog::new(app.fs().clone(), app.vault_id().clone())
+            .operation_state()?
+            .is_some()
+    {
+        envelope.data["dry_run"] = true.into();
+        envelope.data["plan_complete"] = false.into();
+        envelope.data["reused"] = Value::Null;
+        envelope.data["request"] = request;
+        envelope.data["validation"] = json!({
+            "explicit_file_guards_checked":false,
+            "target_resolution_checked":false,
+            "indexed_admission_checked":false,
+            "read_dependencies_checked":false,
+            "portable_collisions_checked":false,
+            "identities_reserved":false
+        });
+        envelope.warnings.push("Source preview validates the supplied request only. Existing targets, revision reuse, identities, dependencies and portable collisions remain unchecked. Proposed add identities are not reserved. Staging or applying performs admission checks.".into());
     }
     Ok(())
 }

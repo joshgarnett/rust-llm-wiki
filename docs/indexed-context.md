@@ -148,3 +148,67 @@ existing version-2 source-refresh receipts keep their original replay format.
 These paths do not yet migrate source addition/withdrawal or page rename.
 The normalized layout remains opt-in, and Page fixture checks do not establish
 large-vault update throughput or whole-task retrieval completeness.
+
+
+## Capturing and maintaining sources after activation
+
+On an activated normalized vault, `source add FILE` immediately publishes one
+new Source and its immutable Revision. Ordinary lexical search, selected read
+and context can use it without a rebuild. UTF-8 text retains exact original and
+captured bytes. Empty text and unsupported formats preserve originals but return
+`citable: false`; unsupported original bytes are not searchable captured text.
+Use `-` for bounded standard input. That input retains the existing `agent-report`
+origin classification, without claiming an observed fetch.
+
+```sh
+lwiki --wiki /path/to/wiki --offline index rebuild --normalized
+lwiki --wiki /path/to/wiki --offline --json source add '/path/to/release notes.md' --title 'Release checklist'
+# Set SOURCE_ID to the returned allocated_ids.source string.
+lwiki --wiki /path/to/wiki --offline context 'release checklist' --source-id "$SOURCE_ID"
+lwiki --wiki /path/to/wiki --offline source refresh "$SOURCE_ID" --file '/path/to/release notes.md'
+lwiki --wiki /path/to/wiki --offline source withdraw "$SOURCE_ID" --reason 'Superseded by the author'
+lwiki --wiki /path/to/wiki --offline search 'release checklist' --source-id "$SOURCE_ID" --include-historical
+```
+
+New Source IDs are 39-digit strings encoding the full UUIDv7 value; preserve them
+as opaque strings, including leading zeros. Existing tagged IDs and paths remain
+unchanged. Allocation reserves both Source and Revision identities against
+published claims, typed references, exact companion paths and policy inputs.
+It refuses an occupied generated Source directory. A staged capture also refuses
+an independently created directory before applying; it never reallocates a staged
+identity to hide that conflict. Numeric naming avoids source-root alias census
+only on this admitted capture route. Generic path, containment, symlink, nested
+vault, immutable ownership and exact member checks still apply. Unrelated sibling
+names, including non-UTF-8 names, are outside that selected numeric probe; explicit
+full maintenance remains the global namespace boundary.
+
+Refresh preserves source origin and immutable history. Unchanged input reuses
+its authenticated revision; explicit title changes can update discovery without
+creating another revision. Withdrawal changes only status, time and reason in the
+Source note, then updates affected source/revision/evidence/support and captured
+text metadata together. It does not rewrite authored prose or immutable payloads.
+The reason must be nonblank and at most 4096 UTF-8 bytes. Repeating withdrawal
+preserves its first reason/time and returns reuse. Refresh does not reactivate a
+withdrawn source. Historical discovery and selected read retain access to bytes;
+strict historical context remains a separate unsupported normalized mode.
+
+`--stage` prepares an inspectable capture, refresh or withdrawal with unchanged
+canonical visibility. Apply and recovery use the exact retained operation and
+publication; retries do not create another revision or generation. Selected
+external edits cause refusal and preserve authored bytes. Abort an unapplied
+staged change with `changes abort CHANGE_ID`, then sync external edits separately.
+
+Normalized source dry-run validates the supplied request before any SQLite open.
+It preserves all vault bytes and modification times, including shared memory.
+Its JSON marks target resolution, guards, admission, dependencies, collisions and
+identity reservations unchecked, and reuse unknown. An add preview contains
+proposed unreserved IDs/paths; refresh and withdrawal leave existing targets
+unresolved. Staging/applying performs actual admission. A successful preview does
+not establish that a damaged or missing cache can apply the request.
+
+Selected admission has finite row, byte and time limits; excessive actual fanout
+refuses before canonical writes. Public collection import and remaining retrieval
+modes are still separate work. Source-root probe behavior alone is not import
+throughput evidence: retained object/change namespaces and durable publication
+also contribute work. This workflow does not qualify 100k capacity or semantic
+answer completeness.

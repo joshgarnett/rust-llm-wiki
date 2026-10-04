@@ -1036,10 +1036,19 @@ fn human_mutation_summary_distinguishes_preview_prepared_and_committed() {
         "{staged}"
     );
     let committed = run(&[]);
+    assert!(committed.contains("source add: committed"), "{committed}");
+    let source = committed
+        .lines()
+        .find_map(|line| line.trim().strip_prefix("source: "))
+        .expect("committed summary must identify its source");
+    assert_eq!(source.len(), 39, "{committed}");
     assert!(
-        committed.contains("source add: committed") && committed.contains("source: source_"),
+        source.bytes().all(|byte| byte.is_ascii_digit()),
         "{committed}"
     );
+    let source_id = lwiki::domain::RecordId::new(source).unwrap();
+    let selected = ok(temp.path(), &["read", "--id", source_id.as_str()], None);
+    assert_eq!(selected["data"]["record"]["wiki_id"], source);
     assert!(!committed.contains("manifest_hash"));
 }
 

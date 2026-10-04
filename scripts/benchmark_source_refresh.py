@@ -161,7 +161,7 @@ def validate_preseed(args, runner):
         if (source["index"] != index or source["bytes"] != args.bytes_per_source
                 or source["marker"] != f"refreshprobe{index:06d}v000000"
                 or source["title"] != f"Synthetic capture {index:06d}"
-                or not re.fullmatch(r"source_[A-Za-z0-9_-]+", source["source_id"])
+                or not re.fullmatch(r"(?:source_[A-Za-z0-9_-]+|[0-9]{39})", source["source_id"])
                 or not re.fullmatch(r"revision_[A-Za-z0-9_-]+", source["revision_id"])
                 or source["source_id"] in ids):
             raise ValueError("invalid preseed source identity/sequence")

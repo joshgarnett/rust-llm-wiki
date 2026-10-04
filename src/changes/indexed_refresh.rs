@@ -25,6 +25,9 @@ pub(crate) enum IndexedWriteOperation {
     SourceRefresh {
         source_id: RecordId,
     },
+    SourceWithdraw {
+        source_id: RecordId,
+    },
     SourceCapture {
         source_id: RecordId,
         revision_id: RecordId,
@@ -44,7 +47,7 @@ pub(crate) struct IndexedPageTarget {
 impl IndexedWriteOperation {
     pub(crate) fn validate(&self) -> Result<()> {
         match self {
-            Self::SourceRefresh { .. } => Ok(()),
+            Self::SourceRefresh { .. } | Self::SourceWithdraw { .. } => Ok(()),
             Self::SourceCapture {
                 source_id,
                 revision_id,
@@ -186,6 +189,16 @@ impl IndexedRefreshProof {
     }
     pub(crate) fn validate_manifest(&self, manifest: &ChangeManifest) -> Result<()> {
         self.validate(&manifest.vault_id, &self.change)?;
+        if let Some(IndexedWriteOperation::SourceWithdraw { .. }) = &self.operation {
+            if manifest.operations.len() != 1
+                || !matches!(manifest.operations[0].before, ExpectedState::Hash(_))
+                || !matches!(manifest.operations[0].after, ExpectedState::Hash(_))
+            {
+                return Err(recovery(
+                    "withdrawal must replace exactly one existing Source",
+                ));
+            }
+        }
         if let Some(IndexedWriteOperation::PageBatch { pages }) = &self.operation {
             if manifest.operations.len() != pages.len()
                 || manifest.operations.iter().any(|operation| {
@@ -636,6 +649,33 @@ impl ChangeEngine {
             return Err(recovery(
                 "indexed refresh has a durable conflict or aborted intent",
             ));
+        }
+        // A known unapplied capture cannot adopt an independently occupied
+        // Source parent, even when its planned revision tree is still absent.
+        // Applying recovery uses the retained tree/member and journal authority.
+        if phase == IndexedRefreshPhase::AtBase
+            && matches!(state.status, None | Some(ChangeStatus::Prepared))
+            && let Some(IndexedWriteOperation::SourceCapture { source_id, .. }) = &proof.operation
+        {
+            let path = self
+                .fs
+                .root()
+                .resolve(&VaultRelativePath::new(format!("sources/{source_id}"))?)?;
+            match std::fs::symlink_metadata(path) {
+                Ok(_) => {
+                    return Err(WikiError::new(
+                        ErrorCode::ContentConflict,
+                        "source namespace was independently occupied after preparation",
+                    ));
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => {
+                    return Err(WikiError::new(
+                        ErrorCode::Internal,
+                        format!("inspect prepared source namespace: {error}"),
+                    ));
+                }
+            }
         }
         if phase == IndexedRefreshPhase::AlreadyPublished {
             require_active(&authority, &proof)?;

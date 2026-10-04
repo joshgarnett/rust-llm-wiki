@@ -42,6 +42,9 @@ pub(super) struct ProjectedWriteParts {
     pub delta: CatalogDelta,
 }
 impl ProjectedWrite {
+    pub(super) fn from_parts(parts: ProjectedWriteParts) -> Self {
+        Self { parts }
+    }
     pub(crate) fn draft(&self) -> &ChangeDraft {
         &self.parts.draft
     }

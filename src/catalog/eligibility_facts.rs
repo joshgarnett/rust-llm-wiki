@@ -448,7 +448,7 @@ mod tests {
             ),
             ("evidence_bad", &current, b"wrong quote".as_slice()),
         ] {
-            let mut bytes = format!("---\nwiki_schema: '1'\nwiki_id: {name}\nwiki_kind: evidence\ntitle: {name}\nwiki_status: active\nwiki_assertion_id: assertion_fixture\nwiki_source_id: {source}\nwiki_source_revision: {revision}\nwiki_stance: supports\nwiki_locator_kind: utf8-bytes\nwiki_span_start: 0\nwiki_span_end: {}\nwiki_quote_hash: {}\n---\n", quote.len(), Blake3Hash::digest(quote)).into_bytes();
+            let mut bytes = format!("---\nwiki_schema: '1'\nwiki_id: {name}\nwiki_kind: evidence\ntitle: {name}\nwiki_status: active\nwiki_assertion_id: assertion_fixture\nwiki_source_id: '{source}'\nwiki_source_revision: '{revision}'\nwiki_stance: supports\nwiki_locator_kind: utf8-bytes\nwiki_span_start: 0\nwiki_span_end: {}\nwiki_quote_hash: {}\n---\n", quote.len(), Blake3Hash::digest(quote)).into_bytes();
             bytes.extend(
                 crate::sources::evidence::exact_quote_body(quote, "\n", "Fixture").unwrap(),
             );

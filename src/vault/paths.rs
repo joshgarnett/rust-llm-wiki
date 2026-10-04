@@ -7,6 +7,13 @@ use std::{
 };
 use unicase::UniCase;
 
+/// All 39 ASCII decimal digits have exactly one inverse spelling under the
+/// pinned Unicode fold implementation. This removes only alias enumeration;
+/// normal component resolution, type, symlink and nested-vault checks still run.
+fn numeric_source_component(component: &str) -> bool {
+    component.len() == 39 && component.bytes().all(|byte| byte.is_ascii_digit())
+}
+
 /// Aggregate diagnostics only; no path policy or filesystem operations change.
 #[cfg(test)]
 pub(crate) mod profile {
@@ -324,7 +331,13 @@ impl VaultRoot {
                 {
                     return Err(WikiError::invalid("case-folded planned path collision"));
                 }
-                if !scope.is_some_and(|scope| scope.published(&prefix)) && parent.is_dir() {
+                let singleton_source = scope.is_some_and(|scope| scope.singleton_source(&prefix))
+                    && parent == self.path.join("sources")
+                    && numeric_source_component(component);
+                if !singleton_source
+                    && !scope.is_some_and(|scope| scope.published(&prefix))
+                    && parent.is_dir()
+                {
                     let folded = UniCase::unicode(component).to_folded_case();
                     #[cfg(test)]
                     let mut profile =
@@ -386,7 +399,11 @@ impl VaultRoot {
             } else {
                 format!("{parent}/{component}")
             };
-            if scope.is_some_and(|scope| scope.published(&prefix)) {
+            if scope.is_some_and(|scope| scope.published(&prefix))
+                || scope.is_some_and(|scope| scope.singleton_source(&prefix))
+                    && parent == "sources"
+                    && numeric_source_component(component)
+            {
                 parent = prefix;
                 continue;
             }
@@ -562,5 +579,43 @@ impl VaultRoot {
             }
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod numeric_source_tests {
+    use super::*;
+
+    #[test]
+    fn pinned_unicode_fold_has_no_other_inverse_for_decimal_names() {
+        // Verify the actual compiled dependency, including multi-scalar folds.
+        // No scalar may disappear or emit an ASCII digit except that digit.
+        // Therefore concatenation cannot create another decimal spelling.
+        for scalar in 0..=0x10ffff {
+            let Some(ch) = char::from_u32(scalar) else {
+                continue;
+            };
+            let input = ch.to_string();
+            let folded = UniCase::unicode(input.as_str()).to_folded_case();
+            assert!(!folded.is_empty(), "empty fold for U+{scalar:04X}");
+            if folded.bytes().any(|byte| byte.is_ascii_digit()) {
+                assert!(
+                    ch.is_ascii_digit(),
+                    "digit inverse U+{scalar:04X}: {folded:?}"
+                );
+                assert_eq!(folded, input);
+            }
+        }
+        for _ in 0..32 {
+            let id = crate::domain::RecordId::generate(crate::domain::RecordKind::Source).unwrap();
+            assert!(numeric_source_component(id.as_str()));
+            assert_eq!(UniCase::unicode(id.as_str()).to_folded_case(), id.as_str());
+        }
+        assert!(!numeric_source_component(
+            "source_0000000000000000000000000000000000000"
+        ));
+        assert!(!numeric_source_component(
+            "00000000000000000000000000000000000000"
+        ));
     }
 }

@@ -832,7 +832,105 @@ impl OfflineApp {
     }
     pub fn source_add(&self, request: CaptureRequest) -> Result<MutationOutcome> {
         capture_bounds(&request)?;
+        let catalog = self.catalog();
+        if catalog.operation_state()?.is_some() {
+            use crate::{
+                catalog::{
+                    capture_projection::project_capture, query_types::QueryReadLimits,
+                    source_projection::RefreshProjectionLimits,
+                },
+                sources::SourceRefreshLookup,
+            };
+            let store = SourceStore::new(self.fs.clone());
+            // Preview allocates a proposed pair, but does not reserve it or open
+            // SQLite. Applying the request performs fresh allocation/admission.
+            if self.options.dry_run {
+                let plan = store.plan_capture(request)?;
+                let draft = plan.draft.as_ref().expect("capture draft");
+                return Ok(MutationOutcome {
+                    source_capture: plan.capture_state,
+                    plan: summarize(&draft.title, &draft.read_preconditions, &draft.operations),
+                    allocated_ids: draft.allocated_ids.clone(),
+                    change: None,
+                    status: None,
+                    snapshot: None,
+                    reused: false,
+                });
+            }
+            catalog.guard_query()?;
+            let reader = catalog.query_snapshot(QueryReadLimits::default())?;
+            reader.require_policy_layout()?;
+            for _ in 0..16 {
+                let plan = store.plan_capture(request.clone())?;
+                let root = VaultRelativePath::new(format!("sources/{}", plan.source_id))?;
+                let physical = self.fs.root().resolve(&root)?;
+                // Do not adopt even an empty, externally occupied directory.
+                match std::fs::symlink_metadata(physical) {
+                    Ok(_) => continue,
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(error) => {
+                        return Err(WikiError::new(
+                            ErrorCode::Internal,
+                            format!("inspect source allocation: {error}"),
+                        ));
+                    }
+                }
+                let source_path = VaultRelativePath::new(format!("{root}/source.md"))?;
+                let revision_path = VaultRelativePath::new(format!(
+                    "{root}/revisions/{}/revision.md",
+                    plan.revision_id
+                ))?;
+                if reader.revision_identity_is_reserved(&plan.source_id, &source_path)?
+                    || reader.revision_identity_is_reserved(&plan.revision_id, &revision_path)?
+                {
+                    continue;
+                }
+                let capture = plan.capture_state;
+                let projected =
+                    project_capture(&self.fs, &reader, plan, &RefreshProjectionLimits::default())?;
+                return self.publish_source_write(&catalog, projected, capture);
+            }
+            return Err(WikiError::new(
+                ErrorCode::ContentConflict,
+                "could not reserve a fresh source and revision identity after 16 attempts",
+            ));
+        }
         self.source_plan(SourceStore::new(self.fs.clone()).plan_capture(request)?)
+    }
+    fn publish_source_write(
+        &self,
+        catalog: &Catalog,
+        projected: crate::catalog::write_projection::ProjectedWrite,
+        capture: Option<crate::sources::SourceCaptureState>,
+    ) -> Result<MutationOutcome> {
+        let draft = projected.draft();
+        let mut outcome = MutationOutcome {
+            source_capture: capture,
+            plan: summarize(&draft.title, &draft.read_preconditions, &draft.operations),
+            allocated_ids: draft.allocated_ids.clone(),
+            change: None,
+            status: None,
+            snapshot: None,
+            reused: false,
+        };
+        let writer = self.writer()?;
+        catalog.guard_current(None)?;
+        let mut session = crate::catalog::source_refresh::IndexedRefreshSession::prepare_write(
+            catalog, &writer, projected,
+        )?;
+        let change = session.proof().change.clone();
+        outcome.change = Some(change.clone());
+        if self.options.stage_only {
+            outcome.status = Some(ChangeStatus::Prepared);
+            return Ok(outcome);
+        }
+        let report = self
+            .engine()?
+            .apply_indexed_refresh(&writer, &mut session)
+            .map_err(|error| retained_error(error, &change))?;
+        outcome.status = Some(report.status);
+        outcome.snapshot = report.snapshot;
+        Ok(outcome)
     }
     pub fn source_refresh(&self, id: RecordId, request: CaptureRequest) -> Result<MutationOutcome> {
         self.source_refresh_with_title(id, request, None)
@@ -846,6 +944,20 @@ impl OfflineApp {
         capture_bounds(&request)?;
         let catalog = self.catalog();
         if catalog.operation_state()?.is_some() {
+            if self.options.dry_run {
+                // Selected target/head/reuse require indexed facts. Leave them
+                // unresolved in a pure preview, with no shared-memory changes.
+                let _ = SourceStore::new(self.fs.clone()).plan_capture(request)?;
+                return Ok(MutationOutcome {
+                    source_capture: None,
+                    plan: summarize("Refresh source (target unresolved in preview)", &[], &[]),
+                    allocated_ids: BTreeMap::from([("source".into(), id)]),
+                    change: None,
+                    status: None,
+                    snapshot: None,
+                    reused: false,
+                });
+            }
             return self.indexed_source_refresh(&catalog, id, request, title);
         }
         let p = self.current_projection()?;
@@ -938,6 +1050,47 @@ impl OfflineApp {
         Ok(outcome)
     }
     pub fn source_withdraw(&self, id: RecordId, reason: &str) -> Result<MutationOutcome> {
+        if reason.trim().is_empty() || reason.len() > 4096 {
+            return Err(WikiError::invalid(
+                "withdrawal requires a nonempty reason of at most 4096 bytes",
+            ));
+        }
+        let catalog = self.catalog();
+        if catalog.operation_state()?.is_some() {
+            if self.options.dry_run {
+                return Ok(MutationOutcome {
+                    source_capture: None,
+                    plan: summarize("Withdraw source (target unresolved in preview)", &[], &[]),
+                    allocated_ids: BTreeMap::from([("source".into(), id)]),
+                    change: None,
+                    status: None,
+                    snapshot: None,
+                    reused: false,
+                });
+            }
+            catalog.guard_query()?;
+            let reader =
+                catalog.query_snapshot(crate::catalog::query_types::QueryReadLimits::default())?;
+            let projected = crate::catalog::withdraw_projection::project_withdraw(
+                &self.fs,
+                &reader,
+                &id,
+                reason,
+                &crate::catalog::source_projection::RefreshProjectionLimits::default(),
+            )?;
+            return match projected {
+                Some(projected) => self.publish_source_write(&catalog, projected, None),
+                None => Ok(MutationOutcome {
+                    source_capture: None,
+                    plan: summarize("Unchanged withdrawn source", &[], &[]),
+                    allocated_ids: BTreeMap::from([("source".into(), id)]),
+                    change: None,
+                    status: None,
+                    snapshot: None,
+                    reused: true,
+                }),
+            };
+        }
         let p = self.current_projection()?;
         self.resolve_path(&RecordSelector::Id(id.clone()), &p)?;
         self.source_plan(SourceStore::new(self.fs.clone()).plan_withdraw(&id, reason)?)

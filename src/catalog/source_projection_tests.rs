@@ -105,6 +105,13 @@ impl Fixture {
         Self::with_setup(fanout, |_| {})
     }
     fn with_setup(fanout: bool, setup: impl FnOnce(&Self)) -> Self {
+        Self::with_source_id(fanout, None, setup)
+    }
+    fn with_source_id(
+        fanout: bool,
+        source_id: Option<RecordId>,
+        setup: impl FnOnce(&Self),
+    ) -> Self {
         let temp = tempfile::tempdir().unwrap();
         fs::write(
             temp.path().join("WIKI.md"),
@@ -114,9 +121,55 @@ impl Fixture {
         let fs_handle = VaultFs::new(VaultRoot::explicit(temp.path()).unwrap());
         let writer = WriterPermit::acquire(fs_handle.root(), Duration::ZERO).unwrap();
         let store = SourceStore::new(fs_handle.clone());
-        let first = store
+        let mut first = store
             .plan_capture(Self::request(b"first capture quote"))
             .unwrap();
+        if let Some(source_id) = source_id {
+            // Seed a persisted legacy identity, including its immutable revision
+            // envelope and companions, before constructing the normalized index.
+            // Public captures continue to exercise the numeric allocator elsewhere.
+            let prior_root = format!("sources/{}", first.source_id);
+            let legacy_root = format!("sources/{source_id}");
+            let draft = first.draft.as_mut().unwrap();
+            draft
+                .allocated_ids
+                .insert("source".into(), source_id.clone());
+            for operation in &mut draft.operations {
+                operation.target = path(&operation.target.as_str().replacen(
+                    &prior_root,
+                    &legacy_root,
+                    1,
+                ));
+                for dependency in &mut operation.apply_after {
+                    *dependency = path(&dependency.as_str().replacen(&prior_root, &legacy_root, 1));
+                }
+                if operation.target.as_str().ends_with("/source.md")
+                    || operation.target.as_str().ends_with("/revision.md")
+                {
+                    let parsed = crate::records::parse_note(operation.proposed.as_ref().unwrap());
+                    let mut fields = parsed.canonical.as_ref().unwrap().fields().clone();
+                    if operation.target.as_str().ends_with("/source.md") {
+                        fields.insert("wiki_id".into(), json!(source_id));
+                    } else {
+                        fields.insert("wiki_source_id".into(), json!(source_id));
+                    }
+                    for field in ["wiki_revision", "wiki_source"] {
+                        if let Some(value) = fields.get(field).and_then(|value| value.as_str()) {
+                            let relocated = value.replacen(&prior_root, &legacy_root, 1);
+                            fields.insert(field.into(), json!(relocated));
+                        }
+                    }
+                    operation.proposed = Some(
+                        crate::sources::revision::record_bytes(
+                            CanonicalRecord::new(fields).unwrap(),
+                            parsed.body(),
+                        )
+                        .unwrap(),
+                    );
+                }
+            }
+            first.source_id = source_id;
+        }
         Self::seed(&fs_handle, first.draft.unwrap());
         let fixture = Self {
             _temp: temp,
@@ -1351,10 +1404,14 @@ fn published_refresh_paths_refuse_selected_symlink() {
 
 #[test]
 fn published_refresh_paths_accept_existing_logical_path_with_external_folded_spelling() {
-    let fixture = Fixture::new(false);
+    let fixture = Fixture::with_source_id(false, Some(id("source_LegacyCapture")), |_| {});
     let parent = fixture.fs.root().path().join("sources");
     let original = parent.join(fixture.source.as_str());
     let foreign = parent.join(fixture.source.as_str().to_uppercase());
+    assert_ne!(
+        original, foreign,
+        "fixture must exercise a distinct folded spelling"
+    );
     // A case-sensitive filesystem can retain both names. On APFS the second
     // spelling aliases the selected directory; rename that physical spelling
     // while retaining the published logical path and exact selected contents.

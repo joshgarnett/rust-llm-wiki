@@ -221,13 +221,14 @@ impl FactDelta {
         Ok(())
     }
 
-    /// Runs before ordinary row replacement. This v2 delta is restricted to
-    /// source refresh: authored propositions and evidence membership stay fixed.
+    /// Runs before ordinary row replacement. Lifecycle fields require the v3
+    /// withdrawal discriminator; refresh and untyped deltas keep them fixed.
     pub(super) fn check_before(
         &self,
         c: &Connection,
         delta: &CatalogDelta,
         stats: &mut DeltaStats,
+        operation: Option<&crate::changes::indexed_refresh::IndexedWriteOperation>,
     ) -> Result<()> {
         for row in &delta.records {
             match load_record(c, row.record.id(), stats)? {
@@ -241,14 +242,23 @@ impl FactDelta {
                         ));
                     }
                     if old.record.kind() == RecordKind::Source {
+                        let withdrawal = delta.version == 3
+                            && matches!(operation, Some(crate::changes::indexed_refresh::IndexedWriteOperation::SourceWithdraw { source_id }) if source_id == row.record.id());
                         let retained = |key: &&String| {
-                            !matches!(
-                                key.as_str(),
-                                "title"
-                                    | "wiki_current_revision"
-                                    | "wiki_revision"
-                                    | "wiki_revisions"
-                            )
+                            if withdrawal {
+                                !matches!(
+                                    key.as_str(),
+                                    "wiki_status" | "wiki_withdrawn_at" | "wiki_withdrawal_reason"
+                                )
+                            } else {
+                                !matches!(
+                                    key.as_str(),
+                                    "title"
+                                        | "wiki_current_revision"
+                                        | "wiki_revision"
+                                        | "wiki_revisions"
+                                )
+                            }
                         };
                         if old
                             .record
