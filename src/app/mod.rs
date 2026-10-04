@@ -24,3 +24,13 @@ mod refresh_path_profile;
 mod pages;
 pub mod probe;
 pub use pages::{PageBatchRequest, PageUpdate};
+
+mod source_import;
+mod source_import_state;
+mod source_import_types;
+pub use source_import::{
+    SourceImportGroup, SourceImportOutcome, SourceImportPendingItem, SourceImportPreparation,
+    SourceImportedItem, prepare_source_import,
+};
+#[cfg(test)]
+mod source_import_tests;

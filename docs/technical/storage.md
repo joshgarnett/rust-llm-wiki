@@ -72,6 +72,33 @@ Capture into `sources/<source-id>/revisions/<revision-id>/`: `revision.md`, exac
 
 `source.md` records the observed locator and current revision. A refresh writes all new revision files before advancing this pointer in the same recoverable changeset. Reuse an existing revision only when original bytes, normalized bytes, and extractor fingerprint all match for that source. URL equality alone does not merge sources. Importing an agent report preserves that report's origin; its links are not verified underlying captures.
 
+[Explicit collection imports](../source-imports.md) use immutable JSONL manifests
+and normalized CaptureBatch publication. Groups contain 1–8 fresh captures with
+one shared structural/policy/navigation admission, retained Change and SQL
+publication. Multiple-item groups have a 4 MiB original-byte bound; size-one
+groups retain the scalar 64 MiB input ceiling. Existing file, derived-row, Work
+and delta budgets remain binding. Default grouping is four; retained groups are
+never silently split, reordered or replaced with scalar writes.
+
+Bounded progress under `.wiki/state/source-imports` records the vault/key,
+immutable manifest hash, ordinal/byte cursors, one pending group with fixed
+Source/Revision/Change IDs and timestamps, and a hash-chain result cursor. The
+exact ordinary manifest and indexed-proof commitments are durable before normal
+retention. The import intent is comparison evidence, never row/apply authority.
+Normal proof, outside operation authority, framed journal, ownership receipt and
+terminal outcome remain authoritative. Active reservation precedes Applying;
+Prepared alone does not establish that replacement is safe. Terminal replay
+precedes obsolete-base/payload checks. Never-Applying stale attempts use existing
+abort and explicit new Change identity while keeping capture identities/time.
+One input-only old-intent anchor preserves verified/resynced captured originals
+for re-admission; it cannot authorize rows or bypass the trusted projector.
+
+Progress and acknowledged mappings are not disposable cache. Result append,
+cursor advancement and interrupted acknowledgement are reconciled on known
+bounded paths, without Source-origin or Change-history rediscovery. Completed
+groups retain historical mappings after refresh/withdrawal. Native returned-error
+reopen tests are narrower than process-kill/power-loss durability qualification.
+
 Evidence verifies both the complete snapshot hash and the selected byte-slice hash. Require `0 <= start < end <= byte_len`, UTF-8 boundaries, and exact quotation equality. An imported quotation must have one exact match in its declared window; zero or multiple matches require correction. Do not normalize before matching. Revalidation against a refreshed source creates successor evidence for the new revision; retain old evidence for history.
 
 Direct captured passages use `CitationRef::Source(SourceSpanRef)` without creating assertion/evidence notes. Validate their source/revision ownership, revision manifest, complete snapshot, span, and quote hash. Current scope also requires an active source and its current revision; historical scope verifies the bytes but labels historical/withdrawn state. `CitationRef::Assertion` additionally verifies the durable evidence/assertion chain. Its `EvidenceRef` keeps the flattened wire fields shown above, equivalent to composing a `SourceSpanRef`. Ordinary note excerpts retain `DocumentLocator` and a note-text label, not an invented source citation.

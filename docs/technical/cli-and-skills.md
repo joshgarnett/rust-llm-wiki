@@ -30,6 +30,7 @@ Commands appear in `capabilities` only when implemented. The following is the im
 | `page put --file FILE` | Create a page; `--if-match HASH` required to replace an existing page | M1 |
 | `page rename ID --to PATH --if-match HASH` | Changeset updating the path and known incoming links; ID preserved | M1 |
 | `source add FILE` | Capture immutable bytes and normalized text for supported local formats | M1 |
+| `source import prepare/run/resume/status` | Freeze a local JSONL list, publish bounded shared-change groups and retain progress/mappings | Subsequent workflow |
 | `source refresh ID --file FILE` | Add a revision; unchanged capture is idempotent | M1 |
 | `source withdraw ID --reason TEXT` | Persist withdrawal and invalidate dependent current evidence | M1 |
 | `evidence revalidate ID --to-revision REV --if-match HASH` | Stage successor evidence only when the original quote matches uniquely in the target source revision | M1 |

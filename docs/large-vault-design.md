@@ -1,10 +1,14 @@
 # Large-vault architecture and validation
 
-Status: incremental implementation with an [indexed-context path](indexed-context.md), not a supported-capacity claim. The initial target is
-100,000 distinct current documents containing approximately 10 GB of UTF-8 text.
+Status: incremental implementation with an [indexed-context path](indexed-context.md), not a supported-capacity claim. At the user's request on
+2026-10-04, the first qualification target is 25,000 distinct current documents
+containing approximately 2.5 GB of UTF-8 text. The 100,000-document / 10 GB tier
+is deferred to subsequent qualification.
 Count original copies, retained revisions, operational records, retrieval units,
 vectors and index files separately. A 10,000-document / 1 GB tier supplies the
-scaling control. Million-document capacity is outside this initial gate.
+scaling control. See the version-2 [acceptance protocol](testing-large-vaults.md)
+for the unchanged correctness/quality gates and prospective 25k measurements.
+Million-document capacity is outside this initial gate.
 
 The existing [storage](technical/storage.md) and
 [retrieval](technical/retrieval.md) contracts remain authoritative until a tested
@@ -23,6 +27,13 @@ Publication stores per-document rows and updates affected rows in one
 transaction. Ordinary normalized queries consult a small publication record;
 they do not audit completed operation history. Selected evidence still requires
 verification before it becomes a citation.
+
+The [local collection importer](source-imports.md) freezes explicit inputs,
+publishes bounded shared groups and resumes owned attempts while retaining
+individual Source/Revision histories. Its public workflow assessment reached
+9.5/10 after targeted recovery replay. Grouping reduced intercepted sync calls
+in a four-input comparison, but growing history/object/import-intent enumeration
+and the 25k resource/capacity gate remain unresolved.
 
 Lexical mixed-document context supports fingerprint-bound host preparation and
 application with the same selected-dependency proof. Explicit complete-cache-loss

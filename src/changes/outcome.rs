@@ -76,6 +76,31 @@ pub(crate) fn terminal_report(
     manifest: &ChangeManifest,
     hash: &Blake3Hash,
 ) -> Result<Option<ApplyReport>> {
+    Ok(load_terminal_proof(fs, manifest, hash)?
+        .as_ref()
+        .map(report))
+}
+
+/// The immutable receipt can retain Applying after the operational journal
+/// has lost a suffix. Attempt replacement must inspect this validated history.
+pub(crate) fn terminal_ever_applying(
+    fs: &VaultFs,
+    manifest: &ChangeManifest,
+    hash: &Blake3Hash,
+) -> Result<Option<bool>> {
+    Ok(load_terminal_proof(fs, manifest, hash)?.map(|proof| {
+        proof
+            .journal
+            .iter()
+            .any(|frame| matches!(frame.event, ChangeEvent::Applying))
+    }))
+}
+
+fn load_terminal_proof(
+    fs: &VaultFs,
+    manifest: &ChangeManifest,
+    hash: &Blake3Hash,
+) -> Result<Option<TerminalProof>> {
     let Some(bytes) = read_bounded(fs, &path(&manifest.change_id)?, MAX_JOURNAL_BYTES)? else {
         return Ok(None);
     };
@@ -126,7 +151,7 @@ pub(crate) fn terminal_report(
             "operational journal disagrees with retained outcome",
         ));
     }
-    Ok(Some(report(proof)))
+    Ok(Some(receipt.proof))
 }
 
 pub(crate) fn finish(

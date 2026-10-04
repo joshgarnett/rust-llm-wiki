@@ -39,6 +39,9 @@ Search should show the deployment note and its `atlas_migrate` command. Context 
 
 Continue with [getting started](docs/getting-started.md) to add an authored page, refresh a source, inspect citations and export an agent workflow. The [maintained workflows](skills/llm-wiki/references/workflows.md) cover guarded edits, packet extraction, explicit resolution and review.
 
+For a local collection, [resumable source imports](docs/source-imports.md) prepare
+an explicit file manifest, commit bounded groups and retain Source/Revision mappings.
+
 ## Providers and research
 
 Remote embedding, API extraction and `doctor --probe` require explicit trusted provider configuration and caller budgets. Research instead hands bounded packets to a host agent: `research run QUESTION` persists a packet, `research import --file FILE` validates the agent's submitted sources or answer, and `research resume RUN_ID` returns the outstanding packet. The CLI does not search, fetch or generate for research. `--offline` research uses local or already captured content; `--dry-run` and `research plan` only preview. Reports retain gaps and unassessed claims; valid citation bytes do not prove a claim's meaning. Host-agent network and token usage are unobserved by CLI accounting.
@@ -70,6 +73,10 @@ The [six native GitHub release jobs](https://github.com/joshgarnett/rust-llm-wik
 - [Progress](PROGRESS.md): completed work, user decisions, and verification limits.
 
 For the packaged historical 0.1.2 release, use the [download and test-agent guide](docs/testing-0.1.2.md), including the offline regression script and live gateway checks.
+
+The [0.2.0 candidate walkthrough](docs/testing-0.2.0.md) covers the new local
+collection workflow and its current validation limits. The first capacity
+qualification target is 25,000 documents; that gate is still open.
 
 ## Project status
 

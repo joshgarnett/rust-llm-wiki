@@ -75,6 +75,15 @@ pub struct PreparedChange {
     pub manifest_hash: Blake3Hash,
 }
 
+/// Named import attempts record this identity before retained file allocation.
+/// The same literal creation time is preserved through preparation retries.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct NamedChangeIdentity {
+    pub change_id: RecordId,
+    pub created_at: String,
+}
+
 /// Namespace words are folded by the immutable-tree parser; identity path
 /// components keep their exact spelling, including legacy non-RecordId names.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]

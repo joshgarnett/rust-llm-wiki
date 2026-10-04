@@ -72,6 +72,16 @@ pub struct CaptureRequest {
     pub media_type: Option<String>,
 }
 
+/// Import intent fixes these values before any retained proposal is allocated.
+/// Allocation is not publication authority; normal capture admission still applies.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct CaptureAllocation {
+    pub source_id: RecordId,
+    pub revision_id: RecordId,
+    pub captured_at: String,
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct InvalidationInputs {

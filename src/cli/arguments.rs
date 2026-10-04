@@ -128,7 +128,7 @@ pub enum Command {
     },
     /// Inspect storage and preview or apply supported retention and migration.
     Storage(super::storage::StorageArguments),
-    /// Capture source files, refresh immutable revisions or withdraw support.
+    /// Capture or import local sources, refresh immutable revisions or withdraw support.
     Source {
         #[command(subcommand)]
         command: SourceCommand,
@@ -246,6 +246,8 @@ pub enum PageCommand {
 }
 #[derive(Debug, Subcommand)]
 pub enum SourceCommand {
+    /// Prepare, run, resume or inspect an explicit local collection import.
+    Import(super::source_import::SourceImportArguments),
     /// Capture a local file as a new source with an immutable revision.
     Add {
         /// Input file; use - to read bounded standard input.
@@ -700,6 +702,9 @@ impl Command {
             Self::Source {
                 command: SourceCommand::Withdraw { .. },
             } => "source withdraw",
+            Self::Source {
+                command: SourceCommand::Import(arguments),
+            } => arguments.command.name(),
             Self::Evidence { .. } => "evidence revalidate",
             Self::Index {
                 command: IndexCommand::Sync,

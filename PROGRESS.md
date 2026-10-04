@@ -4,6 +4,24 @@ Started: 2026-09-28. Status: local M0–M4 implementation complete; P00–P21 an
 
 ## Context-quality follow-up — active
 
+The fresh 2026-10-04 goal also covers complete import, update, search and
+maintenance workflows. The user subsequently selected 25,000 documents / roughly
+2.5 GB as the first capacity target, with 100,000 deferred, and requested a useful
+0.2.0 release build at a coherent tested checkpoint. Tested and
+pushed checkpoints add normalized Page authoring (`024a9fe`), source capture and
+withdrawal (`ed73ebb`), bounded catalog reconstruction and context-selection replay
+(`fe2cef2`), and explicitly experimental retrieval/cost work (`ad9d387`,
+`431b1b9`). The resumable [collection importer](docs/source-imports.md) is
+implemented with grouped native correctness checks passing. A controlled
+four-input comparison reduced intercepted sync calls by about 37%. Independent
+public workflow assessment reached 9.5/10 with no observed correctness blocker
+after replaying the preserved recovery failure. A native macOS ARM64 0.2.0
+candidate and [disposable walkthrough](docs/testing-0.2.0.md) are available.
+Peak-memory and launch-resource observations remain unavailable. Retrieval
+experiments have not passed whole-task acceptance, and full scale and the latest
+strict Clippy gate remain open. These are progress checkpoints, not completion
+of the fresh goal.
+
 The 2026-10-03 context-completeness goal remains open. Independent development review found that relevant sources still lost required facts during passage selection. The [evaluation summary](docs/execution/reports/EVAL-RESEARCH.md) records measured gains, regressions and the unmet acceptance gate. The [host-selection workflow](docs/context-selection.md) now preserves verified source evidence while allowing an agent to select complementary passages; it has additional latency and unavailable model-usage accounting.
 
 Local milestones: `2c340ef` adds reproducible evaluation and separates durable documentation from local session evidence; `8a0f228` adds the tested selection workflow; `77f0382` records complementary datasets and pinned acquisition; `fb91449` preserves source coverage at the candidate-input byte limit; `70d2122` adds the ContractNLI adapter and its 204-task offline evaluation. These commits are checkpoints, not a declaration of quality acceptance. Further dataset adapters and independent development/held-out evaluation are in progress. Detailed run logs and mutable checkpoints remain local.

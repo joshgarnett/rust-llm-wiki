@@ -332,10 +332,10 @@ impl OfflineApp {
     pub fn options(&self) -> &OperationOptions {
         &self.options
     }
-    fn engine(&self) -> Result<ChangeEngine> {
+    pub(super) fn engine(&self) -> Result<ChangeEngine> {
         ChangeEngine::new(self.fs.clone())
     }
-    fn catalog(&self) -> Catalog {
+    pub(super) fn catalog(&self) -> Catalog {
         Catalog::with_options(
             self.fs.clone(),
             self.vault_id.clone(),
@@ -345,7 +345,7 @@ impl OfflineApp {
             },
         )
     }
-    fn writer(&self) -> Result<WriterPermit> {
+    pub(super) fn writer(&self) -> Result<WriterPermit> {
         WriterPermit::acquire(
             self.fs.root(),
             Duration::from_millis(self.options.lock_timeout_ms),
@@ -1372,13 +1372,16 @@ impl OfflineApp {
             if !self.options.dry_run {
                 let writer = self.writer()?;
                 crate::changes::outcome::sync_receipt(&self.fs, &writer, &change.change_id)?;
-                if crate::changes::outcome::terminal_report(
-                    &self.fs,
-                    &manifest,
-                    &change.manifest_hash,
-                )?
-                .as_ref()
-                    != Some(&report)
+                if engine
+                    .indexed_replay_proof(&manifest, &change, catalog.operation_state()?.as_ref())?
+                    .is_some()
+                    || crate::changes::outcome::terminal_report(
+                        &self.fs,
+                        &manifest,
+                        &change.manifest_hash,
+                    )?
+                    .as_ref()
+                        != Some(&report)
                 {
                     return Err(WikiError::new(
                         ErrorCode::RecoveryRequired,

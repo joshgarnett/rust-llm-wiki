@@ -1,4 +1,4 @@
-# Implemented lwiki 0.1.2 commands
+# Implemented lwiki commands
 
 Generated from the release command registry and argument parser. Run `lwiki --json capabilities` before use.
 

@@ -14,3 +14,6 @@ pub mod resolve;
 pub mod rollback;
 pub mod types;
 pub use types::*;
+
+#[cfg(test)]
+mod named_prepare_tests;

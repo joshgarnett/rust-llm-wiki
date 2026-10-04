@@ -1260,7 +1260,7 @@ dependencies = [
 
 [[package]]
 name = "rust-llm-wiki"
-version = "0.1.2"
+version = "0.2.0"
 dependencies = [
  "blake3",
  "bytes",

@@ -92,13 +92,30 @@ pub(super) fn revision_writes(
     request: &CaptureRequest,
     extraction: &Extraction,
 ) -> Result<Vec<ExpectedWrite>> {
+    revision_writes_at(
+        source_id,
+        revision_id,
+        source_path,
+        request,
+        extraction,
+        &timestamp()?,
+    )
+}
+pub(super) fn revision_writes_at(
+    source_id: &RecordId,
+    revision_id: &RecordId,
+    source_path: &VaultRelativePath,
+    request: &CaptureRequest,
+    extraction: &Extraction,
+    captured_at: &str,
+) -> Result<Vec<ExpectedWrite>> {
     let parent = format!("sources/{source_id}/revisions/{revision_id}");
     let original_path = VaultRelativePath::new(format!("{parent}/original.bin"))?;
     let mut fields = common(revision_id, RecordKind::Revision, &request.title);
     for (key, value) in [
         ("wiki_source_id", source_id.as_str().to_owned()),
         ("wiki_source", format!("[[{source_path}]]")),
-        ("wiki_captured_at", timestamp()?),
+        ("wiki_captured_at", captured_at.to_owned()),
         ("wiki_original_path", "original.bin".into()),
         (
             "wiki_original_hash",
@@ -188,15 +205,53 @@ impl SourceStore {
 
     pub fn plan_capture(&self, request: CaptureRequest) -> Result<SourcePlan> {
         let extraction = extract(&request)?;
-        let source_id = RecordId::generate(RecordKind::Source)?;
-        let revision_id = RecordId::generate(RecordKind::Revision)?;
+        let allocation = CaptureAllocation {
+            source_id: RecordId::generate(RecordKind::Source)?,
+            revision_id: RecordId::generate(RecordKind::Revision)?,
+            captured_at: timestamp()?,
+        };
+        self.plan_capture_extracted(request, &allocation, extraction)
+    }
+
+    /// Reproduce an import's frozen capture bytes. Allocation alone confers no
+    /// reservation or publication authority; the caller still admits the plan.
+    pub(crate) fn plan_capture_named(
+        &self,
+        request: CaptureRequest,
+        allocation: &CaptureAllocation,
+    ) -> Result<SourcePlan> {
+        let extraction = extract(&request)?;
+        RecordId::new(allocation.source_id.as_str())?;
+        RecordId::new(allocation.revision_id.as_str())?;
+        if allocation.source_id == allocation.revision_id {
+            return Err(WikiError::invalid(
+                "capture source and revision IDs must differ",
+            ));
+        }
+        time::OffsetDateTime::parse(
+            &allocation.captured_at,
+            &time::format_description::well_known::Rfc3339,
+        )
+        .map_err(|_| WikiError::invalid("captured_at must be RFC3339"))?;
+        self.plan_capture_extracted(request, allocation, extraction)
+    }
+
+    fn plan_capture_extracted(
+        &self,
+        request: CaptureRequest,
+        allocation: &CaptureAllocation,
+        extraction: Extraction,
+    ) -> Result<SourcePlan> {
+        let source_id = allocation.source_id.clone();
+        let revision_id = allocation.revision_id.clone();
         let source_path = VaultRelativePath::new(format!("sources/{source_id}/source.md"))?;
-        let mut operations = revision_writes(
+        let mut operations = revision_writes_at(
             &source_id,
             &revision_id,
             &source_path,
             &request,
             &extraction,
+            &allocation.captured_at,
         )?;
         let mut fields = common(&source_id, RecordKind::Source, &request.title);
         fields.extend(BTreeMap::from([

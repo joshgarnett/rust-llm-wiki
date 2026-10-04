@@ -32,6 +32,9 @@ pub(crate) enum IndexedWriteOperation {
         source_id: RecordId,
         revision_id: RecordId,
     },
+    SourceCaptureBatch {
+        captures: Vec<IndexedCaptureTarget>,
+    },
     PageBatch {
         pages: Vec<IndexedPageTarget>,
     },
@@ -44,6 +47,13 @@ pub(crate) struct IndexedPageTarget {
     pub id: RecordId,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct IndexedCaptureTarget {
+    pub source_id: RecordId,
+    pub revision_id: RecordId,
+}
+
 impl IndexedWriteOperation {
     pub(crate) fn validate(&self) -> Result<()> {
         match self {
@@ -53,6 +63,24 @@ impl IndexedWriteOperation {
                 revision_id,
             } if source_id != revision_id => Ok(()),
             Self::SourceCapture { .. } => Err(recovery("source capture identities overlap")),
+            Self::SourceCaptureBatch { captures } => {
+                let ids: std::collections::BTreeSet<_> = captures
+                    .iter()
+                    .flat_map(|capture| [&capture.source_id, &capture.revision_id])
+                    .collect();
+                if captures.is_empty()
+                    || captures.len() > 8
+                    || ids.len() != captures.len() * 2
+                    || !captures
+                        .windows(2)
+                        .all(|pair| pair[0].source_id < pair[1].source_id)
+                {
+                    return Err(recovery(
+                        "capture batch requires 1–8 sorted, distinct source and revision pairs",
+                    ));
+                }
+                Ok(())
+            }
             Self::PageBatch { pages } => {
                 let ids: std::collections::BTreeSet<_> =
                     pages.iter().map(|page| &page.id).collect();
@@ -70,6 +98,20 @@ impl IndexedWriteOperation {
                 }
                 Ok(())
             }
+        }
+    }
+
+    pub(crate) fn capture_targets(&self) -> Vec<IndexedCaptureTarget> {
+        match self {
+            Self::SourceCapture {
+                source_id,
+                revision_id,
+            } => vec![IndexedCaptureTarget {
+                source_id: source_id.clone(),
+                revision_id: revision_id.clone(),
+            }],
+            Self::SourceCaptureBatch { captures } => captures.clone(),
+            _ => Vec::new(),
         }
     }
 }
@@ -107,7 +149,7 @@ struct Receipt {
 fn recovery(message: &str) -> WikiError {
     super::apply::recovery_error(message)
 }
-fn baseline_path(change: &PreparedChange) -> Result<VaultRelativePath> {
+pub(crate) fn baseline_path(change: &PreparedChange) -> Result<VaultRelativePath> {
     VaultRelativePath::new(format!("changes/{}/validation.json", change.change_id))
 }
 fn publication(snapshot: &ReadSnapshot) -> Result<Publication> {
@@ -655,25 +697,27 @@ impl ChangeEngine {
         // Applying recovery uses the retained tree/member and journal authority.
         if phase == IndexedRefreshPhase::AtBase
             && matches!(state.status, None | Some(ChangeStatus::Prepared))
-            && let Some(IndexedWriteOperation::SourceCapture { source_id, .. }) = &proof.operation
+            && let Some(operation) = &proof.operation
         {
-            let path = self
-                .fs
-                .root()
-                .resolve(&VaultRelativePath::new(format!("sources/{source_id}"))?)?;
-            match std::fs::symlink_metadata(path) {
-                Ok(_) => {
-                    return Err(WikiError::new(
-                        ErrorCode::ContentConflict,
-                        "source namespace was independently occupied after preparation",
-                    ));
-                }
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-                Err(error) => {
-                    return Err(WikiError::new(
-                        ErrorCode::Internal,
-                        format!("inspect prepared source namespace: {error}"),
-                    ));
+            for capture in operation.capture_targets() {
+                let path = self.fs.root().resolve(&VaultRelativePath::new(format!(
+                    "sources/{}",
+                    capture.source_id
+                ))?)?;
+                match std::fs::symlink_metadata(path) {
+                    Ok(_) => {
+                        return Err(WikiError::new(
+                            ErrorCode::ContentConflict,
+                            "source namespace was independently occupied after preparation",
+                        ));
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(error) => {
+                        return Err(WikiError::new(
+                            ErrorCode::Internal,
+                            format!("inspect prepared source namespace: {error}"),
+                        ));
+                    }
                 }
             }
         }

@@ -1,6 +1,6 @@
 //! Strict retained replay dispatch, before loading historical payloads.
 use super::{
-    ChangeEngine, ChangeManifest, PreparedChange,
+    ChangeEngine, ChangeManifest, ChangeStatus, PreparedChange,
     apply::recovery_error,
     indexed_refresh::IndexedRefreshProof,
     operation_authority::Authority,
@@ -31,12 +31,28 @@ impl ChangeEngine {
         let requires_indexed = delta_present
             || authority
                 .and_then(Authority::active)
-                .is_some_and(|active| active.change == *change)
+                .is_some_and(|active| active.change.change_id == change.change_id)
             || terminal
                 .as_ref()
                 .and_then(|report| report.snapshot.as_ref())
                 .is_some_and(|snapshot| snapshot.publication().is_some());
         let Some(bytes) = read_bounded(&self.fs, &baseline, MAX_JOURNAL_BYTES)? else {
+            // A never-started indexed proposal may be aborted before its first
+            // proof is retained. Its replacement can legitimately own the same
+            // targets now; report authenticated history without reopening them.
+            // This exception is absence-only: present proofs remain strict.
+            if let Some(authority) = authority
+                && authority
+                    .active()
+                    .is_none_or(|active| active.change.change_id != change.change_id)
+                && terminal.as_ref().is_some_and(|report| {
+                    report.status == ChangeStatus::Aborted && report.snapshot.is_none()
+                })
+                && outcome::terminal_ever_applying(&self.fs, manifest, &change.manifest_hash)?
+                    == Some(false)
+            {
+                return Ok(None);
+            }
             if requires_indexed {
                 return Err(recovery_error(
                     "indexed change lost its retained validation proof",

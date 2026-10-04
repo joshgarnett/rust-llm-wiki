@@ -39,6 +39,10 @@ pub const COMMANDS: &[&str] = &[
     "source add",
     "source refresh",
     "source withdraw",
+    "source import prepare",
+    "source import run",
+    "source import resume",
+    "source import status",
     "evidence revalidate",
     "index sync",
     "index rebuild",
@@ -134,7 +138,13 @@ pub fn execute(args: &Arguments) -> (Envelope, u8) {
         }
         Err(mut error) => {
             // Retain known local identity even when an operation fails after binding.
-            if let Ok(cwd) = std::env::current_dir()
+            let local_preparation = matches!(
+                &args.command,
+                Command::Source { command: SourceCommand::Import(arguments) }
+                    if !arguments.command.requires_vault()
+            );
+            if !local_preparation
+                && let Ok(cwd) = std::env::current_dir()
                 && let Ok(root) =
                     crate::vault::discovery::resolve(args.wiki.as_deref(), &cwd, false)
                 && let Ok(binding) = ChangeEngine::new(VaultFs::new(root))
@@ -165,6 +175,28 @@ fn execute_inner(args: &Arguments) -> Result<Envelope> {
         ));
     }
     match &args.command {
+        Command::Source {
+            command: SourceCommand::Import(arguments),
+        } if !arguments.command.requires_vault() => {
+            if args.stage {
+                return Err(usage(
+                    "source import prepare cannot be staged; it prepares a standalone manifest",
+                ));
+            }
+            let super::source_import::SourceImportCommand::Prepare { input_list, output } =
+                &arguments.command
+            else {
+                unreachable!("only manifest preparation does not require a vault");
+            };
+            return Ok(Envelope::success(
+                command,
+                value(crate::app::prepare_source_import(
+                    input_list,
+                    output,
+                    args.dry_run,
+                )?)?,
+            ));
+        }
         Command::Capabilities => {
             return Ok(Envelope::success(
                 command,
@@ -495,6 +527,13 @@ fn execute_inner(args: &Arguments) -> Result<Envelope> {
             app.source_withdraw(id.clone(), reason)?,
             json!({"operation":"withdraw", "source_id":id, "reason":reason}),
         )?,
+        Command::Source {
+            command: SourceCommand::Import(arguments),
+        } => {
+            envelope.data = super::source_import::execute(&arguments.command, &app)?;
+            envelope.meta.partial =
+                envelope.data["completed"] == false && envelope.data["preview"] != true;
+        }
         Command::Evidence {
             command:
                 EvidenceCommand::Revalidate {
@@ -1712,7 +1751,9 @@ fn present_inner(
                     writeln!(output, "{hint}")?;
                 }
                 human_error_guidance(output, &error.details)?;
-                if error.code == "CONTENT_CONFLICT" {
+                if envelope.command.starts_with("source import ") {
+                    human_import_error_guidance(output, &error.details)?;
+                } else if error.code == "CONTENT_CONFLICT" {
                     writeln!(
                         output,
                         "Inspect the current record and retained change before retrying. For an author edit, reconcile the current content and prepare a new change with its observed hash. If recovery reports a durable conflict, inspect changes resolve --help."
@@ -1969,6 +2010,97 @@ fn human_error_guidance(output: &mut impl Write, details: &Value) -> io::Result<
         }
     }
     Ok(())
+}
+
+fn human_import_error_guidance(output: &mut impl Write, details: &Value) -> io::Result<()> {
+    if let Some(item) = details.get("import_item")
+        && let (Some(ordinal), Some(path)) = (item["ordinal"].as_u64(), item["path"].as_str())
+    {
+        writeln!(
+            output,
+            "Required input {ordinal}: {}",
+            terminal_text(path, false)
+        )?;
+    }
+    if let Some(progress) = details.get("import") {
+        if let (Some(key), Some(done), Some(total)) = (
+            progress["key"].as_str(),
+            progress["imported_items"].as_u64(),
+            progress["total_items"].as_u64(),
+        ) {
+            writeln!(
+                output,
+                "Import '{}': {done}/{total} items committed.",
+                terminal_text(key, false)
+            )?;
+        }
+        if let Some(group) = progress["pending_group"].as_u64() {
+            writeln!(output, "Pending group: {group}")?;
+        }
+        if let Some(change) = progress["pending_change"].as_str() {
+            writeln!(output, "Pending change: {}", terminal_text(change, false))?;
+        }
+        if let Some(items) = progress["pending_items"].as_array() {
+            for item in items.iter().take(8) {
+                if let (Some(ordinal), Some(path)) =
+                    (item["ordinal"].as_u64(), item["path"].as_str())
+                {
+                    writeln!(
+                        output,
+                        "Pending input {ordinal}: {}",
+                        terminal_text(path, false)
+                    )?;
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod import_error_presentation_tests {
+    use super::*;
+
+    #[test]
+    fn plain_import_error_identifies_input_progress_and_continuation() {
+        let mut error = WikiError::new(
+            ErrorCode::ContentConflict,
+            "import original type or length changed",
+        );
+        error.hint =
+            Some("Restore the required input, then source import resume --key 'drift-key'".into());
+        error.details = json!({
+            "import_item":{"ordinal":4,"path":"/outside inputs/missing\nfile.txt"},
+            "import":{"key":"drift-key","imported_items":4,"total_items":8,
+                "pending_group":1,"pending_change":"change-example",
+                "pending_items":[{"ordinal":4,"path":"/outside inputs/missing\nfile.txt"}]}
+        });
+        let envelope = failure("source import resume", error);
+        let mut bytes = Vec::new();
+        present(&envelope, OutputFormat::Human, &mut bytes).unwrap();
+        let text = String::from_utf8(bytes).unwrap();
+        assert!(text.contains("Required input 4: /outside inputs/missing\\nfile.txt"));
+        assert!(text.contains("Import 'drift-key': 4/8 items committed."));
+        assert!(text.contains("Pending group: 1"));
+        assert!(text.contains("Pending change: change-example"));
+        assert!(text.contains("source import resume --key 'drift-key'"));
+        assert!(!text.contains("author edit"));
+        assert!(!text.contains("changes resolve"));
+    }
+
+    #[test]
+    fn ordinary_content_conflict_keeps_existing_author_guidance() {
+        let envelope = failure(
+            "page put",
+            WikiError::new(ErrorCode::ContentConflict, "author changed"),
+        );
+        let mut bytes = Vec::new();
+        present(&envelope, OutputFormat::Human, &mut bytes).unwrap();
+        let text = String::from_utf8(bytes).unwrap();
+        assert!(text.contains("author edit"));
+        assert!(text.contains("changes resolve"));
+        assert!(!text.contains("Pending input"));
+    }
 }
 
 fn embedding_runtime(

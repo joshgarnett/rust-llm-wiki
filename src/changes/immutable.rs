@@ -130,6 +130,24 @@ fn conflict(message: impl Into<String>) -> WikiError {
 }
 
 impl ChangeEngine {
+    /// Check only the exact named receipt, without discovering other owners.
+    pub(crate) fn validate_named_revision_receipt(
+        &self,
+        manifest: &ChangeManifest,
+        hash: &Blake3Hash,
+    ) -> Result<()> {
+        if read_bounded(
+            &self.fs,
+            &receipt_path(&manifest.change_id)?,
+            MAX_JOURNAL_BYTES,
+        )?
+        .is_some()
+        {
+            let expected = planned(self, manifest, hash)?;
+            load(self, &expected)?;
+        }
+        Ok(())
+    }
     /// Exact manifest-owned roots, without enumerating unrelated retained changes.
     /// This is a structural inventory; callers still prove completed membership.
     pub(crate) fn manifest_revision_owners(
@@ -145,6 +163,20 @@ impl ChangeEngine {
         Ok(tree_inventory(&manifest)?
             .iter()
             .map(|tree| owner_row(tree, change))
+            .collect())
+    }
+
+    /// The trusted in-memory seal can bind owner rows before retention. This is
+    /// the same structural inventory used for the normal retained manifest.
+    pub(crate) fn sealed_revision_owners(
+        &self,
+        sealed: &super::prepare::NamedPreparation,
+    ) -> Result<Vec<RevisionOwnerRow>> {
+        let change = sealed.prepared();
+        self.validate_manifest_structure(sealed.manifest(), &change.change_id)?;
+        Ok(tree_inventory(sealed.manifest())?
+            .iter()
+            .map(|tree| owner_row(tree, &change))
             .collect())
     }
 

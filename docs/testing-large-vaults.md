@@ -2,13 +2,15 @@
 
 This prospective protocol accompanies the [architecture plan](large-vault-design.md).
 Its thresholds are project targets, not measured capabilities or universal RAG
-standards. Adopted protocol version 1 precedes the scale experiments; changes need
-an explicit new version and must preserve earlier failures.
+standards. **Version 2, adopted at the user's request on 2026-10-04, makes
+25,000 documents the first capacity gate; 100,000 is a later target.** Version 1
+and its recorded results remain historical evidence, not a passing 25k run.
+Correctness, retrieval-quality and scoped independent-review gates are unchanged.
 
 ## Corpus and scope
 
-The mandatory tier is **100,000 distinct current captured sources with one
-immutable current revision each**, totaling 10,000,000,000–10,100,000,000 UTF-8
+The mandatory first tier is **25,000 distinct current captured sources with one
+immutable current revision each**, totaling 2,500,000,000–2,525,000,000 UTF-8
 content bytes. Original copies, history, control files and indexes do not count
 toward that text total. Add 1,000 authored pages and a bounded graph overlay;
 report them separately. Controls are 1,000 sources / 100 MB and 10,000 / 1 GB.
@@ -52,16 +54,16 @@ accounting; only known disposable fixtures may be removed.
 
 | Task | Required result |
 | --- | --- |
-| Initial documented batch import | Every intended source is discoverable and byte-exact; full tier completes within four hours and 8 GiB RSS, including publication/sync. Logical read/decode/publish work grows at most 15× from 10k to 100k. |
+| Initial documented batch import | Every intended source is discoverable and byte-exact; full tier completes within four hours and 8 GiB RSS, including publication/sync. Logical read/decode/publish work grows at most 3.75× from 10k to 25k, preserving version 1's 1.5× allowance above linear document growth. |
 | Fast generation-scoped queries | Warm p95 ≤5 seconds; every query and first query after publication ≤15 seconds; process-tree RSS ≤1 GiB. No whole-corpus parse/hash/reconstruction or exhaustive vector scan per query. |
-| Managed incremental changes | No-op ≤5 seconds; one approximately 100 KiB add/refresh/delete/withdraw ≤60 seconds each; 1,000 changed documents ≤10 minutes. Fixed-fanout logical rows, payload bytes and filesystem visits grow at most 2× from 10k to 100k. |
+| Managed incremental changes | No-op ≤5 seconds; one approximately 100 KiB add/refresh/delete/withdraw ≤60 seconds each; 1,000 changed documents ≤10 minutes. Fixed-fanout logical rows, payload bytes and filesystem visits grow at most 2× from 10k to 25k. |
 | Strict reconciliation plus cited query | Unchanged valid full tier succeeds within 30 minutes and 8 GiB RSS. Insufficient-budget and adversarial cases refuse false verification. |
 | Offline rebuild after derived-index removal | Completes within four hours and 8 GiB RSS; canonical identities, eligibility and exact-search results agree. Ignore only declared generation/timestamp bookkeeping in logical comparisons. Zero provider calls. |
 | Interrupted publication and resume | Existing native fault suite plus a representative full-tier interrupted batch; only complete generations visible, no duplicate commit, lost revision or accounting loss. Recovery ≤30 minutes, excluding remaining initial import, which still counts toward its four-hour active-runtime limit. |
 | Independent user walkthrough | Published import/query/update/reconcile/recovery commands work from outside a vault with spaces in its path. JSON/text labels and continuation instructions are accurate; dry-run changes no bytes/mtimes; offline makes no network calls. |
 
 Queries use 100 frozen tasks, with three deterministic interleaved repetitions at
-both 10k and 100k, before and after churn. Use 20 tasks each for exact IDs,
+both 10k and 25k, before and after churn. Use 20 tasks each for exact IDs,
 multi-term distractors, distant evidence, two-source evidence, and restrictive
 filters/absent facts. Freeze candidate/output limits across tiers. Every exact-ID
 task must succeed; every citation and freshness label must be correct. Report
@@ -986,3 +988,62 @@ capture groups through one Change publication. Its pending state must durably
 name every Source, Revision and Change identity and timestamp before retention.
 Per-file durability remains intact. Unrelated Change/object traversal growth
 remains a separate scale blocker; batching alone does not remove that growth.
+
+### Collection-import correctness checkpoint (2026-10-04)
+
+The [explicit manifest importer](source-imports.md) now prepares local inputs
+without opening a vault and runs, resumes or reports bounded shared groups on
+the normalized catalog. Groups preserve individual immutable source histories,
+use one combined projection and Change publication, and acknowledge mappings
+only after authenticated terminal completion. Naming commitments precede normal
+payload retention. Owned pending attempts resume across retained preparation,
+Begin-before-Applying and lost result/cursor acknowledgement; an authenticated
+stale never-Applying attempt can close and re-admit under a new Change while
+preserving its Source/Revision IDs, capture times and retained original bytes.
+
+The focused native release executions contain 168 distinct passing unit tests,
+with every initial unit failure subsequently corrected and replayed. The first
+full selected run retained 18 failures: sixteen invalid non-UTC fixture
+timestamps, one incorrect wiki-link/reserved-path assumption and one fixture
+exceeding the existing derived-row admission bound. Production invariants and
+ceilings were preserved. The final affected checkpoint passed all 25 selected
+tests; unchanged earlier passes were reused. The offline CLI and source-evidence
+integration targets also passed during the initial compile checkpoint, which
+failed overall on a separate unit-test lifetime error. These are combined
+evidence, not a new all-target run or a passing strict Clippy result.
+
+Native compiler actions confirm optimization level 3 for the pinned CLI and
+unit binary. Both storage layouts, group sizes 1/4/8, retained original input
+replay, pure previews and useful pending-item diagnostics have local fixture
+coverage. Three additional adapter/presentation checks and thirteen focused
+recovery/replay checks passed at subsequent release checkpoints, reusing
+unchanged passing evidence. Returned-error/reopen cuts do not demonstrate
+power-loss safety or other-platform behavior.
+
+Independent actual-command review passed the initial 109 calls / 289 assertions
+in both layouts. Its authentic interrupted-state extension reached 173 calls /
+524 assertions with one failure: normal recovery rejected an authenticated old
+Aborted attempt after its replacement import had succeeded. That first failure
+is preserved. The correction recognizes only absent validation for authenticated
+never-Applying Aborted history, with current authority and receipt/journal guards;
+it grants no new publication authority. Native positive and negative replay
+checks passed. Independent replay used the exact preserved failure fixture:
+eighteen public CLI calls and seventy valid assertions passed, including repeated
+recovery, old historical apply, completed mapping and unchanged current cited
+contents/identities/publication. Reviewer parser errors were retained and corrected
+against saved output without repeating commands. The corrected scoped workflow
+assessment is **9.5/10 with no observed correctness blocker**. Missing resource
+observations received no credit; this is not whole-goal acceptance.
+
+The single frozen four-input group1/group4 comparison used identical manifests,
+originals and S10/H31/O91 baselines. Both arms returned all four facts with exact
+citations. Changes/publications fell from four to one, intercepted file syncs
+from 151 to 89 and directory syncs from 973 to 619 (1,124 to 708 combined).
+One instrumented whole-process observation was 2.746 versus 1.484 seconds;
+this is not a latency distribution or a statistical speedup. SQLite and direct
+sync paths are excluded from operation counters. Adapter error returns
+(472 / 294) remain recorded; none was an intercepted sync/write/replace error.
+Directory creation and removal probes account for their categories, but error
+kinds were not captured. Peak RSS and launch free space were unavailable.
+H/O enumeration still grows with history. No collection throughput, full-scale
+capacity or unseen retrieval acceptance follows from this small comparison.

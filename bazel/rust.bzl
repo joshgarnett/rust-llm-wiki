@@ -4,7 +4,7 @@ load("@crates//:defs.bzl", "aliases", "all_crate_deps")
 load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
 
 _EDITION = "2024"
-_VERSION = "0.1.2"
+_VERSION = "0.2.0"
 _CARGO_ENV = {
     # Bazel starts tests in the main repository's runfiles directory.
     "CARGO_MANIFEST_DIR": ".",

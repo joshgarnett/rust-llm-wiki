@@ -53,6 +53,28 @@ struct RetainedDelta {
     rows: CatalogDelta,
 }
 
+/// A frozen import intent compares trusted preparation results; it cannot
+/// authorize canonical mutation or replace the normal retained proof.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct NamedIndexedIntent {
+    pub manifest: crate::changes::ChangeManifest,
+    pub proof: IndexedRefreshProof,
+}
+
+pub(crate) struct SealedIndexedPreparation {
+    engine: ChangeEngine,
+    change: crate::changes::prepare::NamedPreparation,
+    delta: RetainedDelta,
+    intent: NamedIndexedIntent,
+}
+
+impl SealedIndexedPreparation {
+    pub(crate) fn intent(&self) -> &NamedIndexedIntent {
+        &self.intent
+    }
+}
+
 /// Narrow path authority from semantic admission or its exact retained replay.
 /// Existing prefixes are frozen from before-images, never inferred from live
 /// existence: partially applied new allocations still need collision discovery.
@@ -61,7 +83,7 @@ pub(crate) struct PublishedRefreshPaths {
     root: VaultRoot,
     allowed: BTreeSet<String>,
     published: BTreeSet<String>,
-    singleton_source: Option<String>,
+    singleton_sources: BTreeSet<String>,
 }
 impl PublishedRefreshPaths {
     fn admitted(
@@ -78,12 +100,19 @@ impl PublishedRefreshPaths {
         }
         Self {
             root: root.clone(),
-            singleton_source: match operation {
-                Some(IndexedWriteOperation::SourceCapture { source_id, .. }) => {
-                    Some(format!("sources/{source_id}"))
-                }
-                _ => None,
-            },
+            singleton_sources: operation
+                .into_iter()
+                .flat_map(IndexedWriteOperation::capture_targets)
+                .filter(|capture| {
+                    capture.source_id.as_str().len() == 39
+                        && capture
+                            .source_id
+                            .as_str()
+                            .bytes()
+                            .all(|byte| byte.is_ascii_digit())
+                })
+                .map(|capture| format!("sources/{}", capture.source_id))
+                .collect(),
             allowed: before
                 .iter()
                 .chain(after)
@@ -109,7 +138,7 @@ impl PublishedRefreshPaths {
         self.published.contains(prefix)
     }
     pub(crate) fn singleton_source(&self, prefix: &str) -> bool {
-        self.singleton_source.as_deref() == Some(prefix)
+        self.singleton_sources.contains(prefix)
     }
 }
 
@@ -150,7 +179,7 @@ fn publication(snapshot: &ReadSnapshot) -> Result<Publication> {
         epoch: snapshot.generation,
     })
 }
-fn delta_path(change: &PreparedChange) -> Result<VaultRelativePath> {
+pub(crate) fn delta_path(change: &PreparedChange) -> Result<VaultRelativePath> {
     VaultRelativePath::new(format!("changes/{}/indexed-delta.json", change.change_id))
 }
 fn intended(
@@ -421,41 +450,100 @@ impl RetainedDelta {
                     ));
                 }
             }
-            IndexedWriteOperation::SourceCapture {
-                source_id,
-                revision_id,
-            } => {
-                let source = written(source_id, RecordKind::Source)?;
-                let revision = written(revision_id, RecordKind::Revision)?;
-                let source_path = format!("sources/{source_id}/source.md");
-                let root = format!("sources/{source_id}/revisions/{revision_id}");
-                let required = [
-                    source_path.clone(),
-                    format!("{root}/revision.md"),
-                    format!("{root}/original.bin"),
-                ];
-                let content = format!("{root}/content.md");
-                if source.path.as_str() != source_path
-                    || revision.path.as_str() != required[1]
-                    || source.record.string("wiki_current_revision") != Some(revision_id.as_str())
-                    || revision.record.string("wiki_source_id") != Some(source_id.as_str())
-                    || super::scan::list(&source.record, "wiki_revisions")
-                        != [revision_id.to_string()]
-                    || required.iter().any(|path| {
+            IndexedWriteOperation::SourceCapture { .. }
+            | IndexedWriteOperation::SourceCaptureBatch { .. } => {
+                let captures = operation.capture_targets();
+                if self.rows.revisions.len() != captures.len() {
+                    return Err(recovery(
+                        "capture revision rows differ from declared fresh trees",
+                    ));
+                }
+                if matches!(operation, IndexedWriteOperation::SourceCaptureBatch { .. }) {
+                    let allocated: BTreeMap<_, _> = captures
+                        .iter()
+                        .enumerate()
+                        .flat_map(|(index, capture)| {
+                            [
+                                (format!("source_{index}"), capture.source_id.clone()),
+                                (format!("revision_{index}"), capture.revision_id.clone()),
+                            ]
+                        })
+                        .collect();
+                    if manifest.allocated_ids != allocated {
+                        return Err(recovery(
+                            "capture batch allocations differ from declared pair order",
+                        ));
+                    }
+                }
+                let mut expected_paths = BTreeSet::new();
+                for capture in captures {
+                    let source_id = &capture.source_id;
+                    let revision_id = &capture.revision_id;
+                    let source = written(source_id, RecordKind::Source)?;
+                    let revision = written(revision_id, RecordKind::Revision)?;
+                    let source_path = format!("sources/{source_id}/source.md");
+                    let root = format!("sources/{source_id}/revisions/{revision_id}");
+                    let revision_path = format!("{root}/revision.md");
+                    if source.path.as_str() != source_path
+                        || revision.path.as_str() != revision_path
+                        || source.record.string("wiki_current_revision")
+                            != Some(revision_id.as_str())
+                        || revision.record.string("wiki_source_id") != Some(source_id.as_str())
+                        || super::scan::list(&source.record, "wiki_revisions")
+                            != [revision_id.to_string()]
+                    {
+                        return Err(recovery(
+                            "capture operation identity differs from its fresh tree",
+                        ));
+                    }
+                    let identity = self
+                        .rows
+                        .revisions
+                        .iter()
+                        .find(|row| &row.source_id == source_id && &row.revision_id == revision_id)
+                        .ok_or_else(|| recovery("capture lacks its declared revision metadata"))?;
+                    if identity.retained_ordinal != 0
+                        || Some(identity.original_hash.as_str())
+                            != revision.record.string("wiki_original_hash")
+                        || identity.content_hash.as_ref().map(Blake3Hash::as_str)
+                            != revision.record.string("wiki_content_hash")
+                        || Some(identity.extractor_fingerprint.as_str())
+                            != revision.record.string("wiki_extractor_fingerprint")
+                        || Some(identity.extraction_status.as_str())
+                            != revision.record.string("wiki_extraction_status")
+                    {
+                        return Err(recovery(
+                            "capture revision metadata differs from its written envelope",
+                        ));
+                    }
+                    expected_paths.extend([
+                        source_path,
+                        revision_path,
+                        format!("{root}/original.bin"),
+                    ]);
+                    if revision.record.string("wiki_extraction_status") == Some("complete") {
+                        expected_paths.insert(format!("{root}/content.md"));
+                    } else if revision.record.string("wiki_extraction_status")
+                        != Some("unsupported")
+                    {
+                        return Err(recovery("capture operation has invalid extraction state"));
+                    }
+                }
+                if manifest.operations.len() != expected_paths.len()
+                    || manifest.operations.iter().any(|op| {
+                        op.before != ExpectedState::Absent
+                            || matches!(op.after, ExpectedState::Absent)
+                            || !expected_paths.contains(op.target.as_str())
+                    })
+                    || expected_paths.iter().any(|path| {
                         !manifest
                             .operations
                             .iter()
                             .any(|op| op.target.as_str() == path)
                     })
-                    || manifest.operations.iter().any(|op| {
-                        op.before != ExpectedState::Absent
-                            || matches!(op.after, ExpectedState::Absent)
-                            || !required.iter().any(|path| op.target.as_str() == path)
-                                && op.target.as_str() != content
-                    })
                 {
                     return Err(recovery(
-                        "source capture operation is not one fresh captured revision",
+                        "capture operation writes outside its exact fresh trees",
                     ));
                 }
             }
@@ -511,16 +599,21 @@ impl RetainedDelta {
                     "page operation cannot own captured revision trees",
                 ));
             }
-            Some(IndexedWriteOperation::SourceCapture {
-                source_id,
-                revision_id,
-            }) => {
-                if self.rows.owners.len() != 1
-                    || self.rows.owners[0].key.source_component != source_id.as_str()
-                    || self.rows.owners[0].key.revision_component != revision_id.as_str()
+            Some(
+                operation @ (IndexedWriteOperation::SourceCapture { .. }
+                | IndexedWriteOperation::SourceCaptureBatch { .. }),
+            ) => {
+                let captures = operation.capture_targets();
+                if self.rows.owners.len() != captures.len()
+                    || captures.iter().any(|capture| {
+                        !self.rows.owners.iter().any(|owner| {
+                            owner.key.source_component == capture.source_id.as_str()
+                                && owner.key.revision_component == capture.revision_id.as_str()
+                        })
+                    })
                 {
                     return Err(recovery(
-                        "capture operation differs from its manifest-derived revision owner",
+                        "capture operation differs from its exact manifest-derived revision owners",
                     ));
                 }
             }
@@ -590,22 +683,160 @@ impl<'a> IndexedRefreshSession<'a> {
         Self::prepare_parts(catalog, writer, projected.into_parts())
     }
 
+    pub(crate) fn seal_named_write(
+        catalog: &Catalog,
+        writer: &WriterPermit,
+        projected: super::write_projection::ProjectedWrite,
+        identity: crate::changes::types::NamedChangeIdentity,
+    ) -> Result<SealedIndexedPreparation> {
+        let mut parts = projected.into_parts();
+        if !matches!(
+            parts.operation,
+            IndexedWriteOperation::SourceCaptureBatch { .. }
+        ) {
+            return Err(recovery("named import requires one admitted capture batch"));
+        }
+        let engine = Self::admitted_engine(catalog, writer, &parts)?;
+        let change = engine.seal_named(writer, identity, parts.draft)?;
+        parts.delta.owners = engine.sealed_revision_owners(&change)?;
+        parts.delta.validate()?;
+        let delta = RetainedDelta {
+            version: DELTA_VERSION,
+            vault_id: catalog.vault_id.clone(),
+            source_id: None,
+            operation: Some(parts.operation),
+            change: change.prepared(),
+            base: parts.base,
+            before: parts.before,
+            after: parts.after,
+            rows: parts.delta,
+        };
+        super::normalized_delta::counted(&delta, MAX_DELTA_BYTES)?;
+        let bytes =
+            serde_json::to_vec(&delta).map_err(|error| WikiError::invalid(error.to_string()))?;
+        if bytes.len() > MAX_DELTA_BYTES {
+            return Err(budget("named refresh delta exceeds byte ceiling"));
+        }
+        let delta_hash = Blake3Hash::digest(&bytes);
+        let proof = IndexedRefreshProof {
+            version: 3,
+            vault_id: delta.vault_id.clone(),
+            source_id: None,
+            operation: delta.operation.clone(),
+            change: delta.change.clone(),
+            base: delta.base.clone(),
+            intended: intended(&delta.base, &delta.change, &delta_hash, DELTA_VERSION)?,
+            delta_hash,
+            before: delta.before.clone(),
+            after: delta.after.clone(),
+        };
+        proof.validate_manifest(change.manifest())?;
+        let intent = NamedIndexedIntent {
+            manifest: change.manifest().clone(),
+            proof,
+        };
+        Ok(SealedIndexedPreparation {
+            engine,
+            change,
+            delta,
+            intent,
+        })
+    }
+
+    /// The caller has durably stored this exact intent before entering retention.
+    /// Restart dispatch must reconcile active and terminal attempts first.
+    pub(crate) fn prepare_named_write(
+        catalog: &Catalog,
+        writer: &'a WriterPermit,
+        expected: &NamedIndexedIntent,
+        sealed: SealedIndexedPreparation,
+    ) -> Result<Self> {
+        if expected != sealed.intent() {
+            return Err(recovery(
+                "named indexed admission differs from frozen import intent",
+            ));
+        }
+        let retained_change = expected.proof.change.clone();
+        let result = (|| {
+            sealed
+                .engine
+                .prepare_named(writer, &expected.manifest, &sealed.change)?;
+            let RetainedDelta {
+                operation,
+                change,
+                base,
+                before,
+                after,
+                rows,
+                ..
+            } = sealed.delta;
+            let session = Self::retain_bound(
+                catalog,
+                writer,
+                operation.ok_or_else(|| recovery("named capture lacks operation descriptor"))?,
+                change,
+                base,
+                before,
+                after,
+                rows,
+                DELTA_VERSION,
+            )?;
+            if session.proof() != &expected.proof {
+                return Err(recovery(
+                    "retained named indexed proof differs from import intent",
+                ));
+            }
+            sealed
+                .engine
+                .stage_indexed_refresh_proof(writer, session.proof())?;
+            Ok(session)
+        })();
+        result.map_err(|error| retained_error(error, &retained_change))
+    }
+
     fn prepare_parts(
         catalog: &Catalog,
         writer: &'a WriterPermit,
         mut parts: super::write_projection::ProjectedWriteParts,
     ) -> Result<Self> {
+        let engine = Self::admitted_engine(catalog, writer, &parts)?;
+        let change = engine.prepare(writer, parts.draft)?.prepared;
+        let retained_change = change.clone();
+        let result: Result<Self> = (|| {
+            parts.delta.owners = engine.manifest_revision_owners(&change)?;
+            let session = Self::retain_bound(
+                catalog,
+                writer,
+                parts.operation,
+                change,
+                parts.base,
+                parts.before,
+                parts.after,
+                parts.delta,
+                DELTA_VERSION,
+            )?;
+            engine.stage_indexed_refresh_proof(writer, session.proof())?;
+            Ok(session)
+        })();
+        result.map_err(|error| retained_error(error, &retained_change))
+    }
+
+    fn admitted_engine(
+        catalog: &Catalog,
+        writer: &WriterPermit,
+        parts: &super::write_projection::ProjectedWriteParts,
+    ) -> Result<ChangeEngine> {
         writer.require_root(catalog.fs.root())?;
         if parts.delta.version != 3 || !parts.delta.owners.is_empty() {
             return Err(recovery(
                 "projected refresh has an invalid publication envelope",
             ));
         }
-        if let IndexedWriteOperation::SourceCapture { source_id, .. } = &parts.operation {
-            let root = catalog
-                .fs
-                .root()
-                .resolve(&VaultRelativePath::new(format!("sources/{source_id}"))?)?;
+        for capture in parts.operation.capture_targets() {
+            let root = catalog.fs.root().resolve(&VaultRelativePath::new(format!(
+                "sources/{}",
+                capture.source_id
+            ))?)?;
             match std::fs::symlink_metadata(root) {
                 Ok(_) => {
                     return Err(WikiError::new(
@@ -622,6 +853,7 @@ impl<'a> IndexedRefreshSession<'a> {
                 }
             }
         }
+        parts.operation.validate()?;
         parts.delta.validate()?;
         let query = catalog.query_snapshot(QueryReadLimits::default())?;
         if QueryCatalog::snapshot(&query) != &parts.base {
@@ -643,26 +875,7 @@ impl<'a> IndexedRefreshSession<'a> {
             &parts.after,
             Some(&parts.operation),
         );
-        let engine = ChangeEngine::new(catalog.fs.with_published_refresh_paths(paths)?)?;
-        let change = engine.prepare(writer, parts.draft)?.prepared;
-        let retained_change = change.clone();
-        let result: Result<Self> = (|| {
-            parts.delta.owners = engine.manifest_revision_owners(&change)?;
-            let session = Self::retain_bound(
-                catalog,
-                writer,
-                parts.operation,
-                change,
-                parts.base,
-                parts.before,
-                parts.after,
-                parts.delta,
-                DELTA_VERSION,
-            )?;
-            engine.stage_indexed_refresh_proof(writer, session.proof())?;
-            Ok(session)
-        })();
-        result.map_err(|error| retained_error(error, &retained_change))
+        ChangeEngine::new(catalog.fs.with_published_refresh_paths(paths)?)
     }
 
     /// Raw row actions are only a recovery-mechanics fixture constructor.
@@ -1571,5 +1784,72 @@ mod tests {
         // Without an exact sealed capture descriptor, the generic policy remains.
         let generic = PublishedRefreshPaths::admitted(&root, &before, &after, None);
         assert!(!generic.singleton_source(&format!("sources/{id}")));
+    }
+}
+
+#[cfg(test)]
+mod capture_batch_path_scope_tests {
+    use super::*;
+    use crate::changes::indexed_refresh::IndexedCaptureTarget;
+
+    #[test]
+    fn batch_numeric_source_scope_is_exact_and_absent_roots_are_never_published() {
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::write(temp.path().join("WIKI.md"), "---\nwiki_schema: '1'\nwiki_id: vault_batch_scope\nwiki_kind: vault\ntitle: Batch scope\n---\n").unwrap();
+        let root = VaultRoot::explicit(temp.path()).unwrap();
+        let captures = (1..=2)
+            .map(|index| IndexedCaptureTarget {
+                source_id: RecordId::new(format!("{index:039}")).unwrap(),
+                revision_id: RecordId::new(format!("revision_{index}")).unwrap(),
+            })
+            .collect::<Vec<_>>();
+        let operation = IndexedWriteOperation::SourceCaptureBatch {
+            captures: captures.clone(),
+        };
+        let before = captures
+            .iter()
+            .map(|capture| ReadDependency {
+                path: VaultRelativePath::new(format!("sources/{}/source.md", capture.source_id))
+                    .unwrap(),
+                expected: ExpectedState::Absent,
+            })
+            .collect::<Vec<_>>();
+        let after = before
+            .iter()
+            .map(|dependency| ReadDependency {
+                path: dependency.path.clone(),
+                expected: ExpectedState::Hash(Blake3Hash::digest(b"planned")),
+            })
+            .collect::<Vec<_>>();
+        let scope = PublishedRefreshPaths::admitted(&root, &before, &after, Some(&operation));
+        for capture in &captures {
+            let prefix = format!("sources/{}", capture.source_id);
+            assert!(scope.singleton_source(&prefix));
+            assert!(!scope.published(&prefix));
+            assert!(!scope.singleton_source(&format!("{prefix}/revisions")));
+        }
+        assert!(!scope.singleton_source("sources/000000000000000000000000000000000000003"));
+        assert!(!scope.singleton_source("sources/source_legacy"));
+        std::fs::create_dir(root.path().join("sources")).unwrap();
+        std::fs::create_dir(root.path().join("sources/unrelated_legacy")).unwrap();
+        let scoped = VaultFs::new(root.clone())
+            .with_published_refresh_paths(scope)
+            .unwrap();
+        scoped
+            .validate_paths(
+                &before
+                    .iter()
+                    .map(|dependency| dependency.path.clone())
+                    .collect::<Vec<_>>(),
+            )
+            .unwrap();
+        let wrong = tempfile::tempdir().unwrap();
+        std::fs::write(wrong.path().join("WIKI.md"), b"marker").unwrap();
+        let scope = PublishedRefreshPaths::admitted(&root, &before, &after, Some(&operation));
+        assert!(
+            VaultFs::new(VaultRoot::explicit(wrong.path()).unwrap())
+                .with_published_refresh_paths(scope)
+                .is_err()
+        );
     }
 }

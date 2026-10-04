@@ -1,4 +1,4 @@
-//! Sealed admission for exactly one fresh generated immutable source capture.
+//! Sealed admission for a bounded combined overlay of fresh source captures.
 use super::{
     eligibility_facts::EligibilityFact,
     link_facts,
@@ -13,8 +13,14 @@ use super::{
     write_projection::{ProjectedWrite, ProjectedWriteParts, empty_delta, project_policy},
 };
 use crate::{
-    changes::{ChangeDraft, indexed_refresh::IndexedWriteOperation},
-    domain::{Blake3Hash, Eligibility, RecordKind, Result, VaultRelativePath, WikiError},
+    changes::{
+        ChangeDraft,
+        indexed_refresh::{IndexedCaptureTarget, IndexedWriteOperation},
+    },
+    domain::{
+        Blake3Hash, Eligibility, ErrorCode, RecordId, RecordKind, Result, VaultRelativePath,
+        WikiError,
+    },
     sources::{SourceCaptureState, SourcePlan, SourceRefreshLookup},
     vault::{ExpectedState, VaultFs},
 };
@@ -28,236 +34,350 @@ pub(crate) fn project_capture(
     plan: SourcePlan,
     limits: &RefreshProjectionLimits,
 ) -> Result<ProjectedWrite> {
+    project_capture_core(fs, reader, vec![plan], limits, false)
+}
+
+/// A batch is one selected admission and one publication, never concatenated
+/// independently sealed deltas. Size-one importer groups keep this descriptor;
+/// the scalar entry point above retains the historical SourceCapture envelope.
+pub(crate) fn project_capture_batch(
+    fs: &VaultFs,
+    reader: &QuerySnapshot,
+    plans: Vec<SourcePlan>,
+    limits: &RefreshProjectionLimits,
+) -> Result<ProjectedWrite> {
+    project_capture_core(fs, reader, plans, limits, true)
+}
+
+struct CaptureTree {
+    source_id: RecordId,
+    revision_id: RecordId,
+    source_root: VaultRelativePath,
+    source_path: VaultRelativePath,
+    revision_path: VaultRelativePath,
+    content_path: VaultRelativePath,
+    content: Option<Vec<u8>>,
+}
+
+fn project_capture_core(
+    fs: &VaultFs,
+    reader: &QuerySnapshot,
+    mut plans: Vec<SourcePlan>,
+    limits: &RefreshProjectionLimits,
+    batch: bool,
+) -> Result<ProjectedWrite> {
+    if plans.is_empty() || plans.len() > 8 {
+        return Err(WikiError::invalid("capture group requires 1–8 fresh plans"));
+    }
+    plans.sort_by(|left, right| left.source_id.cmp(&right.source_id));
+    let ids: BTreeSet<_> = plans
+        .iter()
+        .flat_map(|plan| [&plan.source_id, &plan.revision_id])
+        .collect();
+    if ids.len() != plans.len() * 2 {
+        return Err(WikiError::invalid(
+            "capture group Source and Revision identities overlap",
+        ));
+    }
+    // The nominal group bound applies to original input bytes only. A scalar-
+    // supported large item may form a size-one group; all actual Work/file/delta
+    // bounds still apply to every group, including supplied extracted content.
+    if plans.len() > 1 {
+        let original_bytes = plans.iter().try_fold(0usize, |total, plan| {
+            let original = plan
+                .draft
+                .as_ref()
+                .and_then(|draft| {
+                    draft
+                        .operations
+                        .iter()
+                        .find(|operation| operation.target.as_str().ends_with("/original.bin"))
+                })
+                .and_then(|operation| operation.proposed.as_ref())
+                .ok_or_else(|| WikiError::invalid("capture group lacks original input"))?;
+            total.checked_add(original.len()).ok_or_else(|| {
+                WikiError::new(
+                    ErrorCode::BudgetExceeded,
+                    "capture group original input bound overflow",
+                )
+            })
+        })?;
+        if original_bytes > 4 * 1024 * 1024 {
+            return Err(WikiError::new(
+                ErrorCode::BudgetExceeded,
+                "capture group original input exceeds 4 MiB",
+            ));
+        }
+    }
     reader.require_policy_layout()?;
     let base = QueryCatalog::snapshot(reader).clone();
     if base.publication().is_none() {
         return Err(conflict("capture admission requires a pinned publication"));
     }
-    if plan.source_id == plan.revision_id
-        || plan.reused
-        || plan.invalidation != Default::default()
-        || !plan.dependencies.is_empty()
-    {
-        return Err(WikiError::invalid(
-            "capture requires one fresh generated source plan",
-        ));
-    }
-    let mut draft = plan
-        .draft
-        .ok_or_else(|| WikiError::invalid("capture plan lacks generated operations"))?;
-    validate_draft(&draft, &plan.source_id, &plan.revision_id)?;
-
-    let source_path = VaultRelativePath::new(format!("sources/{}/source.md", plan.source_id))?;
-    let source_root = VaultRelativePath::new(format!("sources/{}", plan.source_id))?;
-    require_fresh_root(fs, &source_root)?;
-    let revision_root = format!("sources/{}/revisions/{}", plan.source_id, plan.revision_id);
-    let revision_path = VaultRelativePath::new(format!("{revision_root}/revision.md"))?;
-    let original_path = VaultRelativePath::new(format!("{revision_root}/original.bin"))?;
-    let content_path = VaultRelativePath::new(format!("{revision_root}/content.md"))?;
-    // The indexed reservation probe covers claims, dangling typed references,
-    // exact companion paths and policy identity dependencies for either kind.
-    for (id, path) in [
-        (&plan.source_id, &source_path),
-        (&plan.revision_id, &revision_path),
-    ] {
-        if reader.revision_identity_is_reserved(id, path)? {
-            return Err(conflict(
-                "generated capture identity or path is already reserved",
-            ));
-        }
-    }
     let mut work = Work::new(fs, reader, limits)?;
     work.capture_path(&VaultRelativePath::new("WIKI.md")?)?;
-    let mut operations = BTreeMap::new();
-    for operation in &draft.operations {
-        work.tick()?;
-        let bytes = operation
-            .proposed
+    let mut trees = Vec::new();
+    let mut drafts = Vec::new();
+    for plan in plans {
+        if plan.source_id == plan.revision_id
+            || plan.reused
+            || plan.invalidation != Default::default()
+            || !plan.dependencies.is_empty()
+        {
+            return Err(WikiError::invalid(
+                "capture requires one fresh generated source plan",
+            ));
+        }
+        let draft = plan
+            .draft
+            .ok_or_else(|| WikiError::invalid("capture plan lacks generated operations"))?;
+        validate_draft(&draft, &plan.source_id, &plan.revision_id)?;
+
+        let source_path = VaultRelativePath::new(format!("sources/{}/source.md", plan.source_id))?;
+        let source_root = VaultRelativePath::new(format!("sources/{}", plan.source_id))?;
+        require_fresh_root(fs, &source_root)?;
+        let revision_root = format!("sources/{}/revisions/{}", plan.source_id, plan.revision_id);
+        let revision_path = VaultRelativePath::new(format!("{revision_root}/revision.md"))?;
+        let original_path = VaultRelativePath::new(format!("{revision_root}/original.bin"))?;
+        let content_path = VaultRelativePath::new(format!("{revision_root}/content.md"))?;
+        // The indexed reservation probe covers claims, dangling typed references,
+        // exact companion paths and policy identity dependencies for either kind.
+        for (id, path) in [
+            (&plan.source_id, &source_path),
+            (&plan.revision_id, &revision_path),
+        ] {
+            if reader.revision_identity_is_reserved(id, path)? {
+                return Err(conflict(
+                    "generated capture identity or path is already reserved",
+                ));
+            }
+        }
+        let mut operations = BTreeMap::new();
+        for operation in &draft.operations {
+            work.tick()?;
+            let bytes = operation
+                .proposed
+                .as_ref()
+                .ok_or_else(|| WikiError::invalid("capture cannot delete files"))?;
+            if operation.expected != ExpectedState::Absent
+                || bytes.len() > limits.max_file_bytes
+                || work.overlay.contains_key(&operation.target)
+                || operations
+                    .insert(operation.target.clone(), operation)
+                    .is_some()
+            {
+                return Err(WikiError::invalid(
+                    "capture operations are not fresh bounded targets",
+                ));
+            }
+            work.charge(bytes.len())?;
+            if reader.document_metadata(&operation.target)?.is_some()
+                || reader.record_at_path(&operation.target)?.is_some()
+            {
+                return Err(conflict("capture target is already indexed"));
+            }
+            work.capture(&operation.target, &ExpectedState::Absent)?;
+            work.overlay.insert(operation.target.clone(), bytes.clone());
+        }
+        let source_note = work.note(&source_path)?;
+        let revision_note = work.note(&revision_path)?;
+        let source = source_note
+            .canonical
             .as_ref()
-            .ok_or_else(|| WikiError::invalid("capture cannot delete files"))?;
-        if operation.expected != ExpectedState::Absent
-            || bytes.len() > limits.max_file_bytes
-            || operations
-                .insert(operation.target.clone(), operation)
-                .is_some()
+            .filter(|r| r.kind() == RecordKind::Source && r.id() == &plan.source_id)
+            .ok_or_else(|| WikiError::invalid("capture lacks its generated Source envelope"))?;
+        let revision = revision_note
+            .canonical
+            .as_ref()
+            .filter(|r| r.kind() == RecordKind::Revision && r.id() == &plan.revision_id)
+            .ok_or_else(|| WikiError::invalid("capture lacks its generated Revision envelope"))?;
+        if !source_note.body().is_empty()
+            || !revision_note.body().is_empty()
+            || source.string("wiki_schema") != Some("1")
+            || revision.string("wiki_schema") != Some("1")
+            || source.fields().keys().any(|key| !source_field(key))
+            || revision.fields().keys().any(|key| !revision_field(key))
+            || source.title() != revision.title()
+            || source.string("wiki_status") != Some("active")
+            || source.string("wiki_current_revision") != Some(plan.revision_id.as_str())
+            || source.string("wiki_revision") != Some(format!("[[{revision_path}]]").as_str())
+            || scan::list(source, "wiki_revisions") != [plan.revision_id.to_string()]
+            || revision.string("wiki_source_id") != Some(plan.source_id.as_str())
+            || revision.string("wiki_source") != Some(format!("[[{source_path}]]").as_str())
+            || revision.string("wiki_original_path") != Some("original.bin")
         {
             return Err(WikiError::invalid(
-                "capture operations are not fresh bounded targets",
+                "capture differs from the generated ownership envelope",
             ));
         }
-        work.charge(bytes.len())?;
-        if reader.document_metadata(&operation.target)?.is_some()
-            || reader.record_at_path(&operation.target)?.is_some()
+        if revision.field("origin_retrieved_at").is_some()
+            || revision.field("origin_retrieved_at_kind").is_some()
         {
-            return Err(conflict("capture target is already indexed"));
-        }
-        work.capture(&operation.target, &ExpectedState::Absent)?;
-        work.overlay.insert(operation.target.clone(), bytes.clone());
-    }
-    let source_note = work.note(&source_path)?;
-    let revision_note = work.note(&revision_path)?;
-    let source = source_note
-        .canonical
-        .as_ref()
-        .filter(|r| r.kind() == RecordKind::Source && r.id() == &plan.source_id)
-        .ok_or_else(|| WikiError::invalid("capture lacks its generated Source envelope"))?;
-    let revision = revision_note
-        .canonical
-        .as_ref()
-        .filter(|r| r.kind() == RecordKind::Revision && r.id() == &plan.revision_id)
-        .ok_or_else(|| WikiError::invalid("capture lacks its generated Revision envelope"))?;
-    if !source_note.body().is_empty()
-        || !revision_note.body().is_empty()
-        || source.string("wiki_schema") != Some("1")
-        || revision.string("wiki_schema") != Some("1")
-        || source.fields().keys().any(|key| !source_field(key))
-        || revision.fields().keys().any(|key| !revision_field(key))
-        || source.title() != revision.title()
-        || source.string("wiki_status") != Some("active")
-        || source.string("wiki_current_revision") != Some(plan.revision_id.as_str())
-        || source.string("wiki_revision") != Some(format!("[[{revision_path}]]").as_str())
-        || scan::list(source, "wiki_revisions") != [plan.revision_id.to_string()]
-        || revision.string("wiki_source_id") != Some(plan.source_id.as_str())
-        || revision.string("wiki_source") != Some(format!("[[{source_path}]]").as_str())
-        || revision.string("wiki_original_path") != Some("original.bin")
-    {
-        return Err(WikiError::invalid(
-            "capture differs from the generated ownership envelope",
-        ));
-    }
-    if revision.field("origin_retrieved_at").is_some()
-        || revision.field("origin_retrieved_at_kind").is_some()
-    {
-        if source.string("wiki_origin_kind") != Some("agent-report")
-            || revision.string("origin_retrieved_at_kind") != Some("agent-claimed")
-            || revision.string("origin_retrieved_at").is_none_or(|value| {
-                time::OffsetDateTime::parse(value, &time::format_description::well_known::Rfc3339)
+            if source.string("wiki_origin_kind") != Some("agent-report")
+                || revision.string("origin_retrieved_at_kind") != Some("agent-claimed")
+                || revision.string("origin_retrieved_at").is_none_or(|value| {
+                    time::OffsetDateTime::parse(
+                        value,
+                        &time::format_description::well_known::Rfc3339,
+                    )
                     .is_err()
-            })
-        {
-            return Err(WikiError::invalid(
-                "capture has invalid agent retrieval provenance",
-            ));
+                })
+            {
+                return Err(WikiError::invalid(
+                    "capture has invalid agent retrieval provenance",
+                ));
+            }
         }
-    }
-    let complete = revision.string("wiki_extraction_status") == Some("complete");
-    let expected_capture_state = if complete {
-        if revision.string("wiki_content_path") != Some("content.md") {
-            return Err(WikiError::invalid(
-                "complete capture lacks its generated content path",
-            ));
-        }
-        let bytes = work
-            .overlay
-            .get(&content_path)
-            .ok_or_else(|| WikiError::invalid("complete capture lacks content bytes"))?;
-        if bytes.is_empty() {
-            SourceCaptureState::Empty
+        let complete = revision.string("wiki_extraction_status") == Some("complete");
+        let expected_capture_state = if complete {
+            if revision.string("wiki_content_path") != Some("content.md") {
+                return Err(WikiError::invalid(
+                    "complete capture lacks its generated content path",
+                ));
+            }
+            let bytes = work
+                .overlay
+                .get(&content_path)
+                .ok_or_else(|| WikiError::invalid("complete capture lacks content bytes"))?;
+            if bytes.is_empty() {
+                SourceCaptureState::Empty
+            } else {
+                SourceCaptureState::Complete
+            }
         } else {
-            SourceCaptureState::Complete
-        }
-    } else {
-        if revision.string("wiki_extraction_status") != Some("unsupported")
-            || revision.field("wiki_content_path").is_some()
-            || revision.field("wiki_content_hash").is_some()
-        {
-            return Err(WikiError::invalid(
-                "unsupported capture cannot claim extracted content",
-            ));
-        }
-        SourceCaptureState::Unsupported
-    };
-    if plan.capture_state != Some(expected_capture_state) {
-        return Err(WikiError::invalid(
-            "capture state differs from generated extracted bytes",
-        ));
-    }
-    let mut required_paths = BTreeSet::from([
-        source_path.clone(),
-        revision_path.clone(),
-        original_path.clone(),
-    ]);
-    let mut asset_paths = BTreeSet::from([original_path.clone()]);
-    if complete {
-        required_paths.insert(content_path.clone());
-        asset_paths.insert(content_path.clone());
-    }
-    if operations.keys().cloned().collect::<BTreeSet<_>>() != required_paths {
-        return Err(WikiError::invalid(
-            "capture writes outside one exact immutable tree",
-        ));
-    }
-    for (path, operation) in &operations {
-        let required = if path == &source_path {
-            required_paths
-                .difference(&BTreeSet::from([source_path.clone()]))
-                .cloned()
-                .collect()
-        } else if path == &revision_path {
-            asset_paths.clone()
-        } else {
-            BTreeSet::new()
+            if revision.string("wiki_extraction_status") != Some("unsupported")
+                || revision.field("wiki_content_path").is_some()
+                || revision.field("wiki_content_hash").is_some()
+            {
+                return Err(WikiError::invalid(
+                    "unsupported capture cannot claim extracted content",
+                ));
+            }
+            SourceCaptureState::Unsupported
         };
-        if operation
-            .apply_after
-            .iter()
-            .cloned()
-            .collect::<BTreeSet<_>>()
-            != required
-            || operation.apply_after.len() != required.len()
-        {
+        if plan.capture_state != Some(expected_capture_state) {
             return Err(WikiError::invalid(
-                "capture write ordering differs from generated ownership",
+                "capture state differs from generated extracted bytes",
             ));
         }
-    }
-    // Immutable assets are proof inputs only; they are never parsed into a
-    // canonical record or accepted as a caller-supplied graph overlay.
-    for (record, path, hash, direct_paths) in [
-        (
-            source.clone(),
+        let mut required_paths = BTreeSet::from([
             source_path.clone(),
-            source_note.source_hash.clone(),
-            BTreeSet::from([source_path.clone()]),
-        ),
-        (
-            revision.clone(),
             revision_path.clone(),
-            revision_note.source_hash.clone(),
-            asset_paths
+            original_path.clone(),
+        ]);
+        let mut asset_paths = BTreeSet::from([original_path.clone()]);
+        if complete {
+            required_paths.insert(content_path.clone());
+            asset_paths.insert(content_path.clone());
+        }
+        if operations.keys().cloned().collect::<BTreeSet<_>>() != required_paths {
+            return Err(WikiError::invalid(
+                "capture writes outside one exact immutable tree",
+            ));
+        }
+        for (path, operation) in &operations {
+            let required = if path == &source_path {
+                required_paths
+                    .difference(&BTreeSet::from([source_path.clone()]))
+                    .cloned()
+                    .collect()
+            } else if path == &revision_path {
+                asset_paths.clone()
+            } else {
+                BTreeSet::new()
+            };
+            if operation
+                .apply_after
                 .iter()
                 .cloned()
-                .chain(std::iter::once(revision_path.clone()))
-                .collect(),
-        ),
-    ] {
-        let row = RecordRow {
-            authored_status: record.string("wiki_status").map(str::to_owned),
-            record,
-            path: path.clone(),
-            hash,
-            eligibility: Eligibility::Current,
-            reasons: vec![],
-            identity_eligibility: None,
-            description_eligibility: None,
-            disputed: false,
-            dependencies: vec![],
-        };
-        let id = row.record.id().clone();
-        work.new_registry.push(entry(&row));
-        work.replaced_registry.insert(path);
-        work.facts.insert(
-            id.clone(),
-            EligibilityFact {
-                baseline: baseline(),
-                structural: Default::default(),
-                direct_paths,
-            },
-        );
-        work.now.insert(id, row);
+                .collect::<BTreeSet<_>>()
+                != required
+                || operation.apply_after.len() != required.len()
+            {
+                return Err(WikiError::invalid(
+                    "capture write ordering differs from generated ownership",
+                ));
+            }
+        }
+        // Immutable assets are proof inputs only; they are never parsed into a
+        // canonical record or accepted as a caller-supplied graph overlay.
+        for (record, path, hash, direct_paths) in [
+            (
+                source.clone(),
+                source_path.clone(),
+                source_note.source_hash.clone(),
+                BTreeSet::from([source_path.clone()]),
+            ),
+            (
+                revision.clone(),
+                revision_path.clone(),
+                revision_note.source_hash.clone(),
+                asset_paths
+                    .iter()
+                    .cloned()
+                    .chain(std::iter::once(revision_path.clone()))
+                    .collect(),
+            ),
+        ] {
+            let row = RecordRow {
+                authored_status: record.string("wiki_status").map(str::to_owned),
+                record,
+                path: path.clone(),
+                hash,
+                eligibility: Eligibility::Current,
+                reasons: vec![],
+                identity_eligibility: None,
+                description_eligibility: None,
+                disputed: false,
+                dependencies: vec![],
+            };
+            let id = row.record.id().clone();
+            work.new_registry.push(entry(&row));
+            work.replaced_registry.insert(path);
+            work.facts.insert(
+                id.clone(),
+                EligibilityFact {
+                    baseline: baseline(),
+                    structural: Default::default(),
+                    direct_paths,
+                },
+            );
+            work.now.insert(id, row);
+        }
+        let content = work.verify_head(&plan.source_id, &plan.revision_id)?;
+        trees.push(CaptureTree {
+            source_id: plan.source_id,
+            revision_id: plan.revision_id,
+            source_root,
+            source_path,
+            revision_path,
+            content_path,
+            content,
+        });
+        drafts.push(draft);
     }
-    let content = work.verify_head(&plan.source_id, &plan.revision_id)?;
-    let mut seeds = BTreeSet::from([plan.source_id.clone(), plan.revision_id.clone()]);
+    let mut draft = drafts.remove(0);
+    if batch {
+        draft.title = format!("Capture {} sources", trees.len());
+        draft.allocated_ids = trees
+            .iter()
+            .enumerate()
+            .flat_map(|(index, tree)| {
+                [
+                    (format!("source_{index}"), tree.source_id.clone()),
+                    (format!("revision_{index}"), tree.revision_id.clone()),
+                ]
+            })
+            .collect();
+    }
+    for remaining in drafts {
+        draft.operations.extend(remaining.operations);
+    }
+    let revision_ids: BTreeSet<_> = trees.iter().map(|tree| tree.revision_id.clone()).collect();
+    let mut seeds = trees
+        .iter()
+        .flat_map(|tree| [tree.source_id.clone(), tree.revision_id.clone()])
+        .collect::<BTreeSet<_>>();
     let keys: Vec<_> = work
         .new_registry
         .iter()
@@ -328,7 +448,7 @@ pub(crate) fn project_capture(
         work.emit_record(&id, &mut delta)?;
         let row = work.now[&id].clone();
         if row.record.kind() == RecordKind::Revision
-            && row.record.id() != &plan.revision_id
+            && !revision_ids.contains(row.record.id())
             && row.record.string("wiki_extraction_status") == Some("complete")
         {
             let path = source_projection::asset_path(
@@ -394,33 +514,35 @@ pub(crate) fn project_capture(
             });
         }
     }
-    let head = &work.now[&plan.revision_id];
-    delta.revisions.push(RevisionIdentityRow {
-        source_id: plan.source_id.clone(),
-        revision_id: plan.revision_id.clone(),
-        retained_ordinal: 0,
-        original_hash: Blake3Hash::new(head.record.string("wiki_original_hash").unwrap())?,
-        content_hash: head
-            .record
-            .string("wiki_content_hash")
-            .map(Blake3Hash::new)
-            .transpose()?,
-        extractor_fingerprint: Blake3Hash::new(
-            head.record.string("wiki_extractor_fingerprint").unwrap(),
-        )?,
-        extraction_status: head.record.string("wiki_extraction_status").unwrap().into(),
-    });
-    if let Some(content) = content {
-        let text =
-            String::from_utf8(content).map_err(|_| conflict("captured content is not UTF-8"))?;
-        delta.documents.push(DocumentMutation::Put {
-            row: row_projection::captured_content_document(
-                content_path,
-                plan.source_id.clone(),
-                head,
-                text,
-            ),
+    for tree in &mut trees {
+        let head = &work.now[&tree.revision_id];
+        delta.revisions.push(RevisionIdentityRow {
+            source_id: tree.source_id.clone(),
+            revision_id: tree.revision_id.clone(),
+            retained_ordinal: 0,
+            original_hash: Blake3Hash::new(head.record.string("wiki_original_hash").unwrap())?,
+            content_hash: head
+                .record
+                .string("wiki_content_hash")
+                .map(Blake3Hash::new)
+                .transpose()?,
+            extractor_fingerprint: Blake3Hash::new(
+                head.record.string("wiki_extractor_fingerprint").unwrap(),
+            )?,
+            extraction_status: head.record.string("wiki_extraction_status").unwrap().into(),
         });
+        if let Some(content) = tree.content.take() {
+            let text = String::from_utf8(content)
+                .map_err(|_| conflict("captured content is not UTF-8"))?;
+            delta.documents.push(DocumentMutation::Put {
+                row: row_projection::captured_content_document(
+                    tree.content_path.clone(),
+                    tree.source_id.clone(),
+                    head,
+                    text,
+                ),
+            });
+        }
     }
     for registry in &work.new_registry {
         delta
@@ -434,7 +556,10 @@ pub(crate) fn project_capture(
                 keys: link_facts::registry_keys(registry)?,
             });
     }
-    let mut link_owners = BTreeSet::from([source_path, revision_path]);
+    let mut link_owners = trees
+        .iter()
+        .flat_map(|tree| [tree.source_path.clone(), tree.revision_path.clone()])
+        .collect::<BTreeSet<_>>();
     link_owners.extend(affected_links.into_iter().map(|(path, _)| path));
     for path in link_owners {
         work.emit_links(&path, &mut delta)?;
@@ -462,12 +587,28 @@ pub(crate) fn project_capture(
     work.recheck()?;
     // Directory creation is not representable by a file-hash ReadDependency.
     // Preparation independently repeats this new-root check before allocation.
-    require_fresh_root(fs, &source_root)?;
+    for tree in &trees {
+        require_fresh_root(fs, &tree.source_root)?;
+    }
+    let operation = if batch {
+        IndexedWriteOperation::SourceCaptureBatch {
+            captures: trees
+                .iter()
+                .map(|tree| IndexedCaptureTarget {
+                    source_id: tree.source_id.clone(),
+                    revision_id: tree.revision_id.clone(),
+                })
+                .collect(),
+        }
+    } else {
+        IndexedWriteOperation::SourceCapture {
+            source_id: trees[0].source_id.clone(),
+            revision_id: trees[0].revision_id.clone(),
+        }
+    };
+    operation.validate()?;
     Ok(ProjectedWrite::from_parts(ProjectedWriteParts {
-        operation: IndexedWriteOperation::SourceCapture {
-            source_id: plan.source_id,
-            revision_id: plan.revision_id,
-        },
+        operation,
         draft,
         base,
         before: deps(work.before),
@@ -553,3 +694,7 @@ fn revision_field(name: &str) -> bool {
 #[cfg(test)]
 #[path = "capture_projection_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "capture_batch_projection_tests.rs"]
+mod batch_tests;

@@ -64,6 +64,19 @@ impl ChangeEngine {
             }
             if let Some(terminal) = outcome::terminal_report(&self.fs, &manifest, &hash)? {
                 outcome::sync_receipt(&self.fs, permit, &id)?;
+                let observed_authority = catalog
+                    .operation_state()?
+                    .ok_or_else(|| recovery_error("normalized recovery authority disappeared"))?;
+                if self
+                    .indexed_replay_proof(&manifest, &change, Some(&observed_authority))?
+                    .is_some()
+                    || outcome::terminal_report(&self.fs, &manifest, &hash)?.as_ref()
+                        != Some(&terminal)
+                {
+                    return Err(recovery_error(
+                        "terminal change routing changed during recovery",
+                    ));
+                }
                 report.changes.push(terminal);
                 continue;
             }

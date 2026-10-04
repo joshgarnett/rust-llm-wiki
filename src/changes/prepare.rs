@@ -28,6 +28,27 @@ pub(super) const MAX_GRAPH_INPUT_BYTES: usize = 64 * 1024 * 1024;
 pub(super) const MAX_INVERSE_PAYLOAD_BYTES: usize = 256 * 1024 * 1024;
 const OPEN: &[u8] = b"```lwiki-change-v1\n";
 
+/// Trusted admission result. The caller persists its exact normal manifest in
+/// bounded import intent before asking the engine to retain the proposal.
+pub(crate) struct NamedPreparation {
+    manifest: ChangeManifest,
+    manifest_hash: Blake3Hash,
+    plan: ChangePlan,
+}
+
+impl NamedPreparation {
+    pub(crate) fn manifest(&self) -> &ChangeManifest {
+        &self.manifest
+    }
+
+    pub(crate) fn prepared(&self) -> PreparedChange {
+        PreparedChange {
+            change_id: self.manifest.change_id.clone(),
+            manifest_hash: self.manifest_hash.clone(),
+        }
+    }
+}
+
 impl ChangeEngine {
     pub fn new(fs: VaultFs) -> Result<Self> {
         VaultRoot::explicit(fs.root().path())?;
@@ -211,17 +232,103 @@ impl ChangeEngine {
         let created_at = time::OffsetDateTime::now_utc()
             .format(&time::format_description::well_known::Rfc3339)
             .map_err(|e| WikiError::invalid(e.to_string()))?;
+        let sealed = self.seal_plan(
+            draft,
+            plan,
+            NamedChangeIdentity {
+                change_id,
+                created_at,
+            },
+        )?;
+        let manifest = sealed.manifest;
+        for (index, operation) in sealed.plan.operations.iter().enumerate() {
+            let before = self.retain(
+                permit,
+                &manifest.change_id,
+                index,
+                "before",
+                sealed.plan.before[index].as_deref(),
+                &operation.target,
+            )?;
+            let after = self.retain(
+                permit,
+                &manifest.change_id,
+                index,
+                "proposed",
+                operation.proposed.as_deref(),
+                &operation.target,
+            )?;
+            if before != manifest.operations[index].before_payload
+                || after != manifest.operations[index].after_payload
+            {
+                return Err(WikiError::invalid(
+                    "retained payload route changed during preparation",
+                ));
+            }
+        }
+        let note = render_prepared_note(&manifest, &sealed.manifest_hash)?;
+        self.persist(permit, &manifest_path(&manifest.change_id)?, &note)?;
+        // Reload validates retained bytes, exact fence identity and manifest before authorization.
+        let loaded = self.load_manifest(&manifest.change_id)?;
+        journal::append_event(
+            &self.fs,
+            permit,
+            &loaded.0,
+            &loaded.1,
+            ChangeEvent::Prepared,
+        )?;
+        self.inspect(&manifest.change_id)
+    }
+
+    /// Runs normal admission under the writer without retaining any proposal.
+    /// Import intent must durably bind the result before named retention.
+    pub(crate) fn seal_named(
+        &self,
+        permit: &WriterPermit,
+        identity: NamedChangeIdentity,
+        draft: ChangeDraft,
+    ) -> Result<NamedPreparation> {
+        permit.require_root(self.fs.root())?;
+        if draft.origin.is_some()
+            || draft.inverse_of.is_some()
+            || !(3..=32).contains(&draft.operations.len())
+            || !(2..=16).contains(&draft.allocated_ids.len())
+            || draft
+                .operations
+                .iter()
+                .any(|operation| operation.expected != ExpectedState::Absent)
+        {
+            return Err(WikiError::invalid(
+                "named preparation requires bounded fresh capture operations without graph origins or inverses",
+            ));
+        }
+        time::OffsetDateTime::parse(
+            &identity.created_at,
+            &time::format_description::well_known::Rfc3339,
+        )
+        .map_err(|error| WikiError::invalid(format!("invalid named Change time: {error}")))?;
+        let plan = self.plan(&draft)?;
+        self.seal_plan(draft, plan, identity)
+    }
+
+    fn seal_plan(
+        &self,
+        draft: ChangeDraft,
+        plan: ChangePlan,
+        identity: NamedChangeIdentity,
+    ) -> Result<NamedPreparation> {
+        let version = if crate::storage::layout::active(self.fs.root())? {
+            2
+        } else {
+            1
+        };
         let deps = resolve_dependencies(&plan.operations)?;
         let mut manifest = ChangeManifest {
-            version: if crate::storage::layout::active(self.fs.root())? {
-                2
-            } else {
-                1
-            },
+            version,
             vault_id: self.vault_id.clone(),
-            change_id: change_id.clone(),
+            change_id: identity.change_id,
             title: draft.title,
-            created_at,
+            created_at: identity.created_at,
             origin: draft.origin,
             inverse_of: draft.inverse_of,
             allocated_ids: draft.allocated_ids,
@@ -229,22 +336,25 @@ impl ChangeEngine {
             operations: Vec::new(),
         };
         for (index, operation) in plan.operations.iter().enumerate() {
-            let before_payload = self.retain(
-                permit,
-                &change_id,
-                index,
-                "before",
-                plan.before[index].as_deref(),
-                &operation.target,
-            )?;
-            let after_payload = self.retain(
-                permit,
-                &change_id,
-                index,
-                "proposed",
-                operation.proposed.as_deref(),
-                &operation.target,
-            )?;
+            let reference = |side: &str, bytes: Option<&[u8]>| -> Result<Option<PayloadRef>> {
+                bytes
+                    .map(|bytes| {
+                        let hash = Blake3Hash::digest(bytes);
+                        let path = if version == 2 {
+                            crate::storage::layout::object_path(&hash)?
+                        } else {
+                            payload_path(&manifest.change_id, index, side, &operation.target)?
+                        };
+                        Ok(PayloadRef {
+                            path,
+                            hash,
+                            byte_len: bytes.len() as u64,
+                        })
+                    })
+                    .transpose()
+            };
+            let before_payload = reference("before", plan.before[index].as_deref())?;
+            let after_payload = reference("proposed", operation.proposed.as_deref())?;
             manifest.operations.push(ChangeOp {
                 target: operation.target.clone(),
                 before: operation.expected.clone(),
@@ -259,19 +369,253 @@ impl ChangeEngine {
         if json.len() > MAX_MANIFEST_BYTES {
             return Err(WikiError::invalid("manifest exceeds limit"));
         }
-        let hash = Blake3Hash::digest(&json);
-        let note = render_prepared_note(&manifest, &hash)?;
-        self.persist(permit, &manifest_path(&change_id)?, &note)?;
-        // Reload validates retained bytes, exact fence identity and manifest before authorization.
-        let loaded = self.load_manifest(&change_id)?;
-        journal::append_event(
-            &self.fs,
-            permit,
-            &loaded.0,
-            &loaded.1,
-            ChangeEvent::Prepared,
-        )?;
-        self.inspect(&change_id)
+        Ok(NamedPreparation {
+            manifest,
+            manifest_hash: Blake3Hash::digest(&json),
+            plan,
+        })
+    }
+
+    /// Complete only the exact initially admitted proposal named in import
+    /// intent. The catalog must classify active/terminal authority first; this
+    /// method grants no canonical application or stale-base replacement.
+    pub(crate) fn prepare_named(
+        &self,
+        permit: &WriterPermit,
+        expected: &ChangeManifest,
+        sealed: &NamedPreparation,
+    ) -> Result<ChangeInspection> {
+        permit.require_root(self.fs.root())?;
+        self.require_binding()?;
+        if expected != sealed.manifest()
+            || expected.vault_id != self.vault_id
+            || expected.version
+                != if crate::storage::layout::active(self.fs.root())? {
+                    2
+                } else {
+                    1
+                }
+        {
+            return Err(WikiError::invalid(
+                "named preparation differs from frozen import intent",
+            ));
+        }
+        for path in std::iter::once(manifest_path(&expected.change_id)?)
+            .chain(std::iter::once(journal::journal_path(&expected.change_id)?))
+            .chain(expected.operations.iter().flat_map(|operation| {
+                [&operation.before_payload, &operation.after_payload]
+                    .into_iter()
+                    .filter_map(|payload| payload.as_ref().map(|payload| payload.path.clone()))
+            }))
+        {
+            self.require_named_single_link(&path)?;
+        }
+        let state = journal::load_journal(&self.fs, expected, &sealed.manifest_hash)?;
+        if state.status == Some(ChangeStatus::Prepared) {
+            if state.torn_tail {
+                return Err(super::apply::recovery_error(
+                    "named Prepared attempt has an incomplete later journal frame",
+                ));
+            }
+            let (manifest, hash) = self.load_manifest(&expected.change_id)?;
+            if manifest != *expected || hash != sealed.manifest_hash {
+                return Err(WikiError::invalid(
+                    "retained named proposal differs from import intent",
+                ));
+            }
+            require_sync(
+                self.fs
+                    .sync_target(&journal::journal_path(&expected.change_id)?, permit)?,
+            )?;
+            return self.inspect(&expected.change_id);
+        }
+        if state.status.is_some() {
+            return Err(super::apply::recovery_error(
+                "named attempt requires application or terminal dispatch before preparation",
+            ));
+        }
+        let note = render_prepared_note(expected, &sealed.manifest_hash)?;
+        let mut files: BTreeMap<VaultRelativePath, &[u8]> = BTreeMap::new();
+        files.insert(manifest_path(&expected.change_id)?, &note);
+        for (index, operation) in expected.operations.iter().enumerate() {
+            for (reference, bytes) in [
+                (
+                    &operation.before_payload,
+                    sealed.plan.before[index].as_deref(),
+                ),
+                (
+                    &operation.after_payload,
+                    sealed.plan.operations[index].proposed.as_deref(),
+                ),
+            ] {
+                if let (Some(reference), Some(bytes)) = (reference, bytes)
+                    && expected.version == 1
+                    && files.insert(reference.path.clone(), bytes).is_some()
+                {
+                    return Err(WikiError::invalid("duplicate named retained payload path"));
+                }
+            }
+        }
+        self.require_named_prefix(expected, &files)?;
+        // Keep payload-before-note ordering, including on a resumed partial.
+        for (index, operation) in expected.operations.iter().enumerate() {
+            for (reference, bytes) in [
+                (
+                    &operation.before_payload,
+                    sealed.plan.before[index].as_deref(),
+                ),
+                (
+                    &operation.after_payload,
+                    sealed.plan.operations[index].proposed.as_deref(),
+                ),
+            ] {
+                if let (Some(reference), Some(bytes)) = (reference, bytes) {
+                    if expected.version == 2 {
+                        crate::storage::layout::put(&self.fs, permit, &reference.path, bytes)?;
+                    } else {
+                        self.persist_named(permit, &reference.path, bytes)?;
+                    }
+                }
+            }
+        }
+        self.persist_named(permit, &manifest_path(&expected.change_id)?, &note)?;
+        let (manifest, hash) = self.load_manifest(&expected.change_id)?;
+        if manifest != *expected || hash != sealed.manifest_hash {
+            return Err(WikiError::invalid(
+                "completed named retained proposal differs",
+            ));
+        }
+        journal::append_event(&self.fs, permit, &manifest, &hash, ChangeEvent::Prepared)?;
+        self.inspect(&expected.change_id)
+    }
+
+    fn persist_named(
+        &self,
+        permit: &WriterPermit,
+        path: &VaultRelativePath,
+        bytes: &[u8],
+    ) -> Result<()> {
+        self.require_named_single_link(path)?;
+        match read_bounded(&self.fs, path, MAX_PAYLOAD_BYTES)? {
+            None => self.persist(permit, path, bytes),
+            Some(existing) if existing == bytes => require_sync(self.fs.sync_target(path, permit)?),
+            Some(_) => Err(WikiError::new(
+                ErrorCode::ContentConflict,
+                "named retained path contains unfamiliar bytes",
+            )),
+        }
+    }
+
+    pub(crate) fn require_named_single_link(&self, path: &VaultRelativePath) -> Result<()> {
+        let metadata = match fs::symlink_metadata(self.fs.root().resolve(path)?) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(error) => return Err(io_error(error)),
+        };
+        if !metadata.is_file() || metadata.file_type().is_symlink() {
+            return Err(WikiError::new(
+                ErrorCode::ContentConflict,
+                "named retained file has an unsafe type",
+            ));
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            if metadata.nlink() != 1 {
+                return Err(WikiError::new(
+                    ErrorCode::ContentConflict,
+                    "named retained file must have one physical link",
+                ));
+            }
+        }
+        #[cfg(not(unix))]
+        return Err(WikiError::new(
+            ErrorCode::CapabilityUnavailable,
+            "single-link named retention is not qualified on this platform",
+        ));
+        #[cfg(unix)]
+        Ok(())
+    }
+
+    /// This inventory is bounded to one declared Change prefix, never history.
+    /// An empty or stage-only prefix is ambiguous and must remain untouched.
+    fn require_named_prefix(
+        &self,
+        manifest: &ChangeManifest,
+        files: &BTreeMap<VaultRelativePath, &[u8]>,
+    ) -> Result<()> {
+        let prefix = VaultRelativePath::new(format!("changes/{}", manifest.change_id))?;
+        let physical = self.fs.root().resolve(&prefix)?;
+        match fs::symlink_metadata(&physical) {
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(error) => return Err(io_error(error)),
+            Ok(metadata) if !metadata.is_dir() || metadata.file_type().is_symlink() => {
+                return Err(WikiError::new(
+                    ErrorCode::ContentConflict,
+                    "named Change prefix is unsafe",
+                ));
+            }
+            Ok(_) => {}
+        }
+        let allowed_directories: BTreeSet<_> = files
+            .keys()
+            .flat_map(|path| {
+                path.as_str()
+                    .match_indices('/')
+                    .map(|(end, _)| path.as_str()[..end].to_owned())
+            })
+            .collect();
+        let mut stack = vec![prefix];
+        let mut entries = 0usize;
+        let mut matched = 0usize;
+        while let Some(directory) = stack.pop() {
+            for entry in fs::read_dir(self.fs.root().resolve(&directory)?).map_err(io_error)? {
+                entries += 1;
+                if entries > 128 {
+                    return Err(WikiError::new(
+                        ErrorCode::BudgetExceeded,
+                        "named retained prefix exceeds bounded capture inventory",
+                    ));
+                }
+                let entry = entry.map_err(io_error)?;
+                let name = entry.file_name();
+                let name = name
+                    .to_str()
+                    .ok_or_else(|| WikiError::invalid("non-UTF8 named retained entry"))?;
+                let path = VaultRelativePath::new(format!("{directory}/{name}"))?;
+                let kind = entry.file_type().map_err(io_error)?;
+                if kind.is_dir() && allowed_directories.contains(path.as_str()) {
+                    stack.push(path);
+                } else if kind.is_file() && files.contains_key(&path) {
+                    self.fs.validate_paths(std::slice::from_ref(&path))?;
+                    let expected = files[&path];
+                    let actual = read_bounded(&self.fs, &path, expected.len())?;
+                    if actual.as_deref() != Some(expected) {
+                        return Err(WikiError::new(
+                            ErrorCode::ContentConflict,
+                            "named retained prefix contains unfamiliar bytes",
+                        ));
+                    }
+                    matched += 1;
+                } else {
+                    let mut error = WikiError::new(
+                        ErrorCode::ContentConflict,
+                        "named Change prefix is unmarked or contains unfamiliar entries",
+                    );
+                    error.details = serde_json::json!({"named_attempt_state":"ambiguous_prefix", "change_id":manifest.change_id});
+                    return Err(error);
+                }
+            }
+        }
+        if matched == 0 {
+            let mut error = WikiError::new(
+                ErrorCode::ContentConflict,
+                "named Change prefix is unmarked and must be preserved",
+            );
+            error.details = serde_json::json!({"named_attempt_state":"ambiguous_prefix", "change_id":manifest.change_id});
+            return Err(error);
+        }
+        Ok(())
     }
     pub fn prepare_or_reuse<F>(
         &self,
@@ -450,7 +794,7 @@ impl ChangeEngine {
         self.load_manifest_with_budget(id, &mut remaining)
     }
     /// Bound aggregate retained payload reads before validating/allocating any payload.
-    pub(super) fn load_manifest_with_budget(
+    pub(crate) fn load_manifest_with_budget(
         &self,
         id: &RecordId,
         remaining: &mut usize,
@@ -601,7 +945,11 @@ impl ChangeEngine {
         }
         Ok(())
     }
-    fn validate_manifest_structure(&self, manifest: &ChangeManifest, id: &RecordId) -> Result<()> {
+    pub(super) fn validate_manifest_structure(
+        &self,
+        manifest: &ChangeManifest,
+        id: &RecordId,
+    ) -> Result<()> {
         if !matches!(manifest.version, 1 | 2)
             || &manifest.change_id != id
             || manifest.vault_id != self.vault_id
