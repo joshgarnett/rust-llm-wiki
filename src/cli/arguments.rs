@@ -224,7 +224,8 @@ pub enum PageCommand {
         /// Markdown page file with a valid page envelope; use - for stdin.
         #[arg(long)]
         file: PathBuf,
-        /// Destination vault-relative path; defaults to pages/<record-id>.md.
+        /// Destination path; existing IDs preserve their indexed path. Omit in
+        /// dry-run to leave destination and author-guard checks unresolved.
         #[arg(long)]
         path: Option<VaultRelativePath>,
         /// Required current BLAKE3 hash when replacing an existing page.

@@ -1,4 +1,5 @@
 //! Strict exhaustive identity-remap proof. No redirect traversal or inferred identity.
+use super::policy_inputs::PolicyInputKey;
 use super::receipt_budget::ReceiptBudget;
 use super::{decision_types::*, extraction_types::*, import, mention_state, packet, wire};
 use crate::{
@@ -368,6 +369,12 @@ pub struct VerifiedDecisionPolicy {
     aliases: BTreeSet<RecordId>,
 }
 impl VerifiedDecisionPolicy {
+    pub(crate) fn policy_aliases(&self) -> &BTreeSet<RecordId> {
+        &self.aliases
+    }
+    pub(crate) fn policy_families(&self) -> &[BTreeSet<RecordId>] {
+        &self.families
+    }
     pub fn historical_alias_authority(&self, id: &RecordId) -> bool {
         self.aliases.contains(id)
     }
@@ -441,7 +448,13 @@ fn reference_set_scoped(
     if entities.is_empty() {
         return Ok(found);
     }
+    budget.require(PolicyInputKey::Extractions)?;
+    budget.require(PolicyInputKey::AssertionCandidates)?;
+    for id in entities {
+        budget.require(PolicyInputKey::AssertionEndpoint(id.clone()))?;
+    }
     for (path, note) in notes {
+        budget.step()?;
         let Some(record) = &note.canonical else {
             if note.fields.as_ref().is_some_and(|f| {
                 ["wiki_subject_id", "wiki_object_id"].iter().any(|k| {
@@ -457,6 +470,7 @@ fn reference_set_scoped(
         };
         match record.kind() {
             RecordKind::Assertion => {
+                budget.observe(path, note)?;
                 for f in [
                     AssertionEntityField::SubjectId,
                     AssertionEntityField::ObjectId,
@@ -478,6 +492,7 @@ fn reference_set_scoped(
                 budget.admit(path, note)?;
                 let a = artifact(note)?;
                 for (local, binding) in &a.bindings {
+                    budget.step()?;
                     if let MentionBinding::Resolved { entity_id, .. } = binding
                         && entities.contains(entity_id)
                     {
@@ -826,16 +841,21 @@ fn receipts_scoped(
     notes: &BTreeMap<VaultRelativePath, ParsedNote>,
     budget: &mut ReceiptBudget,
 ) -> Result<BTreeMap<RecordId, EntityDecisionReceiptV1>> {
+    budget.require(PolicyInputKey::RemapReceiptCandidates)?;
     let mut result = BTreeMap::new();
     for (path, note) in notes {
+        budget.step()?;
         if note.canonical.as_ref().is_some_and(|r| {
             r.kind() == RecordKind::Decision
                 && matches!(
                     r.string("wiki_action"),
                     Some("merge" | "split" | "add_alias" | "bind_mention")
                 )
-        }) && fence_present(note)?
-        {
+        }) {
+            budget.observe(path, note)?;
+            if !fence_present(note)? {
+                continue;
+            }
             budget.admit(path, note)?;
             if note.raw.len() > MAX_ENTITY_DECISION_RECEIPT_BYTES + 262144 {
                 return Err(super::receipt_budget::exhausted());
@@ -856,6 +876,7 @@ fn binding_chain(
     local: &PacketLocalId,
     before: &MentionBinding,
     after: &MentionBinding,
+    budget: &mut ReceiptBudget,
 ) -> Result<()> {
     let mut state = before.clone();
     let mut seen = BTreeSet::new();
@@ -867,13 +888,22 @@ fn binding_chain(
         if !seen.insert(key) {
             return Err(bad("binding supersession cycle"));
         }
-        let transitions = receipts
-            .values()
-            .flat_map(|r| r.extraction_proofs.iter())
-            .filter(|p| &p.extraction_id == extraction)
-            .flat_map(|p| p.transitions.iter())
-            .filter(|t| &t.mention_id == local && t.before == state)
-            .collect::<Vec<_>>();
+        let mut transitions = Vec::new();
+        for r in receipts.values() {
+            budget.step()?;
+            for p in &r.extraction_proofs {
+                budget.step()?;
+                if &p.extraction_id != extraction {
+                    continue;
+                }
+                for t in &p.transitions {
+                    budget.step()?;
+                    if &t.mention_id == local && t.before == state {
+                        transitions.push(t);
+                    }
+                }
+            }
+        }
         if transitions.len() != 1 {
             return Err(bad("missing/contradictory explicit binding successor"));
         }
@@ -888,6 +918,7 @@ fn endpoint_chain(
     before: &RecordId,
     after: &RecordId,
     unchanged: &Blake3Hash,
+    budget: &mut ReceiptBudget,
 ) -> Result<()> {
     let mut state = before.clone();
     let mut seen = BTreeSet::new();
@@ -898,16 +929,20 @@ fn endpoint_chain(
         if !seen.insert(state.clone()) {
             return Err(bad("assertion endpoint cycle"));
         }
-        let transitions = receipts
-            .values()
-            .flat_map(|r| &r.assertion_proofs)
-            .filter(|p| {
-                &p.assertion_id == id
+        let mut transitions = Vec::new();
+        for r in receipts.values() {
+            budget.step()?;
+            for p in &r.assertion_proofs {
+                budget.step()?;
+                if &p.assertion_id == id
                     && field(&p.field) == field(f)
                     && p.before_entity_id == state
                     && &p.invariant_proposition_hash == unchanged
-            })
-            .collect::<Vec<_>>();
+                {
+                    transitions.push(p);
+                }
+            }
+        }
         if transitions.len() != 1 {
             return Err(bad("missing/contradictory assertion endpoint successor"));
         }
@@ -925,6 +960,7 @@ fn envelope_policy(
     let mut family = BTreeSet::new();
     let mut edges = BTreeSet::new();
     for (op, a) in r.request.decisions.iter().zip(&r.allocations) {
+        budget.step()?;
         let (_, note) = budget.find(notes, &a.decision_id)?;
         let rec = note
             .canonical
@@ -1122,7 +1158,14 @@ fn envelope_policy(
                 .bindings
                 .get(&m.mention_id)
                 .ok_or_else(|| bad("current mention missing"))?;
-            binding_chain(all, &m.extraction_id, &m.mention_id, &proof.after, current)?;
+            binding_chain(
+                all,
+                &m.extraction_id,
+                &m.mention_id,
+                &proof.after,
+                current,
+                budget,
+            )?;
             if rec.string("wiki_status") == Some("active") && current != &proof.after {
                 return Err(bad("active replacement is not current binding"));
             }
@@ -1184,8 +1227,13 @@ fn current_scoped_authorities(
     outputs: &BTreeSet<RecordId>,
     budget: &mut ReceiptBudget,
 ) -> Result<BTreeSet<RecordId>> {
+    budget.require(PolicyInputKey::ScopedAuthorityCandidates)?;
+    for output in outputs {
+        budget.require(PolicyInputKey::ScopedAuthority(output.clone()))?;
+    }
     let mut ids = BTreeSet::new();
     for (path, note) in notes {
+        budget.step()?;
         let Some(d) = &note.canonical else { continue };
         if d.kind() != RecordKind::Decision
             || d.string("wiki_status") != Some("active")
@@ -1196,6 +1244,7 @@ fn current_scoped_authorities(
         {
             continue;
         }
+        budget.observe(path, note)?;
         let assigned = id_list(d, "wiki_output_ids")?;
         if assigned.len() != 1 || !outputs.contains(&assigned[0]) {
             continue;
@@ -1338,8 +1387,10 @@ pub(crate) fn verify_decision_policy_scoped(
     let mut aliases = BTreeSet::new();
     let mut edges = BTreeSet::new();
     for r in all.values() {
+        budget.step()?;
         let (mut family, new_edges) = envelope_policy(notes, r, &all, budget)?;
         for (op, a) in r.request.decisions.iter().zip(&r.allocations) {
+            budget.step()?;
             if matches!(op, EntityDecision::AddAlias { .. }) {
                 aliases.insert(a.decision_id.clone());
                 continue;
@@ -1364,6 +1415,7 @@ pub(crate) fn verify_decision_policy_scoped(
                 .cloned()
                 .collect::<BTreeSet<_>>();
             for prior in all.values() {
+                budget.step()?;
                 for (alias_op, alias_alloc) in
                     prior.request.decisions.iter().zip(&prior.allocations)
                 {
@@ -1378,6 +1430,7 @@ pub(crate) fn verify_decision_policy_scoped(
         families.push(family);
         edges.extend(new_edges);
         for p in &r.extraction_proofs {
+            budget.step()?;
             let (_, n) = budget.find(notes, &p.extraction_id)?;
             let current = artifact(n)?;
             if mention_state::immutable_hash(&current)? != p.immutable_extraction_hash
@@ -1393,6 +1446,7 @@ pub(crate) fn verify_decision_policy_scoped(
                 return Err(bad("remap immutable artifact/complete prior map differs"));
             }
             for (local, before) in &p.prior_bindings {
+                budget.step()?;
                 if p.transitions.iter().any(|t| &t.mention_id == local) {
                     continue;
                 }
@@ -1402,7 +1456,7 @@ pub(crate) fn verify_decision_policy_scoped(
                     .ok_or_else(|| bad("untouched current mention absent"))?;
                 match before {
                     MentionBinding::Resolved { .. } => {
-                        binding_chain(&all, &p.extraction_id, local, before, now)?
+                        binding_chain(&all, &p.extraction_id, local, before, now, budget)?
                     }
                     MentionBinding::Rejected { .. } if before != now => {
                         return Err(bad("historical rejected binding changed"));
@@ -1414,6 +1468,7 @@ pub(crate) fn verify_decision_policy_scoped(
                 }
             }
             for t in &p.transitions {
+                budget.step()?;
                 binding_chain(
                     &all,
                     &p.extraction_id,
@@ -1423,14 +1478,17 @@ pub(crate) fn verify_decision_policy_scoped(
                         .bindings
                         .get(&t.mention_id)
                         .ok_or_else(|| bad("missing current binding"))?,
+                    budget,
                 )?;
             }
             // Every predecessor's complete declared mention authority is carried.
             for t in &p.transitions {
+                budget.step()?;
                 let MentionBinding::Resolved { decision_id, .. } = &t.before else {
                     return Err(bad("nonresolved remap prior binding"));
                 };
                 for (local, b) in &p.prior_bindings {
+                    budget.step()?;
                     if matches!(b,MentionBinding::Resolved{decision_id:id,..} if id==decision_id)
                         && !p.transitions.iter().any(|t| &t.mention_id == local)
                     {
@@ -1440,6 +1498,7 @@ pub(crate) fn verify_decision_policy_scoped(
             }
         }
         for p in &r.assertion_proofs {
+            budget.step()?;
             let (_, n) = budget.find(notes, &p.assertion_id)?;
             let rec = n
                 .canonical
@@ -1461,9 +1520,11 @@ pub(crate) fn verify_decision_policy_scoped(
                 &p.after_entity_id,
                 &current,
                 &p.invariant_proposition_hash,
+                budget,
             )?;
         }
         for op in &r.request.decisions {
+            budget.step()?;
             let original_sources = sources(op);
             let refs = reference_set_scoped(notes, &original_sources, budget)?;
             if !refs.is_empty() {
@@ -1477,7 +1538,9 @@ pub(crate) fn verify_decision_policy_scoped(
         colors: &mut BTreeMap<RecordId, u8>,
         lengths: &mut BTreeMap<RecordId, usize>,
         depth: usize,
+        budget: &mut ReceiptBudget,
     ) -> Result<usize> {
+        budget.step()?;
         if depth > MAX_AUTHORIZED_EVOLUTION_HOPS || colors.get(id) == Some(&1) {
             return Err(bad("decision supersession cycle/chain ceiling"));
         }
@@ -1493,7 +1556,7 @@ pub(crate) fn verify_decision_policy_scoped(
         colors.insert(id.clone(), 1);
         let mut longest = 0;
         for (_, next) in edges.iter().filter(|(old, _)| old == id) {
-            longest = longest.max(1 + visit(next, edges, colors, lengths, depth + 1)?);
+            longest = longest.max(1 + visit(next, edges, colors, lengths, depth + 1, budget)?);
         }
         if longest > MAX_AUTHORIZED_EVOLUTION_HOPS {
             return Err(bad("decision supersession cycle/chain ceiling"));
@@ -1505,12 +1568,14 @@ pub(crate) fn verify_decision_policy_scoped(
     let mut colors = BTreeMap::new();
     let mut lengths = BTreeMap::new();
     for (id, _) in &edges {
-        visit(id, &edges, &mut colors, &mut lengths, 0)?;
+        visit(id, &edges, &mut colors, &mut lengths, 0, budget)?;
     }
     // Distinct explicit merges retaining one target have consistent current outcomes.
     let mut merges: BTreeMap<RecordId, (BTreeSet<RecordId>, BTreeSet<RecordId>)> = BTreeMap::new();
     for r in all.values() {
+        budget.step()?;
         for (op, a) in r.request.decisions.iter().zip(&r.allocations) {
+            budget.step()?;
             if let EntityDecision::MergeEntities { target_id, .. } = op
                 && budget
                     .find(notes, &a.decision_id)?
@@ -1530,12 +1595,20 @@ pub(crate) fn verify_decision_policy_scoped(
         }
     }
     for (target, (mut ids, absorbed)) in merges {
+        budget.require(PolicyInputKey::ActiveDecisionCandidates)?;
+        for id in std::iter::once(&target).chain(absorbed.iter()) {
+            budget.require(PolicyInputKey::ActiveDecisionOutput(id.clone()))?;
+        }
         for (path, note) in notes {
+            budget.step()?;
             let Some(d) = &note.canonical else {
                 continue;
             };
             if d.kind() != RecordKind::Decision || d.string("wiki_status") != Some("active") {
                 continue;
+            }
+            if aliases.contains(d.id()) {
+                budget.observe(path, note)?;
             }
             if aliases.contains(d.id())
                 && id_list(d, "wiki_output_ids")?
@@ -1575,7 +1648,14 @@ pub fn verify_binding_evolution(
     }
     let policy = verify_decision_policy(&view.notes)?
         .ok_or_else(|| bad("binding remap has no explicit canonical receipt"))?;
-    binding_chain(&policy.receipts, extraction_id, mention_id, before, after)
+    binding_chain(
+        &policy.receipts,
+        extraction_id,
+        mention_id,
+        before,
+        after,
+        &mut ReceiptBudget::default(),
+    )
 }
 pub fn verify_proposition_evolution(
     view: &SourceView<'_>,
@@ -1607,6 +1687,7 @@ pub fn verify_proposition_evolution(
                 &RecordId::new(old)?,
                 &RecordId::new(new)?,
                 &invariant(before)?,
+                &mut ReceiptBudget::default(),
             )?,
             (a, b) if a == b => {}
             _ => return Err(bad("entity/literal shape changed")),

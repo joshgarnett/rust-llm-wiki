@@ -1,5 +1,6 @@
 //! Rebuildable catalog generations and complete graph eligibility.
 pub(crate) mod compact_audit;
+mod decision_rules;
 pub(crate) mod doctor;
 pub mod eligibility;
 pub(crate) mod eligibility_facts;
@@ -35,6 +36,10 @@ pub(crate) mod normalized_read;
 pub(crate) mod normalized_schema;
 #[cfg(test)]
 mod ownership_tests;
+mod policy_delta;
+pub(crate) mod policy_facts;
+mod policy_projection;
+mod policy_query;
 #[cfg(test)]
 mod projector_query_tests;
 pub mod publish;
@@ -49,6 +54,8 @@ pub mod snapshot;
 pub(crate) mod source_projection;
 pub(crate) mod source_refresh;
 pub mod sql;
+mod structural_projection;
 pub(crate) mod structural_rules;
 pub mod types;
+pub(crate) mod write_projection;
 pub use types::*;

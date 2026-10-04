@@ -554,6 +554,12 @@ impl OfflineApp {
         let before = crate::changes::prepare::read_bounded(&self.fs, &path, MAX_INPUT_BYTES)?;
         let expected = match (before, if_match) {
             (Some(old), Some(hash)) => {
+                if Blake3Hash::digest(&old) != hash {
+                    return Err(WikiError::new(
+                        ErrorCode::ContentConflict,
+                        "page author hash differs from current bytes",
+                    ));
+                }
                 let old_note = parse_note(&old);
                 let old_record = old_note
                     .canonical
@@ -595,7 +601,84 @@ impl OfflineApp {
         if_match: Option<Blake3Hash>,
     ) -> Result<MutationOutcome> {
         let operation = self.plan_page_write(path, bytes, if_match)?;
-        self.execute_draft(empty_draft("Put page".into(), vec![operation]), false)
+        self.execute_page_draft(empty_draft("Put page".into(), vec![operation]))
+    }
+    pub(crate) fn default_page_path(&self, id: &RecordId) -> Result<VaultRelativePath> {
+        use crate::catalog::query_types::QueryCatalog;
+        let catalog = self.catalog();
+        let existing = if catalog.operation_state()?.is_some() {
+            catalog.guard_query()?;
+            catalog
+                .query_snapshot(crate::catalog::query_types::QueryReadLimits::default())?
+                .record(id)?
+                .map(|row| row.path)
+        } else {
+            crate::catalog::scan::scan(&self.fs, &self.vault_id)?
+                .records
+                .get(id)
+                .map(|row| row.path.clone())
+        };
+        existing
+            .map(Ok)
+            .unwrap_or_else(|| VaultRelativePath::new(format!("pages/{id}.md")))
+    }
+    /// Page writes use selected admission on a normalized publication. Other
+    /// mutation kinds retain their own validation and authority boundaries.
+    pub(crate) fn execute_page_draft(&self, draft: ChangeDraft) -> Result<MutationOutcome> {
+        use crate::catalog::{
+            query_types::QueryReadLimits, source_projection::RefreshProjectionLimits,
+            source_refresh::IndexedRefreshSession, write_projection::project_pages,
+        };
+        let catalog = self.catalog();
+        if catalog.operation_state()?.is_none() {
+            return self.execute_draft(draft, false);
+        }
+        let mut outcome = MutationOutcome {
+            source_capture: None,
+            plan: summarize(&draft.title, &draft.read_preconditions, &draft.operations),
+            allocated_ids: draft.allocated_ids.clone(),
+            change: None,
+            status: None,
+            snapshot: None,
+            reused: false,
+        };
+        // WAL readers can change shared-memory coordination even when opened
+        // read-only. A preview checks explicit file guards but leaves indexed
+        // admission unknown instead of opening SQLite or claiming a sealed plan.
+        if self.options.dry_run {
+            return Ok(outcome);
+        }
+        catalog.guard_query()?;
+        let reader = catalog.query_snapshot(QueryReadLimits::default())?;
+        let Some(projected) = project_pages(
+            &self.fs,
+            &reader,
+            draft,
+            &RefreshProjectionLimits::default(),
+        )?
+        else {
+            outcome.plan.operations.clear();
+            outcome.reused = true;
+            return Ok(outcome);
+        };
+        let draft = projected.draft();
+        outcome.plan = summarize(&draft.title, &draft.read_preconditions, &draft.operations);
+        let writer = self.writer()?;
+        catalog.guard_current(None)?;
+        let mut session = IndexedRefreshSession::prepare_write(&catalog, &writer, projected)?;
+        let change = session.proof().change.clone();
+        outcome.change = Some(change.clone());
+        if self.options.stage_only {
+            outcome.status = Some(ChangeStatus::Prepared);
+            return Ok(outcome);
+        }
+        let report = self
+            .engine()?
+            .apply_indexed_refresh(&writer, &mut session)
+            .map_err(|error| retained_error(error, &change))?;
+        outcome.status = Some(report.status);
+        outcome.snapshot = report.snapshot;
+        Ok(outcome)
     }
     pub fn page_rename(
         &self,

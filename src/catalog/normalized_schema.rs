@@ -67,6 +67,8 @@ CREATE TABLE link_match_keys(kind TEXT NOT NULL,value TEXT NOT NULL,from_path TE
 CREATE INDEX link_match_owners ON link_match_keys(from_path,byte_start);
 CREATE TABLE registry_match_keys(kind TEXT NOT NULL,value TEXT NOT NULL,record_id TEXT NOT NULL,path TEXT NOT NULL,PRIMARY KEY(kind,value,record_id,path));
 CREATE INDEX registry_match_owners ON registry_match_keys(record_id,path);
+CREATE TABLE policy_facts(family TEXT NOT NULL CHECK(family IN ('layout','state','dependency','read_path','membership','alias','family_member','remap_edge','review_edge')),key TEXT NOT NULL,owner TEXT NOT NULL,value TEXT NOT NULL,PRIMARY KEY(family,key,owner));
+CREATE INDEX policy_facts_owner ON policy_facts(family,owner,key);
 CREATE TABLE diagnostics(diagnostic_row INTEGER PRIMARY KEY,path TEXT NOT NULL,record_id TEXT,code TEXT NOT NULL,details_json TEXT NOT NULL);
 CREATE INDEX diagnostic_paths ON diagnostics(path);
 CREATE TABLE dependencies(dependency_row INTEGER PRIMARY KEY,path TEXT NOT NULL UNIQUE,expected_hash TEXT);

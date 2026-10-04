@@ -115,3 +115,36 @@ semantic, hybrid, literal, graph and host selection remain separate migration
 work. Dry-run previews the resolved request without running its proof. Operational
 generation-output records currently require explicit cached read because their
 selected verification is not implemented.
+
+## Editing Pages on normalized indexes
+
+`page init`, `page put` and `page batch` update a selected normalized publication
+without a full-vault scan or a separate sync. `page init` creates a draft; use a
+reviewed Page envelope when the text should enter default context. Existing
+Pages require their current author hash. Omitted `--path` on `page put` resolves
+an existing identity through the index and preserves its custom path.
+
+Admission checks the changed Pages and their actual structural, policy, support
+and navigation dependencies. It publishes the resulting rows and search postings
+together. Receipt fences are policy inputs under the existing graph rules, even
+when they appear in authored Pages; adding or removing one recomputes that policy.
+An update that would newly invalidate a dependent record refuses before mutation.
+Broad genuine dependency fanout can exceed the finite admission budget; the
+command does not silently publish a partial closure.
+
+Unchanged Page proposals report reuse without a new publication, while retaining
+and checking supplied read guards. Dry-run previews the request without opening
+SQLite or changing bytes/mtimes. It checks explicit target files and their author
+guards, but leaves indexed admission, portable path collisions and read
+dependencies unchecked. A `page put` preview without `--path` reports the intended
+record ID and an unresolved destination/supplied guard. JSON marks
+`plan_complete: false` and exposes checked/unperformed validation fields; no
+reuse or stageability claim follows from a preview. `--stage` retains the plan; `changes apply ID`
+rechecks its author/dependency hashes before applying it. An intervening edit is
+preserved. A batch is recoverable across sequential writes, not a multi-file
+filesystem transaction. Version-3 receipts identify the admitted write kind;
+existing version-2 source-refresh receipts keep their original replay format.
+
+These paths do not yet migrate source addition/withdrawal or page rename.
+The normalized layout remains opt-in, and Page fixture checks do not establish
+large-vault update throughput or whole-task retrieval completeness.

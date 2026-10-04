@@ -65,17 +65,14 @@ impl OfflineApp {
             }
             operations.push(operation);
         }
-        self.execute_draft(
-            ChangeDraft {
-                title: request.title,
-                origin: None,
-                inverse_of: None,
-                allocated_ids: BTreeMap::new(),
-                read_preconditions: request.read_preconditions,
-                operations,
-            },
-            false,
-        )
+        self.execute_page_draft(ChangeDraft {
+            title: request.title,
+            origin: None,
+            inverse_of: None,
+            allocated_ids: BTreeMap::new(),
+            read_preconditions: request.read_preconditions,
+            operations,
+        })
     }
     pub fn page_initialize(
         &self,

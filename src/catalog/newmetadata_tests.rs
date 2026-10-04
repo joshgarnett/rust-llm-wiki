@@ -91,6 +91,11 @@ impl MetadataSink for Collector {
             ));
         }
         let (kind, owner) = match row {
+            MetadataRow::Policy(row) => {
+                let columns = row.columns()?;
+                self.rows.push(("policy".into(), columns[2].clone()));
+                return Ok(());
+            }
             MetadataRow::AssertionNavigation { assertion, key } => {
                 if assertion.as_str() == FORWARD {
                     self.navigation.push(format!(
@@ -128,7 +133,7 @@ impl MetadataSink for Collector {
 }
 
 #[test]
-fn real_bootstrap_metadata_preserves_navigation_dedup_order_and_all_seven_families() {
+fn real_bootstrap_metadata_preserves_navigation_dedup_order_and_all_eight_families() {
     let (_temp, projection) = fixture();
     let mut actual = Collector::default();
     visit_eligibility_rows(&projection.validation, &projection.facts, &mut actual).unwrap();
@@ -168,6 +173,7 @@ fn real_bootstrap_metadata_preserves_navigation_dedup_order_and_all_seven_famili
     );
     assert_eq!(actual.evidence.len(), 9);
     for family in [
+        "policy",
         "navigation",
         "opposition",
         "baseline",

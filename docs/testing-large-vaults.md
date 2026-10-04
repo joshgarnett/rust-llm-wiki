@@ -753,3 +753,49 @@ This checkpoint does not qualify new source import or authored mutations after
 normalized activation, remaining retrieval modes, default storage activation,
 100k/10 GB capacity or unseen answer completeness. Its functional fixtures import
 sources before activation; they do not substitute for the remaining import path.
+
+
+### Normalized Page authoring checkpoint
+
+An activated normalized vault supports Page initialization, guarded replacement
+and bounded cross-linked batches, followed by immediate read, lexical discovery
+and mixed-document context. Staged changes use retained version-3 write proofs;
+deployed version-2 refresh recovery remains supported. See
+[Page command behavior and limits](indexed-context.md).
+
+The terminal release checkpoint passed all ten targets: 626 unit tests and 185
+integration test executions (811 total). Eleven tests were ignored; two unchanged
+accounting fault matrices were excluded. Source hashes remained unchanged during
+the 985.05-second validation. The only later code change reordered module
+declarations to satisfy formatting; `cargo fmt --all -- --check` and
+`git diff --check` passed. Strict Clippy was not run; compiler warnings remain.
+The reproducible integrated command is:
+
+```sh
+python3 scripts/bazel.py -- test //:unit_tests --test_output=errors --nofetch --config=release \
+  --test_arg=--skip=jobs::accounting_tests::every_actual_ledger_io_boundary_replays_without_duplicate_charge \
+  --test_arg=--skip=jobs::accounting_tests::every_bootstrap_genesis_head_and_canonical_create_io_boundary_is_retryable \
+  //:offline_application_test //:offline_cli_test //:changes_recovery_test \
+  //:catalog_scan_eligibility_test //:sources_evidence_test //:graph_queries_test \
+  //:graph_review_test //:entity_decisions_test //:machine_contract_test
+```
+
+Independent Astra acceptance was **9.3/10**, with zero correctness blockers.
+The public-command review verified guarded edits, cross-linked
+batches, immediate content, exact source citation bytes and BLAKE3 hashes,
+selected-file tamper refusal, stage/apply/retry, stale-stage author preservation,
+and persisted review-policy restoration. Fourteen preview cases preserved every
+file and directory's bytes and modification times, including SQLite shared
+memory. Preview explicitly marks indexed admission, dependencies and collisions
+unchecked; an omitted put destination remains unresolved. A preview is not an
+admitted or stageable change.
+
+Native injected failures before and after SQLite commit exercised real sealed
+Page admission and retained replay, old-reader isolation, canonical/cache oracle
+agreement, policy restoration and terminal idempotence. These are native
+in-process fault tests with reconstructed sessions, not process-death or
+power-loss qualification.
+
+This checkpoint covers Page authoring only. New-source capture/withdrawal,
+collection import, remaining query modes, default activation, 100k/10 GB capacity
+and unseen semantic completeness remain separate acceptance requirements.

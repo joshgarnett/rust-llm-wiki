@@ -672,7 +672,7 @@ fn receipt(n: &ParsedNote) -> Result<ReviewReceiptV1> {
         MAX_REVIEW_RECEIPT_BYTES,
     )
 }
-fn has_fence(n: &ParsedNote) -> bool {
+pub(crate) fn has_fence(n: &ParsedNote) -> bool {
     std::str::from_utf8(n.body()).is_ok_and(|s|Parser::new(s).any(|e|matches!(e,Event::Start(Tag::CodeBlock(CodeBlockKind::Fenced(info))) if info.as_ref()==GRAPH_REVIEW_FENCE)))
 }
 pub fn relevant_decision_ids(
@@ -699,8 +699,10 @@ fn receipts_scoped(
     notes: &BTreeMap<VaultRelativePath, ParsedNote>,
     scope: &mut ReceiptBudget,
 ) -> Result<BTreeMap<RecordId, ReviewReceiptV1>> {
+    scope.require(super::policy_inputs::PolicyInputKey::ReviewReceiptCandidates)?;
     let mut all = BTreeMap::new();
     for (path, n) in notes {
+        scope.step()?;
         if !has_fence(n) {
             continue;
         }
@@ -1070,12 +1072,17 @@ impl VerifiedReviewPolicy {
     }
 }
 fn acyclic(edges: &BTreeSet<(RecordId, RecordId)>) -> Result<()> {
+    acyclic_scoped(edges, &mut ReceiptBudget::default())
+}
+fn acyclic_scoped(edges: &BTreeSet<(RecordId, RecordId)>, scope: &mut ReceiptBudget) -> Result<()> {
     fn walk(
         id: &RecordId,
         edges: &BTreeMap<RecordId, BTreeSet<RecordId>>,
         visiting: &mut BTreeSet<RecordId>,
         memo: &mut BTreeMap<RecordId, usize>,
+        scope: &mut ReceiptBudget,
     ) -> Result<usize> {
+        scope.step()?;
         if let Some(n) = memo.get(id) {
             return Ok(*n);
         }
@@ -1085,7 +1092,7 @@ fn acyclic(edges: &BTreeSet<(RecordId, RecordId)>) -> Result<()> {
         let mut depth = 0usize;
         for next in edges.get(id).into_iter().flatten() {
             depth = depth.max(
-                walk(next, edges, visiting, memo)?
+                walk(next, edges, visiting, memo, scope)?
                     .checked_add(1)
                     .ok_or_else(budget)?,
             );
@@ -1099,11 +1106,12 @@ fn acyclic(edges: &BTreeSet<(RecordId, RecordId)>) -> Result<()> {
     }
     let mut graph = BTreeMap::<RecordId, BTreeSet<RecordId>>::new();
     for (a, b) in edges {
+        scope.step()?;
         graph.entry(a.clone()).or_default().insert(b.clone());
     }
     let mut memo = BTreeMap::new();
     for id in graph.keys() {
-        walk(id, &graph, &mut BTreeSet::new(), &mut memo)?;
+        walk(id, &graph, &mut BTreeSet::new(), &mut memo, scope)?;
     }
     Ok(())
 }
@@ -1141,9 +1149,11 @@ pub(crate) fn verify_review_policy_scoped(
     if let Some(p) = remap::verify_decision_policy_scoped(notes, scope)? {
         combined.extend(p.supersession_edges().iter().cloned());
     }
-    acyclic(&combined)?;
+    acyclic_scoped(&combined, scope)?;
     for r in all.values() {
+        scope.step()?;
         for d in &r.request.decisions {
+            scope.step()?;
             let (_, n) = scope.find(notes, &r.allocations.decisions[&d.assertion_id])?;
             semantic_decision(r, d, n)?;
             if status(n)? == "active" {
@@ -1168,6 +1178,7 @@ pub(crate) fn verify_review_policy_scoped(
             }
         }
         for p in &r.predecessors {
+            scope.step()?;
             let (_, n) = scope.find(notes, &p.decision_id)?;
             let old = record(n)?;
             if old.kind() != RecordKind::Decision

@@ -93,13 +93,27 @@ pub(crate) struct DeltaStats {
 
 impl CatalogDelta {
     pub fn validate(&self) -> Result<()> {
-        if !matches!((self.version, self.facts.is_some()), (1, false) | (2, true)) {
+        if !matches!(
+            (self.version, self.facts.is_some()),
+            (1, false) | (2 | 3, true)
+        ) {
             return Err(invalid(
                 "catalog delta version and normalized facts disagree",
             ));
         }
-        if self.version == 2 && self.records.iter().any(|row| !row.dependencies.is_empty()) {
+        if self.version >= 2 && self.records.iter().any(|row| !row.dependencies.is_empty()) {
             return Err(invalid("normalized delta carries flattened record proofs"));
+        }
+        if self.version == 3
+            && self
+                .facts
+                .as_ref()
+                .and_then(|facts| facts.policy.as_ref())
+                .is_none()
+        {
+            return Err(invalid(
+                "normalized write delta requires complete policy maintenance",
+            ));
         }
         let mut count = 0usize;
         let mut admit = |value: &dyn SizedJson| -> Result<()> {
@@ -241,10 +255,26 @@ impl CatalogDelta {
                 |row| row.get(0),
             )
             .map_err(sql::sql_error)?;
-        if layout != if self.version == 2 { 2 } else { 0 } {
+        if layout != if self.version >= 2 { 2 } else { 0 } {
             return Err(invalid("catalog delta and selected proof layout disagree"));
         }
-        if self.version == 2 {
+        if self.version == 3 {
+            let layout: Option<String> = connection
+                .query_row(
+                    "SELECT value FROM policy_facts WHERE family='layout' AND key='' AND owner=''",
+                    [],
+                    |row| row.get(0),
+                )
+                .optional()
+                .map_err(sql::sql_error)?;
+            if layout.as_deref() != Some("1") {
+                return Err(invalid(
+                    "normalized write policy layout requires explicit rebuild",
+                ));
+            }
+            connection.prepare("SELECT value FROM policy_facts INDEXED BY policy_facts_owner WHERE family=?1 AND owner=?2 AND key=?3").map_err(sql::sql_error)?;
+        }
+        if self.version >= 2 {
             for query in [
                 "SELECT baseline_json,structural_json FROM record_eligibility_facts WHERE record_id=?1",
                 "SELECT path FROM record_direct_paths WHERE owner_id=?1",

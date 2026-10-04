@@ -50,7 +50,7 @@ impl ChangeEngine {
             .and_then(|proof| proof.get("version"))
             .and_then(|version| version.as_u64())
         {
-            Some(2) => {
+            Some(2 | 3) => {
                 let proof = self.load_indexed_refresh_proof(change)?.ok_or_else(|| {
                     recovery_error("indexed validation proof disappeared during dispatch")
                 })?;

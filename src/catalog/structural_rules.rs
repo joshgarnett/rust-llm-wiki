@@ -25,6 +25,19 @@ pub(crate) enum StructuralStage {
     Propagation,
     EvidenceIntegrity,
 }
+impl StructuralStage {
+    /// Execution phase order is explicit, independent of enum declaration/serde.
+    pub(crate) const fn rank(self) -> u8 {
+        match self {
+            Self::Reference => 0,
+            Self::Invariant => 1,
+            Self::Decision => 2,
+            Self::RevisionIntegrity => 3,
+            Self::Propagation => 4,
+            Self::EvidenceIntegrity => 5,
+        }
+    }
+}
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct StructuralEffect {
@@ -72,6 +85,55 @@ pub(crate) struct StructuralFact {
     pub effects: Vec<StructuralEffect>,
 }
 impl StructuralFact {
+    /// Replay only the requested inclusive prefix. Later-stage effects remain
+    /// retained but cannot leak final eligibility into an earlier phase.
+    pub(crate) fn baseline_through(&self, through: StructuralStage) -> Result<EligibilityBaseline> {
+        self.validate_order()?;
+        Ok(Self {
+            effects: self
+                .effects
+                .iter()
+                .filter(|effect| effect.stage.rank() <= through.rank())
+                .cloned()
+                .collect(),
+        }
+        .baseline())
+    }
+    /// Replace an entire stage, preserving emission order within that stage and
+    /// the exact order of all other effects. Later effects are retained, not
+    /// revalidated: callers must reevaluate dependent stages before publication.
+    pub(crate) fn replace_stage_effects(
+        &mut self,
+        stage: StructuralStage,
+        replacements: Vec<StructuralEffect>,
+    ) -> Result<()> {
+        self.validate_order()?;
+        if replacements.iter().any(|effect| effect.stage != stage) {
+            return Err(incomplete(
+                "replacement effects belong to another structural stage",
+            ));
+        }
+        let before = self
+            .effects
+            .partition_point(|effect| effect.stage.rank() < stage.rank());
+        let after = self
+            .effects
+            .partition_point(|effect| effect.stage.rank() <= stage.rank());
+        self.effects.splice(before..after, replacements);
+        Ok(())
+    }
+    fn validate_order(&self) -> Result<()> {
+        if self
+            .effects
+            .windows(2)
+            .any(|pair| pair[0].stage.rank() > pair[1].stage.rank())
+        {
+            return Err(incomplete(
+                "structural effects are not in execution stage order",
+            ));
+        }
+        Ok(())
+    }
     pub(crate) fn baseline(&self) -> EligibilityBaseline {
         let mut eligibility = Eligibility::Current;
         let mut reasons = Vec::new();

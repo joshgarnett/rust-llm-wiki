@@ -17,7 +17,7 @@ use rusqlite::{Connection, Params, params, types::ValueRef};
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet};
 
-const FAMILIES: [&str; 18] = [
+const FAMILIES: [&str; 19] = [
     "documents",
     "graph_rows",
     "records",
@@ -32,6 +32,7 @@ const FAMILIES: [&str; 18] = [
     "assertion_navigation_keys",
     "opposition_members",
     "record_eligibility_facts",
+    "policy_facts",
     "record_direct_paths",
     "semantic_edges",
     "dependencies",
@@ -488,6 +489,23 @@ impl MetadataSink for AuditSink<'_> {
     }
     fn row(&mut self, row: MetadataRow<'_>) -> Result<()> {
         match row {
+            MetadataRow::Policy(row) => {
+                let columns = row.columns()?;
+                counted_json(&columns, self.budget.limits().max_row_bytes)?;
+                self.compare(
+                    "policy_facts",
+                    "family,key,owner,value",
+                    "family=?1 AND key=?2 AND owner=?3",
+                    params![columns[0], columns[1], columns[2]],
+                    &[
+                        text(&columns[0]),
+                        text(&columns[1]),
+                        text(&columns[2]),
+                        text(&columns[3]),
+                    ],
+                    false,
+                )?;
+            }
             MetadataRow::AssertionNavigation { assertion, key } => {
                 self.compare(
                     "assertion_navigation_keys",

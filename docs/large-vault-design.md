@@ -14,16 +14,18 @@ operation, bounded remote embedding calls and recovery/accounting invariants.
 
 ## Current implementation boundary
 
-An explicitly selected normalized catalog supports bounded captured-source
-context, cached `read --no-sync`, general lexical `search --no-sync`, document
-snapshot context, and indexed source refresh with staged apply and recovery.
+An explicitly selected normalized catalog supports plain lexical search,
+selected-dependency verified reads, mixed authored/captured document context,
+cached `read --no-sync`, document snapshot context, and indexed source refresh
+with staged apply and recovery. Page initialization, guarded replacement and
+bounded batches also use selected admission and shared publication/replay.
 Publication stores per-document rows and updates affected rows in one
 transaction. Ordinary normalized queries consult a small publication record;
 they do not audit completed operation history. Selected evidence still requires
 verification before it becomes a citation.
 
-Default synchronized retrieval, literal, semantic, hybrid and graph queries,
-authored mutations and public default activation are not fully migrated. These
+Literal, semantic, hybrid and graph queries, host context selection, source
+addition/withdrawal, page rename and public default activation are not fully migrated. These
 are required integration work, not optional omissions. Large-vault capacity and
 unseen context completeness remain unqualified. See the
 [validation protocol and measured results](testing-large-vaults.md) for actual

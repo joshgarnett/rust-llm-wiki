@@ -16,6 +16,61 @@ use crate::{
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
+/// New write receipts identify their admitted operation without inventing a
+/// source identity for authored pages. Version-two receipts keep their exact
+/// original fields and checksum encoding.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub(crate) enum IndexedWriteOperation {
+    SourceRefresh {
+        source_id: RecordId,
+    },
+    SourceCapture {
+        source_id: RecordId,
+        revision_id: RecordId,
+    },
+    PageBatch {
+        pages: Vec<IndexedPageTarget>,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct IndexedPageTarget {
+    pub path: VaultRelativePath,
+    pub id: RecordId,
+}
+
+impl IndexedWriteOperation {
+    pub(crate) fn validate(&self) -> Result<()> {
+        match self {
+            Self::SourceRefresh { .. } => Ok(()),
+            Self::SourceCapture {
+                source_id,
+                revision_id,
+            } if source_id != revision_id => Ok(()),
+            Self::SourceCapture { .. } => Err(recovery("source capture identities overlap")),
+            Self::PageBatch { pages } => {
+                let ids: std::collections::BTreeSet<_> =
+                    pages.iter().map(|page| &page.id).collect();
+                if pages.is_empty()
+                    || pages.len() > 16
+                    || ids.len() != pages.len()
+                    || !pages.windows(2).all(|pair| pair[0].path < pair[1].path)
+                    || pages
+                        .iter()
+                        .any(|page| !crate::sources::revision::canonical_path(&page.path))
+                {
+                    return Err(recovery(
+                        "page operation requires 1–16 unique sorted canonical targets",
+                    ));
+                }
+                Ok(())
+            }
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum IndexedRefreshPhase {
     AtBase,
@@ -29,7 +84,10 @@ pub(crate) enum IndexedRefreshPhase {
 pub(crate) struct IndexedRefreshProof {
     pub version: u32,
     pub vault_id: RecordId,
-    pub source_id: RecordId,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_id: Option<RecordId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub operation: Option<IndexedWriteOperation>,
     pub change: PreparedChange,
     pub base: ReadSnapshot,
     pub intended: ReadSnapshot,
@@ -71,7 +129,16 @@ fn publication(snapshot: &ReadSnapshot) -> Result<Publication> {
 }
 impl IndexedRefreshProof {
     fn validate(&self, vault: &RecordId, change: &PreparedChange) -> Result<()> {
-        if self.version != 2 || &self.vault_id != vault || &self.change != change {
+        match (self.version, &self.source_id, &self.operation) {
+            (2, Some(_), None) => {}
+            (3, None, Some(operation)) => operation.validate()?,
+            _ => {
+                return Err(recovery(
+                    "indexed write operation identity or version differs",
+                ));
+            }
+        }
+        if &self.vault_id != vault || &self.change != change {
             return Err(recovery(
                 "indexed refresh baseline identity or version differs",
             ));
@@ -119,6 +186,18 @@ impl IndexedRefreshProof {
     }
     pub(crate) fn validate_manifest(&self, manifest: &ChangeManifest) -> Result<()> {
         self.validate(&manifest.vault_id, &self.change)?;
+        if let Some(IndexedWriteOperation::PageBatch { pages }) = &self.operation {
+            if manifest.operations.len() != pages.len()
+                || manifest.operations.iter().any(|operation| {
+                    !pages.iter().any(|page| page.path == operation.target)
+                        || matches!(operation.after, ExpectedState::Absent)
+                })
+            {
+                return Err(recovery(
+                    "page operation targets differ from its retained manifest",
+                ));
+            }
+        }
         if manifest.change_id != self.change.change_id {
             return Err(recovery(
                 "indexed refresh manifest differs from baseline change",

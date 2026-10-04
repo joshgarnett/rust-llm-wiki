@@ -1,27 +1,91 @@
 //! Admission for actual receipt/proof notes, independent of unrelated catalog size.
+use super::policy_inputs::{PolicyInputKey, PolicyInputTrace, PolicyWork};
 use crate::{
     domain::{ErrorCode, RecordId, Result, VaultRelativePath, WikiError},
     records::ParsedNote,
 };
 use std::collections::{BTreeMap, BTreeSet};
-pub(crate) struct ReceiptBudget {
+pub(crate) struct ReceiptBudget<'a> {
     max_files: usize,
     max_bytes: usize,
     seen: BTreeSet<VaultRelativePath>,
     bytes: usize,
+    certificates: Option<BTreeSet<PolicyInputKey>>,
+    pending: Option<PolicyInputKey>,
+    trace: PolicyInputTrace,
+    tracing: bool,
+    meter: Option<&'a mut dyn FnMut(PolicyWork) -> Result<()>>,
 }
-impl Default for ReceiptBudget {
+impl Default for ReceiptBudget<'_> {
     fn default() -> Self {
         Self {
             max_files: 4096,
             max_bytes: 64 * 1024 * 1024,
             seen: BTreeSet::new(),
             bytes: 0,
+            certificates: None,
+            pending: None,
+            trace: PolicyInputTrace::default(),
+            tracing: false,
+            meter: None,
         }
     }
 }
-impl ReceiptBudget {
+impl<'a> ReceiptBudget<'a> {
+    pub(crate) fn certified(certificates: Option<BTreeSet<PolicyInputKey>>) -> Self {
+        Self {
+            certificates,
+            tracing: true,
+            ..Self::default()
+        }
+    }
+    pub(crate) fn with_meter(mut self, meter: &'a mut dyn FnMut(PolicyWork) -> Result<()>) -> Self {
+        self.meter = Some(meter);
+        self
+    }
+    pub(crate) fn step(&mut self) -> Result<()> {
+        if let Some(meter) = self.meter.as_mut() {
+            meter(PolicyWork { steps: 1, bytes: 0 })?;
+        }
+        Ok(())
+    }
+    pub(crate) fn require(&mut self, key: PolicyInputKey) -> Result<()> {
+        self.step()?;
+        if self.tracing {
+            self.trace.keys.insert(key.clone());
+        }
+        if self
+            .certificates
+            .as_ref()
+            .is_some_and(|keys| !keys.contains(&key))
+        {
+            self.pending = Some(key);
+            return Err(super::remap::bad("internal incomplete policy input"));
+        }
+        Ok(())
+    }
+    pub(crate) fn into_trace(self) -> (Option<PolicyInputKey>, PolicyInputTrace) {
+        (self.pending, self.trace)
+    }
+
+    pub(crate) fn observe(&mut self, path: &VaultRelativePath, note: &ParsedNote) -> Result<()> {
+        self.step()?;
+        if self.tracing && !self.trace.paths.contains_key(path) {
+            if let Some(meter) = self.meter.as_mut() {
+                meter(PolicyWork {
+                    steps: 0,
+                    bytes: note.raw.len(),
+                })?;
+            }
+            self.trace
+                .paths
+                .insert(path.clone(), crate::domain::Blake3Hash::digest(&note.raw));
+            self.step()?;
+        }
+        Ok(())
+    }
     pub(crate) fn admit(&mut self, path: &VaultRelativePath, note: &ParsedNote) -> Result<()> {
+        self.observe(path, note)?;
         if self.seen.contains(path) {
             return Ok(());
         }
@@ -39,13 +103,15 @@ impl ReceiptBudget {
     }
     /// Preserve exhaustive canonical-identity discovery, including duplicate
     /// witnesses. Only matching notes enter the proof byte/count allowance.
-    pub(crate) fn find<'a>(
+    pub(crate) fn find<'notes>(
         &mut self,
-        notes: &'a BTreeMap<VaultRelativePath, ParsedNote>,
+        notes: &'notes BTreeMap<VaultRelativePath, ParsedNote>,
         id: &RecordId,
-    ) -> Result<(&'a VaultRelativePath, &'a ParsedNote)> {
+    ) -> Result<(&'notes VaultRelativePath, &'notes ParsedNote)> {
+        self.require(PolicyInputKey::CanonicalIdentity(id.clone()))?;
         let mut found = None;
         for (path, note) in notes {
+            self.step()?;
             if note
                 .canonical
                 .as_ref()

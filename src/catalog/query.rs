@@ -43,6 +43,7 @@ pub(crate) struct QuerySnapshot {
     vault_id: RecordId,
     verification: SnapshotVerification,
     usage: Cell<QueryReadUsage>,
+    pub(super) policy_layout_verified: Cell<bool>,
     limits: QueryReadLimits,
     operation_authority: Option<Authority>,
     scope: QueryScope,
@@ -145,6 +146,7 @@ impl Catalog {
                 vault_id: self.vault_id.clone(),
                 verification: SnapshotVerification::IndexSnapshot,
                 usage: Cell::new(QueryReadUsage::default()),
+                policy_layout_verified: Cell::new(false),
                 limits,
                 operation_authority,
                 scope,
@@ -218,6 +220,7 @@ impl Catalog {
             vault_id: self.vault_id.clone(),
             verification: SnapshotVerification::IndexSnapshot,
             usage: Cell::new(QueryReadUsage::default()),
+            policy_layout_verified: Cell::new(false),
             limits,
             operation_authority: None,
             scope,
@@ -339,26 +342,10 @@ impl QuerySnapshot {
         let mut selected: Option<super::IdentityClaimRow> = None;
         while let Some(row) = rows.next().map_err(sql::sql_error)? {
             self.reserve_refresh_row(row, 4)?;
-            let claimed_id =
-                RecordId::new(utf8(text_bytes(row, 0)?)?).map_err(|e| corrupt(e.message))?;
-            let path = VaultRelativePath::new(utf8(text_bytes(row, 1)?)?)
-                .map_err(|e| corrupt(e.message))?;
-            let hash =
-                Blake3Hash::new(utf8(text_bytes(row, 2)?)?).map_err(|e| corrupt(e.message))?;
-            let kind = match row.get_ref(3).map_err(sql::sql_error)? {
-                ValueRef::Null => None,
-                ValueRef::Text(bytes) => Some(
-                    utf8(bytes)?
-                        .parse::<RecordKind>()
-                        .map_err(|_| corrupt("identity claim kind is invalid"))?,
-                ),
-                _ => return Err(corrupt("identity claim kind is not text or NULL")),
-            };
-            if &claimed_id != id {
-                return Err(corrupt("identity claim key differs from requested ID"));
-            }
+            let claim = decode_identity_claim(row, id)?;
+            let path = &claim.path;
             if let Some(first) = &selected {
-                if first.path == path {
+                if &first.path == path {
                     return Err(corrupt(
                         "identity claim primary key returned duplicate paths",
                     ));
@@ -368,14 +355,37 @@ impl QuerySnapshot {
                     "record ID has multiple canonical identity claims",
                 ));
             }
-            selected = Some(super::IdentityClaimRow {
-                id: claimed_id,
-                path,
-                hash,
-                kind,
-            });
+            selected = Some(claim);
         }
         Ok(selected)
+    }
+
+    /// Complete selected identity claims, including malformed-note reservations
+    /// and every duplicate claimant path. Completeness fails with the read budget.
+    pub(crate) fn identity_claims_for_id(
+        &self,
+        id: &RecordId,
+    ) -> Result<Vec<super::IdentityClaimRow>> {
+        self.require_refresh_publication()?;
+        self.reserve_fact_input(id.as_str().len())?;
+        self.require_identity_claim_access()?;
+        let mut statement = self.connection.prepare(
+            "SELECT record_id,path,file_hash,kind FROM identity_claims INDEXED BY sqlite_autoindex_identity_claims_1 WHERE record_id=?1 ORDER BY path",
+        ).map_err(sql::sql_error)?;
+        let mut rows = statement.query([id.as_str()]).map_err(sql::sql_error)?;
+        let mut result: Vec<super::IdentityClaimRow> = Vec::new();
+        while let Some(row) = rows.next().map_err(sql::sql_error)? {
+            self.reserve_refresh_row(row, 4)?;
+            let claim = decode_identity_claim(row, id)?;
+            if result
+                .last()
+                .is_some_and(|previous| previous.path >= claim.path)
+            {
+                return Err(corrupt("identity claim paths are not unique sorted keys"));
+            }
+            result.push(claim);
+        }
+        Ok(result)
     }
 
     fn require_identity_claim_access(&self) -> Result<()> {
@@ -487,7 +497,7 @@ impl QuerySnapshot {
 
     /// Reserve all returned text bytes (including malformed blobs) and the row
     /// before constructing any owned IDs, paths, hashes or record payloads.
-    fn reserve_refresh_row(&self, row: &Row<'_>, columns: usize) -> Result<()> {
+    pub(super) fn reserve_refresh_row(&self, row: &Row<'_>, columns: usize) -> Result<()> {
         let mut bytes = 0usize;
         for column in 0..columns {
             let size = match row.get_ref(column).map_err(sql::sql_error)? {
@@ -529,7 +539,7 @@ impl QuerySnapshot {
         }
     }
 
-    fn reserve_fact_input(&self, bytes: usize) -> Result<()> {
+    pub(super) fn reserve_fact_input(&self, bytes: usize) -> Result<()> {
         let mut usage = self.usage.get();
         let total = usage
             .bytes
@@ -993,15 +1003,38 @@ impl QuerySnapshot {
         &self,
         key: &super::link_facts::MatchKey,
     ) -> Result<super::navigation_resolution::RegistryProbe> {
+        self.registry_probe_for_key_excluding(key, &BTreeSet::new())
+    }
+    /// Probe the complete surviving bucket after a bounded owner replacement.
+    /// Exclusions must be applied before saturation, otherwise hidden survivors
+    /// beyond the first two witnesses can be lost.
+    pub(crate) fn registry_probe_for_key_excluding(
+        &self,
+        key: &super::link_facts::MatchKey,
+        excluded_paths: &BTreeSet<VaultRelativePath>,
+    ) -> Result<super::navigation_resolution::RegistryProbe> {
         use super::{
             link_facts::MatchKeyKind,
             navigation_resolution::{RegistryCandidate, RegistryProbe},
         };
+        if excluded_paths.len() > 16 {
+            return Err(WikiError::new(
+                ErrorCode::BudgetExceeded,
+                "registry replacement excludes more than 16 owners",
+            ));
+        }
         self.require_fact_layout()?;
         self.reserve_fact_input(key.value.len())?;
-        let mut statement = self.connection.prepare("SELECT k.kind,k.value,k.record_id,k.path,r.id,r.kind,r.path FROM registry_match_keys k INDEXED BY sqlite_autoindex_registry_match_keys_1 LEFT JOIN records r INDEXED BY sqlite_autoindex_records_1 ON r.id=k.record_id WHERE k.kind=?1 AND k.value=?2 ORDER BY k.record_id,k.path LIMIT 2").map_err(sql::sql_error)?;
+        for path in excluded_paths {
+            self.reserve_fact_input(path.as_str().len())?;
+        }
+        let query = registry_probe_sql(excluded_paths.len());
+        let mut statement = self.connection.prepare(&query).map_err(sql::sql_error)?;
+        let inputs = std::iter::once(fact_key_name(key.kind))
+            .chain(std::iter::once(key.value.as_str()))
+            .chain(excluded_paths.iter().map(VaultRelativePath::as_str));
         let mut rows = statement
-            .query(params![fact_key_name(key.kind), key.value])
+            .query(rusqlite::params_from_iter(inputs))
             .map_err(sql::sql_error)?;
         let mut result = RegistryProbe::Zero;
         while let Some(row) = rows.next().map_err(sql::sql_error)? {
@@ -1045,6 +1078,44 @@ impl QuerySnapshot {
         }
         Ok(result)
     }
+}
+fn decode_identity_claim(row: &Row<'_>, id: &RecordId) -> Result<super::IdentityClaimRow> {
+    let claimed_id = RecordId::new(utf8(text_bytes(row, 0)?)?).map_err(|e| corrupt(e.message))?;
+    let path =
+        VaultRelativePath::new(utf8(text_bytes(row, 1)?)?).map_err(|e| corrupt(e.message))?;
+    let hash = Blake3Hash::new(utf8(text_bytes(row, 2)?)?).map_err(|e| corrupt(e.message))?;
+    let kind = match row.get_ref(3).map_err(sql::sql_error)? {
+        ValueRef::Null => None,
+        ValueRef::Text(bytes) => Some(
+            utf8(bytes)?
+                .parse::<RecordKind>()
+                .map_err(|_| corrupt("identity claim kind is invalid"))?,
+        ),
+        _ => return Err(corrupt("identity claim kind is not text or NULL")),
+    };
+    if &claimed_id != id {
+        return Err(corrupt("identity claim key differs from requested ID"));
+    }
+    Ok(super::IdentityClaimRow {
+        id: claimed_id,
+        path,
+        hash,
+        kind,
+    })
+}
+
+fn registry_probe_sql(exclusions: usize) -> String {
+    let predicate = if exclusions == 0 {
+        String::new()
+    } else {
+        format!(
+            " AND k.path NOT IN ({})",
+            (0..exclusions).map(|_| "?").collect::<Vec<_>>().join(",")
+        )
+    };
+    format!(
+        "SELECT k.kind,k.value,k.record_id,k.path,r.id,r.kind,r.path FROM registry_match_keys k INDEXED BY sqlite_autoindex_registry_match_keys_1 LEFT JOIN records r INDEXED BY sqlite_autoindex_records_1 ON r.id=k.record_id WHERE k.kind=? AND k.value=?{predicate} ORDER BY k.record_id,k.path LIMIT 2"
+    )
 }
 fn fact_key_name(kind: super::link_facts::MatchKeyKind) -> &'static str {
     use super::link_facts::MatchKeyKind;
@@ -1196,7 +1267,9 @@ impl crate::sources::SourceRefreshLookup for QuerySnapshot {
         id: &RecordId,
         path: &VaultRelativePath,
     ) -> Result<bool> {
-        self.require_fact_layout()?;
+        self.require_policy_layout()?;
+        let policy_key =
+            sql::json(&crate::graph::policy_inputs::PolicyInputKey::CanonicalIdentity(id.clone()))?;
         let input_bytes = id
             .as_str()
             .len()
@@ -1208,25 +1281,36 @@ impl crate::sources::SourceRefreshLookup for QuerySnapshot {
                 )
             })?;
         self.reserve_fact_input(input_bytes)?;
+        self.reserve_fact_input(policy_key.len())?;
         // Prepare all indexed probes together so a missing required table
         // or index refuses even when an earlier branch would find a reservation.
         // LIMIT 1 proves existence; it is not a partial candidate collection.
         let mut statement = self.connection.prepare(
-            "SELECT 0,record_id FROM identity_claims INDEXED BY sqlite_autoindex_identity_claims_1 WHERE record_id=?1 \
-             UNION ALL SELECT 0,id FROM records INDEXED BY sqlite_autoindex_records_1 WHERE id=?1 \
-             UNION ALL SELECT 1,target_id FROM semantic_edges INDEXED BY semantic_dependents WHERE target_id=?1 \
-             UNION ALL SELECT 2,value FROM link_match_keys INDEXED BY sqlite_autoindex_link_match_keys_1 WHERE kind='path' AND value=?2 LIMIT 1"
+            "SELECT 0,record_id,'','' FROM identity_claims INDEXED BY sqlite_autoindex_identity_claims_1 WHERE record_id=?1 \
+             UNION ALL SELECT 0,id,'','' FROM records INDEXED BY sqlite_autoindex_records_1 WHERE id=?1 \
+             UNION ALL SELECT 1,target_id,'','' FROM semantic_edges INDEXED BY semantic_dependents WHERE target_id=?1 \
+             UNION ALL SELECT 2,value,'','' FROM link_match_keys INDEXED BY sqlite_autoindex_link_match_keys_1 WHERE kind='path' AND value=?2 \
+             UNION ALL SELECT 3,key,owner,value FROM policy_facts INDEXED BY sqlite_autoindex_policy_facts_1 WHERE family='dependency' AND key=?3 LIMIT 1"
         ).map_err(sql::sql_error)?;
         let mut rows = statement
-            .query(params![id.as_str(), path.as_str()])
+            .query(params![id.as_str(), path.as_str(), policy_key])
             .map_err(sql::sql_error)?;
         let Some(row) = rows.next().map_err(sql::sql_error)? else {
             return Ok(false);
         };
-        self.reserve_refresh_row(row, 2)?;
+        self.reserve_refresh_row(row, 4)?;
         let expected = match row.get::<_, i64>(0).map_err(sql::sql_error)? {
             0 | 1 => id.as_str(),
             2 => path.as_str(),
+            3 => {
+                super::policy_facts::PolicyRow::from_columns([
+                    "dependency".into(),
+                    utf8(text_bytes(row, 1)?)?.into(),
+                    utf8(text_bytes(row, 2)?)?.into(),
+                    utf8(text_bytes(row, 3)?)?.into(),
+                ])?;
+                policy_key.as_str()
+            }
             _ => return Err(corrupt("unknown revision reservation witness")),
         };
         if utf8(text_bytes(row, 1)?)? != expected {
@@ -1753,6 +1837,14 @@ mod tests {
         catalog: &Catalog,
         epoch: u64,
     ) -> super::super::normalized_build::CompletedCatalog {
+        publish_normalized_layout(catalog, epoch, false)
+    }
+
+    fn publish_normalized_layout(
+        catalog: &Catalog,
+        epoch: u64,
+        with_facts: bool,
+    ) -> super::super::normalized_build::CompletedCatalog {
         use crate::catalog::{
             file_types::{BuildIdentity, CatalogSelection},
             normalized_build::{BuildLimits, NormalizedBuilder},
@@ -1769,8 +1861,16 @@ mod tests {
             NormalizedBuilder::begin(&catalog.fs, &writer, identity, BuildLimits::default())
                 .unwrap();
         let input = scan::scan_input(&catalog.fs, &catalog.vault_id).unwrap();
-        let projection = scan::project_with_sink(&catalog.fs, &input, false, &mut builder).unwrap();
-        let completed = builder.finish(&projection).unwrap();
+        let completed = if with_facts {
+            let projection =
+                scan::project_normalized_with_sink(&catalog.fs, &input, false, &mut builder)
+                    .unwrap();
+            builder.finish_normalized(&projection).unwrap()
+        } else {
+            let projection =
+                scan::project_with_sink(&catalog.fs, &input, false, &mut builder).unwrap();
+            builder.finish(&projection).unwrap()
+        };
         selector::publish(
             &catalog.fs,
             &writer,
@@ -1902,6 +2002,78 @@ mod tests {
                     .is_none()
             );
         }
+    }
+
+    #[test]
+    fn complete_identity_claim_lookup_returns_every_malformed_claimant_path() {
+        let (temp, _root, catalog) = unsynced();
+        for suffix in ["a", "b", "c"] {
+            fs::write(
+                temp.path().join(format!("broken_{suffix}.md")),
+                "---\nwiki_id: duplicate_claim\ntitle: [broken\n---\n",
+            )
+            .unwrap();
+        }
+        let completed = publish_normalized(&catalog, 1);
+        let reader = defaults(&catalog);
+        let claims = reader
+            .identity_claims_for_id(&id("duplicate_claim"))
+            .unwrap();
+        assert_eq!(
+            claims
+                .iter()
+                .map(|claim| claim.path.clone())
+                .collect::<Vec<_>>(),
+            [
+                path("broken_a.md"),
+                path("broken_b.md"),
+                path("broken_c.md")
+            ]
+        );
+        assert!(
+            claims
+                .iter()
+                .all(|claim| claim.id == id("duplicate_claim") && claim.kind.is_none())
+        );
+        assert!(
+            reader
+                .identity_claims_for_id(&id("absent_claim"))
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(
+            reader
+                .unique_identity_claim(&id("duplicate_claim"))
+                .unwrap_err()
+                .code,
+            ErrorCode::ReferenceAmbiguous
+        );
+        let limited = catalog
+            .query_snapshot(QueryReadLimits {
+                max_rows: 4,
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(
+            limited
+                .identity_claims_for_id(&id("duplicate_claim"))
+                .unwrap_err()
+                .code,
+            ErrorCode::BudgetExceeded
+        );
+        assert_eq!(limited.usage().rows, 4);
+        // The complete reader must validate a later claim beyond unique's two witnesses.
+        let db = Connection::open(completed.path).unwrap();
+        db.execute("UPDATE identity_claims SET file_hash='bad' WHERE record_id='duplicate_claim' AND path='broken_c.md'",[]).unwrap();
+        let fresh = defaults(&catalog);
+        assert_eq!(
+            fresh
+                .identity_claims_for_id(&id("duplicate_claim"))
+                .unwrap_err()
+                .code,
+            ErrorCode::IndexCorrupt
+        );
+        assert_eq!(fresh.usage().rows, 5);
     }
 
     #[test]
@@ -2552,6 +2724,114 @@ mod tests {
             );
             assert_eq!(error.hint.as_deref(), Some("run index rebuild"));
             assert_eq!(reader.usage(), QueryReadUsage::default());
+        }
+    }
+
+    #[test]
+    fn registry_replacement_excludes_owners_before_saturating_bucket() {
+        use crate::catalog::{
+            link_facts::{MatchKey, MatchKeyKind},
+            navigation_resolution::RegistryProbe,
+        };
+        let (temp, _root, catalog) = unsynced();
+        for suffix in ["a", "b", "c"] {
+            fs::write(temp.path().join(format!("candidate_{suffix}.md")), format!("---\nwiki_schema: \"1\"\nwiki_id: candidate_{suffix}\nwiki_kind: page\ntitle: Candidate {suffix}\naliases: [Shared]\nwiki_status: reviewed\n---\n# Candidate\n")).unwrap();
+        }
+        publish_normalized_layout(&catalog, 1, true);
+        let key = MatchKey {
+            kind: MatchKeyKind::Alias,
+            value: "Shared".into(),
+        };
+        let reader = defaults(&catalog);
+        assert!(matches!(
+            reader.registry_probe_for_key(&key).unwrap(),
+            RegistryProbe::Many(_)
+        ));
+        assert!(matches!(
+            reader
+                .registry_probe_for_key_excluding(&key, &BTreeSet::from([path("candidate_a.md")]))
+                .unwrap(),
+            RegistryProbe::Many(_)
+        ));
+        let excluded = BTreeSet::from([path("candidate_a.md"), path("candidate_b.md")]);
+        let surviving = reader
+            .registry_probe_for_key_excluding(&key, &excluded)
+            .unwrap();
+        assert!(
+            matches!(surviving, RegistryProbe::One(ref candidate) if candidate.id == id("candidate_c") && candidate.path == path("candidate_c.md") && candidate.kind == RecordKind::Page)
+        );
+        let mut all = excluded;
+        all.insert(path("candidate_c.md"));
+        assert_eq!(
+            reader.registry_probe_for_key_excluding(&key, &all).unwrap(),
+            RegistryProbe::Zero
+        );
+        // An ID probe carries the same adopted kind/path without changing caller precedence.
+        let named = MatchKey {
+            kind: MatchKeyKind::Id,
+            value: "candidate_c".into(),
+        };
+        assert!(
+            matches!(reader.registry_probe_for_key_excluding(&named, &BTreeSet::from([path("candidate_a.md")])).unwrap(), RegistryProbe::One(candidate) if candidate.id == id("candidate_c") && candidate.kind == RecordKind::Page)
+        );
+        let sixteen: BTreeSet<_> = (0..16)
+            .map(|n| path(&format!("unrelated_{n}.md")))
+            .collect();
+        assert!(matches!(
+            reader
+                .registry_probe_for_key_excluding(&key, &sixteen)
+                .unwrap(),
+            RegistryProbe::Many(_)
+        ));
+        let mut seventeen = sixteen;
+        seventeen.insert(path("unrelated_extra.md"));
+        let before = reader.usage();
+        assert_eq!(
+            reader
+                .registry_probe_for_key_excluding(&key, &seventeen)
+                .unwrap_err()
+                .code,
+            ErrorCode::BudgetExceeded
+        );
+        assert_eq!(reader.usage(), before);
+    }
+
+    #[test]
+    fn registry_exclusion_sql_keeps_indexed_order_and_bound_parameters() {
+        let db = Connection::open_in_memory().unwrap();
+        db.execute_batch("CREATE TABLE registry_match_keys(kind TEXT NOT NULL,value TEXT NOT NULL,record_id TEXT NOT NULL,path TEXT NOT NULL,PRIMARY KEY(kind,value,record_id,path)); CREATE TABLE records(id TEXT PRIMARY KEY,kind TEXT NOT NULL,path TEXT NOT NULL);").unwrap();
+        for exclusions in [0, 2, 16] {
+            let query = registry_probe_sql(exclusions);
+            assert_eq!(
+                db.prepare(&query).unwrap().parameter_count(),
+                2 + exclusions
+            );
+            let params: Vec<&str> = (0..2 + exclusions).map(|_| "scope").collect();
+            let details: Vec<String> = db
+                .prepare(&format!("EXPLAIN QUERY PLAN {query}"))
+                .unwrap()
+                .query_map(rusqlite::params_from_iter(params), |r| r.get(3))
+                .unwrap()
+                .map(|r| r.unwrap())
+                .collect();
+            assert!(
+                details.iter().any(|d| d.contains(
+                    "SEARCH k USING COVERING INDEX sqlite_autoindex_registry_match_keys_1"
+                )),
+                "{details:?}"
+            );
+            assert!(
+                details
+                    .iter()
+                    .any(|d| d.contains("SEARCH r USING INDEX sqlite_autoindex_records_1")),
+                "{details:?}"
+            );
+            assert!(
+                !details
+                    .iter()
+                    .any(|d| d.contains("SCAN") || d.contains("TEMP B-TREE")),
+                "{details:?}"
+            );
         }
     }
 

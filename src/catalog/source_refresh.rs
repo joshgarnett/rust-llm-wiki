@@ -14,12 +14,15 @@ use crate::{
     changes::{
         ChangeEngine, ChangeStatus, PreparedChange, ReadDependency, RevisionOwnerRow,
         RevisionOwnershipLookup,
-        indexed_refresh::{IndexedRefreshPhase, IndexedRefreshProof},
+        indexed_refresh::{IndexedRefreshPhase, IndexedRefreshProof, IndexedWriteOperation},
         journal,
         operation_authority::{self, ActiveOperation, Authority, Presence, Publication},
         prepare::{MAX_PAYLOAD_BYTES, read_bounded, strict_json},
     },
-    domain::{Blake3Hash, ErrorCode, ReadSnapshot, RecordId, Result, VaultRelativePath, WikiError},
+    domain::{
+        Blake3Hash, ErrorCode, ReadSnapshot, RecordId, RecordKind, Result, VaultRelativePath,
+        WikiError,
+    },
     vault::{ExpectedState, VaultFs, VaultRoot, WriterPermit},
 };
 use rusqlite::{Transaction, TransactionBehavior, limits::Limit, params};
@@ -30,7 +33,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-const DELTA_VERSION: u32 = 2;
+const DELTA_VERSION: u32 = 3;
 const MAX_DELTA_BYTES: usize = 256 * 1024 * 1024;
 const MAX_SELECTED_BYTES: usize = 256 * 1024 * 1024;
 
@@ -39,7 +42,10 @@ const MAX_SELECTED_BYTES: usize = 256 * 1024 * 1024;
 struct RetainedDelta {
     version: u32,
     vault_id: RecordId,
-    source_id: RecordId,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    source_id: Option<RecordId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    operation: Option<IndexedWriteOperation>,
     change: PreparedChange,
     base: ReadSnapshot,
     before: Vec<ReadDependency>,
@@ -136,13 +142,18 @@ fn intended(
     base: &ReadSnapshot,
     change: &PreparedChange,
     delta_hash: &Blake3Hash,
+    version: u32,
 ) -> Result<ReadSnapshot> {
     let binding = base
         .publication()
         .ok_or_else(|| recovery("refresh base is not a published epoch"))?;
     let hash = Blake3Hash::digest(
         serde_json::to_vec(&(
-            "lwiki.source-refresh-publication.v1",
+            if version <= 2 {
+                "lwiki.source-refresh-publication.v1"
+            } else {
+                "lwiki.normalized-write-publication.v1"
+            },
             base,
             change,
             delta_hash,
@@ -159,7 +170,213 @@ fn intended(
     )
 }
 
+/// A retained v3 delta may replace only owners admitted by its selected proof.
+/// Captured-content lifecycle metadata is bound by its authenticated Revision;
+/// changing eligibility does not require rereading an immutable payload.
+fn require_selected_delta_scope(
+    rows: &CatalogDelta,
+    after: &BTreeMap<&VaultRelativePath, &ExpectedState>,
+) -> Result<()> {
+    use super::{normalized_delta::DocumentMutation, policy_facts::PolicyRow};
+    let selected = |path: &VaultRelativePath| {
+        if matches!(after.get(path), Some(ExpectedState::Hash(_))) {
+            Ok(())
+        } else {
+            Err(recovery(
+                "indexed write row owner is outside selected after state",
+            ))
+        }
+    };
+    let exact = |path: &VaultRelativePath, hash: &Blake3Hash| {
+        if after.get(path).copied() == Some(&ExpectedState::Hash(hash.clone())) {
+            Ok(())
+        } else {
+            Err(recovery(
+                "indexed write row hash differs from selected after state",
+            ))
+        }
+    };
+    for row in &rows.records {
+        exact(&row.path, &row.hash)?;
+    }
+    let record_ids: BTreeSet<_> = rows.records.iter().map(|row| row.record.id()).collect();
+    let identity = |id: &RecordId| {
+        if record_ids.contains(id) {
+            Ok(())
+        } else {
+            Err(recovery(
+                "indexed write derived owner lacks a selected canonical record",
+            ))
+        }
+    };
+    for row in &rows.graph {
+        identity(&row.target_id)?;
+    }
+    for row in &rows.revisions {
+        identity(&row.source_id)?;
+        identity(&row.revision_id)?;
+    }
+    for owner in rows
+        .claims
+        .iter()
+        .map(|row| &row.path)
+        .chain(rows.diagnostics.iter().map(|row| &row.path))
+        .chain(rows.links.iter().map(|row| &row.path))
+    {
+        selected(owner)?;
+    }
+    for document in &rows.documents {
+        match document {
+            DocumentMutation::Put { row } => exact(&row.path, &row.hash)?,
+            DocumentMutation::Metadata { path, .. } => {
+                let revision_bound = rows.records.iter().any(|row| {
+                    row.record.kind() == RecordKind::Revision
+                        && row
+                            .record
+                            .string("wiki_source_id")
+                            .zip(row.record.string("wiki_content_path"))
+                            .is_some_and(|(source, content)| {
+                                path.as_str()
+                                    == format!(
+                                        "sources/{source}/revisions/{}/{content}",
+                                        row.record.id()
+                                    )
+                            })
+                });
+                if !revision_bound {
+                    selected(path)?;
+                }
+            }
+        }
+    }
+    if let Some(facts) = &rows.facts {
+        for id in facts
+            .records
+            .iter()
+            .map(|row| &row.record_id)
+            .chain(facts.registry.iter().map(|row| &row.record_id))
+            .chain(facts.edge_inserts.iter().map(|row| &row.owner_id))
+            .chain(facts.edge_deletes.iter().map(|row| &row.owner_id))
+        {
+            identity(id)?;
+        }
+        for path in facts
+            .links
+            .iter()
+            .map(|row| &row.path)
+            .chain(facts.registry.iter().map(|row| &row.path))
+        {
+            selected(path)?;
+        }
+        if let Some(policy) = &facts.policy {
+            for member in &policy.memberships {
+                exact(&member.path, &member.hash)?;
+            }
+            for row in policy
+                .replacements
+                .iter()
+                .flat_map(|replacement| &replacement.rows)
+            {
+                if let PolicyRow::ReadPath { path, hash, .. } = row {
+                    exact(path, hash)?;
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 impl RetainedDelta {
+    fn require_operation_rows(&self, manifest: &crate::changes::ChangeManifest) -> Result<()> {
+        let Some(operation) = &self.operation else {
+            // Exact historical v2 admission is intentionally unchanged.
+            return Ok(());
+        };
+        let written = |id: &RecordId, kind: RecordKind| {
+            self.rows.records.iter().find(|row| {
+                row.record.id() == id
+                    && row.record.kind() == kind
+                    && manifest.operations.iter().any(|op| {
+                        op.target == row.path && op.after == ExpectedState::Hash(row.hash.clone())
+                    })
+            }).ok_or_else(|| recovery("indexed operation identity, kind, or after-image differs from its manifest"))
+        };
+        match operation {
+            IndexedWriteOperation::PageBatch { pages } => {
+                for page in pages {
+                    if written(&page.id, RecordKind::Page)?.path != page.path {
+                        return Err(recovery("page operation identity is bound to another path"));
+                    }
+                }
+            }
+            IndexedWriteOperation::SourceRefresh { source_id } => {
+                let source = written(source_id, RecordKind::Source)?;
+                let head = manifest
+                    .operations
+                    .iter()
+                    .find(|op| op.target == source.path)
+                    .unwrap();
+                if !matches!(head.before, ExpectedState::Hash(_))
+                    || self
+                        .rows
+                        .owners
+                        .iter()
+                        .any(|owner| owner.key.source_component != source_id.as_str())
+                    || manifest.operations.iter().any(|op| {
+                        op.target != source.path
+                            && !op
+                                .target
+                                .as_str()
+                                .starts_with(&format!("sources/{source_id}/revisions/"))
+                    })
+                {
+                    return Err(recovery(
+                        "source refresh operation crosses its existing source boundary",
+                    ));
+                }
+            }
+            IndexedWriteOperation::SourceCapture {
+                source_id,
+                revision_id,
+            } => {
+                let source = written(source_id, RecordKind::Source)?;
+                let revision = written(revision_id, RecordKind::Revision)?;
+                let source_path = format!("sources/{source_id}/source.md");
+                let root = format!("sources/{source_id}/revisions/{revision_id}");
+                let required = [
+                    source_path.clone(),
+                    format!("{root}/revision.md"),
+                    format!("{root}/original.bin"),
+                ];
+                let content = format!("{root}/content.md");
+                if source.path.as_str() != source_path
+                    || revision.path.as_str() != required[1]
+                    || source.record.string("wiki_current_revision") != Some(revision_id.as_str())
+                    || revision.record.string("wiki_source_id") != Some(source_id.as_str())
+                    || super::scan::list(&source.record, "wiki_revisions")
+                        != [revision_id.to_string()]
+                    || required.iter().any(|path| {
+                        !manifest
+                            .operations
+                            .iter()
+                            .any(|op| op.target.as_str() == path)
+                    })
+                    || manifest.operations.iter().any(|op| {
+                        op.before != ExpectedState::Absent
+                            || matches!(op.after, ExpectedState::Absent)
+                            || !required.iter().any(|path| op.target.as_str() == path)
+                                && op.target.as_str() != content
+                    })
+                {
+                    return Err(recovery(
+                        "source capture operation is not one fresh captured revision",
+                    ));
+                }
+            }
+        }
+        Ok(())
+    }
+
     fn require_bound(
         &self,
         catalog: &Catalog,
@@ -169,33 +386,65 @@ impl RetainedDelta {
         let (manifest, hash) = engine.load_manifest_structure(&proof.change.change_id)?;
         proof.validate_manifest(&manifest)?;
         if hash != proof.change.manifest_hash
-            || (self.version != DELTA_VERSION && !(cfg!(test) && self.version == 1))
-            || (self.version == DELTA_VERSION && self.rows.version != 2)
+            || (!matches!(self.version, 2 | 3) && !(cfg!(test) && self.version == 1))
+            || (self.version == 2 && self.rows.version != 2)
+            || (self.version == 3 && self.rows.version != 3)
+            || (self.version <= 2
+                && (proof.version != 2 || self.operation.is_some() || self.source_id.is_none()))
+            || (self.version == 3
+                && (proof.version != 3 || self.operation.is_none() || self.source_id.is_some()))
             || proof.vault_id != catalog.vault_id
             || self.vault_id != proof.vault_id
             || self.source_id != proof.source_id
+            || self.operation != proof.operation
             || self.change != proof.change
             || self.base != proof.base
             || self.before != proof.before
             || self.after != proof.after
             || proof.base.parser_fingerprint != scan::parser_fingerprint()
-            || intended(&proof.base, &proof.change, &proof.delta_hash)? != proof.intended
+            || intended(&proof.base, &proof.change, &proof.delta_hash, self.version)?
+                != proof.intended
         {
             return Err(recovery(
                 "refresh delta, manifest, or replay version differs from retained proof",
             ));
         }
         self.rows.validate()?;
+        self.require_operation_rows(&manifest)?;
         if self.rows.owners != engine.manifest_revision_owners(&proof.change)? {
             return Err(recovery(
                 "refresh delta owners differ from exact manifest roots",
             ));
+        }
+        match &self.operation {
+            Some(IndexedWriteOperation::PageBatch { .. }) if !self.rows.owners.is_empty() => {
+                return Err(recovery(
+                    "page operation cannot own captured revision trees",
+                ));
+            }
+            Some(IndexedWriteOperation::SourceCapture {
+                source_id,
+                revision_id,
+            }) => {
+                if self.rows.owners.len() != 1
+                    || self.rows.owners[0].key.source_component != source_id.as_str()
+                    || self.rows.owners[0].key.revision_component != revision_id.as_str()
+                {
+                    return Err(recovery(
+                        "capture operation differs from its manifest-derived revision owner",
+                    ));
+                }
+            }
+            _ => {}
         }
         let after: BTreeMap<_, _> = proof
             .after
             .iter()
             .map(|dep| (&dep.path, &dep.expected))
             .collect();
+        if self.version == 3 {
+            require_selected_delta_scope(&self.rows, &after)?;
+        }
         if self
             .rows
             .dependencies
@@ -227,9 +476,38 @@ impl<'a> IndexedRefreshSession<'a> {
         writer: &'a WriterPermit,
         projected: super::source_projection::ProjectedSourceRefresh,
     ) -> Result<Self> {
+        let parts = projected.into_parts();
+        Self::prepare_parts(
+            catalog,
+            writer,
+            super::write_projection::ProjectedWriteParts {
+                operation: IndexedWriteOperation::SourceRefresh {
+                    source_id: parts.source_id,
+                },
+                draft: parts.draft,
+                base: parts.base,
+                before: parts.before,
+                after: parts.after,
+                delta: parts.delta,
+            },
+        )
+    }
+
+    pub(crate) fn prepare_write(
+        catalog: &Catalog,
+        writer: &'a WriterPermit,
+        projected: super::write_projection::ProjectedWrite,
+    ) -> Result<Self> {
+        Self::prepare_parts(catalog, writer, projected.into_parts())
+    }
+
+    fn prepare_parts(
+        catalog: &Catalog,
+        writer: &'a WriterPermit,
+        mut parts: super::write_projection::ProjectedWriteParts,
+    ) -> Result<Self> {
         writer.require_root(catalog.fs.root())?;
-        let mut parts = projected.into_parts();
-        if parts.delta.version != 2 || !parts.delta.owners.is_empty() {
+        if parts.delta.version != 3 || !parts.delta.owners.is_empty() {
             return Err(recovery(
                 "projected refresh has an invalid publication envelope",
             ));
@@ -255,7 +533,7 @@ impl<'a> IndexedRefreshSession<'a> {
             let session = Self::retain_bound(
                 catalog,
                 writer,
-                parts.source_id,
+                parts.operation,
                 change,
                 parts.base,
                 parts.before,
@@ -284,7 +562,15 @@ impl<'a> IndexedRefreshSession<'a> {
         rows: CatalogDelta,
     ) -> Result<Self> {
         Self::retain_bound(
-            catalog, writer, source_id, change, base, before, after, rows, 1,
+            catalog,
+            writer,
+            IndexedWriteOperation::SourceRefresh { source_id },
+            change,
+            base,
+            before,
+            after,
+            rows,
+            1,
         )
     }
 
@@ -292,7 +578,7 @@ impl<'a> IndexedRefreshSession<'a> {
     fn retain_bound(
         catalog: &Catalog,
         writer: &'a WriterPermit,
-        source_id: RecordId,
+        operation: IndexedWriteOperation,
         change: PreparedChange,
         base: ReadSnapshot,
         before: Vec<ReadDependency>,
@@ -302,10 +588,20 @@ impl<'a> IndexedRefreshSession<'a> {
     ) -> Result<Self> {
         writer.require_root(catalog.fs.root())?;
         rows.validate()?;
+        operation.validate()?;
+        let (source_id, operation) = if version <= 2 {
+            let IndexedWriteOperation::SourceRefresh { source_id } = operation else {
+                return Err(recovery("legacy retained delta requires source refresh"));
+            };
+            (Some(source_id), None)
+        } else {
+            (None, Some(operation))
+        };
         let delta = RetainedDelta {
             version,
             vault_id: catalog.vault_id.clone(),
             source_id,
+            operation,
             change,
             base,
             before,
@@ -320,12 +616,13 @@ impl<'a> IndexedRefreshSession<'a> {
         }
         let delta_hash = Blake3Hash::digest(&bytes);
         let proof = IndexedRefreshProof {
-            version: 2,
+            version: if version <= 2 { 2 } else { 3 },
             vault_id: delta.vault_id.clone(),
             source_id: delta.source_id.clone(),
+            operation: delta.operation.clone(),
             change: delta.change.clone(),
             base: delta.base.clone(),
-            intended: intended(&delta.base, &delta.change, &delta_hash)?,
+            intended: intended(&delta.base, &delta.change, &delta_hash, version)?,
             delta_hash,
             before: delta.before.clone(),
             after: delta.after.clone(),
@@ -383,9 +680,12 @@ impl<'a> IndexedRefreshSession<'a> {
             ));
         }
         let delta = load_delta(catalog, proof)?;
-        if delta.version != DELTA_VERSION || delta.rows.version != 2 {
+        if !matches!(delta.version, 2 | 3)
+            || (delta.version == 2 && delta.rows.version != 2)
+            || (delta.version == 3 && delta.rows.version != 3)
+        {
             return Err(recovery(
-                "read-only refresh replay requires production delta version two",
+                "read-only indexed replay requires a supported production delta version",
             ));
         }
         delta.require_bound(catalog, &engine, proof)?;
@@ -591,7 +891,7 @@ impl<'a> IndexedRefreshSession<'a> {
         if fs.root() != self.catalog.fs.root() {
             return Err(recovery("refresh session belongs to another vault"));
         }
-        if self.delta.version != DELTA_VERSION {
+        if !matches!(self.delta.version, 2 | 3) {
             return Ok(fs.clone());
         }
         self.retained()?;
@@ -930,6 +1230,54 @@ fn configure_delta(connection: &rusqlite::Connection) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn selected_scope_rejects_unrelated_empty_owner_replacements() {
+        use super::super::normalized_delta::{OwnedClaims, OwnedDiagnostics, OwnedLinks};
+        let selected = VaultRelativePath::new("pages/selected.md").unwrap();
+        let unrelated = VaultRelativePath::new("pages/unrelated.md").unwrap();
+        let expected = ExpectedState::Hash(Blake3Hash::digest(b"selected canonical bytes"));
+        let after = BTreeMap::from([(&selected, &expected)]);
+        let empty = CatalogDelta {
+            version: 3,
+            records: vec![],
+            documents: vec![],
+            graph: vec![],
+            links: vec![],
+            diagnostics: vec![],
+            claims: vec![],
+            revisions: vec![],
+            dependencies: vec![],
+            owners: vec![],
+            facts: None,
+        };
+        // Empty replacement rows still delete an owner's old SQL rows. They
+        // therefore need the same selected authority as a nonempty insert.
+        for kind in 0..3 {
+            let mut delta = empty.clone();
+            match kind {
+                0 => delta.claims.push(OwnedClaims {
+                    path: unrelated.clone(),
+                    rows: vec![],
+                }),
+                1 => delta.diagnostics.push(OwnedDiagnostics {
+                    path: unrelated.clone(),
+                    rows: vec![],
+                }),
+                _ => delta.links.push(OwnedLinks {
+                    path: unrelated.clone(),
+                    rows: vec![],
+                }),
+            }
+            assert!(require_selected_delta_scope(&delta, &after).is_err());
+            match kind {
+                0 => delta.claims[0].path = selected.clone(),
+                1 => delta.diagnostics[0].path = selected.clone(),
+                _ => delta.links[0].path = selected.clone(),
+            }
+            require_selected_delta_scope(&delta, &after).unwrap();
+        }
+    }
     use crate::vault::{VaultFs, VaultRoot};
 
     #[test]

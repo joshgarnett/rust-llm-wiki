@@ -20,6 +20,8 @@ use std::collections::BTreeSet;
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct FactDelta {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub policy: Option<super::policy_delta::PolicyDelta>,
     pub records: Vec<RecordFactMutation>,
     pub edge_inserts: Vec<EligibilityEdge>,
     pub edge_deletes: Vec<EligibilityEdge>,
@@ -83,6 +85,34 @@ fn admit_new<T: Serialize>(v: &T, count: &mut usize) -> Result<()> {
 
 impl FactDelta {
     pub(super) fn validate(&self, delta: &CatalogDelta, count: &mut usize) -> Result<()> {
+        if let Some(policy) = &self.policy {
+            policy.validate(delta, count)?;
+            if delta.version == 3 {
+                let written: BTreeSet<_> = delta
+                    .documents
+                    .iter()
+                    .filter_map(|document| match document {
+                        super::normalized_delta::DocumentMutation::Put { row }
+                            if row.record_id.is_some() =>
+                        {
+                            Some(&row.path)
+                        }
+                        _ => None,
+                    })
+                    .collect();
+                if written
+                    != policy
+                        .memberships
+                        .iter()
+                        .map(|member| &member.path)
+                        .collect()
+                {
+                    return Err(invalid(
+                        "normalized canonical writes require exact policy membership replacements",
+                    ));
+                }
+            }
+        }
         let mut owners = BTreeSet::new();
         for row in &self.records {
             unique(&mut owners, &row.record_id)?;
@@ -203,6 +233,7 @@ impl FactDelta {
             match load_record(c, row.record.id(), stats)? {
                 Some(old) => {
                     if old.record.kind() != RecordKind::Source
+                        && !(delta.version == 3 && old.record.kind() == RecordKind::Page)
                         && (old.record != row.record || old.hash != row.hash)
                     {
                         return Err(conflict(
@@ -241,7 +272,9 @@ impl FactDelta {
                     }
                 }
                 None => {
-                    if row.record.kind() != RecordKind::Revision
+                    if !(row.record.kind() == RecordKind::Revision
+                        || delta.version == 3
+                            && matches!(row.record.kind(), RecordKind::Page | RecordKind::Source))
                         || !self
                             .records
                             .iter()
@@ -424,6 +457,9 @@ impl FactDelta {
                 stats.fact_rows += 1;
             }
         }
+        if let Some(policy) = &self.policy {
+            policy.apply(c, stats)?;
+        }
         for row in &delta.records {
             require_fact(c, row.record.id())?;
             let own:bool=c.query_row("SELECT EXISTS(SELECT 1 FROM record_direct_paths p JOIN dependencies d ON d.path=p.path WHERE p.owner_id=?1 AND p.path=?2 AND d.expected_hash=?3)",params![row.record.id().as_str(),row.path.as_str(),row.hash.as_str()],|r|r.get(0)).map_err(sql::sql_error)?;
@@ -486,7 +522,7 @@ fn load_record(c: &Connection, id: &RecordId, stats: &mut DeltaStats) -> Result<
     Ok(Some(decoded))
 }
 
-fn charge_old(bytes: usize, stats: &mut DeltaStats) -> Result<()> {
+pub(super) fn charge_old(bytes: usize, stats: &mut DeltaStats) -> Result<()> {
     if bytes > MAX_ROW_BYTES {
         return Err(budget());
     }

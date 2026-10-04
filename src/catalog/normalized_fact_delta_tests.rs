@@ -160,6 +160,7 @@ fn empty() -> CatalogDelta {
     CatalogDelta {
         version: 2,
         facts: Some(FactDelta {
+            policy: None,
             records: vec![],
             edge_inserts: vec![],
             edge_deletes: vec![],

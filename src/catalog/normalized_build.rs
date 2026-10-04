@@ -860,6 +860,18 @@ impl super::normalized_metadata::MetadataSink for NormalizedBuilder<'_> {
     fn row(&mut self, row: super::normalized_metadata::MetadataRow<'_>) -> Result<()> {
         use super::normalized_metadata::MetadataRow;
         match row {
+            MetadataRow::Policy(row) => {
+                let columns = row.columns()?;
+                let bytes = counted_json(&columns, self.limits.max_row_bytes)?;
+                self.admit(checked_sum(&[256, bytes])?)?;
+                self.connection()
+                    .execute(
+                        "INSERT INTO policy_facts(family,key,owner,value) VALUES(?1,?2,?3,?4)",
+                        params![columns[0], columns[1], columns[2], columns[3]],
+                    )
+                    .map_err(build_sql_error)?;
+                self.commit_lookup("policy_fact", &columns)?;
+            }
             MetadataRow::AssertionNavigation { assertion: id, key } => {
                 self.admit(checked_sum(&[
                     256,

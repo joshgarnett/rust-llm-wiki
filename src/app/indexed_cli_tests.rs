@@ -461,7 +461,7 @@ fn indexed_cli_replay_refuses_malformed_unknown_and_mixed_proofs_in_both_modes_w
         .root
         .join(format!("changes/{change}/validation.json"));
     let original: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
-    assert_eq!(original["proof"]["version"], 2);
+    assert_eq!(original["proof"]["version"], 3);
     for variant in ["malformed", "unknown", "mixed_fields", "legacy_with_delta"] {
         let mut value = original.clone();
         let (bytes, code) = match variant {
@@ -679,6 +679,382 @@ fn general_fixture(normalized: bool) -> Fixture {
         ],
         normalized,
     )
+}
+
+fn authored_page(id: &str, body: &str) -> String {
+    format!(
+        "---\nwiki_schema: '1'\nwiki_kind: page\nwiki_id: {id}\ntitle: WriteSignal Handbook\nwiki_status: reviewed\n---\n{body}\n"
+    )
+}
+
+#[test]
+#[ignore = "requires an authentic v2 fixture prepared by a pinned previous release"]
+fn authentic_v2_retained_refresh_resumes_after_sql_commit() {
+    use crate::{
+        catalog::{
+            Catalog, CatalogOptions, PublicationCheckpoint, PublicationFault,
+            source_refresh::IndexedRefreshSession,
+        },
+        changes::{
+            ChangeEngine, ChangeStatus, PreparedChange, indexed_refresh::IndexedRefreshPhase,
+        },
+        domain::{ErrorCode, Result, WikiError},
+    };
+    // The supplied fixture is only read. All fault injection and replay happens
+    // in a bounded disposable copy, including its retained SQLite WAL.
+    fn copy_fixture(from: &Path, to: &Path, count: &mut usize, bytes: &mut u64) {
+        fs::create_dir(to).unwrap();
+        for entry in fs::read_dir(from).unwrap() {
+            let entry = entry.unwrap();
+            let metadata = fs::symlink_metadata(entry.path()).unwrap();
+            assert!(!metadata.file_type().is_symlink());
+            *count += 1;
+            assert!(*count <= 1000, "compatibility fixture entry allowance");
+            let target = to.join(entry.file_name());
+            if metadata.is_dir() {
+                copy_fixture(&entry.path(), &target, count, bytes);
+            } else {
+                assert!(metadata.is_file());
+                *bytes += metadata.len();
+                assert!(
+                    *bytes <= 32 * 1024 * 1024,
+                    "compatibility fixture byte allowance"
+                );
+                fs::copy(entry.path(), target).unwrap();
+            }
+        }
+    }
+    struct AfterCommit;
+    impl PublicationFault for AfterCommit {
+        fn check(&self, point: PublicationCheckpoint) -> Result<()> {
+            if point == PublicationCheckpoint::AfterCommit {
+                Err(WikiError::new(
+                    ErrorCode::RecoveryRequired,
+                    "authentic v2 interrupted after SQL commit",
+                ))
+            } else {
+                Ok(())
+            }
+        }
+    }
+    let preparation = std::env::var_os("LWIKI_V2_COMPAT_PREPARATION")
+        .expect("provide the authentic v2 preparation report");
+    let encoded = fs::read(preparation).unwrap();
+    assert!(encoded.len() <= 64 * 1024);
+    let input: Value = serde_json::from_slice(&encoded).unwrap();
+    assert_eq!(input["proof_version"], 2);
+    assert_eq!(input["delta_version"], 2);
+    let source = Path::new(input["vault"].as_str().unwrap());
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("v2 replay vault with spaces");
+    copy_fixture(source, &root, &mut 0, &mut 0);
+    let change_id = RecordId::new(input["change"].as_str().unwrap()).unwrap();
+    let receipt_path = root.join(format!("changes/{change_id}/validation.json"));
+    let delta_path = root.join(format!("changes/{change_id}/indexed-delta.json"));
+    let receipt_bytes = fs::read(&receipt_path).unwrap();
+    let delta_bytes = fs::read(&delta_path).unwrap();
+    let wire: Value = serde_json::from_slice(&receipt_bytes).unwrap();
+    let change: PreparedChange = serde_json::from_value(wire["proof"]["change"].clone()).unwrap();
+    let vault_id: RecordId = serde_json::from_value(wire["proof"]["vault_id"].clone()).unwrap();
+    let handle = VaultFs::new(VaultRoot::explicit(&root).unwrap());
+    let writer = WriterPermit::acquire(handle.root(), Duration::ZERO).unwrap();
+    let engine = ChangeEngine::new(handle.clone()).unwrap();
+    let proof = engine.load_indexed_refresh_proof(&change).unwrap().unwrap();
+    assert_eq!(proof.version, 2);
+    let faulty = Catalog::with_options(
+        handle.clone(),
+        vault_id.clone(),
+        CatalogOptions {
+            busy_timeout_ms: 1000,
+            fault: Some(std::sync::Arc::new(AfterCommit)),
+        },
+    );
+    let mut session = IndexedRefreshSession::resume(&faulty, &writer, proof.clone()).unwrap();
+    assert_eq!(session.phase(), IndexedRefreshPhase::AtBase);
+    let error = engine
+        .apply_indexed_refresh(&writer, &mut session)
+        .unwrap_err();
+    assert_eq!(error.code, ErrorCode::RecoveryRequired);
+    assert_eq!(session.phase(), IndexedRefreshPhase::AlreadyPublished);
+    drop(session);
+    let catalog = Catalog::new(handle, vault_id);
+    let before = canonical_tree(&root);
+    let mut resumed = IndexedRefreshSession::resume(&catalog, &writer, proof.clone()).unwrap();
+    assert_eq!(resumed.phase(), IndexedRefreshPhase::AlreadyPublished);
+    let report = engine.apply_indexed_refresh(&writer, &mut resumed).unwrap();
+    assert_eq!(report.status, ChangeStatus::Committed);
+    assert_eq!(report.snapshot, Some(proof.intended));
+    drop(resumed);
+    assert_eq!(canonical_tree(&root), before);
+    assert_eq!(fs::read(&receipt_path).unwrap(), receipt_bytes);
+    assert_eq!(fs::read(&delta_path).unwrap(), delta_bytes);
+    assert_eq!(
+        engine
+            .indexed_refresh_terminal_report(&writer, &change)
+            .unwrap(),
+        Some(report)
+    );
+}
+
+#[test]
+fn indexed_cli_pages_initialize_edit_batch_and_retrieve_without_sync() {
+    let fixture = Fixture::new();
+    fs::write(&fixture.input, "WriteSignal initial draft.").unwrap();
+    let initialized = fixture.cli(&[
+        "page",
+        "init",
+        "--file",
+        fixture.input.to_str().unwrap(),
+        "--id",
+        "page_write_a",
+        "--path",
+        "pages/custom a.md",
+        "--title",
+        "WriteSignal Handbook",
+    ]);
+    fixture.committed_epoch(&initialized, 2);
+    let initial = fs::read(fixture.root.join("pages/custom a.md")).unwrap();
+    let first = authored_page("page_write_a", "WriteSignal revised amber checklist.");
+    fs::write(&fixture.input, &first).unwrap();
+    // Omit --path: resolving an existing identity must use the selected index,
+    // preserve its custom path, and never scan the whole canonical corpus.
+    let updated = fixture.cli(&[
+        "page",
+        "put",
+        "--file",
+        fixture.input.to_str().unwrap(),
+        "--if-match",
+        Blake3Hash::digest(&initial).as_str(),
+    ]);
+    fixture.committed_epoch(&updated, 3);
+    assert!(!fixture.root.join("pages/page_write_a.md").exists());
+    let read = fixture.cli(&["read", "--id", "page_write_a"]);
+    assert!(
+        read["data"]["body"]
+            .as_str()
+            .unwrap()
+            .contains("revised amber")
+    );
+    let search = fixture.cli(&["search", "WriteSignal"]);
+    assert!(
+        search["data"]["hits"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|hit| hit["path"] == "pages/custom a.md")
+    );
+    let after = authored_page(
+        "page_write_a",
+        "WriteSignal final violet checklist. [[page_write_b]]",
+    );
+    let second = authored_page(
+        "page_write_b",
+        "WriteSignal second review. [[page_write_a]]",
+    );
+    let batch = fixture.outside.join("coupled edits.json");
+    fs::write(&batch, serde_json::to_vec(&serde_json::json!({
+        "title": "Coupled authored edits",
+        "pages": [
+            {"path":"pages/custom a.md", "markdown":after, "if_match":Blake3Hash::digest(first.as_bytes())},
+            {"path":"pages/b.md", "markdown":second}
+        ]
+    })).unwrap()).unwrap();
+    let published = fixture.cli(&["page", "batch", "--file", batch.to_str().unwrap()]);
+    fixture.committed_epoch(&published, 4);
+    let context = fixture.cli(&["context", "WriteSignal", "--kind", "page"]);
+    let text = context["data"]["text"].as_str().unwrap();
+    assert!(
+        text.contains("final violet") && text.contains("second review"),
+        "{context}"
+    );
+    assert!(!text.contains("revised amber"), "{context}");
+    for passage in context["data"]["passages"].as_array().unwrap() {
+        assert!(passage["citations"].as_array().unwrap().is_empty());
+    }
+    assert_eq!(
+        fs::read_to_string(fixture.root.join("pages/custom a.md")).unwrap(),
+        after
+    );
+    assert_eq!(
+        fs::read_to_string(fixture.root.join("pages/b.md")).unwrap(),
+        second
+    );
+}
+
+#[test]
+fn indexed_cli_page_stage_dry_run_noop_and_apply_preserve_author_guards() {
+    let fixture = general_fixture(true);
+    let proposed = authored_page("page_general_a", "WriteSignal staged replacement.");
+    fs::write(&fixture.input, &proposed).unwrap();
+    let expected = Blake3Hash::digest(GENERAL_REVIEWED).to_string();
+    let put = [
+        "page",
+        "put",
+        "--file",
+        fixture.input.to_str().unwrap(),
+        "--if-match",
+        &expected,
+    ];
+    let before = tree(&fixture.root);
+    let mut dry = vec!["--dry-run"];
+    dry.extend(put);
+    let preview = fixture.cli(&dry);
+    assert_eq!(
+        preview["data"]["unresolved_target"]["record_id"],
+        "page_general_a"
+    );
+    assert!(preview["data"]["unresolved_target"]["path"].is_null());
+    assert_eq!(
+        preview["data"]["validation"]["explicit_file_guards_checked"],
+        false
+    );
+    assert_eq!(tree(&fixture.root), before);
+    let canonical_before = canonical_tree(&fixture.root);
+    let mut stage = vec!["--stage"];
+    stage.extend(put);
+    let prepared = fixture.cli(&stage);
+    assert_eq!(prepared["data"]["status"], "prepared");
+    assert_eq!(canonical_tree(&fixture.root), canonical_before);
+    let change = prepared["data"]["change"]["change_id"].as_str().unwrap();
+    let applied = fixture.cli(&["changes", "apply", change]);
+    fixture.committed_epoch(&applied, 2);
+    let applied_again = fixture.cli(&["changes", "apply", change]);
+    fixture.committed_epoch(&applied_again, 2);
+    let canonical_after = canonical_tree(&fixture.root);
+    fixture.cli_error(&put, "CONTENT_CONFLICT");
+    assert_eq!(canonical_tree(&fixture.root), canonical_after);
+    let hash = Blake3Hash::digest(proposed.as_bytes()).to_string();
+    let noop = fixture.cli(&[
+        "page",
+        "put",
+        "--file",
+        fixture.input.to_str().unwrap(),
+        "--if-match",
+        &hash,
+    ]);
+    assert_eq!(noop["data"]["reused"], true);
+    assert!(noop["data"]["change"].is_null());
+    assert_eq!(canonical_tree(&fixture.root), canonical_after);
+}
+
+#[test]
+fn indexed_cli_page_previews_preserve_complete_tree_and_mark_unchecked_admission() {
+    let fixture = general_fixture(true);
+    let input = fixture.input.to_str().unwrap();
+    fs::write(&fixture.input, "Preview only body.").unwrap();
+    let before = tree(&fixture.root);
+    let init = fixture.cli(&[
+        "--dry-run",
+        "page",
+        "init",
+        "--file",
+        input,
+        "--title",
+        "Preview only",
+        "--id",
+        "page_preview_only",
+        "--path",
+        "pages/preview only.md",
+    ]);
+    assert_eq!(tree(&fixture.root), before);
+    fs::write(
+        &fixture.input,
+        authored_page("page_general_a", "Preview changed text."),
+    )
+    .unwrap();
+    let guard = Blake3Hash::digest(GENERAL_REVIEWED).to_string();
+    let explicit = fixture.cli(&[
+        "--dry-run",
+        "page",
+        "put",
+        "--file",
+        input,
+        "--path",
+        "pages/a.md",
+        "--if-match",
+        &guard,
+    ]);
+    assert_eq!(tree(&fixture.root), before);
+    let batch = fixture.outside.join("preview batch.json");
+    fs::write(&batch, serde_json::to_vec(&serde_json::json!({
+        "title":"Preview batch", "pages":[{
+            "path":"pages/a.md", "markdown":authored_page("page_general_a", "Batch preview."),
+            "if_match":guard
+        }],
+        "read_preconditions":[{"path":"missing.md", "expected":{"state":"hash", "hash":Blake3Hash::digest(b"absent")}}]
+    })).unwrap()).unwrap();
+    // Explicit read dependencies remain unchecked in previews; no seal or
+    // stageability is claimed. The normal batch path checks them at admission.
+    let batched = fixture.cli(&[
+        "--dry-run",
+        "page",
+        "batch",
+        "--file",
+        batch.to_str().unwrap(),
+    ]);
+    assert_eq!(tree(&fixture.root), before);
+    for preview in [init, explicit, batched] {
+        assert_eq!(preview["data"]["dry_run"], true);
+        assert_eq!(preview["data"]["plan_complete"], false);
+        assert_eq!(
+            preview["data"]["validation"]["explicit_file_guards_checked"],
+            true
+        );
+        assert_eq!(
+            preview["data"]["validation"]["indexed_admission_checked"],
+            false
+        );
+        assert_eq!(
+            preview["data"]["validation"]["read_dependencies_checked"],
+            false
+        );
+        assert!(preview["data"]["change"].is_null());
+        assert!(preview["data"]["reused"].is_null());
+    }
+    fixture.cli_error(
+        &[
+            "--dry-run",
+            "page",
+            "put",
+            "--file",
+            input,
+            "--path",
+            "pages/a.md",
+            "--if-match",
+            Blake3Hash::digest(b"wrong bytes").as_str(),
+        ],
+        "CONTENT_CONFLICT",
+    );
+    assert_eq!(tree(&fixture.root), before);
+}
+
+#[test]
+fn indexed_cli_staged_page_refuses_an_external_edit_without_overwriting_it() {
+    let fixture = general_fixture(true);
+    fs::write(
+        &fixture.input,
+        authored_page("page_general_a", "WriteSignal staged."),
+    )
+    .unwrap();
+    let staged = fixture.cli(&[
+        "--stage",
+        "page",
+        "put",
+        "--file",
+        fixture.input.to_str().unwrap(),
+        "--if-match",
+        Blake3Hash::digest(GENERAL_REVIEWED).as_str(),
+    ]);
+    let change = staged["data"]["change"]["change_id"].as_str().unwrap();
+    let external = authored_page("page_general_a", "An intervening author edit.");
+    fs::write(fixture.root.join("pages/a.md"), &external).unwrap();
+    let before = canonical_tree(&fixture.root);
+    fixture.cli_result(&["changes", "apply", change], false);
+    assert_eq!(canonical_tree(&fixture.root), before);
+    assert_eq!(
+        fs::read_to_string(fixture.root.join("pages/a.md")).unwrap(),
+        external
+    );
 }
 
 #[test]

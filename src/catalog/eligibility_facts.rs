@@ -75,6 +75,8 @@ pub(crate) struct EligibilityEdge {
 #[serde(deny_unknown_fields)]
 pub(crate) struct NormalizedEligibilityFacts {
     pub version: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub policy: Option<super::policy_facts::NormalizedPolicyFacts>,
     pub records: BTreeMap<RecordId, EligibilityFact>,
     pub observed: BTreeMap<VaultRelativePath, ExpectedState>,
     pub edges: BTreeSet<EligibilityEdge>,
@@ -83,6 +85,7 @@ impl NormalizedEligibilityFacts {
     pub(super) fn new() -> Self {
         Self {
             version: 2,
+            policy: None,
             records: BTreeMap::new(),
             observed: BTreeMap::new(),
             edges: BTreeSet::new(),

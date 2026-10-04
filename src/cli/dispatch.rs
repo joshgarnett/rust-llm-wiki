@@ -380,8 +380,9 @@ fn execute_inner(args: &Arguments) -> Result<Envelope> {
         } => {
             let body =
                 String::from_utf8(input(file)?).map_err(|_| usage("page body must be UTF-8"))?;
-            mutation(
+            page_mutation(
                 &mut envelope,
+                &app,
                 app.page_initialize(path.clone(), id.clone(), title.clone(), body)?,
             )?;
         }
@@ -390,7 +391,7 @@ fn execute_inner(args: &Arguments) -> Result<Envelope> {
         } => {
             let request: PageBatchRequest = serde_json::from_slice(&input(file)?)
                 .map_err(|_| usage("invalid page batch JSON; inspect lwiki schema page-batch"))?;
-            mutation(&mut envelope, app.page_batch(request)?)?;
+            page_mutation(&mut envelope, &app, app.page_batch(request)?)?;
         }
         Command::Storage(options) => {
             envelope.data = super::storage::execute(&options.command, &app)?;
@@ -411,26 +412,43 @@ fn execute_inner(args: &Arguments) -> Result<Envelope> {
                 },
         } => {
             let bytes = input(file)?;
-            let target = if let Some(path) = path {
-                path.clone()
-            } else {
+            let normalized_preview = args.dry_run
+                && path.is_none()
+                && Catalog::new(app.fs().clone(), app.vault_id().clone())
+                    .operation_state()?
+                    .is_some();
+            if normalized_preview {
                 let note = parse_note(&bytes);
                 let record = note
                     .canonical
                     .as_ref()
                     .filter(|r| r.kind() == RecordKind::Page)
                     .ok_or_else(|| crate::app::offline::page_envelope_error(&note))?;
-                let projection = crate::catalog::scan::scan(app.fs(), app.vault_id())?;
-                projection
-                    .records
-                    .get(record.id())
-                    .map(|row| row.path.clone())
-                    .unwrap_or(VaultRelativePath::new(format!("pages/{}.md", record.id()))?)
-            };
-            mutation(
-                &mut envelope,
-                app.page_put(target, bytes, if_match.clone())?,
-            )?;
+                envelope.data = json!({
+                    "plan":{"title":"Put page", "operations":[], "read_preconditions":[]},
+                    "unresolved_target":{"record_id":record.id(), "if_match":if_match,
+                        "byte_len":bytes.len(), "path":null},
+                    "allocated_ids":{}, "change":null, "status":null, "snapshot":null
+                });
+                page_preview_metadata(&mut envelope, false);
+            } else {
+                let target = if let Some(path) = path {
+                    path.clone()
+                } else {
+                    let note = parse_note(&bytes);
+                    let record = note
+                        .canonical
+                        .as_ref()
+                        .filter(|r| r.kind() == RecordKind::Page)
+                        .ok_or_else(|| crate::app::offline::page_envelope_error(&note))?;
+                    app.default_page_path(record.id())?
+                };
+                page_mutation(
+                    &mut envelope,
+                    &app,
+                    app.page_put(target, bytes, if_match.clone())?,
+                )?;
+            }
         }
         Command::Page {
             command: PageCommand::Rename { id, to, if_match },
@@ -1197,6 +1215,34 @@ fn mutation(envelope: &mut Envelope, outcome: MutationOutcome) -> Result<()> {
     }
     Ok(())
 }
+fn page_mutation(
+    envelope: &mut Envelope,
+    app: &OfflineApp,
+    outcome: MutationOutcome,
+) -> Result<()> {
+    mutation(envelope, outcome)?;
+    if app.options().dry_run
+        && Catalog::new(app.fs().clone(), app.vault_id().clone())
+            .operation_state()?
+            .is_some()
+    {
+        page_preview_metadata(envelope, true);
+    }
+    Ok(())
+}
+fn page_preview_metadata(envelope: &mut Envelope, explicit_targets: bool) {
+    envelope.data["dry_run"] = true.into();
+    envelope.data["plan_complete"] = false.into();
+    envelope.data["reused"] = Value::Null;
+    envelope.data["validation"] = json!({
+        "explicit_file_guards_checked":explicit_targets,
+        "target_resolution_checked":explicit_targets,
+        "indexed_admission_checked":false,
+        "read_dependencies_checked":false,
+        "portable_collisions_checked":false
+    });
+    envelope.warnings.push("Page preview leaves indexed identities, affected records, read dependencies and portable path collisions unchecked. Omitted destinations remain unresolved; --path allows checking that file's author guard. Staging or applying performs admission checks.".into());
+}
 fn reader(app: &OfflineApp, no_sync: bool) -> Result<(Option<WriterPermit>, ReaderSnapshot)> {
     let catalog = Catalog::with_options(
         app.fs().clone(),
@@ -1828,6 +1874,9 @@ fn present_inner(
                         writeln!(output, "{kind}: {id}")?;
                     }
                 }
+            }
+            if let Some(id) = envelope.data["unresolved_target"]["record_id"].as_str() {
+                writeln!(output, "Page: {id}; destination unresolved in preview")?;
             }
             if let Some(extraction) = envelope.data["extraction_status"].as_str() {
                 writeln!(

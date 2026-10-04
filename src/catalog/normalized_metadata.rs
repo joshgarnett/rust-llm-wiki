@@ -12,6 +12,7 @@ use crate::{
 };
 
 pub(crate) enum MetadataRow<'a> {
+    Policy(super::policy_facts::PolicyRow),
     AssertionNavigation {
         assertion: &'a RecordId,
         key: &'a MatchKey,
@@ -84,6 +85,12 @@ pub(crate) fn visit_eligibility_rows(
                 "normalized observation differs from complete dependency inventory",
             ));
         }
+    }
+    if let Some(policy) = &facts.policy {
+        policy.visit(&mut |row| {
+            sink.progress()?;
+            sink.row(MetadataRow::Policy(row))
+        })?;
     }
     for (id, fact) in &facts.records {
         sink.progress()?;

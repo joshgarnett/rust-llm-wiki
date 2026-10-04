@@ -14,7 +14,7 @@ use super::{
     query::QuerySnapshot,
     query_types::QueryCatalog,
     row_projection, scan,
-    types::{IdentityClaimRow, LinkRow, RecordRow},
+    types::{CatalogDiagnostic, IdentityClaimRow, LinkRow, RecordRow},
 };
 use crate::{
     changes::{
@@ -73,31 +73,31 @@ impl ProjectedSourceRefresh {
         self.parts
     }
 }
-fn corrupt(message: impl Into<String>) -> WikiError {
+pub(super) fn corrupt(message: impl Into<String>) -> WikiError {
     WikiError::new(ErrorCode::IndexCorrupt, message)
 }
-fn conflict(message: impl Into<String>) -> WikiError {
+pub(super) fn conflict(message: impl Into<String>) -> WikiError {
     WikiError::new(ErrorCode::ContentConflict, message)
 }
-fn budget() -> WikiError {
+pub(super) fn budget() -> WikiError {
     WikiError::new(
         ErrorCode::BudgetExceeded,
         "source projection exceeds cumulative allowance",
     )
 }
-fn typed(field: &str) -> EligibilityRole {
+pub(super) fn typed(field: &str) -> EligibilityRole {
     EligibilityRole::TypedReference {
         field: field.into(),
     }
 }
-fn record_id(record: &CanonicalRecord, field: &str) -> Result<RecordId> {
+pub(super) fn record_id(record: &CanonicalRecord, field: &str) -> Result<RecordId> {
     RecordId::new(
         record
             .string(field)
             .ok_or_else(|| corrupt(format!("record lacks {field}")))?,
     )
 }
-fn baseline() -> EligibilityBaseline {
+pub(super) fn baseline() -> EligibilityBaseline {
     EligibilityBaseline {
         eligibility: Eligibility::Current,
         reasons: vec![],
@@ -106,7 +106,7 @@ fn baseline() -> EligibilityBaseline {
         disputed: false,
     }
 }
-fn entry(row: &RecordRow) -> RegistryEntry {
+pub(super) fn entry(row: &RecordRow) -> RegistryEntry {
     RegistryEntry {
         id: row.record.id().clone(),
         kind: row.record.kind(),
@@ -114,40 +114,93 @@ fn entry(row: &RecordRow) -> RegistryEntry {
         aliases: scan::list(&row.record, "aliases"),
     }
 }
-fn state(bytes: Option<&[u8]>) -> ExpectedState {
+pub(super) fn state(bytes: Option<&[u8]>) -> ExpectedState {
     bytes.map_or(ExpectedState::Absent, |bytes| {
         ExpectedState::Hash(Blake3Hash::digest(bytes))
     })
 }
-fn deps(map: BTreeMap<VaultRelativePath, ExpectedState>) -> Vec<ReadDependency> {
+pub(super) fn deps(map: BTreeMap<VaultRelativePath, ExpectedState>) -> Vec<ReadDependency> {
     map.into_iter()
         .map(|(path, expected)| ReadDependency { path, expected })
         .collect()
 }
 
-struct Work<'a> {
-    fs: &'a VaultFs,
-    reader: &'a QuerySnapshot,
-    limits: &'a RefreshProjectionLimits,
-    started: Instant,
-    bytes: usize,
-    visits: usize,
-    before: BTreeMap<VaultRelativePath, ExpectedState>,
-    captured: BTreeMap<VaultRelativePath, ScanDocument>,
-    old: BTreeMap<RecordId, RecordRow>,
-    now: BTreeMap<RecordId, RecordRow>,
-    facts: BTreeMap<RecordId, EligibilityFact>,
-    overlay: BTreeMap<VaultRelativePath, Vec<u8>>,
-    dynamic: BTreeSet<RecordId>,
-    support: BTreeMap<RecordId, BTreeSet<RecordId>>,
-    declared: BTreeMap<RecordId, BTreeSet<RecordId>>,
-    generation: BTreeMap<RecordId, Option<RecordId>>,
-    opposition: BTreeMap<eligibility::OppositionKey, Vec<(RecordId, bool)>>,
-    new_registry: Vec<RegistryEntry>,
-    key_cache: BTreeMap<MatchKey, RegistryProbe>,
+pub(super) struct Work<'a> {
+    pub(super) fs: &'a VaultFs,
+    pub(super) reader: &'a QuerySnapshot,
+    pub(super) limits: &'a RefreshProjectionLimits,
+    pub(super) started: Instant,
+    pub(super) bytes: usize,
+    pub(super) visits: usize,
+    pub(super) before: BTreeMap<VaultRelativePath, ExpectedState>,
+    pub(super) captured: BTreeMap<VaultRelativePath, ScanDocument>,
+    pub(super) old: BTreeMap<RecordId, RecordRow>,
+    pub(super) now: BTreeMap<RecordId, RecordRow>,
+    pub(super) facts: BTreeMap<RecordId, EligibilityFact>,
+    pub(super) overlay: BTreeMap<VaultRelativePath, Vec<u8>>,
+    pub(super) dynamic: BTreeSet<RecordId>,
+    pub(super) support: BTreeMap<RecordId, BTreeSet<RecordId>>,
+    pub(super) declared: BTreeMap<RecordId, BTreeSet<RecordId>>,
+    pub(super) generation: BTreeMap<RecordId, Option<RecordId>>,
+    pub(super) lifecycle_diagnostics: BTreeMap<RecordId, Option<CatalogDiagnostic>>,
+    pub(super) opposition: BTreeMap<eligibility::OppositionKey, Vec<(RecordId, bool)>>,
+    pub(super) new_registry: Vec<RegistryEntry>,
+    pub(super) replaced_registry: BTreeSet<VaultRelativePath>,
+    /// Owners whose complete structural before/after states passed Page
+    /// admission. Their already-invalid references may change diagnostic shape.
+    /// Refresh leaves this empty and keeps its stricter navigation-only guard.
+    pub(super) admitted_typed_navigation: BTreeSet<VaultRelativePath>,
+    pub(super) edge_overrides: BTreeMap<RecordId, BTreeSet<EligibilityEdge>>,
+    pub(super) key_cache: BTreeMap<MatchKey, RegistryProbe>,
+}
+impl<'a> Work<'a> {
+    pub(super) fn new(
+        fs: &'a VaultFs,
+        reader: &'a QuerySnapshot,
+        limits: &'a RefreshProjectionLimits,
+    ) -> Result<Self> {
+        let ceiling = RefreshProjectionLimits::default();
+        if limits.max_rows == 0
+            || limits.max_rows > ceiling.max_rows
+            || limits.max_file_bytes == 0
+            || limits.max_file_bytes > ceiling.max_file_bytes
+            || limits.max_canonical_bytes == 0
+            || limits.max_canonical_bytes > ceiling.max_canonical_bytes
+            || limits.max_elapsed.is_zero()
+            || limits.max_elapsed > ceiling.max_elapsed
+        {
+            return Err(budget());
+        }
+        reader.require_fact_layout()?;
+        Ok(Self {
+            fs,
+            reader,
+            limits,
+            started: Instant::now(),
+            bytes: 0,
+            visits: 0,
+            before: BTreeMap::new(),
+            captured: BTreeMap::new(),
+            old: BTreeMap::new(),
+            now: BTreeMap::new(),
+            facts: BTreeMap::new(),
+            overlay: BTreeMap::new(),
+            dynamic: BTreeSet::new(),
+            support: BTreeMap::new(),
+            declared: BTreeMap::new(),
+            generation: BTreeMap::new(),
+            lifecycle_diagnostics: BTreeMap::new(),
+            opposition: BTreeMap::new(),
+            new_registry: vec![],
+            replaced_registry: BTreeSet::new(),
+            admitted_typed_navigation: BTreeSet::new(),
+            edge_overrides: BTreeMap::new(),
+            key_cache: BTreeMap::new(),
+        })
+    }
 }
 impl Work<'_> {
-    fn tick(&mut self) -> Result<()> {
+    pub(super) fn tick(&mut self) -> Result<()> {
         self.visits = self
             .visits
             .checked_add(1)
@@ -158,7 +211,7 @@ impl Work<'_> {
         }
         Ok(())
     }
-    fn charge(&mut self, bytes: usize) -> Result<()> {
+    pub(super) fn charge(&mut self, bytes: usize) -> Result<()> {
         self.tick()?;
         self.bytes = self
             .bytes
@@ -167,7 +220,11 @@ impl Work<'_> {
             .ok_or_else(budget)?;
         Ok(())
     }
-    fn observe(&mut self, path: &VaultRelativePath, expected: ExpectedState) -> Result<()> {
+    pub(super) fn observe(
+        &mut self,
+        path: &VaultRelativePath,
+        expected: ExpectedState,
+    ) -> Result<()> {
         if self.before.get(path).is_some_and(|old| old != &expected) {
             return Err(conflict(format!("selected state changed: {path}")));
         }
@@ -177,7 +234,11 @@ impl Work<'_> {
         self.before.insert(path.clone(), expected);
         Ok(())
     }
-    fn capture(&mut self, path: &VaultRelativePath, expected: &ExpectedState) -> Result<()> {
+    pub(super) fn capture(
+        &mut self,
+        path: &VaultRelativePath,
+        expected: &ExpectedState,
+    ) -> Result<()> {
         self.tick()?;
         if let Some(doc) = self.captured.get(path) {
             if expected != &ExpectedState::Hash(doc.hash.clone()) {
@@ -204,7 +265,7 @@ impl Work<'_> {
         }
         Ok(())
     }
-    fn load(&mut self, id: &RecordId) -> Result<bool> {
+    pub(super) fn load(&mut self, id: &RecordId) -> Result<bool> {
         self.tick()?;
         if self.now.contains_key(id) {
             return Ok(true);
@@ -236,18 +297,18 @@ impl Work<'_> {
         self.facts.insert(id.clone(), fact);
         Ok(true)
     }
-    fn require(&mut self, id: &RecordId) -> Result<()> {
+    pub(super) fn require(&mut self, id: &RecordId) -> Result<()> {
         if self.load(id)? {
             Ok(())
         } else {
             Err(corrupt(format!("selected boundary record missing: {id}")))
         }
     }
-    fn mark(&mut self, id: &RecordId) -> Result<bool> {
+    pub(super) fn mark(&mut self, id: &RecordId) -> Result<bool> {
         self.require(id)?;
         Ok(self.dynamic.insert(id.clone()))
     }
-    fn note(&self, path: &VaultRelativePath) -> Result<ParsedNote> {
+    pub(super) fn note(&self, path: &VaultRelativePath) -> Result<ParsedNote> {
         let bytes = self
             .overlay
             .get(path)
@@ -256,26 +317,48 @@ impl Work<'_> {
             .ok_or_else(|| corrupt("selected note was not captured"))?;
         Ok(parse_note(bytes))
     }
-    fn edges(
+    pub(super) fn edges(
         &mut self,
         id: &RecordId,
         roles: &[EligibilityRole],
         reverse: bool,
     ) -> Result<Vec<EligibilityEdge>> {
         self.tick()?;
-        let edges = if reverse {
+        let mut edges = if reverse {
             self.reader.dependent_edges(id, roles)?
         } else {
             self.reader.outgoing_edges(id, roles)?
         };
+        edges.retain(|edge| !self.edge_overrides.contains_key(&edge.owner_id));
+        for values in self.edge_overrides.values() {
+            edges.extend(
+                values
+                    .iter()
+                    .filter(|edge| {
+                        roles.contains(&edge.role)
+                            && if reverse {
+                                &edge.target_id == id
+                            } else {
+                                &edge.owner_id == id
+                            }
+                    })
+                    .cloned(),
+            );
+        }
         for _ in &edges {
             self.tick()?;
         }
         Ok(edges)
     }
-    fn lifecycle_boundary(&mut self, id: &RecordId) -> Result<()> {
+    pub(super) fn lifecycle_boundary(&mut self, id: &RecordId) -> Result<()> {
         let row = self.now[id].clone();
         if self.facts[id].baseline.eligibility == Eligibility::Invalid {
+            if row.record.kind() == RecordKind::RunEvent && self.edge_overrides.contains_key(id) {
+                self.edge_overrides
+                    .get_mut(id)
+                    .unwrap()
+                    .retain(|edge| edge.role != EligibilityRole::GenerationPacket);
+            }
             return Ok(());
         }
         match row.record.kind() {
@@ -297,7 +380,55 @@ impl Work<'_> {
                 if edges.len() > 1 {
                     return Err(corrupt("generation output has multiple bound packets"));
                 }
-                let packet = edges.first().map(|e| e.target_id.clone());
+                let packet = if self.edge_overrides.contains_key(id) {
+                    // Full rebuild records this body-derived edge only for
+                    // structurally valid outputs. Restoration must reconstruct
+                    // the binding rather than treating an absent old edge as
+                    // proof that the unchanged body is unbound.
+                    let note = self.note(&row.path)?;
+                    let output = crate::graph::packet::fenced_json(
+                        &note,
+                        "lwiki-api-extraction-output-v1",
+                        crate::graph::MAX_ARTIFACT_BYTES,
+                    )
+                    .ok()
+                    .and_then(|json| {
+                        crate::graph::packet::decode::<
+                            crate::graph::generation_cache::GenerationOutput,
+                        >(json, crate::graph::MAX_ARTIFACT_BYTES)
+                        .ok()
+                    });
+                    let mut bound = None;
+                    if let Some(output) = output {
+                        self.load(&output.packet_id)?;
+                        if output.version == 1
+                            && output.attempt.run_id.as_str()
+                                == row.record.string("wiki_run_id").unwrap_or_default()
+                            && output.attempt.task_key == output.task_key
+                            && Blake3Hash::digest(output.response.as_bytes())
+                                == output.response_hash
+                            && self.now.get(&output.packet_id).is_some_and(|packet| {
+                                packet.record.kind() == RecordKind::ExtractionPacket
+                                    && packet.record.string("wiki_packet_fingerprint")
+                                        == Some(output.packet_fingerprint.as_str())
+                            })
+                        {
+                            bound = Some(output.packet_id);
+                        }
+                    }
+                    let edges = self.edge_overrides.get_mut(id).unwrap();
+                    edges.retain(|edge| edge.role != EligibilityRole::GenerationPacket);
+                    if let Some(packet) = &bound {
+                        edges.insert(EligibilityEdge {
+                            owner_id: id.clone(),
+                            target_id: packet.clone(),
+                            role: EligibilityRole::GenerationPacket,
+                        });
+                    }
+                    bound
+                } else {
+                    edges.first().map(|e| e.target_id.clone())
+                };
                 if let Some(packet) = &packet {
                     self.require(packet)?;
                     let source = record_id(&self.now[packet].record, "wiki_source_id")?;
@@ -309,7 +440,7 @@ impl Work<'_> {
         }
         Ok(())
     }
-    fn discover(&mut self, seeds: BTreeSet<RecordId>) -> Result<()> {
+    pub(super) fn discover(&mut self, seeds: BTreeSet<RecordId>) -> Result<()> {
         let mut queue: VecDeque<_> = seeds.into_iter().collect();
         let mut seen = BTreeSet::new();
         while let Some(id) = queue.pop_front() {
@@ -391,7 +522,7 @@ impl Work<'_> {
         }
         Ok(())
     }
-    fn recompute(&mut self) -> Result<()> {
+    pub(super) fn recompute(&mut self) -> Result<()> {
         let ids: Vec<_> = self.dynamic.iter().cloned().collect();
         for id in &ids {
             rules::restore_baseline(self.now.get_mut(id).unwrap(), &self.facts[id].baseline);
@@ -411,9 +542,7 @@ impl Work<'_> {
                 GenerationContext::NotGeneration
             };
             let diagnostic = rules::lifecycle(self.now.get_mut(id).unwrap(), &boundary, context)?;
-            // Existing unchanged generation diagnostics are retained verbatim.
-            // Refresh cannot alter body binding or missing source identity.
-            let _ = diagnostic;
+            self.lifecycle_diagnostics.insert(id.clone(), diagnostic);
         }
         let boundary = self.now.clone();
         for id in &ids {
@@ -481,7 +610,7 @@ impl Work<'_> {
         }
         Ok(())
     }
-    fn generation_context<'b>(
+    pub(super) fn generation_context<'b>(
         &self,
         row: &RecordRow,
         boundary: &'b BTreeMap<RecordId, RecordRow>,
@@ -551,27 +680,7 @@ pub(crate) fn project_refresh(
     {
         return Err(conflict("source plan differs from pinned publication"));
     }
-    let mut work = Work {
-        fs,
-        reader,
-        limits,
-        started: Instant::now(),
-        bytes: 0,
-        visits: 0,
-        before: BTreeMap::new(),
-        captured: BTreeMap::new(),
-        old: BTreeMap::new(),
-        now: BTreeMap::new(),
-        facts: BTreeMap::new(),
-        overlay: BTreeMap::new(),
-        dynamic: BTreeSet::new(),
-        support: BTreeMap::new(),
-        declared: BTreeMap::new(),
-        generation: BTreeMap::new(),
-        opposition: BTreeMap::new(),
-        new_registry: vec![],
-        key_cache: BTreeMap::new(),
-    };
+    let mut work = Work::new(fs, reader, limits)?;
     for document in plan.captured {
         work.charge(document.bytes.len())?;
         if document.bytes.len() > limits.max_file_bytes
@@ -842,8 +951,9 @@ pub(crate) fn project_refresh(
     }
     work.discover(seeds)?;
     work.recompute()?;
+    let policy = super::write_projection::project_policy(&mut work)?;
     let mut delta = CatalogDelta {
-        version: 2,
+        version: 3,
         records: vec![],
         documents: vec![],
         graph: vec![],
@@ -854,6 +964,7 @@ pub(crate) fn project_refresh(
         dependencies: vec![],
         owners: vec![],
         facts: Some(FactDelta {
+            policy: Some(policy),
             records: vec![],
             edge_inserts: vec![],
             edge_deletes: vec![],
@@ -1018,7 +1129,7 @@ pub(crate) fn project_refresh(
         },
     }))
 }
-fn asset_path(row: &RecordRow, name: &str) -> Result<VaultRelativePath> {
+pub(super) fn asset_path(row: &RecordRow, name: &str) -> Result<VaultRelativePath> {
     let parent = row
         .path
         .as_str()
@@ -1029,7 +1140,7 @@ fn asset_path(row: &RecordRow, name: &str) -> Result<VaultRelativePath> {
 }
 
 impl Work<'_> {
-    fn recheck(&mut self) -> Result<()> {
+    pub(super) fn recheck(&mut self) -> Result<()> {
         for (path, expected) in self.before.clone() {
             self.tick()?;
             let remaining = self.limits.max_canonical_bytes.saturating_sub(self.bytes);
@@ -1043,7 +1154,11 @@ impl Work<'_> {
         }
         Ok(())
     }
-    fn verify_head(&mut self, source: &RecordId, revision: &RecordId) -> Result<Option<Vec<u8>>> {
+    pub(super) fn verify_head(
+        &mut self,
+        source: &RecordId,
+        revision: &RecordId,
+    ) -> Result<Option<Vec<u8>>> {
         let row = self.now[revision].clone();
         for (path_field, hash_field) in [
             ("wiki_original_path", "wiki_original_hash"),
@@ -1117,7 +1232,7 @@ impl Work<'_> {
         self.tick()?;
         Ok(content)
     }
-    fn capture_path(&mut self, path: &VaultRelativePath) -> Result<()> {
+    pub(super) fn capture_path(&mut self, path: &VaultRelativePath) -> Result<()> {
         if self.overlay.contains_key(path) {
             return Ok(());
         }
@@ -1128,7 +1243,7 @@ impl Work<'_> {
             .ok_or_else(|| corrupt("selected path has no central expected state"))?;
         self.capture(path, &dependency.expected)
     }
-    fn metadata_document(
+    pub(super) fn metadata_document(
         &mut self,
         path: &VaultRelativePath,
         row: &RecordRow,
@@ -1157,7 +1272,7 @@ impl Work<'_> {
         }
         Ok(())
     }
-    fn emit_record(&mut self, id: &RecordId, delta: &mut CatalogDelta) -> Result<()> {
+    pub(super) fn emit_record(&mut self, id: &RecordId, delta: &mut CatalogDelta) -> Result<()> {
         self.tick()?;
         let row = self.now[id].clone();
         let old = self.old.get(id).cloned();
@@ -1227,10 +1342,19 @@ impl Work<'_> {
         delta.records.push(row);
         Ok(())
     }
-    fn registry_probe(&mut self, key: &MatchKey, include_new: bool) -> Result<RegistryProbe> {
+    pub(super) fn registry_probe(
+        &mut self,
+        key: &MatchKey,
+        include_new: bool,
+    ) -> Result<RegistryProbe> {
         self.tick()?;
+        if !include_new && !self.replaced_registry.is_empty() {
+            return self.reader.registry_probe_for_key(key);
+        }
         if !self.key_cache.contains_key(key) {
-            let probe = self.reader.registry_probe_for_key(key)?;
+            let probe = self
+                .reader
+                .registry_probe_for_key_excluding(key, &self.replaced_registry)?;
             self.key_cache.insert(key.clone(), probe);
         }
         let mut probe = self.key_cache[key].clone();
@@ -1245,7 +1369,7 @@ impl Work<'_> {
         }
         Ok(probe)
     }
-    fn navigation(
+    pub(super) fn navigation(
         &mut self,
         fact: &OwnedLinkFact,
         include_new: bool,
@@ -1262,9 +1386,13 @@ impl Work<'_> {
             navigation_resolution::resolve_untyped(&fact.raw_destination, &mut probe)
         }
     }
-    fn resolve_fact(&mut self, mut fact: OwnedLinkFact) -> Result<(LinkRow, OwnedLinkFact)> {
+    pub(super) fn resolve_fact(
+        &mut self,
+        mut fact: OwnedLinkFact,
+    ) -> Result<(LinkRow, OwnedLinkFact)> {
         let resolution = self.navigation(&fact, true)?;
         if let Some(target) = &fact.typed
+            && !self.admitted_typed_navigation.contains(&fact.from_path)
             && !matches!(resolution, NavigationResolution::Resolved { .. })
         {
             let before = self.navigation(&fact, false)?;
@@ -1302,7 +1430,11 @@ impl Work<'_> {
             fact,
         ))
     }
-    fn emit_links(&mut self, path: &VaultRelativePath, delta: &mut CatalogDelta) -> Result<()> {
+    pub(super) fn emit_links(
+        &mut self,
+        path: &VaultRelativePath,
+        delta: &mut CatalogDelta,
+    ) -> Result<()> {
         self.capture_path(path)?;
         let note = self.note(path)?;
         let canonical = note.canonical.as_ref();
@@ -1397,15 +1529,26 @@ impl Work<'_> {
         });
         Ok(())
     }
-    fn emit_assertion_navigation(&mut self, id: &RecordId, delta: &mut CatalogDelta) -> Result<()> {
+    pub(super) fn emit_assertion_navigation(
+        &mut self,
+        id: &RecordId,
+        delta: &mut CatalogDelta,
+    ) -> Result<()> {
         self.require(id)?;
         let row = self.now[id].clone();
         if row.record.kind() != RecordKind::Assertion {
             return Err(corrupt("assertion navigation owner is not an assertion"));
         }
-        let mut diagnostics = self
-            .reader
-            .diagnostics(&BTreeSet::from([row.path.clone()]))?;
+        let mut diagnostics = if let Some(owned) = delta
+            .diagnostics
+            .iter()
+            .find(|owned| owned.path == row.path)
+        {
+            owned.rows.clone()
+        } else {
+            self.reader
+                .diagnostics(&BTreeSet::from([row.path.clone()]))?
+        };
         diagnostics.retain(|diagnostic| {
             !diagnostic
                 .details

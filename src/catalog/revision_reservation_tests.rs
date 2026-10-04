@@ -75,13 +75,17 @@ fn actual_builder_claims_dangling_typed_list_and_exact_path_reserve_new_identity
     ] {
         let (reserved, usage) = measure(&catalog, name);
         assert!(reserved, "{name}");
-        assert_eq!(usage.rows, 2, "one header plus one existence witness");
+        assert_eq!(
+            usage.rows,
+            measure(&catalog, "revision_fresh").1.rows + 1,
+            "policy preflight plus one existence witness"
+        );
     }
     // The typed/list/path targets genuinely do not exist as adopted records.
     let absent: i64 = database.query_row("SELECT count(*) FROM records WHERE id IN ('revision_typed_reserved','revision_list_reserved','revision_path_reserved')", [], |row| row.get(0)).unwrap();
     assert_eq!(absent, 0);
     assert!(!measure(&catalog, "revision_fresh").0);
-    assert_eq!(measure(&catalog, "revision_fresh").1.rows, 1);
+    assert!(measure(&catalog, "revision_fresh").1.rows > 1);
     // Exact proposed path is independent of the proposed ID lookup itself.
     let reader = catalog.query_snapshot(QueryReadLimits::default()).unwrap();
     assert!(
@@ -120,7 +124,10 @@ fn adopted_record_remains_reserved_when_selected_identity_claim_is_missing() {
             )
             .unwrap()
     );
-    assert_eq!(reader.usage().rows, 2);
+    assert_eq!(
+        reader.usage().rows,
+        measure(&catalog, "revision_fresh").1.rows + 1
+    );
 }
 
 #[test]
@@ -251,9 +258,10 @@ fn layout_and_malformed_header_refuse_instead_of_treating_missing_facts_as_fresh
 #[test]
 fn reservation_input_and_witness_are_admitted_against_shared_cumulative_limits() {
     let (_temp, catalog, _database) = fixture();
+    let preflight_rows = measure(&catalog, "revision_fresh").1.rows;
     let reader = catalog
         .query_snapshot(QueryReadLimits {
-            max_rows: 1,
+            max_rows: preflight_rows,
             ..QueryReadLimits::default()
         })
         .unwrap();
@@ -262,7 +270,7 @@ fn reservation_input_and_witness_are_admitted_against_shared_cumulative_limits()
             .revision_identity_is_reserved(&id("revision_fresh"), &revision_path("revision_fresh"))
             .unwrap()
     );
-    assert_eq!(reader.usage().rows, 1);
+    assert_eq!(reader.usage().rows, preflight_rows);
     assert_eq!(
         reader
             .revision_identity_is_reserved(
@@ -275,7 +283,7 @@ fn reservation_input_and_witness_are_admitted_against_shared_cumulative_limits()
     );
     let reader = catalog
         .query_snapshot(QueryReadLimits {
-            max_rows: 1,
+            max_rows: preflight_rows,
             ..QueryReadLimits::default()
         })
         .unwrap();
@@ -302,7 +310,7 @@ fn reservation_input_and_witness_are_admitted_against_shared_cumulative_limits()
             .code,
         ErrorCode::BudgetExceeded
     );
-    assert_eq!(reader.usage().rows, 1);
+    assert_eq!(reader.usage().rows, 2);
     assert_eq!(reader.usage().bytes, 0);
     let reader = catalog
         .query_snapshot(QueryReadLimits {
@@ -316,5 +324,105 @@ fn reservation_input_and_witness_are_admitted_against_shared_cumulative_limits()
             .unwrap_err()
             .code,
         ErrorCode::BudgetExceeded
+    );
+}
+
+#[test]
+fn policy_only_missing_canonical_identity_reserves_generated_revision_id() {
+    use crate::{
+        catalog::{
+            policy_facts::{PolicyKind, PolicyRow},
+            sql,
+        },
+        graph::policy_inputs::PolicyInputKey,
+    };
+    let (_temp, catalog, database) = fixture();
+    let missing = id("revision_policy_reserved");
+    let row = PolicyRow::Dependency {
+        kind: PolicyKind::Remap,
+        key: PolicyInputKey::CanonicalIdentity(missing.clone()),
+    };
+    let columns = row.columns().unwrap();
+    database
+        .execute(
+            "INSERT INTO policy_facts VALUES(?1,?2,?3,?4)",
+            params![columns[0], columns[1], columns[2], columns[3]],
+        )
+        .unwrap();
+    let absent: i64 = database
+        .query_row(
+            "SELECT count(*) FROM records WHERE id=?1",
+            [missing.as_str()],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(absent, 0);
+    assert!(measure(&catalog, missing.as_str()).0);
+    assert!(!measure(&catalog, "revision_unrelated_policy").0);
+    // An ID-bearing key with different semantics must not reserve this generated identity.
+    let unrelated = sql::json(&PolicyInputKey::AssertionEndpoint(id(
+        "revision_unrelated_policy",
+    )))
+    .unwrap();
+    database
+        .execute(
+            "INSERT INTO policy_facts VALUES('dependency',?1,'review','')",
+            [unrelated],
+        )
+        .unwrap();
+    assert!(!measure(&catalog, "revision_unrelated_policy").0);
+}
+
+#[test]
+fn reservation_requires_policy_layout_and_index_before_claim_short_circuit() {
+    for mutation in [
+        "DELETE FROM policy_facts WHERE family='layout'",
+        "DROP INDEX policy_facts_owner",
+        "DROP TABLE policy_facts",
+    ] {
+        let (_temp, catalog, database) = fixture();
+        database.execute_batch(mutation).unwrap();
+        let reader = catalog.query_snapshot(QueryReadLimits::default()).unwrap();
+        let error = reader
+            .revision_identity_is_reserved(
+                &id("revision_claimed"),
+                &revision_path("revision_claimed"),
+            )
+            .unwrap_err();
+        assert_eq!(
+            error.code,
+            if mutation == "DROP INDEX policy_facts_owner" {
+                ErrorCode::IndexCorrupt
+            } else {
+                ErrorCode::OfflineUnavailable
+            },
+            "{mutation}"
+        );
+    }
+}
+
+#[test]
+fn malformed_policy_reservation_witness_is_not_accepted() {
+    let (_temp, catalog, database) = fixture();
+    let key = super::sql::json(
+        &crate::graph::policy_inputs::PolicyInputKey::CanonicalIdentity(id("revision_policy_bad")),
+    )
+    .unwrap();
+    database
+        .execute(
+            "INSERT INTO policy_facts VALUES('dependency',?1,'unsupported_policy','')",
+            [key],
+        )
+        .unwrap();
+    let reader = catalog.query_snapshot(QueryReadLimits::default()).unwrap();
+    assert_eq!(
+        reader
+            .revision_identity_is_reserved(
+                &id("revision_policy_bad"),
+                &revision_path("revision_policy_bad")
+            )
+            .unwrap_err()
+            .code,
+        ErrorCode::IndexCorrupt
     );
 }

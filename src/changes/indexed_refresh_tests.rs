@@ -59,7 +59,8 @@ fn fixture() -> (
     let proof = IndexedRefreshProof {
         version: 2,
         vault_id: engine.vault_id.clone(),
-        source_id: id("source_fixture"),
+        source_id: Some(id("source_fixture")),
+        operation: None,
         change: change.prepared.clone(),
         base: ReadSnapshot::published(
             10,
@@ -75,6 +76,103 @@ fn fixture() -> (
         after,
     };
     (temp, engine, writer, change, proof)
+}
+
+#[test]
+fn version_two_proof_encoding_and_checksum_remain_exact() {
+    // The deployed wire type, deliberately independent of new optional fields.
+    #[derive(Serialize)]
+    struct VersionTwo<'a> {
+        version: u32,
+        vault_id: &'a RecordId,
+        source_id: &'a RecordId,
+        change: &'a PreparedChange,
+        base: &'a ReadSnapshot,
+        intended: &'a ReadSnapshot,
+        delta_hash: &'a Blake3Hash,
+        before: &'a [ReadDependency],
+        after: &'a [ReadDependency],
+    }
+    let (_temp, engine, writer, change, proof) = fixture();
+    let original = serde_json::to_vec(&VersionTwo {
+        version: 2,
+        vault_id: &proof.vault_id,
+        source_id: proof.source_id.as_ref().unwrap(),
+        change: &proof.change,
+        base: &proof.base,
+        intended: &proof.intended,
+        delta_hash: &proof.delta_hash,
+        before: &proof.before,
+        after: &proof.after,
+    })
+    .unwrap();
+    let decoded: IndexedRefreshProof = strict_json(&original).unwrap();
+    assert_eq!(serde_json::to_vec(&decoded).unwrap(), original);
+    decoded.validate_manifest(&change.manifest).unwrap();
+    let receipt = format!(
+        "{{\"proof\":{},\"checksum\":{}}}",
+        std::str::from_utf8(&original).unwrap(),
+        serde_json::to_string(&Blake3Hash::digest(&original)).unwrap()
+    );
+    let path = baseline_path(&change.prepared).unwrap();
+    let staged = engine.fs.stage(&path, receipt.as_bytes(), &writer).unwrap();
+    engine
+        .fs
+        .replace(staged, &ExpectedState::Absent, &writer)
+        .unwrap();
+    assert_eq!(
+        engine.load_indexed_refresh_proof(&change.prepared).unwrap(),
+        Some(proof)
+    );
+}
+
+#[test]
+fn operation_descriptor_rejects_mixed_versions_and_manifest_scope() {
+    let (_temp, engine, _writer, change, legacy) = fixture();
+    let mut proof = legacy.clone();
+    proof.version = 3;
+    proof.source_id = None;
+    proof.operation = Some(IndexedWriteOperation::PageBatch {
+        pages: vec![IndexedPageTarget {
+            path: path("page.md"),
+            id: id("page_fixture"),
+        }],
+    });
+    proof.validate_manifest(&change.manifest).unwrap();
+    for variant in 0..6 {
+        let mut invalid = proof.clone();
+        match variant {
+            0 => invalid.version = 2,
+            1 => invalid.source_id = legacy.source_id.clone(),
+            2 => invalid.operation = None,
+            3 => invalid.operation = Some(IndexedWriteOperation::PageBatch { pages: vec![] }),
+            4 => {
+                invalid.operation = Some(IndexedWriteOperation::PageBatch {
+                    pages: vec![IndexedPageTarget {
+                        path: path("other.md"),
+                        id: id("page_fixture"),
+                    }],
+                })
+            }
+            5 => {
+                invalid.operation = Some(IndexedWriteOperation::SourceCapture {
+                    source_id: id("source_same"),
+                    revision_id: id("source_same"),
+                })
+            }
+            _ => unreachable!(),
+        }
+        assert!(
+            invalid.validate_manifest(&change.manifest).is_err(),
+            "variant {variant}"
+        );
+    }
+    assert!(
+        proof
+            .validate(&id("vault_other"), &change.prepared)
+            .is_err()
+    );
+    proof.validate(&engine.vault_id, &change.prepared).unwrap();
 }
 
 #[test]
@@ -411,6 +509,7 @@ impl ConnectedFixture {
         let delta = CatalogDelta {
             facts: self.normalized_facts.then(|| {
                 crate::catalog::normalized_fact_delta::FactDelta {
+                    policy: None,
                     records: vec![],
                     edge_inserts: vec![],
                     edge_deletes: vec![],

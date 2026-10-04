@@ -125,7 +125,7 @@ fn full_check_reconciles_real_bootstrap_and_deleted_owner_without_source_writes(
 }
 
 #[test]
-fn full_check_all_eighteen_families_reject_changed_missing_and_extra_rows() {
+fn full_check_all_nineteen_families_reject_changed_missing_and_extra_rows() {
     let fixture = Fixture::new();
     fixture.check();
     let db = Connection::open(&fixture.database).unwrap();
@@ -148,6 +148,7 @@ fn full_check_all_eighteen_families_reject_changed_missing_and_extra_rows() {
         "semantic_edges",
         "dependencies",
         "diagnostics",
+        "policy_facts",
     ];
     for family in families {
         let mut stmt = db
@@ -166,7 +167,10 @@ fn full_check_all_eighteen_families_reject_changed_missing_and_extra_rows() {
             panic!("rowid")
         };
         let text_column = (1..original.len())
-            .find(|i| matches!(&original[*i], Value::Text(_)))
+            .find(|i| {
+                matches!(&original[*i], Value::Text(_))
+                    && !(family == "policy_facts" && columns[*i - 1] == "family")
+            })
             .unwrap();
         let all_columns = std::iter::once("rowid".to_owned())
             .chain(columns.clone())
@@ -196,6 +200,12 @@ fn full_check_all_eighteen_families_reject_changed_missing_and_extra_rows() {
                 "extra" => {
                     let mut extra = original.clone();
                     for (i, value) in extra.iter_mut().enumerate() {
+                        // Keep the closed family discriminator valid so the
+                        // explicit audit, rather than SQLite's CHECK, detects
+                        // the extra policy row.
+                        if family == "policy_facts" && i == 1 {
+                            continue;
+                        }
                         match value {
                             Value::Text(s) => s.push_str(" audit extra"),
                             Value::Integer(n)
