@@ -171,6 +171,8 @@ mod tests {
         assertion_calls: Cell<usize>,
         ambiguous: Option<RecordId>,
         claimed: bool,
+        reserved_attempts: Cell<usize>,
+        reservation_calls: RefCell<Vec<(RecordId, VaultRelativePath)>>,
         mutate_on_claim: Option<PathBuf>,
     }
     impl SourceRefreshLookup for Lookup {
@@ -195,6 +197,21 @@ mod tests {
                 fs::write(path, b"concurrent selected edit").unwrap();
             }
             Ok(self.claimed)
+        }
+        fn revision_identity_is_reserved(
+            &self,
+            id: &RecordId,
+            path: &VaultRelativePath,
+        ) -> Result<bool> {
+            self.reservation_calls
+                .borrow_mut()
+                .push((id.clone(), path.clone()));
+            if self.id_is_claimed(id)? {
+                return Ok(true);
+            }
+            let remaining = self.reserved_attempts.get();
+            self.reserved_attempts.set(remaining.saturating_sub(1));
+            Ok(remaining > 0)
         }
         fn record_at_path(&self, path: &VaultRelativePath) -> Result<Option<RefreshRecord>> {
             Ok(self.records.values().find(|row| &row.path == path).cloned())
@@ -382,6 +399,8 @@ mod tests {
                 assertion_calls: Cell::new(0),
                 ambiguous: None,
                 claimed: false,
+                reserved_attempts: Cell::new(0),
+                reservation_calls: RefCell::new(vec![]),
                 mutate_on_claim: None,
             }
         }
@@ -641,6 +660,47 @@ mod tests {
                 .code,
             ErrorCode::SourceIntegrity
         );
+    }
+
+    #[test]
+    fn generated_revision_retries_reserved_id_or_path_without_scanning_dependents() {
+        let fixture = Fixture::new(request(b"original"));
+        let lookup = fixture.lookup();
+        lookup.reserved_attempts.set(2);
+        let plan = fixture.plan(&lookup, request(b"new bytes"), None).unwrap();
+        let calls = lookup.reservation_calls.borrow();
+        assert_eq!(calls.len(), 3);
+        assert_eq!(calls[2].0, plan.plan.revision_id);
+        assert_eq!(
+            calls
+                .iter()
+                .map(|(id, _)| id)
+                .collect::<BTreeSet<_>>()
+                .len(),
+            3
+        );
+        for (id, path) in calls.iter() {
+            assert_eq!(
+                path.as_str(),
+                format!("sources/{}/revisions/{id}/revision.md", fixture.source)
+            );
+        }
+        assert_eq!(lookup.assertion_calls.get(), 0);
+        drop(calls);
+        let mut exhausted = fixture.lookup();
+        exhausted.claimed = true;
+        assert_eq!(
+            fixture
+                .plan(&exhausted, request(b"other bytes"), None)
+                .err()
+                .unwrap()
+                .code,
+            ErrorCode::ReferenceAmbiguous
+        );
+        assert_eq!(exhausted.reservation_calls.borrow().len(), 16);
+        let noop = fixture.lookup();
+        fixture.plan(&noop, request(b"original"), None).unwrap();
+        assert!(noop.reservation_calls.borrow().is_empty());
     }
 
     #[test]
@@ -1013,19 +1073,27 @@ impl SourceStore {
                 None
             };
         let is_reused = reused.is_some();
-        let revision_id = match &reused {
-            Some(revision) => revision.record.id().clone(),
-            None => {
-                let id = RecordId::generate(RecordKind::Revision)?;
-                if lookup.id_is_claimed(&id)? {
-                    return Err(WikiError::new(
-                        ErrorCode::ReferenceAmbiguous,
-                        "new revision ID is already claimed",
-                    ));
+        let revision_id =
+            match &reused {
+                Some(revision) => revision.record.id().clone(),
+                None => {
+                    let mut allocated = None;
+                    for _ in 0..16 {
+                        let id = RecordId::generate(RecordKind::Revision)?;
+                        let path = VaultRelativePath::new(format!(
+                            "sources/{source_id}/revisions/{id}/revision.md"
+                        ))?;
+                        if !lookup.revision_identity_is_reserved(&id, &path)? {
+                            allocated = Some(id);
+                            break;
+                        }
+                    }
+                    allocated.ok_or_else(|| WikiError::new(
+                    ErrorCode::ReferenceAmbiguous,
+                    "could not allocate an unreferenced revision identity after 16 attempts",
+                ))?
                 }
-                id
-            }
-        };
+            };
         let unchanged = is_reused && revision_id == old_head && !title_changed;
         let (change, invalidation) = if unchanged {
             (None, InvalidationInputs::default())

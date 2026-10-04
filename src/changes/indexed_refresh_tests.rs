@@ -818,18 +818,16 @@ fn connected_new_revision_commits_and_recovers_exact_immutable_owner() {
         .unwrap();
     let mut request = ConnectedFixture::request();
     request.original = b"New immutable captured revision with changed content.\n".to_vec();
+    // This fixture deliberately tests raw v1 delta/ownership recovery on the
+    // old proof layout. Production indexed allocation requires current facts;
+    // the sealed v2 projector recovery has its own connected tests.
+    let base_snapshot = QueryCatalog::snapshot(&reader).clone();
     let plan = SourceStore::new(fixture.engine.fs.clone())
-        .plan_refresh_indexed(
-            &reader,
-            &fixture.source,
-            request,
-            None,
-            &SourceRefreshLimits::default(),
-        )
+        .plan_refresh_with_title(&fixture.source, request, None)
         .unwrap();
-    assert!(!plan.plan.reused);
-    let revision_id = plan.plan.revision_id.clone();
-    let mut draft = plan.plan.draft.unwrap();
+    assert!(!plan.reused);
+    let revision_id = plan.revision_id.clone();
+    let mut draft = plan.draft.unwrap();
     // This test oracle projects the COMPLETE small fixture plus its proposed
     // overlay. Production admission may not use a synthetic partial graph.
     let mut input = scan::scan_input(&fixture.engine.fs, &fixture.engine.vault_id).unwrap();
@@ -843,7 +841,6 @@ fn connected_new_revision_commits_and_recovers_exact_immutable_owner() {
         .collect();
     let projected = scan::project(&fixture.engine.fs, &input).unwrap();
     let mut before: BTreeMap<_, _> = plan
-        .plan
         .dependencies
         .into_iter()
         .map(|d| (d.path, d.expected))
@@ -961,7 +958,7 @@ fn connected_new_revision_commits_and_recovers_exact_immutable_owner() {
         &fixture.writer,
         fixture.source.clone(),
         inspection.prepared.clone(),
-        plan.base_snapshot,
+        base_snapshot,
         before,
         after,
         delta,

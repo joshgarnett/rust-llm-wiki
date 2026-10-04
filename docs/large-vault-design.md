@@ -144,9 +144,32 @@ does not rewrite completed canonical files.
 Normalized proof layout 2 stores structural validation effects separately from
 the final baseline and requires rebuilding older layouts. Full validation and
 incremental code share reference and propagation rules; the full evaluator checks
-that recorded effects reproduce its baseline. This is the foundation for repairing
-previously invalid references, not a completed repair implementation: bounded
-Decision-group evaluation and affected-reference recomputation remain necessary.
+that recorded effects reproduce its baseline. General authored-record adoption
+still needs complete structural and policy recomputation when repairing references.
+
+Capture creates an opaque revision identity; its public request has no requested-ID
+field. An allocated identity must be absent from both identity claims and structural
+references, and its exact canonical path must be unreferenced. The planner retries
+collisions within a finite bound, and sealed admission repeats the checks against
+the same publication before accepting generated revision metadata. This prevents
+an ordinary capture from accidentally adopting a dangling reference. Historical
+reuse authenticates an existing revision. Generic basename and alias links remain
+navigation updates and never reserve a generated identity.
+
+Receipt validation limits apply to receipt notes and the distinct records actually
+needed for their proofs. Complete discovery still checks malformed, duplicate and
+contradictory receipts; exhaustive reference checks retain their actual witnesses.
+Exceeding the proof allowance is an operation error, not a semantic invalidity to
+cache on a Decision. Unrelated document growth must not change receipt authority.
+The semantic fingerprint changes with these rules so earlier cached outcomes need
+rebuilding. Explicit authored-operation capture limits remain separate.
+
+The connected freshness and receipt-budget gate passed 451 unit tests and 110
+integration tests across catalog eligibility, source evidence, graph queries,
+graph review and entity decisions. Five tests were ignored and the same two
+unchanged ledger matrices were excluded. This covers collision retries, sealed
+admission, full-projection parity and receipt behavior with unrelated document
+growth; it does not establish public CLI performance or retrieval completeness.
 
 Normalized navigation now records an exact compact ambiguity state. Bounded
 candidate probes preserve path precedence and public resolver behavior. A connected

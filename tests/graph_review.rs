@@ -1651,7 +1651,7 @@ fn malformed_encoded_and_deleted_canonical_review_fences_keep_capture_bounds() {
         );
         assert_eq!(
             verify_review_policy(&policy_notes).unwrap_err().code,
-            ErrorCode::BudgetExceeded,
+            ErrorCode::RecordInvalid,
             "{info}"
         );
         input.overlay = vec![ProposedTarget {

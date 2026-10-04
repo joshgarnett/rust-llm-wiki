@@ -658,3 +658,138 @@ fn generic_and_exact_navigation_refresh_work_is_independent_of_candidate_populat
         "unrelated matching candidates must not increase update work"
     );
 }
+
+#[test]
+fn forged_capture_cannot_adopt_a_dangling_reference_or_reserved_exact_path() {
+    for reserve_id in [true, false] {
+        let future = RecordId::generate(RecordKind::Revision).unwrap();
+        let fixture = Fixture::with_setup(true, |fixture| {
+            if reserve_id {
+                fixture.write(
+                    "future-evidence.md",
+                    &note(
+                        "evidence",
+                        "evidence_future",
+                        json!({"wiki_status":"active","wiki_assertion_id":"assertion_keep",
+                        "wiki_source_id":fixture.source,"wiki_source_revision":future,
+                        "wiki_stance":"supports","wiki_locator_kind":"utf8-bytes",
+                        "wiki_span_start":0,"wiki_span_end":13,
+                        "wiki_quote_hash":Blake3Hash::digest(b"future bytes!")}),
+                        &exact_quote_body(b"future bytes!", "\n", "Future").unwrap(),
+                    ),
+                );
+            } else {
+                fixture.write(
+                    "reserved-path.md",
+                    &note(
+                        "page",
+                        "page_reserved_path",
+                        json!({"wiki_status":"reviewed"}),
+                        format!("[[sources/{}/revisions/{future}/revision]]", fixture.source)
+                            .as_bytes(),
+                    ),
+                );
+            }
+        });
+        let (reader, mut plan) = fixture.plan(Fixture::request(b"future bytes!"), None);
+        let source_path = fixture
+            .fs
+            .root()
+            .path()
+            .join(format!("sources/{}/source.md", fixture.source));
+        let before = fs::read(&source_path).unwrap();
+        let old_id = plan.plan.revision_id.clone();
+        plan.plan.revision_id = future.clone();
+        let draft = plan.plan.draft.as_mut().unwrap();
+        draft
+            .allocated_ids
+            .insert("revision".into(), future.clone());
+        for op in &mut draft.operations {
+            op.target = path(&op.target.as_str().replace(old_id.as_str(), future.as_str()));
+            for dependency in &mut op.apply_after {
+                *dependency = path(
+                    &dependency
+                        .as_str()
+                        .replace(old_id.as_str(), future.as_str()),
+                );
+            }
+            let proposed = op.proposed.as_mut().unwrap();
+            *proposed = std::str::from_utf8(proposed)
+                .unwrap()
+                .replace(old_id.as_str(), future.as_str())
+                .into_bytes();
+        }
+        let error = project_refresh(
+            &fixture.fs,
+            &reader,
+            plan,
+            &RefreshProjectionLimits::default(),
+        )
+        .err()
+        .unwrap();
+        assert_eq!(error.code, ErrorCode::ContentConflict);
+        assert!(error.message.contains("referenced"), "{error:?}");
+        assert_eq!(fs::read(&source_path).unwrap(), before);
+        let unchanged = fixture
+            .catalog
+            .query_snapshot(QueryReadLimits::default())
+            .unwrap();
+        assert_eq!(
+            QueryCatalog::snapshot(&unchanged),
+            QueryCatalog::snapshot(&reader)
+        );
+        drop(unchanged);
+        drop(reader);
+        // A normal capture allocates a different identity and completes; no user
+        // reconciliation or full-audit fallback is needed for the dangling link.
+        let delta = fixture
+            .apply(Fixture::request(b"future bytes!"), None)
+            .unwrap();
+        assert!(delta.records.iter().all(|row| row.record.id() != &future));
+        fixture.oracle();
+    }
+}
+
+#[test]
+fn generated_revision_admission_rejects_injected_graph_metadata_and_body() {
+    let fixture = Fixture::new(true);
+    for injection in [
+        "aliases: [\"injected\"]\n",
+        "wiki_depends_on_ids: [\"assertion_keep\"]\n",
+        "body",
+    ] {
+        let (reader, mut plan) = fixture.plan(Fixture::request(b"new capture"), None);
+        let op = plan
+            .plan
+            .draft
+            .as_mut()
+            .unwrap()
+            .operations
+            .iter_mut()
+            .find(|op| op.target.as_str().ends_with("/revision.md"))
+            .unwrap();
+        let bytes = op.proposed.as_mut().unwrap();
+        if injection == "body" {
+            bytes.extend(b"Injected body");
+        } else {
+            bytes.splice(4..4, injection.bytes());
+        }
+        assert!(
+            parse_note(bytes).canonical.is_some(),
+            "fixture must reach generated-shape check"
+        );
+        let error = project_refresh(
+            &fixture.fs,
+            &reader,
+            plan,
+            &RefreshProjectionLimits::default(),
+        )
+        .err()
+        .unwrap();
+        assert_eq!(error.code, ErrorCode::ContentConflict);
+        assert!(
+            error.message.contains("generated capture metadata"),
+            "{error:?}"
+        );
+    }
+}

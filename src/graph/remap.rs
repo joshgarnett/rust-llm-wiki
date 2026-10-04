@@ -1,4 +1,5 @@
 //! Strict exhaustive identity-remap proof. No redirect traversal or inferred identity.
+use super::receipt_budget::ReceiptBudget;
 use super::{decision_types::*, extraction_types::*, import, mention_state, packet, wire};
 use crate::{
     changes::{OriginOperation, RetainedGraphInput, RetainedGraphInverseInput, ValidationInput},
@@ -342,6 +343,9 @@ pub(crate) fn has_fence(note: &ParsedNote) -> Result<bool> {
     if note.raw.len() > MAX_ENTITY_DECISION_RECEIPT_BYTES + 262144 {
         return Err(bad("entity decision note exceeds ceiling"));
     }
+    fence_present(note)
+}
+fn fence_present(note: &ParsedNote) -> Result<bool> {
     let text = std::str::from_utf8(note.body()).map_err(|_| bad("decision body not UTF8"))?;
     Ok(pulldown_cmark::Parser::new(text).any(|e|matches!(e,Event::Start(Tag::CodeBlock(CodeBlockKind::Fenced(info))) if info.as_ref()==ENTITY_DECISION_FENCE)))
 }
@@ -426,11 +430,18 @@ pub(crate) fn reference_set(
     notes: &BTreeMap<VaultRelativePath, ParsedNote>,
     entities: &BTreeSet<RecordId>,
 ) -> Result<BTreeMap<String, RecordId>> {
+    reference_set_scoped(notes, entities, &mut ReceiptBudget::default())
+}
+fn reference_set_scoped(
+    notes: &BTreeMap<VaultRelativePath, ParsedNote>,
+    entities: &BTreeSet<RecordId>,
+    budget: &mut ReceiptBudget,
+) -> Result<BTreeMap<String, RecordId>> {
     let mut found = BTreeMap::new();
     if entities.is_empty() {
         return Ok(found);
     }
-    for note in notes.values() {
+    for (path, note) in notes {
         let Some(record) = &note.canonical else {
             if note.fields.as_ref().is_some_and(|f| {
                 ["wiki_subject_id", "wiki_object_id"].iter().any(|k| {
@@ -439,6 +450,7 @@ pub(crate) fn reference_set(
                         .is_some_and(|s| entities.iter().any(|id| id.as_str() == s))
                 })
             }) {
+                budget.admit(path, note)?;
                 return Err(bad("malformed referring canonical envelope"));
             }
             continue;
@@ -452,6 +464,7 @@ pub(crate) fn reference_set(
                     if let Some(id) = record.string(field(&f)).map(RecordId::new).transpose()?
                         && entities.contains(&id)
                     {
+                        budget.admit(path, note)?;
                         found.insert(
                             format!("a:{}:{}", record.id(), field(&f)),
                             record.id().clone(),
@@ -460,6 +473,9 @@ pub(crate) fn reference_set(
                 }
             }
             RecordKind::Extraction => {
+                // Every Extraction is a negative-proof witness: its retained
+                // bindings may still refer to the remapped identity.
+                budget.admit(path, note)?;
                 let a = artifact(note)?;
                 for (local, binding) in &a.bindings {
                     if let MentionBinding::Resolved { entity_id, .. } = binding
@@ -804,24 +820,26 @@ pub(crate) fn shape(receipt: &EntityDecisionReceiptV1) -> Result<()> {
 fn receipts(
     notes: &BTreeMap<VaultRelativePath, ParsedNote>,
 ) -> Result<BTreeMap<RecordId, EntityDecisionReceiptV1>> {
-    if notes.len() > 4096
-        || notes
-            .values()
-            .try_fold(0usize, |n, note| n.checked_add(note.raw.len()))
-            .is_none_or(|n| n > packet::SOURCE_CAP)
-    {
-        return Err(bad("decision policy capture exceeds ceiling"));
-    }
+    receipts_scoped(notes, &mut ReceiptBudget::default())
+}
+fn receipts_scoped(
+    notes: &BTreeMap<VaultRelativePath, ParsedNote>,
+    budget: &mut ReceiptBudget,
+) -> Result<BTreeMap<RecordId, EntityDecisionReceiptV1>> {
     let mut result = BTreeMap::new();
-    for note in notes.values() {
+    for (path, note) in notes {
         if note.canonical.as_ref().is_some_and(|r| {
             r.kind() == RecordKind::Decision
                 && matches!(
                     r.string("wiki_action"),
                     Some("merge" | "split" | "add_alias" | "bind_mention")
                 )
-        }) && has_fence(note)?
+        }) && fence_present(note)?
         {
+            budget.admit(path, note)?;
+            if note.raw.len() > MAX_ENTITY_DECISION_RECEIPT_BYTES + 262144 {
+                return Err(super::receipt_budget::exhausted());
+            }
             let r = receipt(note)?;
             shape(&r)?;
             if result.get(&r.task_id).is_some_and(|old| old != &r) {
@@ -902,11 +920,12 @@ fn envelope_policy(
     notes: &BTreeMap<VaultRelativePath, ParsedNote>,
     r: &EntityDecisionReceiptV1,
     all: &BTreeMap<RecordId, EntityDecisionReceiptV1>,
+    budget: &mut ReceiptBudget,
 ) -> Result<EnvelopePolicy> {
     let mut family = BTreeSet::new();
     let mut edges = BTreeSet::new();
     for (op, a) in r.request.decisions.iter().zip(&r.allocations) {
-        let (_, note) = find(notes, &a.decision_id)?;
+        let (_, note) = budget.find(notes, &a.decision_id)?;
         let rec = note
             .canonical
             .as_ref()
@@ -947,10 +966,16 @@ fn envelope_policy(
                     .entities
                     .get(&new.key)
                     .ok_or_else(|| bad("split entity allocation missing"))?;
-                if find(notes, id)?.1.canonical.as_ref().is_none_or(|entity| {
-                    entity.kind() != RecordKind::Entity
-                        || entity.string("wiki_entity_type") != Some(new.entity_type.as_str())
-                }) {
+                if budget
+                    .find(notes, id)?
+                    .1
+                    .canonical
+                    .as_ref()
+                    .is_none_or(|entity| {
+                        entity.kind() != RecordKind::Entity
+                            || entity.string("wiki_entity_type") != Some(new.entity_type.as_str())
+                    })
+                {
                     return Err(bad("split entity immutable type differs"));
                 }
             }
@@ -966,7 +991,7 @@ fn envelope_policy(
         }
         if rec.string("wiki_status") == Some("active") {
             for source in sources(op) {
-                let (_, n) = find(notes, &source)?;
+                let (_, n) = budget.find(notes, &source)?;
                 let entity = n
                     .canonical
                     .as_ref()
@@ -979,7 +1004,7 @@ fn envelope_policy(
                 }
             }
             for id in output_ids(op, a) {
-                let (_, n) = find(notes, &id)?;
+                let (_, n) = budget.find(notes, &id)?;
                 let entity = n
                     .canonical
                     .as_ref()
@@ -998,7 +1023,7 @@ fn envelope_policy(
                 entity_id, alias, ..
             } = op
             {
-                let (_, n) = find(notes, entity_id)?;
+                let (_, n) = budget.find(notes, entity_id)?;
                 if !n
                     .canonical
                     .as_ref()
@@ -1011,7 +1036,7 @@ fn envelope_policy(
             }
         }
         for m in &a.mention_decisions {
-            let (_, note) = find(notes, &m.decision_id)?;
+            let (_, note) = budget.find(notes, &m.decision_id)?;
             let rec = note
                 .canonical
                 .as_ref()
@@ -1036,7 +1061,7 @@ fn envelope_policy(
             {
                 return Err(bad("replacement envelope/supersession differs"));
             }
-            let (_, old) = find(notes, &m.predecessor_id)?;
+            let (_, old) = budget.find(notes, &m.predecessor_id)?;
             let old = old
                 .canonical
                 .as_ref()
@@ -1091,7 +1116,7 @@ fn envelope_policy(
             if !matches!(rec.string("wiki_status"), Some("active" | "superseded")) {
                 return Err(bad("replacement decision status invalid"));
             }
-            let (_, e) = find(notes, &m.extraction_id)?;
+            let (_, e) = budget.find(notes, &m.extraction_id)?;
             let current = artifact(e)?;
             let current = current
                 .bindings
@@ -1106,7 +1131,7 @@ fn envelope_policy(
         }
     }
     for e in &r.main_supersessions {
-        let (_, old) = find(notes, &e.predecessor_id)?;
+        let (_, old) = budget.find(notes, &e.predecessor_id)?;
         if old.canonical.as_ref().is_none_or(|rec| {
             rec.kind() != RecordKind::Decision
                 || rec.string("wiki_status") != Some("superseded")
@@ -1138,7 +1163,8 @@ fn envelope_policy(
                 ));
             }
             for id in ids {
-                if find(notes, &id)?
+                if budget
+                    .find(notes, &id)?
                     .1
                     .canonical
                     .as_ref()
@@ -1156,9 +1182,10 @@ fn envelope_policy(
 fn current_scoped_authorities(
     notes: &BTreeMap<VaultRelativePath, ParsedNote>,
     outputs: &BTreeSet<RecordId>,
+    budget: &mut ReceiptBudget,
 ) -> Result<BTreeSet<RecordId>> {
     let mut ids = BTreeSet::new();
-    for note in notes.values() {
+    for (path, note) in notes {
         let Some(d) = &note.canonical else { continue };
         if d.kind() != RecordKind::Decision
             || d.string("wiki_status") != Some("active")
@@ -1173,6 +1200,7 @@ fn current_scoped_authorities(
         if assigned.len() != 1 || !outputs.contains(&assigned[0]) {
             continue;
         }
+        budget.admit(path, note)?;
         let extraction = RecordId::new(
             d.string("wiki_extraction_id")
                 .ok_or_else(|| bad("scoped extraction missing"))?,
@@ -1193,7 +1221,7 @@ fn current_scoped_authorities(
         if declared.is_empty() || declared.len() != locals.len() {
             return Err(bad("scoped mention authority empty/duplicate"));
         }
-        let (_, n) = find(notes, &extraction)?;
+        let (_, n) = budget.find(notes, &extraction)?;
         let current = artifact(n)?;
         let actual = current
             .bindings
@@ -1223,6 +1251,7 @@ fn verify_current_binding(
     artifact: &ExtractionArtifactV1,
     local: &PacketLocalId,
     binding: &MentionBinding,
+    budget: &mut ReceiptBudget,
 ) -> Result<()> {
     let (decision_id, output, allowed) = match binding {
         MentionBinding::Pending => return Ok(()),
@@ -1238,7 +1267,7 @@ fn verify_current_binding(
             (decision_id, vec![], ["reject_mention"].as_slice())
         }
     };
-    let (_, note) = find(notes, decision_id)?;
+    let (_, note) = budget.find(notes, decision_id)?;
     let d = note
         .canonical
         .as_ref()
@@ -1295,7 +1324,13 @@ fn verify_current_binding(
 pub fn verify_decision_policy(
     notes: &BTreeMap<VaultRelativePath, ParsedNote>,
 ) -> Result<Option<VerifiedDecisionPolicy>> {
-    let all = receipts(notes)?;
+    verify_decision_policy_scoped(notes, &mut ReceiptBudget::default())
+}
+pub(crate) fn verify_decision_policy_scoped(
+    notes: &BTreeMap<VaultRelativePath, ParsedNote>,
+    budget: &mut ReceiptBudget,
+) -> Result<Option<VerifiedDecisionPolicy>> {
+    let all = receipts_scoped(notes, budget)?;
     if all.is_empty() {
         return Ok(None);
     }
@@ -1303,7 +1338,7 @@ pub fn verify_decision_policy(
     let mut aliases = BTreeSet::new();
     let mut edges = BTreeSet::new();
     for r in all.values() {
-        let (mut family, new_edges) = envelope_policy(notes, r, &all)?;
+        let (mut family, new_edges) = envelope_policy(notes, r, &all, budget)?;
         for (op, a) in r.request.decisions.iter().zip(&r.allocations) {
             if matches!(op, EntityDecision::AddAlias { .. }) {
                 aliases.insert(a.decision_id.clone());
@@ -1313,7 +1348,8 @@ pub fn verify_decision_policy(
             // split needs its own output family; historical authorities do not
             // grant compatibility to unrelated current decisions.
             if !matches!(op, EntityDecision::SplitEntity { .. })
-                || find(notes, &a.decision_id)?
+                || budget
+                    .find(notes, &a.decision_id)?
                     .1
                     .canonical
                     .as_ref()
@@ -1322,7 +1358,7 @@ pub fn verify_decision_policy(
                 continue;
             }
             let outputs = output_ids(op, a).into_iter().collect::<BTreeSet<_>>();
-            family.extend(current_scoped_authorities(notes, &outputs)?);
+            family.extend(current_scoped_authorities(notes, &outputs, budget)?);
             let scope = outputs
                 .union(&sources(op))
                 .cloned()
@@ -1342,7 +1378,7 @@ pub fn verify_decision_policy(
         families.push(family);
         edges.extend(new_edges);
         for p in &r.extraction_proofs {
-            let (_, n) = find(notes, &p.extraction_id)?;
+            let (_, n) = budget.find(notes, &p.extraction_id)?;
             let current = artifact(n)?;
             if mention_state::immutable_hash(&current)? != p.immutable_extraction_hash
                 || current.bindings.keys().ne(p.prior_bindings.keys())
@@ -1371,7 +1407,9 @@ pub fn verify_decision_policy(
                     MentionBinding::Rejected { .. } if before != now => {
                         return Err(bad("historical rejected binding changed"));
                     }
-                    MentionBinding::Pending => verify_current_binding(notes, &current, local, now)?,
+                    MentionBinding::Pending => {
+                        verify_current_binding(notes, &current, local, now, budget)?
+                    }
                     _ => {}
                 }
             }
@@ -1402,7 +1440,7 @@ pub fn verify_decision_policy(
             }
         }
         for p in &r.assertion_proofs {
-            let (_, n) = find(notes, &p.assertion_id)?;
+            let (_, n) = budget.find(notes, &p.assertion_id)?;
             let rec = n
                 .canonical
                 .as_ref()
@@ -1427,7 +1465,7 @@ pub fn verify_decision_policy(
         }
         for op in &r.request.decisions {
             let original_sources = sources(op);
-            let refs = reference_set(notes, &original_sources)?;
+            let refs = reference_set_scoped(notes, &original_sources, budget)?;
             if !refs.is_empty() {
                 return Err(bad("unremapped canonical reference to superseded identity"));
             }
@@ -1474,7 +1512,8 @@ pub fn verify_decision_policy(
     for r in all.values() {
         for (op, a) in r.request.decisions.iter().zip(&r.allocations) {
             if let EntityDecision::MergeEntities { target_id, .. } = op
-                && find(notes, &a.decision_id)?
+                && budget
+                    .find(notes, &a.decision_id)?
                     .1
                     .canonical
                     .as_ref()
@@ -1491,7 +1530,7 @@ pub fn verify_decision_policy(
         }
     }
     for (target, (mut ids, absorbed)) in merges {
-        for note in notes.values() {
+        for (path, note) in notes {
             let Some(d) = &note.canonical else {
                 continue;
             };
@@ -1503,12 +1542,14 @@ pub fn verify_decision_policy(
                     .iter()
                     .any(|id| id == &target || absorbed.contains(id))
             {
+                budget.admit(path, note)?;
                 ids.insert(d.id().clone());
             }
         }
         ids.extend(current_scoped_authorities(
             notes,
             &BTreeSet::from([target]),
+            budget,
         )?);
         if ids.len() > 1 {
             families.push(ids);
@@ -1729,6 +1770,7 @@ pub fn verify_remap_overlay(
             ));
         }
         Ok(None) => return Ok(None),
+        Err(e) if e.code == ErrorCode::BudgetExceeded => return Err(e),
         Err(_) if !fresh_authority && witness.is_none() => return Ok(None),
         Err(e) => return Err(e),
     };

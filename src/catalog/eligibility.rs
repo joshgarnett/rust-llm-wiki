@@ -432,6 +432,9 @@ fn compute_inner(
     let decision_policy = match crate::graph::remap::verify_decision_policy(notes) {
         Ok(policy) => policy,
         Err(error) => {
+            if error.code == ErrorCode::BudgetExceeded {
+                return Err(error);
+            }
             for id in crate::graph::remap::relevant_decision_ids(notes) {
                 if let Some(row) = records.get_mut(&id) {
                     mark_invalid(
@@ -449,6 +452,9 @@ fn compute_inner(
     let review_policy = match crate::graph::review::verify_review_policy(notes) {
         Ok(policy) => policy,
         Err(error) => {
+            if error.code == ErrorCode::BudgetExceeded {
+                return Err(error);
+            }
             for id in crate::graph::review::relevant_decision_ids(notes) {
                 if let Some(row) = records.get_mut(&id) {
                     mark_invalid(

@@ -1062,6 +1062,52 @@ impl crate::sources::SourceRefreshLookup for QuerySnapshot {
         Ok(true)
     }
 
+    fn revision_identity_is_reserved(
+        &self,
+        id: &RecordId,
+        path: &VaultRelativePath,
+    ) -> Result<bool> {
+        self.require_fact_layout()?;
+        let input_bytes = id
+            .as_str()
+            .len()
+            .checked_add(path.as_str().len())
+            .ok_or_else(|| {
+                WikiError::new(
+                    ErrorCode::BudgetExceeded,
+                    "revision reservation input byte count overflow",
+                )
+            })?;
+        self.reserve_fact_input(input_bytes)?;
+        // Prepare all indexed probes together so a missing required table
+        // or index refuses even when an earlier branch would find a reservation.
+        // LIMIT 1 proves existence; it is not a partial candidate collection.
+        let mut statement = self.connection.prepare(
+            "SELECT 0,record_id FROM identity_claims INDEXED BY sqlite_autoindex_identity_claims_1 WHERE record_id=?1 \
+             UNION ALL SELECT 0,id FROM records INDEXED BY sqlite_autoindex_records_1 WHERE id=?1 \
+             UNION ALL SELECT 1,target_id FROM semantic_edges INDEXED BY semantic_dependents WHERE target_id=?1 \
+             UNION ALL SELECT 2,value FROM link_match_keys INDEXED BY sqlite_autoindex_link_match_keys_1 WHERE kind='path' AND value=?2 LIMIT 1"
+        ).map_err(sql::sql_error)?;
+        let mut rows = statement
+            .query(params![id.as_str(), path.as_str()])
+            .map_err(sql::sql_error)?;
+        let Some(row) = rows.next().map_err(sql::sql_error)? else {
+            return Ok(false);
+        };
+        self.reserve_refresh_row(row, 2)?;
+        let expected = match row.get::<_, i64>(0).map_err(sql::sql_error)? {
+            0 | 1 => id.as_str(),
+            2 => path.as_str(),
+            _ => return Err(corrupt("unknown revision reservation witness")),
+        };
+        if utf8(text_bytes(row, 1)?)? != expected {
+            return Err(corrupt(
+                "revision reservation witness differs from lookup key",
+            ));
+        }
+        Ok(true)
+    }
+
     fn matching_revision(
         &self,
         source: &RecordId,

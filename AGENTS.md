@@ -26,6 +26,8 @@ For consequential quality work, establish a critic before implementing. Agree on
 
 Before consequential architecture decisions, ask an independent Astra reviewer to challenge the measured problem, expected user benefit, simpler alternatives, scaling costs and migration path. Revisit the decision when evidence or constraints change. Require a concrete experiment for uncertain tradeoffs and prioritize an integrated user workflow over additional disconnected components. Passing component tests and scoped critic scores do not establish that the architecture is useful or that integration is complete. Routine local edits do not need another architecture review.
 
+Before adding a general repair subsystem, trace the failure through the actual public inputs and allocation rules. Ask whether a stronger input or identity invariant prevents the failure while preserving the intended workflow. Keep adversarial internal-plan tests, and verify that ordinary commands handle the case automatically; a safe refusal alone does not establish good usability.
+
 ## Research failures and reassess the architecture
 
 When an unexpected failure appears, identify which pipeline stage loses the required information. Research how comparable tools address that failure using primary documentation, source code and original papers. Record the mechanism, fit, tradeoffs and testable hypothesis in the relevant report or decision log. A vendor's benchmark is evidence for investigating an approach, not proof it will work here or permission to add a conflicting dependency.

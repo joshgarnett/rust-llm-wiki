@@ -1,4 +1,5 @@
 //! Complete explicit evidence reviews, guarded publication and authenticated reversal.
+use super::receipt_budget::ReceiptBudget;
 use super::{packet, remap, review_types::*};
 use crate::{
     changes::*,
@@ -692,24 +693,20 @@ pub fn relevant_decision_ids(
 fn receipts(
     notes: &BTreeMap<VaultRelativePath, ParsedNote>,
 ) -> Result<BTreeMap<RecordId, ReviewReceiptV1>> {
-    // A large ordinary catalog does not become a review capture merely because
-    // receipt policy is consulted by global eligibility. Actual (even malformed)
-    // review fences still enter the existing bounded receipt path.
-    if !notes.values().any(has_fence) {
-        return Ok(BTreeMap::new());
-    }
-    if notes.len() > MAX_REVIEW_CAPTURE_FILES
-        || notes
-            .values()
-            .try_fold(0usize, |n, v| n.checked_add(v.raw.len()))
-            .is_none_or(|n| n > MAX_REVIEW_CAPTURE_BYTES)
-    {
-        return Err(budget());
-    }
+    receipts_scoped(notes, &mut ReceiptBudget::default())
+}
+fn receipts_scoped(
+    notes: &BTreeMap<VaultRelativePath, ParsedNote>,
+    scope: &mut ReceiptBudget,
+) -> Result<BTreeMap<RecordId, ReviewReceiptV1>> {
     let mut all = BTreeMap::new();
-    for n in notes.values() {
+    for (path, n) in notes {
         if !has_fence(n) {
             continue;
+        }
+        scope.admit(path, n)?;
+        if n.raw.len() > MAX_REVIEW_RECEIPT_BYTES + 262144 {
+            return Err(super::receipt_budget::exhausted());
         }
         let r = record(n)?;
         if r.kind() != RecordKind::Decision
@@ -1130,21 +1127,27 @@ fn semantic_decision(r: &ReviewReceiptV1, d: &AssertionReview, n: &ParsedNote) -
 pub fn verify_review_policy(
     notes: &BTreeMap<VaultRelativePath, ParsedNote>,
 ) -> Result<Option<VerifiedReviewPolicy>> {
-    let all = receipts(notes)?;
+    verify_review_policy_scoped(notes, &mut ReceiptBudget::default())
+}
+pub(crate) fn verify_review_policy_scoped(
+    notes: &BTreeMap<VaultRelativePath, ParsedNote>,
+    scope: &mut ReceiptBudget,
+) -> Result<Option<VerifiedReviewPolicy>> {
+    let all = receipts_scoped(notes, scope)?;
     if all.is_empty() {
         return Ok(None);
     }
     let mut combined = all.values().flat_map(edges).collect::<BTreeSet<_>>();
-    if let Some(p) = remap::verify_decision_policy(notes)? {
+    if let Some(p) = remap::verify_decision_policy_scoped(notes, scope)? {
         combined.extend(p.supersession_edges().iter().cloned());
     }
     acyclic(&combined)?;
     for r in all.values() {
         for d in &r.request.decisions {
-            let (_, n) = find(notes, &r.allocations.decisions[&d.assertion_id])?;
+            let (_, n) = scope.find(notes, &r.allocations.decisions[&d.assertion_id])?;
             semantic_decision(r, d, n)?;
             if status(n)? == "active" {
-                let (_, an) = find(notes, &d.assertion_id)?;
+                let (_, an) = scope.find(notes, &d.assertion_id)?;
                 if status(an)? != d.decision.assertion_status() {
                     return Err(bad("active review Decision outcome differs"));
                 }
@@ -1165,7 +1168,7 @@ pub fn verify_review_policy(
             }
         }
         for p in &r.predecessors {
-            let (_, n) = find(notes, &p.decision_id)?;
+            let (_, n) = scope.find(notes, &p.decision_id)?;
             let old = record(n)?;
             if old.kind() != RecordKind::Decision
                 || status(n)? != "superseded"
@@ -1396,6 +1399,9 @@ pub fn verify_review_overlay(
     let all = match receipts(&proposed.notes) {
         Ok(r) => r,
         Err(e) => {
+            if e.code == ErrorCode::BudgetExceeded {
+                return Err(e);
+            }
             if witness.is_none()
                 && !input
                     .overlay
@@ -2616,3 +2622,7 @@ fn references_deleted(n: &ParsedNote, deleted: &BTreeSet<RecordId>) -> bool {
             }
     })
 }
+
+#[cfg(test)]
+#[path = "receipt_review_budget_tests.rs"]
+mod receipt_budget_tests;

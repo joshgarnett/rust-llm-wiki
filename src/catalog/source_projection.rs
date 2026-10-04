@@ -675,16 +675,16 @@ pub(crate) fn project_refresh(
         ));
     }
     if is_new {
-        if reader.id_is_claimed(&new_head)?
-            || draft.allocated_ids != BTreeMap::from([("revision".into(), new_head.clone())])
-        {
-            return Err(conflict(
-                "new revision identity is already claimed or unallocated",
-            ));
-        }
         let revision_path = VaultRelativePath::new(format!(
             "sources/{source_id}/revisions/{new_head}/revision.md"
         ))?;
+        if reader.revision_identity_is_reserved(&new_head, &revision_path)?
+            || draft.allocated_ids != BTreeMap::from([("revision".into(), new_head.clone())])
+        {
+            return Err(conflict(
+                "new revision identity or path is already claimed, referenced, or unallocated",
+            ));
+        }
         let note = work.note(&revision_path)?;
         let record = note
             .canonical
@@ -695,6 +695,35 @@ pub(crate) fn project_refresh(
             || record.string("wiki_source_id") != Some(source_id.as_str())
         {
             return Err(conflict("new revision owner or identity differs"));
+        }
+        // This capability admits the capture generator's envelope, not arbitrary
+        // record adoption. In particular, new graph edges or aliases would make
+        // cached structural and policy facts insufficient.
+        if !note.body().is_empty()
+            || record.fields().keys().any(|field| {
+                !matches!(
+                    field.as_str(),
+                    "wiki_schema"
+                        | "wiki_id"
+                        | "wiki_kind"
+                        | "title"
+                        | "wiki_source_id"
+                        | "wiki_source"
+                        | "wiki_captured_at"
+                        | "wiki_original_path"
+                        | "wiki_original_hash"
+                        | "wiki_extractor"
+                        | "wiki_extractor_fingerprint"
+                        | "wiki_extraction_status"
+                        | "wiki_media_type"
+                        | "wiki_content_path"
+                        | "wiki_content_hash"
+                )
+            })
+        {
+            return Err(conflict(
+                "new revision differs from generated capture metadata",
+            ));
         }
         let row = RecordRow {
             record,

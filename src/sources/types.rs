@@ -115,6 +115,14 @@ pub(crate) trait SourceRefreshLookup {
     fn unique_record(&self, id: &RecordId) -> Result<Option<RefreshRecord>>;
     fn record_at_path(&self, path: &VaultRelativePath) -> Result<Option<RefreshRecord>>;
     fn id_is_claimed(&self, id: &RecordId) -> Result<bool>;
+    /// Generated capture identities cannot adopt a dangling reference. Reserve
+    /// both any named structural ID and the exact future canonical path; broad
+    /// navigation basename/alias matches do not reserve a fresh identity.
+    fn revision_identity_is_reserved(
+        &self,
+        id: &RecordId,
+        path: &VaultRelativePath,
+    ) -> Result<bool>;
     /// First matching retained ordinal; the planner checks the current head
     /// first and authenticates exact bytes before actually reusing a revision.
     fn matching_revision(

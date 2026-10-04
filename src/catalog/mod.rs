@@ -29,6 +29,8 @@ mod projector_query_tests;
 pub mod publish;
 pub(crate) mod query;
 pub(crate) mod query_types;
+#[cfg(test)]
+mod revision_reservation_tests;
 pub(crate) mod row_projection;
 pub mod scan;
 pub(crate) mod selector;
