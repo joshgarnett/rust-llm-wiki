@@ -75,6 +75,29 @@ pub struct PreparedChange {
     pub manifest_hash: Blake3Hash,
 }
 
+/// Namespace words are folded by the immutable-tree parser; identity path
+/// components keep their exact spelling, including legacy non-RecordId names.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) struct RevisionTreeKey {
+    pub source_component: String,
+    pub revision_component: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct RevisionOwnerRow {
+    pub key: RevisionTreeKey,
+    pub change: PreparedChange,
+}
+
+/// A complete historical ownership registry at one pinned published epoch.
+/// Implementations must refuse an unready registry, including an empty one.
+pub(crate) trait RevisionOwnershipLookup {
+    fn snapshot(&self) -> &ReadSnapshot;
+    fn vault_id(&self) -> &RecordId;
+    fn require_ready(&self) -> Result<()>;
+    fn revision_owner(&self, key: &RevisionTreeKey) -> Result<Option<PreparedChange>>;
+}
+
 #[derive(Debug, Clone)]
 pub struct ExpectedWrite {
     pub target: VaultRelativePath,

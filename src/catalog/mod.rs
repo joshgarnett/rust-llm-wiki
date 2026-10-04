@@ -6,6 +6,8 @@ pub(crate) mod normalized_audit;
 pub(crate) mod normalized_build;
 pub(crate) mod normalized_read;
 pub(crate) mod normalized_schema;
+#[cfg(test)]
+mod ownership_tests;
 pub mod publish;
 pub(crate) mod query;
 pub(crate) mod query_types;

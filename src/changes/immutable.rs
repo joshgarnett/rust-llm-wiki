@@ -1,6 +1,6 @@
 //! Engine-owned sealed revision membership; graph validation cannot relax this policy.
 use super::{
-    journal, outcome,
+    journal, operation_authority, outcome,
     prepare::{MAX_JOURNAL_BYTES, MAX_PAYLOAD_BYTES, read_bounded, strict_json},
     types::*,
 };
@@ -175,12 +175,24 @@ impl ChangeEngine {
         hash: &Blake3Hash,
         state: &JournalState,
     ) -> Result<()> {
+        self.preflight_revision_trees_with(permit, manifest, hash, state, &|ownership| {
+            self.check_competing_owners(ownership)
+        })
+    }
+    fn preflight_revision_trees_with(
+        &self,
+        permit: &WriterPermit,
+        manifest: &ChangeManifest,
+        hash: &Blake3Hash,
+        state: &JournalState,
+        owners: &dyn Fn(&Ownership) -> Result<()>,
+    ) -> Result<()> {
         permit.require_root(self.fs.root())?;
         if tree_inventory(manifest)?.is_empty() {
             return Ok(());
         }
         let ownership = planned(self, manifest, hash)?;
-        self.check_competing_owners(&ownership)?;
+        owners(&ownership)?;
         let retained = load(self, &ownership)?;
         let applying = matches!(
             state.status,
@@ -238,6 +250,18 @@ impl ChangeEngine {
         hash: &Blake3Hash,
         complete: bool,
     ) -> Result<()> {
+        self.verify_revision_trees_with(permit, manifest, hash, complete, &|ownership| {
+            self.check_competing_owners(ownership)
+        })
+    }
+    fn verify_revision_trees_with(
+        &self,
+        permit: &WriterPermit,
+        manifest: &ChangeManifest,
+        hash: &Blake3Hash,
+        complete: bool,
+        owners: &dyn Fn(&Ownership) -> Result<()>,
+    ) -> Result<()> {
         permit.require_root(self.fs.root())?;
         if tree_inventory(manifest)?.is_empty() {
             return Ok(());
@@ -248,7 +272,7 @@ impl ChangeEngine {
                 "missing verified revision ownership receipt",
             ));
         }
-        self.check_competing_owners(&ownership)?;
+        owners(&ownership)?;
         for tree in &ownership.trees {
             check_members(self, tree, manifest, complete)?;
         }
@@ -313,6 +337,323 @@ impl ChangeEngine {
         Ok(())
     }
 }
+fn indexed_key(root: &VaultRelativePath) -> RevisionTreeKey {
+    let (source, revision) = key(root);
+    RevisionTreeKey {
+        source_component: source.to_owned(),
+        revision_component: revision.to_owned(),
+    }
+}
+fn owner_row(tree: &Tree, change: &PreparedChange) -> RevisionOwnerRow {
+    RevisionOwnerRow {
+        key: indexed_key(&tree.root),
+        change: change.clone(),
+    }
+}
+
+/// A bounded guard can only be created for the exact retained manifest named by
+/// active authority, using the exact starting published epoch. It never replaces
+/// the ownership receipt or member checks, only competing-owner discovery.
+pub(crate) struct IndexedRevisionGuard<'a> {
+    engine: &'a ChangeEngine,
+    writer: &'a WriterPermit,
+    change: &'a PreparedChange,
+    lookup: &'a dyn RevisionOwnershipLookup,
+    manifest: ChangeManifest,
+    authority: operation_authority::Authority,
+    snapshot: crate::domain::ReadSnapshot,
+}
+impl ChangeEngine {
+    pub(crate) fn indexed_revision_guard<'a>(
+        &'a self,
+        writer: &'a WriterPermit,
+        change: &'a PreparedChange,
+        lookup: &'a dyn RevisionOwnershipLookup,
+    ) -> Result<IndexedRevisionGuard<'a>> {
+        writer.require_root(self.fs.root())?;
+        self.require_binding()?;
+        lookup.require_ready()?;
+        if lookup.vault_id() != &self.vault_id {
+            return Err(super::apply::recovery_error(
+                "revision ownership lookup belongs to another vault",
+            ));
+        }
+        let authority = operation_authority::load(
+            &self.fs,
+            &self.vault_id,
+            operation_authority::Presence::Required,
+        )?
+        .ok_or_else(|| {
+            super::apply::recovery_error("revision guard requires operational authority")
+        })?;
+        let active = authority
+            .active()
+            .filter(|active| &active.change == change)
+            .ok_or_else(|| {
+                super::apply::recovery_error("revision guard requires the exact active change")
+            })?;
+        let snapshot = lookup.snapshot();
+        if snapshot.generation != active.starting.epoch
+            || !snapshot.publication().is_some_and(|published| {
+                published.version == 1 && published.file_id == active.starting.file_id
+            })
+        {
+            return Err(super::apply::recovery_error(
+                "revision ownership lookup differs from active starting publication",
+            ));
+        }
+        let (manifest, hash) = self.load_manifest_structure(&change.change_id)?;
+        if hash != change.manifest_hash {
+            return Err(super::apply::recovery_error(
+                "revision guard retained manifest binding changed",
+            ));
+        }
+        Ok(IndexedRevisionGuard {
+            engine: self,
+            writer,
+            change,
+            lookup,
+            manifest,
+            authority,
+            snapshot: snapshot.clone(),
+        })
+    }
+
+    /// Explicit rebuild/migration only. Existing classification collects change
+    /// IDs once; manifests and terminal receipts are processed one at a time.
+    /// The sink must reject conflicting owners for a key before marking its
+    /// candidate ready. Never infer these historical roots from current files.
+    pub(crate) fn reconstruct_revision_owners(
+        &self,
+        writer: &WriterPermit,
+        current: Option<&PreparedChange>,
+        progress: &mut dyn FnMut() -> Result<()>,
+        emit: &mut dyn FnMut(RevisionOwnerRow) -> Result<()>,
+    ) -> Result<()> {
+        progress()?;
+        writer.require_root(self.fs.root())?;
+        self.require_binding()?;
+        if let Some(authority) = operation_authority::load(
+            &self.fs,
+            &self.vault_id,
+            operation_authority::Presence::LegacyMayBeAbsent,
+        )? && let Some(active) = authority.active()
+            && current != Some(&active.change)
+        {
+            return Err(super::apply::recovery_error(
+                "ownership reconstruction cannot bypass another active operation",
+            ));
+        }
+        let mut found_current = current.is_none();
+        for id in self.change_ids_checked(progress)? {
+            progress()?;
+            let (manifest, hash) = self.load_manifest_structure(&id)?;
+            let change = PreparedChange {
+                change_id: id,
+                manifest_hash: hash,
+            };
+            let is_current = current.is_some_and(|expected| expected.change_id == change.change_id);
+            if is_current && current != Some(&change) {
+                return Err(super::apply::recovery_error(
+                    "ownership reconstruction current manifest changed",
+                ));
+            }
+            if let Some(terminal) =
+                outcome::terminal_report(&self.fs, &manifest, &change.manifest_hash)?
+            {
+                progress()?;
+                // Valid historical outcomes deliberately do not require obsolete
+                // canonical trees, retained payloads, or validation baselines.
+                if terminal.status == ChangeStatus::Committed {
+                    for tree in tree_inventory(&manifest)? {
+                        emit(owner_row(&tree, &change))?;
+                    }
+                }
+                if is_current {
+                    return Err(super::apply::recovery_error(
+                        "current ownership reconstruction requires an in-flight legacy publication",
+                    ));
+                }
+                continue;
+            }
+            let state = journal::load_journal(&self.fs, &manifest, &change.manifest_hash)?;
+            progress()?;
+            if is_current {
+                if !matches!(
+                    state.status,
+                    Some(ChangeStatus::FilesApplied | ChangeStatus::Indexed)
+                ) {
+                    return Err(super::apply::recovery_error(
+                        "current ownership reconstruction lacks files-applied intent",
+                    ));
+                }
+                let ownership = planned(self, &manifest, &change.manifest_hash)?;
+                if !ownership.trees.is_empty() && load(self, &ownership)?.is_none() {
+                    return Err(super::apply::recovery_error(
+                        "current ownership reconstruction requires its original ownership receipt",
+                    ));
+                }
+                for tree in &ownership.trees {
+                    check_members(self, tree, &manifest, true)?;
+                    emit(owner_row(tree, &change))?;
+                }
+                found_current = true;
+                continue;
+            }
+            match state.status {
+                Some(ChangeStatus::Prepared) => {}
+                None => {
+                    if read_bounded(
+                        &self.fs,
+                        &receipt_path(&change.change_id)?,
+                        MAX_JOURNAL_BYTES,
+                    )?
+                    .is_some()
+                        || self
+                            .observe(&manifest)?
+                            .iter()
+                            .any(|observed| observed.observed != observed.before)
+                    {
+                        return Err(super::apply::recovery_error(
+                            "unresolved staged ownership blocks reconstruction",
+                        ));
+                    }
+                }
+                _ => {
+                    return Err(super::apply::recovery_error(
+                        "unresolved or unretained terminal change blocks ownership reconstruction",
+                    ));
+                }
+            }
+        }
+        if !found_current {
+            return Err(super::apply::recovery_error(
+                "current ownership reconstruction manifest is missing",
+            ));
+        }
+        progress()?;
+        Ok(())
+    }
+}
+impl IndexedRevisionGuard<'_> {
+    fn require_active(&self) -> Result<()> {
+        self.writer.require_root(self.engine.fs.root())?;
+        self.engine.require_binding()?;
+        let authority = operation_authority::load(
+            &self.engine.fs,
+            &self.engine.vault_id,
+            operation_authority::Presence::Required,
+        )?
+        .ok_or_else(|| {
+            super::apply::recovery_error("revision guard operation authority disappeared")
+        })?;
+        if !self.authority.same_revision(&authority)
+            || self.lookup.snapshot() != &self.snapshot
+            || self.lookup.vault_id() != &self.engine.vault_id
+        {
+            return Err(super::apply::recovery_error(
+                "revision guard active operation or pinned publication changed",
+            ));
+        }
+        // The retained manifest is immutable authority, not caller-owned input.
+        let (manifest, hash) = self
+            .engine
+            .load_manifest_structure(&self.change.change_id)?;
+        if hash != self.change.manifest_hash || manifest != self.manifest {
+            return Err(super::apply::recovery_error(
+                "revision guard retained manifest changed",
+            ));
+        }
+        Ok(())
+    }
+    fn check_owners(&self, current: &Ownership) -> Result<()> {
+        for tree in &current.trees {
+            let requested = indexed_key(&tree.root);
+            let Some(owner) = self.lookup.revision_owner(&requested)? else {
+                continue;
+            };
+            if owner == *self.change {
+                continue;
+            }
+            let (manifest, hash) = self.engine.load_manifest_structure(&owner.change_id)?;
+            if hash != owner.manifest_hash
+                || !tree_inventory(&manifest)?
+                    .iter()
+                    .any(|other| key(&other.root) == key(&tree.root))
+            {
+                return Err(WikiError::new(
+                    ErrorCode::IndexCorrupt,
+                    "indexed revision owner differs from retained manifest",
+                ));
+            }
+            if !outcome::terminal_report(&self.engine.fs, &manifest, &hash)?
+                .is_some_and(|terminal| terminal.status == ChangeStatus::Committed)
+            {
+                return Err(super::apply::recovery_error(
+                    "indexed revision owner lacks its committed terminal receipt",
+                ));
+            }
+            return Err(conflict(format!(
+                "revision tree is already owned by retained change {}",
+                owner.change_id
+            )));
+        }
+        Ok(())
+    }
+    pub(crate) fn preflight(&self) -> Result<()> {
+        self.require_active()?;
+        let state =
+            journal::load_journal(&self.engine.fs, &self.manifest, &self.change.manifest_hash)?;
+        if !matches!(
+            state.status,
+            None | Some(
+                ChangeStatus::Prepared
+                    | ChangeStatus::Applying
+                    | ChangeStatus::FilesApplied
+                    | ChangeStatus::Indexed
+            )
+        ) {
+            return Err(super::apply::recovery_error(
+                "revision guard requires an applicable active journal",
+            ));
+        }
+        self.engine.preflight_revision_trees_with(
+            self.writer,
+            &self.manifest,
+            &self.change.manifest_hash,
+            &state,
+            &|ownership| self.check_owners(ownership),
+        )
+    }
+    pub(crate) fn verify(&self, complete: bool) -> Result<()> {
+        self.require_active()?;
+        self.engine.verify_revision_trees_with(
+            self.writer,
+            &self.manifest,
+            &self.change.manifest_hash,
+            complete,
+            &|ownership| self.check_owners(ownership),
+        )
+    }
+    pub(crate) fn complete_owner_rows(&self) -> Result<Vec<RevisionOwnerRow>> {
+        self.verify(true)?;
+        let state =
+            journal::load_journal(&self.engine.fs, &self.manifest, &self.change.manifest_hash)?;
+        if !matches!(
+            state.status,
+            Some(ChangeStatus::FilesApplied | ChangeStatus::Indexed)
+        ) {
+            return Err(super::apply::recovery_error(
+                "completed owner rows require files-applied intent",
+            ));
+        }
+        Ok(tree_inventory(&self.manifest)?
+            .iter()
+            .map(|tree| owner_row(tree, self.change))
+            .collect())
+    }
+}
+
 fn check_members(
     engine: &ChangeEngine,
     tree: &Tree,
@@ -458,3 +799,7 @@ fn private_stage(
     }
     Ok(false)
 }
+
+#[cfg(test)]
+#[path = "immutable_indexed_tests.rs"]
+mod indexed_tests;

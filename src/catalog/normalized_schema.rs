@@ -11,6 +11,7 @@ CREATE TABLE catalog_meta(
  origin_change_id TEXT,origin_manifest_hash TEXT,
  vector_cache_lost INTEGER NOT NULL CHECK(vector_cache_lost IN (0,1)),
  vector_loss_unknown INTEGER NOT NULL CHECK(vector_loss_unknown IN (0,1)),
+ revision_ownership_version INTEGER NOT NULL DEFAULT 0 CHECK(revision_ownership_version IN (0,1)),
  CHECK((origin_change_id IS NULL)=(origin_manifest_hash IS NULL)),
  CHECK(state='building' OR (parser_hash IS NOT NULL AND publication_hash IS NOT NULL)),
  CHECK((audit_epoch IS NULL AND control_hash IS NULL AND dependency_hash IS NULL) OR
@@ -46,6 +47,7 @@ CREATE INDEX source_revision_matches ON source_revision_identity(source_id,origi
 CREATE TABLE source_evidence(source_id TEXT NOT NULL,evidence_id TEXT NOT NULL,assertion_id TEXT NOT NULL,PRIMARY KEY(source_id,evidence_id));
 CREATE INDEX source_assertions ON source_evidence(source_id,assertion_id,evidence_id);
 CREATE INDEX assertion_evidence ON source_evidence(assertion_id,evidence_id);
+CREATE TABLE revision_tree_owners(source_component TEXT COLLATE BINARY NOT NULL,revision_component TEXT COLLATE BINARY NOT NULL,change_id TEXT NOT NULL,manifest_hash TEXT NOT NULL,PRIMARY KEY(source_component,revision_component));
 CREATE TABLE links(link_row INTEGER PRIMARY KEY,from_path TEXT NOT NULL,byte_start INTEGER NOT NULL CHECK(byte_start>=0),target_id TEXT,target_path TEXT,resolution TEXT NOT NULL);
 CREATE INDEX link_paths ON links(from_path,byte_start,link_row);
 CREATE TABLE diagnostics(diagnostic_row INTEGER PRIMARY KEY,path TEXT NOT NULL,record_id TEXT,code TEXT NOT NULL,details_json TEXT NOT NULL);

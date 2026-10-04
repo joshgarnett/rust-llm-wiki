@@ -547,6 +547,66 @@ impl crate::sources::SourceRefreshLookup for QuerySnapshot {
     }
 }
 
+impl crate::changes::RevisionOwnershipLookup for QuerySnapshot {
+    fn snapshot(&self) -> &ReadSnapshot {
+        &self.snapshot
+    }
+
+    fn vault_id(&self) -> &RecordId {
+        &self.vault_id
+    }
+
+    fn require_ready(&self) -> Result<()> {
+        self.require_refresh_publication()?;
+        let mut statement = self
+            .connection
+            .prepare("SELECT revision_ownership_version FROM catalog_meta WHERE singleton=1")
+            .map_err(sql::sql_error)?;
+        let mut rows = statement.query([]).map_err(sql::sql_error)?;
+        let row = rows
+            .next()
+            .map_err(sql::sql_error)?
+            .ok_or_else(|| corrupt("revision ownership header is absent"))?;
+        self.reserve_refresh_row(row, 1)?;
+        match row.get::<_, i64>(0).map_err(sql::sql_error)? {
+            1 => Ok(()),
+            0 => Err(WikiError::new(
+                ErrorCode::OfflineUnavailable,
+                "revision ownership registry requires explicit reconstruction",
+            )),
+            _ => Err(corrupt("unsupported revision ownership registry version")),
+        }
+    }
+
+    fn revision_owner(
+        &self,
+        key: &crate::changes::RevisionTreeKey,
+    ) -> Result<Option<crate::changes::PreparedChange>> {
+        self.require_ready()?;
+        let mut statement = self.connection.prepare(
+            "SELECT source_component,revision_component,change_id,manifest_hash FROM revision_tree_owners INDEXED BY sqlite_autoindex_revision_tree_owners_1 WHERE source_component=?1 AND revision_component=?2"
+        ).map_err(sql::sql_error)?;
+        let mut rows = statement
+            .query(params![key.source_component, key.revision_component])
+            .map_err(sql::sql_error)?;
+        let Some(row) = rows.next().map_err(sql::sql_error)? else {
+            return Ok(None);
+        };
+        self.reserve_refresh_row(row, 4)?;
+        if utf8(text_bytes(row, 0)?)? != key.source_component
+            || utf8(text_bytes(row, 1)?)? != key.revision_component
+        {
+            return Err(corrupt("revision ownership key differs from lookup"));
+        }
+        Ok(Some(crate::changes::PreparedChange {
+            change_id: RecordId::new(utf8(text_bytes(row, 2)?)?)
+                .map_err(|error| corrupt(error.message))?,
+            manifest_hash: Blake3Hash::new(utf8(text_bytes(row, 3)?)?)
+                .map_err(|error| corrupt(error.message))?,
+        }))
+    }
+}
+
 impl QueryCatalog for QuerySnapshot {
     fn publication_id(&self) -> Option<&str> {
         match &self.connection {
@@ -1126,6 +1186,75 @@ mod tests {
             ErrorCode::BudgetExceeded
         );
         assert_eq!(limited.usage().rows, 0);
+    }
+
+    #[test]
+    fn revision_ownership_lookup_requires_complete_registry_and_bounds_reads() {
+        use crate::changes::{RevisionOwnershipLookup, RevisionTreeKey};
+        let (_temp, _root, catalog) = unsynced();
+        let completed = publish_normalized(&catalog, 1);
+        let connection = Connection::open(&completed.path).unwrap();
+        let key = RevisionTreeKey {
+            source_component: "source_Selected".into(),
+            revision_component: "revision_Selected".into(),
+        };
+        let manifest_hash = Blake3Hash::digest(b"retained owner fixture");
+        connection
+            .execute(
+                "INSERT INTO revision_tree_owners VALUES(?1,?2,?3,?4)",
+                params![
+                    key.source_component,
+                    key.revision_component,
+                    "change_owner",
+                    manifest_hash.as_str()
+                ],
+            )
+            .unwrap();
+        connection.execute(
+            "WITH RECURSIVE n(x) AS (SELECT 1 UNION ALL SELECT x+1 FROM n WHERE x<1000) INSERT INTO revision_tree_owners SELECT 'unrelated_'||x,'revision_'||x,'change_owner',?1 FROM n",
+            [manifest_hash.as_str()],
+        ).unwrap();
+        let reader = defaults(&catalog);
+        let owner = reader.revision_owner(&key).unwrap().unwrap();
+        assert_eq!(owner.change_id, id("change_owner"));
+        assert_eq!(owner.manifest_hash, manifest_hash);
+        assert_eq!(reader.usage().rows, 2); // one readiness row + selected owner
+        assert!(
+            reader
+                .revision_owner(&RevisionTreeKey {
+                    source_component: "source_selected".into(),
+                    revision_component: key.revision_component.clone(),
+                })
+                .unwrap()
+                .is_none()
+        ); // identity components remain case-sensitive
+        drop(reader);
+        connection
+            .execute("UPDATE catalog_meta SET revision_ownership_version=0", [])
+            .unwrap();
+        let reader = defaults(&catalog);
+        assert_eq!(
+            reader.revision_owner(&key).unwrap_err().code,
+            ErrorCode::OfflineUnavailable
+        );
+        assert_eq!(
+            reader.require_ready().unwrap_err().code,
+            ErrorCode::OfflineUnavailable
+        );
+        drop(reader);
+        connection
+            .execute("UPDATE catalog_meta SET revision_ownership_version=1", [])
+            .unwrap();
+        let limited = catalog
+            .query_snapshot(QueryReadLimits {
+                max_rows: 1,
+                ..QueryReadLimits::default()
+            })
+            .unwrap();
+        assert_eq!(
+            limited.revision_owner(&key).unwrap_err().code,
+            ErrorCode::BudgetExceeded
+        );
     }
 
     #[test]

@@ -371,6 +371,13 @@ impl ChangeEngine {
         self.classify_change_directories()
             .map(|(actionable, _)| actionable)
     }
+    pub(crate) fn change_ids_checked(
+        &self,
+        progress: &mut dyn FnMut() -> Result<()>,
+    ) -> Result<Vec<RecordId>> {
+        self.classify_change_directories_checked(progress)
+            .map(|(actionable, _)| actionable)
+    }
     /// Read-only diagnostics for bytes retained before a manifest became durable.
     /// These directories are preserved, and cannot authorize an application.
     pub fn incomplete_preparations(&self) -> Result<Vec<RecordId>> {
@@ -379,6 +386,13 @@ impl ChangeEngine {
             .map(|(_, incomplete)| incomplete)
     }
     fn classify_change_directories(&self) -> Result<(Vec<RecordId>, Vec<RecordId>)> {
+        self.classify_change_directories_checked(&mut || Ok(()))
+    }
+    fn classify_change_directories_checked(
+        &self,
+        progress: &mut dyn FnMut() -> Result<()>,
+    ) -> Result<(Vec<RecordId>, Vec<RecordId>)> {
+        progress()?;
         let relative = VaultRelativePath::new("changes")?;
         let path = self.fs.root().resolve(&relative)?;
         let entries = match fs::read_dir(path) {
@@ -391,6 +405,7 @@ impl ChangeEngine {
         let mut ids = Vec::new();
         let mut incomplete = Vec::new();
         for entry in entries {
+            progress()?;
             let entry = entry.map_err(io_error)?;
             let name = entry.file_name();
             let name = name
@@ -413,6 +428,7 @@ impl ChangeEngine {
                 VaultRelativePath::new(format!("changes/{id}/validation.json"))?,
                 VaultRelativePath::new(format!("changes/{id}/revision-trees.json"))?,
             ] {
+                progress()?;
                 if read_bounded(&self.fs, &evidence, MAX_JOURNAL_BYTES)?.is_some() {
                     return Err(WikiError::new(
                         ErrorCode::RecoveryRequired,
@@ -426,6 +442,7 @@ impl ChangeEngine {
         }
         ids.sort();
         incomplete.sort();
+        progress()?;
         Ok((ids, incomplete))
     }
     pub(crate) fn load_manifest(&self, id: &RecordId) -> Result<(ChangeManifest, Blake3Hash)> {

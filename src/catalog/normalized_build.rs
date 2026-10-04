@@ -40,6 +40,7 @@ pub(crate) struct BuildLimits {
     pub max_batch_bytes: u64,
     pub max_batch_rows: u64,
     pub max_rows: u64,
+    pub max_history_steps: u64,
     pub sqlite_cache_bytes: u64,
     pub max_database_bytes: u64,
     pub max_elapsed: Duration,
@@ -52,6 +53,7 @@ impl Default for BuildLimits {
             max_batch_bytes: 128 * 1024 * 1024,
             max_batch_rows: 256,
             max_rows: 10_000_000,
+            max_history_steps: 10_000_000,
             sqlite_cache_bytes: 32 * 1024 * 1024,
             max_database_bytes: 32 * 1024 * 1024 * 1024,
             max_elapsed: Duration::from_secs(4 * 60 * 60),
@@ -67,6 +69,7 @@ impl BuildLimits {
             || self.max_batch_rows == 0
             || self.max_batch_rows > 256
             || self.max_rows == 0
+            || self.max_history_steps == 0
             || self.sqlite_cache_bytes < 1024
             || self.sqlite_cache_bytes / 1024 > i32::MAX as u64
             || self.max_database_bytes < 4096
@@ -86,6 +89,8 @@ impl BuildLimits {
 #[derive(Debug, Clone, Default, Serialize)]
 pub(crate) struct BuildStats {
     pub identity_claims: u64,
+    pub revision_owners: u64,
+    pub history_steps: u64,
     pub documents: u64,
     pub graph_rows: u64,
     pub links: u64,
@@ -428,6 +433,76 @@ impl<'a> NormalizedBuilder<'a> {
         Ok(())
     }
 
+    fn reconstruct_revision_owners(&mut self) -> Result<Blake3Hash> {
+        let engine = crate::changes::ChangeEngine::new(self.fs.clone())?;
+        let writer = self.writer;
+        let current = self
+            .identity
+            .origin
+            .as_ref()
+            .map(|origin| crate::changes::PreparedChange {
+                change_id: origin.change_id.clone(),
+                manifest_hash: origin.manifest_hash.clone(),
+            });
+        let mut fingerprint = blake3::Hasher::new();
+        fingerprint.update(b"lwiki.revision-ownership.v1.build");
+        let (started, max_elapsed, max_steps) = (
+            self.started,
+            self.limits.max_elapsed,
+            self.limits.max_history_steps,
+        );
+        let mut history_steps = 0u64;
+        let mut progress = || {
+            if started.elapsed() > max_elapsed {
+                return Err(budget("ownership reconstruction exceeds build deadline"));
+            }
+            history_steps = history_steps
+                .checked_add(1)
+                .filter(|n| *n <= max_steps)
+                .ok_or_else(|| budget("ownership reconstruction exceeds history work ceiling"))?;
+            Ok(())
+        };
+        engine.reconstruct_revision_owners(writer, current.as_ref(), &mut progress, &mut |row| {
+            self.guard()?;
+            let fields = [row.key.source_component.as_str(), row.key.revision_component.as_str(),
+                row.change.change_id.as_str(), row.change.manifest_hash.as_str()];
+            let mut bytes = 256u64;
+            for field in fields {
+                bytes = checked_sum(&[bytes, field.len() as u64])?;
+            }
+            self.admit(bytes)?;
+            let inserted = self.connection().execute(
+                "INSERT INTO revision_tree_owners(source_component,revision_component,change_id,manifest_hash) VALUES(?1,?2,?3,?4) ON CONFLICT(source_component,revision_component) DO NOTHING",
+                params![fields[0], fields[1], fields[2], fields[3]],
+            ).map_err(build_sql_error)?;
+            if inserted == 0 {
+                let same: bool = self.connection().query_row(
+                    "SELECT change_id=?3 AND manifest_hash=?4 FROM revision_tree_owners WHERE source_component=?1 AND revision_component=?2",
+                    params![fields[0], fields[1], fields[2], fields[3]], |row| row.get(0),
+                ).map_err(build_sql_error)?;
+                if !same {
+                    return Err(WikiError::new(ErrorCode::ContentConflict,
+                        "retained changes claim the same immutable revision tree"));
+                }
+                return Ok(());
+            }
+            for field in fields {
+                fingerprint.update(&(field.len() as u64).to_le_bytes());
+                fingerprint.update(field.as_bytes());
+            }
+            self.stats.revision_owners += 1;
+            Ok(())
+        })?;
+        self.stats.history_steps = history_steps;
+        // This flag is written only after the complete retained-history stream
+        // succeeds. An empty table alone never authorizes bounded writes.
+        self.connection().execute(
+            "UPDATE catalog_meta SET revision_ownership_version=1 WHERE singleton=1 AND state='building'",
+            [],
+        ).map_err(build_sql_error)?;
+        Blake3Hash::new(format!("blake3:{}", fingerprint.finalize().to_hex()))
+    }
+
     fn insert_refresh_lookups(&mut self, projection: &ValidationProjection) -> Result<()> {
         // Rebuild work may inspect complete metadata once. Refresh queries use
         // these source-local indexes instead of reading historical payloads.
@@ -582,6 +657,7 @@ impl<'a> NormalizedBuilder<'a> {
             self.stats.records += 1;
         }
         self.insert_refresh_lookups(projection)?;
+        let revision_ownership_hash = self.reconstruct_revision_owners()?;
         for dependency in &projection.dependencies {
             let hash = match &dependency.expected {
                 ExpectedState::Absent => None,
@@ -672,6 +748,7 @@ impl<'a> NormalizedBuilder<'a> {
             &projection.parser_fingerprint,
             &projection.control_manifest,
             &dependency_hash,
+            &revision_ownership_hash,
         ))?);
         self.connection().execute("UPDATE catalog_meta SET parser_hash=?1,control_hash=?2,dependency_hash=?3,publication_hash=?4,audit_epoch=epoch,state='complete' WHERE singleton=1 AND state='building'",params![projection.parser_fingerprint.as_str(),projection.control_manifest.as_str(),dependency_hash.as_str(),publication_hash.as_str()]).map_err(build_sql_error)?;
         self.step(BuildCheckpoint::AfterComplete)?;

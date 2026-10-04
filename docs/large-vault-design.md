@@ -148,7 +148,13 @@ trees have since disappeared. An explicit completed ownership-index version must
 gate bounded writes; an empty table does not establish that reconstruction ran.
 The active operation record reserves a pending manifest, and its new ownership
 rows must commit with the catalog delta. This is the integration design, not an
-implemented replacement for the current history checks.
+activated replacement for the public command's history checks. The internal
+registry reconstruction and bounded guard passed 112 catalog/authority tests
+(two ignored) and eight existing native revision-recovery regressions. Coverage
+includes removed committed trees, aborted changes, conflicting retained histories
+and interrupted publication. Reconstruction checks cooperative deadlines and a
+separate history-work limit even when history emits no ownership rows. Finalizing
+an already committed delta after a crash still requires separate integration.
 
 Use independently addressable catalog records, source manifests, reverse
 dependencies and retrieval units. Query only required rows and bounded candidate
