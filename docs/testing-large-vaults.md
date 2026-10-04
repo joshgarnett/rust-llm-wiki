@@ -592,6 +592,9 @@ unseen semantic-completeness gate are also still open.
 
 ### Public full-check resource controls
 
+The [reproduction guide](benchmark-full-check.md) describes release builds,
+compiler provenance, fixture prerequisites and the complete supervised workflow.
+
 The **unoptimized fastbuild** native macOS rehearsal and 1k control passed with the implementation at
 `bdfd8ad` and the test-only held-reader helper committed as `ae73b16`. Each run
 copies canonical files from a verified closed export, adds the existing 133-file
