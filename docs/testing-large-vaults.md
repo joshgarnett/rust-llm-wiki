@@ -416,7 +416,39 @@ Selected keys, scores and ordering stayed identical. SQLite bytecode confirmed
 that tag filtering reads only the table's tag column while eligibility and kind
 come from the index. VM steps increased slightly; this is page-access reduction,
 not uniformly reduced SQL work. Public title-only and new-revision refresh tests
-also passed. Fresh end-user benchmark qualification remains pending.
+also passed.
+
+Fresh fixtures tested the fixed implementation at `2fc6731` with the same pinned
+runner, questions, expectations and budgets. **Both the 1k and 10k diagnostics
+passed all 70 query trials and the refresh/citation workflow.** Original-seed,
+read-only binding and binary/script checks passed. The original failed run is
+retained separately.
+
+| 10k query case | Before median / maximum | Fixed median / maximum |
+| --- | ---: | ---: |
+| Unicode alias with broad FTS matches | 726 / **7,367 ms** | 195 / 344 ms |
+| Popular term | 785 / 977 ms | 268 / 444 ms |
+| Selective filter with no result | 651 / 728 ms | 217 / **1,369 ms** |
+
+The selective-filter maximum increased even though its median fell; all five
+samples remain included. It was the slowest fixed 10k query and stayed within
+the unchanged five-second per-case target. At 1k, the worst call was the first
+exact-ID query at 1,745 ms; the Unicode case peaked at 204 ms. These are fresh
+processes with uncontrolled OS cache, not an OS-cold benchmark.
+
+The single changed-document workflow took 879 ms at 1k and 960 ms at 10k, followed
+by immediate searches in 26 and 28 ms. At 10k, post-refresh snapshot/indexed context
+took 31/47 ms. Native query RSS peaked at 44.4/47.3 MiB for 1k/10k. The final account
+held 35.77 GB allocated; an older completed disposable profiling vault was retired
+before these runs, with its reports, hashes and original seed preserved. No
+inventory scans overlapped timed queries.
+
+Independent review accepted the scoped general lexical/snapshot package at
+**9.2/10 with zero blockers**, verifying raw outputs, case statistics, native RSS,
+binary/script pins, publication bindings and selected canonical spans. These
+diagnostic results do not
+qualify public normalized rebuild/sync/check, all retrieval modes, the 100k/10 GB
+workload or unseen semantic completeness.
 
 ### Acceptance evidence
 
