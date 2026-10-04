@@ -135,8 +135,7 @@ impl IndexedRegistry {
                 .entry(entry.path.as_str().to_owned())
                 .or_default()
                 .push(position);
-            let basename = entry.path.as_str().rsplit('/').next().unwrap_or_default();
-            let stem = basename.strip_suffix(".md").unwrap_or(basename);
+            let stem = registry_basename(entry.path.as_str());
             registry
                 .by_stem
                 .entry(stem.to_owned())
@@ -174,11 +173,17 @@ impl IndexedRegistry {
     }
 
     fn exact_positions(&self, path: &str) -> &[usize] {
-        let direct = self.candidates(self.by_path.get(path));
-        if !direct.is_empty() || path.ends_with(".md") {
+        self.exact_key_positions(&exact_paths(path))
+    }
+
+    fn exact_key_positions(&self, keys: &ExactPaths<'_>) -> &[usize] {
+        let direct = self.candidates(self.by_path.get(keys.direct));
+        if !direct.is_empty() {
             return direct;
         }
-        self.candidates(self.by_path.get(&format!("{path}.md")))
+        keys.fallback.as_ref().map_or(&[][..], |fallback| {
+            self.candidates(self.by_path.get(fallback))
+        })
     }
 
     fn ambiguous_positions(&self, positions: &[usize]) -> LinkResolution {
@@ -213,19 +218,20 @@ impl IndexedRegistry {
     }
 
     pub(crate) fn resolve_untyped(&self, destination: &str) -> LinkResolution {
-        let (path, fragment) = target(destination);
-        if path.starts_with("//") || path.contains(':') {
-            return LinkResolution::External;
-        }
-        if path.is_empty() || VaultRelativePath::new(path).is_err() {
-            return LinkResolution::Missing;
-        }
-        let positions = self.exact_positions(path);
+        let (exact, stem, fragment) = match untyped_lookup(destination) {
+            UntypedLookup::External => return LinkResolution::External,
+            UntypedLookup::Missing => return LinkResolution::Missing,
+            UntypedLookup::Local {
+                exact,
+                basename,
+                fragment,
+            } => (exact, basename, fragment),
+        };
+        let path = exact.direct;
+        let positions = self.exact_key_positions(&exact);
         if !positions.is_empty() {
             return self.unique_positions(positions, fragment);
         }
-        let basename = path.rsplit('/').next().unwrap_or(path);
-        let stem = basename.strip_suffix(".md").unwrap_or(basename);
         // The original predicate is basename-stem OR alias(path) OR alias(stem).
         // A position set preserves one match per entry and registry ordering.
         let mut positions = BTreeSet::new();
@@ -299,6 +305,54 @@ pub enum LinkResolution {
         expected: RecordId,
         actual: RecordId,
     },
+}
+/// Exact path always wins; extension fallback is tried only without direct matches.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ExactPaths<'a> {
+    pub direct: &'a str,
+    pub fallback: Option<String>,
+}
+pub(crate) fn exact_paths(path: &str) -> ExactPaths<'_> {
+    ExactPaths {
+        direct: path,
+        fallback: (!path.ends_with(".md")).then(|| format!("{path}.md")),
+    }
+}
+/// The basename match is byte-exact, with only the lowercase `.md` suffix removed.
+pub(crate) fn registry_basename(path: &str) -> &str {
+    let basename = path.rsplit('/').next().unwrap_or_default();
+    basename.strip_suffix(".md").unwrap_or(basename)
+}
+/// The resolver's potential lookup buckets, including currently shadowed fallbacks.
+/// Labels/fragments are presentation; they do not change candidate identities.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum UntypedLookup<'a> {
+    External,
+    Missing,
+    Local {
+        exact: ExactPaths<'a>,
+        basename: &'a str,
+        fragment: Option<String>,
+    },
+}
+pub(crate) fn untyped_lookup(destination: &str) -> UntypedLookup<'_> {
+    let (path, fragment) = target(destination);
+    if path.starts_with("//") || path.contains(':') {
+        return UntypedLookup::External;
+    }
+    if path.is_empty() || VaultRelativePath::new(path).is_err() {
+        return UntypedLookup::Missing;
+    }
+    UntypedLookup::Local {
+        exact: exact_paths(path),
+        basename: registry_basename(path),
+        fragment,
+    }
+}
+pub(crate) fn companion_paths(destination: &str) -> ExactPaths<'_> {
+    // Typed companions intentionally do not use untyped alias/basename matching
+    // or its invalid/external-target gate. The typed ID determines identity.
+    exact_paths(target(destination).0)
 }
 fn target(destination: &str) -> (&str, Option<String>) {
     let destination = destination

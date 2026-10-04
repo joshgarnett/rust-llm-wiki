@@ -12,6 +12,7 @@ CREATE TABLE catalog_meta(
  vector_cache_lost INTEGER NOT NULL CHECK(vector_cache_lost IN (0,1)),
  vector_loss_unknown INTEGER NOT NULL CHECK(vector_loss_unknown IN (0,1)),
  revision_ownership_version INTEGER NOT NULL DEFAULT 0 CHECK(revision_ownership_version IN (0,1)),
+ proof_layout_version INTEGER NOT NULL DEFAULT 0 CHECK(proof_layout_version IN (0,1)),
  CHECK((origin_change_id IS NULL)=(origin_manifest_hash IS NULL)),
  CHECK(state='building' OR (parser_hash IS NOT NULL AND publication_hash IS NOT NULL)),
  CHECK((audit_epoch IS NULL AND control_hash IS NULL AND dependency_hash IS NULL) OR
@@ -51,6 +52,17 @@ CREATE INDEX assertion_evidence ON source_evidence(assertion_id,evidence_id);
 CREATE TABLE revision_tree_owners(source_component TEXT COLLATE BINARY NOT NULL,revision_component TEXT COLLATE BINARY NOT NULL,change_id TEXT NOT NULL,manifest_hash TEXT NOT NULL,PRIMARY KEY(source_component,revision_component));
 CREATE TABLE links(link_row INTEGER PRIMARY KEY,from_path TEXT NOT NULL,byte_start INTEGER NOT NULL CHECK(byte_start>=0),target_id TEXT,target_path TEXT,resolution TEXT NOT NULL);
 CREATE INDEX link_paths ON links(from_path,byte_start,link_row);
+CREATE TABLE record_eligibility_facts(record_id TEXT PRIMARY KEY,baseline_json TEXT NOT NULL);
+CREATE TABLE record_direct_paths(owner_id TEXT NOT NULL,path TEXT NOT NULL,PRIMARY KEY(owner_id,path));
+CREATE INDEX direct_path_owners ON record_direct_paths(path,owner_id);
+CREATE TABLE semantic_edges(owner_id TEXT NOT NULL,target_id TEXT NOT NULL,role_json TEXT NOT NULL,PRIMARY KEY(owner_id,target_id,role_json));
+CREATE INDEX semantic_dependents ON semantic_edges(target_id,role_json,owner_id);
+CREATE INDEX semantic_outgoing ON semantic_edges(owner_id,role_json,target_id);
+CREATE TABLE link_facts(from_path TEXT NOT NULL,byte_start INTEGER NOT NULL CHECK(byte_start>=0),raw_destination TEXT NOT NULL,typed_id TEXT,typed_kind TEXT,CHECK((typed_id IS NULL)=(typed_kind IS NULL)),PRIMARY KEY(from_path,byte_start));
+CREATE TABLE link_match_keys(kind TEXT NOT NULL,value TEXT NOT NULL,from_path TEXT NOT NULL,byte_start INTEGER NOT NULL CHECK(byte_start>=0),PRIMARY KEY(kind,value,from_path,byte_start));
+CREATE INDEX link_match_owners ON link_match_keys(from_path,byte_start);
+CREATE TABLE registry_match_keys(kind TEXT NOT NULL,value TEXT NOT NULL,record_id TEXT NOT NULL,path TEXT NOT NULL,PRIMARY KEY(kind,value,record_id,path));
+CREATE INDEX registry_match_owners ON registry_match_keys(record_id,path);
 CREATE TABLE diagnostics(diagnostic_row INTEGER PRIMARY KEY,path TEXT NOT NULL,record_id TEXT,code TEXT NOT NULL,details_json TEXT NOT NULL);
 CREATE INDEX diagnostic_paths ON diagnostics(path);
 CREATE TABLE dependencies(dependency_row INTEGER PRIMARY KEY,path TEXT NOT NULL UNIQUE,expected_hash TEXT);

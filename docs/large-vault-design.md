@@ -85,6 +85,30 @@ updates every affected record. Production admission still requires the bounded
 semantic projector, including dependent eligibility and link resolution, and
 the selected-proof layout must support authored documents and graph modes.
 
+The normalized proof layout now separates each record's own observed files from
+its typed semantic relationships. Expected file states are stored once per
+publication. Inventory, support and policy relationships have distinct roles;
+a record no longer carries a copied transitive dependency list or every Decision.
+Historical revisions do not capture a source's former head as a fixed dependency.
+
+Navigation indexes retain raw destinations and potential path, basename and
+alias matches, including missing and ambiguous links. An ambiguous link keeps a
+constant number of lookup keys rather than copying every candidate identity.
+Selected fact lookups use explicit indexed scopes and cumulative row/byte budgets;
+exhaustion returns an error rather than an incomplete dependency group. This
+layout has its own version, and older internal catalogs require an explicit rebuild.
+
+The connected catalog, source, recovery and link-resolver gate passed 187 tests
+(two ignored). Regressions include dangling evidence with preserved invalid-row
+diagnostics, a successful build with 4,100 ambiguous alias candidates, and bounded
+lookup work despite unrelated rows. Independent review approved this internal
+checkpoint; these are correctness tests, not a large-vault performance result.
+
+These facts are inputs to the affected-record projector. They do not replace
+selected evidence verification or authorize a partial graph to pass as a complete
+validation. Atomic maintenance of these tables, production refresh admission and
+all-mode query integration remain required before public activation.
+
 ## Why a redesign is necessary
 
 A public 299-source corpus exposed an operational failure before answer quality

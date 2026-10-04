@@ -363,6 +363,413 @@ impl QuerySnapshot {
     }
 }
 
+// Bounded facts drive the selected overlay projector; they confer no global proof.
+impl QuerySnapshot {
+    pub(crate) fn require_fact_layout(&self) -> Result<()> {
+        self.require_refresh_publication()?;
+        let mut statement = self
+            .connection
+            .prepare("SELECT proof_layout_version FROM catalog_meta WHERE singleton=1")
+            .map_err(sql::sql_error)?;
+        let mut rows = statement.query([]).map_err(sql::sql_error)?;
+        let row = rows
+            .next()
+            .map_err(sql::sql_error)?
+            .ok_or_else(|| corrupt("normalized proof layout header absent"))?;
+        self.reserve_refresh_row(row, 1)?;
+        match row.get::<_, i64>(0).map_err(sql::sql_error)? {
+            1 => Ok(()),
+            0 => Err(WikiError::new(
+                ErrorCode::OfflineUnavailable,
+                "normalized proof layout requires explicit rebuild",
+            )),
+            _ => Err(corrupt("unsupported normalized proof layout version")),
+        }
+    }
+
+    fn reserve_fact_input(&self, bytes: usize) -> Result<()> {
+        let mut usage = self.usage.get();
+        let total = usage
+            .bytes
+            .checked_add(bytes)
+            .filter(|n| *n <= self.limits.max_bytes);
+        if bytes > self.limits.max_row_bytes || total.is_none() {
+            return Err(WikiError::new(
+                ErrorCode::BudgetExceeded,
+                "fact lookup input byte budget exhausted",
+            ));
+        }
+        usage.bytes = total.unwrap();
+        self.usage.set(usage);
+        Ok(())
+    }
+    fn fact_requests(&self, count: usize, nonempty: bool) -> Result<()> {
+        if count > 4096 || (nonempty && count == 0) {
+            return Err(WikiError::new(
+                ErrorCode::Usage,
+                "fact lookup requires a finite explicit key or role scope",
+            ));
+        }
+        Ok(())
+    }
+    pub(crate) fn eligibility_fact(
+        &self,
+        id: &RecordId,
+    ) -> Result<Option<super::eligibility_facts::EligibilityFact>> {
+        use super::eligibility_facts::{EligibilityBaseline, EligibilityFact};
+        self.require_fact_layout()?;
+        let mut statement = self.connection.prepare("SELECT r.id,f.baseline_json,r.path FROM records r INDEXED BY sqlite_autoindex_records_1 LEFT JOIN record_eligibility_facts f ON f.record_id=r.id WHERE r.id=?1").map_err(sql::sql_error)?;
+        let mut rows = statement.query([id.as_str()]).map_err(sql::sql_error)?;
+        let Some(row) = rows.next().map_err(sql::sql_error)? else {
+            return Ok(None);
+        };
+        self.reserve_refresh_row(row, 3)?;
+        if utf8(text_bytes(row, 0)?)? != id.as_str() {
+            return Err(corrupt("eligibility fact ID differs from requested record"));
+        }
+        let baseline: EligibilityBaseline =
+            serde_json::from_slice(text_bytes(row, 1)?).map_err(|e| corrupt(e.to_string()))?;
+        let own_path =
+            VaultRelativePath::new(utf8(text_bytes(row, 2)?)?).map_err(|e| corrupt(e.message))?;
+        drop(rows);
+        drop(statement);
+        let mut statement = self.connection.prepare("SELECT owner_id,path FROM record_direct_paths INDEXED BY sqlite_autoindex_record_direct_paths_1 WHERE owner_id=?1 ORDER BY path").map_err(sql::sql_error)?;
+        let mut rows = statement.query([id.as_str()]).map_err(sql::sql_error)?;
+        let mut direct_paths = BTreeSet::new();
+        while let Some(row) = rows.next().map_err(sql::sql_error)? {
+            self.reserve_refresh_row(row, 2)?;
+            if utf8(text_bytes(row, 0)?)? != id.as_str() {
+                return Err(corrupt("direct path owner differs from requested record"));
+            }
+            direct_paths.insert(
+                VaultRelativePath::new(utf8(text_bytes(row, 1)?)?)
+                    .map_err(|e| corrupt(e.message))?,
+            );
+        }
+        if !direct_paths.contains(&own_path) {
+            return Err(corrupt("eligibility fact omits its own canonical path"));
+        }
+        Ok(Some(EligibilityFact {
+            baseline,
+            direct_paths,
+        }))
+    }
+    pub(crate) fn direct_path_states(
+        &self,
+        paths: &[VaultRelativePath],
+    ) -> Result<Vec<crate::changes::ReadDependency>> {
+        use crate::{changes::ReadDependency, vault::ExpectedState};
+        self.fact_requests(paths.len(), false)?;
+        self.require_fact_layout()?;
+        let mut statement = self.connection.prepare("SELECT path,expected_hash FROM dependencies INDEXED BY sqlite_autoindex_dependencies_1 WHERE path=?1").map_err(sql::sql_error)?;
+        let mut result = std::collections::BTreeMap::new();
+        for path in paths {
+            self.reserve_fact_input(path.as_str().len())?;
+            let mut rows = statement.query([path.as_str()]).map_err(sql::sql_error)?;
+            let row = rows
+                .next()
+                .map_err(sql::sql_error)?
+                .ok_or_else(|| corrupt("named direct dependency state absent"))?;
+            self.reserve_refresh_row(row, 2)?;
+            if utf8(text_bytes(row, 0)?)? != path.as_str() {
+                return Err(corrupt("direct dependency key differs from requested path"));
+            }
+            let expected = match row.get_ref(1).map_err(sql::sql_error)? {
+                ValueRef::Null => ExpectedState::Absent,
+                ValueRef::Text(bytes) => ExpectedState::Hash(
+                    Blake3Hash::new(utf8(bytes)?).map_err(|e| corrupt(e.message))?,
+                ),
+                _ => return Err(corrupt("direct dependency hash has invalid SQL type")),
+            };
+            result.insert(
+                path.clone(),
+                ReadDependency {
+                    path: path.clone(),
+                    expected,
+                },
+            );
+        }
+        Ok(result.into_values().collect())
+    }
+    pub(crate) fn outgoing_edges(
+        &self,
+        owner: &RecordId,
+        roles: &[super::eligibility_facts::EligibilityRole],
+    ) -> Result<Vec<super::eligibility_facts::EligibilityEdge>> {
+        self.fact_edges(owner, roles, false)
+    }
+    pub(crate) fn dependent_edges(
+        &self,
+        target: &RecordId,
+        roles: &[super::eligibility_facts::EligibilityRole],
+    ) -> Result<Vec<super::eligibility_facts::EligibilityEdge>> {
+        self.fact_edges(target, roles, true)
+    }
+    fn fact_edges(
+        &self,
+        id: &RecordId,
+        roles: &[super::eligibility_facts::EligibilityRole],
+        reverse: bool,
+    ) -> Result<Vec<super::eligibility_facts::EligibilityEdge>> {
+        use super::eligibility_facts::{EligibilityEdge, EligibilityRole};
+        self.fact_requests(roles.len(), true)?;
+        self.require_fact_layout()?;
+        let query = if reverse {
+            "SELECT owner_id,target_id,role_json FROM semantic_edges INDEXED BY semantic_dependents WHERE target_id=?1 AND role_json=?2 ORDER BY owner_id"
+        } else {
+            "SELECT owner_id,target_id,role_json FROM semantic_edges INDEXED BY semantic_outgoing WHERE owner_id=?1 AND role_json=?2 ORDER BY target_id"
+        };
+        let mut statement = self.connection.prepare(query).map_err(sql::sql_error)?;
+        let mut result = BTreeSet::new();
+        for requested in roles {
+            let bytes = fact_json_size(requested, self.limits.max_row_bytes)?;
+            self.reserve_fact_input(bytes)?;
+            let encoded = sql::json(requested)?;
+            let mut rows = statement
+                .query(params![id.as_str(), encoded])
+                .map_err(sql::sql_error)?;
+            while let Some(row) = rows.next().map_err(sql::sql_error)? {
+                self.reserve_refresh_row(row, 3)?;
+                let owner_id =
+                    RecordId::new(utf8(text_bytes(row, 0)?)?).map_err(|e| corrupt(e.message))?;
+                let target_id =
+                    RecordId::new(utf8(text_bytes(row, 1)?)?).map_err(|e| corrupt(e.message))?;
+                let role: EligibilityRole = serde_json::from_slice(text_bytes(row, 2)?)
+                    .map_err(|e| corrupt(e.to_string()))?;
+                if &role != requested || (if reverse { &target_id } else { &owner_id }) != id {
+                    return Err(corrupt(
+                        "selected semantic edge differs from requested scope",
+                    ));
+                }
+                result.insert(EligibilityEdge {
+                    owner_id,
+                    target_id,
+                    role,
+                });
+            }
+        }
+        Ok(result.into_iter().collect())
+    }
+    pub(crate) fn link_fact(
+        &self,
+        path: &VaultRelativePath,
+        byte_start: u64,
+    ) -> Result<Option<super::link_facts::OwnedLinkFact>> {
+        use super::link_facts::{MatchKey, OwnedLinkFact, TypedLinkTarget};
+        self.require_fact_layout()?;
+        let offset = sql::integer(byte_start)?;
+        let mut statement = self.connection.prepare("SELECT from_path,byte_start,raw_destination,typed_id,typed_kind FROM link_facts INDEXED BY sqlite_autoindex_link_facts_1 WHERE from_path=?1 AND byte_start=?2").map_err(sql::sql_error)?;
+        let mut rows = statement
+            .query(params![path.as_str(), offset])
+            .map_err(sql::sql_error)?;
+        let Some(row) = rows.next().map_err(sql::sql_error)? else {
+            return Ok(None);
+        };
+        self.reserve_refresh_row(row, 5)?;
+        if utf8(text_bytes(row, 0)?)? != path.as_str()
+            || row.get::<_, i64>(1).map_err(sql::sql_error)? != offset
+        {
+            return Err(corrupt(
+                "selected link fact differs from requested location",
+            ));
+        }
+        let raw_destination = utf8(text_bytes(row, 2)?)?.to_owned();
+        let typed = match (
+            row.get_ref(3).map_err(sql::sql_error)?,
+            row.get_ref(4).map_err(sql::sql_error)?,
+        ) {
+            (ValueRef::Null, ValueRef::Null) => None,
+            (ValueRef::Text(id), ValueRef::Text(kind)) => Some(TypedLinkTarget {
+                id: RecordId::new(utf8(id)?).map_err(|e| corrupt(e.message))?,
+                expected_kind: utf8(kind)?
+                    .parse()
+                    .map_err(|_| corrupt("invalid typed companion kind"))?,
+            }),
+            _ => return Err(corrupt("link fact typed identity is incomplete")),
+        };
+        drop(rows);
+        drop(statement);
+        let mut statement = self.connection.prepare("SELECT kind,value FROM link_match_keys INDEXED BY link_match_owners WHERE from_path=?1 AND byte_start=?2").map_err(sql::sql_error)?;
+        let mut rows = statement
+            .query(params![path.as_str(), offset])
+            .map_err(sql::sql_error)?;
+        let mut keys = BTreeSet::new();
+        while let Some(row) = rows.next().map_err(sql::sql_error)? {
+            self.reserve_refresh_row(row, 2)?;
+            keys.insert(MatchKey {
+                kind: fact_key_kind(utf8(text_bytes(row, 0)?)?)?,
+                value: utf8(text_bytes(row, 1)?)?.to_owned(),
+            });
+        }
+        if let Some(target) = &typed {
+            let expected = super::link_facts::typed_fact(
+                path,
+                byte_start,
+                &raw_destination,
+                &target.id,
+                target.expected_kind,
+            )?;
+            if keys.iter().ne(expected.keys.iter()) {
+                return Err(corrupt(
+                    "typed link keys differ from exact companion semantics",
+                ));
+            }
+        } else {
+            let resolution = match crate::records::links::untyped_lookup(&raw_destination) {
+                crate::records::links::UntypedLookup::External => {
+                    crate::records::LinkResolution::External
+                }
+                _ => crate::records::LinkResolution::Missing,
+            };
+            let expected =
+                super::link_facts::untyped_fact(path, byte_start, &raw_destination, &resolution)?;
+            let static_keys = keys
+                .iter()
+                .filter(|key| key.kind != super::link_facts::MatchKeyKind::Id);
+            if static_keys.ne(expected.keys.iter()) {
+                return Err(corrupt(
+                    "untyped link keys differ from raw destination semantics",
+                ));
+            }
+            let mut ids = keys
+                .iter()
+                .filter(|key| key.kind == super::link_facts::MatchKeyKind::Id);
+            if let Some(key) = ids.next() {
+                RecordId::new(&key.value).map_err(|e| corrupt(e.message))?;
+                if ids.next().is_some() {
+                    return Err(corrupt("untyped link stores more than one resolved ID"));
+                }
+            }
+        }
+        Ok(Some(OwnedLinkFact {
+            from_path: path.clone(),
+            byte_start,
+            raw_destination,
+            typed,
+            keys: keys.into_iter().collect(),
+        }))
+    }
+    pub(crate) fn affected_links(
+        &self,
+        keys: &[super::link_facts::MatchKey],
+    ) -> Result<Vec<(VaultRelativePath, u64)>> {
+        self.fact_requests(keys.len(), false)?;
+        self.require_fact_layout()?;
+        let mut statement = self.connection.prepare("SELECT kind,value,from_path,byte_start FROM link_match_keys INDEXED BY sqlite_autoindex_link_match_keys_1 WHERE kind=?1 AND value=?2 ORDER BY from_path,byte_start").map_err(sql::sql_error)?;
+        let mut result = BTreeSet::new();
+        for key in keys {
+            self.reserve_fact_input(key.value.len())?;
+            let mut rows = statement
+                .query(params![fact_key_name(key.kind), key.value])
+                .map_err(sql::sql_error)?;
+            while let Some(row) = rows.next().map_err(sql::sql_error)? {
+                self.reserve_refresh_row(row, 4)?;
+                if fact_key_kind(utf8(text_bytes(row, 0)?)?)? != key.kind
+                    || utf8(text_bytes(row, 1)?)? != key.value
+                {
+                    return Err(corrupt(
+                        "selected reverse link key differs from requested key",
+                    ));
+                }
+                let offset = u64::try_from(row.get::<_, i64>(3).map_err(sql::sql_error)?)
+                    .map_err(|_| corrupt("negative reverse link byte offset"))?;
+                let path = VaultRelativePath::new(utf8(text_bytes(row, 2)?)?)
+                    .map_err(|e| corrupt(e.message))?;
+                result.insert((path, offset));
+            }
+        }
+        Ok(result.into_iter().collect())
+    }
+    pub(crate) fn registry_candidates_for_key(
+        &self,
+        key: &super::link_facts::MatchKey,
+    ) -> Result<Vec<crate::records::RegistryEntry>> {
+        use crate::records::RegistryEntry;
+        self.require_fact_layout()?;
+        self.reserve_fact_input(key.value.len())?;
+        let mut statement = self.connection.prepare("SELECT kind,value,record_id,path FROM registry_match_keys INDEXED BY sqlite_autoindex_registry_match_keys_1 WHERE kind=?1 AND value=?2 ORDER BY record_id,path").map_err(sql::sql_error)?;
+        let mut rows = statement
+            .query(params![fact_key_name(key.kind), key.value])
+            .map_err(sql::sql_error)?;
+        let mut result = Vec::new();
+        while let Some(row) = rows.next().map_err(sql::sql_error)? {
+            self.reserve_refresh_row(row, 4)?;
+            if fact_key_kind(utf8(text_bytes(row, 0)?)?)? != key.kind
+                || utf8(text_bytes(row, 1)?)? != key.value
+            {
+                return Err(corrupt("selected registry key differs from requested key"));
+            }
+            let id = RecordId::new(utf8(text_bytes(row, 2)?)?).map_err(|e| corrupt(e.message))?;
+            let path = VaultRelativePath::new(utf8(text_bytes(row, 3)?)?)
+                .map_err(|e| corrupt(e.message))?;
+            let adopted = QueryCatalog::record(self, &id)?
+                .ok_or_else(|| corrupt("registry match has no adopted record"))?;
+            if adopted.path != path {
+                return Err(corrupt(
+                    "registry candidate path differs from adopted record",
+                ));
+            }
+            let entry = RegistryEntry {
+                id,
+                kind: adopted.record.kind(),
+                path,
+                aliases: scan::list(&adopted.record, "aliases"),
+            };
+            if !super::link_facts::registry_keys(&entry)?.contains(key) {
+                return Err(corrupt("registry match key differs from adopted record"));
+            }
+            result.push(entry);
+        }
+        Ok(result)
+    }
+}
+fn fact_key_name(kind: super::link_facts::MatchKeyKind) -> &'static str {
+    use super::link_facts::MatchKeyKind;
+    match kind {
+        MatchKeyKind::Id => "id",
+        MatchKeyKind::Path => "path",
+        MatchKeyKind::Basename => "basename",
+        MatchKeyKind::Alias => "alias",
+    }
+}
+fn fact_key_kind(value: &str) -> Result<super::link_facts::MatchKeyKind> {
+    use super::link_facts::MatchKeyKind;
+    match value {
+        "id" => Ok(MatchKeyKind::Id),
+        "path" => Ok(MatchKeyKind::Path),
+        "basename" => Ok(MatchKeyKind::Basename),
+        "alias" => Ok(MatchKeyKind::Alias),
+        _ => Err(corrupt("unknown normalized match key kind")),
+    }
+}
+fn fact_json_size(value: &impl serde::Serialize, limit: usize) -> Result<usize> {
+    struct Counter {
+        bytes: usize,
+        limit: usize,
+    }
+    impl std::io::Write for Counter {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.bytes = self
+                .bytes
+                .checked_add(bytes.len())
+                .filter(|n| *n <= self.limit)
+                .ok_or_else(|| std::io::Error::other("fact lookup input exceeds byte ceiling"))?;
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let mut counter = Counter { bytes: 0, limit };
+    serde_json::to_writer(&mut counter, value).map_err(|_| {
+        WikiError::new(
+            ErrorCode::BudgetExceeded,
+            "fact lookup input exceeds byte ceiling",
+        )
+    })?;
+    Ok(counter.bytes)
+}
+
 impl crate::sources::SourceRefreshLookup for QuerySnapshot {
     fn snapshot(&self) -> &ReadSnapshot {
         &self.snapshot

@@ -1,5 +1,6 @@
 //! Authored status is preserved; only derived eligibility is computed here.
 use super::{
+    eligibility_facts::{EligibilityRole, NormalizedEligibilityFacts},
     scan::{
         diagnostic, input_notes, isolated_fields, list, project_validation,
         project_validation_closed, readable_id,
@@ -410,6 +411,29 @@ pub(crate) fn compute(
     records: &mut BTreeMap<RecordId, RecordRow>,
     diagnostics: &mut Vec<CatalogDiagnostic>,
 ) -> Result<()> {
+    compute_inner(view, notes, records, diagnostics, None)
+}
+
+/// Full normalized rebuild entry point. The input remains a complete graph;
+/// only proof representation differs from legacy compute.
+pub(crate) fn compute_normalized(
+    view: &SourceView<'_>,
+    notes: &BTreeMap<VaultRelativePath, ParsedNote>,
+    records: &mut BTreeMap<RecordId, RecordRow>,
+    diagnostics: &mut Vec<CatalogDiagnostic>,
+) -> Result<NormalizedEligibilityFacts> {
+    let mut facts = NormalizedEligibilityFacts::new();
+    compute_inner(view, notes, records, diagnostics, Some(&mut facts))?;
+    Ok(facts)
+}
+
+fn compute_inner(
+    view: &SourceView<'_>,
+    notes: &BTreeMap<VaultRelativePath, ParsedNote>,
+    records: &mut BTreeMap<RecordId, RecordRow>,
+    diagnostics: &mut Vec<CatalogDiagnostic>,
+    mut facts: Option<&mut NormalizedEligibilityFacts>,
+) -> Result<()> {
     let registry = IndexedRegistry::new(
         records
             .values()
@@ -458,6 +482,15 @@ pub(crate) fn compute(
             if let Some(value) = record.string(field) {
                 let target = RecordId::new(value)?;
                 edges.entry(id.clone()).or_default().insert(target.clone());
+                if let Some(facts) = facts.as_deref_mut() {
+                    facts.edge(
+                        id,
+                        &target,
+                        EligibilityRole::TypedReference {
+                            field: field.into(),
+                        },
+                    );
+                }
                 if !matches!(
                     registry.resolve_typed(&target, kind, companion.and_then(|k| record.string(k))),
                     LinkResolution::Resolved { .. }
@@ -477,6 +510,9 @@ pub(crate) fn compute(
         for value in list(&record, "wiki_depends_on_ids") {
             let target = RecordId::new(value)?;
             edges.entry(id.clone()).or_default().insert(target.clone());
+            if let Some(facts) = facts.as_deref_mut() {
+                facts.edge(id, &target, EligibilityRole::DeclaredSupport);
+            }
             declared
                 .entry(id.clone())
                 .or_default()
@@ -515,6 +551,17 @@ pub(crate) fn compute(
             for value in values {
                 let target = RecordId::new(value)?;
                 edges.entry(id.clone()).or_default().insert(target.clone());
+                if let Some(facts) = facts.as_deref_mut() {
+                    let role = match field {
+                        "wiki_revisions" => EligibilityRole::SourceInventory,
+                        "wiki_source_ids" => EligibilityRole::ExtractionSource,
+                        "wiki_source_revision_ids" => EligibilityRole::ExtractionRevision,
+                        "wiki_input_ids" => EligibilityRole::DecisionInput,
+                        "wiki_output_ids" => EligibilityRole::DecisionOutput,
+                        _ => unreachable!("fixed list reference vocabulary"),
+                    };
+                    facts.edge(id, &target, role);
+                }
                 if snapshot
                     .get(&target)
                     .is_none_or(|r| kind.is_some_and(|kind| r.record.kind() != kind))
@@ -652,6 +699,9 @@ pub(crate) fn compute(
         .map(|p| p.supersession_edges().clone())
         .unwrap_or_default();
     for (predecessor, successor) in &review_edges {
+        if let Some(facts) = facts.as_deref_mut() {
+            facts.edge(successor, predecessor, EligibilityRole::PolicySupersession);
+        }
         supersession
             .entry(successor.clone())
             .or_default()
@@ -659,6 +709,9 @@ pub(crate) fn compute(
     }
     if let Some(policy) = &decision_policy {
         for (predecessor, successor) in policy.supersession_edges() {
+            if let Some(facts) = facts.as_deref_mut() {
+                facts.edge(successor, predecessor, EligibilityRole::PolicySupersession);
+            }
             supersession
                 .entry(successor.clone())
                 .or_default()
@@ -777,6 +830,9 @@ pub(crate) fn compute(
     }
     // Structural errors follow typed references, independently from support freshness.
     propagate_invalid(records, &edges, diagnostics);
+    if let Some(facts) = facts.as_deref_mut() {
+        facts.capture_baseline(records);
+    }
     let snapshot = records.clone();
     for row in records.values_mut() {
         if row.eligibility == Eligibility::Invalid {
@@ -886,6 +942,13 @@ pub(crate) fn compute(
                             == Some(out.packet_fingerprint.as_str())
                 });
                 if let Some((_, packet)) = bound {
+                    if let Some(facts) = facts.as_deref_mut() {
+                        facts.edge(
+                            row.record.id(),
+                            packet.record.id(),
+                            EligibilityRole::GenerationPacket,
+                        );
+                    }
                     let source = packet
                         .record
                         .string("wiki_source_id")
@@ -963,6 +1026,19 @@ pub(crate) fn compute(
         .filter(|(_, r)| r.record.kind() == RecordKind::Evidence)
     {
         let reference = evidence_reference(&row.record)?;
+        if let Some(facts) = facts.as_deref_mut()
+            && snapshot
+                .get(&reference.assertion_id)
+                .is_some_and(|row| row.record.kind() == RecordKind::Assertion)
+        {
+            // The inverse support relation belongs to an adopted record. A
+            // dangling assertion remains represented by Evidence's typed edge.
+            facts.edge(
+                &reference.assertion_id,
+                id,
+                EligibilityRole::AssertionEvidence,
+            );
+        }
         edges
             .entry(reference.assertion_id.clone())
             .or_default()
@@ -984,6 +1060,9 @@ pub(crate) fn compute(
             Err(error) => {
                 if error.code == ErrorCode::BudgetExceeded {
                     return Err(error);
+                }
+                if let Some(facts) = facts.as_deref_mut() {
+                    facts.evidence_integrity_failure(id);
                 }
                 mark_invalid(
                     row,
@@ -1086,40 +1165,46 @@ pub(crate) fn compute(
             row.reasons.push("disputed".into());
         }
     }
-    // All related bytes form an over-approximated closure. This intentionally
-    // includes complete decisions and all evidence membership for a reviewed claim.
-    let decision_deps: Vec<_> = records
-        .values()
-        .filter(|r| r.record.kind() == RecordKind::Decision)
-        .flat_map(|r| r.dependencies.clone())
-        .collect();
-    let own = records.clone();
-    for (id, row) in records.iter_mut() {
-        let mut reachable = BTreeSet::new();
-        let mut pending = vec![id.clone()];
-        while let Some(next) = pending.pop() {
-            if reachable.insert(next.clone()) {
-                pending.extend(edges.get(&next).into_iter().flatten().cloned());
-            }
-        }
-        let mut deps: BTreeMap<_, _> = decision_deps
-            .iter()
-            .map(|d| (d.path.clone(), d.expected.clone()))
+    if let Some(facts) = facts.as_deref_mut() {
+        facts.capture_direct(records)?;
+    } else {
+        // All related bytes form an over-approximated closure. This intentionally
+        // includes complete decisions and all evidence membership for a reviewed claim.
+        let decision_deps: Vec<_> = records
+            .values()
+            .filter(|r| r.record.kind() == RecordKind::Decision)
+            .flat_map(|r| r.dependencies.clone())
             .collect();
-        for target in reachable {
-            if let Some(target) = own.get(&target) {
-                deps.extend(
-                    target
-                        .dependencies
-                        .iter()
-                        .map(|d| (d.path.clone(), d.expected.clone())),
-                );
+        let own = records.clone();
+        for (id, row) in records.iter_mut() {
+            let mut reachable = BTreeSet::new();
+            let mut pending = vec![id.clone()];
+            while let Some(next) = pending.pop() {
+                if reachable.insert(next.clone()) {
+                    pending.extend(edges.get(&next).into_iter().flatten().cloned());
+                }
             }
+            let mut deps: BTreeMap<_, _> = decision_deps
+                .iter()
+                .map(|d| (d.path.clone(), d.expected.clone()))
+                .collect();
+            for target in reachable {
+                if let Some(target) = own.get(&target) {
+                    deps.extend(
+                        target
+                            .dependencies
+                            .iter()
+                            .map(|d| (d.path.clone(), d.expected.clone())),
+                    );
+                }
+            }
+            row.dependencies = deps
+                .into_iter()
+                .map(|(path, expected)| ReadDependency { path, expected })
+                .collect();
         }
-        row.dependencies = deps
-            .into_iter()
-            .map(|(path, expected)| ReadDependency { path, expected })
-            .collect();
+    }
+    for row in records.values_mut() {
         row.reasons.sort();
         row.reasons.dedup();
         if row.record.kind() == RecordKind::Entity {

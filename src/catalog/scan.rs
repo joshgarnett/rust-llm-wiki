@@ -130,14 +130,14 @@ pub(crate) fn project_validation(
     fs: &VaultFs,
     input: &ValidationInput,
 ) -> Result<ValidationProjection> {
-    project_input(fs, input, false, None)
+    project_input(fs, input, false, None, None)
 }
 
 pub(crate) fn project_validation_closed(
     fs: &VaultFs,
     input: &ValidationInput,
 ) -> Result<ValidationProjection> {
-    project_input(fs, input, true, None)
+    project_input(fs, input, true, None, None)
 }
 
 #[derive(Default)]
@@ -182,7 +182,20 @@ pub(crate) fn project_with_sink(
     closed: bool,
     sink: &mut dyn RetrievalSink,
 ) -> Result<ValidationProjection> {
-    project_input(fs, input, closed, Some(sink))
+    project_input(fs, input, closed, Some(sink), None)
+}
+
+/// A complete normalized build avoids constructing legacy transitive proof
+/// copies. Its separate result type must not authorize legacy proof consumers.
+pub(crate) fn project_normalized_with_sink(
+    fs: &VaultFs,
+    input: &ValidationInput,
+    closed: bool,
+    sink: &mut dyn RetrievalSink,
+) -> Result<NormalizedValidationProjection> {
+    let mut facts = super::eligibility_facts::NormalizedEligibilityFacts::new();
+    let validation = project_input(fs, input, closed, Some(sink), Some(&mut facts))?;
+    Ok(NormalizedValidationProjection { validation, facts })
 }
 
 fn project_catalog(
@@ -211,6 +224,7 @@ fn project_input(
     input: &ValidationInput,
     closed: bool,
     mut retrieval: Option<&mut dyn RetrievalSink>,
+    mut normalized: Option<&mut super::eligibility_facts::NormalizedEligibilityFacts>,
 ) -> Result<ValidationProjection> {
     let notes = input_notes(input)?;
     let mut memberships: BTreeMap<RecordId, Vec<VaultRelativePath>> = BTreeMap::new();
@@ -281,12 +295,43 @@ fn project_input(
     } else {
         SourceView::from_input(fs, input)?
     };
-    super::eligibility::compute(&source_view, &notes, &mut records, &mut diagnostics)?;
+    if let Some(facts) = normalized.as_deref_mut() {
+        *facts = super::eligibility::compute_normalized(
+            &source_view,
+            &notes,
+            &mut records,
+            &mut diagnostics,
+        )?;
+    } else {
+        super::eligibility::compute(&source_view, &notes, &mut records, &mut diagnostics)?;
+    }
     let mut dependencies: BTreeMap<VaultRelativePath, ExpectedState> = notes
         .iter()
         .map(|(p, n)| (p.clone(), ExpectedState::Hash(n.source_hash.clone())))
         .collect();
+    if let Some(facts) = normalized.as_deref() {
+        for (path, expected) in &facts.observed {
+            if dependencies.get(path).is_some_and(|old| old != expected) {
+                return Err(WikiError::new(
+                    ErrorCode::ContentConflict,
+                    "normalized observation conflicts with canonical input",
+                ));
+            }
+            dependencies.insert(path.clone(), expected.clone());
+        }
+    }
     if let Some(retrieval) = retrieval.as_deref_mut() {
+        if normalized.is_some() {
+            for row in records.values() {
+                let entry = RegistryEntry {
+                    id: row.record.id().clone(),
+                    kind: row.record.kind(),
+                    path: row.path.clone(),
+                    aliases: list(&row.record, "aliases"),
+                };
+                retrieval.registry_keys(&entry, &super::link_facts::registry_keys(&entry)?)?;
+            }
+        }
         let registry = IndexedRegistry::new(
             records
                 .values()
@@ -322,6 +367,14 @@ fn project_input(
                     target_path,
                     resolution: format!("{resolution:?}"),
                 })?;
+                if normalized.is_some() {
+                    retrieval.link_fact(super::link_facts::untyped_fact(
+                        path,
+                        (body_offset + link.range.start) as u64,
+                        &link.destination,
+                        &resolution,
+                    )?)?;
+                }
             }
             if let Some(row) = row {
                 for (field, kind, companion) in super::eligibility::references(&row.record) {
@@ -360,6 +413,15 @@ fn project_input(
                         target_path,
                         resolution: format!("{resolution:?}"),
                     })?;
+                    if normalized.is_some() {
+                        retrieval.link_fact(super::link_facts::typed_fact(
+                            path,
+                            start as u64,
+                            destination,
+                            &target,
+                            kind,
+                        )?)?;
+                    }
                 }
             }
         }
@@ -415,7 +477,17 @@ fn project_input(
                 }
             }
             // Failed verification also contributes every byte observed before failure.
-            dependencies.extend(deps);
+            for (path, expected) in deps {
+                if normalized.is_some()
+                    && dependencies.get(&path).is_some_and(|old| old != &expected)
+                {
+                    return Err(WikiError::new(
+                        ErrorCode::ContentConflict,
+                        "normalized payload observation changed during projection",
+                    ));
+                }
+                dependencies.insert(path, expected);
+            }
         }
     }
     diagnostics.sort_by(|a, b| {

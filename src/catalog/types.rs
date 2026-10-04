@@ -110,6 +110,14 @@ pub(crate) struct ValidationProjection {
     pub dependencies: Vec<ReadDependency>,
 }
 
+/// Full-build semantic results with factored proof inputs. The record rows do
+/// not carry legacy transitive proofs and must never be passed to their readers.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct NormalizedValidationProjection {
+    pub validation: ValidationProjection,
+    pub facts: super::eligibility_facts::NormalizedEligibilityFacts,
+}
+
 /// Receives provisional retrieval rows without retaining corpus text in the projector.
 /// A failed callback aborts projection; callers must discard provisional publication
 /// state unless projection and subsequent freshness checks both succeed.
@@ -118,6 +126,16 @@ pub(crate) trait RetrievalSink {
     fn document(&mut self, row: DocumentRow) -> Result<()>;
     fn graph(&mut self, row: GraphRow) -> Result<()>;
     fn link(&mut self, row: LinkRow) -> Result<()>;
+    fn link_fact(&mut self, _row: super::link_facts::OwnedLinkFact) -> Result<()> {
+        Ok(())
+    }
+    fn registry_keys(
+        &mut self,
+        _entry: &crate::records::RegistryEntry,
+        _keys: &[super::link_facts::MatchKey],
+    ) -> Result<()> {
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

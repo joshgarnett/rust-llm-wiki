@@ -1,12 +1,18 @@
 //! Rebuildable catalog generations and complete graph eligibility.
 pub mod eligibility;
+pub(crate) mod eligibility_facts;
+#[cfg(test)]
+mod fact_query_tests;
 pub(crate) mod file_types;
 mod integrity;
+pub(crate) mod link_facts;
 pub(crate) mod normalized_audit;
 pub(crate) mod normalized_build;
 pub(crate) mod normalized_delta;
 #[cfg(test)]
 mod normalized_delta_tests;
+#[cfg(test)]
+mod normalized_fact_tests;
 pub(crate) mod normalized_read;
 pub(crate) mod normalized_schema;
 #[cfg(test)]

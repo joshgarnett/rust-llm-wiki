@@ -17,6 +17,16 @@ use std::{
     time::{Duration, Instant},
 };
 
+fn link_key_kind(kind: super::link_facts::MatchKeyKind) -> &'static str {
+    use super::link_facts::MatchKeyKind::*;
+    match kind {
+        Id => "id",
+        Path => "path",
+        Basename => "basename",
+        Alias => "alias",
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum BuildCheckpoint {
     AfterHeader,
@@ -94,6 +104,11 @@ pub(crate) struct BuildStats {
     pub documents: u64,
     pub graph_rows: u64,
     pub links: u64,
+    pub link_facts: u64,
+    pub registry_keys: u64,
+    pub eligibility_facts: u64,
+    pub direct_paths: u64,
+    pub semantic_edges: u64,
     pub records: u64,
     pub dependencies: u64,
     pub diagnostics: u64,
@@ -127,6 +142,7 @@ pub(crate) struct NormalizedBuilder<'a> {
     transaction_open: bool,
     poisoned: bool,
     stats: BuildStats,
+    lookup_hash: blake3::Hasher,
 }
 impl<'a> NormalizedBuilder<'a> {
     pub fn begin(
@@ -250,6 +266,7 @@ impl<'a> NormalizedBuilder<'a> {
             transaction_open: false,
             poisoned: false,
             stats: BuildStats::default(),
+            lookup_hash: blake3::Hasher::new(),
         };
         builder.step(BuildCheckpoint::AfterHeader)?;
         Ok(builder)
@@ -433,6 +450,161 @@ impl<'a> NormalizedBuilder<'a> {
         Ok(())
     }
 
+    fn commit_lookup<T: Serialize>(&mut self, namespace: &str, row: &T) -> Result<()> {
+        counted_json(row, self.limits.max_row_bytes)?;
+        let encoded = sql::json(row)?;
+        self.lookup_hash
+            .update(&(namespace.len() as u64).to_le_bytes());
+        self.lookup_hash.update(namespace.as_bytes());
+        self.lookup_hash
+            .update(&(encoded.len() as u64).to_le_bytes());
+        self.lookup_hash.update(encoded.as_bytes());
+        Ok(())
+    }
+
+    fn insert_eligibility_facts(
+        &mut self,
+        projection: &ValidationProjection,
+        facts: &super::eligibility_facts::NormalizedEligibilityFacts,
+    ) -> Result<()> {
+        if facts.version != 1
+            || facts.records.keys().ne(projection.records.keys())
+            || projection
+                .records
+                .values()
+                .any(|row| !row.dependencies.is_empty())
+        {
+            return Err(WikiError::new(
+                ErrorCode::IndexCorrupt,
+                "normalized proof layout or record scope is incomplete",
+            ));
+        }
+        let expected: std::collections::BTreeMap<_, _> = projection
+            .dependencies
+            .iter()
+            .map(|dependency| (&dependency.path, &dependency.expected))
+            .collect();
+        for (path, observed) in &facts.observed {
+            self.guard()?;
+            if expected.get(path).copied() != Some(observed) {
+                return Err(WikiError::new(
+                    ErrorCode::IndexCorrupt,
+                    "normalized observation differs from complete dependency inventory",
+                ));
+            }
+        }
+        for (id, fact) in &facts.records {
+            let record = &projection.records[id];
+            let own = ExpectedState::Hash(record.hash.clone());
+            if !fact.direct_paths.contains(&record.path)
+                || expected.get(&record.path).copied() != Some(&own)
+            {
+                return Err(WikiError::new(
+                    ErrorCode::IndexCorrupt,
+                    "normalized record lacks its exact own canonical state",
+                ));
+            }
+            let bytes = counted_json(&fact.baseline, self.limits.max_row_bytes)?;
+            self.admit(checked_sum(&[256, id.as_str().len() as u64, bytes])?)?;
+            self.connection()
+                .execute(
+                    "INSERT INTO record_eligibility_facts(record_id,baseline_json) VALUES(?1,?2)",
+                    params![id.as_str(), sql::json(&fact.baseline)?],
+                )
+                .map_err(build_sql_error)?;
+            self.commit_lookup("baseline", &(id, &fact.baseline))?;
+            self.stats.eligibility_facts += 1;
+            for path in &fact.direct_paths {
+                if !expected.contains_key(path)
+                    || (path != &record.path && crate::sources::revision::canonical_path(path))
+                {
+                    return Err(WikiError::new(
+                        ErrorCode::IndexCorrupt,
+                        "normalized direct path lacks state or captures another canonical note",
+                    ));
+                }
+                self.admit(checked_sum(&[
+                    256,
+                    id.as_str().len() as u64,
+                    path.as_str().len() as u64,
+                ])?)?;
+                self.connection()
+                    .execute(
+                        "INSERT INTO record_direct_paths(owner_id,path) VALUES(?1,?2)",
+                        params![id.as_str(), path.as_str()],
+                    )
+                    .map_err(build_sql_error)?;
+                self.commit_lookup("direct_path", &(id, path))?;
+                self.stats.direct_paths += 1;
+            }
+        }
+        for edge in &facts.edges {
+            if !projection.records.contains_key(&edge.owner_id) {
+                return Err(WikiError::new(
+                    ErrorCode::IndexCorrupt,
+                    "normalized semantic edge has unknown owner",
+                ));
+            }
+            // Missing targets remain explicit facts for structurally invalid
+            // records. They must not be silently removed during reconstruction.
+            let bytes = counted_json(edge, self.limits.max_row_bytes)?;
+            self.admit(checked_sum(&[256, bytes])?)?;
+            self.connection()
+                .execute(
+                    "INSERT INTO semantic_edges(owner_id,target_id,role_json) VALUES(?1,?2,?3)",
+                    params![
+                        edge.owner_id.as_str(),
+                        edge.target_id.as_str(),
+                        sql::json(&edge.role)?
+                    ],
+                )
+                .map_err(build_sql_error)?;
+            self.commit_lookup("semantic_edge", edge)?;
+            self.stats.semantic_edges += 1;
+        }
+        Ok(())
+    }
+
+    fn insert_link_fact(&mut self, row: &super::link_facts::OwnedLinkFact) -> Result<()> {
+        let bytes = counted_json(row, self.limits.max_row_bytes)?;
+        self.admit(checked_sum(&[256, bytes])?)?;
+        self.connection().execute("INSERT INTO link_facts(from_path,byte_start,raw_destination,typed_id,typed_kind) VALUES(?1,?2,?3,?4,?5)",
+            params![row.from_path.as_str(),sql::integer(row.byte_start)?,row.raw_destination,
+                row.typed.as_ref().map(|target|target.id.as_str()),row.typed.as_ref().map(|target|target.expected_kind.as_str())]).map_err(build_sql_error)?;
+        for key in &row.keys {
+            self.admit(checked_sum(&[
+                256,
+                key.value.len() as u64,
+                row.from_path.as_str().len() as u64,
+            ])?)?;
+            self.connection().execute("INSERT INTO link_match_keys(kind,value,from_path,byte_start) VALUES(?1,?2,?3,?4)",
+                params![link_key_kind(key.kind),key.value,row.from_path.as_str(),sql::integer(row.byte_start)?]).map_err(build_sql_error)?;
+        }
+        self.commit_lookup("link_fact", row)?;
+        self.stats.link_facts += 1;
+        Ok(())
+    }
+
+    fn insert_registry_keys(
+        &mut self,
+        entry: &crate::records::RegistryEntry,
+        keys: &[super::link_facts::MatchKey],
+    ) -> Result<()> {
+        for key in keys {
+            self.admit(checked_sum(&[
+                256,
+                key.value.len() as u64,
+                entry.id.as_str().len() as u64,
+                entry.path.as_str().len() as u64,
+            ])?)?;
+            self.connection().execute("INSERT INTO registry_match_keys(kind,value,record_id,path) VALUES(?1,?2,?3,?4)",
+                params![link_key_kind(key.kind),key.value,entry.id.as_str(),entry.path.as_str()]).map_err(build_sql_error)?;
+            self.commit_lookup("registry_key", &(&entry.id, &entry.path, key))?;
+            self.stats.registry_keys += 1;
+        }
+        Ok(())
+    }
+
     fn reconstruct_revision_owners(&mut self) -> Result<Blake3Hash> {
         let engine = crate::changes::ChangeEngine::new(self.fs.clone())?;
         let writer = self.writer;
@@ -586,8 +758,23 @@ impl<'a> NormalizedBuilder<'a> {
         Ok(())
     }
 
-    pub fn finish(mut self, projection: &ValidationProjection) -> Result<CompletedCatalog> {
-        let result = self.finish_inner(projection);
+    pub fn finish(self, projection: &ValidationProjection) -> Result<CompletedCatalog> {
+        self.finish_with_facts(projection, None)
+    }
+
+    pub fn finish_normalized(
+        self,
+        projection: &NormalizedValidationProjection,
+    ) -> Result<CompletedCatalog> {
+        self.finish_with_facts(&projection.validation, Some(&projection.facts))
+    }
+
+    fn finish_with_facts(
+        mut self,
+        projection: &ValidationProjection,
+        facts: Option<&super::eligibility_facts::NormalizedEligibilityFacts>,
+    ) -> Result<CompletedCatalog> {
+        let result = self.finish_inner(projection, facts);
         if result.is_err() {
             self.failed();
             // A complete header is never authority until root selects the sibling.
@@ -607,12 +794,24 @@ impl<'a> NormalizedBuilder<'a> {
         }
         result
     }
-    fn finish_inner(&mut self, projection: &ValidationProjection) -> Result<CompletedCatalog> {
+    fn finish_inner(
+        &mut self,
+        projection: &ValidationProjection,
+        facts: Option<&super::eligibility_facts::NormalizedEligibilityFacts>,
+    ) -> Result<CompletedCatalog> {
         self.guard()?;
         if projection.vault_id != self.identity.selection.vault_id {
             return Err(WikiError::new(
                 ErrorCode::IndexCorrupt,
                 "validation projection belongs to another vault",
+            ));
+        }
+        if let Some(facts) = facts {
+            self.insert_eligibility_facts(projection, facts)?;
+        } else if self.stats.registry_keys != 0 || self.stats.link_facts != 0 {
+            return Err(WikiError::new(
+                ErrorCode::IndexCorrupt,
+                "normalized emitted facts require normalized finalization",
             ));
         }
         for (id, row) in &projection.records {
@@ -738,7 +937,7 @@ impl<'a> NormalizedBuilder<'a> {
         // This names a publication, not a fresh full-vault proof. Subsequent
         // deltas chain their exact changed inputs without recomputing a global
         // digest. The full-build observations are separately epoch-bound.
-        let publication_hash = Blake3Hash::digest(sql::json(&(
+        let mut publication_hash = Blake3Hash::digest(sql::json(&(
             "lwiki.catalog-publication.v3.build",
             &self.identity.selection,
             self.identity
@@ -750,6 +949,32 @@ impl<'a> NormalizedBuilder<'a> {
             &dependency_hash,
             &revision_ownership_hash,
         ))?);
+        if facts.is_some() {
+            if self.stats.links != self.stats.link_facts {
+                return Err(WikiError::new(
+                    ErrorCode::IndexCorrupt,
+                    "normalized link facts do not cover emitted links",
+                ));
+            }
+            let missing: bool = self.connection().query_row(
+                "SELECT EXISTS(SELECT 1 FROM records r WHERE NOT EXISTS(SELECT 1 FROM registry_match_keys k WHERE k.kind='id' AND k.value=r.id AND k.record_id=r.id AND k.path=r.path))",
+                [], |row| row.get(0),
+            ).map_err(build_sql_error)?;
+            if missing {
+                return Err(WikiError::new(
+                    ErrorCode::IndexCorrupt,
+                    "normalized registry facts omit adopted identity",
+                ));
+            }
+            // This additional commitment names the proof layout and exact facts;
+            // legacy full-proof builds retain their existing publication encoding.
+            publication_hash = Blake3Hash::digest(sql::json(&(
+                "lwiki.normalized-proof-layout.v1",
+                &publication_hash,
+                self.lookup_hash.finalize().to_hex().to_string(),
+            ))?);
+            self.connection().execute("UPDATE catalog_meta SET proof_layout_version=1 WHERE singleton=1 AND state='building'", []).map_err(build_sql_error)?;
+        }
         self.connection().execute("UPDATE catalog_meta SET parser_hash=?1,control_hash=?2,dependency_hash=?3,publication_hash=?4,audit_epoch=epoch,state='complete' WHERE singleton=1 AND state='building'",params![projection.parser_fingerprint.as_str(),projection.control_manifest.as_str(),dependency_hash.as_str(),publication_hash.as_str()]).map_err(build_sql_error)?;
         self.step(BuildCheckpoint::AfterComplete)?;
         checkpoint(self.connection())?;
@@ -801,6 +1026,24 @@ impl<'a> NormalizedBuilder<'a> {
     }
 }
 impl RetrievalSink for NormalizedBuilder<'_> {
+    fn link_fact(&mut self, row: super::link_facts::OwnedLinkFact) -> Result<()> {
+        let result = self.insert_link_fact(&row);
+        if result.is_err() {
+            self.failed();
+        }
+        result
+    }
+    fn registry_keys(
+        &mut self,
+        entry: &crate::records::RegistryEntry,
+        keys: &[super::link_facts::MatchKey],
+    ) -> Result<()> {
+        let result = self.insert_registry_keys(entry, keys);
+        if result.is_err() {
+            self.failed();
+        }
+        result
+    }
     fn identity_claim(&mut self, row: IdentityClaimRow) -> Result<()> {
         let result = (|| {
             self.guard()?;
