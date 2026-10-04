@@ -676,3 +676,42 @@ exact 7/9, paraphrase 5/6, multisource 4/5, new-document 3/4 (overlapping catego
 four unsupported absent controls, correct citations and semantic critic ≥9/10
 with no blockers. Neither gate substitutes for the other; distinguish automatic
 and host-assisted workflows and report unknown model usage as unknown.
+
+### Release full-check controls at 1k and 10k
+
+The same control subsequently passed with pinned release executables. Actual
+Bazel Rustc actions for the library, CLI and held-reader test binary each contained
+exactly one `--codegen=opt-level=3` in `darwin_arm64-opt`; the recorded compiler was
+Rust 1.98.0 with LLVM 22.1.8. Production audit code remained the `bdfd8ad` design,
+with the held-reader helper from `ae73b16`. The tracked runner and reproduction
+instructions are available from `f6dcfd9`. The control used unchanged corpus,
+correctness assertions and resource limits from protocol version 2.
+
+| Native macOS release control | 1,000 sources / 100 MB | 10,000 sources / 1 GB |
+| --- | --- | --- |
+| Two public normalized rebuilds | 9.033 / 8.178 s | 116.499 / 113.774 s |
+| Full check plus cited query, before / after refresh | 9.171 / 9.309 s | 121.067 / 114.977 s |
+| Managed 100,000-byte refresh | 0.494 s | 0.567 s |
+| First subsequent cited query | 0.060 s | 0.062 s |
+| Largest sampled audit plus held-reader RSS | 193,150,976 bytes | 768,507,904 bytes |
+| Largest sampled scratch allocation | 84,475,904 bytes | 823,611,392 bytes |
+| Whole supervised run, including fixture/account verification | 485.479 s | 1,118.172 s |
+
+Both tiers completed all ten CLI commands, full canonical/cache agreement before
+and after refresh, exact citations, read-only inventories and original-generation
+reader checks. Both cleaned their private scratch and revalidated pinned inputs.
+At 10k the conservative sum of native audit and holder peak RSS was 769,212,416
+bytes; returned logical scratch sizes were 817,971,200 and 818,302,976 bytes.
+The completed account, including retained prior attempts, occupied 53,531,934,720
+allocated bytes. A prior release 10k attempt stopped after the sandbox denied
+process monitoring; its supervisor terminated the first rebuild and retained the
+failed fixture. That attempt supplies no capacity conclusion.
+
+Independent Astra review accepted the explicit-check slice at **9.2/10** with
+zero blockers after inspecting raw outputs, exact citation spans/hashes, the
+40,144/40,158-file read-only inventories and the retained reader result.
+
+These results qualify this explicit-audit control at 1k and 10k. They retain the
+measurement limitations above: no cold-cache or tail distribution claim, no
+acknowledgment-to-answer timing claim, and no qualification of 100k, import,
+history-heavy workloads, remaining query modes or unseen answer completeness.
