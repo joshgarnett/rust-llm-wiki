@@ -7,6 +7,131 @@ use std::{
 };
 use unicase::UniCase;
 
+/// Aggregate diagnostics only; no path policy or filesystem operations change.
+#[cfg(test)]
+pub(crate) mod profile {
+    use std::{cell::RefCell, collections::BTreeMap, path::Path, time::Instant};
+
+    #[derive(Debug, Default, Clone, serde::Serialize)]
+    pub(crate) struct Enumeration {
+        pub opens: u64,
+        pub entries: u64,
+        pub folds: u64,
+        pub elapsed_ns: u128,
+    }
+    #[derive(Debug, Default, Clone, serde::Serialize)]
+    pub(crate) struct PathProfile {
+        pub portable_calls: u64,
+        pub portable_elapsed_ns: u128,
+        pub enumerations: BTreeMap<String, Enumeration>,
+    }
+    std::thread_local! {
+        static ACTIVE: RefCell<Option<PathProfile>> = const { RefCell::new(None) };
+    }
+    pub(crate) fn begin() {
+        ACTIVE.with(|value| {
+            assert!(value.borrow().is_none(), "path profile already active");
+            *value.borrow_mut() = Some(PathProfile::default());
+        });
+    }
+    pub(crate) fn finish() -> PathProfile {
+        ACTIVE.with(|value| value.borrow_mut().take().expect("path profile inactive"))
+    }
+    #[derive(Clone, Copy)]
+    pub(crate) enum Kind {
+        Physical,
+        Logical,
+        Marker,
+        Immutable,
+    }
+    pub(crate) struct EnumerationGuard {
+        start: Option<Instant>,
+        key: String,
+        counts: Enumeration,
+    }
+    pub(crate) fn enumeration(path: &Path, root: &Path, kind: Kind) -> EnumerationGuard {
+        let enabled = ACTIVE.with(|value| value.borrow().is_some());
+        let group = match path.strip_prefix(root).ok().and_then(Path::to_str) {
+            Some("sources") => "sources_root",
+            Some(value) if value.starts_with("sources/") && value.ends_with("/revisions") => {
+                "selected_revisions"
+            }
+            Some(value) if value.starts_with("sources/") => "selected_source_tree",
+            Some(value)
+                if value.starts_with("changes")
+                    || value.starts_with(".wiki/state")
+                    || value.starts_with(".wiki/retained/changes") =>
+            {
+                "changes_state"
+            }
+            Some("") => "vault_root",
+            _ => "other",
+        };
+        let kind = match kind {
+            Kind::Physical => "physical",
+            Kind::Logical => "logical",
+            Kind::Marker => "marker",
+            Kind::Immutable => "immutable",
+        };
+        EnumerationGuard {
+            start: enabled.then(Instant::now),
+            key: if enabled {
+                format!("{kind}:{group}")
+            } else {
+                String::new()
+            },
+            counts: Enumeration {
+                opens: u64::from(enabled),
+                ..Default::default()
+            },
+        }
+    }
+    impl EnumerationGuard {
+        pub(crate) fn entry(&mut self) {
+            self.counts.entries += u64::from(self.start.is_some());
+        }
+        pub(crate) fn fold(&mut self) {
+            self.counts.folds += u64::from(self.start.is_some());
+        }
+    }
+    impl Drop for EnumerationGuard {
+        fn drop(&mut self) {
+            if let Some(start) = self.start {
+                self.counts.elapsed_ns = start.elapsed().as_nanos();
+                ACTIVE.with(|value| {
+                    if let Some(profile) = value.borrow_mut().as_mut() {
+                        let total = profile.enumerations.entry(self.key.clone()).or_default();
+                        total.opens += self.counts.opens;
+                        total.entries += self.counts.entries;
+                        total.folds += self.counts.folds;
+                        total.elapsed_ns += self.counts.elapsed_ns;
+                    }
+                });
+            }
+        }
+    }
+    pub(crate) struct PortableGuard(Option<Instant>);
+    pub(crate) fn portable() -> PortableGuard {
+        PortableGuard(
+            ACTIVE
+                .with(|value| value.borrow().is_some())
+                .then(Instant::now),
+        )
+    }
+    impl Drop for PortableGuard {
+        fn drop(&mut self) {
+            if let Some(start) = self.0 {
+                ACTIVE.with(|value| {
+                    if let Some(profile) = value.borrow_mut().as_mut() {
+                        profile.portable_calls += 1;
+                        profile.portable_elapsed_ns += start.elapsed().as_nanos();
+                    }
+                });
+            }
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VaultRoot {
     path: PathBuf,
@@ -45,7 +170,11 @@ fn exact_marker_budgeted(path: &Path, on_entry: &mut dyn FnMut() -> Result<()>) 
         Err(error) => return Err(io_error("inspect vault marker", error)),
     }
     on_entry()?;
+    #[cfg(test)]
+    let mut profile = profile::enumeration(path, Path::new(""), profile::Kind::Marker);
     for entry in fs::read_dir(path).map_err(|e| io_error("read vault directory", e))? {
+        #[cfg(test)]
+        profile.entry();
         on_entry()?;
         let entry = entry.map_err(|e| io_error("read vault entry", e))?;
         if entry.file_name() == "WIKI.md" {
@@ -154,6 +283,8 @@ impl VaultRoot {
     }
     /// Compare every path prefix against plans and existing siblings, using full Unicode folding.
     pub fn validate_portable_paths(&self, paths: &[VaultRelativePath]) -> Result<()> {
+        #[cfg(test)]
+        let _profile = profile::portable();
         let mut planned = BTreeMap::<String, String>::new();
         let mut targets = std::collections::BTreeSet::new();
         let retained = crate::storage::layout::active(self)?;
@@ -181,17 +312,28 @@ impl VaultRoot {
                 }
                 if parent.is_dir() {
                     let folded = UniCase::unicode(component).to_folded_case();
+                    #[cfg(test)]
+                    let mut profile =
+                        profile::enumeration(&parent, &self.path, profile::Kind::Physical);
                     for entry in
                         fs::read_dir(&parent).map_err(|e| io_error("check portable siblings", e))?
                     {
+                        #[cfg(test)]
+                        profile.entry();
                         let name = entry
                             .map_err(|e| io_error("read portable sibling", e))?
                             .file_name();
                         let name = name.to_str().ok_or_else(|| {
                             WikiError::invalid("non-UTF-8 filesystem path is unsupported")
                         })?;
-                        if name != component && UniCase::unicode(name).to_folded_case() == folded {
-                            return Err(WikiError::invalid("case-folded existing path collision"));
+                        if name != component {
+                            #[cfg(test)]
+                            profile.fold();
+                            if UniCase::unicode(name).to_folded_case() == folded {
+                                return Err(WikiError::invalid(
+                                    "case-folded existing path collision",
+                                ));
+                            }
                         }
                     }
                 }
@@ -237,20 +379,29 @@ impl VaultRoot {
             };
             let internal = internal.map(|path| self.resolve_raw(&path)).transpose()?;
             for directory in std::iter::once(visible).chain(internal) {
+                #[cfg(test)]
+                let mut profile =
+                    profile::enumeration(&directory, &self.path, profile::Kind::Logical);
                 let entries = match fs::read_dir(directory) {
                     Ok(entries) => entries,
                     Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
                     Err(e) => return Err(io_error("check logical siblings", e)),
                 };
                 for entry in entries {
+                    #[cfg(test)]
+                    profile.entry();
                     let name = entry
                         .map_err(|e| io_error("read logical sibling", e))?
                         .file_name();
                     let name = name.to_str().ok_or_else(|| {
                         WikiError::invalid("non-UTF-8 filesystem path is unsupported")
                     })?;
-                    if name != component && UniCase::unicode(name).to_folded_case() == folded {
-                        return Err(WikiError::invalid("case-folded logical path collision"));
+                    if name != component {
+                        #[cfg(test)]
+                        profile.fold();
+                        if UniCase::unicode(name).to_folded_case() == folded {
+                            return Err(WikiError::invalid("case-folded logical path collision"));
+                        }
                     }
                 }
             }

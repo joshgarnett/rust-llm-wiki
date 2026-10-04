@@ -14,6 +14,8 @@ mod indexed_cli_tests;
 
 #[cfg(test)]
 mod refresh_fixture_export;
+#[cfg(test)]
+mod refresh_path_profile;
 
 mod pages;
 pub mod probe;

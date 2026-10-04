@@ -237,6 +237,44 @@ account, including earlier fixtures, used 11.64 GB. Export time grew 11.1× for 
 content. These fixture and warm-command measurements remain development evidence,
 with the same exclusions as the 1k result.
 
+The test-only [path profiler](../scripts/profile_source_refresh.py) isolates the
+logical filesystem work behind this result. It copies and verifies a closed
+export, runs one no-op, title-only and content update through the real application,
+and verifies immediate citations. Supply the matching native unit-test executable
+and its SHA-256, rather than the production CLI binary:
+
+```sh
+python3 scripts/profile_source_refresh.py \
+  --binary /absolute/account/bin/unit_tests --sha256 ACTUAL_SHA256 \
+  --preseed /absolute/account/export-1k/fixture \
+  --account-root /absolute/account --workdir /absolute/account/profile-1k \
+  --tier 1000
+```
+
+Use a two-source export with `--tier tiny` first, then independent new output
+directories for 1k and 10k. The runner requires Python `blake3`, caps the combined
+account at 20 GiB, retains a 32 GiB free-space floor, and bounds setup plus execution
+to 30 minutes and the child to 120 seconds/8 GiB RSS. It preserves all failures and
+qualifies phase timings when its account inventories overlap the child. This
+direct application diagnostic excludes CLI argument/configuration overhead and
+does not replace the actual-command benchmark.
+
+The measured source-directory work was:
+
+| Update | Directory enumerations | Entries at 1k | Entries at 10k |
+|---|---:|---:|---:|
+| No-op | 0 | 0 | 0 |
+| Title-only | 12 | 12,000 | 120,000 |
+| Changed content | 30 | 30,000 | 300,000 |
+
+All three cases at each tier passed revision, epoch, payload and citation checks.
+The counts establish corpus-linear work in ordinary updates. Both larger profiling
+runs overlapped supervisor inventory scans, so their phase times are not accepted
+as clean attribution evidence. The independent critic accepted the counts as
+sufficient evidence to remove the unnecessary source-directory enumeration; the
+post-change CLI benchmark must establish the resulting latency. This profiling
+checkpoint itself does not change production path validation.
+
 ### Acceptance evidence
 
 Freeze the binary/tree, protocol, generator/seed, manifests, expected outcomes,

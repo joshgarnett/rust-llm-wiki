@@ -783,9 +783,15 @@ impl OfflineApp {
             source_projection::{RefreshProjectionLimits, project_refresh},
             source_refresh::IndexedRefreshSession,
         };
+        #[cfg(test)]
+        let profile_acquire = super::refresh_path_profile::phase("acquire");
         catalog.guard_query()?;
         let reader = catalog.query_snapshot(QueryReadLimits::default())?;
         reader.require_fact_layout()?;
+        #[cfg(test)]
+        drop(profile_acquire);
+        #[cfg(test)]
+        let profile_plan = super::refresh_path_profile::phase("plan");
         let plan = SourceStore::new(self.fs.clone()).plan_refresh_indexed(
             &reader,
             &id,
@@ -793,6 +799,8 @@ impl OfflineApp {
             title,
             &crate::sources::SourceRefreshLimits::default(),
         )?;
+        #[cfg(test)]
+        drop(profile_plan);
         let mut outcome = MutationOutcome {
             source_capture: plan.plan.capture_state.clone(),
             plan: summarize("Unchanged source", &plan.plan.dependencies, &[]),
@@ -805,31 +813,43 @@ impl OfflineApp {
             snapshot: None,
             reused: plan.plan.reused,
         };
+        #[cfg(test)]
+        let profile_project = super::refresh_path_profile::phase("project");
         let Some(projected) =
             project_refresh(&self.fs, &reader, plan, &RefreshProjectionLimits::default())?
         else {
             return Ok(outcome);
         };
+        #[cfg(test)]
+        drop(profile_project);
         let draft = projected.draft();
         outcome.plan = summarize(&draft.title, &draft.read_preconditions, &draft.operations);
         if self.options.dry_run {
             return Ok(outcome);
         }
+        #[cfg(test)]
+        let profile_prepare = super::refresh_path_profile::phase("prepare");
         let writer = self.writer()?;
         catalog.guard_current(None)?;
         // The sealed projection retains its pinned base. Preparation refuses a
         // concurrent publication rather than replanning an already reviewed draft.
         let mut session = IndexedRefreshSession::prepare_projected(catalog, &writer, projected)?;
+        #[cfg(test)]
+        drop(profile_prepare);
         let change = session.proof().change.clone();
         outcome.change = Some(change.clone());
         if self.options.stage_only {
             outcome.status = Some(ChangeStatus::Prepared);
             return Ok(outcome);
         }
+        #[cfg(test)]
+        let profile_apply = super::refresh_path_profile::phase("apply_including_publish");
         let report = self
             .engine()?
             .apply_indexed_refresh(&writer, &mut session)
             .map_err(|error| retained_error(error, &change))?;
+        #[cfg(test)]
+        drop(profile_apply);
         outcome.status = Some(report.status);
         outcome.snapshot = report.snapshot;
         Ok(outcome)

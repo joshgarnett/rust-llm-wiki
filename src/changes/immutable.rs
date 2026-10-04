@@ -755,9 +755,17 @@ fn walk(
     found: &mut BTreeSet<VaultRelativePath>,
 ) -> Result<()> {
     let absolute = engine.fs.root().resolve(directory)?;
+    #[cfg(test)]
+    let mut profile = crate::vault::paths::profile::enumeration(
+        &absolute,
+        engine.fs.root().path(),
+        crate::vault::paths::profile::Kind::Immutable,
+    );
     for entry in
         fs::read_dir(absolute).map_err(|e| WikiError::new(ErrorCode::Internal, e.to_string()))?
     {
+        #[cfg(test)]
+        profile.entry();
         let entry = entry.map_err(|e| WikiError::new(ErrorCode::Internal, e.to_string()))?;
         let name = entry
             .file_name()
