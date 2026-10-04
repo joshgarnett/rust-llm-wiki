@@ -329,6 +329,59 @@ still grow with their respective histories. These results do not qualify 100k
 capacity, authored fanout, all query modes, cold-cache tails or unseen semantic
 completeness. See the [published-path storage contract](technical/storage.md).
 
+### General lexical and snapshot-context diagnostic
+
+The [general-query runner](../scripts/benchmark_general_queries.py) copies only
+canonical files from a verified closed seed into a new owned fixture, then uses
+the real normalized builder and public CLI. It adds 133 fixed authored records
+and executes 14 query cases five times each: identity/title/alias, Unicode,
+popular and rare terms, selective filters, long metadata, stale identity, and
+single- and multisource document context. A changed-source workflow then checks
+immediate discovery, snapshot context and exact indexed-evidence citations.
+Fixture construction is not public import/rebuild qualification.
+
+The implementation at `19e8eb4` returned all expected results in **70/70 trials
+at each tier**. Both refresh workflows passed, as did canonical read-only
+bindings, original-seed verification and binary/script pins. The frozen
+per-case nearest-rank p95 target was five seconds; with five samples this is
+the maximum. The **1k diagnostic passed; the 10k diagnostic failed latency**.
+
+| Sources | Worst query | Changed refresh | First search after refresh | Snapshot / indexed context |
+| --- | ---: | ---: | ---: | ---: |
+| 1,000 | 1,615 ms | 893 ms | 27 ms | 30 / 45 ms |
+| 10,000 | **7,367 ms (failed)** | 979 ms | 29 ms | 30 / 46 ms |
+
+At 10k, the first Unicode-alias query caused the failure; its five-call median
+was 726 ms. The query also contains a term present in every captured source,
+so the FTS candidate leg scores a broad match population. The failure is retained;
+subsequent faster calls do not turn it into a pass. Query native peak RSS was
+51.7 MiB at 1k and 51.4 MiB at 10k. Runs used fresh CLI processes after fixture
+construction and hashing, with uncontrolled OS cache state and all first calls
+included. They do not establish cold-cache performance or semantic completeness.
+
+Run the finite diagnostic with Python `blake3` installed and explicitly pinned
+CLI and unit-test binaries built from the same source:
+
+```sh
+python3 scripts/benchmark_general_queries.py \
+  --binary /absolute/account/bin/lwiki \
+  --binary-sha256 CLI_SHA256 \
+  --unit-binary /absolute/account/bin/unit_tests \
+  --unit-sha256 UNIT_SHA256 \
+  --account /absolute/account \
+  --preseed /absolute/account/export/fixture \
+  --workdir /absolute/account/new-general-query-run \
+  --tier 1000
+```
+
+Use a new work directory for each run. The runner retains raw output and failed
+reports, caps combined account allocation at 40 GiB, requires 32 GiB free, and
+limits each query to 15 seconds and 1 GiB native RSS. Query timing excludes
+inventory scans. The two measured runs used runner SHA-256
+`cb93e29d76fb6056a2bb15fac10c1e0e68cdbda15a6db1e6298287cfc23de67d`.
+The 10k latency failure requires diagnosis and a fresh fixed-version test before
+this package can receive performance approval.
+
 ### Acceptance evidence
 
 Freeze the binary/tree, protocol, generator/seed, manifests, expected outcomes,
