@@ -283,6 +283,16 @@ impl VaultRoot {
     }
     /// Compare every path prefix against plans and existing siblings, using full Unicode folding.
     pub fn validate_portable_paths(&self, paths: &[VaultRelativePath]) -> Result<()> {
+        self.validate_refresh_paths(paths, None)
+    }
+    pub(crate) fn validate_refresh_paths(
+        &self,
+        paths: &[VaultRelativePath],
+        scope: Option<&crate::catalog::source_refresh::PublishedRefreshPaths>,
+    ) -> Result<()> {
+        if let Some(scope) = scope {
+            scope.require_root(self)?;
+        }
         #[cfg(test)]
         let _profile = profile::portable();
         let mut planned = BTreeMap::<String, String>::new();
@@ -292,8 +302,12 @@ impl VaultRoot {
             if !targets.insert(relative.as_str()) {
                 return Err(WikiError::invalid("duplicate planned target"));
             }
+            // Relocated paths retain the generic policy. Sources keep their
+            // physical path under both storage layouts; logical alias guards
+            // still run, with the same frozen published-prefix exemption.
+            let scope = scope.filter(|scope| scope.allows(relative));
             if retained {
-                self.validate_retained_logical_siblings(relative)?;
+                self.validate_retained_logical_siblings(relative, scope)?;
             }
             self.resolve(relative)?;
             let physical = crate::storage::layout::physical_relative(self, relative)?;
@@ -310,7 +324,7 @@ impl VaultRoot {
                 {
                     return Err(WikiError::invalid("case-folded planned path collision"));
                 }
-                if parent.is_dir() {
+                if !scope.is_some_and(|scope| scope.published(&prefix)) && parent.is_dir() {
                     let folded = UniCase::unicode(component).to_folded_case();
                     #[cfg(test)]
                     let mut profile =
@@ -344,7 +358,11 @@ impl VaultRoot {
     }
     /// Relocation must not erase portable logical siblings. Reserve only fixed
     /// namespace components; run IDs retain their exact spelling and identity.
-    fn validate_retained_logical_siblings(&self, relative: &VaultRelativePath) -> Result<()> {
+    fn validate_retained_logical_siblings(
+        &self,
+        relative: &VaultRelativePath,
+        scope: Option<&crate::catalog::source_refresh::PublishedRefreshPaths>,
+    ) -> Result<()> {
         let mut parent = String::new();
         for component in relative.as_str().split('/') {
             let reserved: &[&str] = match parent.as_str() {
@@ -362,6 +380,15 @@ impl VaultRoot {
                 .any(|name| *name != component && *name == folded)
             {
                 return Err(WikiError::invalid("case-folded managed namespace alias"));
+            }
+            let prefix = if parent.is_empty() {
+                component.to_owned()
+            } else {
+                format!("{parent}/{component}")
+            };
+            if scope.is_some_and(|scope| scope.published(&prefix)) {
+                parent = prefix;
+                continue;
             }
             let visible = if parent.is_empty() {
                 self.path.clone()

@@ -1,6 +1,6 @@
 # Large-vault architecture and validation
 
-Status: architecture plan with an initial [indexed-context implementation](indexed-context.md), not a supported-capacity claim. The initial target is
+Status: incremental implementation with an [indexed-context path](indexed-context.md), not a supported-capacity claim. The initial target is
 100,000 distinct current documents containing approximately 10 GB of UTF-8 text.
 Count original copies, retained revisions, operational records, retrieval units,
 vectors and index files separately. A 10,000-document / 1 GB tier supplies the
@@ -11,6 +11,28 @@ The existing [storage](technical/storage.md) and
 replacement explicitly changes them. This work must preserve canonical Markdown,
 immutable source revisions, rebuildable local indexes, exact citations, offline
 operation, bounded remote embedding calls and recovery/accounting invariants.
+
+## Current implementation boundary
+
+An explicitly selected normalized catalog supports bounded captured-source
+context, cached `read --no-sync`, and indexed source refresh with staged apply and
+recovery. Publication stores per-document rows and updates affected rows in one
+transaction. Ordinary normalized queries consult a small publication record;
+they do not audit completed operation history. Selected evidence still requires
+verification before it becomes a citation.
+
+General lexical, literal, semantic, hybrid and graph queries, synchronized reads,
+authored mutations and public default activation are not fully migrated. These
+are required integration work, not optional omissions. Large-vault capacity and
+unseen context completeness remain unqualified. See the
+[validation protocol and measured results](testing-large-vaults.md) for actual
+command timings and their limits.
+
+## Implementation checkpoints
+
+The following records describe successive checkpoints. Statements about pending
+work within an earlier checkpoint apply to that checkpoint; the current boundary
+above and later connected results take precedence.
 
 The current storage checkpoint includes a streaming normalized builder, leased
 catalog selection and direct bounded captured-source queries. The production
@@ -190,8 +212,20 @@ normalized catalog by default or migrate the remaining query modes.
 terminal results before opening old payloads or a superseded catalog epoch.
 `recover` remains an explicit maintenance command that enumerates complete
 history and staged proposals. Ordinary refresh and query do not invoke that
-enumeration. Portable-path validation still examines sibling directories; its
-end-to-end scaling cost remains to be measured and addressed.
+enumeration. Admitted source refreshes now follow hash-bound published logical
+paths without enumerating unrelated source siblings. The private path scope is
+bound to the vault and the exact retained before/after dependencies, and survives
+staging and replay without treating newly created paths as previously published.
+New revision and asset names still undergo physical case-folded collision checks;
+selected-file containment, symlink, bytes, ownership and immutable-tree checks
+remain. This applies to unchanged source paths in both storage layouts. Generic
+writers and relocated operational paths retain their existing validation.
+
+This does not certify the absence of external aliases of old path components.
+The [storage contract](technical/storage.md) defines that narrow distinction.
+Selected-source revision history and generic operation-directory validation can
+still grow with their respective histories. Removing source-root enumeration
+does not establish history-independent updates or full-tier performance.
 
 The connected CLI gate passed 458 unit tests and 124 integration tests, with six
 ignored and the two unchanged ledger matrices excluded. Six real-executable

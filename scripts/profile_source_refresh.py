@@ -19,7 +19,11 @@ p.add_argument('--preseed', type=Path, required=True)
 p.add_argument('--account-root', type=Path, required=True)
 p.add_argument('--workdir', type=Path, required=True)
 p.add_argument('--tier', choices=['tiny','1000','10000'], required=True)
+p.add_argument('--max-disk-gib', type=int, default=20,
+               help='Combined disposable account ceiling, 1..100 GiB (default 20)')
 a = p.parse_args()
+if not 1 <= a.max_disk_gib <= 100:
+    p.error('disk ceiling must be 1..100 GiB')
 a.account_root = a.account_root.resolve(strict=True)
 a.preseed = a.preseed.resolve(strict=True)
 a.binary = a.binary.resolve(strict=True)
@@ -35,14 +39,14 @@ if a.workdir.is_relative_to(a.preseed) or a.preseed.is_relative_to(a.workdir):
 if not re.fullmatch('[0-9a-f]{64}', a.sha256) or bm.digest(a.binary) != a.sha256:
     p.error('executable pin differs')
 a.seed, a.bytes_per_source, a.history_revisions = 731, 100000, 0
-a.run_seconds, a.max_disk_gib = 1800, 20
+a.run_seconds = 1800
 a.workdir.mkdir(mode=0o700)
 runner = bm.Runner(a, {str(a.binary): a.sha256})
 report = dict(version=1, status='incomplete', binary_sha256=a.sha256,
               supervisor_sha256=bm.digest(Path(__file__)),
               imported_harness_sha256=bm.digest(ROOT/'scripts/benchmark_source_refresh.py'),
               limits=dict(whole_seconds=1800, child_seconds=120, rss_bytes=8*bm.GIB,
-                          allocated_bytes=20*bm.GIB, free_floor_bytes=32*bm.GIB, output_bytes=4*1024*1024),
+                          allocated_bytes=a.max_disk_gib*bm.GIB, free_floor_bytes=32*bm.GIB, output_bytes=4*1024*1024),
               scope='Instrumented direct app calls; excludes CLI argument/config work. One sample per case; setup and cache verification warm filesystem. Sampled resource enforcement can overshoot. Supervisor RSS is outside child tree. No live provider or capacity claim.')
 proc = None
 child_timer = None
@@ -60,7 +64,7 @@ try:
     seed_allocated = bm.inventory(a.preseed/'vault')['allocated_bytes']
     forecast = seed_allocated + 512*1024*1024
     resource, _ = runner.check_resources()
-    if resource['allocated_bytes'] + forecast > 20*bm.GIB or resource['free_bytes'] - forecast < 32*bm.GIB:
+    if resource['allocated_bytes'] + forecast > a.max_disk_gib*bm.GIB or resource['free_bytes'] - forecast < 32*bm.GIB:
         raise ValueError('clone forecast exceeds disk admission')
     clone = a.workdir/'clone'
     clone.mkdir()

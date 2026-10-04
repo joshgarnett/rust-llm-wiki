@@ -147,6 +147,7 @@ pub struct VaultFs {
     root: VaultRoot,
     io: Arc<dyn DurableIo>,
     storage_recovery: bool,
+    published_refresh_paths: Option<crate::catalog::source_refresh::PublishedRefreshPaths>,
 }
 pub struct StagedFile {
     path: PathBuf,
@@ -177,7 +178,21 @@ impl VaultFs {
             root,
             io,
             storage_recovery: false,
+            published_refresh_paths: None,
         }
+    }
+    pub(crate) fn with_published_refresh_paths(
+        &self,
+        paths: crate::catalog::source_refresh::PublishedRefreshPaths,
+    ) -> Result<Self> {
+        paths.require_root(&self.root)?;
+        let mut scoped = self.clone();
+        scoped.published_refresh_paths = Some(paths);
+        Ok(scoped)
+    }
+    pub(crate) fn validate_paths(&self, paths: &[VaultRelativePath]) -> Result<()> {
+        self.root
+            .validate_refresh_paths(paths, self.published_refresh_paths.as_ref())
     }
     pub fn root(&self) -> &VaultRoot {
         &self.root
@@ -191,6 +206,7 @@ impl VaultFs {
             root: self.root.clone(),
             io: Arc::clone(&self.io),
             storage_recovery: true,
+            published_refresh_paths: None,
         }
     }
     pub(crate) fn require_storage_ready(&self) -> Result<()> {
@@ -227,8 +243,7 @@ impl VaultFs {
         permit.require_root(&self.root)?;
         self.require_storage_ready()?;
         Self::require_operational(target)?;
-        self.root
-            .validate_portable_paths(std::slice::from_ref(target))?;
+        self.validate_paths(std::slice::from_ref(target))?;
         let path = self.root.resolve(target)?;
         let mut file = self
             .io
@@ -315,8 +330,7 @@ impl VaultFs {
     ) -> Result<DirectorySync> {
         permit.require_root(&self.root)?;
         self.require_storage_ready()?;
-        self.root
-            .validate_portable_paths(std::slice::from_ref(directory))?;
+        self.validate_paths(std::slice::from_ref(directory))?;
         let directory = crate::storage::layout::physical_relative(&self.root, directory)?;
         let mut relative = String::new();
         let mut support = DirectorySync::Supported;
@@ -356,8 +370,7 @@ impl VaultFs {
     ) -> Result<StagedFile> {
         permit.require_root(&self.root)?;
         self.require_storage_ready()?;
-        self.root
-            .validate_portable_paths(std::slice::from_ref(target))?;
+        self.validate_paths(std::slice::from_ref(target))?;
         let destination = self.root.resolve(target)?;
         let parent = destination.parent().expect("managed file has parent");
         // Logical operational files can have a managed physical parent different
@@ -432,8 +445,7 @@ impl VaultFs {
         if staged.root != self.root {
             return Err(WikiError::invalid("stage belongs to another vault"));
         }
-        self.root
-            .validate_portable_paths(std::slice::from_ref(&staged.target))?;
+        self.validate_paths(std::slice::from_ref(&staged.target))?;
         let destination = self.root.resolve(&staged.target)?;
         // Stage is public by path for journal intent; detect accidental tampering.
         let metadata =
@@ -468,8 +480,7 @@ impl VaultFs {
     ) -> Result<DirectorySync> {
         permit.require_root(&self.root)?;
         self.require_storage_ready()?;
-        self.root
-            .validate_portable_paths(std::slice::from_ref(target))?;
+        self.validate_paths(std::slice::from_ref(target))?;
         let destination = self.root.resolve(target)?;
         self.guard(target, expected)?;
         if expected == &ExpectedState::Absent {

@@ -253,7 +253,8 @@ python3 scripts/profile_source_refresh.py \
 
 Use a two-source export with `--tier tiny` first, then independent new output
 directories for 1k and 10k. The runner requires Python `blake3`, caps the combined
-account at 20 GiB, retains a 32 GiB free-space floor, and bounds setup plus execution
+account at 20 GiB by default (`--max-disk-gib` can explicitly raise it, up to the
+100 GiB experiment ceiling), retains a 32 GiB free-space floor, and bounds setup plus execution
 to 30 minutes and the child to 120 seconds/8 GiB RSS. It preserves all failures and
 qualifies phase timings when its account inventories overlap the child. This
 direct application diagnostic excludes CLI argument/configuration overhead and
@@ -274,6 +275,59 @@ as clean attribution evidence. The independent critic accepted the counts as
 sufficient evidence to remove the unnecessary source-directory enumeration; the
 post-change CLI benchmark must establish the resulting latency. This profiling
 checkpoint itself does not change production path validation.
+
+The subsequent published-path optimization removes that source-root census for
+admitted source refreshes while preserving checks for new namespace components
+and selected files. Both storage layouts passed immediate and staged-apply tests.
+The regression gate passed 475 unit and 105 filesystem, recovery, offline CLI and
+source-evidence integration tests: 580 passed, nine ignored, with the two unchanged
+ledger matrices excluded. Invalid-UTF-8 filename coverage is Linux-only; native
+macOS coverage uses representable folded spelling and real collision cases.
+
+The candidate CLI (SHA-256
+`a8e9399968397e0f8a0136cf5e0b5b2c560bae85d06b9a6774d0f04a8b314362`)
+passed all 15 refresh/query pairs at each tier using the original closed fixtures
+and five-trial protocol. The baseline below is the earlier recorded run, not a
+contemporaneous randomized comparison. Values are median / maximum milliseconds:
+
+| Sources | Update | Baseline | Candidate |
+|---:|---|---:|---:|
+| 1,000 | No-op | 36 / 39 | 40 / 49 |
+| 1,000 | Title-only | 403 / 430 | 364 / 388 |
+| 1,000 | Changed content | 844 / 891 | 785 / 917 |
+| 10,000 | No-op | 41 / 43 | 83 / 90 |
+| 10,000 | Title-only | 692 / 699 | 410 / 420 |
+| 10,000 | Changed content | 1,604 / 1,722 | 879 / 909 |
+
+All candidate prospective targets passed, including changed-content p95 at most
+one second; with five samples p95 equals the maximum. Context maxima increased
+from 52 to 59 ms at 1k and from 54 to 106 ms at 10k. No inventory scan overlapped
+the timed CLI commands. Candidate native refresh/context RSS peaked at
+35.6/28.0 MB for 1k and 37.3/28.2 MB for 10k.
+
+To investigate the no-op/context increase, a separate 20-command check alternated
+both pinned binaries on the same completed 10k candidate vault, with identical
+input, epoch and exact returned context. Five paired samples per mode, without
+concurrent process polling or inventory, gave context medians of 46.19/46.20 ms
+and no-op medians of 37.44/35.74 ms (baseline/candidate). Context maxima were
+98.66/83.90 ms. Selected canonical and authority bytes remained unchanged. This
+did not reproduce a sustained binary regression; it does not establish the cause
+of the earlier difference or erase those measurements. Its different monitoring
+protocol is suitable for that paired check, not substitution into the table.
+
+Independent candidate counter runs at tiny, 1k and 10k all passed revision,
+payload, epoch and citation checks with **zero source-root directory opens or
+entries** for all three update cases. The larger profiler runs overlapped account
+inventories and remain count evidence only. The complete retained experiment
+account used 29.01 GB, within an explicitly raised 32 GiB ceiling and the unchanged
+32 GiB free-space floor. Whole CLI benchmark runs took 423 and 633 seconds,
+including untimed fixture verification and account inventories; these durations
+are not document-update latency.
+
+Selected-source revision allocation and generic operational-directory checks can
+still grow with their respective histories. These results do not qualify 100k
+capacity, authored fanout, all query modes, cold-cache tails or unseen semantic
+completeness. See the [published-path storage contract](technical/storage.md).
 
 ### Acceptance evidence
 

@@ -471,6 +471,18 @@ impl ChangeEngine {
         writer: &WriterPermit,
         session: &mut IndexedRefreshSession<'_>,
     ) -> Result<ApplyReport> {
+        let scoped = Self {
+            fs: session.scoped_fs(&self.fs)?,
+            vault_id: self.vault_id.clone(),
+        };
+        scoped.apply_indexed_refresh_scoped(writer, session)
+    }
+
+    fn apply_indexed_refresh_scoped(
+        &self,
+        writer: &WriterPermit,
+        session: &mut IndexedRefreshSession<'_>,
+    ) -> Result<ApplyReport> {
         writer.require_root(self.fs.root())?;
         self.require_binding()?;
         let proof = session.proof().clone();

@@ -42,6 +42,20 @@ Newtypes validate construction. All hashes use `blake3:<64 lowercase hex digits>
 
 Vault paths use relative slash-separated components; reject absolute paths, `..`, NUL, and platform-reserved names. Managed writes reject symlink components and recheck destination containment. Initial scans skip symlinks, `.wiki`, `.git`, generated `index.md`, and changeset payload copies. Revision payloads never supply managed envelopes: captured frontmatter cannot introduce canonical IDs. Index normalized text through its revision owner; do not index original binaries. Case-folded path collisions are errors for portable writes, even on a case-sensitive host. Hostile concurrent symlink replacement is outside the initial local-vault concurrency model.
 
+An admitted normalized source refresh follows its published logical paths without
+repeating a sibling census for existing path prefixes. The exemption is bound to
+one vault and the exact selected before/after paths; only prefixes of hash-bound
+before-images qualify as existing. Retained replay uses the same frozen scope,
+so a partially created revision never acquires an exemption through filesystem
+existence. New namespace components still require physical case-folded collision
+checks, and planned path collisions remain errors. Containment, symlink and type
+checks, selected identity and expected bytes, immutable-tree membership and
+publication guards remain mandatory. Unrelated targets, relocated operational
+paths and generic writers retain ordinary portability validation. Refresh does
+not certify the physical spelling or absence of externally introduced aliases
+of already published ancestors; global namespace inspection belongs to explicit
+maintenance, not every document update.
+
 ## Parsing and references
 
 Parse UTF-8 bytes without line-ending or Unicode normalization. Preserve an optional initial BOM. Frontmatter exists only when the first logical line after that BOM is exactly `---`; terminate at the next exact `---` line, accepting LF or CRLF. An unterminated envelope is invalid, while all text remains available to literal search. An adopted envelope must be a YAML mapping. Reject duplicate keys at every depth, aliases, anchors, merge keys, and explicit YAML tags for structured operations; bound envelope size and nesting. Known fields use the schema's exact types, with no string/number/date coercion.

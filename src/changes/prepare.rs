@@ -803,7 +803,7 @@ fn state(bytes: Option<&[u8]>) -> ExpectedState {
 }
 fn validate_targets(fs: &VaultFs, targets: &[VaultRelativePath]) -> Result<()> {
     validate_retained_targets(targets)?;
-    fs.root().validate_portable_paths(targets)
+    fs.validate_paths(targets)
 }
 fn validate_retained_targets(targets: &[VaultRelativePath]) -> Result<()> {
     for path in targets {

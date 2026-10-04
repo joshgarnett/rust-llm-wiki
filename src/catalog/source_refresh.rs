@@ -20,13 +20,13 @@ use crate::{
         prepare::{MAX_PAYLOAD_BYTES, read_bounded, strict_json},
     },
     domain::{Blake3Hash, ErrorCode, ReadSnapshot, RecordId, Result, VaultRelativePath, WikiError},
-    vault::{ExpectedState, WriterPermit},
+    vault::{ExpectedState, VaultFs, VaultRoot, WriterPermit},
 };
 use rusqlite::{Transaction, TransactionBehavior, limits::Limit, params};
 use serde::{Deserialize, Serialize};
 use std::{
     cell::Cell,
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     time::{Duration, Instant},
 };
 
@@ -45,6 +45,51 @@ struct RetainedDelta {
     before: Vec<ReadDependency>,
     after: Vec<ReadDependency>,
     rows: CatalogDelta,
+}
+
+/// Narrow path authority from semantic admission or its exact retained replay.
+/// Existing prefixes are frozen from before-images, never inferred from live
+/// existence: partially applied new allocations still need collision discovery.
+#[derive(Clone)]
+pub(crate) struct PublishedRefreshPaths {
+    root: VaultRoot,
+    allowed: BTreeSet<String>,
+    published: BTreeSet<String>,
+}
+impl PublishedRefreshPaths {
+    fn admitted(root: &VaultRoot, before: &[ReadDependency], after: &[ReadDependency]) -> Self {
+        fn prefixes(path: &VaultRelativePath) -> impl Iterator<Item = String> + '_ {
+            path.as_str()
+                .match_indices('/')
+                .map(|(end, _)| path.as_str()[..end].to_owned())
+                .chain(std::iter::once(path.as_str().to_owned()))
+        }
+        Self {
+            root: root.clone(),
+            allowed: before
+                .iter()
+                .chain(after)
+                .flat_map(|dep| prefixes(&dep.path))
+                .collect(),
+            published: before
+                .iter()
+                .filter(|dep| matches!(dep.expected, ExpectedState::Hash(_)))
+                .flat_map(|dep| prefixes(&dep.path))
+                .collect(),
+        }
+    }
+    pub(crate) fn require_root(&self, root: &VaultRoot) -> Result<()> {
+        if &self.root != root {
+            return Err(recovery("published refresh paths belong to another vault"));
+        }
+        Ok(())
+    }
+    pub(crate) fn allows(&self, path: &VaultRelativePath) -> bool {
+        self.allowed.contains(path.as_str()) && crate::storage::layout::managed_path(path).is_none()
+    }
+    pub(crate) fn published(&self, prefix: &str) -> bool {
+        self.published.contains(prefix)
+    }
 }
 
 pub(crate) struct IndexedRefreshSession<'a> {
@@ -201,7 +246,8 @@ impl<'a> IndexedRefreshSession<'a> {
             .delta
             .require_layout(QueryCatalog::connection(&query))?;
         drop(query);
-        let engine = ChangeEngine::new(catalog.fs.clone())?;
+        let paths = PublishedRefreshPaths::admitted(catalog.fs.root(), &parts.before, &parts.after);
+        let engine = ChangeEngine::new(catalog.fs.with_published_refresh_paths(paths)?)?;
         let change = engine.prepare(writer, parts.draft)?.prepared;
         let retained_change = change.clone();
         let result: Result<Self> = (|| {
@@ -540,6 +586,22 @@ impl<'a> IndexedRefreshSession<'a> {
         Ok(session)
     }
 
+    /// Only a successfully opened production replay may recover this scope.
+    pub(crate) fn scoped_fs(&self, fs: &VaultFs) -> Result<VaultFs> {
+        if fs.root() != self.catalog.fs.root() {
+            return Err(recovery("refresh session belongs to another vault"));
+        }
+        if self.delta.version != DELTA_VERSION {
+            return Ok(fs.clone());
+        }
+        self.retained()?;
+        fs.with_published_refresh_paths(PublishedRefreshPaths::admitted(
+            self.catalog.fs.root(),
+            &self.proof.before,
+            &self.proof.after,
+        ))
+    }
+
     pub(crate) fn proof(&self) -> &IndexedRefreshProof {
         &self.proof
     }
@@ -869,6 +931,87 @@ fn configure_delta(connection: &rusqlite::Connection) -> Result<()> {
 mod tests {
     use super::*;
     use crate::vault::{VaultFs, VaultRoot};
+
+    #[test]
+    fn published_path_scope_is_root_bound_and_new_components_remain_portable() {
+        let first = tempfile::tempdir().unwrap();
+        let second = tempfile::tempdir().unwrap();
+        for directory in [&first, &second] {
+            std::fs::write(directory.path().join("WIKI.md"), "---\nwiki_schema: '1'\nwiki_id: vault_paths\nwiki_kind: vault\ntitle: Paths\n---\n").unwrap();
+        }
+        let root = VaultRoot::explicit(first.path()).unwrap();
+        let original = VaultFs::new(root.clone());
+        let selected = VaultRelativePath::new("sources/source_selected/source.md").unwrap();
+        let new_asset =
+            VaultRelativePath::new("sources/source_selected/revisions/rev_new/content.md").unwrap();
+        let before = vec![ReadDependency {
+            path: selected.clone(),
+            expected: ExpectedState::Hash(Blake3Hash::digest(b"selected")),
+        }];
+        let after = vec![ReadDependency {
+            path: new_asset.clone(),
+            expected: ExpectedState::Hash(Blake3Hash::digest(b"asset")),
+        }];
+        let scope = PublishedRefreshPaths::admitted(&root, &before, &after);
+        assert!(
+            VaultFs::new(VaultRoot::explicit(second.path()).unwrap())
+                .with_published_refresh_paths(scope.clone())
+                .is_err()
+        );
+        let scoped = original.with_published_refresh_paths(scope).unwrap();
+        std::fs::create_dir_all(
+            first
+                .path()
+                .join("sources/source_selected/revisions/rev_new"),
+        )
+        .unwrap();
+        std::fs::write(first.path().join(selected.as_str()), b"selected").unwrap();
+        std::fs::write(
+            first
+                .path()
+                .join("sources/source_selected/revisions/rev_new/CONTENT.md"),
+            b"collision",
+        )
+        .unwrap();
+        assert!(
+            scoped
+                .validate_paths(std::slice::from_ref(&new_asset))
+                .is_err()
+        );
+        // Even though the new directory exists now, its spelling was never a
+        // published before-prefix. A replay must still discover its siblings.
+        std::fs::remove_file(
+            first
+                .path()
+                .join("sources/source_selected/revisions/rev_new/CONTENT.md"),
+        )
+        .unwrap();
+        std::fs::rename(
+            first
+                .path()
+                .join("sources/source_selected/revisions/rev_new"),
+            first
+                .path()
+                .join("sources/source_selected/revisions/REV_NEW"),
+        )
+        .unwrap();
+        assert!(
+            scoped
+                .validate_paths(std::slice::from_ref(&new_asset))
+                .is_err()
+        );
+        let unrelated = VaultRelativePath::new("sources/source_other/source.md").unwrap();
+        std::fs::create_dir(first.path().join("sources/SOURCE_OTHER")).unwrap();
+        assert!(scoped.validate_paths(&[unrelated]).is_err());
+        assert!(
+            scoped
+                .validate_paths(&[
+                    selected.clone(),
+                    VaultRelativePath::new("sources/source_selected/SOURCE.md").unwrap()
+                ])
+                .is_err()
+        );
+    }
 
     #[test]
     fn repeated_selected_verification_shares_one_byte_allowance() {

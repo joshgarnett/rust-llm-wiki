@@ -991,3 +991,255 @@ fn generated_revision_admission_rejects_injected_graph_metadata_and_body() {
         );
     }
 }
+
+#[test]
+fn published_refresh_paths_keep_sources_census_zero_for_fresh_and_retained_apply() {
+    use crate::vault::paths::profile;
+    for retained_layout in [false, true] {
+        for staged in [false, true] {
+            let fixture = Fixture::with_setup(false, |fixture| {
+                if retained_layout {
+                    crate::storage::cleanup(
+                        &fixture.fs,
+                        &fixture.writer,
+                        &crate::storage::StorageOptions::default(),
+                    )
+                    .unwrap();
+                    assert!(crate::storage::layout::active(fixture.fs.root()).unwrap());
+                }
+            });
+            for title_only in [true, false] {
+                let request = Fixture::request(if title_only {
+                    b"first capture quote"
+                } else {
+                    b"next captured payload"
+                });
+                let (reader, plan) = fixture.plan(request, Some("Published logical title"));
+                let projected = project_refresh(
+                    &fixture.fs,
+                    &reader,
+                    plan,
+                    &RefreshProjectionLimits::default(),
+                )
+                .unwrap()
+                .unwrap();
+                profile::begin();
+                let mut session = IndexedRefreshSession::prepare_projected(
+                    &fixture.catalog,
+                    &fixture.writer,
+                    projected,
+                )
+                .unwrap();
+                if staged {
+                    let proof = session.proof().clone();
+                    drop(session);
+                    session =
+                        IndexedRefreshSession::resume(&fixture.catalog, &fixture.writer, proof)
+                            .unwrap();
+                }
+                let report = ChangeEngine::new(fixture.fs.clone())
+                    .unwrap()
+                    .apply_indexed_refresh(&fixture.writer, &mut session)
+                    .unwrap();
+                let counts = profile::finish();
+                assert_eq!(report.status, ChangeStatus::Committed);
+                for name in ["physical:sources_root", "logical:sources_root"] {
+                    assert_eq!(
+                        counts.enumerations.get(name).map_or(0, |count| count.opens),
+                        0,
+                        "{name}: retained_layout={retained_layout}, staged={staged}, title_only={title_only}"
+                    );
+                }
+                drop(session);
+                drop(reader);
+                fixture.oracle();
+            }
+        }
+    }
+}
+
+// Linux fixture filesystems support byte names. APFS rejects this fixture at
+// creation; its supported spelling-alias case is exercised separately below.
+#[cfg(target_os = "linux")]
+#[test]
+fn published_refresh_paths_ignore_foreign_non_utf8_sibling_but_generic_validation_refuses() {
+    use std::os::unix::ffi::OsStringExt;
+    let fixture = Fixture::new(false);
+    let foreign = fixture
+        .fs
+        .root()
+        .path()
+        .join("sources")
+        .join(std::ffi::OsString::from_vec(vec![0xff]));
+    fs::create_dir(&foreign).unwrap();
+    let target = path(&format!("sources/{}/source.md", fixture.source));
+    assert!(
+        fixture
+            .fs
+            .root()
+            .validate_portable_paths(std::slice::from_ref(&target))
+            .is_err()
+    );
+    fixture.apply(
+        Fixture::request(b"first capture quote"),
+        Some("Selected update succeeds"),
+    );
+    fixture.apply(Fixture::request(b"changed selected payload"), None);
+    fs::remove_dir(foreign).unwrap();
+    fixture.oracle();
+}
+
+#[test]
+fn published_refresh_paths_preserve_selected_and_immutable_guards() {
+    for failure in [
+        "selected_bytes",
+        "payload",
+        "extra_member",
+        "revision_collision",
+        "asset_collision",
+        "epoch",
+    ] {
+        let fixture = Fixture::new(false);
+        let (reader, plan) = fixture.plan(Fixture::request(b"new captured payload"), None);
+        let projected = project_refresh(
+            &fixture.fs,
+            &reader,
+            plan,
+            &RefreshProjectionLimits::default(),
+        )
+        .unwrap()
+        .unwrap();
+        let engine = ChangeEngine::new(fixture.fs.clone()).unwrap();
+        let session =
+            IndexedRefreshSession::prepare_projected(&fixture.catalog, &fixture.writer, projected)
+                .unwrap();
+        let proof = session.proof().clone();
+        drop(session);
+        drop(reader);
+        let (manifest, _) = engine.load_manifest(&proof.change.change_id).unwrap();
+        let asset = manifest
+            .operations
+            .iter()
+            .find(|op| op.target.as_str().ends_with("/content.md"))
+            .unwrap();
+        let revision_root = asset.target.as_str().rsplit_once('/').unwrap().0;
+        match failure {
+            "selected_bytes" => fixture.write(
+                &format!("sources/{}/source.md", fixture.source),
+                b"changed externally",
+            ),
+            "payload" => {
+                let payload = asset.after_payload.as_ref().unwrap();
+                fixture.write(payload.path.as_str(), b"tampered retained bytes");
+            }
+            "extra_member" => fixture.write(
+                &format!("{revision_root}/extra.bin"),
+                b"foreign immutable member",
+            ),
+            "revision_collision" => {
+                let (parent, name) = revision_root.rsplit_once('/').unwrap();
+                fs::create_dir(
+                    fixture
+                        .fs
+                        .root()
+                        .path()
+                        .join(format!("{parent}/{}", name.to_uppercase())),
+                )
+                .unwrap();
+            }
+            "asset_collision" => fixture.write(
+                &format!("{revision_root}/CONTENT.md"),
+                b"foreign asset spelling",
+            ),
+            "epoch" => {
+                fixture.apply(
+                    Fixture::request(b"first capture quote"),
+                    Some("Different published epoch"),
+                );
+            }
+            _ => unreachable!(),
+        }
+        let refused = match IndexedRefreshSession::resume(&fixture.catalog, &fixture.writer, proof)
+        {
+            Err(_) => true,
+            Ok(mut session) => engine
+                .apply_indexed_refresh(&fixture.writer, &mut session)
+                .is_err(),
+        };
+        assert!(refused, "guard failed for {failure}");
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn published_refresh_paths_refuse_selected_symlink() {
+    let fixture = Fixture::new(false);
+    let (reader, plan) = fixture.plan(Fixture::request(b"first capture quote"), Some("New title"));
+    let projected = project_refresh(
+        &fixture.fs,
+        &reader,
+        plan,
+        &RefreshProjectionLimits::default(),
+    )
+    .unwrap()
+    .unwrap();
+    let mut session =
+        IndexedRefreshSession::prepare_projected(&fixture.catalog, &fixture.writer, projected)
+            .unwrap();
+    let target = fixture
+        .fs
+        .root()
+        .path()
+        .join(format!("sources/{}/source.md", fixture.source));
+    let saved = fixture.fs.root().path().join("saved-source.md");
+    fs::rename(&target, &saved).unwrap();
+    std::os::unix::fs::symlink(&saved, &target).unwrap();
+    assert!(
+        ChangeEngine::new(fixture.fs.clone())
+            .unwrap()
+            .apply_indexed_refresh(&fixture.writer, &mut session)
+            .is_err()
+    );
+}
+
+#[test]
+fn published_refresh_paths_accept_existing_logical_path_with_external_folded_spelling() {
+    let fixture = Fixture::new(false);
+    let parent = fixture.fs.root().path().join("sources");
+    let original = parent.join(fixture.source.as_str());
+    let foreign = parent.join(fixture.source.as_str().to_uppercase());
+    // A case-sensitive filesystem can retain both names. On APFS the second
+    // spelling aliases the selected directory; rename that physical spelling
+    // while retaining the published logical path and exact selected contents.
+    let separate_sibling = match fs::create_dir(&foreign) {
+        Ok(()) => true,
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+            fs::rename(&original, &foreign).unwrap();
+            assert!(
+                original.is_dir(),
+                "expected case-insensitive logical lookup"
+            );
+            false
+        }
+        Err(error) => panic!("create folded-spelling fixture: {error}"),
+    };
+    let target = path(&format!("sources/{}/source.md", fixture.source));
+    assert!(
+        fixture
+            .fs
+            .root()
+            .validate_portable_paths(std::slice::from_ref(&target))
+            .is_err()
+    );
+    fixture.apply(
+        Fixture::request(b"first capture quote"),
+        Some("Selected update succeeds"),
+    );
+    fixture.apply(Fixture::request(b"changed selected payload"), None);
+    if separate_sibling {
+        fs::remove_dir(foreign).unwrap();
+    } else {
+        fs::rename(foreign, original).unwrap();
+    }
+    fixture.oracle();
+}
