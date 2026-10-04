@@ -925,6 +925,8 @@ struct IntervalCoveragePool {
 struct CoverageDiagnostics {
     candidate_evaluations: usize,
     native_packet_calls: usize,
+    full_pool_prevalidation_calls: usize,
+    original_prepare_native_packet_calls: usize,
     trial_pack_calls: usize,
     exact_trial_output_bytes: u64,
     feasible_trials: usize,
@@ -1125,7 +1127,7 @@ fn coverage_native_packet(
     }
     result
 }
-fn coverage_deck(
+fn coverage_deck_exhaustive_validated(
     binding: &Value,
     pool: &IntervalCoveragePool,
     meter: &Meter,
@@ -1202,6 +1204,125 @@ fn coverage_deck(
     // full-pool exclusion count is separately explicit, never silently changed.
     stats.choices.push(json!({"stage":"deck_summary","full_pool":pool.candidates.len(),"selected":chosen.len(),"selection_omitted_candidates":pool.candidates.len()-chosen.len(),"F":pool.objective(&current)}));
     Ok(packet)
+}
+fn coverage_deck_ranked_validated(
+    binding: &Value,
+    pool: &IntervalCoveragePool,
+    meter: &Meter,
+    stats: &mut CoverageDiagnostics,
+) -> Result<SelectionPacket> {
+    let mut chosen = Vec::new();
+    let mut current = vec![0.0f64; pool.intervals.len()];
+    let mut owners = Vec::new();
+    for candidate in &pool.candidates {
+        if !owners.contains(&candidate.owner) {
+            owners.push(candidate.owner.clone());
+        }
+    }
+    // Exactly one owner round. Remaining slots are global, without owner quotas.
+    let floors = owners
+        .into_iter()
+        .map(Some)
+        .chain(std::iter::repeat_n(None, 80));
+    for owner in floors {
+        meter.check()?;
+        if chosen.len() == 80 {
+            break;
+        }
+        let mut ranked = Vec::new();
+        for index in 0..pool.candidates.len() {
+            if chosen.contains(&index)
+                || owner
+                    .as_ref()
+                    .is_some_and(|owner| owner != &pool.candidates[index].owner)
+            {
+                continue;
+            }
+            stats.candidate_evaluations += 1;
+            meter.check()?;
+            let gain = pool.gain(&current, index);
+            if gain <= 0.0 && owner.is_none() {
+                stats.zero_gain_candidates += 1;
+                continue;
+            }
+            ranked.push((index, gain));
+        }
+        ranked.sort_by(|&(left, left_gain), &(right, right_gain)| {
+            right_gain
+                .total_cmp(&left_gain)
+                .then_with(|| {
+                    pool.candidates[left]
+                        .ordinal
+                        .cmp(&pool.candidates[right].ordinal)
+                })
+                .then_with(|| pool.candidates[left].key.cmp(&pool.candidates[right].key))
+                .then_with(|| left.cmp(&right))
+        });
+        let mut best = None;
+        for (index, gain) in ranked {
+            let mut trial = chosen.clone();
+            trial.push(index);
+            let packet = coverage_native_packet(binding, pool, &trial, stats)?;
+            meter.check()?;
+            if packet.cards.len() != trial.len() {
+                stats.infeasible_trials += 1;
+                stats.trial(json!({"candidate":pool.candidates[index].card.id,"stage":"deck","status":"native_input_cap","gain":gain,"input_bytes":packet.input_bytes}));
+                continue;
+            }
+            stats.feasible_trials += 1;
+            best = Some((index, gain));
+            break;
+        }
+        let Some((index, gain)) = best else {
+            if owner.is_some() {
+                stats
+                    .choices
+                    .push(json!({"stage":"owner_floor","owner":owner,"status":"no_feasible_card"}));
+                continue;
+            }
+            break;
+        };
+        chosen.push(index);
+        pool.add(&mut current, index);
+        stats.choices.push(json!({"stage":"deck","id":pool.candidates[index].card.id,"owner_floor":owner.is_some(),"gain":gain,"F":pool.objective(&current)}));
+    }
+    let packet = coverage_native_packet(binding, pool, &chosen, stats)?;
+    assert_eq!(packet.cards.len(), chosen.len());
+    assert!(packet.candidate_count <= 80 && packet.input_bytes <= 130_048);
+    // Native omitted_candidates describes supplied selected cards only. The
+    // full-pool exclusion count is separately explicit, never silently changed.
+    stats.choices.push(json!({"stage":"deck_summary","full_pool":pool.candidates.len(),"selected":chosen.len(),"selection_omitted_candidates":pool.candidates.len()-chosen.len(),"F":pool.objective(&current)}));
+    Ok(packet)
+}
+// The shortcut has a checked full-pool boundary even for direct helper tests.
+// Prepare already validates every supplied card before truncation, but rebuilding
+// once here also checks the exact reconstructed pool and binding without relying
+// on a trace mutation convention. This extra native call is counted separately.
+fn coverage_deck_with_order(
+    binding: &Value,
+    pool: &IntervalCoveragePool,
+    meter: &Meter,
+    stats: &mut CoverageDiagnostics,
+    exhaustive: bool,
+) -> Result<SelectionPacket> {
+    meter.check()?;
+    stats.full_pool_prevalidation_calls += 1;
+    let all = (0..pool.candidates.len()).collect::<Vec<_>>();
+    coverage_native_packet(binding, pool, &all, stats)?;
+    meter.check()?;
+    if exhaustive {
+        coverage_deck_exhaustive_validated(binding, pool, meter, stats)
+    } else {
+        coverage_deck_ranked_validated(binding, pool, meter, stats)
+    }
+}
+fn coverage_deck(
+    binding: &Value,
+    pool: &IntervalCoveragePool,
+    meter: &Meter,
+    stats: &mut CoverageDiagnostics,
+) -> Result<SelectionPacket> {
+    coverage_deck_with_order(binding, pool, meter, stats, false)
 }
 struct CoverageTrialContext<'a> {
     reader: &'a dyn QueryCatalog,
@@ -1437,6 +1558,7 @@ fn coverage_context(
         )
     });
     let mut prepared = prepared?;
+    stats.original_prepare_native_packet_calls = 1;
     meter.check()?;
     if let Some(expected) = expected_pool {
         if trace_stage(&trace, "candidate_pool") != expected {
@@ -1771,6 +1893,284 @@ fn coverage_contained_native_skip_cannot_earn_a_weighted_vote() {
     proof.recheck(&fixture.catalog, &reader).unwrap();
 }
 
+// Synthetic native-boundary fixtures are not canonical evidence or quality
+// labels. Every complete pool is validated by the actual builder before either
+// evaluation order, including cards the native cap will omit.
+fn deck_cost_pool(count: usize) -> IntervalCoveragePool {
+    let fixture = Fixture::new();
+    let (_, trace) = context::with_candidate_ordering_trace(|| fixture.prepare());
+    let original = IntervalCoveragePool::from_trace(&trace);
+    let mut candidates = Vec::new();
+    let mut intervals = Vec::new();
+    for index in 0..count {
+        let mut candidate = original.candidates[0].clone();
+        candidate.card.id = format!("d{index:04}");
+        candidate.card.title = format!("Café 東京 \\\" {index:03}");
+        candidate.card.passage.text = "Café 東京 \\\"\n".into();
+        candidate.card.passage.span =
+            ByteSpan::new(0, candidate.card.passage.text.len() as u64).unwrap();
+        candidate.card.passage.locator.path = path(&format!("fixture/owner{index:03}.md"));
+        candidate.card.passage.citations.clear();
+        candidate.card.child_span = None;
+        candidate.card.rendered_bytes = candidate.card.passage.text.len() + 128;
+        candidate.lexical.span = candidate.card.passage.span;
+        candidate.coordinate = coverage_coordinate(&candidate.card.passage);
+        candidate.owner = format!("owner{}", index % 3);
+        candidate.ordinal = index;
+        candidate.key = format!("key{index:03}");
+        candidate.relevance = 1.0;
+        candidate.intervals = vec![index];
+        intervals.push(CoverageInterval {
+            coordinate: candidate.coordinate.clone(),
+            start: 0,
+            end: candidate.lexical.span.end(),
+        });
+        candidates.push(candidate);
+    }
+    IntervalCoveragePool {
+        candidates,
+        intervals,
+        term_weights: original.term_weights,
+    }
+}
+fn deck_cost_equivalent(
+    binding: &Value,
+    pool: &IntervalCoveragePool,
+) -> (SelectionPacket, CoverageDiagnostics) {
+    let mut budget = request().verification_budget;
+    budget.max_elapsed_ms = 5000;
+    let mut old = CoverageDiagnostics::default();
+    let previous =
+        coverage_deck_with_order(binding, pool, &Meter::new(&budget), &mut old, true).unwrap();
+    let mut new = CoverageDiagnostics::default();
+    let packet = coverage_deck(binding, pool, &Meter::new(&budget), &mut new).unwrap();
+    assert_eq!(
+        packet, previous,
+        "exact cards, task bytes, dictionary, commitments and counts"
+    );
+    assert_eq!(
+        new.choices, old.choices,
+        "ordered choices, objective and owner-floor trace"
+    );
+    assert_eq!(new.candidate_evaluations, old.candidate_evaluations);
+    assert_eq!(new.zero_gain_candidates, old.zero_gain_candidates);
+    assert_eq!(new.full_pool_prevalidation_calls, 1);
+    assert!(new.native_packet_calls <= old.native_packet_calls);
+    (packet, new)
+}
+#[test]
+fn deck_cost_rank_first_matches_exhaustive_ties_overlap_and_zero_gain_floor() {
+    let mut pool = deck_cost_pool(8);
+    // Equal gain/ordinal uses key, not enumeration. A repeated exact coordinate
+    // has zero gain after its first admission but still gets its owner round.
+    pool.candidates[1].ordinal = 0;
+    pool.candidates[1].key = "aaa".into();
+    pool.candidates[1].owner = pool.candidates[0].owner.clone();
+    pool.candidates[7].card.passage = pool.candidates[2].card.passage.clone();
+    pool.candidates[7].lexical.span = pool.candidates[2].lexical.span;
+    pool.candidates[7].coordinate = pool.candidates[2].coordinate.clone();
+    pool.candidates[7].intervals = pool.candidates[2].intervals.clone();
+    pool.candidates[7].owner = "last-zero-floor".into();
+    let (packet, stats) = deck_cost_equivalent(&json!({"query":"native boundary"}), &pool);
+    assert_eq!(packet.cards[0].id, "d0001");
+    assert!(
+        stats
+            .choices
+            .iter()
+            .any(|choice| choice["owner_floor"] == true && choice["gain"] == 0.0)
+    );
+    let empty = deck_cost_pool(0);
+    assert_eq!(deck_cost_equivalent(&json!({}), &empty).0.cards.len(), 0);
+}
+#[test]
+fn deck_cost_rank_first_matches_partial_overlap_and_positive_gain_stop() {
+    let mut pool = deck_cost_pool(3);
+    let locator = pool.candidates[0].card.passage.locator.clone();
+    let coordinate = coverage_coordinate(&pool.candidates[0].card.passage);
+    let boundaries = [0, 5, 8, 10, 13, 15];
+    pool.intervals = boundaries
+        .windows(2)
+        .map(|ends| CoverageInterval {
+            coordinate: coordinate.clone(),
+            start: ends[0],
+            end: ends[1],
+        })
+        .collect();
+    for (index, (start, end)) in [(0, 10), (5, 15), (8, 13)].into_iter().enumerate() {
+        let candidate = &mut pool.candidates[index];
+        candidate.owner = "overlapping-owner".into();
+        candidate.coordinate = coordinate.clone();
+        candidate.card.passage.locator = locator.clone();
+        candidate.card.passage.span = ByteSpan::new(start, end).unwrap();
+        candidate.card.passage.text = "x".repeat((end - start) as usize);
+        candidate.lexical.span = candidate.card.passage.span;
+        candidate.intervals = pool
+            .intervals
+            .iter()
+            .enumerate()
+            .filter(|(_, interval)| start <= interval.start && interval.end <= end)
+            .map(|(index, _)| index)
+            .collect();
+    }
+    let (packet, _) =
+        deck_cost_equivalent(&json!({"query":"partial exact-coordinate overlap"}), &pool);
+    assert_eq!(packet.cards.len(), 3);
+    // All lower-density coordinates already covered by a higher-density card
+    // stop the global round without backfilling zero-gain cards.
+    pool.candidates[1].card.passage = pool.candidates[0].card.passage.clone();
+    pool.candidates[1].lexical.span = pool.candidates[0].lexical.span;
+    pool.candidates[1].intervals = pool.candidates[0].intervals.clone();
+    pool.candidates[1].relevance = 0.1;
+    assert_eq!(deck_cost_equivalent(&json!({}), &pool).0.cards.len(), 2);
+}
+
+#[test]
+fn deck_cost_rank_first_matches_exact_eighty_card_boundary_and_repeat_bytes() {
+    let pool = deck_cost_pool(84);
+    let binding = json!({"query":"escaped UTF-8 dictionary indexes"});
+    let (packet, stats) = deck_cost_equivalent(&binding, &pool);
+    assert_eq!(packet.cards.len(), 80);
+    assert_eq!(
+        stats.native_packet_calls, 82,
+        "prevalidation + 80 winning trials + final build"
+    );
+    assert_eq!(stats.infeasible_trials, 0);
+    let mut again = CoverageDiagnostics::default();
+    assert_eq!(
+        coverage_deck(
+            &binding,
+            &pool,
+            &Meter::new(&request().verification_budget),
+            &mut again
+        )
+        .unwrap(),
+        packet
+    );
+    let task: Value = serde_json::from_str(&packet.selector_input).unwrap();
+    assert!(task["payload"]["sources"].as_array().unwrap().len() > 10);
+}
+#[test]
+fn deck_cost_rank_first_retries_multiple_native_byte_cap_failures() {
+    let mut pool = deck_cost_pool(4);
+    for candidate in &mut pool.candidates {
+        candidate.owner = "one-owner".into();
+    }
+    pool.candidates[0].relevance = 100.0;
+    for (index, relevance) in [(1, 80.0), (2, 70.0)] {
+        let candidate = &mut pool.candidates[index];
+        candidate.relevance = relevance;
+        candidate.card.title = "東京\\\"".repeat(512); // exactly 4096 UTF-8 bytes
+        candidate.card.passage.text = "\\\"".repeat(1024); // exactly 2048 bytes, heavily escaped
+        candidate.card.passage.span = ByteSpan::new(0, 2048).unwrap();
+        candidate.card.rendered_bytes = 2200;
+        candidate.lexical.span = candidate.card.passage.span;
+        pool.intervals[index].end = 2048;
+    }
+    pool.candidates[3].relevance = 10.0;
+    // Same already-admitted source metadata for the lower-ranked fitting card.
+    pool.candidates[3].card.title = pool.candidates[0].card.title.clone();
+    pool.candidates[3].card.passage.locator = pool.candidates[0].card.passage.locator.clone();
+    pool.candidates[3].card.passage.locator.observed_hash =
+        Blake3Hash::digest(b"second exact version, same source dictionary");
+    pool.candidates[3].coordinate = coverage_coordinate(&pool.candidates[3].card.passage);
+    pool.intervals[3].coordinate = pool.candidates[3].coordinate.clone();
+    let binding = json!({"query":"native byte pressure","padding":"x".repeat(120_000)});
+    let (packet, stats) = deck_cost_equivalent(&binding, &pool);
+    assert_eq!(
+        packet
+            .cards
+            .iter()
+            .map(|card| card.id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["d0000", "d0003"]
+    );
+    assert!(
+        stats.infeasible_trials >= 4,
+        "both rejected alternatives are reconsidered after the winner"
+    );
+    assert!(packet.input_bytes <= 130_048);
+    // A separate owner whose entire round fails does not stop the global round.
+    pool.candidates[1].owner = "unfittable-owner".into();
+    pool.candidates[2].owner = "unfittable-owner".into();
+    let (_, stats) = deck_cost_equivalent(&binding, &pool);
+    assert!(
+        stats
+            .choices
+            .iter()
+            .any(|choice| choice["status"] == "no_feasible_card")
+    );
+}
+#[test]
+fn deck_cost_full_pool_validation_rejects_malformed_omitted_cards_and_binding() {
+    let mut pool = deck_cost_pool(81);
+    pool.candidates[80].relevance = 0.0;
+    let valid = pool.candidates[80].card.clone();
+    let binding = json!({});
+    for invalid in 0..5 {
+        pool.candidates[80].card = valid.clone();
+        match invalid {
+            0 => pool.candidates[80].card.id = "invalid id".into(),
+            1 => pool.candidates[80].card.id = pool.candidates[0].card.id.clone(),
+            2 => pool.candidates[80].card.passage.text.push('!'),
+            3 => pool.candidates[80].card.title = "x".repeat(4097),
+            _ => {
+                let fixture = Fixture::new();
+                let mut card = fixture
+                    .prepare()
+                    .selection_packet()
+                    .unwrap()
+                    .cards
+                    .iter()
+                    .find(|card| !card.passage.citations.is_empty())
+                    .unwrap()
+                    .clone();
+                card.id = valid.id.clone();
+                card.passage.text = "x".repeat(card.passage.text.len());
+                pool.candidates[80].card = card;
+            }
+        }
+        for exhaustive in [false, true] {
+            let mut stats = CoverageDiagnostics::default();
+            assert!(
+                coverage_deck_with_order(
+                    &binding,
+                    &pool,
+                    &Meter::new(&request().verification_budget),
+                    &mut stats,
+                    exhaustive
+                )
+                .is_err()
+            );
+            assert_eq!(stats.native_packet_calls, 1);
+            assert_eq!(stats.packing_errors, 1);
+            assert!(stats.choices.is_empty());
+        }
+    }
+    pool.candidates[80].card = valid;
+    let huge = json!({"padding":"x".repeat(130_049)});
+    let mut stats = CoverageDiagnostics::default();
+    assert!(
+        coverage_deck(
+            &huge,
+            &pool,
+            &Meter::new(&request().verification_budget),
+            &mut stats
+        )
+        .is_err()
+    );
+    assert!(stats.choices.is_empty());
+}
+#[test]
+fn deck_cost_deadline_returns_error_without_partial_packet() {
+    let pool = deck_cost_pool(4);
+    let mut budget = request().verification_budget;
+    budget.max_elapsed_ms = 0;
+    let mut stats = CoverageDiagnostics::default();
+    assert!(coverage_deck(&json!({}), &pool, &Meter::new(&budget), &mut stats).is_err());
+    assert!(stats.choices.is_empty());
+    assert_eq!(stats.native_packet_calls, 0);
+}
+
 #[derive(serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 struct CoveragePilotConfig {
@@ -1778,15 +2178,29 @@ struct CoveragePilotConfig {
     cases: PathBuf,
     controls: PathBuf,
     artifacts: PathBuf,
+    #[serde(default)]
+    prior_decks: Option<PathBuf>,
 }
 #[test]
 #[ignore = "explicit frozen six-case coverage config required; no models or public production mode"]
 fn normalized_interval_coverage_six_case_development_pilot() {
+    coverage_development_pilot(false);
+}
+#[test]
+#[ignore = "explicit frozen six-case deck-cost config required; no models or production mode"]
+fn normalized_interval_deck_cost_six_case_development_pilot() {
+    coverage_development_pilot(true);
+}
+fn coverage_development_pilot(deck_cost: bool) {
     let repo = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .canonicalize()
         .unwrap();
     let owned = repo
-        .join(".artifacts/context-ordering-002")
+        .join(if deck_cost {
+            ".artifacts/context-ordering-003"
+        } else {
+            ".artifacts/context-ordering-002"
+        })
         .canonicalize()
         .unwrap();
     let previous = repo
@@ -1794,7 +2208,12 @@ fn normalized_interval_coverage_six_case_development_pilot() {
         .canonicalize()
         .unwrap();
     let config_path = PathBuf::from(
-        std::env::var("LWIKI_COVERAGE_CONFIG").expect("explicit owned configuration"),
+        std::env::var(if deck_cost {
+            "LWIKI_DECK_COST_CONFIG"
+        } else {
+            "LWIKI_COVERAGE_CONFIG"
+        })
+        .expect("explicit owned configuration"),
     )
     .canonicalize()
     .unwrap();
@@ -1807,6 +2226,22 @@ fn normalized_interval_coverage_six_case_development_pilot() {
     assert!(vault.starts_with(&owned) || vault == previous.join("unit-vault"));
     assert!(cases.starts_with(&owned));
     assert_eq!(controls, previous.join("unit-results-001"));
+    let prior_decks = config
+        .prior_decks
+        .as_ref()
+        .map(|path| path.canonicalize().unwrap());
+    if deck_cost {
+        assert_eq!(
+            prior_decks,
+            Some(
+                repo.join(".artifacts/context-ordering-002/results-001")
+                    .canonicalize()
+                    .unwrap()
+            )
+        );
+    } else {
+        assert!(prior_decks.is_none());
+    }
     assert!(
         config
             .artifacts
@@ -1893,6 +2328,7 @@ fn normalized_interval_coverage_six_case_development_pilot() {
         })
         .collect::<Vec<_>>();
     write("status.json", json!(statuses));
+    let mut comparison_failures = Vec::new();
     for case in cases {
         if apply_case.as_ref().is_some_and(|id| id != &case.id) {
             continue;
@@ -1934,10 +2370,68 @@ fn normalized_interval_coverage_six_case_development_pilot() {
                 Some(expected),
                 &mut stats,
             );
+            let elapsed_ms = started.elapsed().as_secs_f64() * 1000.0;
+            let mut comparisons = json!(null);
+            if let Some(prior) = &prior_decks {
+                let archived = bounded_json(
+                    &prior.join(format!(
+                        "{}-{}.json",
+                        case.id,
+                        if name == "exact-id-apply" {
+                            "weighted-deck"
+                        } else {
+                            name
+                        }
+                    )),
+                    16 * 1024 * 1024,
+                );
+                let actual = json!(&result);
+                let mut checks = Vec::new();
+                checks.push((
+                    "retained_pool",
+                    stats.pool == archived["diagnostics"]["pool"],
+                ));
+                if name == "weighted-deck" {
+                    if archived["result"]["Ok"].is_object() {
+                        checks.push((
+                            "successful_deck_exact_packet",
+                            actual["Ok"]["selection_packet"]
+                                == archived["result"]["Ok"]["selection_packet"],
+                        ));
+                        checks.push((
+                            "successful_deck_exact_choices",
+                            json!(stats.choices) == archived["diagnostics"]["choices"],
+                        ));
+                    } else {
+                        let prefix = archived["diagnostics"]["choices"].as_array().unwrap();
+                        checks.push((
+                            "failed_deck_accepted_choice_prefix",
+                            stats.choices.starts_with(prefix),
+                        ));
+                    }
+                } else if name == "weighted-final" {
+                    // FullPoolFinal algorithm is unchanged. Exclude only the
+                    // already-declared wall-clock verification timestamp.
+                    let mut old = archived["result"].clone();
+                    let mut new = actual.clone();
+                    for value in [&mut old, &mut new] {
+                        if let Some(verification) = value["Ok"]["verification"].as_object_mut() {
+                            verification.remove("verified_at");
+                        }
+                    }
+                    checks.push(("unchanged_final_except_verified_at", old == new));
+                }
+                for (check, matched) in &checks {
+                    if !matched {
+                        comparison_failures.push(format!("{} {name} {check}", case.id));
+                    }
+                }
+                comparisons = json!({"archive":prior,"checks":checks,"exclude_only":"verification.verified_at for final; elapsed time and diagnostics compared separately"});
+            }
             let outcome = if result.is_ok() { "OK" } else { "ERROR" };
             write(
                 &format!("{}-{name}.json", case.id),
-                json!({"result":result,"diagnostics":stats,"elapsed_ms":started.elapsed().as_secs_f64()*1000.0,"scope":"test-only exact packing experiment; not public Automatic, host/model success, relevance/completeness or shipping performance qualification"}),
+                json!({"result":result,"diagnostics":stats,"archive_comparisons":comparisons,"elapsed_ms":elapsed_ms,"scope":"test-only exact packing experiment; not public Automatic, host/model success, relevance/completeness or shipping performance qualification"}),
             );
             let status = statuses
                 .iter_mut()
@@ -1947,4 +2441,12 @@ fn normalized_interval_coverage_six_case_development_pilot() {
             write("status.json", json!(statuses));
         }
     }
+    write(
+        "archive-comparison-status.json",
+        json!({"failures":comparison_failures}),
+    );
+    assert!(
+        comparison_failures.is_empty(),
+        "all twelve arms recorded before reporting archived-control mismatch: {comparison_failures:?}"
+    );
 }

@@ -1038,4 +1038,525 @@ mod source_add_profile {
         );
         result
     }
+    /// Frozen one-pair extension; the original L2 harness above is unchanged.
+    mod sync_attribution {
+        use super::*;
+        use crate::vault::{DirectorySync, DurableIo, NativeIo};
+        use std::{
+            fs::File,
+            sync::{Arc, Mutex},
+        };
+
+        const COVERAGE: &str = "Only syncs routed through this VaultFs/DurableIo Arc. SQLite internal syncs and direct File::sync_all/NativeIo bypasses are excluded. Sequential sync timers exclude counter mutex/allocation work; outer timers include instrumentation overhead. Not total fsync, latency distribution or capacity qualification.";
+
+        #[derive(Default, Clone, serde::Serialize)]
+        struct SyncCalls {
+            calls: u64,
+            completed: u64,
+            errors: u64,
+            unsupported: u64,
+            elapsed_ns: u128,
+        }
+        #[derive(Default, Clone, serde::Serialize)]
+        struct SyncProfile {
+            file: SyncCalls,
+            directory: SyncCalls,
+        }
+        #[derive(Default)]
+        struct CountingNativeIo {
+            active: Mutex<Option<SyncProfile>>,
+        }
+        impl CountingNativeIo {
+            fn begin(&self) {
+                let mut active = self.active.lock().unwrap();
+                assert!(active.is_none(), "sync scope already active");
+                *active = Some(SyncProfile::default());
+            }
+            fn finish(&self) -> SyncProfile {
+                self.active
+                    .lock()
+                    .unwrap()
+                    .take()
+                    .expect("sync scope inactive")
+            }
+            fn record(
+                &self,
+                directory: bool,
+                elapsed_ns: u128,
+                completed: bool,
+                unsupported: bool,
+            ) {
+                if let Some(profile) = self.active.lock().unwrap().as_mut() {
+                    let calls = if directory {
+                        &mut profile.directory
+                    } else {
+                        &mut profile.file
+                    };
+                    calls.calls += 1;
+                    calls.completed += u64::from(completed);
+                    calls.errors += u64::from(!completed);
+                    calls.unsupported += u64::from(unsupported);
+                    calls.elapsed_ns += elapsed_ns;
+                }
+            }
+        }
+        impl DurableIo for CountingNativeIo {
+            fn create_stage(&self, path: &Path) -> io::Result<File> {
+                NativeIo.create_stage(path)
+            }
+            fn create_private_stage(&self, path: &Path) -> io::Result<File> {
+                NativeIo.create_private_stage(path)
+            }
+            fn create_private_directory(&self, path: &Path) -> io::Result<()> {
+                NativeIo.create_private_directory(path)
+            }
+            fn open_append(&self, path: &Path) -> io::Result<File> {
+                NativeIo.open_append(path)
+            }
+            fn truncate_file(&self, file: &File, length: u64) -> io::Result<()> {
+                NativeIo.truncate_file(file, length)
+            }
+            fn write_stage(&self, file: &mut File, bytes: &[u8]) -> io::Result<()> {
+                NativeIo.write_stage(file, bytes)
+            }
+            fn sync_file(&self, file: &File) -> io::Result<()> {
+                let started = Instant::now();
+                let result = NativeIo.sync_file(file);
+                let elapsed_ns = started.elapsed().as_nanos();
+                self.record(
+                    false,
+                    elapsed_ns,
+                    result.is_ok(),
+                    result
+                        .as_ref()
+                        .err()
+                        .is_some_and(|error| error.kind() == io::ErrorKind::Unsupported),
+                );
+                result
+            }
+            fn replace(&self, staged: &Path, target: &Path) -> io::Result<()> {
+                NativeIo.replace(staged, target)
+            }
+            fn remove(&self, target: &Path) -> io::Result<()> {
+                NativeIo.remove(target)
+            }
+            fn remove_directory(&self, target: &Path) -> io::Result<()> {
+                NativeIo.remove_directory(target)
+            }
+            fn create_directory(&self, path: &Path) -> io::Result<()> {
+                NativeIo.create_directory(path)
+            }
+            fn sync_directory(&self, path: &Path) -> io::Result<DirectorySync> {
+                let started = Instant::now();
+                let result = NativeIo.sync_directory(path);
+                let elapsed_ns = started.elapsed().as_nanos();
+                self.record(
+                    true,
+                    elapsed_ns,
+                    result.is_ok(),
+                    matches!(&result, Ok(DirectorySync::Unsupported))
+                        || result
+                            .as_ref()
+                            .err()
+                            .is_some_and(|error| error.kind() == io::ErrorKind::Unsupported),
+                );
+                result
+            }
+        }
+        fn measured_sync(
+            name: &str,
+            adapter: &CountingNativeIo,
+            operation: impl FnOnce() -> crate::domain::Result<MutationOutcome>,
+        ) -> (crate::domain::Result<MutationOutcome>, Value) {
+            adapter.begin();
+            let (result, mut sample) = measured(name, operation);
+            let sync = adapter.finish();
+            sample["vaultfs_sync"] =
+                json!({"file":sync.file,"directory":sync.directory,"coverage":COVERAGE});
+            (result, sample)
+        }
+        fn path_counts(value: &Value) -> DiagnosticResult<Value> {
+            let mut paths = value
+                .get("paths")
+                .cloned()
+                .ok_or_else(|| invalid("baseline paths missing"))?;
+            let object = paths
+                .as_object_mut()
+                .ok_or_else(|| invalid("baseline paths invalid"))?;
+            object.remove("portable_elapsed_ns");
+            let enums = object
+                .get_mut("enumerations")
+                .and_then(Value::as_object_mut)
+                .ok_or_else(|| invalid("baseline enumerations invalid"))?;
+            for value in enums.values_mut() {
+                value
+                    .as_object_mut()
+                    .ok_or_else(|| invalid("baseline enumeration invalid"))?
+                    .remove("elapsed_ns");
+            }
+            Ok(paths)
+        }
+        fn require_arc(fs: &VaultFs, expected: &Arc<dyn DurableIo>) -> DiagnosticResult<()> {
+            if !Arc::ptr_eq(&fs.durable_io(), expected) {
+                return Err(invalid("sync adapter Arc was replaced"));
+            }
+            Ok(())
+        }
+        #[test]
+        fn native_sync_scope_preserves_clones_errors_and_private_creation() {
+            let temp = tempfile::tempdir().unwrap();
+            fs::write(
+                temp.path().join("WIKI.md"),
+                include_bytes!("../../tests/fixtures/bootstrap/vault/WIKI.md"),
+            )
+            .unwrap();
+            let adapter = Arc::new(CountingNativeIo::default());
+            let erased: Arc<dyn DurableIo> = adapter.clone();
+            let handle =
+                VaultFs::with_io(VaultRoot::explicit(temp.path()).unwrap(), erased.clone());
+            let cloned = handle.clone();
+            require_arc(&cloned, &erased).unwrap();
+            let private = temp.path().join("private");
+            erased.create_private_directory(&private).unwrap();
+            let path = private.join("bytes");
+            let mut file = erased.create_private_stage(&path).unwrap();
+            erased.write_stage(&mut file, b"exact bytes").unwrap();
+            adapter.begin();
+            cloned.durable_io().sync_file(&file).unwrap();
+            let directory = cloned.durable_io().sync_directory(&private).unwrap();
+            let missing = private.join("absent");
+            let native_error = NativeIo.sync_directory(&missing).unwrap_err();
+            let observed_error = cloned.durable_io().sync_directory(&missing).unwrap_err();
+            assert_eq!(observed_error.kind(), native_error.kind());
+            assert_eq!(observed_error.raw_os_error(), native_error.raw_os_error());
+            let counts = adapter.finish();
+            assert_eq!(
+                (counts.file.calls, counts.file.completed, counts.file.errors),
+                (1, 1, 0)
+            );
+            assert_eq!(
+                (
+                    counts.directory.calls,
+                    counts.directory.completed,
+                    counts.directory.errors
+                ),
+                (2, 1, 1)
+            );
+            assert_eq!(
+                counts.directory.unsupported,
+                u64::from(directory == DirectorySync::Unsupported)
+            );
+            assert_eq!(fs::read(&path).unwrap(), b"exact bytes");
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                assert_eq!(
+                    fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+                    0o600
+                );
+                assert_eq!(
+                    fs::metadata(&private).unwrap().permissions().mode() & 0o777,
+                    0o700
+                );
+            }
+            // Outside scopes still forwards; the next scope excludes those calls.
+            erased.sync_file(&file).unwrap();
+            adapter.begin();
+            assert_eq!(adapter.finish().file.calls, 0);
+        }
+        #[test]
+        #[ignore = "one supervisor-owned existing baseline clone pair; exactly2add1apply"]
+        fn profile_normalized_source_add_sync() {
+            run_sync().unwrap();
+        }
+        fn run_sync() -> DiagnosticResult<()> {
+            let manifest_path = env::var_os("LWIKI_SOURCE_ADD_PROFILE_MANIFEST")
+                .map(PathBuf::from)
+                .ok_or_else(|| invalid("source add manifest required"))?;
+            let report_path = env::var_os("LWIKI_SOURCE_ADD_PROFILE_REPORT")
+                .map(PathBuf::from)
+                .ok_or_else(|| invalid("source add report required"))?;
+            absolute(&manifest_path)?;
+            absolute(&report_path)?;
+            ancestors(
+                manifest_path
+                    .parent()
+                    .ok_or_else(|| invalid("manifest parent missing"))?,
+            )?;
+            ancestors(
+                report_path
+                    .parent()
+                    .ok_or_else(|| invalid("report parent missing"))?,
+            )?;
+            if fs::symlink_metadata(&report_path).is_ok() {
+                return Err(invalid("add report already exists"));
+            }
+            let bytes = bounded(&manifest_path, 64 * 1024 * 1024)?;
+            let manifest: AddManifest = serde_json::from_slice(&bytes)?;
+            absolute(&manifest.original_export)?;
+            if manifest.version != 1
+                || manifest.kind != "disposable-source-add-sync-clone-pair"
+                || !matches!(
+                    (
+                        manifest.source_count,
+                        manifest.change_count,
+                        manifest.object_count
+                    ),
+                    (10, 31, 91)
+                )
+                || manifest.whole == manifest.staged
+                || manifest.marker != "addprobe999999"
+                || manifest.title != "Measured fresh capture"
+                || report_path.starts_with(&manifest.original_export)
+                || manifest_path.starts_with(&manifest.original_export)
+            {
+                return Err(invalid("unsupported initial add profile envelope"));
+            }
+            for root in [&manifest.whole, &manifest.staged] {
+                absolute(root)?;
+                if root.starts_with(&manifest.original_export)
+                    || manifest.original_export.starts_with(root)
+                    || report_path.starts_with(root)
+                    || manifest_path.starts_with(root)
+                    || root.starts_with(if root == &manifest.whole {
+                        &manifest.staged
+                    } else {
+                        &manifest.whole
+                    })
+                {
+                    return Err(invalid("add original/clone/report paths must be disjoint"));
+                }
+            }
+            absolute(&manifest.input)?;
+            ancestors(
+                manifest
+                    .input
+                    .parent()
+                    .ok_or_else(|| invalid("add input parent missing"))?,
+            )?;
+            if manifest.origin != manifest.input.to_str().unwrap()
+                || manifest.input.starts_with(&manifest.whole)
+                || manifest.input.starts_with(&manifest.staged)
+                || manifest.input.starts_with(&manifest.original_export)
+            {
+                return Err(invalid("add origin/input must be exact and outside vaults"));
+            }
+            let body = bounded(&manifest.input, 1024)?;
+            if body.len() != 1024
+                || Blake3Hash::digest(&body) != manifest.input_blake3
+                || std::str::from_utf8(&body)?
+                    .matches(&manifest.marker)
+                    .count()
+                    != 1
+            {
+                return Err(invalid("add input pin/marker differs"));
+            }
+            let baseline_path = env::var_os("LWIKI_SOURCE_ADD_SYNC_BASELINE")
+                .map(PathBuf::from)
+                .ok_or_else(|| invalid("sync baseline required"))?;
+            absolute(&baseline_path)?;
+            ancestors(
+                baseline_path
+                    .parent()
+                    .ok_or_else(|| invalid("sync baseline parent missing"))?,
+            )?;
+            if baseline_path.starts_with(&manifest.whole)
+                || baseline_path.starts_with(&manifest.staged)
+                || baseline_path.starts_with(&manifest.original_export)
+            {
+                return Err(invalid("sync baseline must be outside all vaults"));
+            }
+            let baseline_bytes = bounded(&baseline_path, 1024 * 1024)?;
+            let baseline: Value = serde_json::from_slice(&baseline_bytes)?;
+            if baseline["kind"] != "source-add-path-attribution"
+                || baseline["complete"] != true
+                || baseline["source_count"] != 10
+                || baseline["change_count"] != 31
+                || baseline["object_count"] != 91
+                || baseline["cases"].as_array().map(Vec::len) != Some(3)
+            {
+                return Err(invalid("sync baseline differs from frozen initial case"));
+            }
+            let mut cases = Vec::new();
+            let mut starting_snapshot = None;
+            let mut starting_authority = Value::Null;
+            let mut adapter_arc_verified = false;
+            let result = (|| -> DiagnosticResult<()> {
+                validate_clone(&manifest, &manifest.original_export)?;
+                let whole_pins = validate_clone(&manifest, &manifest.whole)?;
+                let staged_pins = validate_clone(&manifest, &manifest.staged)?;
+                let options = OperationOptions {
+                    offline: true,
+                    ..Default::default()
+                };
+                let whole_io = Arc::new(CountingNativeIo::default());
+                let staged_io = Arc::new(CountingNativeIo::default());
+                let whole_erased: Arc<dyn DurableIo> = whole_io.clone();
+                let staged_erased: Arc<dyn DurableIo> = staged_io.clone();
+                let whole_fs =
+                    VaultFs::with_io(VaultRoot::explicit(&manifest.whole)?, whole_erased.clone());
+                let staged_fs = VaultFs::with_io(
+                    VaultRoot::explicit(&manifest.staged)?,
+                    staged_erased.clone(),
+                );
+                let whole_app = OfflineApp::new(whole_fs.clone(), options)?;
+                let staged_app = OfflineApp::new(
+                    staged_fs.clone(),
+                    OperationOptions {
+                        stage_only: true,
+                        ..options
+                    },
+                )?;
+                let apply_app = OfflineApp::new(staged_fs.clone(), options)?;
+                let whole_catalog = Catalog::new(whole_fs, whole_app.vault_id().clone());
+                let staged_catalog = Catalog::new(staged_fs, staged_app.vault_id().clone());
+                require_arc(whole_app.fs(), &whole_erased)?;
+                require_arc(staged_app.fs(), &staged_erased)?;
+                require_arc(apply_app.fs(), &staged_erased)?;
+                require_arc(&whole_catalog.fs, &whole_erased)?;
+                require_arc(&staged_catalog.fs, &staged_erased)?;
+                adapter_arc_verified = true;
+                let before = QueryCatalog::snapshot(
+                    &whole_catalog.query_snapshot(QueryReadLimits::default())?,
+                )
+                .clone();
+                if before.publication().is_none()
+                    || QueryCatalog::snapshot(
+                        &staged_catalog.query_snapshot(QueryReadLimits::default())?,
+                    ) != &before
+                {
+                    return Err(invalid(
+                        "add clones have different/unpublished starting snapshots",
+                    ));
+                }
+                let authority = whole_catalog
+                    .operation_state()?
+                    .ok_or_else(|| invalid("add clone outside authority missing"))?;
+                authority.require_publication(authority.publication())?;
+                starting_authority =
+                    json!({"revision":authority.revision(),"publication":authority.publication()});
+                starting_snapshot = Some(before.clone());
+                let request = CaptureRequest {
+                    title: manifest.title.clone(),
+                    origin_kind: SourceOrigin::LocalFile,
+                    origin: manifest.origin.clone(),
+                    original: body.clone(),
+                    extraction: ExtractionInput::Utf8Preserve,
+                    media_type: Some("text/plain".into()),
+                };
+                let (outcome, sample) = measured_sync("whole_add", &whole_io, || {
+                    whole_app.source_add(request.clone())
+                });
+                cases.push(sample);
+                let outcome = outcome?;
+                cases.last_mut().unwrap()["verification"] = verify_added(
+                    &manifest,
+                    &manifest.whole,
+                    &whole_catalog,
+                    &outcome,
+                    &before,
+                    &body,
+                    &whole_pins,
+                )?;
+                let (prepared, sample) = measured_sync("staged_prepare", &staged_io, || {
+                    staged_app.source_add(request)
+                });
+                cases.push(sample);
+                let prepared = prepared?;
+                let source = prepared
+                    .allocated_ids
+                    .get("source")
+                    .ok_or_else(|| invalid("staged source ID missing"))?;
+                let source_absent = matches!(fs::symlink_metadata(manifest.staged.join(format!("sources/{source}"))), Err(error) if error.kind() == io::ErrorKind::NotFound);
+                if prepared.status != Some(ChangeStatus::Prepared)
+                    || prepared.reused
+                    || prepared.source_capture != Some(SourceCaptureState::Complete)
+                    || prepared.snapshot.is_some()
+                    || !source_absent
+                    || QueryCatalog::snapshot(
+                        &staged_catalog.query_snapshot(QueryReadLimits::default())?,
+                    ) != &before
+                {
+                    return Err(invalid("staged prepare changed canonical/selected state"));
+                }
+                require_canonical_pins(&manifest.staged, &staged_pins)?;
+                let change = prepared
+                    .change
+                    .as_ref()
+                    .ok_or_else(|| invalid("staged retained proof missing"))?
+                    .change_id
+                    .clone();
+                let (applied, sample) = measured_sync("staged_apply", &staged_io, || {
+                    apply_app.changes_apply(change)
+                });
+                cases.push(sample);
+                let mut applied = applied?;
+                if applied.allocated_ids != prepared.allocated_ids
+                    || applied.change != prepared.change
+                {
+                    return Err(invalid("staged apply differs from prepared identity/proof"));
+                }
+                // changes_apply reports no extraction work; retain the capture state's
+                // original prepared observation for the common final verifier.
+                applied.source_capture = prepared.source_capture;
+                cases.last_mut().unwrap()["verification"] = verify_added(
+                    &manifest,
+                    &manifest.staged,
+                    &staged_catalog,
+                    &applied,
+                    &before,
+                    &body,
+                    &staged_pins,
+                )?;
+                validate_clone(&manifest, &manifest.original_export)?;
+                for (index, sample) in cases.iter().enumerate() {
+                    if sample["case"] != baseline["cases"][index]["case"]
+                        || path_counts(sample)? != path_counts(&baseline["cases"][index])?
+                    {
+                        return Err(invalid(
+                            "sync instrumentation changed frozen baseline PathProfile counts",
+                        ));
+                    }
+                    if sample["vaultfs_sync"]["file"]["calls"]
+                        .as_u64()
+                        .unwrap_or(0)
+                        == 0
+                        || sample["vaultfs_sync"]["directory"]["calls"]
+                            .as_u64()
+                            .unwrap_or(0)
+                            == 0
+                    {
+                        return Err(invalid("expected real VaultFs sync calls absent"));
+                    }
+                }
+                Ok(())
+            })();
+            let report = json!({"version":1,"kind":"source-add-sync-attribution","counter_grouping_version":2,
+                "complete":result.is_ok(),"error":result.as_ref().err().map(|error|error.to_string()),
+                "manifest_blake3":Blake3Hash::digest(&bytes),"test_binary_blake3":hash_file(&env::current_exe()?)?,
+                "source_count":manifest.source_count,"change_count":manifest.change_count,"object_count":manifest.object_count,
+                "starting_snapshot":starting_snapshot,"starting_authority":starting_authority,
+                "whole":manifest.whole,"staged":manifest.staged,"original_export":manifest.original_export,"cases":cases,
+                "source_add_limit":2,"changes_apply_limit":1,"filesystem_sync_calls":null,"sync_coverage":COVERAGE,"adapter_arc_verified":adapter_arc_verified,"baseline_profile_blake3":Blake3Hash::digest(&baseline_bytes),"baseline_path_counts_match":result.is_ok(),
+                "timing_note":"Direct OfflineApp excludes CLI/config. Whole versus staged prepare/apply are separate runs, not additive attribution. Portable/sub-enumeration and immutable timers are inclusive. Parent inventory/ps overhead must be reported separately. Verification/check outside counters; no capacity qualification."});
+            let bytes = serde_json::to_vec_pretty(&report)?;
+            if bytes.len() > 1024 * 1024 {
+                return Err(invalid("add profile report ceiling"));
+            }
+            let mut output = OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&report_path)?;
+            output.write_all(&bytes)?;
+            output.write_all(b"\n")?;
+            output.sync_all()?;
+            println!(
+                "{}",
+                serde_json::to_string(
+                    &json!({"profile_report":report_path,"complete":result.is_ok()})
+                )?
+            );
+            result
+        }
+    }
 }

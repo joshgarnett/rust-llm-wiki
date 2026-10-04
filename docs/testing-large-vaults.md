@@ -927,3 +927,62 @@ The next bounded measurements separate durability cost from traversal and exact
 packet-building cost from semantic selection. They must preserve existing
 allocation, collision, recovery, freshness and budget contracts; a scoped
 development gain does not permit weaker acceptance limits.
+
+### Durability attribution and selection-cost checkpoint (2026-10-04)
+
+One native baseline pair completed two captures, one staged apply and two public
+checks, with identical prior traversal counts, exact citations and unchanged
+existing canonical bytes and modification times. The pass-through adapter
+delegates each durability operation once and preserves its result. During the
+443 ms whole-add observation, 31 intercepted file syncs took 146 ms and 219
+directory syncs took 103 ms: approximately 56% combined. These counters exclude
+SQLite's internal syncs and direct file/adapter paths. They establish a material
+shared-operation cost, not total filesystem sync work or a latency distribution.
+Existing-directory syncs protect interrupted directory creation; this experiment
+does not justify removing them.
+
+The test-only candidate-deck implementation now ranks eligible candidates before
+trying native packet construction. Full-pool native validation still rejects
+malformed omitted candidates; native construction still decides feasibility.
+The objective, owner rounds, tie order, exact spans and final packing are unchanged.
+Eleven focused selection correctness/equivalence checks passed. The first combined
+checkpoint also retained one fixture failure; after adding the existing required
+vault marker, only the affected durability-adapter test was rebuilt and passed.
+The eleven unchanged selection passes were reused. Native compiler actions confirm
+optimization level 3, and the production CLI executable hash stayed unchanged.
+
+All twelve development arms then completed. Positive decks used 82 counted native
+packet constructions in 82–89 ms, plus the original preparation call; the absent
+case used 69 constructions in 61 ms. Prior successful deck bytes and formerly
+failed accepted prefixes were preserved exactly. The unchanged deterministic final
+selector still completes only 2/5 positive tasks. An independent critic found all
+five displayed positive fact sets complete and verified five reference ID replies
+producing complete, correctly cited final contexts of 2,170–4,123 bytes. These
+reference replies prove feasible packing, not autonomous selection quality.
+
+Six fresh host selectors subsequently ran once each. Actual tool traces exposed
+truncated input in the first trial despite a sufficient nested file-read limit.
+That failure remains in the denominator; the remaining five used a prospectively
+recorded outer-and-inner limit correction and received exact complete tasks. All
+six raw replies passed native replay without retries or changed source files.
+Independent assessment found complete returned content for 4/5 positive tasks,
+including the invalid-input trial. The other failure omitted required prerequisite
+competence despite its presence in the full displayed deck. Combined input-valid
+and complete-task credit is therefore 3/5. The absent control returned no passages;
+all 17 final citations and six native budgets passed. The assisted gate failed.
+
+Current host execution logs supply actual harness-reported usage: six selector
+invocations required twelve model responses, totaling 336,400 input tokens
+(253,568 cached) and 2,215 output tokens, including 786 reasoning tokens. Visible
+application tasks and wrappers totaled 360,381 bytes. Usage includes harness and
+repeated context; monetary cost remains unavailable. Observed external-agent UTC
+intervals totaled 331 seconds, include orchestration and do not measure inference
+time. None of these
+development experiments qualifies the unseen semantic gate or the 100k/~10GB
+lifecycle. Strict Clippy remains failing.
+
+The next acquisition milestone is a resumable manifest importer sharing bounded
+capture groups through one Change publication. Its pending state must durably
+name every Source, Revision and Change identity and timestamp before retention.
+Per-file durability remains intact. Unrelated Change/object traversal growth
+remains a separate scale blocker; batching alone does not remove that growth.
