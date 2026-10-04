@@ -1,7 +1,10 @@
 //! Source operation and verification contracts, owned by the orchestrator.
 use crate::{
-    changes::{ChangeDraft, ReadDependency},
-    domain::{Blake3Hash, ByteSpan, CitationRef, EvidenceRef, RecordId, VaultRelativePath},
+    changes::{ChangeDraft, ReadDependency, ScanDocument},
+    domain::{
+        Blake3Hash, ByteSpan, CanonicalRecord, CitationRef, EvidenceRef, ReadSnapshot, RecordId,
+        Result, VaultRelativePath,
+    },
     vault::VaultFs,
 };
 use serde::{Deserialize, Serialize};
@@ -79,6 +82,72 @@ pub struct SourcePlan {
     pub dependencies: Vec<ReadDependency>,
     /// The capture's text availability; withdrawal has no capture state.
     pub capture_state: Option<SourceCaptureState>,
+}
+
+/// Selected facts from one published index. These are discovery facts, not a
+/// fresh global identity audit of externally edited canonical files.
+#[derive(Debug, Clone)]
+pub(crate) struct RefreshRecord {
+    pub record: CanonicalRecord,
+    pub path: VaultRelativePath,
+    pub hash: Blake3Hash,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct RevisionSignature {
+    pub original_hash: Blake3Hash,
+    pub content_hash: Option<Blake3Hash>,
+    pub extractor_fingerprint: Blake3Hash,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct MatchingRevision {
+    pub revision: RefreshRecord,
+    /// Position in the authenticated source's retained revision list.
+    pub retained_ordinal: usize,
+}
+
+pub(crate) trait SourceRefreshLookup {
+    fn snapshot(&self) -> &ReadSnapshot;
+    fn vault_id(&self) -> &RecordId;
+    /// Refuse multiple or malformed identity claims; do not silently adopt the
+    /// only valid record while ignoring other readable declarations of its ID.
+    fn unique_record(&self, id: &RecordId) -> Result<Option<RefreshRecord>>;
+    fn record_at_path(&self, path: &VaultRelativePath) -> Result<Option<RefreshRecord>>;
+    fn id_is_claimed(&self, id: &RecordId) -> Result<bool>;
+    /// First matching retained ordinal; the planner checks the current head
+    /// first and authenticates exact bytes before actually reusing a revision.
+    fn matching_revision(
+        &self,
+        source: &RecordId,
+        signature: &RevisionSignature,
+    ) -> Result<Option<MatchingRevision>>;
+    fn source_assertions(&self, source: &RecordId) -> Result<Vec<RecordId>>;
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct SourceRefreshLimits {
+    pub max_file_bytes: usize,
+    pub max_canonical_bytes: usize,
+    pub max_retained_revisions: usize,
+}
+impl Default for SourceRefreshLimits {
+    fn default() -> Self {
+        Self {
+            max_file_bytes: 64 * 1024 * 1024,
+            max_canonical_bytes: 256 * 1024 * 1024,
+            max_retained_revisions: 100_000,
+        }
+    }
+}
+
+/// Exact selected before-images and dependencies accompany the ordinary draft.
+/// Only the indexed apply validator can authorize their bounded publication.
+pub(crate) struct IndexedSourceRefreshPlan {
+    pub plan: SourcePlan,
+    pub base_snapshot: ReadSnapshot,
+    pub previous_revision: RecordId,
+    pub captured: Vec<ScanDocument>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

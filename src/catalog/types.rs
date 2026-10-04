@@ -114,9 +114,18 @@ pub(crate) struct ValidationProjection {
 /// A failed callback aborts projection; callers must discard provisional publication
 /// state unless projection and subsequent freshness checks both succeed.
 pub(crate) trait RetrievalSink {
+    fn identity_claim(&mut self, row: IdentityClaimRow) -> Result<()>;
     fn document(&mut self, row: DocumentRow) -> Result<()>;
     fn graph(&mut self, row: GraphRow) -> Result<()>;
     fn link(&mut self, row: LinkRow) -> Result<()>;
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct IdentityClaimRow {
+    pub id: RecordId,
+    pub path: VaultRelativePath,
+    pub hash: Blake3Hash,
+    pub kind: Option<RecordKind>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

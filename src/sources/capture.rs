@@ -19,7 +19,7 @@ pub(crate) struct Extraction {
     pub content: Option<Vec<u8>>,
 }
 impl Extraction {
-    fn capture_state(&self) -> SourceCaptureState {
+    pub(super) fn capture_state(&self) -> SourceCaptureState {
         match self.content.as_deref() {
             None => SourceCaptureState::Unsupported,
             Some([]) => SourceCaptureState::Empty,
@@ -27,7 +27,7 @@ impl Extraction {
         }
     }
 }
-fn extract(request: &CaptureRequest) -> Result<Extraction> {
+pub(super) fn extract(request: &CaptureRequest) -> Result<Extraction> {
     let (extractor, fingerprint, content) = match &request.extraction {
         ExtractionInput::Utf8Preserve => (
             "utf8-preserve-v1".to_owned(),
@@ -85,7 +85,7 @@ pub(crate) fn draft(
         read_preconditions: vec![],
     }
 }
-fn revision_writes(
+pub(super) fn revision_writes(
     source_id: &RecordId,
     revision_id: &RecordId,
     source_path: &VaultRelativePath,

@@ -2,6 +2,7 @@
 pub mod capture;
 pub mod evidence;
 pub(crate) mod identity;
+pub(crate) mod indexed_refresh;
 pub mod lifecycle;
 mod lookup;
 pub mod revision;

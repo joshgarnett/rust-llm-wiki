@@ -185,6 +185,9 @@ struct CollectingRetrievalSink {
 }
 
 impl RetrievalSink for CollectingRetrievalSink {
+    fn identity_claim(&mut self, _row: IdentityClaimRow) -> Result<()> {
+        Ok(())
+    }
     fn document(&mut self, row: DocumentRow) -> Result<()> {
         self.documents.push(row);
         Ok(())
@@ -250,6 +253,14 @@ fn project_input(
     let mut memberships: BTreeMap<RecordId, Vec<VaultRelativePath>> = BTreeMap::new();
     for (path, note) in &notes {
         for id in readable_ids(note) {
+            if let Some(sink) = retrieval.as_deref_mut() {
+                sink.identity_claim(IdentityClaimRow {
+                    id: id.clone(),
+                    path: path.clone(),
+                    hash: note.source_hash.clone(),
+                    kind: note.canonical.as_ref().map(|record| record.kind()),
+                })?;
+            }
             memberships.entry(id).or_default().push(path.clone());
         }
     }
@@ -1140,6 +1151,9 @@ mod tests {
         links: Vec<LinkRow>,
     }
     impl RetrievalSink for RecordingSink {
+        fn identity_claim(&mut self, _row: IdentityClaimRow) -> Result<()> {
+            Ok(())
+        }
         fn document(&mut self, row: DocumentRow) -> Result<()> {
             assert!(self.documents.insert(row.path.clone(), row).is_none());
             Ok(())
@@ -1226,6 +1240,9 @@ mod tests {
         events: Vec<String>,
     }
     impl RetrievalSink for OracleSink {
+        fn identity_claim(&mut self, _row: IdentityClaimRow) -> Result<()> {
+            Ok(())
+        }
         fn document(&mut self, row: DocumentRow) -> Result<()> {
             self.events.push(format!("document:{}", row.path));
             self.documents.push(row);
@@ -1547,6 +1564,9 @@ mod tests {
         }
     }
     impl RetrievalSink for FailingSink {
+        fn identity_claim(&mut self, _row: IdentityClaimRow) -> Result<()> {
+            Ok(())
+        }
         fn document(&mut self, row: DocumentRow) -> Result<()> {
             if row.owner_revision.is_some() {
                 self.source_attempts += 1;

@@ -325,6 +325,228 @@ impl QuerySnapshot {
     }
 }
 
+// Refresh discovery stays on the same pinned published epoch as retrieval.
+// These helpers do not inspect canonical files or claim fresh global identity.
+impl QuerySnapshot {
+    fn require_refresh_publication(&self) -> Result<()> {
+        let QueryConnection::Normalized(selected) = &self.connection else {
+            return Err(WikiError::new(
+                ErrorCode::OfflineUnavailable,
+                "source refresh requires a normalized published catalog",
+            ));
+        };
+        if !self.snapshot.publication().is_some_and(|binding| {
+            binding.file_id == selected.selection().file_id && binding.version == 1
+        }) {
+            return Err(corrupt("source refresh requires a published epoch binding"));
+        }
+        Ok(())
+    }
+
+    /// Reserve all returned text bytes (including malformed blobs) and the row
+    /// before constructing any owned IDs, paths, hashes or record payloads.
+    fn reserve_refresh_row(&self, row: &Row<'_>, columns: usize) -> Result<()> {
+        let mut bytes = 0usize;
+        for column in 0..columns {
+            let size = match row.get_ref(column).map_err(sql::sql_error)? {
+                ValueRef::Text(bytes) | ValueRef::Blob(bytes) => bytes.len(),
+                _ => 0,
+            };
+            bytes = bytes.checked_add(size).ok_or_else(|| {
+                WikiError::new(
+                    ErrorCode::BudgetExceeded,
+                    "refresh lookup byte count overflow",
+                )
+            })?;
+        }
+        self.reserve(bytes)
+    }
+}
+
+impl crate::sources::SourceRefreshLookup for QuerySnapshot {
+    fn snapshot(&self) -> &ReadSnapshot {
+        &self.snapshot
+    }
+    fn vault_id(&self) -> &RecordId {
+        &self.vault_id
+    }
+
+    fn unique_record(&self, id: &RecordId) -> Result<Option<crate::sources::RefreshRecord>> {
+        self.require_refresh_publication()?;
+        let mut statement = self.connection.prepare(
+            "SELECT path,file_hash,kind FROM identity_claims INDEXED BY sqlite_autoindex_identity_claims_1 WHERE record_id=?1 ORDER BY path LIMIT 2"
+        ).map_err(sql::sql_error)?;
+        let mut rows = statement.query([id.as_str()]).map_err(sql::sql_error)?;
+        let Some(row) = rows.next().map_err(sql::sql_error)? else {
+            // A missing identity claim must not silently hide an adopted record.
+            if QueryCatalog::record(self, id)?.is_some() {
+                return Err(corrupt("adopted record has no identity claim"));
+            }
+            return Ok(None);
+        };
+        self.reserve_refresh_row(row, 3)?;
+        let path = VaultRelativePath::new(utf8(text_bytes(row, 0)?)?)
+            .map_err(|error| corrupt(error.message))?;
+        let hash =
+            Blake3Hash::new(utf8(text_bytes(row, 1)?)?).map_err(|error| corrupt(error.message))?;
+        let kind = utf8(text_bytes(row, 2)?)?.to_owned();
+        if let Some(row) = rows.next().map_err(sql::sql_error)? {
+            self.reserve_refresh_row(row, 3)?;
+            return Err(corrupt("record ID has multiple canonical identity claims"));
+        }
+        let adopted = QueryCatalog::record(self, id)?
+            .ok_or_else(|| corrupt("claimed record is malformed or not adopted"))?;
+        if adopted.path != path || adopted.hash != hash || adopted.record.kind().as_str() != kind {
+            return Err(corrupt("identity claim differs from adopted record"));
+        }
+        if adopted.eligibility == crate::domain::Eligibility::Invalid
+            && matches!(
+                adopted.record.kind(),
+                crate::domain::RecordKind::Source | crate::domain::RecordKind::Revision
+            )
+        {
+            return Err(WikiError::new(
+                ErrorCode::SourceIntegrity,
+                "selected source or revision has a known invalid baseline",
+            ));
+        }
+        Ok(Some(crate::sources::RefreshRecord {
+            record: adopted.record,
+            path: adopted.path,
+            hash: adopted.hash,
+        }))
+    }
+
+    fn record_at_path(
+        &self,
+        path: &VaultRelativePath,
+    ) -> Result<Option<crate::sources::RefreshRecord>> {
+        self.require_refresh_publication()?;
+        let mut statement = self
+            .connection
+            .prepare("SELECT id,path FROM records INDEXED BY record_paths WHERE path=?1")
+            .map_err(sql::sql_error)?;
+        let mut rows = statement.query([path.as_str()]).map_err(sql::sql_error)?;
+        let Some(row) = rows.next().map_err(sql::sql_error)? else {
+            return Ok(None);
+        };
+        self.reserve_refresh_row(row, 2)?;
+        if utf8(text_bytes(row, 1)?)? != path.as_str() {
+            return Err(corrupt("selected record path differs from lookup key"));
+        }
+        let id =
+            RecordId::new(utf8(text_bytes(row, 0)?)?).map_err(|error| corrupt(error.message))?;
+        let record = self
+            .unique_record(&id)?
+            .ok_or_else(|| corrupt("selected path has no uniquely claimed record"))?;
+        if &record.path != path {
+            return Err(corrupt("selected record path differs from its claim"));
+        }
+        Ok(Some(record))
+    }
+
+    fn id_is_claimed(&self, id: &RecordId) -> Result<bool> {
+        self.require_refresh_publication()?;
+        let mut statement = self.connection.prepare(
+            "SELECT record_id FROM identity_claims INDEXED BY sqlite_autoindex_identity_claims_1 WHERE record_id=?1 UNION ALL SELECT id FROM records INDEXED BY sqlite_autoindex_records_1 WHERE id=?1 LIMIT 1"
+        ).map_err(sql::sql_error)?;
+        let mut rows = statement.query([id.as_str()]).map_err(sql::sql_error)?;
+        let Some(row) = rows.next().map_err(sql::sql_error)? else {
+            return Ok(false);
+        };
+        self.reserve_refresh_row(row, 1)?;
+        if utf8(text_bytes(row, 0)?)? != id.as_str() {
+            return Err(corrupt("identity claim differs from lookup ID"));
+        }
+        Ok(true)
+    }
+
+    fn matching_revision(
+        &self,
+        source: &RecordId,
+        signature: &crate::sources::RevisionSignature,
+    ) -> Result<Option<crate::sources::MatchingRevision>> {
+        self.require_refresh_publication()?;
+        let mut statement = self.connection.prepare(
+            "SELECT source_id,revision_id,retained_ordinal,original_hash,content_hash,extractor_fingerprint,extraction_status FROM source_revision_identity INDEXED BY source_revision_matches WHERE source_id=?1 AND original_hash=?2 AND content_hash IS ?3 AND extractor_fingerprint=?4 ORDER BY retained_ordinal LIMIT 1"
+        ).map_err(sql::sql_error)?;
+        let mut rows = statement
+            .query(params![
+                source.as_str(),
+                signature.original_hash.as_str(),
+                signature.content_hash.as_ref().map(Blake3Hash::as_str),
+                signature.extractor_fingerprint.as_str()
+            ])
+            .map_err(sql::sql_error)?;
+        let Some(row) = rows.next().map_err(sql::sql_error)? else {
+            return Ok(None);
+        };
+        self.reserve_refresh_row(row, 7)?;
+        let optional = |column| -> Result<Option<&str>> {
+            match row.get_ref(column).map_err(sql::sql_error)? {
+                ValueRef::Null => Ok(None),
+                ValueRef::Text(bytes) => utf8(bytes).map(Some),
+                _ => Err(corrupt("revision content hash has invalid SQL type")),
+            }
+        };
+        let retained_ordinal = usize::try_from(row.get::<_, i64>(2).map_err(sql::sql_error)?)
+            .map_err(|_| corrupt("revision retained ordinal is invalid"))?;
+        if utf8(text_bytes(row, 0)?)? != source.as_str()
+            || utf8(text_bytes(row, 3)?)? != signature.original_hash.as_str()
+            || optional(4)? != signature.content_hash.as_ref().map(Blake3Hash::as_str)
+            || utf8(text_bytes(row, 5)?)? != signature.extractor_fingerprint.as_str()
+        {
+            return Err(corrupt(
+                "selected revision tuple differs from lookup signature",
+            ));
+        }
+        let id =
+            RecordId::new(utf8(text_bytes(row, 1)?)?).map_err(|error| corrupt(error.message))?;
+        let status = utf8(text_bytes(row, 6)?)?;
+        let selected = self
+            .unique_record(&id)?
+            .ok_or_else(|| corrupt("matched revision has no uniquely claimed record"))?;
+        let record = &selected.record;
+        if record.kind() != crate::domain::RecordKind::Revision
+            || record.string("wiki_source_id") != Some(source.as_str())
+            || record.string("wiki_original_hash") != Some(signature.original_hash.as_str())
+            || record.string("wiki_content_hash")
+                != signature.content_hash.as_ref().map(Blake3Hash::as_str)
+            || record.string("wiki_extractor_fingerprint")
+                != Some(signature.extractor_fingerprint.as_str())
+            || record.string("wiki_extraction_status") != Some(status)
+        {
+            return Err(corrupt(
+                "matched revision identity differs from canonical record",
+            ));
+        }
+        Ok(Some(crate::sources::MatchingRevision {
+            revision: selected,
+            retained_ordinal,
+        }))
+    }
+
+    fn source_assertions(&self, source: &RecordId) -> Result<Vec<RecordId>> {
+        self.require_refresh_publication()?;
+        let mut statement = self.connection.prepare(
+            "SELECT DISTINCT assertion_id FROM source_evidence INDEXED BY source_assertions WHERE source_id=?1 ORDER BY assertion_id LIMIT ?2"
+        ).map_err(sql::sql_error)?;
+        let remaining = self.limits.max_rows.saturating_sub(self.usage.get().rows);
+        let mut rows = statement
+            .query(params![source.as_str(), (remaining + 1) as i64])
+            .map_err(sql::sql_error)?;
+        let mut result = Vec::new();
+        while let Some(row) = rows.next().map_err(sql::sql_error)? {
+            self.reserve_refresh_row(row, 1)?;
+            result.push(
+                RecordId::new(utf8(text_bytes(row, 0)?)?)
+                    .map_err(|error| corrupt(error.message))?,
+            );
+        }
+        Ok(result)
+    }
+}
+
 impl QueryCatalog for QuerySnapshot {
     fn publication_id(&self) -> Option<&str> {
         match &self.connection {
@@ -718,6 +940,373 @@ mod tests {
         )
         .unwrap();
         completed
+    }
+
+    fn refresh_source_fixture(root: &std::path::Path) -> crate::sources::RevisionSignature {
+        fn note(
+            root: &std::path::Path,
+            name: &str,
+            kind: &str,
+            id: &str,
+            extra: serde_json::Value,
+        ) {
+            let mut fields = BTreeMap::from([
+                ("wiki_schema".into(), serde_json::json!("1")),
+                ("wiki_id".into(), serde_json::json!(id)),
+                ("wiki_kind".into(), serde_json::json!(kind)),
+                ("title".into(), serde_json::json!("Révision 東京")),
+            ]);
+            fields.extend(
+                extra
+                    .as_object()
+                    .unwrap()
+                    .iter()
+                    .map(|(k, v)| (k.clone(), v.clone())),
+            );
+            crate::domain::CanonicalRecord::new(fields.clone()).unwrap();
+            let mut text = String::from("---\n");
+            for (key, value) in fields {
+                text.push_str(&format!("{key}: {value}\n"));
+            }
+            text.push_str("---\n");
+            let target = root.join(name);
+            fs::create_dir_all(target.parent().unwrap()).unwrap();
+            fs::write(target, text).unwrap();
+        }
+        note(
+            root,
+            "sources/source_refresh/source.md",
+            "source",
+            "source_refresh",
+            serde_json::json!({
+                "wiki_status":"active", "wiki_origin_kind":"local-file", "wiki_origin":"fixture",
+                "wiki_current_revision":"revision_current", "wiki_revisions":["revision_z","revision_a","revision_current","revision_unsupported"]
+            }),
+        );
+        let fingerprint = Blake3Hash::digest(b"fixture-v1");
+        for (revision, content, complete) in [
+            ("revision_z", "repeat", true),
+            ("revision_a", "repeat", true),
+            ("revision_current", "head", true),
+            ("revision_unsupported", "unavailable", false),
+        ] {
+            let parent = format!("sources/source_refresh/revisions/{revision}");
+            let hash = Blake3Hash::digest(content.as_bytes());
+            let mut extra = serde_json::json!({
+                "wiki_source_id":"source_refresh", "wiki_captured_at":"2026-09-28T00:00:00Z",
+                "wiki_original_path":"original.bin", "wiki_original_hash":hash,
+                "wiki_extractor":"fixture", "wiki_extractor_fingerprint":fingerprint,
+                "wiki_extraction_status":if complete {"complete"} else {"unsupported"}
+            });
+            if complete {
+                extra["wiki_content_path"] = serde_json::json!("content.md");
+                extra["wiki_content_hash"] = serde_json::json!(hash);
+            }
+            note(
+                root,
+                &format!("{parent}/revision.md"),
+                "revision",
+                revision,
+                extra,
+            );
+            fs::write(root.join(format!("{parent}/original.bin")), content).unwrap();
+            if complete {
+                fs::write(root.join(format!("{parent}/content.md")), content).unwrap();
+            }
+        }
+        crate::sources::RevisionSignature {
+            original_hash: Blake3Hash::digest(b"repeat"),
+            content_hash: Some(Blake3Hash::digest(b"repeat")),
+            extractor_fingerprint: fingerprint,
+        }
+    }
+
+    #[test]
+    fn refresh_lookup_real_claims_unicode_and_malformed_duplicates() {
+        for variant in 0..3 {
+            let (temp, _root, catalog) = unsynced();
+            fs::rename(temp.path().join("page.md"), temp.path().join("東京.md")).unwrap();
+            fs::write(temp.path().join("東京.md"), page("Résumé 東京")).unwrap();
+            if variant == 1 {
+                fs::write(temp.path().join("duplicate.md"), page("Duplicate")).unwrap();
+            }
+            if variant == 2 {
+                fs::write(temp.path().join("broken.md"), "---\nwiki_schema: '1'\nwiki_id: page_query\nwiki_kind: invalid\ntitle: Broken\n---\n").unwrap();
+            }
+            publish_normalized(&catalog, 1);
+            let reader = defaults(&catalog);
+            let lookup: &dyn crate::sources::SourceRefreshLookup = &reader;
+            assert!(lookup.id_is_claimed(&id("page_query")).unwrap());
+            if variant == 0 {
+                let selected = lookup.unique_record(&id("page_query")).unwrap().unwrap();
+                assert_eq!(selected.path, path("東京.md"));
+                assert_eq!(selected.record.title(), "Résumé 東京");
+                assert_eq!(
+                    lookup
+                        .record_at_path(&path("東京.md"))
+                        .unwrap()
+                        .unwrap()
+                        .hash,
+                    selected.hash
+                );
+                assert!(lookup.unique_record(&id("not_present")).unwrap().is_none());
+                assert!(!lookup.id_is_claimed(&id("not_present")).unwrap());
+                assert!(lookup.record_at_path(&path("absent.md")).unwrap().is_none());
+                assert_eq!(lookup.snapshot(), QueryCatalog::snapshot(&reader));
+                assert_eq!(lookup.vault_id(), &id("vault_query"));
+            } else {
+                assert_eq!(
+                    lookup.unique_record(&id("page_query")).unwrap_err().code,
+                    ErrorCode::IndexCorrupt
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn refresh_lookup_admits_claim_bytes_before_decode_and_refuses_mismatch() {
+        for mutation in [
+            "UPDATE identity_claims SET file_hash='invalid' WHERE record_id='page_query'",
+            "UPDATE identity_claims SET kind=NULL WHERE record_id='page_query'",
+            "UPDATE identity_claims SET path='wrong.md' WHERE record_id='page_query'",
+            "DELETE FROM identity_claims WHERE record_id='page_query'",
+        ] {
+            let (_temp, _root, catalog) = unsynced();
+            let completed = publish_normalized(&catalog, 1);
+            let writer = Connection::open(&completed.path).unwrap();
+            selector::configure_wal(&writer).unwrap();
+            writer.execute_batch(mutation).unwrap();
+            drop(writer);
+            let reader = defaults(&catalog);
+            let lookup: &dyn crate::sources::SourceRefreshLookup = &reader;
+            assert!(lookup.id_is_claimed(&id("page_query")).unwrap());
+            assert_eq!(
+                lookup.unique_record(&id("page_query")).unwrap_err().code,
+                ErrorCode::IndexCorrupt
+            );
+        }
+        let (temp, _root, catalog) = unsynced();
+        fs::rename(temp.path().join("page.md"), temp.path().join("東京.md")).unwrap();
+        let completed = publish_normalized(&catalog, 1);
+        let database = Connection::open(&completed.path).unwrap();
+        selector::configure_wal(&database).unwrap();
+        database
+            .execute("UPDATE records SET row_json='{' WHERE id='page_query'", [])
+            .unwrap();
+        drop(database);
+        let reader = catalog
+            .query_snapshot(QueryReadLimits {
+                max_rows: 1,
+                ..QueryReadLimits::default()
+            })
+            .unwrap();
+        let lookup: &dyn crate::sources::SourceRefreshLookup = &reader;
+        assert_eq!(
+            lookup.unique_record(&id("page_query")).unwrap_err().code,
+            ErrorCode::BudgetExceeded
+        );
+        let claim_bytes =
+            "東京.md".len() + Blake3Hash::digest(b"anything").as_str().len() + "page".len();
+        assert_eq!(
+            reader.usage(),
+            QueryReadUsage {
+                rows: 1,
+                bytes: claim_bytes
+            }
+        );
+        let limited = catalog
+            .query_snapshot(QueryReadLimits {
+                max_row_bytes: claim_bytes - 1,
+                ..QueryReadLimits::default()
+            })
+            .unwrap();
+        let lookup: &dyn crate::sources::SourceRefreshLookup = &limited;
+        assert_eq!(
+            lookup.unique_record(&id("page_query")).unwrap_err().code,
+            ErrorCode::BudgetExceeded
+        );
+        assert_eq!(limited.usage().rows, 0);
+    }
+
+    #[test]
+    fn refresh_revision_signature_uses_retained_order_and_validates_tuple() {
+        let (temp, _root, catalog) = unsynced();
+        let signature = refresh_source_fixture(temp.path());
+        let completed = publish_normalized(&catalog, 1);
+        let reader = defaults(&catalog);
+        let lookup: &dyn crate::sources::SourceRefreshLookup = &reader;
+        let source = id("source_refresh");
+        let matched = lookup
+            .matching_revision(&source, &signature)
+            .unwrap()
+            .unwrap();
+        assert_eq!(matched.retained_ordinal, 0);
+        assert_eq!(matched.revision.record.id(), &id("revision_z")); // retained order differs from ID order
+        assert_eq!(
+            lookup
+                .unique_record(&source)
+                .unwrap()
+                .unwrap()
+                .record
+                .string("wiki_current_revision"),
+            Some("revision_current")
+        );
+        for (bytes, content, expected) in [
+            (b"head".as_slice(), true, "revision_current"),
+            (b"unavailable".as_slice(), false, "revision_unsupported"),
+        ] {
+            let requested = crate::sources::RevisionSignature {
+                original_hash: Blake3Hash::digest(bytes),
+                content_hash: content.then(|| Blake3Hash::digest(bytes)),
+                extractor_fingerprint: signature.extractor_fingerprint.clone(),
+            };
+            assert_eq!(
+                lookup
+                    .matching_revision(&source, &requested)
+                    .unwrap()
+                    .unwrap()
+                    .revision
+                    .record
+                    .id(),
+                &id(expected)
+            );
+        }
+        let wrong = crate::sources::RevisionSignature {
+            original_hash: signature.original_hash.clone(),
+            content_hash: None,
+            extractor_fingerprint: signature.extractor_fingerprint.clone(),
+        };
+        assert!(lookup.matching_revision(&source, &wrong).unwrap().is_none());
+        drop(reader);
+        let writer = Connection::open(&completed.path).unwrap();
+        selector::configure_wal(&writer).unwrap();
+        writer.execute("UPDATE source_revision_identity SET extraction_status='unsupported' WHERE revision_id='revision_z'", []).unwrap();
+        drop(writer);
+        let reader = defaults(&catalog);
+        let lookup: &dyn crate::sources::SourceRefreshLookup = &reader;
+        assert_eq!(
+            lookup
+                .matching_revision(&source, &signature)
+                .unwrap_err()
+                .code,
+            ErrorCode::IndexCorrupt
+        );
+    }
+
+    #[test]
+    fn refresh_assertions_stream_distinct_ids_with_admission_and_indexed_plan() {
+        let (_temp, _root, catalog) = unsynced();
+        let completed = publish_normalized(&catalog, 1);
+        let database = Connection::open(&completed.path).unwrap();
+        selector::configure_wal(&database).unwrap();
+        database.execute_batch("INSERT INTO source_evidence VALUES('source_selected','evidence_b','assertion_b'),('source_selected','evidence_a','assertion_a'),('source_selected','evidence_c','assertion_b'); WITH RECURSIVE n(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM n WHERE x<1000) INSERT INTO source_evidence SELECT 'unrelated_'||x,'evidence_'||x,'assertion_'||x FROM n;").unwrap();
+        drop(database);
+        let reader = defaults(&catalog);
+        let lookup: &dyn crate::sources::SourceRefreshLookup = &reader;
+        assert_eq!(
+            lookup.source_assertions(&id("source_selected")).unwrap(),
+            vec![id("assertion_a"), id("assertion_b")]
+        );
+        assert_eq!(
+            reader.usage(),
+            QueryReadUsage {
+                rows: 2,
+                bytes: "assertion_a".len() + "assertion_b".len()
+            }
+        );
+        for (query, index) in [
+            (
+                "SELECT DISTINCT assertion_id FROM source_evidence INDEXED BY source_assertions WHERE source_id='source_selected' ORDER BY assertion_id",
+                "source_assertions",
+            ),
+            (
+                "SELECT revision_id FROM source_revision_identity INDEXED BY source_revision_matches WHERE source_id='source_selected' AND original_hash='hash' AND content_hash IS NULL AND extractor_fingerprint='fingerprint' ORDER BY retained_ordinal LIMIT 1",
+                "source_revision_matches",
+            ),
+            (
+                "SELECT id FROM records INDEXED BY record_paths WHERE path='page.md'",
+                "record_paths",
+            ),
+        ] {
+            let mut statement = reader
+                .connection()
+                .prepare(&format!("EXPLAIN QUERY PLAN {query}"))
+                .unwrap();
+            let details = statement
+                .query_map([], |row| row.get::<_, String>(3))
+                .unwrap()
+                .collect::<std::result::Result<Vec<_>, _>>()
+                .unwrap();
+            assert!(
+                details
+                    .iter()
+                    .any(|detail| detail.contains("SEARCH") && detail.contains(index)),
+                "{details:?}"
+            );
+            assert!(
+                !details.iter().any(|detail| detail.contains("TEMP B-TREE")),
+                "{details:?}"
+            );
+        }
+        let limited = catalog
+            .query_snapshot(QueryReadLimits {
+                max_rows: 1,
+                ..QueryReadLimits::default()
+            })
+            .unwrap();
+        let lookup: &dyn crate::sources::SourceRefreshLookup = &limited;
+        assert_eq!(
+            lookup
+                .source_assertions(&id("source_selected"))
+                .unwrap_err()
+                .code,
+            ErrorCode::BudgetExceeded
+        );
+        assert_eq!(limited.usage().rows, 1);
+    }
+
+    #[test]
+    fn refresh_rejects_legacy_unbound_and_known_invalid_sources() {
+        let (_temp, _root, catalog) = fixture();
+        let reader = defaults(&catalog);
+        let lookup: &dyn crate::sources::SourceRefreshLookup = &reader;
+        assert_eq!(
+            lookup.unique_record(&id("page_query")).unwrap_err().code,
+            ErrorCode::OfflineUnavailable
+        );
+        let (temp, _root, catalog) = unsynced();
+        refresh_source_fixture(temp.path());
+        fs::write(
+            temp.path()
+                .join("sources/source_refresh/revisions/revision_z/original.bin"),
+            "corrupt retained payload",
+        )
+        .unwrap();
+        publish_normalized(&catalog, 1);
+        let reader = defaults(&catalog);
+        let lookup: &dyn crate::sources::SourceRefreshLookup = &reader;
+        assert_eq!(
+            lookup
+                .unique_record(&id("source_refresh"))
+                .unwrap_err()
+                .code,
+            ErrorCode::SourceIntegrity
+        );
+        drop(reader);
+        let mut unbound = defaults(&catalog);
+        unbound.snapshot = ReadSnapshot::canonical(
+            1,
+            scan::parser_fingerprint(),
+            Blake3Hash::digest(b"not publication"),
+        );
+        let lookup: &dyn crate::sources::SourceRefreshLookup = &unbound;
+        assert_eq!(
+            lookup
+                .id_is_claimed(&id("source_refresh"))
+                .unwrap_err()
+                .code,
+            ErrorCode::IndexCorrupt
+        );
     }
 
     #[test]

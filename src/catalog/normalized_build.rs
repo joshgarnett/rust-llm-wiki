@@ -2,7 +2,8 @@
 use super::{file_types::BuildIdentity, normalized_schema, sql, types::*};
 use crate::{
     domain::{
-        Blake3Hash, Eligibility, ErrorCode, ReadSnapshot, Result, VaultRelativePath, WikiError,
+        Blake3Hash, Eligibility, ErrorCode, ReadSnapshot, RecordId, RecordKind, Result,
+        VaultRelativePath, WikiError,
     },
     vault::{ExpectedState, VaultFs, WriterPermit},
 };
@@ -84,6 +85,7 @@ impl BuildLimits {
 
 #[derive(Debug, Clone, Default, Serialize)]
 pub(crate) struct BuildStats {
+    pub identity_claims: u64,
     pub documents: u64,
     pub graph_rows: u64,
     pub links: u64,
@@ -426,6 +428,89 @@ impl<'a> NormalizedBuilder<'a> {
         Ok(())
     }
 
+    fn insert_refresh_lookups(&mut self, projection: &ValidationProjection) -> Result<()> {
+        // Rebuild work may inspect complete metadata once. Refresh queries use
+        // these source-local indexes instead of reading historical payloads.
+        for source in projection.records.values().filter(|row| {
+            row.record.kind() == RecordKind::Source && row.eligibility != Eligibility::Invalid
+        }) {
+            let revisions = source
+                .record
+                .field("wiki_revisions")
+                .and_then(serde_json::Value::as_array)
+                .ok_or_else(|| {
+                    WikiError::new(
+                        ErrorCode::IndexCorrupt,
+                        "source revision list missing from validated projection",
+                    )
+                })?;
+            for (ordinal, value) in revisions.iter().enumerate() {
+                let revision_id = RecordId::new(value.as_str().ok_or_else(|| {
+                    WikiError::new(
+                        ErrorCode::IndexCorrupt,
+                        "source revision identity is not text",
+                    )
+                })?)?;
+                let row = projection
+                    .records
+                    .get(&revision_id)
+                    .filter(|row| {
+                        row.record.kind() == RecordKind::Revision
+                            && row.record.string("wiki_source_id")
+                                == Some(source.record.id().as_str())
+                    })
+                    .ok_or_else(|| {
+                        WikiError::new(
+                            ErrorCode::IndexCorrupt,
+                            "validated retained revision identity is missing or foreign",
+                        )
+                    })?;
+                let required = |field| {
+                    row.record.string(field).ok_or_else(|| {
+                        WikiError::new(
+                            ErrorCode::IndexCorrupt,
+                            format!("validated revision lacks {field}"),
+                        )
+                    })
+                };
+                let original = required("wiki_original_hash")?;
+                let content = row.record.string("wiki_content_hash");
+                let fingerprint = required("wiki_extractor_fingerprint")?;
+                let status = required("wiki_extraction_status")?;
+                self.admit(checked_sum(&[
+                    256,
+                    source.record.id().as_str().len() as u64,
+                    revision_id.as_str().len() as u64,
+                    original.len() as u64,
+                    content.map_or(0, str::len) as u64,
+                    fingerprint.len() as u64,
+                    status.len() as u64,
+                ])?)?;
+                self.connection().execute("INSERT INTO source_revision_identity(source_id,revision_id,retained_ordinal,original_hash,content_hash,extractor_fingerprint,extraction_status) VALUES(?1,?2,?3,?4,?5,?6,?7)",params![source.record.id().as_str(),revision_id.as_str(),sql::integer(ordinal as u64)?,original,content,fingerprint,status]).map_err(build_sql_error)?;
+            }
+        }
+        for row in projection
+            .records
+            .values()
+            .filter(|row| row.record.kind() == RecordKind::Evidence)
+        {
+            let source = row.record.string("wiki_source_id").ok_or_else(|| {
+                WikiError::new(ErrorCode::IndexCorrupt, "evidence lacks source identity")
+            })?;
+            let assertion = row.record.string("wiki_assertion_id").ok_or_else(|| {
+                WikiError::new(ErrorCode::IndexCorrupt, "evidence lacks assertion identity")
+            })?;
+            self.admit(checked_sum(&[
+                256,
+                source.len() as u64,
+                row.record.id().as_str().len() as u64,
+                assertion.len() as u64,
+            ])?)?;
+            self.connection().execute("INSERT INTO source_evidence(source_id,evidence_id,assertion_id) VALUES(?1,?2,?3)",params![source,row.record.id().as_str(),assertion]).map_err(build_sql_error)?;
+        }
+        Ok(())
+    }
+
     pub fn finish(mut self, projection: &ValidationProjection) -> Result<CompletedCatalog> {
         let result = self.finish_inner(projection);
         if result.is_err() {
@@ -496,6 +581,7 @@ impl<'a> NormalizedBuilder<'a> {
                 .map_err(build_sql_error)?;
             self.stats.records += 1;
         }
+        self.insert_refresh_lookups(projection)?;
         for dependency in &projection.dependencies {
             let hash = match &dependency.expected {
                 ExpectedState::Absent => None,
@@ -638,6 +724,24 @@ impl<'a> NormalizedBuilder<'a> {
     }
 }
 impl RetrievalSink for NormalizedBuilder<'_> {
+    fn identity_claim(&mut self, row: IdentityClaimRow) -> Result<()> {
+        let result = (|| {
+            self.guard()?;
+            self.admit(checked_sum(&[
+                256,
+                row.id.as_str().len() as u64,
+                row.path.as_str().len() as u64,
+                row.hash.as_str().len() as u64,
+            ])?)?;
+            self.connection().execute("INSERT INTO identity_claims(record_id,path,file_hash,kind) VALUES(?1,?2,?3,?4)", params![row.id.as_str(),row.path.as_str(),row.hash.as_str(),row.kind.map(|kind|kind.as_str())]).map_err(build_sql_error)?;
+            self.stats.identity_claims += 1;
+            Ok(())
+        })();
+        if result.is_err() {
+            self.failed();
+        }
+        result
+    }
     fn document(&mut self, row: DocumentRow) -> Result<()> {
         let result = self.insert_document(&row);
         if result.is_err() {

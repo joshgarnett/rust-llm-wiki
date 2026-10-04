@@ -52,6 +52,15 @@ The catalog/retrieval gate passed 148 tests (two ignored), including old-reader
 visibility, missing-WAL refusal without mutation and committed-WAL recovery after
 shared-memory loss. The public refresh workflow and its latency remain unfinished.
 
+The bounded refresh planner now uses indexed identity claims, revision signatures
+and evidence associations. It authenticates the selected source, current revision
+and any historical revision actually reused, including that revision's retained
+position. Unselected historical payloads are outside this planning operation.
+The catalog/source/authority gate passed 122 tests (two ignored), including
+no-op, title-only, historical reuse, malformed identities, changed selected bytes
+and invalid retained positions. These tests cover planning and lookup behavior;
+the public command still needs bounded apply, dependency updates and publication.
+
 ## Why a redesign is necessary
 
 A public 299-source corpus exposed an operational failure before answer quality
@@ -127,7 +136,16 @@ revision, matching retained revision identity and affected dependents by index.
 Authenticate the selected inputs and any revision actually reused; inspecting
 every unrelated historical payload belongs to explicit auditing. A no-op should
 return after those selected checks, without preparing a changeset or rebuilding
-the graph. This still requires changes to the current planner and apply path.
+the graph. The internal planner implements this boundary; the public command and
+apply path still require integration.
+
+Keep immutable revision ownership in indexed rows reconstructed from validated
+retained change receipts and manifests. Include committed owners whose canonical
+trees have since disappeared. An explicit completed ownership-index version must
+gate bounded writes; an empty table does not establish that reconstruction ran.
+The active operation record reserves a pending manifest, and its new ownership
+rows must commit with the catalog delta. This is the integration design, not an
+implemented replacement for the current history checks.
 
 Use independently addressable catalog records, source manifests, reverse
 dependencies and retrieval units. Query only required rows and bounded candidate

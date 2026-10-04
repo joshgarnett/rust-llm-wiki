@@ -39,6 +39,13 @@ CREATE VIEW graph_fts_content AS SELECT graph_row,name,aliases_text AS aliases,e
 CREATE VIRTUAL TABLE graph_fts USING fts5(name,aliases,endpoints,predicate,qualifiers,description,target_kind UNINDEXED,target_id UNINDEXED,content='graph_fts_content',content_rowid='graph_row',detail=full,columnsize=1,tokenize='unicode61 remove_diacritics 2');
 CREATE VIRTUAL TABLE graph_vocab USING fts5vocab(graph_fts,'instance');
 CREATE TABLE records(id TEXT PRIMARY KEY,kind TEXT NOT NULL,path TEXT NOT NULL,hash TEXT NOT NULL,authored_status TEXT,eligibility TEXT NOT NULL,identity_eligibility TEXT,description_eligibility TEXT,disputed INTEGER NOT NULL CHECK(disputed IN (0,1)),row_json TEXT NOT NULL);
+CREATE UNIQUE INDEX record_paths ON records(path);
+CREATE TABLE identity_claims(record_id TEXT NOT NULL,path TEXT NOT NULL,file_hash TEXT NOT NULL,kind TEXT,PRIMARY KEY(record_id,path));
+CREATE TABLE source_revision_identity(source_id TEXT NOT NULL,revision_id TEXT NOT NULL,retained_ordinal INTEGER NOT NULL CHECK(retained_ordinal>=0),original_hash TEXT NOT NULL,content_hash TEXT,extractor_fingerprint TEXT NOT NULL,extraction_status TEXT NOT NULL,PRIMARY KEY(source_id,revision_id),UNIQUE(source_id,retained_ordinal));
+CREATE INDEX source_revision_matches ON source_revision_identity(source_id,original_hash,content_hash,extractor_fingerprint,retained_ordinal);
+CREATE TABLE source_evidence(source_id TEXT NOT NULL,evidence_id TEXT NOT NULL,assertion_id TEXT NOT NULL,PRIMARY KEY(source_id,evidence_id));
+CREATE INDEX source_assertions ON source_evidence(source_id,assertion_id,evidence_id);
+CREATE INDEX assertion_evidence ON source_evidence(assertion_id,evidence_id);
 CREATE TABLE links(link_row INTEGER PRIMARY KEY,from_path TEXT NOT NULL,byte_start INTEGER NOT NULL CHECK(byte_start>=0),target_id TEXT,target_path TEXT,resolution TEXT NOT NULL);
 CREATE INDEX link_paths ON links(from_path,byte_start,link_row);
 CREATE TABLE diagnostics(diagnostic_row INTEGER PRIMARY KEY,path TEXT NOT NULL,record_id TEXT,code TEXT NOT NULL,details_json TEXT NOT NULL);
