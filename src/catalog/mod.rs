@@ -11,6 +11,7 @@ mod ownership_tests;
 pub mod publish;
 pub(crate) mod query;
 pub(crate) mod query_types;
+pub(crate) mod row_projection;
 pub mod scan;
 pub(crate) mod selector;
 pub mod snapshot;

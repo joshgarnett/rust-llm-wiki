@@ -98,43 +98,6 @@ pub(crate) fn readable_id(note: &ParsedNote) -> Option<RecordId> {
     }
 }
 
-/// Bookkeeping copies retain their kind when malformed metadata or duplicate
-/// IDs prevent adoption. A readable top-level declaration is required.
-fn declared_bookkeeping_kind(note: &ParsedNote) -> Option<RecordKind> {
-    let bookkeeping = |kind| {
-        matches!(
-            kind,
-            RecordKind::Decision
-                | RecordKind::ExtractionPacket
-                | RecordKind::Extraction
-                | RecordKind::Run
-                | RecordKind::RunEvent
-                | RecordKind::Change
-        )
-    };
-    let declared = note
-        .canonical
-        .as_ref()
-        .map(|record| record.kind())
-        .or_else(|| {
-            note.fields.as_ref().and_then(|fields| {
-                fields
-                    .get("wiki_kind")
-                    .and_then(serde_json::Value::as_str)
-                    .and_then(|kind| kind.parse().ok())
-            })
-        });
-    declared.filter(|kind| bookkeeping(*kind)).or_else(|| {
-        isolated_fields(note).iter().find_map(|fields| {
-            fields
-                .get("wiki_kind")
-                .and_then(serde_json::Value::as_str)
-                .and_then(|kind| kind.parse().ok())
-                .filter(|kind| bookkeeping(*kind))
-        })
-    })
-}
-
 pub(crate) use crate::sources::identity::isolated_fields;
 
 pub(crate) fn diagnostic(
@@ -341,64 +304,8 @@ fn project_input(
                 .as_ref()
                 .and_then(|record| records.get(record.id()))
                 .filter(|row| &row.path == path);
-            let raw_text = note.literal_text().unwrap_or_default().to_owned();
+            retrieval.document(super::row_projection::canonical_document(path, note, row))?;
             let body = std::str::from_utf8(note.body()).unwrap_or_default();
-            let bookkeeping = declared_bookkeeping_kind(note);
-            let excluded = bookkeeping.is_some_and(|kind| kind != RecordKind::Decision)
-                || row.is_some_and(|r| {
-                    matches!(
-                        r.record.kind(),
-                        RecordKind::Evidence
-                            | RecordKind::Extraction
-                            | RecordKind::ExtractionPacket
-                    )
-                });
-            let (headings, normalized) = if excluded {
-                (String::new(), String::new())
-            } else {
-                normalized_markdown(body)
-            };
-            let title = row.map_or_else(
-                || first_heading(body).unwrap_or_else(|| path.as_str().to_owned()),
-                |r| r.record.title().to_owned(),
-            );
-            retrieval.document(DocumentRow {
-                path: path.clone(),
-                hash: note.source_hash.clone(),
-                record_id: row.map(|r| r.record.id().clone()),
-                kind: row.map(|r| r.record.kind()).or(bookkeeping),
-                title,
-                aliases: row.map_or_else(Vec::new, |r| list(&r.record, "aliases")),
-                headings,
-                tags: row.map_or_else(Vec::new, |r| list(&r.record, "tags")),
-                body: normalized,
-                raw_text,
-                source_id: None,
-                owner_revision: None,
-                eligibility: row.map_or_else(
-                    || {
-                        if note.canonical.is_some()
-                            || readable_id(note).is_some()
-                            || !note.diagnostics.is_empty()
-                        {
-                            Eligibility::Invalid
-                        } else {
-                            Eligibility::Current
-                        }
-                    },
-                    |r| r.eligibility,
-                ),
-                reasons: row.map_or_else(
-                    || {
-                        if note.canonical.is_some() || !note.diagnostics.is_empty() {
-                            vec!["unadopted_or_invalid".into()]
-                        } else {
-                            vec!["note_text".into()]
-                        }
-                    },
-                    |r| r.reasons.clone(),
-                ),
-            })?;
             let body_offset = note.raw.len() - note.body().len();
             for link in extract_links(body) {
                 let resolution = registry.resolve_untyped(&link.destination);
@@ -465,53 +372,20 @@ fn project_input(
         if let Some(retrieval) = retrieval.as_deref_mut()
             && matches!(record.kind(), RecordKind::Entity | RecordKind::Assertion)
         {
-            retrieval.graph(GraphRow {
-                target_id: record.id().clone(),
-                target_kind: record.kind(),
-                name: if record.kind() == RecordKind::Entity {
-                    record.title().into()
-                } else {
-                    String::new()
-                },
-                aliases: list(record, "aliases"),
-                endpoints: [
-                    record.string("wiki_subject_id"),
-                    record.string("wiki_object_id"),
-                ]
-                .into_iter()
-                .flatten()
-                .filter_map(|id| RecordId::new(id).ok().and_then(|id| records.get(&id)))
-                .filter(|row| row.record.kind() == RecordKind::Entity)
-                .flat_map(|row| {
-                    std::iter::once(row.record.title().to_owned())
-                        .chain(list(&row.record, "aliases"))
-                })
-                .collect::<Vec<_>>()
-                .join(" "),
-                predicate: record.string("wiki_predicate").unwrap_or_default().into(),
-                qualifiers: serde_json::to_string(&qualifiers(record))
-                    .map_err(|e| WikiError::invalid(e.to_string()))?,
-                description: if record.kind() == RecordKind::Entity
-                    && row.description_eligibility != Some(Eligibility::Current)
-                {
-                    String::new()
-                } else {
-                    record
-                        .string("description")
-                        .map(str::to_owned)
-                        .unwrap_or_else(|| {
-                            notes
-                                .get(&row.path)
-                                .map(|n| {
-                                    normalized_markdown(
-                                        std::str::from_utf8(n.body()).unwrap_or_default(),
-                                    )
-                                    .1
-                                })
-                                .unwrap_or_default()
-                        })
-                },
-            })?;
+            let endpoints = [
+                record.string("wiki_subject_id"),
+                record.string("wiki_object_id"),
+            ]
+            .map(|id| {
+                id.and_then(|id| RecordId::new(id).ok())
+                    .and_then(|id| records.get(&id))
+                    .map(|row| &row.record)
+            });
+            retrieval.graph(super::row_projection::graph_row(
+                row,
+                notes.get(&row.path),
+                endpoints,
+            )?)?;
         }
         if record.kind() == RecordKind::Revision
             && record.string("wiki_extraction_status") == Some("complete")
@@ -535,23 +409,9 @@ fn project_input(
                     && let Some(retrieval) = retrieval.as_deref_mut()
                     && let Ok(raw_text) = String::from_utf8(content)
                 {
-                    let (headings, body) = normalized_markdown(&raw_text);
-                    retrieval.document(DocumentRow {
-                        path,
-                        hash: Blake3Hash::digest(raw_text.as_bytes()),
-                        record_id: None,
-                        kind: None,
-                        title: record.title().into(),
-                        aliases: vec![],
-                        headings,
-                        tags: vec![],
-                        body,
-                        raw_text,
-                        source_id: Some(source_id),
-                        owner_revision: Some(record.id().clone()),
-                        eligibility: row.eligibility,
-                        reasons: row.reasons.clone(),
-                    })?;
+                    retrieval.document(super::row_projection::captured_content_document(
+                        path, source_id, row, raw_text,
+                    ))?;
                 }
             }
             // Failed verification also contributes every byte observed before failure.
@@ -605,40 +465,6 @@ pub(crate) fn list(record: &crate::domain::CanonicalRecord, key: &str) -> Vec<St
         .unwrap_or_default()
 }
 
-fn qualifiers(record: &crate::domain::CanonicalRecord) -> BTreeMap<String, serde_json::Value> {
-    let mut fields = BTreeMap::new();
-    if record.kind() != RecordKind::Assertion {
-        return fields;
-    }
-    for key in [
-        "wiki_literal_type",
-        "wiki_literal_value",
-        "wiki_property",
-        "wiki_unit",
-        "wiki_valid_from",
-        "wiki_valid_until",
-    ] {
-        if let Some(value) = record.field(key) {
-            fields.insert(key.to_owned(), value.clone());
-        }
-    }
-    fields.insert(
-        "wiki_negated".into(),
-        record
-            .field("wiki_negated")
-            .cloned()
-            .unwrap_or(false.into()),
-    );
-    fields.insert(
-        "wiki_modality".into(),
-        record
-            .field("wiki_modality")
-            .cloned()
-            .unwrap_or("asserted".into()),
-    );
-    fields
-}
-
 #[cfg(test)]
 thread_local! {
     static NORMALIZATION_CALLS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
@@ -672,14 +498,6 @@ pub(crate) fn normalized_markdown(markdown: &str) -> (String, String) {
     }
     (headings.join("\n"), text)
 }
-fn first_heading(body: &str) -> Option<String> {
-    normalized_markdown(body)
-        .0
-        .lines()
-        .next()
-        .map(str::to_owned)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
