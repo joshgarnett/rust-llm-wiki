@@ -44,4 +44,6 @@ When a solution adds an agent/model stage or changes the user workflow, declare 
 
 Measure elapsed time with a monotonic clock inside the process that owns the interval. Verify clock comparability before subtracting timestamps from separate processes; use recorded UTC observation times for external agent intervals when a shared monotonic epoch is unavailable, disclose wall-clock limitations, and distinguish observed turnaround from model inference time.
 
+Before using timings to guide performance changes or claim capacity, verify the actual compiler optimization settings and intended user build profile. Use the release configuration for release-performance qualification; pin the executable, build mode and compiler settings together. Preserve unoptimized runs as explicitly labeled diagnostics, and do not infer shipping limits from them. Correctness tests and representative performance measurements serve different purposes.
+
 Local mocks test mechanics. Live calls require existing user authorization, explicit finite limits and protected credentials; never print secrets or discard unknown accounting holds to make an experiment fit. Report experimental changes and residual limitations plainly. Update contracts, user documentation and execution state only to match the behavior actually implemented and verified.

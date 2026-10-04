@@ -30,11 +30,18 @@ All scale runs are offline with zero live provider calls.
 ## Environment and resource envelope
 
 Initial native host: Apple M1 Max, ten CPU cores, 32 GiB RAM, APFS. Record current
-OS, free space, power/background conditions and binary hash for each run. Leave
+OS, free space, power/background conditions and binary hash for each run. Verify
+and record actual compiler optimization settings. Release-performance qualification
+uses `--config=release` (Bazel `opt`, Rust optimization level 3); default `fastbuild`
+uses Rust optimization level 0 and is only an unoptimized diagnostic. Leave
 at least 32 GiB free; the entire disposable experiment may occupy at most 100 GiB
 physical storage, including input, canonical copies, history, indexes, WAL,
 temporary files and controlled backups. Bulk operations allow at most 8 GiB peak
 process-tree RSS. The full run allows 24 hours; no command may exceed four hours.
+
+Cargo's own benchmarking profile [inherits its release profile](https://doc.rust-lang.org/cargo/reference/profiles.html#bench).
+Here, retain the actual Rust compiler actions with executable pins; an output
+filename alone does not establish which optimizations were enabled.
 
 Run 1k and 10k controls before allocating the full tier. Stop safely if projected
 or observed disk, memory or time exceeds the envelope. Such a stop is an
@@ -585,7 +592,7 @@ unseen semantic-completeness gate are also still open.
 
 ### Public full-check resource controls
 
-The native macOS rehearsal and 1k control passed with the implementation at
+The **unoptimized fastbuild** native macOS rehearsal and 1k control passed with the implementation at
 `bdfd8ad` and the test-only held-reader helper committed as `ae73b16`. Each run
 copies canonical files from a verified closed export, adds the existing 133-file
 authored/graph overlay, and invokes two public normalized rebuilds. No seed SQLite
@@ -627,8 +634,14 @@ transaction; it does not extend production query deadlines.
 
 The frozen 20× projection from the larger 1k measurements gives 817.932 seconds
 per check/query pair, 4,237,230,080 bytes of memory and 1,689,518,080 bytes of
-scratch for 10k. These are conservative admission estimates, not measured 10k
-results. The 10k control and full-tier acceptance remain pending. In particular,
+scratch for 10k. These were admission estimates for the same unoptimized build,
+not measured 10k results or release-performance estimates. The 10k attempt
+completed its first rebuild in 360.809 seconds, then was deliberately interrupted
+during its second rebuild after the build-profile mismatch was identified. The
+supervisor preserved the failed/incomplete report and the held reader exited
+cleanly. No 10k control pass is claimed. Release qualification retains the same
+corpus, outcomes and resource thresholds with newly pinned optimized binaries.
+In particular,
 the 1k result alone does not establish the 100k audit-time target, import
 throughput, history-heavy workloads, other retrieval modes or unseen answer
 completeness.
