@@ -1096,3 +1096,305 @@ fn human_staged_commands_keep_vault_selection_and_search_escapes_terminal_contro
     );
     assert!(!text.contains("\nForged heading"));
 }
+
+fn doctor_fixture(normalized: bool) -> tempfile::TempDir {
+    let temp = fixture();
+    fs::write(
+        temp.path().join("doctor-page.md"),
+        page("Doctor.Page", "Cached apricot content"),
+    )
+    .unwrap();
+    let args = if normalized {
+        vec!["index", "rebuild", "--normalized"]
+    } else {
+        vec!["index", "sync"]
+    };
+    ok(temp.path(), &args, None);
+    temp
+}
+
+fn assert_doctor_has_no_audit(doctor: &Value) {
+    assert!(doctor["check"].is_null(), "{doctor}");
+    for field in [
+        "canonical_check_performed",
+        "history_check_performed",
+        "cache_integrity_check_performed",
+        "provider_probe_performed",
+    ] {
+        assert_eq!(doctor[field], false, "{field}: {doctor}");
+    }
+    assert_eq!(doctor["canonical_freshness"], "unknown");
+    assert_eq!(doctor["unresolved_changes"], json!([]));
+    assert_eq!(doctor["incomplete_preparations"], json!([]));
+    assert_ne!(doctor["cache_state"], "healthy");
+    assert_ne!(doctor["cache_state"], "ready");
+}
+
+fn poison_unrelated_doctor_inputs(root: &Path) {
+    fs::write(root.join("broken.md"), b"---\nwiki_schema: \"1\"\nwiki_id: Broken.Page\nwiki_kind: page\n---\nMissing required title\n").unwrap();
+    fs::create_dir_all(root.join("changes/History.Malformed")).unwrap();
+    fs::write(
+        root.join("changes/History.Malformed/change.md"),
+        b"not a valid retained changeset",
+    )
+    .unwrap();
+    fs::create_dir_all(root.join("changes/Preparation.Malformed")).unwrap();
+    fs::write(
+        root.join("changes/Preparation.Malformed/outcome.json"),
+        b"malformed durable evidence without a manifest",
+    )
+    .unwrap();
+}
+
+#[test]
+fn doctor_cli_ignores_unrelated_malformed_canonical_and_history_but_check_finds_canonical() {
+    for normalized in [false, true] {
+        let temp = doctor_fixture(normalized);
+        let root = temp.path();
+        poison_unrelated_doctor_inputs(root);
+        let inputs = [
+            "broken.md",
+            "changes/History.Malformed/change.md",
+            "changes/Preparation.Malformed/outcome.json",
+        ];
+        let before: Vec<_> = inputs
+            .iter()
+            .map(|name| fs::read(root.join(name)).unwrap())
+            .collect();
+        let doctor = ok(root, &["doctor"], None);
+        let doctor = &doctor["data"];
+        assert_doctor_has_no_audit(doctor);
+        assert_eq!(
+            doctor["cache_layout"],
+            if normalized { "normalized" } else { "legacy" }
+        );
+        assert!(doctor["cache_error"].is_null(), "{doctor}");
+        assert_eq!(
+            doctor["operation_state"],
+            if normalized {
+                "idle"
+            } else {
+                "legacy_without_slot"
+            }
+        );
+        if normalized {
+            assert_eq!(doctor["cache_state"], "header_available");
+            assert_eq!(doctor["header_check_performed"], true);
+            assert!(doctor["cache_header_snapshot"].is_object());
+            assert_eq!(doctor["parser_compatible"], true);
+        }
+        for (name, bytes) in inputs.iter().zip(before) {
+            assert_eq!(fs::read(root.join(name)).unwrap(), bytes);
+        }
+        let (exit, checked) = invoke(Some(root), &["check"], None);
+        assert_eq!(exit, 9, "{checked}");
+        assert!(
+            checked["data"]["diagnostics"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|diagnostic| diagnostic["path"] == "broken.md"),
+            "{checked}"
+        );
+    }
+}
+
+#[test]
+fn doctor_cli_dry_run_probe_preserves_absent_legacy_and_normalized_trees() {
+    for layout in ["absent", "legacy", "normalized"] {
+        let temp = if layout == "absent" {
+            fixture()
+        } else {
+            doctor_fixture(layout == "normalized")
+        };
+        let root = temp.path();
+        poison_unrelated_doctor_inputs(root);
+        let before = tree(root);
+        for args in [
+            vec!["--dry-run", "doctor"],
+            vec!["--dry-run", "doctor", "--probe"],
+        ] {
+            let response = ok(root, &args, None);
+            let doctor = if args.contains(&"--probe") {
+                &response["data"]["doctor"]
+            } else {
+                &response["data"]
+            };
+            assert_doctor_has_no_audit(doctor);
+            assert_eq!(doctor["cache_layout"], "unknown");
+            assert_eq!(doctor["cache_state"], "unknown");
+            assert_eq!(doctor["operation_state"], "not_checked");
+            assert_eq!(doctor["header_check_performed"], false);
+            assert!(doctor["cache_header_snapshot"].is_null());
+            assert!(doctor["parser_compatible"].is_null());
+            if args.contains(&"--probe") {
+                assert_eq!(response["data"]["probe"]["dry_run"], true);
+            }
+            assert_eq!(tree(root), before, "layout={layout}, args={args:?}");
+        }
+    }
+}
+
+#[test]
+fn doctor_cli_legacy_wal_without_sidecars_is_present_uninspected_and_read_only() {
+    let temp = doctor_fixture(false);
+    let root = temp.path();
+    let database = root.join(".wiki/cache/index.sqlite");
+    let bytes = fs::read(&database).unwrap();
+    assert_eq!(&bytes[..16], b"SQLite format 3\0");
+    assert_eq!((bytes[18], bytes[19]), (2, 2));
+    for suffix in ["-wal", "-shm"] {
+        assert!(
+            !root
+                .join(format!(".wiki/cache/index.sqlite{suffix}"))
+                .exists()
+        );
+    }
+    let before = tree(root);
+    let response = ok(root, &["doctor"], None);
+    let doctor = &response["data"];
+    assert_doctor_has_no_audit(doctor);
+    assert_eq!(doctor["cache_layout"], "legacy");
+    assert_eq!(doctor["cache_state"], "present_uninspected");
+    assert_eq!(doctor["header_check_performed"], false);
+    assert!(doctor["cache_header_snapshot"].is_null());
+    assert!(doctor["parser_compatible"].is_null());
+    assert!(doctor["cache_error"].is_null());
+    assert!(
+        doctor["cache_note"]
+            .as_str()
+            .is_some_and(|note| !note.is_empty())
+    );
+    assert_eq!(tree(root), before);
+}
+
+#[test]
+fn doctor_cli_normalized_missing_or_damaged_authority_is_unavailable_without_legacy_fallback() {
+    for missing in [true, false] {
+        let temp = doctor_fixture(false);
+        let root = temp.path();
+        assert!(root.join(".wiki/cache/index.sqlite").exists());
+        ok(root, &["index", "rebuild", "--normalized"], None);
+        let slot = root.join(".wiki/state/operations.json");
+        if missing {
+            fs::remove_file(&slot).unwrap();
+        } else {
+            fs::write(&slot, b"damaged authoritative slot").unwrap();
+        }
+        let before = tree(root);
+        let response = ok(root, &["doctor"], None);
+        let doctor = &response["data"];
+        assert_doctor_has_no_audit(doctor);
+        assert_eq!(doctor["cache_layout"], "normalized");
+        assert_eq!(doctor["cache_state"], "unavailable");
+        assert_eq!(doctor["operation_state"], "unavailable");
+        assert_eq!(doctor["header_check_performed"], false);
+        assert!(doctor["cache_header_snapshot"].is_null());
+        assert!(doctor["cache_error"].is_object(), "{doctor}");
+        assert_eq!(tree(root), before);
+    }
+}
+
+#[test]
+fn doctor_cli_normalized_header_availability_does_not_claim_row_integrity() {
+    let temp = doctor_fixture(true);
+    let root = temp.path();
+    let selected: Value =
+        serde_json::from_slice(&fs::read(root.join(".wiki/cache/catalog-current.json")).unwrap())
+            .unwrap();
+    let database = root.join(format!(
+        ".wiki/cache/catalogs/{}.sqlite",
+        selected["file_id"].as_str().unwrap()
+    ));
+    let connection = rusqlite::Connection::open(&database).unwrap();
+    connection
+        .execute_batch("DELETE FROM documents; PRAGMA journal_mode=DELETE;")
+        .unwrap();
+    drop(connection);
+    let response = ok(root, &["doctor"], None);
+    let doctor = &response["data"];
+    assert_doctor_has_no_audit(doctor);
+    assert_eq!(doctor["cache_layout"], "normalized");
+    assert_eq!(doctor["cache_state"], "header_available");
+    assert_eq!(doctor["header_check_performed"], true);
+    assert_eq!(doctor["parser_compatible"], true);
+    assert!(doctor["cache_header_snapshot"].is_object());
+    assert!(doctor["cache_error"].is_null());
+    assert!(root.join("doctor-page.md").exists());
+}
+
+#[test]
+fn doctor_cli_reports_active_slot_without_loading_unrelated_change_history() {
+    let temp = doctor_fixture(true);
+    let root = temp.path();
+    poison_unrelated_doctor_inputs(root);
+    let slot = root.join(".wiki/state/operations.json");
+    let mut authority: Value = serde_json::from_slice(&fs::read(&slot).unwrap()).unwrap();
+    let mut intended = authority["publication"].clone();
+    intended["epoch"] = json!(intended["epoch"].as_u64().unwrap() + 1);
+    authority["revision"] = json!(authority["revision"].as_u64().unwrap() + 1);
+    authority["active"] = json!({
+        "change": {"change_id":"Change.Doctor.Active", "manifest_hash":Blake3Hash::digest(b"fixed doctor active-slot fixture")},
+        "starting":authority["publication"], "intended":intended,
+    });
+    fs::write(&slot, serde_json::to_vec(&authority).unwrap()).unwrap();
+    let before = fs::read(&slot).unwrap();
+    let response = ok(root, &["doctor"], None);
+    let doctor = &response["data"];
+    assert_doctor_has_no_audit(doctor);
+    assert_eq!(doctor["cache_layout"], "normalized");
+    assert_eq!(doctor["operation_state"], "active");
+    assert_eq!(doctor["active_change"], "Change.Doctor.Active");
+    assert_eq!(doctor["cache_state"], "header_available");
+    assert_eq!(doctor["header_check_performed"], true);
+    assert_eq!(fs::read(slot).unwrap(), before);
+}
+
+#[test]
+fn doctor_cli_human_summary_states_unperformed_checks_and_quotes_selected_vault() {
+    let temp = fixture();
+    let root = temp.path().join("doctor vault with spaces");
+    fs::create_dir(&root).unwrap();
+    fs::copy(temp.path().join("WIKI.md"), root.join("WIKI.md")).unwrap();
+    fs::write(
+        root.join("doctor-page.md"),
+        page("Doctor.Human", "Apricot text"),
+    )
+    .unwrap();
+    ok(&root, &["index", "sync"], None);
+    let output = Command::new(test_paths::binary(env!("CARGO_BIN_EXE_lwiki")))
+        .args(["--offline", "--wiki"])
+        .arg(&root)
+        .arg("doctor")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(output.stderr.is_empty());
+    let rendered = String::from_utf8(output.stdout).unwrap();
+    assert!(!rendered.trim_start().starts_with('{'), "{rendered}");
+    assert!(
+        !rendered.contains("\"canonical_check_performed\":"),
+        "{rendered}"
+    );
+    for expected in [
+        "Cache:",
+        "legacy",
+        "present_uninspected",
+        "Canonical, history and cache-integrity audits: not performed.",
+        "Canonical freshness: unknown",
+    ] {
+        assert!(
+            rendered.contains(expected),
+            "missing {expected:?}: {rendered}"
+        );
+    }
+    let check = format!("lwiki --wiki '{}' check", root.display());
+    assert!(
+        rendered.contains(&check),
+        "missing executable selected-vault guidance {check:?}: {rendered}"
+    );
+}

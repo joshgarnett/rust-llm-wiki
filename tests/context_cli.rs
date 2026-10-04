@@ -957,6 +957,8 @@ fn executable_m1_context_tracks_rename_revalidation_withdrawal_and_cache_rebuild
     assert_eq!(rebuilt["data"]["passages"], historical["data"]["passages"]);
     ok(root, &["recover"]);
     let doctor = ok(root, &["doctor"]);
+    assert_eq!(doctor["data"]["history_check_performed"], false);
+    assert!(doctor["data"]["check"].is_null());
     assert!(
         doctor["data"]["unresolved_changes"]
             .as_array()

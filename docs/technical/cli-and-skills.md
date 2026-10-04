@@ -118,6 +118,21 @@ Stderr is for concise diagnostics/progress. With JSON/JSONL, it never carries a 
 
 Limit truncation during ordinary discovery is a successful bounded query, with `partial: true`. A requested complete operation that stops at its budget returns exit 7 with its durable partial result. `check` reports diagnostics as data and returns 9 for error-level invalid records; warnings alone do not fail it. `doctor` does not probe providers unless `--probe` is explicit.
 
+`doctor` is a bounded status observation. Its `check` is null; canonical, history
+and cache-integrity checks are marked unperformed, with canonical freshness
+unknown. `cache_state: header_available` means the selected header was read,
+not that the vault or index passed a full audit. A legacy WAL database without
+its ordinary sidecars is `present_uninspected`: this can follow a clean close,
+and doctor leaves it unopened to avoid creating sidecars. An active normalized
+operation is reported separately in `active_change`; empty history arrays do
+not establish that no unresolved changes exist. Use explicit `check` for
+canonical diagnostics and `recover` for recovery. Dry-run skips the cache
+observation and any requested provider probe.
+
+Legacy header inspection also requires a nonblocking shared lock on the existing
+writer lock. A missing or busy lock yields `present_uninspected` without opening
+SQLite or creating a lock file; retry after an active writer finishes.
+
 ## Mutation and dry-run behavior
 
 All writes route through storage's expected-version changeset API. A caller can stage and later apply, or request a direct authorized single operation whose implementation uses the same journal. Normal complete invocations do not prompt for repeated approval. Conflicts never silently downgrade to unconditional overwrite. Applying model-produced changes is explicit, and import schema validity is distinct from accepting a factual assertion.

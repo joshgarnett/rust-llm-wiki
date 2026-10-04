@@ -158,7 +158,7 @@ pub enum Command {
     },
     /// Check canonical records, references and source integrity.
     Check,
-    /// Inspect local health; contact a provider only with --probe.
+    /// Inspect local status without a full audit; probe providers only with --probe.
     Doctor {
         /// Explicitly contact the selected provider within the supplied request limits.
         #[arg(long)]

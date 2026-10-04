@@ -114,9 +114,20 @@ pub struct CheckOutcome {
 }
 #[derive(Debug, Clone, Serialize)]
 pub struct DoctorOutcome {
-    pub check: CheckOutcome,
+    pub check: Option<CheckOutcome>,
+    pub canonical_check_performed: bool,
+    pub canonical_freshness: String,
+    pub history_check_performed: bool,
+    pub cache_integrity_check_performed: bool,
+    pub cache_layout: String,
     pub cache_state: String,
     pub cache_error: Option<WikiError>,
+    pub cache_header_snapshot: Option<ReadSnapshot>,
+    pub header_check_performed: bool,
+    pub parser_compatible: Option<bool>,
+    pub cache_note: Option<String>,
+    pub operation_state: String,
+    pub active_change: Option<RecordId>,
     pub unresolved_changes: Vec<RecordId>,
     pub incomplete_preparations: Vec<RecordId>,
     pub provider_probe_performed: bool,

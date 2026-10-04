@@ -1626,6 +1626,45 @@ fn present_inner(
             }
             Ok(())
         }
+        OutputFormat::Human
+            if envelope.command == "doctor" && envelope.data["cache_state"].is_string() =>
+        {
+            let doctor = &envelope.data;
+            writeln!(
+                output,
+                "Cache: {} / {}",
+                doctor["cache_layout"].as_str().unwrap_or("unknown"),
+                doctor["cache_state"].as_str().unwrap_or("unknown")
+            )?;
+            if let Some(compatible) = doctor["parser_compatible"].as_bool() {
+                writeln!(output, "Parser compatible: {compatible}")?;
+            }
+            if let Some(note) = doctor["cache_note"].as_str() {
+                writeln!(output, "{note}")?;
+            }
+            if let Some(message) = doctor["cache_error"]["message"].as_str() {
+                writeln!(output, "Cache observation failed: {message}")?;
+                if let Some(hint) = doctor["cache_error"]["hint"].as_str() {
+                    writeln!(output, "{hint}")?;
+                }
+            }
+            writeln!(
+                output,
+                "Operation status: {}",
+                doctor["operation_state"].as_str().unwrap_or("not_checked")
+            )?;
+            if let Some(change) = doctor["active_change"].as_str() {
+                writeln!(
+                    output,
+                    "Active change: {change}\nRecover with: {command_prefix} recover"
+                )?;
+            }
+            writeln!(
+                output,
+                "Canonical, history and cache-integrity audits: not performed. Canonical freshness: unknown."
+            )?;
+            writeln!(output, "Canonical diagnostics: {command_prefix} check")
+        }
         OutputFormat::Human if envelope.command == "read" => write!(
             output,
             "{}",

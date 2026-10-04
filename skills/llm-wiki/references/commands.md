@@ -753,6 +753,9 @@ Recreate the disposable index from canonical files without provider calls
 Usage: lwiki index rebuild [OPTIONS]
 
 Options:
+      --normalized
+          Use the normalized catalog; currently supports cached lexical reads and source refresh
+
       --wiki <WIKI>
           Wiki root containing WIKI.md; defaults to discovery from the current directory
 
@@ -1315,10 +1318,10 @@ Options:
           Apply an ID-only host reply to the exact current candidate packet (file or - for stdin)
 
       --scope <SCOPE>
-          Evidence scope: verified current, historical, or unverified index snapshot
+          Evidence scope: current, historical, snapshot, or indexed-evidence (captured sources only)
 
           [default: current]
-          [possible values: current, historical, snapshot]
+          [possible values: current, historical, snapshot, indexed-evidence]
 
       --target <TARGET>
           Retrieve document passages, graph evidence or both
@@ -2167,7 +2170,7 @@ Options:
 ## doctor
 
 ```text
-Inspect local health; contact a provider only with --probe
+Inspect local status without a full audit; probe providers only with --probe
 
 Usage: lwiki doctor [OPTIONS]
 

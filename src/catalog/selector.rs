@@ -34,7 +34,9 @@ enum CachePath<'a> {
     Active,
     Gate,
     Catalogs,
+    StateWriter,
     File(&'a str, FileKind),
+    Legacy(FileKind),
 }
 impl CachePath<'_> {
     fn relative(self) -> Result<String> {
@@ -43,6 +45,17 @@ impl CachePath<'_> {
             Self::Active => ".wiki/cache/catalog-v2-active.json".into(),
             Self::Gate => ".wiki/cache/catalog-acquisition.lock".into(),
             Self::Catalogs => ".wiki/cache/catalogs".into(),
+            Self::StateWriter => ".wiki/state/writer.lock".into(),
+            Self::Legacy(kind) => {
+                let suffix = match kind {
+                    FileKind::Database => "",
+                    FileKind::Wal => "-wal",
+                    FileKind::Shm => "-shm",
+                    FileKind::Journal => "-journal",
+                    FileKind::Lease => return Err(corrupt("legacy doctor has no file lease")),
+                };
+                format!(".wiki/cache/index.sqlite{suffix}")
+            }
             Self::File(id, kind) => {
                 if id.len() != 32
                     || !id
@@ -818,12 +831,238 @@ fn maintenance_connection(name: &Path) -> Result<Connection> {
         )
         .map_err(super::sql::sql_error)?;
     connection
+        .set_limit(rusqlite::limits::Limit::SQLITE_LIMIT_SQL_LENGTH, 256 * 1024)
+        .map_err(super::sql::sql_error)?;
+    connection
         .busy_timeout(Duration::ZERO)
         .map_err(super::sql::sql_error)?;
     connection
-        .execute_batch("PRAGMA query_only=ON; BEGIN;")
+        .execute_batch("PRAGMA query_only=ON; PRAGMA mmap_size=0; PRAGMA cache_size=-8192; BEGIN;")
         .map_err(super::sql::sql_error)?;
     Ok(connection)
+}
+
+/// A legacy WAL header without ordinary sidecars is ambiguous: it can be a
+/// clean close or missing durable state. Never open SQLite to resolve that
+/// ambiguity because a read-only connection can create a missing SHM file.
+pub(crate) enum LegacyDoctorHeader {
+    Absent,
+    Uninspected(&'static str),
+    Header(crate::domain::ReadSnapshot),
+}
+
+pub(crate) fn legacy_doctor_header(fs: &VaultFs) -> Result<LegacyDoctorHeader> {
+    legacy_doctor_header_inner(
+        fs,
+        #[cfg(test)]
+        &mut || Ok(()),
+        #[cfg(test)]
+        &mut || Ok(()),
+    )
+}
+
+#[cfg(test)]
+pub(crate) fn legacy_doctor_header_with_probe(
+    fs: &VaultFs,
+    before_guard: &mut dyn FnMut() -> Result<()>,
+    before_open: &mut dyn FnMut() -> Result<()>,
+) -> Result<LegacyDoctorHeader> {
+    legacy_doctor_header_inner(fs, before_guard, before_open)
+}
+
+fn legacy_doctor_header_inner(
+    fs: &VaultFs,
+    #[cfg(test)] before_guard: &mut dyn FnMut() -> Result<()>,
+    #[cfg(test)] before_open: &mut dyn FnMut() -> Result<()>,
+) -> Result<LegacyDoctorHeader> {
+    let name = path(fs, CachePath::Legacy(FileKind::Database))?;
+    if !exists(&name)? {
+        // Validate existing sidecars even when the main file is absent.
+        for kind in [FileKind::Wal, FileKind::Shm, FileKind::Journal] {
+            let sidecar = path(fs, CachePath::Legacy(kind))?;
+            if exists(&sidecar)? {
+                Checked::open(&sidecar, false, false)?.verify()?;
+                return Err(corrupt("legacy sidecar has no main database"));
+            }
+        }
+        return Ok(LegacyDoctorHeader::Absent);
+    }
+    let checked = Checked::open(&name, false, false)?;
+    #[cfg(test)]
+    before_guard()?;
+    // A shared lock on the existing writer inode excludes ordinary writers
+    // across journal/sidecar preflight, SQLite open, and SQLite close. Merely
+    // holding WAL/SHM handles does not prevent their unlink on Unix.
+    let writer_name = path(fs, CachePath::StateWriter)?;
+    let (guard, guard_note) = if exists(&writer_name)? {
+        let writer = Checked::open(&writer_name, false, true)?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            let owner = checked
+                .file
+                .metadata()
+                .map_err(|e| io("inspect database owner", e))?
+                .uid();
+            let metadata = writer
+                .file
+                .metadata()
+                .map_err(|e| io("inspect writer lock", e))?;
+            if metadata.uid() != owner || metadata.mode() & 0o022 != 0 {
+                return Err(corrupt(
+                    "legacy observation writer lock ownership or permissions are unsafe",
+                ));
+            }
+        }
+        #[cfg(windows)]
+        crate::vault::windows_security::validate_same_file(
+            &writer.file,
+            &writer_name,
+            crate::vault::acl_policy::Protection::Private,
+        )
+        .map_err(|e| io("verify private writer lock", e))?;
+        match lock(writer, false, Duration::ZERO)? {
+            Some(guard) => (Some(guard), None),
+            None => (
+                None,
+                Some(
+                    "The existing writer lock is busy; no SQLite header inspection was performed. No cache or sidecar repair was attempted.",
+                ),
+            ),
+        }
+    } else {
+        (
+            None,
+            Some(
+                "The existing writer lock is absent; no SQLite header inspection was performed. No lock, cache, or sidecar files were created.",
+            ),
+        )
+    };
+    // The main handle was opened before locking for owner comparison. A
+    // cooperating writer may have replaced it in that gap; reject the old
+    // inode before deriving journal/sidecar admission from its bytes.
+    if guard.is_some() {
+        checked.verify()?;
+    }
+    let mut sidecars = Vec::new();
+    let mut wal = false;
+    let mut shm = false;
+    let mut journal = false;
+    for kind in [FileKind::Wal, FileKind::Shm, FileKind::Journal] {
+        let sidecar = path(fs, CachePath::Legacy(kind))?;
+        if !exists(&sidecar)? {
+            continue;
+        }
+        let held = Checked::open(&sidecar, false, false)?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            let owner = checked
+                .file
+                .metadata()
+                .map_err(|e| io("inspect database owner", e))?
+                .uid();
+            let metadata = held
+                .file
+                .metadata()
+                .map_err(|e| io("inspect sidecar owner", e))?;
+            if metadata.uid() != owner || metadata.mode() & 0o022 != 0 {
+                return Err(corrupt(
+                    "SQLite sidecar ownership or write permissions are unsafe",
+                ));
+            }
+        }
+        match kind {
+            FileKind::Wal => wal = true,
+            FileKind::Shm => shm = true,
+            FileKind::Journal => journal = true,
+            _ => unreachable!(),
+        }
+        sidecars.push(held);
+    }
+    // Even a missing/busy guard cannot hide an unsafe present sidecar.
+    if let Some(note) = guard_note {
+        verify_sidecars(&sidecars)?;
+        checked.verify()?;
+        return Ok(LegacyDoctorHeader::Uninspected(note));
+    }
+    let guard = guard.expect("successful legacy observation requires shared writer lock");
+    let mode = journal_header(&checked)?;
+    let note = if mode == JournalMode::Wal && (!wal || !shm) {
+        Some(
+            "Legacy WAL sidecars are absent or incomplete; a clean close and missing WAL state cannot be distinguished by this lightweight check. No SQLite header inspection was performed.",
+        )
+    } else if journal || mode == JournalMode::Delete && (wal || shm) {
+        Some(
+            "Legacy SQLite sidecars require interpretation beyond this lightweight check. No SQLite header inspection was performed.",
+        )
+    } else {
+        None
+    };
+    if let Some(note) = note {
+        verify_sidecars(&sidecars)?;
+        checked.verify()?;
+        return Ok(LegacyDoctorHeader::Uninspected(note));
+    }
+    guard.checked.verify()?;
+    #[cfg(test)]
+    before_open()?;
+    let connection = maintenance_connection(&name)?;
+    super::sql::validate_header(&connection)?;
+    let snapshot = legacy_scalar_header(&connection)?;
+    drop(connection);
+    verify_sidecars(&sidecars)?;
+    checked.verify()?;
+    guard.checked.verify()?;
+    Ok(LegacyDoctorHeader::Header(snapshot))
+}
+
+fn legacy_scalar_header(connection: &Connection) -> Result<crate::domain::ReadSnapshot> {
+    let mut statement = connection.prepare("SELECT m.published_gen,g.gen,g.state,g.parser_hash,g.manifest_hash,m.vector_cache_lost,m.vector_loss_unknown FROM index_meta m LEFT JOIN generations g ON g.gen=m.published_gen WHERE m.singleton=1").map_err(super::sql::sql_error)?;
+    let mut rows = statement.query([]).map_err(super::sql::sql_error)?;
+    let row = rows
+        .next()
+        .map_err(super::sql::sql_error)?
+        .ok_or_else(|| corrupt("legacy published header is absent"))?;
+    let mut bytes = 0usize;
+    for column in 0..7 {
+        if let rusqlite::types::ValueRef::Text(value) =
+            row.get_ref(column).map_err(super::sql::sql_error)?
+        {
+            bytes = bytes
+                .checked_add(value.len())
+                .filter(|n| *n <= 16 * 1024)
+                .ok_or_else(|| corrupt("legacy published header exceeds 16 KiB"))?;
+        }
+    }
+    let epoch: i64 = row.get(0).map_err(super::sql::sql_error)?;
+    let generation: i64 = row.get(1).map_err(super::sql::sql_error)?;
+    let text = |column| -> Result<&str> {
+        row.get_ref(column)
+            .map_err(super::sql::sql_error)?
+            .as_str()
+            .map_err(|e| corrupt(e.to_string()))
+    };
+    if epoch <= 0 || generation != epoch || text(2)? != "complete" {
+        return Err(corrupt(
+            "legacy published generation is invalid or incomplete",
+        ));
+    }
+    for column in [5, 6] {
+        if !matches!(
+            row.get::<_, i64>(column).map_err(super::sql::sql_error)?,
+            0 | 1
+        ) {
+            return Err(corrupt("legacy cache loss notice is not boolean"));
+        }
+    }
+    let parser = Blake3Hash::new(text(3)?).map_err(|e| corrupt(e.message))?;
+    let manifest = Blake3Hash::new(text(4)?).map_err(|e| corrupt(e.message))?;
+    let snapshot = crate::domain::ReadSnapshot::canonical(epoch as u64, parser, manifest);
+    if rows.next().map_err(super::sql::sql_error)?.is_some() {
+        return Err(corrupt("legacy published header is not unique"));
+    }
+    Ok(snapshot)
 }
 
 /// Verify publication/retirement ownership using a bounded read transaction.
@@ -856,12 +1095,21 @@ pub(crate) fn maintenance_header(
     let selected = acquire(fs, vault, timeout, |name, selection| {
         let connection = maintenance_connection(name)?;
         header = Some(super::normalized_read::header(&connection, selection)?);
-        let rows: i64 = connection
-            .query_row("SELECT count(*) FROM catalog_meta", [], |r| r.get(0))
+        let mut statement = connection
+            .prepare("SELECT singleton FROM catalog_meta LIMIT 2")
             .map_err(super::sql::sql_error)?;
-        if rows != 1 {
+        let mut rows = statement.query([]).map_err(super::sql::sql_error)?;
+        let first = rows
+            .next()
+            .map_err(super::sql::sql_error)?
+            .ok_or_else(|| corrupt("catalog header is absent"))?;
+        if first.get::<_, i64>(0).map_err(super::sql::sql_error)? != 1
+            || rows.next().map_err(super::sql::sql_error)?.is_some()
+        {
             return Err(corrupt("catalog header is not unique"));
         }
+        drop(rows);
+        drop(statement);
         Ok(connection)
     })?;
     match selected {

@@ -4,7 +4,7 @@ use crate::{
     changes::ReadDependency,
     domain::{
         Blake3Hash, CanonicalRecord, Eligibility, ErrorCode, ReadSnapshot, RecordId, RecordKind,
-        Result, VaultRelativePath,
+        Result, VaultRelativePath, WikiError,
     },
 };
 use serde::{Deserialize, Serialize};
@@ -82,6 +82,35 @@ pub struct SyncReport {
     pub vector_cache_lost: bool,
     /// Retained notice that an absent/unknown old cache's vector contents are unknown.
     pub vector_loss_unknown: bool,
+}
+
+/// Small observations for doctor, never a canonical or database integrity audit.
+#[derive(Debug, Clone, Serialize)]
+pub struct DoctorCacheMetadata {
+    pub layout: String,
+    pub state: String,
+    pub error: Option<WikiError>,
+    pub header_snapshot: Option<ReadSnapshot>,
+    pub header_check_performed: bool,
+    pub parser_compatible: Option<bool>,
+    pub operation_state: String,
+    pub active_change: Option<RecordId>,
+    pub note: Option<String>,
+}
+impl Default for DoctorCacheMetadata {
+    fn default() -> Self {
+        Self {
+            layout: "unknown".into(),
+            state: "unknown".into(),
+            error: None,
+            header_snapshot: None,
+            header_check_performed: false,
+            parser_compatible: None,
+            operation_state: "not_checked".into(),
+            active_change: None,
+            note: None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

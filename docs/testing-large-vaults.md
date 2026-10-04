@@ -483,6 +483,48 @@ This checkpoint does not qualify native rebuild throughput or RSS, automatic
 collection of every abandoned file, complete normalized `check`, bounded
 `doctor`, all command modes, 100k/10 GB capacity or unseen semantic completeness.
 
+### Bounded doctor checkpoint
+
+`doctor` now observes the selected header and constant-size operation slot without
+scanning canonical notes or retained history. JSON reports unperformed audits and
+unknown canonical freshness; plain output explains those limits and supplies a
+command for canonical diagnostics. Dry-run skips cache and provider observation.
+Legacy inspection uses a nonblocking shared lock on the existing writer lock,
+held through SQLite close. Missing/busy locks and ambiguous WAL sidecars return
+`present_uninspected`; unsafe present paths remain errors.
+
+The broader native run passed **642 tests** and failed one generated command
+manifest check. Regenerating the reference from the actual CLI corrected that
+failure, including previously missing normalized rebuild and indexed-evidence
+help. The broad run excluded two unchanged accounting stress matrices and left
+eight tests ignored. Its failure remains recorded; it is not an all-green gate.
+
+Independent review found and corrected a legacy sidecar race, including database
+replacement before lock acquisition. The final focused run passed **30 tests**:
+13 doctor and six skill unit tests, seven actual doctor CLI tests and all four
+skill-export integration tests. Source pins remained unchanged during each run.
+The earlier unit assertion that confused semantic diagnostics with a failed scan
+was also corrected and retested. Formatting checks passed for changed Rust files.
+
+Independent Astra review accepted this doctor checkpoint at **9.2/10 with zero
+scoped blockers**. Tests cover a 16 MiB legacy projection with scalar-only header
+access, malformed unrelated notes/history, active or damaged normalized authority,
+readable headers with unaudited rows, dry-run filesystem equality, and deterministic
+WAL/DELETE writer contention and replacement boundaries. SQLite SHM read marks may
+change during a permitted read; cooperative SQL limits are not hard OS deadlines.
+This is native macOS evidence, not Windows, 100k capacity or semantic qualification.
+
+Reproduce the final focused selection after hydrating the build dependencies:
+
+```sh
+python3 scripts/bazel.py -- test //:unit_tests //:offline_cli_test //:skill_export_test \
+  --test_arg=doctor --test_arg=skill --test_arg=--test-threads=1 \
+  --test_output=errors --nofetch
+```
+
+Complete normalized `check`, remaining modes/default activation, the full large-vault
+workflow and the unseen completeness gate remain outstanding.
+
 ### Acceptance evidence
 
 Freeze the binary/tree, protocol, generator/seed, manifests, expected outcomes,

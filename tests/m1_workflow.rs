@@ -307,6 +307,8 @@ fn m1_vertical_rename_refresh_revalidate_recover_rebuild() {
     }
     drop(writer);
     let doctor = app.doctor().unwrap();
+    assert!(!doctor.history_check_performed);
+    assert!(doctor.check.is_none());
     assert!(doctor.unresolved_changes.is_empty());
     assert!(!doctor.provider_probe_performed);
 }

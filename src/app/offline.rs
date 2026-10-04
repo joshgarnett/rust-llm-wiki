@@ -939,30 +939,28 @@ impl OfflineApp {
         })
     }
     pub fn doctor(&self) -> Result<DoctorOutcome> {
-        let check = self.check()?;
-        let engine = self.engine()?;
-        let pending = self.pending(&engine)?;
-        let incomplete = engine.incomplete_preparations()?;
-        let (mut cache_state, mut cache_error) = ("unknown".to_owned(), None);
-        if !self.options.dry_run {
-            if !self.catalog().cache_path()?.exists() {
-                cache_state = "absent".into();
-            } else {
-                match self.catalog().check_available() {
-                    Ok(()) => cache_state = "ready".into(),
-                    Err(e) => {
-                        cache_state = "unavailable".into();
-                        cache_error = Some(e);
-                    }
-                }
-            }
-        }
+        let metadata = if self.options.dry_run {
+            crate::catalog::DoctorCacheMetadata::default()
+        } else {
+            self.catalog().doctor_cache_metadata()
+        };
         Ok(DoctorOutcome {
-            check,
-            cache_state,
-            cache_error,
-            unresolved_changes: pending,
-            incomplete_preparations: incomplete,
+            check: None,
+            canonical_check_performed: false,
+            canonical_freshness: "unknown".into(),
+            history_check_performed: false,
+            cache_integrity_check_performed: false,
+            cache_layout: metadata.layout,
+            cache_state: metadata.state,
+            cache_error: metadata.error,
+            cache_header_snapshot: metadata.header_snapshot,
+            header_check_performed: metadata.header_check_performed,
+            parser_compatible: metadata.parser_compatible,
+            cache_note: metadata.note,
+            operation_state: metadata.operation_state,
+            active_change: metadata.active_change,
+            unresolved_changes: Vec::new(),
+            incomplete_preparations: Vec::new(),
             provider_probe_performed: false,
         })
     }

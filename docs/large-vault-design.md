@@ -397,8 +397,11 @@ replaced.
 Use the existing `lwiki check` command for that explicit full audit, extending it
 to cover the selected index. Keep `doctor` lightweight, `index sync` for discovering
 external edits, and `index rebuild` for reconstruction. Currently `check` scans
-canonical data only, and `doctor` invokes it; those implementations still need
-to change. Do not introduce another overlapping audit command.
+canonical data only; extending it to the selected index remains outstanding.
+`doctor` observes the publication header and operation slot without scanning
+canonical records or retained change history. It reports unperformed checks and
+unknown canonical freshness explicitly. Do not introduce another overlapping
+audit command.
 
 Ordinary search uses a published index epoch and validates the evidence returned.
 A successful managed update must make its changes discoverable by subsequent
@@ -499,6 +502,19 @@ unperformed audits labeled. The current in-memory audit backup must also be
 replaced or resource-qualified. Forecast scratch together with current and
 reader-pinned old databases before choosing a disk-backed copy. These are
 implementation requirements, not completed large-vault qualification.
+
+The full-check implementation should combine a read-only native SQLite integrity
+check with streamed canonical row comparison and a disk-backed, contentless FTS
+reference. SQLite added FTS5 virtual-table integrity checking in 3.44; checking
+external-content equality remains a separate obligation. Compare token positions,
+complete document-size membership and token totals as well as ordinary metadata
+and retained revision owners. This avoids duplicating raw/body text in another
+full database merely to audit the selected one. It is a design choice pending
+corruption tests and capacity measurements, not proof that compact scratch will
+always fit. Include reference postings, temporary merges and any reader-pinned
+predecessor in disk accounting.
+[SQLite 3.44 release notes](https://www.sqlite.org/releaselog/3_44_0.html),
+[FTS5 integrity checking](https://www.sqlite.org/fts5.html#the_integrity_check_command)
 
 Retries must not accumulate full unacknowledged siblings. Dispose only the exact
 owned candidate after proving it is neither selected nor acknowledged, and try
