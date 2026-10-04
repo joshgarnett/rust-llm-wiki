@@ -261,6 +261,56 @@ continuations, read-only dry-run, and rejection of legacy results after activati
 Identity lookup tests retain identical decoded work after adding 4,096 unrelated
 claims. These checks qualify the cached-read route, not default activation.
 
+### General cached discovery
+
+On a selected normalized catalog, `search QUERY --no-sync --mode lexical` now
+searches authored notes and captured text through the same exact ID, title,
+alias and lexical ranking channels as the legacy index. Filters apply before
+candidate limits. Entity identity remains searchable independently of an
+unsupported description; identity-only hits do not return description excerpts.
+`context QUERY --scope snapshot --target documents --no-sync --mode lexical`
+uses those candidates with the existing passage selection and packing rules.
+
+These commands return `index_snapshot` freshness. Snapshot context can include
+historical material with its eligibility label and supplies no verified
+citations. External file edits remain invisible until synchronization; a managed
+source refresh publishes its changed rows before returning. Use the separate
+`indexed-evidence` scope for selected captured-source citation verification.
+General discovery and captured evidence use distinct cursor/dependency scopes.
+Cursors also remain bound to the physical publication and generation.
+
+The query opens the published catalog read-only, checks selected cached rows,
+and rechecks operation authority before returning. It performs no full-vault
+audit, synchronization or index repair. Dry-run performs the same cached query
+with an explicit cache warning; SQLite shared-memory coordination may still
+change. Complete proof layout 2 and the general title index are required.
+Missing capabilities refuse rather than create indexes or scan canonical files.
+
+The result cap bounds selected payload, not all query work. FTS scoring and
+restrictive filters can depend on matching population; source filters can parse
+record metadata. Literal, semantic, hybrid, graph and synchronized normalized
+routes remain outside this package. Public normalized reconstruction and default
+activation still require the remaining lifecycle work; an internally prepared
+fixture does not establish that ordinary users can activate this layout.
+
+The internal correctness checkpoint passed 498 unit tests and 139 integration
+tests across context, freshness, lexical, semantic, graph and offline CLI
+behavior. Eight tests were ignored and two unchanged ledger stress matrices
+were excluded. A subsequent 36-test serial run passed the final capability
+preflight, duplicate-ID, Unicode span/alias, lifecycle and query-work additions.
+The focused count overlaps the full gate; it is not an additional independent
+population. Broader runtime qualification remains separate.
+
+The SQL probes distinguish selected payload from candidate work. With 10 versus
+1,000 extra matching notes and a one-hit limit, the exact-alias leg retained 266
+VM steps, while exact-title and FTS work grew to 61,226 and 62,688 steps. Both
+returned two candidate rows for overflow detection. A negative source filter over
+100 records with approximately 10 MB of metadata retained the same 7,869 VM
+steps but increased measured statement time from 1.2 to 16.5 ms, admitting no
+payload rows. These are component measurements, not CLI latency or capacity
+claims. Native JSON processing is one reason VM counts cannot stand alone;
+SQLite documents its [JSON input conversion costs](https://www.sqlite.org/json1.html#performance_considerations).
+
 ## Incremental validation and navigation
 
 A cached final eligibility state is insufficient for incremental repair. A record

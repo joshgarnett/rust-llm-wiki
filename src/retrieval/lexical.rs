@@ -113,11 +113,26 @@ fn compare(a: &Candidate, b: &Candidate) -> Ordering {
 }
 
 pub fn search(reader: &ReaderSnapshot, query: &str, plan: &QueryPlan) -> Result<HitSet> {
+    search_catalog(reader, query, plan)
+}
+pub(crate) fn search_catalog(
+    reader: &dyn QueryCatalog,
+    query: &str,
+    plan: &QueryPlan,
+) -> Result<HitSet> {
     search_inner(reader, query, plan, None, false)
 }
 /// Context eligibility is applied before every candidate and hit limit.
 pub(crate) fn search_context(
     reader: &ReaderSnapshot,
+    query: &str,
+    plan: &QueryPlan,
+    historical: bool,
+) -> Result<HitSet> {
+    search_context_catalog(reader, query, plan, historical)
+}
+pub(crate) fn search_context_catalog(
+    reader: &dyn QueryCatalog,
     query: &str,
     plan: &QueryPlan,
     historical: bool,
@@ -154,10 +169,10 @@ fn search_inner(
             "semantic and hybrid retrieval require the embedding application",
         ));
     }
-    if reader.normalized_layout() && !source_only {
+    if reader.normalized_layout() && plan.mode == SearchMode::Literal {
         return Err(WikiError::new(
             ErrorCode::CapabilityUnavailable,
-            "normalized direct retrieval currently supports indexed captured sources only",
+            "normalized literal retrieval requires an exact substring access path",
         ));
     }
     let plan = validate_plan(query, plan)?;
@@ -179,7 +194,7 @@ fn search_inner(
         base_fingerprint
     };
     let context_policy = context_scope
-        .map(filters::context_policy)
+        .map(|historical| filters::catalog_context_policy(historical, reader.normalized_layout()))
         .unwrap_or("1".into());
     let offset = cursor::offset(
         reader,
@@ -189,6 +204,8 @@ fn search_inner(
     )?;
     if source_only {
         validate_source_indexes(reader.connection(), reader.normalized_layout())?;
+    } else if reader.normalized_layout() {
+        validate_general_indexes(reader.connection())?;
     }
     let tokenizer = if plan.mode == SearchMode::Lexical {
         Some(Tokenizer::new(reader.connection())?)
@@ -221,6 +238,16 @@ fn search_inner(
             query,
             expression.as_deref().expect("indexed lexical expression"),
             &plan,
+        )?;
+    } else if reader.normalized_layout() {
+        (candidates, overflow) = normalized_candidates(
+            reader,
+            query,
+            expression
+                .as_deref()
+                .expect("normalized lexical expression"),
+            &plan,
+            &context_policy,
         )?;
     } else if let Some(expression) = &expression {
         for (tier, condition, reason, channel, fts, identity) in [
@@ -550,6 +577,296 @@ const SOURCE_INDEXES: [(&str, &str); 3] = [
     ("source_revision_ids", "owner_revision"),
     ("source_document_titles", "title"),
 ];
+
+const GENERAL_TITLE_INDEX: &str = "CREATE INDEX document_titles ON documents(title,record_id,path)";
+
+fn validate_general_indexes(connection: &Connection) -> Result<()> {
+    // Layout 0/1 builders did not publish the complete registry/fact membership
+    // used by this query. An index alone cannot make their missing alias rows
+    // authoritative; refuse before silently demoting exact alias to FTS.
+    let layout: i64 = connection
+        .query_row(
+            "SELECT proof_layout_version FROM catalog_meta WHERE singleton=1",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(sql_error)?;
+    if layout != 2 {
+        return Err(WikiError::new(
+            ErrorCode::CapabilityUnavailable,
+            "all-document normalized retrieval requires complete proof layout 2",
+        ));
+    }
+    let mut statement = connection.prepare(
+        "SELECT sql FROM sqlite_schema WHERE type='index' AND name='document_titles' AND tbl_name='documents' LIMIT 2",
+    ).map_err(sql_error)?;
+    let mut rows = statement.query([]).map_err(sql_error)?;
+    let valid = if let Some(row) = rows.next().map_err(sql_error)? {
+        let actual = sql_text(row, 0)?;
+        actual.len() <= 4096
+            && normalize_index_sql(actual) == normalize_index_sql(GENERAL_TITLE_INDEX)
+    } else {
+        false
+    };
+    if !valid || rows.next().map_err(sql_error)?.is_some() {
+        return Err(WikiError::new(
+            ErrorCode::CapabilityUnavailable,
+            "catalog lacks the bounded all-document exact-title search index",
+        ));
+    }
+    Ok(())
+}
+
+/// Only scalar keys and scores enter the ranking sorter. Exact identity, title
+/// and alias legs enter through their own indexed lookups; lexical cost depends
+/// on matching postings. Metadata policies and filters precede the cap.
+fn normalized_candidate_query(
+    query: &str,
+    expression: &str,
+    plan: &QueryPlan,
+    context_policy: &str,
+    leg: usize,
+) -> (String, Vec<Value>) {
+    let fts = leg >= 3;
+    let identity = leg == 4;
+    let mut values = vec![Value::Text(if identity {
+        format!("{{title aliases}} : ({expression})")
+    } else if fts {
+        expression.into()
+    } else {
+        query.into()
+    })];
+    let common = filters::catalog_sql(&plan.filters, &mut values, true);
+    let identity_policy = filters::catalog_identity_policy(true);
+    let policy = if identity {
+        identity_policy.to_owned()
+    } else if !fts {
+        format!(
+            "({}) OR ({identity_policy})",
+            filters::catalog_normal_policy(&plan.filters, true)
+        )
+    } else {
+        filters::catalog_normal_policy(&plan.filters, true)
+    };
+    let limit = filters::bind(
+        &mut values,
+        Value::Integer((plan.limits.candidates + 1) as i64),
+    );
+    let (access, condition) = match leg {
+        0 => (
+            "documents d INDEXED BY document_record_ids",
+            "d.record_id=?1",
+        ),
+        1 => ("documents d INDEXED BY document_titles", "d.title=?1"),
+        2 => (
+            "registry_match_keys k INDEXED BY sqlite_autoindex_registry_match_keys_1 CROSS JOIN documents d INDEXED BY sqlite_autoindex_documents_1",
+            "k.kind='alias' AND k.value=?1 AND d.path=k.path AND d.record_id=k.record_id",
+        ),
+        _ => (
+            "documents_fts JOIN documents d ON d.doc_row=documents_fts.rowid",
+            "documents_fts MATCH ?1",
+        ),
+    };
+    let score = if identity {
+        "bm25(documents_fts,8,6,0,0,0)"
+    } else if fts {
+        "bm25(documents_fts,8,6,3,2,1)"
+    } else {
+        "NULL"
+    };
+    let columns = crate::catalog::normalized_schema::DOCUMENT_COLUMNS
+        .split(',')
+        .map(|column| format!("d.{column}"))
+        .collect::<Vec<_>>()
+        .join(",");
+    let fts_columns = if fts {
+        ",f.title,f.aliases,f.headings,f.tags,f.body"
+    } else {
+        ""
+    };
+    let fts_lookup = if fts {
+        "JOIN documents_fts f ON f.rowid=c.doc_row"
+    } else {
+        ""
+    };
+    // Alias registry membership guarantees a nonnull equal record ID and path.
+    // Its primary key already provides the exact tie order; retaining the
+    // coalesce expression in this ORDER BY would sort the complete alias bucket.
+    let order = if leg == 2 {
+        "k.record_id,k.path"
+    } else {
+        "score,tie,d.path"
+    };
+    let sql = format!(
+        "WITH candidate_ids AS MATERIALIZED (\
+         SELECT d.doc_row,{score} AS score,coalesce(d.record_id,d.path) AS tie,d.path \
+         FROM {access} LEFT JOIN records r ON r.id=d.record_id \
+         WHERE ({condition}) AND ({common}) AND ({policy}) AND ({context_policy}) \
+         ORDER BY {order} LIMIT {limit}) \
+         SELECT {columns},c.score,d.aliases_text,d.tags_text{fts_columns} \
+         FROM candidate_ids c JOIN documents d ON d.doc_row=c.doc_row {fts_lookup} \
+         ORDER BY c.score,c.tie,c.path"
+    );
+    (sql, values)
+}
+
+fn validate_general_document(
+    reader: &dyn QueryCatalog,
+    row: &Row<'_>,
+    document: &DocumentRow,
+    fts: bool,
+) -> Result<()> {
+    let aliases = document.aliases.join(" ");
+    let tags = document.tags.join(" ");
+    let hash_matches = Blake3Hash::digest(document.raw_text.as_bytes()) == document.hash;
+    // Non-UTF8 canonical notes deliberately retain their original byte hash
+    // with empty cached text and an exact parse diagnostic. They remain invalid
+    // title/path discovery, just as in the legacy reader and cached read route.
+    let unreadable_note = !hash_matches
+        && document.owner_revision.is_none()
+        && document.source_id.is_none()
+        && document.record_id.is_none()
+        && document.kind.is_none()
+        && document.eligibility == Eligibility::Invalid
+        && document.raw_text.is_empty()
+        && document.body.is_empty()
+        && document.headings.is_empty()
+        && document.aliases.is_empty()
+        && document.tags.is_empty()
+        && reader
+            .diagnostics(&BTreeSet::from([document.path.clone()]))?
+            .iter()
+            .any(|diagnostic| {
+                diagnostic.code == ErrorCode::RecordInvalid
+                    && diagnostic
+                        .details
+                        .get("message")
+                        .and_then(serde_json::Value::as_str)
+                        == Some("note is not UTF-8")
+            });
+    if sql_text(row, 15)? != aliases
+        || sql_text(row, 16)? != tags
+        || (!hash_matches && !unreadable_note)
+        || (fts
+            && (sql_text(row, 17)? != document.title
+                || sql_text(row, 18)? != aliases
+                || sql_text(row, 19)? != document.headings
+                || sql_text(row, 20)? != tags
+                || sql_text(row, 21)? != document.body))
+    {
+        return Err(WikiError::new(
+            ErrorCode::IndexCorrupt,
+            "selected document differs from its normalized derivatives",
+        ));
+    }
+    Ok(())
+}
+
+fn normalized_candidates(
+    reader: &dyn QueryCatalog,
+    query: &str,
+    expression: &str,
+    plan: &QueryPlan,
+    context_policy: &str,
+) -> Result<(BTreeMap<VaultRelativePath, Candidate>, bool)> {
+    let mut candidates: BTreeMap<VaultRelativePath, Candidate> = BTreeMap::new();
+    let mut overflow = false;
+    for (leg, (tier, reason, channel)) in [
+        (0, RetrievalReason::ExactId, "exact_id"),
+        (1, RetrievalReason::ExactTitle, "exact_title"),
+        (1, RetrievalReason::ExactAlias, "exact_alias"),
+        (2, RetrievalReason::Lexical, "lexical"),
+        (2, RetrievalReason::Lexical, "identity_lexical"),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let (sql, values) =
+            normalized_candidate_query(query, expression, plan, context_policy, leg);
+        let mut statement = reader.connection().prepare(&sql).map_err(sql_error)?;
+        let mut rows = statement
+            .query(params_from_iter(values))
+            .map_err(sql_error)?;
+        let mut rank = 0;
+        while let Some(row) = rows.next().map_err(sql_error)? {
+            if rank == plan.limits.candidates {
+                overflow = true;
+                break;
+            }
+            let document = reader.decode_document(row, 0)?;
+            validate_general_document(reader, row, &document, leg >= 3)?;
+            if leg == 2 && !document.aliases.iter().any(|alias| alias == query) {
+                return Err(WikiError::new(
+                    ErrorCode::IndexCorrupt,
+                    "selected alias key differs from its document",
+                ));
+            }
+            let score: Option<f64> = row.get(14).map_err(sql_error)?;
+            if score.is_some_and(|score| !score.is_finite()) {
+                return Err(WikiError::new(
+                    ErrorCode::IndexCorrupt,
+                    "non-finite lexical rank",
+                ));
+            }
+            let record = record_for(reader, &document)?;
+            if document.record_id.is_some() && record.is_none() {
+                return Err(WikiError::new(
+                    ErrorCode::IndexCorrupt,
+                    "selected document lacks its adopted record",
+                ));
+            }
+            if let Some(record) = &record {
+                if record.path != document.path
+                    || record.hash != document.hash
+                    || Some(record.record.kind()) != document.kind
+                    || record.record.title() != document.title
+                    || crate::catalog::scan::list(&record.record, "aliases") != document.aliases
+                    || crate::catalog::scan::list(&record.record, "tags") != document.tags
+                    || record.eligibility != document.eligibility
+                {
+                    return Err(WikiError::new(
+                        ErrorCode::IndexCorrupt,
+                        "selected document differs from its adopted record",
+                    ));
+                }
+            }
+            let identity = leg == 4
+                || (!plan.filters.include_historical
+                    && record.is_some_and(|record| {
+                        record.identity_eligibility == Some(Eligibility::Current)
+                            && record.description_eligibility != Some(Eligibility::Current)
+                    }));
+            rank += 1;
+            let contribution = RankContribution {
+                channel: channel.into(),
+                rank,
+                score,
+            };
+            let candidate = Candidate {
+                document,
+                tier,
+                score,
+                reasons: vec![reason],
+                ranks: vec![contribution.clone()],
+                identity,
+            };
+            if let Some(existing) = candidates.get_mut(&candidate.document.path) {
+                if !existing.reasons.contains(&reason) {
+                    existing.reasons.push(reason);
+                }
+                existing.ranks.push(contribution);
+                if compare(&candidate, existing) == Ordering::Less {
+                    existing.tier = tier;
+                    existing.score = score;
+                    existing.identity = identity;
+                }
+            } else {
+                candidates.insert(candidate.document.path.clone(), candidate);
+            }
+        }
+    }
+    Ok((candidates, overflow))
+}
 
 fn validate_source_filters(filters: &SearchFilters) -> Result<()> {
     if !filters.kinds.is_empty()
@@ -1113,7 +1430,7 @@ fn excerpt_window(raw: &str, bounds: Range<usize>, anchor: usize, bytes: usize) 
 /// Token matching guides the window, but all returned text/spans/hash still
 /// come from the exact original UTF-8 source bytes.
 pub(crate) fn focused_excerpt(
-    reader: &ReaderSnapshot,
+    reader: &dyn QueryCatalog,
     document: &DocumentRow,
     query: &str,
     span: ByteSpan,
@@ -1988,3 +2305,7 @@ mod indexed_source_tests {
         }));
     }
 }
+
+#[cfg(test)]
+#[path = "general_lexical_tests.rs"]
+mod general_lexical_tests;

@@ -533,7 +533,44 @@ fn execute_inner(args: &Arguments) -> Result<Envelope> {
             if search.graph.is_some() && plan.mode != retrieval::SearchMode::Hybrid {
                 return Err(usage("--graph entities requires hybrid search"));
             }
-            if args.dry_run {
+            let catalog = Catalog::with_options(
+                app.fs().clone(),
+                app.vault_id().clone(),
+                CatalogOptions {
+                    busy_timeout_ms: app.options().lock_timeout_ms,
+                    fault: None,
+                },
+            );
+            if catalog.operation_state()?.is_some() {
+                if !search.no_sync
+                    || plan.mode != retrieval::SearchMode::Lexical
+                    || search.graph.is_some()
+                {
+                    return Err(WikiError::new(
+                        ErrorCode::CapabilityUnavailable,
+                        "normalized general search currently requires lexical mode and --no-sync without graph expansion",
+                    ));
+                }
+                catalog.guard_query()?;
+                let reader = catalog.cached_query_snapshot(QueryReadLimits::default())?;
+                if !reader.normalized_layout() {
+                    return Err(WikiError::new(
+                        ErrorCode::IndexCorrupt,
+                        "normalized search selected another catalog layout",
+                    ));
+                }
+                let hits = retrieval::lexical::search_catalog(&reader, &search.query, &plan)?;
+                reader.verify_operations(&catalog)?;
+                result_metadata(&mut envelope.meta, &hits.snapshot, &hits.verification);
+                envelope.meta.partial = hits.truncated;
+                envelope.warnings.extend(hits.warnings.iter().cloned());
+                envelope.data = value(hits)?;
+                if args.dry_run {
+                    envelope
+                        .warnings
+                        .push("dry-run results reflect the published cache".into());
+                }
+            } else if args.dry_run {
                 // Even a read-only WAL open can create sidecars. Use no SQLite path.
                 let projection = crate::catalog::scan::scan(app.fs(), app.vault_id())?;
                 envelope.data = json!({"query":search.query,"plan":plan,"dry_run":true,"cache_state_unknown":true,"canonical_document_count":projection.documents.len(),"hits":null});
@@ -572,6 +609,7 @@ fn execute_inner(args: &Arguments) -> Result<Envelope> {
                     let (_writer, reader) = reader(&app, search.no_sync)?;
                     retrieval::search(&reader, &search.query, &plan)?
                 };
+                require_legacy_query_still_selected(&catalog)?;
                 result_metadata(&mut envelope.meta, &hits.snapshot, &hits.verification);
                 envelope.meta.network_used = hits.network_used;
                 envelope.meta.partial = hits.truncated;
@@ -771,7 +809,33 @@ fn execute_inner(args: &Arguments) -> Result<Envelope> {
                 ));
             }
             let request = retrieval::context::validate_request(&context.search.query, &request)?;
-            if args.dry_run {
+            let catalog = Catalog::with_options(
+                app.fs().clone(),
+                app.vault_id().clone(),
+                CatalogOptions {
+                    busy_timeout_ms: app.options().lock_timeout_ms,
+                    fault: None,
+                },
+            );
+            let normalized_selected = catalog.operation_state()?.is_some();
+            let cached_documents = request.scope == retrieval::ContextScope::Snapshot
+                && request.target == retrieval::ContextTarget::Documents
+                && request.documents.mode == retrieval::SearchMode::Lexical
+                && request.graph.is_none();
+            // Refuse before preparing embeddings or acquiring a writer for a
+            // mode that cannot consume the selected normalized catalog.
+            if normalized_selected
+                && request.scope != retrieval::ContextScope::IndexedEvidence
+                && !cached_documents
+            {
+                return Err(WikiError::new(
+                    ErrorCode::CapabilityUnavailable,
+                    "normalized context currently supports lexical document snapshots and indexed-evidence only",
+                ));
+            }
+            let cached_dry_run =
+                args.dry_run && context.search.no_sync && cached_documents && normalized_selected;
+            if args.dry_run && !cached_dry_run {
                 envelope.data = json!({"query": context.search.query, "request": request, "dry_run": true, "cache_state_unknown": true, "context": null});
                 envelope
                     .warnings
@@ -802,14 +866,6 @@ fn execute_inner(args: &Arguments) -> Result<Envelope> {
                         },
                     )?
                 } else {
-                    let catalog = Catalog::with_options(
-                        app.fs().clone(),
-                        app.vault_id().clone(),
-                        CatalogOptions {
-                            busy_timeout_ms: app.options().lock_timeout_ms,
-                            fault: None,
-                        },
-                    );
                     let writer = if matches!(
                         request.scope,
                         retrieval::ContextScope::Snapshot
@@ -851,6 +907,11 @@ fn execute_inner(args: &Arguments) -> Result<Envelope> {
                 envelope.meta.partial = result.truncated();
                 envelope.warnings.extend(result.warnings().iter().cloned());
                 envelope.data = value(result)?;
+                if cached_dry_run {
+                    envelope
+                        .warnings
+                        .push("dry-run results reflect the published cache".into());
+                }
             }
         }
         Command::Check => {
@@ -1145,13 +1206,17 @@ fn cached_legacy_read(
     request: ReadRequest,
 ) -> Result<ReadOutcome> {
     let outcome = cached_read(reader, request)?;
+    require_legacy_query_still_selected(catalog)?;
+    Ok(outcome)
+}
+fn require_legacy_query_still_selected(catalog: &Catalog) -> Result<()> {
     if catalog.operation_state()?.is_some() {
         return Err(WikiError::new(
             ErrorCode::RecoveryRequired,
             "normalized authority activated while a legacy reader was held",
         ));
     }
-    Ok(outcome)
+    Ok(())
 }
 fn cached_read(reader: &ReaderSnapshot, request: ReadRequest) -> Result<ReadOutcome> {
     let projection = reader.projection();

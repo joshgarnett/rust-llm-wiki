@@ -662,3 +662,272 @@ fn indexed_cli_cached_read_is_stale_by_contract_and_never_writes() {
         "stale selected canonical bytes must not be cited: {result}"
     );
 }
+
+const GENERAL_REVIEWED: &[u8] = b"---\nwiki_schema: '1'\nwiki_kind: page\nwiki_id: page_general_a\ntitle: PlanningSignal Handbook\nwiki_status: reviewed\naliases: [PlanningAlias]\ntags: [team, keep]\n---\nPlanningSignal teams review the amber checklist before release.\n";
+const GENERAL_SECOND: &[u8] = b"---\nwiki_schema: '1'\nwiki_kind: page\nwiki_id: page_general_b\ntitle: PlanningSignal Followup\nwiki_status: reviewed\ntags: [team]\n---\nPlanningSignal teams archive the violet report after release.\n";
+const GENERAL_DRAFT: &[u8] = b"---\nwiki_schema: '1'\nwiki_kind: page\nwiki_id: page_general_draft\ntitle: PlanningSignal Draft\nwiki_status: draft\n---\nPlanningSignal unfinished speculative draft.\n";
+fn general_fixture(normalized: bool) -> Fixture {
+    Fixture::with_notes(
+        &[
+            ("pages/a.md", GENERAL_REVIEWED),
+            ("pages/b.md", GENERAL_SECOND),
+            ("pages/draft.md", GENERAL_DRAFT),
+            (
+                "plain.md",
+                b"# PlanningSignal plain discovery\nUnadopted PlanningSignal document.\n",
+            ),
+        ],
+        normalized,
+    )
+}
+
+#[test]
+fn indexed_cli_general_search_preserves_authored_results_filters_and_cached_dry_run() {
+    let legacy = general_fixture(false);
+    let normalized = general_fixture(true);
+    for words in [
+        vec!["search", "page_general_a", "--no-sync"],
+        vec!["search", "PlanningSignal Handbook", "--no-sync"],
+        vec!["search", "PlanningAlias", "--no-sync"],
+        vec!["search", "PlanningSignal", "--no-sync"],
+        vec![
+            "search",
+            "PlanningSignal",
+            "--no-sync",
+            "--kind",
+            "page",
+            "--tag",
+            "keep",
+        ],
+        vec![
+            "search",
+            "PlanningSignal",
+            "--no-sync",
+            "--status",
+            "reviewed",
+            "--path-prefix",
+            "pages/",
+        ],
+        vec!["search", "no_result_signal", "--no-sync"],
+    ] {
+        let expected = legacy.cli(&words);
+        let actual = normalized.cli(&words);
+        for field in [
+            "hits",
+            "candidate_count",
+            "omitted_candidates",
+            "truncated",
+            "verification",
+        ] {
+            assert_eq!(
+                actual["data"][field], expected["data"][field],
+                "{words:?}: {field}"
+            );
+        }
+        assert_eq!(actual["meta"]["freshness"], "index_snapshot");
+        assert!(actual["meta"]["verified_at"].is_null());
+    }
+    let before = tree(&normalized.root);
+    let dry = normalized.cli(&["--dry-run", "search", "PlanningSignal", "--no-sync"]);
+    let actual = normalized.cli(&["search", "PlanningSignal", "--no-sync"]);
+    assert_eq!(dry["data"], actual["data"]);
+    same_read_tree(&normalized, before);
+    fs::write(
+        normalized.root.join("pages/a.md"),
+        b"external replacement\n",
+    )
+    .unwrap();
+    let stale = normalized.cli(&["search", "page_general_a", "--no-sync"]);
+    assert_eq!(stale["data"]["hits"][0]["title"], "PlanningSignal Handbook");
+    for words in [
+        vec!["search", "PlanningSignal"],
+        vec!["search", "PlanningSignal", "--no-sync", "--mode", "literal"],
+        vec![
+            "search",
+            "PlanningSignal",
+            "--no-sync",
+            "--mode",
+            "semantic",
+        ],
+        vec!["search", "PlanningSignal", "--no-sync", "--mode", "hybrid"],
+    ] {
+        normalized.cli_error(&words, "CAPABILITY_UNAVAILABLE");
+    }
+}
+
+#[test]
+fn indexed_cli_general_snapshot_context_preserves_reviewed_facets_and_dry_run() {
+    let legacy = general_fixture(false);
+    let normalized = general_fixture(true);
+    let args = [
+        "context",
+        "PlanningSignal",
+        "--scope",
+        "snapshot",
+        "--target",
+        "documents",
+        "--no-sync",
+        "--kind",
+        "page",
+    ];
+    let expected = legacy.cli(&args);
+    let before = tree(&normalized.root);
+    let actual = normalized.cli(&args);
+    for field in ["text", "passages", "omissions", "truncated", "verification"] {
+        assert_eq!(actual["data"][field], expected["data"][field], "{field}");
+    }
+    let text = actual["data"]["text"].as_str().unwrap();
+    assert!(
+        text.contains("amber checklist") && text.contains("violet report"),
+        "{actual}"
+    );
+    assert!(!text.contains("unfinished speculative draft"));
+    assert_eq!(actual["meta"]["freshness"], "index_snapshot");
+    assert!(actual["meta"]["verified_at"].is_null());
+    for passage in actual["data"]["passages"].as_array().unwrap() {
+        assert!(passage["citations"].as_array().unwrap().is_empty());
+    }
+    let mut dry_args = vec!["--dry-run"];
+    dry_args.extend(args);
+    let dry = normalized.cli(&dry_args);
+    assert_eq!(dry["data"], actual["data"]);
+    same_read_tree(&normalized, before);
+}
+
+#[test]
+fn indexed_cli_general_search_context_observe_refresh_and_reject_old_cursor() {
+    let fixture = general_fixture(true);
+    let first = fixture.cli(&["search", "PlanningSignal", "--no-sync", "--limit", "1"]);
+    let cursor = first["data"]["next_cursor"]
+        .as_str()
+        .expect("multiple authored hits")
+        .to_owned();
+    let second_page = fixture.cli(&[
+        "search",
+        "PlanningSignal",
+        "--no-sync",
+        "--limit",
+        "1",
+        "--cursor",
+        &cursor,
+    ]);
+    assert_ne!(
+        first["data"]["hits"][0]["path"],
+        second_page["data"]["hits"][0]["path"]
+    );
+    let changed = fixture.refresh(SECOND, None, None);
+    let revision = changed["data"]["allocated_ids"]["revision"]
+        .as_str()
+        .unwrap();
+    let generation = changed["data"]["snapshot"]["generation"].as_u64().unwrap();
+    let search = fixture.cli(&[
+        "search",
+        "IndexedSignal",
+        "--no-sync",
+        "--source-id",
+        &fixture.source,
+    ]);
+    assert_eq!(search["meta"]["index_generation"], generation);
+    assert_eq!(search["data"]["hits"][0]["owner_revision"], revision);
+    let context = fixture.cli(&[
+        "context",
+        "IndexedSignal",
+        "--scope",
+        "snapshot",
+        "--target",
+        "documents",
+        "--no-sync",
+        "--source-id",
+        &fixture.source,
+    ]);
+    assert_eq!(context["meta"]["index_generation"], generation);
+    let text = context["data"]["text"].as_str().unwrap();
+    assert!(text.contains("29 violet tokens"), "{context}");
+    // Snapshot scope retains history. The refreshed revision must be current;
+    // the old payload may remain only with its historical label.
+    let passages = context["data"]["passages"].as_array().unwrap();
+    assert!(passages.iter().any(|passage| {
+        passage["eligibility"] == "current"
+            && passage["text"]
+                .as_str()
+                .unwrap()
+                .contains("29 violet tokens")
+            && passage["locator"]["record"]["record_id"] == revision
+    }));
+    for passage in passages {
+        if passage["text"]
+            .as_str()
+            .unwrap()
+            .contains("17 amber tokens")
+        {
+            assert_eq!(passage["eligibility"], "historical");
+        }
+    }
+    assert_eq!(fixture.context(revision, SECOND), generation);
+    fixture.cli_error(
+        &[
+            "search",
+            "PlanningSignal",
+            "--no-sync",
+            "--limit",
+            "1",
+            "--cursor",
+            &cursor,
+        ],
+        "CURSOR_STALE",
+    );
+}
+
+#[test]
+fn indexed_cli_general_search_missing_title_index_refuses_without_mutation() {
+    let fixture = general_fixture(true);
+    let path = fixture
+        .root
+        .join(format!(".wiki/cache/catalogs/{}.sqlite", fixture.file_id));
+    assert!(path.is_file());
+    let connection = rusqlite::Connection::open(path).unwrap();
+    selector::configure_wal(&connection).unwrap();
+    connection
+        .execute_batch("DROP INDEX document_titles")
+        .unwrap();
+    drop(connection);
+    let before = tree(&fixture.root);
+    fixture.cli_error(
+        &["search", "PlanningSignal", "--no-sync"],
+        "CAPABILITY_UNAVAILABLE",
+    );
+    same_read_tree(&fixture, before);
+}
+
+#[test]
+fn indexed_cli_general_context_refuses_unsupported_modes_before_provider_setup() {
+    let fixture = general_fixture(true);
+    let before = tree(&fixture.root);
+    for dry in [false, true] {
+        for (scope, mode) in [
+            ("snapshot", "literal"),
+            ("snapshot", "semantic"),
+            ("snapshot", "hybrid"),
+            ("current", "lexical"),
+            ("historical", "lexical"),
+        ] {
+            let mut args = vec![];
+            if dry {
+                args.push("--dry-run");
+            }
+            args.extend([
+                "context",
+                "PlanningSignal",
+                "--scope",
+                scope,
+                "--mode",
+                mode,
+            ]);
+            if scope == "snapshot" {
+                args.push("--no-sync");
+            }
+            fixture.cli_error(&args, "CAPABILITY_UNAVAILABLE");
+        }
+    }
+    same_read_tree(&fixture, before);
+}

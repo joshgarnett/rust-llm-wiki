@@ -21,7 +21,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-type ExportResult<T> = Result<T, Box<dyn std::error::Error>>;
+pub(super) type ExportResult<T> = Result<T, Box<dyn std::error::Error>>;
 const VAULT_ID: &str = "vault_refresh_fixture";
 
 fn invalid(message: &str) -> Box<dyn std::error::Error> {
@@ -134,7 +134,7 @@ fn payload(seed: u64, index: usize, bytes: usize) -> Vec<u8> {
     result
 }
 
-fn create_file(path: &Path, bytes: &[u8]) -> ExportResult<()> {
+pub(super) fn create_file(path: &Path, bytes: &[u8]) -> ExportResult<()> {
     let mut options = OpenOptions::new();
     options.write(true).create_new(true);
     #[cfg(unix)]
@@ -146,7 +146,10 @@ fn create_file(path: &Path, bytes: &[u8]) -> ExportResult<()> {
     file.write_all(bytes)?;
     Ok(())
 }
-fn create_owned_parents(root: &Path, relative: &VaultRelativePath) -> ExportResult<PathBuf> {
+pub(super) fn create_owned_parents(
+    root: &Path,
+    relative: &VaultRelativePath,
+) -> ExportResult<PathBuf> {
     let mut path = root.to_path_buf();
     let mut components = relative.as_str().split('/').peekable();
     while let Some(component) = components.next() {
@@ -167,7 +170,7 @@ fn create_owned_parents(root: &Path, relative: &VaultRelativePath) -> ExportResu
     Ok(path)
 }
 
-fn stream_hash(path: &Path, reject_hardlinks: bool) -> ExportResult<(u64, Blake3Hash)> {
+pub(super) fn stream_hash(path: &Path, reject_hardlinks: bool) -> ExportResult<(u64, Blake3Hash)> {
     let mut options = OpenOptions::new();
     options.read(true);
     #[cfg(unix)]

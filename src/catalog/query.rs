@@ -45,6 +45,13 @@ pub(crate) struct QuerySnapshot {
     usage: Cell<QueryReadUsage>,
     limits: QueryReadLimits,
     operation_authority: Option<Authority>,
+    scope: QueryScope,
+}
+
+#[derive(Clone, Copy)]
+enum QueryScope {
+    IndexedEvidence,
+    CatalogSnapshot,
 }
 
 /// Lifecycle-only access deliberately excludes document and FTS text.
@@ -61,6 +68,21 @@ pub(crate) struct DocumentMetadata {
 
 impl Catalog {
     pub(crate) fn query_snapshot(&self, limits: QueryReadLimits) -> Result<QuerySnapshot> {
+        self.query_snapshot_with_scope(limits, QueryScope::IndexedEvidence)
+    }
+
+    /// General cached discovery has a distinct cursor/dependency domain from
+    /// the selected captured-source evidence protocol. Neither scope audits the
+    /// whole catalog or establishes canonical freshness by opening a reader.
+    pub(crate) fn cached_query_snapshot(&self, limits: QueryReadLimits) -> Result<QuerySnapshot> {
+        self.query_snapshot_with_scope(limits, QueryScope::CatalogSnapshot)
+    }
+
+    fn query_snapshot_with_scope(
+        &self,
+        limits: QueryReadLimits,
+        scope: QueryScope,
+    ) -> Result<QuerySnapshot> {
         // Reject invalid requests before resolving or opening any cache path.
         limits.validate()?;
         if self.options.busy_timeout_ms > 30_000 {
@@ -125,6 +147,7 @@ impl Catalog {
                 usage: Cell::new(QueryReadUsage::default()),
                 limits,
                 operation_authority,
+                scope,
             });
         }
         if operation_authority.is_some() {
@@ -197,6 +220,7 @@ impl Catalog {
             usage: Cell::new(QueryReadUsage::default()),
             limits,
             operation_authority: None,
+            scope,
         })
     }
 }
@@ -1650,7 +1674,10 @@ impl QueryCatalog for QuerySnapshot {
             .map_err(|error| WikiError::new(ErrorCode::Internal, error.to_string()))
     }
     fn query_scope(&self) -> &'static str {
-        "indexed_evidence"
+        match self.scope {
+            QueryScope::IndexedEvidence => "indexed_evidence",
+            QueryScope::CatalogSnapshot => "catalog_snapshot",
+        }
     }
     fn decode_document(&self, row: &Row<'_>, column: usize) -> Result<DocumentRow> {
         if self.normalized_layout() {
@@ -2781,6 +2808,34 @@ mod tests {
         fs::set_permissions(directory, permissions).unwrap();
         assert_eq!(before, snapshot());
         assert!(!temp.path().join(".wiki/cache/index.sqlite").exists());
+    }
+
+    #[test]
+    fn cached_discovery_scope_cannot_share_evidence_fingerprints() {
+        for normalized in [false, true] {
+            let (_temp, _root, catalog) = fixture();
+            if normalized {
+                publish_normalized(&catalog, 1);
+            }
+            let evidence = catalog.query_snapshot(QueryReadLimits::default()).unwrap();
+            let cached = catalog
+                .cached_query_snapshot(QueryReadLimits::default())
+                .unwrap();
+            assert_eq!(evidence.query_scope(), "indexed_evidence");
+            assert_eq!(cached.query_scope(), "catalog_snapshot");
+            assert_eq!(evidence.snapshot(), cached.snapshot());
+            assert_eq!(evidence.publication_id(), cached.publication_id());
+            assert_ne!(
+                evidence.dependency_fingerprint().unwrap(),
+                cached.dependency_fingerprint().unwrap()
+            );
+            assert_eq!(cached.usage(), QueryReadUsage::default());
+            assert_eq!(
+                evidence.document(&path("page.md")).unwrap(),
+                cached.document(&path("page.md")).unwrap()
+            );
+            cached.verify_operations(&catalog).unwrap();
+        }
     }
 
     #[test]

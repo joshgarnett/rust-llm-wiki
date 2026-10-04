@@ -2,11 +2,14 @@
 use super::context_selection_packet::{self, SelectionAction, SelectionCard, SelectionPacket};
 use super::{bundles, context_types::*, types::*};
 use crate::{
-    catalog::{ReaderSnapshot, query_types::QueryCatalog},
+    catalog::{
+        CatalogDiagnostic, DocumentRow, ReaderSnapshot, RecordRow, SnapshotVerification,
+        query_types::QueryCatalog,
+    },
     domain::*,
     graph::{GraphResult, NavigationEdge},
 };
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 pub struct ContextDraft {
     pub(super) text: String,
@@ -141,51 +144,107 @@ pub(super) fn dependencies(reader: &ReaderSnapshot) -> Result<Blake3Hash> {
             .map_err(|e| WikiError::invalid(e.to_string()))?,
     ))
 }
-fn document_passage(
-    reader: &ReaderSnapshot,
+// One fallible lookup per admitted owner, reused by every selected window.
+struct DocumentOwner {
+    document: DocumentRow,
+    canonical: Option<RecordRow>,
+    allowed: bool,
+}
+/// Packing can merge several windows from one selected owner. Reuse its
+/// authenticated cached bytes rather than charging another SQL body decode for
+/// each attempted merge. Strict graph passages retain their original lookup.
+struct OwnerCatalog<'a> {
+    reader: &'a dyn QueryCatalog,
+    owners: &'a [DocumentOwner],
+}
+impl QueryCatalog for OwnerCatalog<'_> {
+    fn normalized_layout(&self) -> bool {
+        self.reader.normalized_layout()
+    }
+    fn publication_id(&self) -> Option<&str> {
+        self.reader.publication_id()
+    }
+    fn connection(&self) -> &rusqlite::Connection {
+        self.reader.connection()
+    }
+    fn snapshot(&self) -> &ReadSnapshot {
+        self.reader.snapshot()
+    }
+    fn vault_id(&self) -> &RecordId {
+        self.reader.vault_id()
+    }
+    fn verification(&self) -> &SnapshotVerification {
+        self.reader.verification()
+    }
+    fn record(&self, id: &RecordId) -> Result<Option<RecordRow>> {
+        if let Some(row) = self
+            .owners
+            .iter()
+            .filter_map(|owner| owner.canonical.as_ref())
+            .find(|row| row.record.id() == id)
+        {
+            return Ok(Some(row.clone()));
+        }
+        self.reader.record(id)
+    }
+    fn document(&self, path: &VaultRelativePath) -> Result<Option<DocumentRow>> {
+        if let Some(owner) = self
+            .owners
+            .iter()
+            .find(|owner| &owner.document.path == path)
+        {
+            return Ok(Some(owner.document.clone()));
+        }
+        self.reader.document(path)
+    }
+    fn diagnostics(&self, paths: &BTreeSet<VaultRelativePath>) -> Result<Vec<CatalogDiagnostic>> {
+        self.reader.diagnostics(paths)
+    }
+    fn dependency_fingerprint(&self) -> Result<Blake3Hash> {
+        self.reader.dependency_fingerprint()
+    }
+    fn query_scope(&self) -> &'static str {
+        self.reader.query_scope()
+    }
+    fn decode_document(&self, row: &rusqlite::Row<'_>, column: usize) -> Result<DocumentRow> {
+        self.reader.decode_document(row, column)
+    }
+}
+fn document_owner(
+    reader: &dyn QueryCatalog,
     hit: &SearchHit,
-    excerpt: &SearchExcerpt,
     request: &ContextRequest,
-    rank: usize,
-) -> Result<Option<ContextPassage>> {
-    let Some(d) = reader
-        .projection()
-        .documents
-        .iter()
-        .find(|d| d.path == hit.locator.path)
-    else {
-        return Err(WikiError::new(
+) -> Result<DocumentOwner> {
+    let d = reader.document(&hit.locator.path)?.ok_or_else(|| {
+        WikiError::new(
             ErrorCode::FreshnessConflict,
-            "context hit path absent from pinned projection",
-        ));
-    };
+            "context hit path absent from pinned catalog",
+        )
+    })?;
     if d.hash != hit.locator.observed_hash {
         return Err(WikiError::new(
             ErrorCode::FreshnessConflict,
             "context hit hash differs from pinned projection",
         ));
     }
-    if !matches_filters(reader, d, &request.documents.filters) {
-        return Ok(None);
-    }
-    if d.owner_revision.is_some()
-        && !request.documents.filters.source_ids.is_empty()
-        && !d
-            .source_id
+    let filters_match =
+        super::filters::matches_catalog_document(reader, &d, &request.documents.filters)?;
+    let source_matches = d.owner_revision.is_none()
+        || request.documents.filters.source_ids.is_empty()
+        || d.source_id
             .as_ref()
-            .is_some_and(|id| request.documents.filters.source_ids.contains(id))
-    {
-        return Ok(None);
-    }
+            .is_some_and(|id| request.documents.filters.source_ids.contains(id));
     let canonical = d
         .record_id
         .as_ref()
-        .and_then(|id| reader.projection().records.get(id));
+        .map(|id| reader.record(id))
+        .transpose()?
+        .flatten();
     let allowed = if d.owner_revision.is_some() {
         d.eligibility != Eligibility::Invalid
             && (request.scope != ContextScope::Current || d.eligibility == Eligibility::Current)
     } else {
-        canonical.is_some_and(|r| match r.record.kind() {
+        canonical.as_ref().is_some_and(|r| match r.record.kind() {
             RecordKind::Page => {
                 r.authored_status.as_deref() != Some("draft")
                     && r.eligibility != Eligibility::Invalid
@@ -204,7 +263,23 @@ fn document_passage(
             _ => false,
         })
     };
-    if !allowed || excerpt.span.is_empty() {
+    Ok(DocumentOwner {
+        document: d,
+        canonical,
+        allowed: allowed && filters_match && source_matches,
+    })
+}
+fn document_passage(
+    reader: &dyn QueryCatalog,
+    owner: &DocumentOwner,
+    hit: &SearchHit,
+    excerpt: &SearchExcerpt,
+    request: &ContextRequest,
+    rank: usize,
+) -> Result<Option<ContextPassage>> {
+    let d = &owner.document;
+    let canonical = owner.canonical.as_ref();
+    if !owner.allowed || excerpt.span.is_empty() {
         return Ok(None);
     }
     let span = excerpt.span;
@@ -217,10 +292,14 @@ fn document_passage(
     }
     let mut citations = Vec::new();
     let record = if let Some(row) = canonical {
-        Some(bundles::reference(reader, row))
+        Some(RecordRef {
+            vault_id: reader.vault_id().clone(),
+            record_id: row.record.id().clone(),
+            expected_kind: row.record.kind(),
+        })
     } else {
         d.owner_revision.as_ref().map(|id| RecordRef {
-            vault_id: reader.projection().vault_id.clone(),
+            vault_id: reader.vault_id().clone(),
             record_id: id.clone(),
             expected_kind: RecordKind::Revision,
         })
@@ -517,6 +596,7 @@ pub fn assemble(
 ) -> Result<ContextDraft> {
     assemble_inner(
         reader,
+        Some(reader),
         request,
         hits,
         graph,
@@ -539,6 +619,7 @@ pub(crate) fn assemble_for_query(
 ) -> Result<ContextDraft> {
     assemble_inner(
         reader,
+        Some(reader),
         request,
         hits,
         graph,
@@ -548,8 +629,39 @@ pub(crate) fn assemble_for_query(
     )
 }
 
+/// Cached document context shares selection and packing without constructing a
+/// partial projection or granting access to strict graph operations.
+pub(crate) fn assemble_snapshot_for_query(
+    reader: &dyn QueryCatalog,
+    request: &ContextRequest,
+    hits: &HitSet,
+    query: &str,
+) -> Result<ContextDraft> {
+    if request.scope != ContextScope::Snapshot
+        || request.target != ContextTarget::Documents
+        || request.documents.mode != SearchMode::Lexical
+        || request.graph.is_some()
+    {
+        return Err(WikiError::new(
+            ErrorCode::Usage,
+            "cached context supports lexical document snapshots only",
+        ));
+    }
+    assemble_inner(
+        reader,
+        None,
+        request,
+        hits,
+        None,
+        Some(query),
+        &ContextSelectionSignals::default(),
+        &SelectionAction::Automatic,
+    )
+}
+
 fn assemble_inner(
-    reader: &ReaderSnapshot,
+    reader: &dyn QueryCatalog,
+    strict_reader: Option<&ReaderSnapshot>,
     request: &ContextRequest,
     hits: &HitSet,
     graph: Option<&GraphResult>,
@@ -577,7 +689,7 @@ fn assemble_inner(
             "context candidate payload exceeds display limit",
         ));
     }
-    let dependency_fingerprint = dependencies(reader)?;
+    let dependency_fingerprint = reader.dependency_fingerprint()?;
     if hits.snapshot != *reader.snapshot()
         || hits.dependency_fingerprint != dependency_fingerprint
         || graph.is_some_and(|g| {
@@ -589,6 +701,14 @@ fn assemble_inner(
             "context candidates are from another pinned snapshot",
         ));
     }
+    let document_owners = if request.target != ContextTarget::Graph {
+        hits.hits
+            .iter()
+            .map(|hit| document_owner(reader, hit, request))
+            .collect::<Result<Vec<_>>>()?
+    } else {
+        Vec::new()
+    };
     let mut packets = Vec::new();
     let mut omissions = Vec::new();
     let mut direct: BTreeMap<String, usize> = BTreeMap::new();
@@ -601,7 +721,16 @@ fn assemble_inner(
         for (i, hit) in hits.hits.iter().enumerate() {
             // Authenticate identity, hash, filters and context eligibility before
             // source-wide expansion. An invalid supplied hit must not gain trust.
-            if document_passage(reader, hit, &hit.excerpt, request, i + 1)?.is_none() {
+            if document_passage(
+                reader,
+                &document_owners[i],
+                hit,
+                &hit.excerpt,
+                request,
+                i + 1,
+            )?
+            .is_none()
+            {
                 omissions.push(ContextOmission {
                     record_id: hit.locator.record.as_ref().map(|r| r.record_id.clone()),
                     path: Some(hit.locator.path.clone()),
@@ -610,12 +739,7 @@ fn assemble_inner(
                 });
                 continue;
             }
-            let document = reader
-                .projection()
-                .documents
-                .iter()
-                .find(|d| d.path == hit.locator.path)
-                .expect("authenticated owner");
+            let document = &document_owners[i].document;
             let anchors = std::iter::once(&hit.excerpt)
                 .chain(hit.secondary_excerpts.iter().take(1))
                 .map(|e| e.span)
@@ -663,9 +787,14 @@ fn assemble_inner(
                     label: hit.excerpt.label,
                     citation: None,
                 };
-                if let Some(p) =
-                    document_passage(reader, hit, &excerpt, request, candidate.owner_index + 1)?
-                {
+                if let Some(p) = document_passage(
+                    reader,
+                    &document_owners[candidate.owner_index],
+                    hit,
+                    &excerpt,
+                    request,
+                    candidate.owner_index + 1,
+                )? {
                     direct
                         .entry(bundles::owner(&p))
                         .and_modify(|r| *r = (*r).min(candidate.owner_index + 1))
@@ -730,6 +859,7 @@ fn assemble_inner(
                     };
                     let mut passage = document_passage(
                         reader,
+                        &document_owners[candidate.owner_index],
                         hit,
                         &excerpt,
                         request,
@@ -777,7 +907,9 @@ fn assemble_inner(
                 .chain(hit.secondary_excerpts.iter().take(1))
                 .enumerate()
             {
-                if let Some(p) = document_passage(reader, hit, excerpt, request, i + 1)? {
+                if let Some(p) =
+                    document_passage(reader, &document_owners[i], hit, excerpt, request, i + 1)?
+                {
                     direct
                         .entry(bundles::owner(&p))
                         .and_modify(|r| *r = (*r).min(i + 1))
@@ -807,6 +939,12 @@ fn assemble_inner(
     if request.target != ContextTarget::Documents
         && let Some(graph) = graph
     {
+        let reader = strict_reader.ok_or_else(|| {
+            WikiError::new(
+                ErrorCode::Usage,
+                "graph context requires a strict catalog reader",
+            )
+        })?;
         for (i, edge) in graph.assertions.iter().enumerate() {
             let graph_filters = &request
                 .graph
@@ -976,7 +1114,10 @@ fn assemble_inner(
         }
     }
     pack(
-        reader,
+        &OwnerCatalog {
+            reader,
+            owners: &document_owners,
+        },
         request,
         PackingInput {
             packets,
@@ -1401,3 +1542,7 @@ pub(super) fn pack(
         selection_packet: None,
     })
 }
+
+#[cfg(test)]
+#[path = "snapshot_context_tests.rs"]
+mod snapshot_context_tests;

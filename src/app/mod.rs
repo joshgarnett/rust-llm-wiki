@@ -13,6 +13,8 @@ mod review;
 mod indexed_cli_tests;
 
 #[cfg(test)]
+mod general_query_fixture;
+#[cfg(test)]
 mod refresh_fixture_export;
 #[cfg(test)]
 mod refresh_path_profile;

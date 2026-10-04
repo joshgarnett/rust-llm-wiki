@@ -6,7 +6,7 @@ use super::{
     types::{MAX_CONTEXT_QUERY_TERMS, RankContribution},
 };
 use crate::{
-    catalog::{DocumentRow, ReaderSnapshot},
+    catalog::{DocumentRow, query_types::QueryCatalog},
     domain::*,
     records::parse_note,
 };
@@ -347,7 +347,7 @@ fn parent_span(owner: &Owner<'_>, child: ByteSpan, bytes: usize) -> Result<(Byte
 }
 
 pub(crate) fn select_units(
-    reader: &ReaderSnapshot,
+    reader: &dyn QueryCatalog,
     query: &str,
     documents: &[UnitDocument<'_>],
     cues: &[ContextSemanticCue],
@@ -552,6 +552,7 @@ pub(crate) fn select_units(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::catalog::ReaderSnapshot;
     use crate::{
         app::{OfflineApp, OperationOptions, offline},
         catalog::Catalog,

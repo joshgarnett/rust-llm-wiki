@@ -3,6 +3,7 @@ use super::{context, context_types::*};
 use crate::{
     catalog::{
         Catalog, CatalogGraphValidator, CatalogProjection, ReaderSnapshot, SnapshotVerification,
+        query_types::QueryReadLimits,
     },
     changes::{ChangeEngine, ProposedTarget, ScanDocument, ValidationInput},
     domain::*,
@@ -295,6 +296,35 @@ pub fn context_with_options(
     if request.scope == ContextScope::IndexedEvidence {
         return super::indexed_context::context(catalog, query, request, options);
     }
+    if catalog.operation_state()?.is_some() {
+        let meter = Meter::new(&request.verification_budget);
+        let request = context::validate_request(query, request)?;
+        context::validate_selection_action(&request, &options.selection)?;
+        if request.scope != ContextScope::Snapshot
+            || request.target != ContextTarget::Documents
+            || request.documents.mode != super::SearchMode::Lexical
+            || request.graph.is_some()
+        {
+            return Err(WikiError::new(
+                ErrorCode::Usage,
+                "normalized context supports lexical document snapshots and indexed-evidence only",
+            ));
+        }
+        meter.check()?;
+        catalog.guard_query()?;
+        meter.check()?;
+        let reader = catalog.cached_query_snapshot(QueryReadLimits::default())?;
+        let hits =
+            super::lexical::search_context_catalog(&reader, query, &request.documents, true)?;
+        let draft = context::assemble_snapshot_for_query(&reader, &request, &hits, query)?;
+        meter.check()?;
+        if let Some(fault) = &options.fault {
+            fault.check(ContextCheckpoint::BeforeFinalVerification { attempt: 0 })?;
+        }
+        reader.verify_operations(catalog)?;
+        meter.check()?;
+        return Ok(seal(draft, SnapshotVerification::IndexSnapshot, &meter));
+    }
     context_with_retrieval(
         catalog,
         writer,
@@ -381,6 +411,16 @@ where
             &signals,
             &options.selection,
         )?;
+        meter.check()?;
+        if let Some(fault) = &options.fault {
+            fault.check(ContextCheckpoint::BeforeFinalVerification { attempt: 0 })?;
+        }
+        if catalog.operation_state()?.is_some() {
+            return Err(WikiError::new(
+                ErrorCode::RecoveryRequired,
+                "normalized authority activated while a legacy context reader was held",
+            ));
+        }
         meter.check()?;
         return Ok(seal(draft, SnapshotVerification::IndexSnapshot, &meter));
     }
