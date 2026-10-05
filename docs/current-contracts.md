@@ -12,9 +12,17 @@ failed its completeness threshold and retained a required-fact regression.
 Citation integrity passed; no experimental allocation mode changes public behavior.
 The new [capacity workflow checkpoint](validation-capacity-workflow.md) completed
 1,000 captured Sources and 1,000 authored Pages, including read-only import preview,
-interruption/resume and full check. Its frozen retrieval, update and recovery
-assessment remains pending; measured import and unchanged-sync costs need work
-before 25k qualification.
+interruption/resume and full check. Its frozen query trial failed on an ordinary
+question when an unsupported description's Current Entity identity aborted the
+verified page. Citation integrity passed for the completed prefix, while four
+completed positives lacked facts. Remaining update/recovery phases and 25k
+qualification are unrun; ordinary import/update throughput needs measurement.
+The separate [selected identity and lifecycle replay](validation-selected-identity.md)
+passed at 9.5/10 with no blockers. Empty authenticated Current Entity navigation
+no longer aborts verified discovery; description/body authority remains guarded.
+Actual refresh, withdrawal, historical reads and complete-cache-loss recovery
+passed on a disposable copy. The original query failure is retained as failed
+evidence, and broader quality and capacity gates remain open.
 
 This is the current capability router for the cleanup of 0.1.2. It records implemented surfaces and the checks that can establish local correctness; local cleanup is accepted by [the exact-source aggregate evidence](execution/reports/CLEANUP-VALIDATION.md). Historical milestone plans and research designs are preserved as history. Use the running binary's `capabilities`, `schema NAME`, and command help for exact syntax.
 

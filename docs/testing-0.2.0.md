@@ -7,6 +7,13 @@ target is now 25,000 documents / roughly 2.5 GB of text. Capacity and unseen
 retrieval completeness remain unqualified; the version number does not certify
 those gates.
 
+The latest candidate also includes the [selected identity repair](validation-selected-identity.md):
+an empty authenticated Current Entity hit no longer aborts verified discovery
+when its description is unsupported. Sixteen native tests and a 54-observation
+public update/withdrawal/navigation/cache-loss replay passed, with independent
+scoped acceptance at 9.5/10 and no blockers. Unsupported body evidence still
+refuses; broader missing-fact and capacity failures remain open.
+
 The candidate now has an actual [1,000-document collection control](validation-1k-collection.md):
 import, interrupted resume, refresh/withdrawal, recovery and complete-cache-loss
 rebuild succeeded. The broader frozen assessment is 8.5/10 and remains failed:

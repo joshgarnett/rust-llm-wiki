@@ -44,6 +44,18 @@ All source and Page bytes match their inputs, and full check passed. Frozen
 retrieval, churn and cache-loss acceptance remain pending. Import throughput and
 unchanged-sync input scans threaten the 25k performance target; investigate them
 with a finite comparison before broader storage changes. No new build was needed.
+That frozen query trial subsequently stopped after 43 completed tasks when a
+Current Entity identity with an unsupported description caused verified search
+to refuse the whole page. All 547 returned citations and 40 reads passed integrity;
+four completed positive tasks lacked facts. The failed run remains preserved,
+and unrun lifecycle phases do not qualify another tier. A narrow authenticated
+identity repair preserves empty, uncited navigation without granting description
+authority; its grouped native checkpoint passes 16 tests. The separate
+[identity and lifecycle replay](docs/validation-selected-identity.md) passed 54
+public observations and independent scoped acceptance at 9.5/10 with no blockers:
+refresh/withdrawal, historical navigation, backup and cache-loss reconstruction
+all passed. A new native 0.2.0 candidate packages this repair. The broader failed
+query trial and remaining missing facts retain their separate open gates.
 Full scale, whole-task quality and
 the latest strict Clippy gate remain open. These are progress checkpoints,
 not completion of the fresh goal.

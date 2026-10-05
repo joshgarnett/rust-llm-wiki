@@ -274,6 +274,14 @@ mod tests {
                 .unwrap();
             self.seed(withdrawal.draft.unwrap());
         }
+        fn add_identity(&self, name: &str, dependencies: &str) -> VaultRelativePath {
+            let target = path(&format!("{name}.md"));
+            fs::write(
+                self.catalog.fs().root().path().join(target.as_str()),
+                format!("---\nwiki_schema: '1'\nwiki_id: {name}\nwiki_kind: entity\ntitle: {QUERY} {name}\nwiki_status: active\nwiki_entity_type: component\n{dependencies}---\n"),
+            ).unwrap();
+            target
+        }
     }
     fn paired(fixture: &Fixture, query: &str, plan: &QueryPlan) -> HitSet {
         let baseline = cached(&fixture.catalog, query, plan).0.unwrap();
@@ -364,6 +372,262 @@ mod tests {
                 .all(|hit| hit.owner_revision.is_none() && hit.excerpt.citation.is_none())
         );
         assert_eq!(verified.warnings.last().unwrap(), SCOPE_WARNING);
+    }
+
+    #[test]
+    fn current_entity_identity_preserves_mixed_and_pure_discovery_uncited() {
+        let fixture = Fixture::new();
+        fixture.add_identity("entity_identity", "");
+        fixture.add_identity(
+            "entity_invalid_description",
+            "wiki_depends_on_ids: [assertion_absent]\n",
+        );
+        fixture.sync();
+        let verified = paired(&fixture, QUERY, &plan());
+        assert_eq!(verified.hits.len(), 4);
+        let identities = verified
+            .hits
+            .iter()
+            .filter(|hit| hit.kind == Some(RecordKind::Entity))
+            .collect::<Vec<_>>();
+        assert_eq!(identities.len(), 2);
+        assert!(
+            identities
+                .iter()
+                .any(|hit| hit.eligibility == Eligibility::Invalid)
+        );
+        assert!(
+            identities
+                .iter()
+                .any(|hit| hit.eligibility == Eligibility::Unsupported)
+        );
+        for hit in identities {
+            assert_eq!(hit.identity_eligibility, Some(Eligibility::Current));
+            assert!(
+                hit.reasons
+                    .contains(&super::super::RetrievalReason::Identity)
+            );
+            assert!(hit.excerpt.text.is_empty() && hit.excerpt.span.is_empty());
+            assert!(hit.excerpt.matched_spans.is_empty());
+            assert!(hit.excerpt.citation.is_none() && hit.secondary_excerpts.is_empty());
+            assert!(hit.source_id.is_none() && hit.owner_revision.is_none());
+        }
+        for hit in &verified.hits {
+            if hit.source_id.is_some() {
+                assert_citation(&fixture, hit);
+            }
+        }
+        let pure = paired(&fixture, "entity_identity", &plan());
+        assert_eq!(pure.hits.len(), 1);
+        assert_eq!(pure.hits[0].kind, Some(RecordKind::Entity));
+        let mut historical = plan();
+        historical.filters.include_historical = true;
+        let body_channel = cached(&fixture.catalog, "entity_identity", &historical)
+            .0
+            .unwrap();
+        assert_eq!(body_channel.hits.len(), 1);
+        assert!(
+            !body_channel.hits[0]
+                .reasons
+                .contains(&super::super::RetrievalReason::Identity)
+        );
+        assert!(
+            search(
+                &fixture.catalog,
+                "entity_identity",
+                &historical,
+                &VerificationBudget::default()
+            )
+            .is_err()
+        );
+        // Pagination and cursor contents remain those of ordinary discovery.
+        let mut page = plan();
+        page.limits.hits = 2;
+        let first = paired(&fixture, QUERY, &page);
+        page.cursor = first.next_cursor;
+        assert!(page.cursor.is_some());
+        assert_eq!(paired(&fixture, QUERY, &page).hits.len(), 2);
+    }
+
+    #[test]
+    fn identity_exception_rejects_body_match_secondary_citation_and_forged_provenance() {
+        let fixture = Fixture::new();
+        let entity_path = fixture.add_identity("entity_identity", "");
+        let target = fixture
+            .catalog
+            .fs()
+            .root()
+            .path()
+            .join(entity_path.as_str());
+        let mut raw = fs::read_to_string(&target).unwrap();
+        raw.push_str(&format!("{QUERY}: unsupported description body.\n"));
+        fs::write(target, raw).unwrap();
+        fixture.sync();
+        let reader = fixture
+            .catalog
+            .cached_query_snapshot(QueryReadLimits::default())
+            .unwrap();
+        let hit = lexical::search_catalog(&reader, "entity_identity", &plan())
+            .unwrap()
+            .hits
+            .remove(0);
+        let mut proof = selected_documents::authenticate(
+            &fixture.catalog,
+            &reader,
+            &[entity_path.clone()],
+            &VerificationBudget::default(),
+        )
+        .unwrap();
+        let raw = &proof.documents[&entity_path].raw_text;
+        let body_start = raw.find(&format!("{QUERY}: unsupported")).unwrap();
+        let body_text = raw[body_start..].to_owned();
+        let body_span = ByteSpan::new(body_start as u64, raw.len() as u64).unwrap();
+        for variant in 0..12 {
+            let mut bad = hit.clone();
+            match variant {
+                0 => bad
+                    .reasons
+                    .retain(|reason| *reason != super::super::RetrievalReason::Identity),
+                1 => {
+                    bad.excerpt.text = body_text.clone();
+                    bad.excerpt.span = body_span;
+                }
+                2 => bad.excerpt.matched_spans.push(bad.excerpt.span),
+                3 => {
+                    let mut excerpt = bad.excerpt.clone();
+                    excerpt.text = body_text.clone();
+                    excerpt.span = body_span;
+                    bad.secondary_excerpts.push(excerpt);
+                }
+                4 => {
+                    bad.excerpt.citation = Some(CitationRef::Source(SourceSpanRef {
+                        source_id: fixture.source.clone(),
+                        source_revision: fixture.revision.clone(),
+                        span: bad.excerpt.span,
+                        quote_hash: Blake3Hash::digest(b""),
+                    }))
+                }
+                5 => bad.source_id = Some(fixture.source.clone()),
+                6 => bad.owner_revision = Some(fixture.revision.clone()),
+                7 => bad.identity_eligibility = Some(Eligibility::Historical),
+                8 => bad.kind = Some(RecordKind::Page),
+                9 => {
+                    bad.excerpt.span = body_span;
+                    bad.excerpt.text.clear();
+                }
+                10 => bad.secondary_excerpts.push(bad.excerpt.clone()),
+                _ => bad.excerpt.label = ExcerptLabel::CapturedSource,
+            }
+            assert!(
+                bind_hit(&mut bad, &proof, fixture.catalog.vault_id()).is_err(),
+                "variant {variant}"
+            );
+        }
+        // Even mutually matching cached metadata cannot substitute for a proven
+        // Current Entity record. Poison only this disposable internal proof.
+        proof
+            .records
+            .get_mut(&id("entity_identity"))
+            .unwrap()
+            .identity_eligibility = Some(Eligibility::Historical);
+        let mut not_current = hit.clone();
+        not_current.identity_eligibility = Some(Eligibility::Historical);
+        assert_eq!(
+            bind_hit(&mut not_current, &proof, fixture.catalog.vault_id())
+                .unwrap_err()
+                .code,
+            ErrorCode::CapabilityUnavailable
+        );
+        proof
+            .records
+            .get_mut(&id("entity_identity"))
+            .unwrap()
+            .identity_eligibility = Some(Eligibility::Current);
+        proof.documents.get_mut(&entity_path).unwrap().source_id = Some(fixture.source.clone());
+        let mut associated = hit.clone();
+        associated.source_id = Some(fixture.source.clone());
+        assert_eq!(
+            bind_hit(&mut associated, &proof, fixture.catalog.vault_id())
+                .unwrap_err()
+                .code,
+            ErrorCode::CapabilityUnavailable
+        );
+        proof.documents.get_mut(&entity_path).unwrap().source_id = None;
+        let source_record = crate::records::parse_note(
+            &fs::read(
+                fixture
+                    .catalog
+                    .fs()
+                    .root()
+                    .path()
+                    .join(format!("sources/{}/source.md", fixture.source)),
+            )
+            .unwrap(),
+        )
+        .canonical
+        .unwrap();
+        let row = proof.records.get_mut(&id("entity_identity")).unwrap();
+        row.record = source_record;
+        let mut forged = hit.clone();
+        forged.locator.record = Some(RecordRef {
+            vault_id: fixture.catalog.vault_id().clone(),
+            record_id: row.record.id().clone(),
+            expected_kind: RecordKind::Source,
+        });
+        assert_eq!(
+            bind_hit(&mut forged, &proof, fixture.catalog.vault_id())
+                .unwrap_err()
+                .code,
+            ErrorCode::CapabilityUnavailable
+        );
+    }
+
+    #[test]
+    fn selected_identity_edit_and_malformed_entity_still_refuse() {
+        let fixture = Fixture::new();
+        let entity_path = fixture.add_identity("entity_identity", "");
+        fixture.sync();
+        let mut fired = false;
+        let (result, _) = selected(
+            &fixture.catalog,
+            "entity_identity",
+            &plan(),
+            &VerificationBudget::default(),
+            || {
+                fired = true;
+                let target = fixture
+                    .catalog
+                    .fs()
+                    .root()
+                    .path()
+                    .join(entity_path.as_str());
+                let raw = fs::read_to_string(&target).unwrap();
+                fs::write(
+                    target,
+                    raw.replace("wiki_status: active", "wiki_status: superseded"),
+                )
+                .unwrap();
+                Ok(())
+            },
+        );
+        assert!(fired);
+        assert_eq!(result.unwrap_err().code, ErrorCode::FreshnessConflict);
+        fs::write(fixture.catalog.fs().root().path().join("malformed-entity.md"), format!("---\nwiki_schema: unsupported\nwiki_id: entity_malformed\nwiki_kind: entity\ntitle: {QUERY} malformed entity\nwiki_status: active\nwiki_entity_type: component\n---\n{QUERY} malformed body.\n")).unwrap();
+        fixture.sync();
+        let mut malformed = plan();
+        malformed.filters.path_prefix = Some("malformed-entity.md".into());
+        let baseline = cached(&fixture.catalog, QUERY, &malformed).0.unwrap();
+        assert_eq!(baseline.hits.len(), 1);
+        assert!(baseline.hits[0].identity_eligibility.is_none());
+        assert!(
+            search(
+                &fixture.catalog,
+                QUERY,
+                &malformed,
+                &VerificationBudget::default()
+            )
+            .is_err()
+        );
     }
 
     #[test]
@@ -701,6 +965,29 @@ mod tests {
             .unwrap();
         assert_eq!(baseline.hits.len(), 1);
         assert_eq!(baseline.hits[0].eligibility, Eligibility::Unsupported);
+        let reader = fixture
+            .catalog
+            .cached_query_snapshot(QueryReadLimits::default())
+            .unwrap();
+        let mut forged = baseline.hits[0].clone();
+        let proof = selected_documents::authenticate(
+            &fixture.catalog,
+            &reader,
+            &[forged.locator.path.clone()],
+            &VerificationBudget::default(),
+        )
+        .unwrap();
+        forged.reasons.push(super::super::RetrievalReason::Identity);
+        forged.excerpt.text.clear();
+        forged.excerpt.span =
+            ByteSpan::new(forged.excerpt.span.start(), forged.excerpt.span.start()).unwrap();
+        forged.excerpt.matched_spans.clear();
+        assert_eq!(
+            bind_hit(&mut forged, &proof, fixture.catalog.vault_id())
+                .unwrap_err()
+                .code,
+            ErrorCode::CapabilityUnavailable
+        );
         assert!(
             search(
                 &fixture.catalog,

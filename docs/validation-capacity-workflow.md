@@ -69,8 +69,32 @@ vault cost needs qualification. A bounded comparison of supported four- and
 eight-item groups is the next performance investigation after this control,
 before considering storage changes. No larger corpus is admitted automatically.
 
-Frozen search/context/read tasks, source updates, withdrawal, complete-cache-loss
-rebuild and independent acceptance remain pending. The earlier
+The frozen initial query trial subsequently stopped on its 44th task. Forty-three
+tasks completed their search/context/conditional-read sequence; the next selected
+search returned `CAPABILITY_UNAVAILABLE` for an ordinary deployment-lead question.
+The failed command returned no data, and the supervisor stopped without a retry.
+All 127 query attempts are retained: 44 searches, 43 contexts and 40 reads. The
+126 successful commands and one refusal took 37.865 supervised seconds total;
+the longest took 0.477 seconds. These are command intervals, not session turnaround
+or warm p95 qualification. The owning clock terminated after 5,738.717 seconds,
+including setup, reviews, audits, host transport and waits.
+
+A separate one-call diagnostic on a complete disposable copy identified the
+trigger: the ten discovery hits included nine Current source payloads and one
+Entity with Current identity and an unsupported description. The Entity excerpt
+was empty and uncited. The selected-search guard conflated identity navigation
+with body-evidence authority and rejected the whole page. This question is now
+development data; the failed run remains immutable.
+
+Independent partial assessment found all 547 returned citation occurrences and
+40 selected read ranges byte-correct and bound to their current revisions.
+Evidence was complete for 33 of 37 completed positive tasks; including the failed
+positive gives 33 of 38 attempted positives. Six completed negative tasks were
+safe. Four completed positives still missed facts despite correct citations.
+The successful prefix does not qualify the frozen workflow or admit another tier.
+
+Remaining repetitions, unstarted questions, Cargo overlays, source updates,
+withdrawal and complete-cache-loss rebuild are unrun in this control. The earlier
 [collection control](validation-1k-collection.md), accepted
 [selected search](validation-verified-search.md), and failed
 [allocation experiment](validation-location-allocation.md) remain separate.

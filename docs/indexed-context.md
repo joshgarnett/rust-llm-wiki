@@ -94,6 +94,12 @@ path filters use the existing document filtering rules.
 
 ### Selected search citations
 
+An authenticated Current Entity identity can remain an empty, uncited navigation
+hit when its description is unsupported or invalid. Verification authenticates
+the identity and selected dependencies; it does not promote that description to
+evidence. Invalid or unsupported body excerpts still refuse. Discovery ordering,
+limits and cursor bindings are unchanged.
+
 The 0.2.0 candidate adds explicit verification to normalized lexical search:
 
 ```sh

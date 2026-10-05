@@ -1,6 +1,6 @@
 //! Published lexical discovery with one bounded proof of the displayed document page.
 use super::{
-    ExcerptLabel, HitSet, QueryPlan, SearchExcerpt, SearchHit, SearchMode,
+    ExcerptLabel, HitSet, QueryPlan, RetrievalReason, SearchExcerpt, SearchHit, SearchMode,
     context_types::VerificationBudget, indexed_documents, lexical, selected_documents,
     verification::Meter,
 };
@@ -114,10 +114,25 @@ fn bind_hit(
             "displayed locator or metadata differs from authenticated document",
         ));
     }
+    // A current Entity identity can be navigable without a supported description.
+    // Authenticate its record and keep that channel empty and uncited; body
+    // eligibility never inherits authority from an Identity retrieval reason.
     if matches!(
         document.eligibility,
         Eligibility::Invalid | Eligibility::Unsupported
-    ) {
+    ) && !(record.is_some_and(|row| {
+        row.record.kind() == RecordKind::Entity
+            && row.identity_eligibility == Some(Eligibility::Current)
+    }) && hit.reasons.contains(&RetrievalReason::Identity)
+        && document.source_id.is_none()
+        && document.owner_revision.is_none()
+        && hit.excerpt.span.is_empty()
+        && hit.excerpt.text.is_empty()
+        && hit.excerpt.matched_spans.is_empty()
+        && hit.excerpt.citation.is_none()
+        && hit.excerpt.label == ExcerptLabel::NoteText
+        && hit.secondary_excerpts.is_empty())
+    {
         return Err(WikiError::new(
             ErrorCode::CapabilityUnavailable,
             "selected search cannot confer evidence authority on invalid or unsupported discovery",

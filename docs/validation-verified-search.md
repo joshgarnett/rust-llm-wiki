@@ -10,6 +10,11 @@ Independent scoped acceptance: **9.5/10, all ten public tasks exercised, no
 observed correctness blocker**. This qualifies the explicit selected-search
 workflow on the tested native platform. The original plain-search 1k assessment
 remains failed, and answer completeness and 25k capacity remain unqualified.
+The subsequent [identity and lifecycle repair](validation-selected-identity.md)
+also passes a separate 9.5/10 gate: it preserves empty Current Entity navigation
+with unsupported descriptions and verifies actual update and cache-loss recovery.
+Its sixteen focused native tests supersede the earlier thirteen-test checkpoint
+for that changed coordinator; the earlier public coverage remains separate.
 
 ## Evidence
 
