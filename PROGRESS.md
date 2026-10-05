@@ -36,6 +36,14 @@ selection/allocation 2/5 in both HIGH and default profiles, with a required-fact
 regression. All 329 citations audited correctly; five mixed diagnostic selections
 showed budget feasibility. No allocation mode is promoted. Continue with an
 integrated public cited-context workflow and independent capacity qualification.
+The new [capacity workflow checkpoint](docs/validation-capacity-workflow.md) used
+the preserved native 0.2.0 candidate to capture 1,000 Sources / 100,302,609 bytes
+and publish 1,000 authored Pages. Import preview preserved all existing bytes and
+mtimes; interruption/resume preserved four pending identities and timestamps.
+All source and Page bytes match their inputs, and full check passed. Frozen
+retrieval, churn and cache-loss acceptance remain pending. Import throughput and
+unchanged-sync input scans threaten the 25k performance target; investigate them
+with a finite comparison before broader storage changes. No new build was needed.
 Full scale, whole-task quality and
 the latest strict Clippy gate remain open. These are progress checkpoints,
 not completion of the fresh goal.

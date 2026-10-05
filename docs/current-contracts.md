@@ -10,6 +10,11 @@ and the still-unrun 25k/HIGH gates remain separate.
 The subsequent [evidence allocation development control](validation-location-allocation.md)
 failed its completeness threshold and retained a required-fact regression.
 Citation integrity passed; no experimental allocation mode changes public behavior.
+The new [capacity workflow checkpoint](validation-capacity-workflow.md) completed
+1,000 captured Sources and 1,000 authored Pages, including read-only import preview,
+interruption/resume and full check. Its frozen retrieval, update and recovery
+assessment remains pending; measured import and unchanged-sync costs need work
+before 25k qualification.
 
 This is the current capability router for the cleanup of 0.1.2. It records implemented surfaces and the checks that can establish local correctness; local cleanup is accepted by [the exact-source aggregate evidence](execution/reports/CLEANUP-VALIDATION.md). Historical milestone plans and research designs are preserved as history. Use the running binary's `capabilities`, `schema NAME`, and command help for exact syntax.
 
