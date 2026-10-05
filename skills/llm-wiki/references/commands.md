@@ -206,7 +206,7 @@ Options:
 ## read
 
 ```text
-Read a record by ID or vault-relative path
+Read a record by ID or vault-relative path; dry-run plans the request without returning bytes
 
 Usage: lwiki read [OPTIONS] <--id <ID>|--path <PATH>>
 
@@ -247,7 +247,7 @@ Options:
           Preview without writes, provider requests or credential resolution
 
       --no-sync
-          Read the existing index snapshot without syncing; freshness is not verified
+          Read the existing index snapshot without syncing; freshness is not verified. Dry-run only plans this mode
 
       --stage
           Retain a guarded preparation for a later explicit changes apply

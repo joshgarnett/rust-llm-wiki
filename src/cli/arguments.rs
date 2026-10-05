@@ -104,7 +104,7 @@ pub enum Command {
         #[arg(long, default_value = "Local wiki")]
         title: String,
     },
-    /// Read a record by ID or vault-relative path.
+    /// Read a record by ID or vault-relative path; dry-run plans the request without returning bytes.
     Read {
         #[command(flatten)]
         selector: Selector,
@@ -117,7 +117,7 @@ pub enum Command {
         /// End of the zero-based, half-open UTF-8 byte range.
         #[arg(long, requires = "start")]
         end: Option<u64>,
-        /// Read the existing index snapshot without syncing; freshness is not verified.
+        /// Read the existing index snapshot without syncing; freshness is not verified. Dry-run only plans this mode.
         #[arg(long)]
         no_sync: bool,
     },

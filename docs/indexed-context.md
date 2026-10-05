@@ -288,6 +288,16 @@ Do not reuse a search excerpt's quote hash for different text. The human
 continuation command retains the selected vault and cached-read mode; citation
 metadata is printed on stderr while stdout contains the exact requested text.
 
+CLI `--dry-run read` returns a request plan before opening the catalog or
+reading the target. It reports the supplied ID/path, requested byte range,
+effective byte limit and requested verified/cached mode. JSON `body` and
+`source_citation` are null; target resolution, UTF-8 range validation and
+verification are explicitly unperformed. Human output describes the planned
+read. Missing targets can therefore produce a plan, but malformed selectors,
+ranges and limits still fail. Run without `--dry-run` to obtain text and proof.
+This changes the previous dry-run behavior that returned source bytes after
+projecting the vault, and applies equally with `--no-sync`.
+
 Cached `--no-sync` reads, dry-run reads, legacy-layout reads, empty ranges and
 authored notes return no source citation. Authored read coordinates address the
 note body and are not captured-source evidence offsets. An external edit to a

@@ -20,6 +20,13 @@ and stdout retains exact source text. The continuation command retains the vault
 and `--no-sync` when requested. Cached, legacy, authored, empty and dry-run reads
 remain uncited. See [the reading contract](indexed-context.md#continuing-a-captured-source-read).
 
+The subsequent [occupied 10k diagnostic](validation-10k-workflow.md) retained
+correct ordinary reads and citations but failed a dry-read deadline. CLI dry-run
+now plans the request without resolving targets or returning body text; this
+explicit compatibility change passed its [separate acceptance gate](validation-dry-read-preview.md)
+at 10.0/10 with no blockers.
+The small historical lifecycle score above applies to its frozen executable.
+
 ## Development comparison
 
 The prospectively frozen recipe kept the same lexical query, five hits, 80

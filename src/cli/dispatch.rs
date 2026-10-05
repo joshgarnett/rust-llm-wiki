@@ -323,6 +323,22 @@ fn execute_inner(args: &Arguments) -> Result<Envelope> {
                 range,
                 max_bytes: preferences.read_max_bytes,
             };
+            if args.dry_run {
+                envelope.data = json!({
+                    "dry_run": true,
+                    "selector": {"id": selector.id, "path": selector.path},
+                    "requested_range": request.range,
+                    "max_bytes": request.max_bytes,
+                    "mode": if *no_sync { "cached" } else { "verified" },
+                    "body": null,
+                    "source_citation": null,
+                    "target_resolution_performed": false,
+                    "utf8_range_validation_performed": false,
+                    "verification_performed": false,
+                });
+                envelope.warnings.push("Dry-run plans the read request; target existence, identity uniqueness, UTF-8 range validity, body and freshness are unverified. Run without --dry-run to read bytes.".into());
+                return Ok(envelope);
+            }
             let catalog = Catalog::with_options(
                 app.fs().clone(),
                 app.vault_id().clone(),
@@ -331,7 +347,7 @@ fn execute_inner(args: &Arguments) -> Result<Envelope> {
                     fault: None,
                 },
             );
-            let outcome = if (*no_sync || !args.dry_run) && catalog.operation_state()?.is_some() {
+            let outcome = if catalog.operation_state()?.is_some() {
                 catalog.guard_query()?;
                 let reader = catalog.query_snapshot(QueryReadLimits::default())?;
                 if !reader.normalized_layout() {
@@ -373,8 +389,6 @@ fn execute_inner(args: &Arguments) -> Result<Envelope> {
                     envelope.meta.freshness = Some("index_snapshot".into());
                 }
                 outcome
-            } else if args.dry_run {
-                app.read(request)?
             } else {
                 let (_writer, reader) = reader(&app, *no_sync)?;
                 snapshot_metadata(&mut envelope.meta, &reader);
@@ -411,11 +425,6 @@ fn execute_inner(args: &Arguments) -> Result<Envelope> {
                 envelope.warnings.push(format!("Read is truncated; continue with: lwiki --wiki {quoted_wiki} read --path {quoted_path}{read_mode} --start {} --end {} --max-bytes {}", range.start(), range.end(), preferences.read_max_bytes));
             }
             envelope.data = value(outcome)?;
-            if args.dry_run {
-                envelope
-                    .warnings
-                    .push("cache state and index freshness are unknown during dry-run".into());
-            }
         }
         Command::Page {
             command:
@@ -1929,6 +1938,29 @@ fn present_inner(
                     "Canonical check complete: no knowledge diagnostics. Cache integrity was not checked (legacy catalog)."
                 )
             }
+        }
+        OutputFormat::Human if envelope.command == "read" && envelope.data["dry_run"] == true => {
+            let selector = &envelope.data["selector"];
+            let (kind, target) = if selector["id"].is_string() {
+                ("ID", &selector["id"])
+            } else {
+                ("path", &selector["path"])
+            };
+            writeln!(
+                output,
+                "Would read {kind} {target} in {} mode, up to {} UTF-8 bytes.",
+                envelope.data["mode"].as_str().unwrap_or_default(),
+                envelope.data["max_bytes"]
+            )?;
+            if !envelope.data["requested_range"].is_null() {
+                writeln!(
+                    output,
+                    "Requested byte range: {}..{}.",
+                    envelope.data["requested_range"]["start"],
+                    envelope.data["requested_range"]["end"]
+                )?;
+            }
+            writeln!(output, "Body and freshness are unknown during dry-run.")
         }
         OutputFormat::Human if envelope.command == "read" => write!(
             output,

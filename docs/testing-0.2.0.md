@@ -30,6 +30,16 @@ acceptance at 10.0/10. Broad reading completed the exposed development questions
 on both old and new builds; the new build supplies citation metadata. Automatic
 context completeness and representative capacity remain separate open gates.
 
+Candidate006 also includes [request-only dry-read previews](validation-dry-read-preview.md),
+with independent scoped acceptance at 10.0/10. This explicitly changes CLI
+`--dry-run read`: it now reports the requested selector/range/limit/mode and
+returns null body/citation, leaving target, content endpoints and freshness
+unverified. Run without `--dry-run` to obtain text. Forty previews and sixteen
+ordinary controls passed on small legacy/normalized vaults and an owned 10k copy;
+the slowest preview took 0.067 seconds. The original
+[occupied 10k diagnostic](validation-10k-workflow.md) remains failed at its old
+dry-read deadline. Representative public import and 25k qualification remain open.
+
 The candidate now has an actual [1,000-document collection control](validation-1k-collection.md):
 import, interrupted resume, refresh/withdrawal, recovery and complete-cache-loss
 rebuild succeeded. The broader frozen assessment is 8.5/10 and remains failed:
@@ -66,6 +76,8 @@ printf '%s\n' '{"path":"shipment.txt"}' '{"path":"inspection.txt"}' > "$DEMO/inp
 "$LWIKI" --wiki "$DEMO/wiki" --offline context 'Atlas shipment' \
   --max-bytes 6000 --max-tokens 1500
 # Copy a captured payload path from search's locator.path before reading it:
+# --dry-run previews only the request; it returns no text.
+# "$LWIKI" --wiki "$DEMO/wiki" --offline --dry-run --json read --path "$PAYLOAD_PATH" --max-bytes 16
 # "$LWIKI" --wiki "$DEMO/wiki" --offline --json read --path "$PAYLOAD_PATH" --max-bytes 16
 # Follow data.continuation with --start/--end; copy data.source_citation.citation.
 

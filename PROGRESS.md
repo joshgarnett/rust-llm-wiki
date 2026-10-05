@@ -16,9 +16,16 @@ failed at 2/5 with a baseline fact loss and is preserved in pushed checkpoint
 checkpoint `d4565cd` is committed and pushed. Native macOS ARM64 0.2.0 candidate005
 is packaged: all 386 compiled source/config/asset files match the commit, and
 version, archive bytes and executable permissions pass without rebuilding.
-Next: bounded larger-occupancy import/update/search/recovery qualification toward
-the first 25k target. Native
-HIGH, generated-answer quality and full capacity remain open.
+The [occupied 10k diagnostic](docs/validation-10k-workflow.md) completed all
+49 positive outcomes and seven absent cases, with exact citations and recovery,
+but remains FAILED at its 15-second dry-read timeout. Its generated seed qualifies
+occupancy only. The [request-only preview correction](docs/validation-dry-read-preview.md)
+passed separate scoped acceptance at 10.0/10 with no blockers: 40 previews,
+16 ordinary controls, exact citations, whole-tree preservation and stale-edit
+refusal. One combined release build and five affected read groups passed.
+Native macOS ARM64 0.2.0 candidate006 packages that accepted slice, with the
+compatibility change explicit. Next: representative public import and lifecycle
+qualification toward 25k. Automatic HIGH and generated answers remain open.
 
 The fresh 2026-10-04 goal also covers complete import, update, search and
 maintenance workflows. The user subsequently selected 25,000 documents / roughly

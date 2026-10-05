@@ -640,20 +640,24 @@ fn indexed_cli_cached_read_is_stale_by_contract_and_never_writes() {
         fixture.source, fixture.first
     );
     let before = tree(&fixture.root);
-    for dry_run in [false, true] {
-        let mut args = vec!["read", "--path", &path, "--no-sync"];
-        if dry_run {
-            args.insert(0, "--dry-run");
-        }
-        let read = fixture.cli(&args);
-        assert_eq!(read["data"]["body"], FIRST);
-        if dry_run {
-            assert!(read["meta"]["freshness"].is_null());
-        } else {
-            assert_eq!(read["meta"]["freshness"], "index_snapshot");
-        }
-    }
+    let read = fixture.cli(&["read", "--path", &path, "--no-sync"]);
+    assert_eq!(read["data"]["body"], FIRST);
+    assert_eq!(read["meta"]["freshness"], "index_snapshot");
     same_read_tree(&fixture, before);
+    // CLI dry-run now plans the request, including cached mode; it returns no
+    // body and must preserve SHM as well as every other fixture entry.
+    let before_preview = tree(&fixture.root);
+    let root_modified = fs::metadata(&fixture.root).unwrap().modified().unwrap();
+    let preview = fixture.cli(&["--dry-run", "read", "--path", &path, "--no-sync"]);
+    assert_eq!(preview["data"]["dry_run"], true);
+    assert_eq!(preview["data"]["mode"], "cached");
+    assert!(preview["data"]["body"].is_null());
+    assert!(preview["meta"]["freshness"].is_null());
+    assert_eq!(tree(&fixture.root), before_preview);
+    assert_eq!(
+        fs::metadata(&fixture.root).unwrap().modified().unwrap(),
+        root_modified
+    );
     fs::write(fixture.root.join(&path), SECOND).unwrap();
     let read = fixture.cli(&["read", "--path", &path, "--no-sync"]);
     assert_eq!(read["data"]["body"], FIRST);
@@ -673,6 +677,270 @@ fn indexed_cli_cached_read_is_stale_by_contract_and_never_writes() {
         !result["error"].is_null(),
         "stale selected canonical bytes must not be cited: {result}"
     );
+}
+
+#[test]
+fn indexed_cli_dry_read_plans_selectors_modes_and_ranges_without_catalog_access() {
+    let fixture = Fixture::new();
+    let captured_path = format!(
+        "sources/{}/revisions/{}/content.md",
+        fixture.source, fixture.first
+    );
+    fs::create_dir_all(fixture.root.join("pages")).unwrap();
+    fs::write(
+        fixture.root.join("pages/unreadable.md"),
+        b"This target is invalid UTF-8: \xff\n",
+    )
+    .unwrap();
+    // These disposable corruptions make successful previews evidence that the
+    // catalog and target text were not resolved, rather than only warmed reads.
+    let current = fixture.root.join(".wiki/cache/catalog-current.json");
+    assert!(current.is_file());
+    fs::write(current, b"not a catalog selector").unwrap();
+    let database = PathBuf::from(format!(".wiki/cache/catalogs/{}.sqlite", fixture.file_id));
+    fs::write(fixture.root.join(&database), b"not a SQLite database").unwrap();
+    let seeded = tree(&fixture.root);
+    assert!(seeded.contains_key(&database));
+    assert!(seeded.contains_key(&fixture.shm()));
+    assert!(seeded.contains_key(&PathBuf::from(format!(
+        ".wiki/cache/catalogs/{}.sqlite-wal",
+        fixture.file_id
+    ))));
+
+    let inside_unicode = FIRST.find('東').unwrap() as u64 + 1;
+    let cases = [
+        (
+            "--path",
+            captured_path.as_str(),
+            Some((inside_unicode, inside_unicode + 1)),
+            Some(17),
+        ),
+        ("--id", fixture.source.as_str(), Some((123, 456)), Some(17)),
+        ("--path", "pages/never existed.md", None, None),
+        (
+            "--id",
+            "source_unresolved_preview",
+            Some((0, 16)),
+            Some(16 * 1024 * 1024),
+        ),
+        ("--path", "pages/unreadable.md", Some((1, 2)), Some(1)),
+        ("--path", "pages/empty-preview.md", Some((0, 0)), Some(1)),
+    ];
+    for cached in [false, true] {
+        for (selector, target, range, maximum) in cases {
+            let mut args = vec!["--dry-run", "read", selector, target];
+            if cached {
+                args.push("--no-sync");
+            }
+            let start = range.map(|(start, _)| start.to_string());
+            let end = range.map(|(_, end)| end.to_string());
+            if let (Some(start), Some(end)) = (&start, &end) {
+                args.extend(["--start", start, "--end", end]);
+            }
+            let maximum_text = maximum.map(|bound| bound.to_string());
+            if let Some(maximum) = &maximum_text {
+                args.extend(["--max-bytes", maximum]);
+            }
+            // Capture immediately before each preview; ordinary reads and their
+            // legitimate SHM coordination never enter this preservation window.
+            let before = tree(&fixture.root);
+            let root_modified = fs::metadata(&fixture.root).unwrap().modified().unwrap();
+            let preview = fixture.cli(&args);
+            assert_eq!(
+                preview["data"],
+                serde_json::json!({
+                    "dry_run": true,
+                    "selector": {
+                        "id": if selector == "--id" {Some(target)} else {None},
+                        "path": if selector == "--path" {Some(target)} else {None},
+                    },
+                    "requested_range": range.map(|(start,end)| serde_json::json!({"start":start,"end":end})),
+                    "max_bytes": maximum.unwrap_or(crate::app::offline::DEFAULT_READ_BYTES),
+                    "mode": if cached {"cached"} else {"verified"},
+                    "body": null,
+                    "source_citation": null,
+                    "target_resolution_performed": false,
+                    "utf8_range_validation_performed": false,
+                    "verification_performed": false,
+                }),
+                "{args:?}: {preview}"
+            );
+            assert!(preview["meta"]["freshness"].is_null());
+            assert!(preview["meta"]["snapshot"].is_null());
+            assert!(preview["meta"]["index_generation"].is_null());
+            assert_eq!(tree(&fixture.root), before, "{args:?}");
+            assert_eq!(
+                fs::metadata(&fixture.root).unwrap().modified().unwrap(),
+                root_modified,
+                "{args:?}"
+            );
+        }
+    }
+
+    let raw_cli = |args: &[&str]| {
+        Command::new(binary())
+            .current_dir(&fixture.outside)
+            .arg("--wiki")
+            .arg(&fixture.root)
+            .args(["--offline", "--lock-timeout-ms", "200"])
+            .args(args)
+            .output()
+            .unwrap()
+    };
+    for cached in [false, true] {
+        for (selector, target) in [
+            ("--path", captured_path.as_str()),
+            ("--id", fixture.source.as_str()),
+        ] {
+            let mut args = vec![
+                "--dry-run",
+                "read",
+                selector,
+                target,
+                "--start",
+                "123",
+                "--end",
+                "456",
+                "--max-bytes",
+                "17",
+            ];
+            if cached {
+                args.push("--no-sync");
+            }
+            let before = tree(&fixture.root);
+            let root_modified = fs::metadata(&fixture.root).unwrap().modified().unwrap();
+            let human = raw_cli(&args);
+            assert!(
+                human.status.success(),
+                "{}",
+                String::from_utf8_lossy(&human.stderr)
+            );
+            let text = String::from_utf8(human.stdout).unwrap();
+            assert!(text.contains("Would read"), "{text}");
+            assert!(text.contains(target), "{text}");
+            assert!(
+                text.contains(if cached {
+                    "cached mode"
+                } else {
+                    "verified mode"
+                }),
+                "{text}"
+            );
+            assert!(text.contains("17 UTF-8 bytes"), "{text}");
+            assert!(text.contains("123..456"), "{text}");
+            assert!(
+                text.contains("Body and freshness are unknown during dry-run."),
+                "{text}"
+            );
+            assert!(
+                !text.contains(FIRST.trim()),
+                "preview leaked target text: {text}"
+            );
+            assert!(!String::from_utf8_lossy(&human.stderr).contains("Source citation"));
+            assert_eq!(tree(&fixture.root), before, "{args:?}");
+            assert_eq!(
+                fs::metadata(&fixture.root).unwrap().modified().unwrap(),
+                root_modified
+            );
+        }
+    }
+
+    // Argument-parser failures and validated-request failures both leave every
+    // directory, lock, WAL and SHM unchanged. None may produce a successful plan.
+    let invalid: &[&[&str]] = &[
+        &["--json", "--dry-run", "read"],
+        &[
+            "--json",
+            "--dry-run",
+            "read",
+            "--id",
+            "source_unresolved",
+            "--path",
+            "pages/missing.md",
+        ],
+        &["--json", "--dry-run", "read", "--path", "../escape.md"],
+        &["--json", "--dry-run", "read", "--id", "bad/id"],
+        &[
+            "--json",
+            "--dry-run",
+            "read",
+            "--path",
+            "pages/missing.md",
+            "--start",
+            "1",
+        ],
+        &[
+            "--json",
+            "--dry-run",
+            "read",
+            "--path",
+            "pages/missing.md",
+            "--end",
+            "2",
+        ],
+        &[
+            "--json",
+            "--dry-run",
+            "read",
+            "--path",
+            "pages/missing.md",
+            "--max-bytes",
+            "not-an-integer",
+        ],
+        &[
+            "--json",
+            "--dry-run",
+            "read",
+            "--path",
+            "pages/missing.md",
+            "--start",
+            "9",
+            "--end",
+            "1",
+        ],
+        &[
+            "--json",
+            "--dry-run",
+            "read",
+            "--path",
+            "pages/missing.md",
+            "--max-bytes",
+            "0",
+        ],
+        &[
+            "--json",
+            "--dry-run",
+            "read",
+            "--id",
+            "source_unresolved",
+            "--no-sync",
+            "--max-bytes",
+            "16777217",
+        ],
+    ];
+    for args in invalid {
+        let before = tree(&fixture.root);
+        let root_modified = fs::metadata(&fixture.root).unwrap().modified().unwrap();
+        let error = raw_cli(args);
+        assert!(!error.status.success(), "{args:?}");
+        if error.stdout.is_empty() {
+            assert!(
+                !error.stderr.is_empty(),
+                "missing parse diagnostic for {args:?}"
+            );
+        } else {
+            let result: Value = serde_json::from_slice(&error.stdout).unwrap();
+            assert_eq!(result["ok"], false, "{args:?}: {result}");
+            assert!(result["data"].is_null(), "{result}");
+            assert!(!result["error"].is_null(), "{result}");
+            assert!(result["meta"]["freshness"].is_null(), "{result}");
+        }
+        assert_eq!(tree(&fixture.root), before, "{args:?}");
+        assert_eq!(
+            fs::metadata(&fixture.root).unwrap().modified().unwrap(),
+            root_modified
+        );
+    }
 }
 
 const GENERAL_REVIEWED: &[u8] = b"---\nwiki_schema: '1'\nwiki_kind: page\nwiki_id: page_general_a\ntitle: PlanningSignal Handbook\nwiki_status: reviewed\naliases: [PlanningAlias]\ntags: [team, keep]\n---\nPlanningSignal teams review the amber checklist before release.\n";
@@ -2054,7 +2322,12 @@ fn indexed_cli_read_source_citation_unicode_continuation_and_uncited_notes() {
     assert_eq!(empty["data"]["body"], "");
     assert!(empty["data"]["source_citation"].is_null());
     let dry = fixture.cli(&["--dry-run", "read", "--path", &path]);
-    assert_eq!(dry["data"]["body"], FIRST);
+    // Request-only preview is an explicit CLI compatibility change; ordinary
+    // FIRST reads and their exact Current citations above remain required.
+    assert!(dry["data"]["body"].is_null());
+    assert_eq!(dry["data"]["dry_run"], true);
+    assert_eq!(dry["data"]["mode"], "verified");
+    assert_eq!(dry["data"]["selector"]["path"], path);
     assert!(dry["data"]["source_citation"].is_null());
 
     let human = Command::new(binary())

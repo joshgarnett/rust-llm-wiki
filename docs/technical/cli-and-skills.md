@@ -26,7 +26,7 @@ Commands appear in `capabilities` only when implemented. The following is the im
 |---|---|---|
 | `init PATH` | Create `WIKI.md`, managed directories, cache excludes; refuse to overwrite an existing vault | M1 |
 | `capabilities`, `schema NAME` | Versioned capability manifest or named JSON schema; no network | M1 |
-| `read --id ID` or `read --path PATH` | Record metadata and bounded body; optional byte range on verified UTF-8 boundaries | M1 |
+| `read --id ID` or `read --path PATH` | Record metadata and bounded body; optional byte range on verified UTF-8 boundaries. Dry-run returns only a request plan. | M1 |
 | `page put --file FILE` | Create a page; `--if-match HASH` required to replace an existing page | M1 |
 | `page rename ID --to PATH --if-match HASH` | Changeset updating the path and known incoming links; ID preserved | M1 |
 | `source add FILE` | Capture immutable bytes and normalized text for supported local formats | M1 |
@@ -97,7 +97,7 @@ Failures use the same envelope with `ok: false` and `error: {code, message, retr
 
 JSONL supports long-running commands only. Each line has `schema_version`, invocation ID, monotonically increasing sequence, event type, and typed data. Events include `started`, `progress`, `checkpoint`, `warning`, and `completed`; `completed` embeds the normal envelope and is the terminal event when orderly shutdown is possible. SIGKILL or an I/O failure can prevent it, so absence means unknown/incomplete, not success. Streaming events are presentation; durable job events remain the recovery authority.
 
-Stderr is for concise diagnostics/progress. With JSON/JSONL, it never carries a second machine protocol. Human output prioritizes matched paths, readable excerpts, provenance, changes made, unresolved issues, and a useful next command. `read` human mode can emit Markdown; `--json` always wraps the record and requested body.
+Stderr is for concise diagnostics/progress. With JSON/JSONL, it never carries a second machine protocol. Human output prioritizes matched paths, readable excerpts, provenance, changes made, unresolved issues, and a useful next command. `read` human mode can emit Markdown; `--json` wraps the record and requested body during an actual read. Dry-run instead returns the supplied selector, requested range, effective byte bound and requested mode, with null body/citation and explicit unperformed target/range/verification checks. It does not resolve the target or open the catalog; human output describes the plan. Missing targets remain unverified rather than failing a request preview.
 
 ## Error and exit contract
 
