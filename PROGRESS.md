@@ -83,8 +83,13 @@ unchanged thresholds: 2.208 occupied items/s, 2.200 times baseline, small ratio
 0.940. Its independent actual mechanics audit passed at 9.4/10 with no blockers. A prior harness-only
 partial-context assertion failure is preserved with four baseline attempts and
 all candidate arms unrun. No product change or rebuild followed that failure.
-The accepted compiled source is ready for candidate004 packaging; prioritize
-complete cited answers next; this does not qualify 25k or native HIGH.
+The accepted compiled source is packaged in native macOS ARM64 candidate004.
+Version smoke, all seventeen archive members and executable permissions passed
+without rebuilding; source pins match the pushed milestone. Subsequent bounded
+host-answer trials stopped on operational handoff failures, with no admitted
+answers or complete paired comparison. The latest trial preserved its sources
+and completed cleanup. Stop transport refinement and prioritize integrated native
+query completeness/parity and 25k qualification; neither gate has passed.
 Full scale, whole-task quality and
 the latest strict Clippy gate remain open. These are progress checkpoints,
 not completion of the fresh goal.

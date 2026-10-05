@@ -78,3 +78,22 @@ refresh, withdrawal/history and cache-loss recovery. Normalized mode parity and
 actual 25k qualification remain open. Detailed protocols, private rubric and raw
 outputs are retained locally; follow the [evaluation protocol](evaluating-context.md)
 for a new control rather than assuming a fresh clone includes historical inputs.
+
+## Follow-up host-answer trial: operational failure
+
+Follow-up continuation/adaptive trials did not complete a paired comparison and
+provide no answer-quality result. Prior manual handoff failures remain preserved.
+In the last bounded trial, nine native commands completed in a summed 0.153
+seconds on the small fixture. One fresh synthesis host read its exact request and
+wrote an output, but coordinator receipt processing missed the 180-second pending
+handoff deadline. No response was admitted or stale output forwarded; one arm
+failed and eleven were unrun. Owner cleanup verified all 61 original files and
+56 protected copied files. Preservation does not convert the trial into a pass.
+
+Model inference time, exact receipt delivery time, host usage and cost were
+unavailable. Native command intervals, the owner-monotonic wait and external UTC
+observations are different measurements; these data do not identify model
+reasoning level as the cause. Stop extending the transport workflow. The next
+implementation decision should prioritize a complete native query workflow and
+representative 25k qualification. Native HIGH, normalized query parity and unseen
+answer completeness remain separate unmet requirements.
