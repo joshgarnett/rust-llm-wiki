@@ -1418,3 +1418,54 @@ fn unindexed_vault_preview_creates_no_cache_import_state_or_writer_lock() {
             .exists()
     );
 }
+
+#[test]
+fn public_import_preserves_external_reader_across_run_resume_and_replay() {
+    for migrated in [false, true] {
+        let fixture = Fixture::new(migrated, 8);
+        fixture.prepare();
+        let app = fixture.app();
+        let catalog = Catalog::new(app.fs().clone(), app.vault_id().clone());
+        let old = catalog
+            .query_snapshot(QueryReadLimits {
+                max_elapsed_ms: 30_000,
+                ..QueryReadLimits::default()
+            })
+            .unwrap();
+        let base = old.snapshot().clone();
+        let wiki = rel("WIKI.md");
+        let before = old.document(&wiki).unwrap();
+        let first = app.source_import_run(&fixture.manifest, KEY, 4, 1).unwrap();
+        assert!(!first.completed);
+        let second = app.source_import_resume(KEY, 1).unwrap();
+        assert!(second.completed);
+        assert_eq!(second.groups_committed, 2);
+        let mut items = mapping(first.last_group.as_ref().unwrap());
+        items.extend(mapping(second.last_group.as_ref().unwrap()));
+        assert_eq!(
+            items.iter().map(|item| item.0).collect::<Vec<_>>(),
+            (0..8).collect::<Vec<_>>()
+        );
+        assert_eq!(old.snapshot(), &base);
+        assert_eq!(old.document(&wiki).unwrap(), before);
+        for (ordinal, source, revision) in &items {
+            assert!(old.record(source).unwrap().is_none());
+            assert!(old.record(revision).unwrap().is_none());
+            fixture.assert_item(*ordinal, source, revision, true);
+        }
+        fixture.assert_query(items[0].0, &items[0].1, &items[0].2);
+        fixture.assert_query(items[7].0, &items[7].1, &items[7].2);
+        drop(old);
+        fixture.remove_originals();
+        let replay = app.source_import_resume(KEY, 1).unwrap();
+        assert_eq!(replay.imported_items, 8);
+        assert_eq!(replay.groups_committed, 2);
+        assert_eq!(
+            mapping(replay.last_group.as_ref().unwrap()),
+            mapping(second.last_group.as_ref().unwrap())
+        );
+        let checked = app.check().unwrap();
+        assert!(checked.complete);
+        assert_eq!(checked.error_count, 0, "{:?}", checked.diagnostics);
+    }
+}

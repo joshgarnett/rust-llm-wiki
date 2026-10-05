@@ -822,3 +822,249 @@ fn import_count_adapter_forwards_private_creation_bytes_sync_and_native_errors_o
     assert_eq!(calls["sync_directory"].errors, 1);
     assert_eq!(fs::read(path).unwrap(), b"exact diagnostic bytes");
 }
+
+// Proposed addition to the existing cfg(test) source_import_experiment module.
+// This is a small-seed reader control, not the occupied public baseline/candidate
+// performance comparison. Run only under the root's finite external supervisor.
+fn quiescent_import_wal(root: &Path, file_id: &str) -> Result<Value> {
+    use std::{io::Read, os::unix::fs::MetadataExt};
+    let database = root.join(format!(".wiki/cache/catalogs/{file_id}.sqlite"));
+    let wal = database.with_extension("sqlite-wal");
+    let shm = database.with_extension("sqlite-shm");
+    let allocation = |path: &Path| -> Result<Value> {
+        let metadata = fs::symlink_metadata(path)?;
+        if !metadata.is_file() || metadata.file_type().is_symlink() || metadata.nlink() != 1 {
+            return Err(fail("WAL observation requires owned regular files"));
+        }
+        Ok(json!({"logical_bytes":metadata.len(),"allocated_bytes":metadata.blocks()*512}))
+    };
+    // Native, version-pinned diagnostic only: no SQL connection or maintenance.
+    // Read twice after import has returned, with no concurrent writer. The held
+    // reader stratum stays idle while these bytes are copied.
+    let read_header = || -> Result<[u8; 136]> {
+        let mut header = [0u8; 136];
+        File::open(&shm)?.read_exact(&mut header)?;
+        Ok(header)
+    };
+    let first = read_header()?;
+    let second = read_header()?;
+    let word = |at: usize| u32::from_ne_bytes(first[at..at + 4].try_into().unwrap());
+    if first != second || first[..48] != first[48..96] || word(0) != 3_007_000 || first[12] != 1 {
+        return Err(fail(
+            "quiescent WAL-index header is unsupported or unstable",
+        ));
+    }
+    let frames = word(16);
+    let backfilled = word(96);
+    if backfilled > frames {
+        return Err(fail("WAL-index backfill exceeds valid frames"));
+    }
+    Ok(
+        json!({"database":allocation(&database)?,"wal":allocation(&wal)?,"shm":allocation(&shm)?,"valid_frames":frames,"backfilled_frames":backfilled,"not_backfilled_frames":frames-backfilled,"wal_reset_salts":first[32..40],"raw_header_blake3":Blake3Hash::digest(first),"method":"native stable duplicated SHM header; quiescent diagnostic only, no SQL probe or checkpoint"}),
+    )
+}
+
+#[test]
+#[ignore = "explicit LWIKI_IMPORT_WAL_EXPERIMENT_DIR/LWIKI_IMPORT_BUILD_PIN; root supervises <=900s/128 captures/no providers"]
+fn profile_import_wal_natural_and_external_reader() {
+    if let Err(error) = run_import_wal_reader_control() {
+        if let Some(destination) = env::var_os("LWIKI_IMPORT_WAL_EXPERIMENT_DIR") {
+            let path = PathBuf::from(destination).join("failure.json");
+            if path.parent().is_some_and(Path::is_dir) && !path.exists() {
+                let _ = write_json(
+                    &path,
+                    &json!({"status":"error","error":error.to_string(),"retry_allowed":false}),
+                );
+            }
+        }
+        panic!("frozen WAL control failed: {error}");
+    }
+}
+
+fn run_import_wal_reader_control() -> Result<()> {
+    let destination = requested_directory("LWIKI_IMPORT_WAL_EXPERIMENT_DIR")?;
+    let pin_path = PathBuf::from(
+        env::var_os("LWIKI_IMPORT_BUILD_PIN").ok_or_else(|| fail("build pin required"))?,
+    );
+    let pin: Value = serde_json::from_slice(&fs::read(&pin_path)?)?;
+    if pin["profile"] != "release" || pin["rustc_opt_level"] != 3 || pin["native"] != true {
+        return Err(fail("actual native optimized compiler pin required"));
+    }
+    let unit = env::current_exe()?;
+    let hashes = sha256(&[unit.clone()])?;
+    if hashes[unit.to_str().ok_or_else(|| fail("unit path nonUTF8"))?] != pin["unit_sha256"] {
+        return Err(fail("test executable differs from build pin"));
+    }
+    if rusqlite::version() != "3.53.2" {
+        return Err(fail("SHM diagnostic requires pinned SQLite3.53.2 layout"));
+    }
+    let inputs = (0..64)
+        .map(|ordinal| {
+            let mut body = format!(
+                "Importneedle{ordinal} vessel holds {} amber tokens. café 東京 🦀.\n",
+                17 + ordinal
+            )
+            .into_bytes();
+            body.resize(100 * 1024, b'.');
+            (format!("input {ordinal}.txt"), body)
+        })
+        .collect();
+    let mut seed = Fixture::with_inputs(false, inputs);
+    // Put every fixture/input beneath the controlled account before preparing
+    // the immutable manifest, whose input paths must point at the final names.
+    let original = seed.temp.path().to_owned();
+    let relocated = destination.join("seed-fixture");
+    fs::rename(&original, &relocated)?;
+    seed.root = relocated.join(seed.root.strip_prefix(&original)?);
+    seed.inputs = seed
+        .inputs
+        .iter()
+        .map(|p| p.strip_prefix(&original).map(|p| relocated.join(p)))
+        .collect::<std::result::Result<_, _>>()?;
+    seed.list = relocated.join(seed.list.strip_prefix(&original)?);
+    seed.manifest = relocated.join(seed.manifest.strip_prefix(&original)?);
+    seed.prepare();
+    let source_before = inventory(&seed.root)?;
+    write_json(
+        &destination.join("protocol.json"),
+        &json!({"version":1,"frozen":true,"kind":"native-small-seed-reader-mechanism-control","build_pin":pin,"sqlite_version":rusqlite::version(),"manifest_hash":Blake3Hash::digest(fs::read(&seed.manifest)?),"input_hashes":sha256(&seed.inputs)?,"cells":["natural","external_reader"],"inputs_per_cell":64,"group_size":8,"groups_per_cell":8,"captures_total":128,"deadline_seconds":900,"coverage":"natural import intervals and quiescent files; held external reader intentionally blocks cleanup; no new SQL observer during measured groups; not occupied throughput/capacity or baseline comparison"}),
+    )?;
+    let mut cells = vec![];
+    for held in [false, true] {
+        let name = if held { "external-reader" } else { "natural" };
+        let root = destination.join(name);
+        clone_tree(&seed.root, &root)?;
+        let app = OfflineApp::new(VaultFs::new(VaultRoot::explicit(&root)?), options())?;
+        let catalog = Catalog::new(app.fs().clone(), app.vault_id().clone());
+        let initial = catalog.query_snapshot(QueryReadLimits {
+            max_elapsed_ms: 30_000,
+            ..QueryReadLimits::default()
+        })?;
+        let base = initial.snapshot().clone();
+        let file_id = base
+            .publication()
+            .ok_or_else(|| fail("normalized seed publication missing"))?
+            .file_id
+            .clone();
+        let wiki_before = initial.document(&rel("WIKI.md"))?;
+        let mut old = if held {
+            Some(initial)
+        } else {
+            drop(initial);
+            None
+        };
+        let mut samples = vec![];
+        let mut all = vec![];
+        for group in 0..8 {
+            let started = Instant::now();
+            let outcome = if group == 0 {
+                app.source_import_run(&seed.manifest, "finite WAL reader control", 8, 1)?
+            } else {
+                app.source_import_resume("finite WAL reader control", 1)?
+            };
+            let elapsed_ns = started.elapsed().as_nanos();
+            if outcome.groups_committed != group + 1
+                || outcome.imported_items != (group + 1) * 8
+                || outcome.completed != (group == 7)
+            {
+                return Err(fail("import group acknowledgement differs"));
+            }
+            all.extend(mapping(
+                outcome
+                    .last_group
+                    .as_ref()
+                    .ok_or_else(|| fail("last group missing"))?,
+            ));
+            // Check returned old-reader content while its ordinary query deadline
+            // is still current. Later groups retain the idle transaction only;
+            // they do not extend or bypass production query limits.
+            if group == 0
+                && let Some(reader) = &old
+            {
+                if reader.snapshot() != &base || reader.document(&rel("WIKI.md"))? != wiki_before {
+                    return Err(fail("old complete snapshot changed"));
+                }
+                for (_, source, revision) in &all {
+                    if reader.record(source)?.is_some() || reader.record(revision)?.is_some() {
+                        return Err(fail(
+                            "old external reader observed newly imported identities",
+                        ));
+                    }
+                }
+            }
+            samples.push(json!({"group":group,"import_elapsed_ns":elapsed_ns,"outcome":outcome,"files":quiescent_import_wal(&root,&file_id)?}));
+            write_json(
+                &destination.join(format!("{name}-group-{group}.json")),
+                samples.last().unwrap(),
+            )?;
+        }
+        if let Some(reader) = &old {
+            if reader.snapshot() != &base || reader.connection().is_autocommit() {
+                return Err(fail(
+                    "external reader did not retain its original transaction",
+                ));
+            }
+        }
+        drop(old.take());
+        let after_reader_release = quiescent_import_wal(&root, &file_id)?;
+        // Verify actual payloads after measurements; these calls do not count
+        // toward import latency, and may change shared-memory read marks.
+        for (ordinal, source, revision) in &all {
+            let tree = format!("sources/{source}/revisions/{revision}");
+            for file in ["original.bin", "content.md"] {
+                if fs::read(root.join(format!("{tree}/{file}")))? != seed.bytes[*ordinal as usize] {
+                    return Err(fail("imported original/extracted payload differs"));
+                }
+            }
+        }
+        let selected = &all[0];
+        let read = app.read(ReadRequest {
+            selector: RecordSelector::Path(rel(format!(
+                "sources/{}/revisions/{}/content.md",
+                selected.1, selected.2
+            ))),
+            range: None,
+            max_bytes: 128 * 1024,
+        })?;
+        if read.body.as_bytes() != seed.bytes[selected.0 as usize] {
+            return Err(fail("ordinary selected read differs"));
+        }
+        // A natural metadata sample alone cannot prove frame reclamation.
+        // Open a bounded supported NOOP probe only AFTER all natural samples.
+        // Its closing connection may checkpoint: retain before/after metadata.
+        let writer = WriterPermit::acquire(app.fs().root(), Duration::ZERO)?;
+        let selection = crate::catalog::selector::delta_selection(
+            app.fs(),
+            &writer,
+            app.vault_id(),
+            Duration::ZERO,
+        )?;
+        let probe =
+            crate::catalog::selector::open_delta(app.fs(), &writer, &selection, Duration::ZERO)?;
+        let settings = json!({
+            "wal_autocheckpoint":probe.connection().pragma_query_value(None,"wal_autocheckpoint",|r|r.get::<_,i64>(0))?,
+            "journal_size_limit":probe.connection().pragma_query_value(None,"journal_size_limit",|r|r.get::<_,i64>(0))?,
+            "synchronous":probe.connection().pragma_query_value(None,"synchronous",|r|r.get::<_,i64>(0))?,
+            "persist_wal":true,
+            "coverage":"same configured delta-writer opener; settings observed after all imports, not introspected inside original publication connections"
+        });
+        let noop: (i64, i64, i64) =
+            probe
+                .connection()
+                .query_row("PRAGMA wal_checkpoint(NOOP)", [], |r| {
+                    Ok((r.get(0)?, r.get(1)?, r.get(2)?))
+                })?;
+        drop(probe);
+        drop(writer);
+        let after_probe_close = quiescent_import_wal(&root, &file_id)?;
+        cells.push(json!({"cell":name,"samples":samples,"after_external_reader_release":after_reader_release,"noop_after_measurement":noop,"noop_close_can_checkpoint":true,"settings_after_measurement":settings,"after_probe_close":after_probe_close,"mapping":all,"selected_read":read}));
+    }
+    if serde_json::to_value(inventory(&seed.root)?)? != serde_json::to_value(source_before)? {
+        return Err(fail("closed seed bytes/times changed"));
+    }
+    write_json(
+        &destination.join("result.json"),
+        &json!({"status":"completed","cells":cells,"seed_preserved":true,"qualification":"reader mechanics only; unscored natural-vs-held control; not proof of speedup or25k capacity"}),
+    )?;
+    Ok(())
+}

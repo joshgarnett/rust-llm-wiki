@@ -650,6 +650,9 @@ impl OfflineApp {
             requests,
             &RefreshProjectionLimits::default(),
         )?;
+        // Projection owns its base and selected dependencies. Release this
+        // importer-owned reader before the publication session opens its guards.
+        drop(reader);
         let sealed = IndexedRefreshSession::seal_named_write(
             &catalog,
             writer,

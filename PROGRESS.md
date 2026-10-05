@@ -4,6 +4,20 @@ Started: 2026-09-28. Status: local M0–M4 implementation complete; P00–P21 an
 
 ## Context-quality follow-up — active
 
+A fresh Astra priority review selects ordinary normalized-vault workflow completion,
+then automatic context completeness, then representative 10k→25k qualification.
+The first bounded package is Page reorganization: author, move with stable identity
+and repaired incoming links, search/read, recover and rebuild. This is planned work;
+normalized default activation and remaining retrieval modes are still open.
+The [reader lifetime checkpoint](docs/validation-import-throughput.md#import-reader-lifetime-checkpoint)
+passes its native release build and 34 affected tests. Its single mechanism control
+shows checkpoint progress, but fails to establish the frozen WAL reset/reuse
+hypothesis; no speed or capacity improvement is claimed. Further importer
+microbenchmarks are deferred. The new public 1k import is complete, including
+pending identity preservation, but both supervisor attempts remain failed due to
+harness defects. A separately reviewed lifecycle tail will reuse the imported
+vault without repeating imports or setup.
+
 The [verified source-reading milestone](docs/validation-source-reading.md) now
 passes independent small synthetic lifecycle acceptance at 10.0/10 with no
 blockers: import, deeper reads with exact citations, refresh, withdrawal/history,

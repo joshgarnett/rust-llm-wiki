@@ -180,3 +180,43 @@ the same six excerpt-bound omissions. Main-process observed peak RSS was about
 
 The next workflow milestone is complete cited answers, followed by integrated
 refresh, withdrawal/history and cache-loss behavior, and explicit 25k qualification.
+
+
+## Import reader lifetime checkpoint
+
+The importer now releases its projection reader once the owned preparation is
+complete, before opening the publication session. The session still independently
+checks its base, selected dependencies and authority and keeps its own reader
+through publication. External readers retain their original snapshot. No journal
+policy, forced checkpoint, schema or public flag changed.
+
+One native macOS ARM64 optimized release build passed in 104.621 seconds; actual
+CLI/library compiler parameters use Rust 2024 and optimization level 3. The affected
+import/replay group passed 25 tests, including run/resume/completed replay with an
+external reader across both layouts. Three experiments were ignored in that group.
+The capture projection/recovery group passed nine tests. An initial named capture
+filter matched zero tests and establishes no coverage; the corrected group was run
+without rebuilding or repeating the passing import group.
+
+The separately frozen, single WAL mechanism control completed 128 captures in
+two small-seed cells, with eight groups of eight per cell. Natural imports had all
+observed frames backfilled after every group; the deliberate external-reader cell
+retained an outstanding frame gap. However, neither cell changed its reset salts:
+valid frames grew from 489 to 4,532, and allocated WAL grew to 18,878,464 bytes in
+both. **The declared reset/reuse hypothesis was not established.** A fully backfilled
+log does not imply that its allocation shrank or that subsequent writes reused it.
+The final writable probe closed after measurement and checkpointed the held-reader
+cell; that intervention is separate from natural import behavior.
+
+Independent review passed mechanism correctness: all 128 Source/Revision pairs,
+256 original/content payloads, frozen inputs and both returned reads matched.
+This separate correctness pass does not change the failed reset/reuse hypothesis.
+
+The control took 42.666 seconds including setup and observation, allocated
+161,341,440 bytes and observed approximately 68.3 MiB sampled child RSS. Exact
+process-tree peak is unavailable. All work was offline, with no provider calls or
+retry. These padded inputs and unpaired observations establish neither a throughput
+improvement nor occupied-vault capacity. The lifetime correction is retained with
+these limited claims; further importer microbenchmarks and journal-policy changes
+are deferred in favor of the integrated user workflow. Full HIGH and 25k gates
+remain open.

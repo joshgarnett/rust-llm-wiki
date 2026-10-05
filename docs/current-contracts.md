@@ -39,6 +39,13 @@ crossed the unchanged performance thresholds at 2.208 occupied items/s and 2.200
 times baseline. Independent actual mechanics acceptance passed at 9.4/10 with
 no blockers; 25k remains unqualified.
 
+The [import reader lifetime checkpoint](validation-import-throughput.md#import-reader-lifetime-checkpoint)
+adds earlier release of the importer-owned projection reader while retaining the
+publication session's independent guards and external snapshot semantics. A native
+release build and 34 affected tests pass. Its single small-seed mechanism control
+does not establish WAL reset/reuse, speedup or capacity; further importer
+microbenchmarks are deferred.
+
 The [native dense discovery development control](validation-native-dense-context.md)
 also failed: global dense and hybrid context each completed 2/5 positives and lost
 baseline-supported guidance. All 79 citations passed; no experimental mode is
