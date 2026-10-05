@@ -358,6 +358,25 @@ fn document_passage(
         support_group: captured.then(|| d.hash.clone()),
     }))
 }
+
+#[cfg(test)]
+pub(super) fn passage_for_span_for_test(
+    reader: &dyn QueryCatalog,
+    request: &ContextRequest,
+    hit: &SearchHit,
+    span: ByteSpan,
+    rank: usize,
+) -> Result<Option<ContextPassage>> {
+    let owner = document_owner(reader, hit, request)?;
+    let excerpt = SearchExcerpt {
+        text: span.slice(&owner.document.raw_text)?.to_owned(),
+        span,
+        matched_spans: vec![],
+        label: hit.excerpt.label,
+        citation: None,
+    };
+    document_passage(reader, &owner, hit, &excerpt, request, rank)
+}
 fn matches_filters(
     reader: &ReaderSnapshot,
     d: &crate::catalog::DocumentRow,
@@ -493,6 +512,7 @@ fn packet_ordering_rows(packets: &[Packet]) -> Vec<serde_json::Value> {
         .map(|packet| {
             serde_json::json!({
                 "key": packet.key, "ordinal": packet.selection_ordinal, "score": packet.score,
+                "unit_score": packet.unit_score, "fallback": packet.fallback, "unit_clipped": packet.unit_clipped,
                 "passages": packet.passages.iter().map(passage_ordering_row).collect::<Vec<_>>(),
                 "lexical_candidate": packet.selection.as_ref().map(|candidate| serde_json::json!({
                     "owner_index": candidate.owner_index, "span": candidate.span,
@@ -623,6 +643,20 @@ fn render(
     bundles: &[EvidenceBundle],
     navigation: &[NavigationEdge],
 ) -> Result<(String, usize)> {
+    #[cfg(test)]
+    CONTEXT_RENDER_COUNTS.with(|counter| -> Result<()> {
+        if let Some(mut state) = counter.get() {
+            if state.0.calls == state.1 {
+                return Err(WikiError::new(
+                    ErrorCode::BudgetExceeded,
+                    "experimental context render cap",
+                ));
+            }
+            state.0.calls += 1;
+            counter.set(Some(state));
+        }
+        Ok(())
+    })?;
     let mut text = match scope {
         ContextScope::Snapshot => "[context index_snapshot; unverified]\n\n".to_owned(),
         ContextScope::IndexedEvidence => format!(
@@ -707,7 +741,130 @@ fn render(
         ));
         graph_bytes += text.len() - start;
     }
+    #[cfg(test)]
+    CONTEXT_RENDER_COUNTS.with(|counter| {
+        if let Some(mut state) = counter.get() {
+            state.0.bytes += text.len() as u64;
+            counter.set(Some(state));
+        }
+    });
     Ok((text, graph_bytes))
+}
+
+#[cfg(test)]
+#[derive(Clone, Copy, Default, serde::Serialize)]
+pub(super) struct ContextRenderCountsForTest {
+    pub calls: usize,
+    pub bytes: u64,
+}
+
+#[cfg(test)]
+std::thread_local! {
+    static CONTEXT_RENDER_COUNTS: std::cell::Cell<Option<(ContextRenderCountsForTest, usize)>> = const { std::cell::Cell::new(None) };
+}
+
+#[cfg(test)]
+pub(super) fn with_context_render_counts_for_test<T>(
+    max_calls: usize,
+    f: impl FnOnce() -> T,
+) -> (T, ContextRenderCountsForTest) {
+    struct Reset;
+    impl Drop for Reset {
+        fn drop(&mut self) {
+            CONTEXT_RENDER_COUNTS.with(|counter| counter.set(None));
+        }
+    }
+    CONTEXT_RENDER_COUNTS.with(|counter| {
+        assert!(counter.get().is_none(), "render accounting cannot nest");
+        counter.set(Some((ContextRenderCountsForTest::default(), max_calls)));
+    });
+    let _reset = Reset;
+    let result = f();
+    let counts = CONTEXT_RENDER_COUNTS.with(|counter| counter.get().unwrap().0);
+    (result, counts)
+}
+
+#[cfg(test)]
+pub(super) fn render_documents_for_test(
+    reader: &dyn QueryCatalog,
+    request: &ContextRequest,
+    passages: &[ContextPassage],
+) -> Result<String> {
+    render(reader, request.scope, passages, &[], &[]).map(|(text, _)| text)
+}
+
+/// One incremental document trial; this diagnostic does not repack old cores.
+/// The predicates mirror document admission in pack and require equivalence
+/// checks before the experimental planner can be used for quality measurements.
+#[cfg(test)]
+pub(super) fn admit_document_for_test(
+    reader: &dyn QueryCatalog,
+    request: &ContextRequest,
+    current: &[ContextPassage],
+    candidate: &ContextPassage,
+) -> Result<std::result::Result<(Vec<ContextPassage>, String), &'static str>> {
+    if request.target != ContextTarget::Documents
+        || request.graph.is_some()
+        || request.documents.mode != SearchMode::Lexical
+        || !matches!(
+            request.scope,
+            ContextScope::IndexedDocuments | ContextScope::Snapshot
+        )
+        || current
+            .iter()
+            .chain(std::iter::once(candidate))
+            .any(|p| !p.contributors.is_empty())
+    {
+        return Err(WikiError::invalid(
+            "location trial requires document-only passages",
+        ));
+    }
+    let mut next = current.to_vec();
+    let mut merged = false;
+    for existing in &mut next {
+        if bundles::merge(existing, candidate, reader)? {
+            merged = true;
+            break;
+        }
+    }
+    if !merged {
+        next.push(candidate.clone());
+    }
+    bundles::coalesce(&mut next, reader)?;
+    compact_direct_citations(&mut next);
+    let rendered = render_documents_for_test(reader, request, &next)?;
+    let mut counts = BTreeMap::new();
+    for passage in &next {
+        *counts.entry(bundles::owner(passage)).or_insert(0usize) += 1;
+    }
+    let available_bytes = request
+        .budget
+        .max_bytes
+        .checked_sub(request.budget.instruction_bytes)
+        .and_then(|bytes| bytes.checked_sub(request.budget.output_bytes))
+        .ok_or_else(|| WikiError::invalid("location trial byte reservation exceeds budget"))?;
+    let available_tokens = request
+        .budget
+        .max_tokens
+        .checked_sub(request.budget.instruction_tokens)
+        .and_then(|tokens| tokens.checked_sub(request.budget.output_tokens))
+        .ok_or_else(|| WikiError::invalid("location trial token reservation exceeds budget"))?;
+    let reason = if next
+        .iter()
+        .any(|p| p.text.len() > request.documents.limits.excerpt_bytes)
+    {
+        Some("merged_passage_exceeds_excerpt_bound")
+    } else if counts.values().any(|n| *n > 4) {
+        Some("document_passage_cap")
+    } else if rendered.len() > available_bytes || rendered.len().div_ceil(4) > available_tokens {
+        Some("required_bundle_or_passage_does_not_fit")
+    } else {
+        None
+    };
+    Ok(match reason {
+        Some(reason) => Err(reason),
+        None => Ok((next, rendered)),
+    })
 }
 pub fn assemble(
     reader: &ReaderSnapshot,
@@ -775,6 +932,23 @@ pub(crate) fn assemble_bounded_documents_with_selection_for_query(
     query: &str,
     selection: &SelectionAction,
 ) -> Result<ContextDraft> {
+    validate_bounded_document_assembly(request, selection)?;
+    assemble_inner(
+        reader,
+        None,
+        request,
+        hits,
+        None,
+        Some(query),
+        &ContextSelectionSignals::default(),
+        selection,
+    )
+}
+
+fn validate_bounded_document_assembly(
+    request: &ContextRequest,
+    selection: &SelectionAction,
+) -> Result<()> {
     validate_selection_action(request, selection)?;
     if !matches!(
         request.scope,
@@ -788,6 +962,19 @@ pub(crate) fn assemble_bounded_documents_with_selection_for_query(
             "bounded document assembly requires snapshot or authenticated indexed-documents lexical context",
         ));
     }
+    Ok(())
+}
+
+#[cfg(test)]
+pub(super) fn assemble_bounded_documents_with_signals_for_test(
+    reader: &dyn QueryCatalog,
+    request: &ContextRequest,
+    hits: &HitSet,
+    query: &str,
+    signals: &ContextSelectionSignals,
+    selection: &SelectionAction,
+) -> Result<ContextDraft> {
+    validate_bounded_document_assembly(request, selection)?;
     assemble_inner(
         reader,
         None,
@@ -795,7 +982,7 @@ pub(crate) fn assemble_bounded_documents_with_selection_for_query(
         hits,
         None,
         Some(query),
-        &ContextSelectionSignals::default(),
+        signals,
         selection,
     )
 }
@@ -977,6 +1164,19 @@ fn assemble_inner(
                 request.documents.limits.excerpt_bytes,
                 request.documents.limits.candidates,
             )?;
+            #[cfg(test)]
+            record_candidate_ordering_trace("unit_lineage", || {
+                serde_json::json!(selected.candidates.iter().map(|candidate| {
+                    let owner = &document_owners[candidate.owner_index].document;
+                    serde_json::json!({
+                        "owner_index": candidate.owner_index,
+                        "path": owner.path, "hash": owner.hash,
+                        "parent_span": candidate.parent_span, "child_span": candidate.child_span,
+                        "score": candidate.score, "rank_contributions": candidate.rank_contributions,
+                        "clipped": candidate.clipped,
+                    })
+                }).collect::<Vec<_>>())
+            });
             for omission in selected.omissions {
                 let hit = &hits.hits[omission.owner_index];
                 omissions.push(ContextOmission {
@@ -1297,6 +1497,50 @@ pub(super) struct PackingInput<'a> {
     pub dependency_fingerprint: Blake3Hash,
 }
 
+/// Existing adaptive packet priority, shared with the bounded diagnostic.
+pub(super) fn packet_utility(
+    packet: &Packet,
+    covered_terms: &[bool],
+    term_weights: &[u64],
+    total_weight: f64,
+    rendered_cost: usize,
+    best_affinity: f64,
+) -> f64 {
+    if let Some(score) = packet.unit_score {
+        return score;
+    }
+    let Some(candidate) = &packet.selection else {
+        return packet.score;
+    };
+    let novel = candidate
+        .covered_terms
+        .iter()
+        .filter(|&&t| !covered_terms[t])
+        .map(|&t| term_weights[t])
+        .sum::<u64>() as f64
+        / total_weight;
+    let local = candidate.local_relevance as f64 / total_weight;
+    // Include the actual standalone reference/header cost. Tiny
+    // fragments must not gain priority merely by being short. Final
+    // admission still measures the fully coalesced rendered result.
+    let density = candidate.span.len() as f64 / rendered_cost.max(1) as f64;
+    let relevance = if let Some(affinity) = candidate.semantic_affinity {
+        // A monotone preference within this cached query/space, not a
+        // calibrated relevance probability. Lexical coverage breaks
+        // coarse unit ties without overruling semantic location.
+        let relative = if best_affinity > 0.0 {
+            affinity.max(0.0) / best_affinity
+        } else {
+            0.0
+        };
+        (0.05 + relative.powi(4)) * (1.0 + 0.25 * novel + 0.5 * local)
+    } else {
+        (0.25 + 2.0 * novel + 0.5 * local + if candidate.seed_overlap { 0.05 } else { 0.0 })
+            * if best_affinity > 0.0 { 0.15 } else { 1.0 }
+    };
+    packet.score * relevance * density * if candidate.clipped { 0.7 } else { 1.0 }
+}
+
 pub(super) fn pack(
     reader: &dyn QueryCatalog,
     request: &ContextRequest,
@@ -1491,39 +1735,14 @@ pub(super) fn pack(
         .fold(0.0f64, f64::max);
     while !packets.is_empty() {
         let utility = |packet: &Packet| {
-            if let Some(score) = packet.unit_score {
-                return score;
-            }
-            let Some(candidate) = &packet.selection else {
-                return packet.score;
-            };
-            let novel = candidate
-                .covered_terms
-                .iter()
-                .filter(|&&t| !covered_terms[t])
-                .map(|&t| term_weights[t])
-                .sum::<u64>() as f64
-                / total_weight;
-            let local = candidate.local_relevance as f64 / total_weight;
-            // Include the actual standalone reference/header cost. Tiny
-            // fragments must not gain priority merely by being short. Final
-            // admission still measures the fully coalesced rendered result.
-            let density = candidate.span.len() as f64 / rendered_costs[&packet.key] as f64;
-            let relevance = if let Some(affinity) = candidate.semantic_affinity {
-                // A monotone preference within this cached query/space, not a
-                // calibrated relevance probability. Lexical coverage breaks
-                // coarse unit ties without overruling semantic location.
-                let relative = if best_affinity > 0.0 {
-                    affinity.max(0.0) / best_affinity
-                } else {
-                    0.0
-                };
-                (0.05 + relative.powi(4)) * (1.0 + 0.25 * novel + 0.5 * local)
-            } else {
-                (0.25 + 2.0 * novel + 0.5 * local + if candidate.seed_overlap { 0.05 } else { 0.0 })
-                    * if best_affinity > 0.0 { 0.15 } else { 1.0 }
-            };
-            packet.score * relevance * density * if candidate.clipped { 0.7 } else { 1.0 }
+            packet_utility(
+                packet,
+                &covered_terms,
+                &term_weights,
+                total_weight,
+                rendered_costs.get(&packet.key).copied().unwrap_or(1),
+                best_affinity,
+            )
         };
         let best = (0..packets.len())
             .max_by(|&a, &b| {

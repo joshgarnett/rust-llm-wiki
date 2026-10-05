@@ -30,6 +30,12 @@ passes scoped public acceptance at 9.5/10: 60 unchanged result pairs and 300 val
 citations, plus navigation/update/withdrawal/refusal/preview checks. It preserves
 the existing missing-fact query and original plain-search failure. A refreshed
 0.2.0 candidate is ready. Next: retrieval completeness and 10k→25k qualification.
+The subsequent [evidence allocation control](docs/validation-location-allocation.md)
+failed: lexical baseline/allocation completed 0/5 positive tasks, cached semantic
+selection/allocation 2/5 in both HIGH and default profiles, with a required-fact
+regression. All 329 citations audited correctly; five mixed diagnostic selections
+showed budget feasibility. No allocation mode is promoted. Continue with an
+integrated public cited-context workflow and independent capacity qualification.
 Full scale, whole-task quality and
 the latest strict Clippy gate remain open. These are progress checkpoints,
 not completion of the fresh goal.

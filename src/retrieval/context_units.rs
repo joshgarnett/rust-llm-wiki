@@ -147,6 +147,52 @@ fn blocks(raw: &str, body: usize, end: usize, limit: usize) -> (Vec<Block>, usiz
     (found, starts, usable_end, limited)
 }
 
+#[cfg(test)]
+pub(super) struct LocationBlockForTest {
+    pub span: ByteSpan,
+    pub kind: &'static str,
+    pub complete: bool,
+}
+
+#[cfg(test)]
+pub(super) fn location_blocks_for_test(
+    document: &DocumentRow,
+    max_bytes: usize,
+    max_starts: usize,
+) -> Result<(Vec<LocationBlockForTest>, usize, usize, usize, bool)> {
+    if max_bytes > OWNER_SCAN_BYTES || max_starts > MAX_STARTS {
+        return Err(WikiError::invalid(
+            "location structural scan exceeds native limits",
+        ));
+    }
+    let raw = &document.raw_text;
+    let body = body_start(document);
+    let end = boundary_before(raw, body.saturating_add(max_bytes));
+    let (parsed, starts, usable_end, limited) = blocks(raw, body, end, max_starts);
+    let parsed = parsed
+        .into_iter()
+        .map(|block| {
+            Ok(LocationBlockForTest {
+                span: ByteSpan::new(block.range.start as u64, block.range.end as u64)?,
+                kind: match block.kind {
+                    Kind::Prose => "prose",
+                    Kind::Code => "code",
+                    Kind::List => "list",
+                    Kind::Heading => "heading",
+                },
+                complete: block.complete,
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    Ok((
+        parsed,
+        starts,
+        end.saturating_sub(body),
+        usable_end,
+        limited,
+    ))
+}
+
 /// Canonical grouping is structural and independent of query/unit scores.
 /// A fitting introductory paragraph, command and terminal explanation form
 /// one parent; headings always end the group. Lists keep their introduction.

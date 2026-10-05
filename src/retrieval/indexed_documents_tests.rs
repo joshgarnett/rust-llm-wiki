@@ -1,4 +1,6 @@
 //! Normalized host selection keeps the same closed selected canonical proof.
+#[path = "indexed_documents_location_experiment.rs"]
+mod location_experiment;
 use super::*;
 use crate::{
     changes::ChangeDraft,

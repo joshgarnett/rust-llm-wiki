@@ -187,6 +187,32 @@ pub(crate) fn render_document_iter<'a>(
     document: &'a DocumentRow,
     settings: &'a EmbeddingSettings,
 ) -> Result<Box<dyn Iterator<Item = Result<RenderedUnit>> + 'a>> {
+    render_document_with_dependency(document, settings, || {
+        let row = document
+            .record_id
+            .as_ref()
+            .and_then(|id| reader.projection().records.get(id));
+        dependency(reader, row, document)
+    })
+}
+
+/// Diagnostic rendering shares exact input bytes with the legacy renderer.
+/// A selected proof is not authority for an old embedding membership.
+#[cfg(test)]
+pub(crate) fn render_selected_document_for_test<'a>(
+    document: &'a DocumentRow,
+    settings: &'a EmbeddingSettings,
+    selected_fingerprint: Blake3Hash,
+) -> Result<Box<dyn Iterator<Item = Result<RenderedUnit>> + 'a>> {
+    settings.validate()?;
+    render_document_with_dependency(document, settings, || Ok(selected_fingerprint))
+}
+
+fn render_document_with_dependency<'a>(
+    document: &'a DocumentRow,
+    settings: &'a EmbeddingSettings,
+    dependency: impl FnOnce() -> Result<Blake3Hash>,
+) -> Result<Box<dyn Iterator<Item = Result<RenderedUnit>> + 'a>> {
     let raw = &document.raw_text;
     let start = if document.owner_revision.is_some() {
         0
@@ -208,11 +234,7 @@ pub(crate) fn render_document_iter<'a>(
     let quality = settings
         .quality_target_bytes
         .unwrap_or(settings.max_input_bytes);
-    let row = document
-        .record_id
-        .as_ref()
-        .and_then(|id| reader.projection().records.get(id));
-    let dep = dependency(reader, row, document)?;
+    let dep = dependency()?;
     if whole_header.len() + raw.len() - start <= quality.min(settings.max_input_bytes) {
         return Ok(Box::new(std::iter::once(unit(
             document,

@@ -563,6 +563,49 @@ fn bounded_window(raw: &str, bounds: Range<usize>, anchor: usize, bytes: usize) 
     start..end
 }
 
+fn query_terms(tokenizer: &Tokenizer<'_>, query: &str) -> Result<(BTreeMap<String, usize>, bool)> {
+    let mut terms = BTreeMap::new();
+    let mut term_cap = false;
+    for token in tokenizer.tokens(query)? {
+        if function_word(&token.text) && !identifier_syntax(query, &token.span) {
+            continue;
+        }
+        let key = term_key(&token.text);
+        if terms.contains_key(&key) {
+            continue;
+        }
+        if terms.len() == MAX_CONTEXT_QUERY_TERMS {
+            term_cap = true;
+            break;
+        }
+        terms.insert(key, terms.len());
+    }
+    Ok((terms, term_cap))
+}
+
+#[cfg(test)]
+pub(super) fn location_terms_for_test(
+    reader: &dyn QueryCatalog,
+    query: &str,
+    raw: &str,
+    spans: &[ByteSpan],
+) -> Result<Vec<Vec<usize>>> {
+    let tokenizer = Tokenizer::new(reader.connection())?;
+    let (terms, _) = query_terms(&tokenizer, query)?;
+    spans
+        .iter()
+        .map(|span| {
+            span.slice(raw)?;
+            matched_terms(
+                &tokenizer,
+                raw,
+                span.start() as usize..span.end() as usize,
+                &terms,
+            )
+        })
+        .collect()
+}
+
 fn select(
     tokenizer: &Tokenizer<'_>,
     query: &str,
@@ -581,22 +624,7 @@ fn select(
         scanned_bytes: 0,
         scanned_blocks: 0,
     };
-    let mut terms = BTreeMap::new();
-    let mut term_cap = false;
-    for token in tokenizer.tokens(query)? {
-        if function_word(&token.text) && !identifier_syntax(query, &token.span) {
-            continue;
-        }
-        let key = term_key(&token.text);
-        if terms.contains_key(&key) {
-            continue;
-        }
-        if terms.len() == MAX_CONTEXT_QUERY_TERMS {
-            term_cap = true;
-            break;
-        }
-        terms.insert(key, terms.len());
-    }
+    let (terms, term_cap) = query_terms(tokenizer, query)?;
     let mut owners = Vec::new();
     let mut frequencies = vec![0usize; terms.len()];
     for parent in parents {
