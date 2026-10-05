@@ -75,6 +75,49 @@ reuse with final dependency rechecks. Preserve tamper, missing-plan, wrong-root,
 concurrent-change and recovery refusals. Do not add a persistent cache or rewrite
 storage from these rates alone.
 
+## Bounded phase observation
+
+A subsequent observation-only optimized build preserved all authentication
+checks and added aggregate timers to the import command. The instrumented
+executable is separate from the user candidate, SHA256
+`249dced3f2389994de4a40273098179b062c81b1b89cd0a71aba58bd516b94ef`.
+Four accounting checks passed in one 101.332-second build/test checkpoint. Its
+second test filter omitted a module; only the five previously unrun layout checks
+were then executed from the pinned test binary and passed in 1.169 seconds.
+There was no rebuild or repetition of passing checks.
+
+Two protected seed copies each imported sixteen identical 1 KiB inputs in two
+eight-item groups, followed immediately by verified search, context and read.
+The ten-call owner completed in 33.439 seconds under its five-minute limit.
+Independent actual-outcome assessment passed mechanics at **9.4/10** and the
+unchanged attribution gate. It verified all 32 Source/Revision pairs, four group
+Changes, 64 payloads, four citations, two selected reads and protected seed/arm
+bytes and mtimes. No product command or build was rerun during that assessment.
+
+| Internal command observation | Small seed | Occupied seed |
+| --- | ---: | ---: |
+| Command elapsed | 4.783 s | 14.554 s |
+| Migration authentication residence | 0.252 s | 8.285 s |
+| Composite strict decode | 0.035 s | 7.318 s |
+| Authentication attempts | 1,600 | 1,600 |
+| Successfully read plan bytes | 2,705,600 | 1,035,931,200 |
+
+Authentication explains **82.2% of the occupied-minus-small command difference**
+and **56.9% of occupied command time**, crossing the prospectively declared 60%
+and 30% attribution thresholds. Decode includes strict parsing, envelope
+serialization/checksum and Epoch conversion. Child timers are disjoint;
+authentication remainder and command unassigned time are reported separately.
+These are elapsed residence measurements, including instrumentation and cache
+effects. Plan bytes count logical reads, not device I/O. Profiling overhead is
+unavailable separately; this is not a shipping speedup or capacity result.
+
+The narrower proposed optimization reuses successful Epoch semantic validation
+within one root-bound import invocation while **still reading and hashing the
+full plan on every check**. It would skip repeated decoding only for the same
+authenticated activation identity/version/hash. Missing, changed or invalid
+plans must retain existing refusals; errors cannot populate the memo. This
+proposal is not implemented or qualified by the observation.
+
 Detailed pinned drivers and raw evidence remain local. This summary records a
 historical development control; a fresh checkout can exercise the public
 [import workflow](source-imports.md), but does not contain those frozen seeds.

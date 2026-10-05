@@ -70,6 +70,14 @@ final cited answers, and an integrated import→answer→refresh→recover miles
 These failed controls are preserved; no allocation tuning or new storage system
 is promoted. Native HIGH, normalized parity and actual 25k qualification remain
 independent blockers.
+A bounded [import phase observation](docs/validation-import-throughput.md#bounded-phase-observation)
+now identifies repeated migration authentication as a dominant measured cost:
+1,600 authentications per sixteen-input run; strict decoding took 7.318 seconds
+on the occupied seed. Authentication explains 82.2% of the extra command time.
+The ten-call workflow passed independent mechanics assessment at 9.4/10 and its
+unchanged attribution gate. Temporary instrumentation remains separate from the
+user candidate. A root-bound per-import validation memo, retaining every full
+plan read/hash check, is the next bounded optimization; no speedup is yet claimed.
 Full scale, whole-task quality and
 the latest strict Clippy gate remain open. These are progress checkpoints,
 not completion of the fresh goal.

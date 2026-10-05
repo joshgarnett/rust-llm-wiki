@@ -30,6 +30,11 @@ hypothesis, not yet an attributed bottleneck. The [public investigation control]
 also failed completeness (3/5 original-query, 2/5 clause-query positives), despite
 exact citations and reads. Anchor reads repeated search excerpts; genuine
 continuation and final cited answers remain untested. Keep the whole goal active.
+The subsequent [bounded import phase observation](validation-import-throughput.md#bounded-phase-observation)
+passed independent mechanics at 9.4/10 and the attribution gate: repeated migration
+authentication explains 82.2% of occupied-minus-small command time. The proposed
+per-import semantic-validation reuse is not implemented; every plan read/hash
+and freshness check must remain authoritative. This is not a shipping speedup.
 
 This is the current capability router for the cleanup of 0.1.2. It records implemented surfaces and the checks that can establish local correctness; local cleanup is accepted by [the exact-source aggregate evidence](execution/reports/CLEANUP-VALIDATION.md). Historical milestone plans and research designs are preserved as history. Use the running binary's `capabilities`, `schema NAME`, and command help for exact syntax.
 
