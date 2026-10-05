@@ -4,6 +4,8 @@ Keep QASPER for long scientific documents and add ConditionalQA, WixQA ExpertWri
 
 This is a dataset acquisition and adapter proposal, researched on 2026-10-03. The retained samples are **development data**, not acceptance results. No CLI evaluation, embedding request, answer generation or paid API call was performed in this research. Follow [the context protocol](evaluating-context.md) and [the critic workflow](testing-usability.md) when implementing adapters and evaluating returned evidence.
 
+The [evaluation datasets quick reference](eval-datasets-quick-reference.md) consolidates the complete recorded catalog, including subsequent development evaluations, considered alternatives, operational fixtures and current acceptance gates.
+
 ## Recommended mix
 
 | Dataset | Contribution | Gold supervision | Practical first experiment |

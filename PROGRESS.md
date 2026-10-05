@@ -2,6 +2,12 @@
 
 Started: 2026-09-28. Status: local M0–M4 implementation complete; P00–P21 and V01–V17 locally accepted; external E01–E05 qualification pending.
 
+The [evaluation datasets quick reference](docs/eval-datasets-quick-reference.md)
+consolidates acquired and considered datasets, provenance, immutable inputs,
+development results, operational fixtures and evaluation methods. It preserves
+the distinction between passing mechanics, scoped acceptance and the still-open
+native HIGH and representative 25k gates.
+
 ## Context-quality follow-up — active
 
 A fresh Astra priority review selects ordinary normalized-vault workflow completion,
