@@ -46,6 +46,13 @@ release build and 34 affected tests pass. Its single small-seed mechanism contro
 does not establish WAL reset/reuse, speedup or capacity; further importer
 microbenchmarks are deferred.
 
+The [fresh representative 1k observations](validation-representative-1k-workflow.md)
+complete public import, 1,000 Page publications, updates, withdrawal, complete backup
+and offline rebuild. All 66 operational queries returned the expected scoped bytes
+and citations, and rebuilt substantive packets matched. Three supervisor failures
+remain preserved; a separate final 22-query completion passed. This mixed-binary,
+mostly synthetic diagnostic does not qualify 25k or native HIGH.
+
 The [native dense discovery development control](validation-native-dense-context.md)
 also failed: global dense and hybrid context each completed 2/5 positives and lost
 baseline-supported guidance. All 79 citations passed; no experimental mode is

@@ -13,10 +13,13 @@ The [reader lifetime checkpoint](docs/validation-import-throughput.md#import-rea
 passes its native release build and 34 affected tests. Its single mechanism control
 shows checkpoint progress, but fails to establish the frozen WAL reset/reuse
 hypothesis; no speed or capacity improvement is claimed. Further importer
-microbenchmarks are deferred. The new public 1k import is complete, including
-pending identity preservation, but both supervisor attempts remain failed due to
-harness defects. A separately reviewed lifecycle tail will reuse the imported
-vault without repeating imports or setup.
+microbenchmarks are deferred. The [new public 1k workflow observations](docs/validation-representative-1k-workflow.md)
+are complete through updates, withdrawal, complete backup and offline rebuild.
+All 66 operational queries completed, with exact citations and unchanged results
+through reconstruction. Three supervisor attempts remain failed under their frozen
+rules; the final 22 read-only observations passed separately. No import, setup,
+rebuild or full check was repeated to finish them. Page reorganization is now in
+implementation under a fresh Astra architecture review and frozen ≥9/10 gate.
 
 The [verified source-reading milestone](docs/validation-source-reading.md) now
 passes independent small synthetic lifecycle acceptance at 10.0/10 with no
