@@ -19,6 +19,8 @@ use std::collections::{BTreeMap, BTreeSet};
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct PolicyDelta {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub retired_owners: Vec<VaultRelativePath>,
     pub memberships: Vec<PolicyMembershipUpdate>,
     pub replacements: Vec<PolicyReplacement>,
 }
@@ -72,6 +74,23 @@ fn family_groups(rows: &[PolicyRow]) -> Result<()> {
 impl PolicyDelta {
     pub(super) fn validate(&self, delta: &CatalogDelta, count: &mut usize) -> Result<()> {
         counted(self, MAX_DELTA_BYTES)?;
+        let moves: Vec<_> = delta
+            .documents
+            .iter()
+            .filter_map(|d| {
+                if let DocumentMutation::MovePage { from, .. } = d {
+                    Some(from)
+                } else {
+                    None
+                }
+            })
+            .collect();
+        if self.retired_owners.iter().collect::<Vec<_>>() != moves {
+            return Err(bad("policy retired owners differ from sealed Page move"));
+        }
+        for retired in &self.retired_owners {
+            admit(retired, count)?;
+        }
         let mut owners = BTreeSet::new();
         for update in &self.memberships {
             if !owners.insert(&update.path) {
@@ -81,34 +100,61 @@ impl PolicyDelta {
             let record = delta
                 .records
                 .iter()
-                .find(|r| r.path == update.path && r.hash == update.hash)
-                .ok_or_else(|| bad("policy membership lacks exact canonical record mutation"))?;
+                .find(|r| r.path == update.path && r.hash == update.hash);
             let document = delta
                 .documents
                 .iter()
                 .find_map(|d| match d {
-                    DocumentMutation::Put { row } if row.path == update.path => Some(row),
+                    DocumentMutation::Put { row } | DocumentMutation::MovePage { row, .. }
+                        if row.path == update.path =>
+                    {
+                        Some(row)
+                    }
                     _ => None,
                 })
-                .ok_or_else(|| bad("policy membership lacks canonical document put"))?;
+                .ok_or_else(|| bad("policy membership lacks exact document replacement"))?;
+            let note = crate::records::parse_note(document.raw_text.as_bytes());
             if document.hash != update.hash
                 || document.owner_revision.is_some()
                 || document.source_id.is_some()
-                || document.record_id.as_ref() != Some(record.record.id())
-                || document.kind != Some(record.record.kind())
                 || Blake3Hash::digest(document.raw_text.as_bytes()) != update.hash
-            {
-                return Err(bad(
-                    "policy membership differs from canonical document bytes",
-                ));
-            }
-            let note = crate::records::parse_note(document.raw_text.as_bytes());
-            if note.canonical.as_ref() != Some(&record.record)
                 || policy_membership_keys(&update.path, &note)? != update.keys
             {
                 return Err(bad(
-                    "policy membership differs from canonical classification",
+                    "policy membership differs from document bytes or classification",
                 ));
+            }
+            match record {
+                Some(record)
+                    if document.record_id.as_ref() == Some(record.record.id())
+                        && document.kind == Some(record.record.kind())
+                        && note.canonical.as_ref() == Some(&record.record) => {}
+                None if !moves.is_empty()
+                    && document.record_id.is_none()
+                    && *document
+                        == super::row_projection::canonical_document(&update.path, &note, None) =>
+                {
+                    let claims = delta
+                        .claims
+                        .iter()
+                        .find(|owned| owned.path == update.path)
+                        .ok_or_else(|| bad("unadopted rewrite lacks complete identity claims"))?;
+                    let expected: Vec<_> = crate::sources::identity::readable_ids(&note)
+                        .into_iter()
+                        .map(|id| super::types::IdentityClaimRow {
+                            id,
+                            path: update.path.clone(),
+                            hash: note.source_hash.clone(),
+                            kind: note.canonical.as_ref().map(|record| record.kind()),
+                        })
+                        .collect();
+                    if claims.rows != expected {
+                        return Err(bad(
+                            "unadopted rewrite identity claims differ from exact parsed bytes",
+                        ));
+                    }
+                }
+                _ => return Err(bad("policy membership changes adopted document identity")),
             }
             for key in &update.keys {
                 admit(
@@ -186,6 +232,9 @@ impl PolicyDelta {
         let mut predicates: Vec<(&str, String)> = Vec::new();
         for update in &self.memberships {
             predicates.push(("family='membership' AND owner=?1", update.path.to_string()));
+        }
+        for retired in &self.retired_owners {
+            predicates.push(("family='membership' AND owner=?1", retired.to_string()));
         }
         for replacement in &self.replacements {
             let kind = replacement.kind.name().to_owned();
@@ -385,6 +434,7 @@ mod tests {
     fn absent_layout_requires_explicit_rebuild() {
         let c = database();
         let delta = PolicyDelta {
+            retired_owners: vec![],
             memberships: vec![],
             replacements: vec![],
         };
@@ -412,6 +462,7 @@ mod tests {
         .unwrap();
         let replacement = PolicyReplacement::from_review(&Ok(None), Default::default()).unwrap();
         let delta = PolicyDelta {
+            retired_owners: vec![],
             memberships: vec![],
             replacements: vec![replacement],
         };
@@ -464,6 +515,7 @@ mod tests {
         )
         .unwrap();
         let delta = PolicyDelta {
+            retired_owners: vec![],
             memberships: vec![],
             replacements: vec![
                 PolicyReplacement::from_review(&Ok(None), Default::default()).unwrap(),

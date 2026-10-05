@@ -21,6 +21,7 @@ mod refresh_fixture_export;
 #[cfg(test)]
 mod refresh_path_profile;
 
+mod page_rename;
 mod pages;
 pub mod probe;
 pub use pages::{PageBatchRequest, PageUpdate};

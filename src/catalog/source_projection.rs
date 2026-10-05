@@ -138,6 +138,7 @@ pub(super) struct Work<'a> {
     pub(super) now: BTreeMap<RecordId, RecordRow>,
     pub(super) facts: BTreeMap<RecordId, EligibilityFact>,
     pub(super) overlay: BTreeMap<VaultRelativePath, Vec<u8>>,
+    pub(super) removed_paths: BTreeSet<VaultRelativePath>,
     pub(super) dynamic: BTreeSet<RecordId>,
     pub(super) support: BTreeMap<RecordId, BTreeSet<RecordId>>,
     pub(super) declared: BTreeMap<RecordId, BTreeSet<RecordId>>,
@@ -185,6 +186,7 @@ impl<'a> Work<'a> {
             now: BTreeMap::new(),
             facts: BTreeMap::new(),
             overlay: BTreeMap::new(),
+            removed_paths: BTreeSet::new(),
             dynamic: BTreeSet::new(),
             support: BTreeMap::new(),
             declared: BTreeMap::new(),
@@ -309,6 +311,9 @@ impl Work<'_> {
         Ok(self.dynamic.insert(id.clone()))
     }
     pub(super) fn note(&self, path: &VaultRelativePath) -> Result<ParsedNote> {
+        if self.removed_paths.contains(path) {
+            return Err(corrupt("selected proposed note is absent"));
+        }
         let bytes = self
             .overlay
             .get(path)
@@ -1190,6 +1195,10 @@ impl Work<'_> {
                     path: path.clone(),
                     bytes: Some(bytes.clone()),
                 })
+                .chain(self.removed_paths.iter().map(|path| ProposedTarget {
+                    path: path.clone(),
+                    bytes: None,
+                }))
                 .collect(),
         };
         let view = SourceView::from_closed_input(self.fs, &input)?;
@@ -1233,7 +1242,7 @@ impl Work<'_> {
         Ok(content)
     }
     pub(super) fn capture_path(&mut self, path: &VaultRelativePath) -> Result<()> {
-        if self.overlay.contains_key(path) {
+        if self.overlay.contains_key(path) || self.removed_paths.contains(path) {
             return Ok(());
         }
         let states = self.reader.direct_path_states(std::slice::from_ref(path))?;
@@ -1276,7 +1285,9 @@ impl Work<'_> {
         self.tick()?;
         let row = self.now[id].clone();
         let old = self.old.get(id).cloned();
-        let canonical_changed = old.as_ref().is_none_or(|old| old.hash != row.hash);
+        let canonical_changed = old
+            .as_ref()
+            .is_none_or(|old| old.hash != row.hash || old.path != row.path);
         let note = self.note(&row.path)?;
         if canonical_changed {
             delta.documents.push(DocumentMutation::Put {
@@ -1333,7 +1344,14 @@ impl Work<'_> {
             let graph = row_projection::graph_row(&row, Some(&note), endpoints)?;
             let before = old
                 .as_ref()
-                .map(|old| row_projection::graph_row(old, Some(&note), endpoints))
+                .map(|old| {
+                    let captured = self
+                        .captured
+                        .get(&old.path)
+                        .ok_or_else(|| corrupt("old graph owner was not authenticated"))?;
+                    let before_note = parse_note(&captured.bytes);
+                    row_projection::graph_row(old, Some(&before_note), endpoints)
+                })
                 .transpose()?;
             if before.as_ref() != Some(&graph) {
                 delta.graph.push(graph);

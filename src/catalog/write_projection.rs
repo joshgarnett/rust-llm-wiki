@@ -78,6 +78,21 @@ pub(super) fn project_policy(work: &mut Work<'_>) -> Result<PolicyDelta> {
     policy_projection::project_policy(work.reader, &before, &overlay, work)
 }
 
+pub(super) fn project_policy_move(work: &mut Work<'_>) -> Result<PolicyDelta> {
+    let mut before = BTreeMap::new();
+    let mut overlay = BTreeMap::new();
+    for path in work.overlay.keys().chain(work.removed_paths.iter()) {
+        if let Some(old) = work.captured.get(path) {
+            before.insert(path.clone(), parse_note(&old.bytes));
+        }
+    }
+    for (path, bytes) in &work.overlay {
+        overlay.insert(path.clone(), parse_note(bytes));
+    }
+    let removed = work.removed_paths.clone();
+    policy_projection::project_policy_for_move(work.reader, &before, &overlay, &removed, work)
+}
+
 pub(super) fn empty_delta(policy: PolicyDelta) -> CatalogDelta {
     CatalogDelta {
         version: 3,

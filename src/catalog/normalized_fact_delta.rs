@@ -93,7 +93,15 @@ impl FactDelta {
                     .iter()
                     .filter_map(|document| match document {
                         super::normalized_delta::DocumentMutation::Put { row }
-                            if row.record_id.is_some() =>
+                        | super::normalized_delta::DocumentMutation::MovePage { row, .. }
+                            if row.record_id.is_some()
+                                || (delta.documents.iter().any(|d| {
+                                    matches!(
+                                        d,
+                                        super::normalized_delta::DocumentMutation::MovePage { .. }
+                                    )
+                                }) && row.owner_revision.is_none()
+                                    && row.source_id.is_none()) =>
                         {
                             Some(&row.path)
                         }
@@ -233,7 +241,42 @@ impl FactDelta {
         for row in &delta.records {
             match load_record(c, row.record.id(), stats)? {
                 Some(old) => {
+                    if let Some(
+                        crate::changes::indexed_refresh::IndexedWriteOperation::PageRename {
+                            page_id,
+                            rewritten_paths,
+                            ..
+                        },
+                    ) = operation
+                    {
+                        if (old.record != row.record || old.hash != row.hash)
+                            && !(old.record.kind() == RecordKind::Page
+                                && row.record.id() == page_id)
+                            && !(rewritten_paths.contains(&row.path) && old.record == row.record)
+                        {
+                            return Err(conflict(
+                                "Page rename changes canonical bytes outside its navigation owners",
+                            ));
+                        }
+                    }
+                    let navigation_rewrite = delta.version == 3
+                        && old.path == row.path
+                        && old.record.id() == row.record.id()
+                        && old.record.kind() == row.record.kind()
+                        && matches!(
+                            old.record.kind(),
+                            RecordKind::Page
+                                | RecordKind::Entity
+                                | RecordKind::Assertion
+                                | RecordKind::Evidence
+                                | RecordKind::Extraction
+                                | RecordKind::Decision
+                                | RecordKind::Source
+                        )
+                        && matches!(operation, Some(crate::changes::indexed_refresh::IndexedWriteOperation::PageRename { rewritten_paths, .. }) if rewritten_paths.contains(&row.path))
+                        && old.record == row.record;
                     if old.record.kind() != RecordKind::Source
+                        && !navigation_rewrite
                         && !(delta.version == 3 && old.record.kind() == RecordKind::Page)
                         && (old.record != row.record || old.hash != row.hash)
                     {
@@ -270,7 +313,12 @@ impl FactDelta {
                             return Err(conflict("source refresh changed fixed source fields"));
                         }
                     }
-                    if old.path != row.path || old.record.kind() != row.record.kind() {
+                    let page_move = delta.version == 3
+                        && old.record.kind() == RecordKind::Page
+                        && matches!(operation, Some(crate::changes::indexed_refresh::IndexedWriteOperation::PageRename { page_id, from, to, from_hash, .. }) if page_id == row.record.id() && from == &old.path && to == &row.path && from_hash == &old.hash);
+                    if (old.path != row.path && !page_move)
+                        || old.record.kind() != row.record.kind()
+                    {
                         return Err(conflict("normalized record identity changed"));
                     }
                     if !self

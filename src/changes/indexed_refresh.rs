@@ -38,6 +38,13 @@ pub(crate) enum IndexedWriteOperation {
     PageBatch {
         pages: Vec<IndexedPageTarget>,
     },
+    PageRename {
+        page_id: RecordId,
+        from: VaultRelativePath,
+        to: VaultRelativePath,
+        from_hash: Blake3Hash,
+        rewritten_paths: Vec<VaultRelativePath>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -77,6 +84,29 @@ impl IndexedWriteOperation {
                 {
                     return Err(recovery(
                         "capture batch requires 1–8 sorted, distinct source and revision pairs",
+                    ));
+                }
+                Ok(())
+            }
+            Self::PageRename {
+                from,
+                to,
+                rewritten_paths,
+                ..
+            } => {
+                if from == to
+                    || !crate::sources::revision::canonical_path(from)
+                    || !crate::sources::revision::canonical_path(to)
+                    || super::immutable::tree_path(from)?.is_some()
+                    || super::immutable::tree_path(to)?.is_some()
+                    || rewritten_paths.len().saturating_add(2) > MAX_OPS
+                    || !rewritten_paths.windows(2).all(|p| p[0] < p[1])
+                    || rewritten_paths.iter().any(|p| {
+                        p == from || p == to || !crate::sources::revision::canonical_path(p)
+                    })
+                {
+                    return Err(recovery(
+                        "Page rename requires one distinct guarded move and sorted rewrite owners",
                     ));
                 }
                 Ok(())
@@ -250,6 +280,62 @@ impl IndexedRefreshProof {
             {
                 return Err(recovery(
                     "page operation targets differ from its retained manifest",
+                ));
+            }
+        }
+        if let Some(IndexedWriteOperation::PageRename {
+            from,
+            to,
+            from_hash,
+            rewritten_paths,
+            ..
+        }) = &self.operation
+        {
+            let destination = manifest
+                .operations
+                .iter()
+                .position(|op| &op.target == to)
+                .ok_or_else(|| recovery("Page rename destination is absent from manifest"))?;
+            let mut removal_after: Vec<_> = manifest
+                .operations
+                .iter()
+                .enumerate()
+                .filter_map(|(index, op)| (&op.target != from).then_some(index))
+                .collect();
+            removal_after.sort_unstable();
+            if manifest.origin.is_some()
+                || manifest.inverse_of.is_some()
+                || !manifest.allocated_ids.is_empty()
+                || manifest.operations.len() != rewritten_paths.len() + 2
+                || manifest.operations.iter().any(|op| {
+                    if op.role != OperationRole::MutableRecord {
+                        return true;
+                    }
+                    if &op.target == to {
+                        op.before != ExpectedState::Absent
+                            || !matches!(op.after, ExpectedState::Hash(_))
+                            || !op.apply_after.is_empty()
+                    } else if &op.target == from {
+                        let mut prerequisites = op.apply_after.clone();
+                        prerequisites.sort_unstable();
+                        op.before != ExpectedState::Hash(from_hash.clone())
+                            || op.after != ExpectedState::Absent
+                            || prerequisites != removal_after
+                    } else {
+                        !rewritten_paths.contains(&op.target)
+                            || !matches!(op.before, ExpectedState::Hash(_))
+                            || !matches!(op.after, ExpectedState::Hash(_))
+                            || op.before == op.after
+                            || op.apply_after != vec![destination]
+                    }
+                })
+                || !manifest.operations.iter().any(|op| &op.target == from)
+                || rewritten_paths
+                    .iter()
+                    .any(|path| !manifest.operations.iter().any(|op| &op.target == path))
+            {
+                return Err(recovery(
+                    "Page rename manifest differs from its exact ordered move and rewrite closure",
                 ));
             }
         }

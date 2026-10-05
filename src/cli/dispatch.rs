@@ -509,10 +509,24 @@ fn execute_inner(args: &Arguments) -> Result<Envelope> {
         }
         Command::Page {
             command: PageCommand::Rename { id, to, if_match },
-        } => mutation(
-            &mut envelope,
-            app.page_rename(id.clone(), to.clone(), if_match.clone())?,
-        )?,
+        } => {
+            mutation(
+                &mut envelope,
+                app.page_rename(id.clone(), to.clone(), if_match.clone())?,
+            )?;
+            if args.dry_run
+                && Catalog::new(app.fs().clone(), app.vault_id().clone())
+                    .operation_state()?
+                    .is_some()
+            {
+                envelope.data["dry_run"] = true.into();
+                envelope.data["plan_complete"] = false.into();
+                envelope.data["reused"] = Value::Null;
+                envelope.data["request"] = json!({"id":id,"to":to,"if_match":if_match});
+                envelope.data["validation"] = json!({"target_resolution_checked":false,"author_hash_checked":false,"destination_availability_checked":false,"incoming_links_checked":false,"read_dependencies_checked":false,"portable_collisions_checked":false});
+                envelope.warnings.push("Page rename preview validates the request only. Target identity, author hash, destination, incoming links and dependencies remain unchecked. Staging or applying performs admission checks.".into());
+            }
+        }
         Command::Source {
             command:
                 SourceCommand::Add {

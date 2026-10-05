@@ -47,6 +47,7 @@ mod projector_query_tests;
 pub mod publish;
 pub(crate) mod query;
 pub(crate) mod query_types;
+pub(crate) mod rename_projection;
 #[cfg(test)]
 mod revision_reservation_tests;
 pub(crate) mod row_projection;

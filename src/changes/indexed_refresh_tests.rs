@@ -176,6 +176,124 @@ fn operation_descriptor_rejects_mixed_versions_and_manifest_scope() {
 }
 
 #[test]
+fn page_rename_manifest_binds_exact_move_guards_and_dependency_order() {
+    let (_temp, engine, writer, _old_change, mut proof) = fixture();
+    let from = path("page.md");
+    let to = path("new.md");
+    let incoming = path("context.md");
+    let change = engine
+        .prepare(
+            &writer,
+            ChangeDraft {
+                title: "One guarded Page move".into(),
+                origin: None,
+                inverse_of: None,
+                allocated_ids: BTreeMap::new(),
+                read_preconditions: vec![],
+                operations: vec![
+                    ExpectedWrite {
+                        target: to.clone(),
+                        expected: ExpectedState::Absent,
+                        proposed: Some(b"after".to_vec()),
+                        apply_after: vec![],
+                    },
+                    ExpectedWrite {
+                        target: incoming.clone(),
+                        expected: ExpectedState::Hash(Blake3Hash::digest(b"selected unchanged")),
+                        proposed: Some(b"incoming changed".to_vec()),
+                        apply_after: vec![to.clone()],
+                    },
+                    ExpectedWrite {
+                        target: from.clone(),
+                        expected: ExpectedState::Hash(Blake3Hash::digest(b"before")),
+                        proposed: None,
+                        apply_after: vec![incoming.clone(), to.clone()],
+                    },
+                ],
+            },
+        )
+        .unwrap();
+    proof.version = 3;
+    proof.source_id = None;
+    proof.change = change.prepared.clone();
+    proof.operation = Some(IndexedWriteOperation::PageRename {
+        page_id: id("page_fixture"),
+        from: from.clone(),
+        to: to.clone(),
+        from_hash: Blake3Hash::digest(b"before"),
+        rewritten_paths: vec![incoming],
+    });
+    proof.before = change
+        .manifest
+        .operations
+        .iter()
+        .map(|op| ReadDependency {
+            path: op.target.clone(),
+            expected: op.before.clone(),
+        })
+        .collect();
+    proof.after = change
+        .manifest
+        .operations
+        .iter()
+        .map(|op| ReadDependency {
+            path: op.target.clone(),
+            expected: op.after.clone(),
+        })
+        .collect();
+    proof.validate_manifest(&change.manifest).unwrap();
+    for immutable in [
+        "sources/source_fixture/revisions/revision_fixture/revision.md",
+        "Sources/source_fixture/Revisions/revision_fixture/revision.md",
+    ] {
+        for replace_from in [true, false] {
+            let mut operation = proof.operation.clone().unwrap();
+            let IndexedWriteOperation::PageRename { from, to, .. } = &mut operation else {
+                unreachable!()
+            };
+            if replace_from {
+                *from = path(immutable);
+            } else {
+                *to = path(immutable);
+            }
+            assert!(
+                operation.validate().is_err(),
+                "immutable Page move {immutable}, from={replace_from}"
+            );
+        }
+    }
+    for variant in 0..7 {
+        let mut manifest = change.manifest.clone();
+        match variant {
+            0 => manifest.operations[0].apply_after.clear(),
+            1 => manifest.operations[2].apply_after.clear(),
+            2 => {
+                manifest.operations[1].before = ExpectedState::Hash(Blake3Hash::digest(b"occupied"))
+            }
+            3 => {
+                manifest.operations[2].after =
+                    ExpectedState::Hash(Blake3Hash::digest(b"still present"))
+            }
+            4 => manifest.operations[0].role = OperationRole::ImmutableAsset,
+            5 => {
+                manifest
+                    .allocated_ids
+                    .insert("extra".into(), id("page_extra"));
+            }
+            6 => {
+                manifest.operations[2].before =
+                    ExpectedState::Hash(Blake3Hash::digest(b"wrong author"))
+            }
+            _ => unreachable!(),
+        }
+        assert!(
+            proof.validate_manifest(&manifest).is_err(),
+            "variant {variant}"
+        );
+    }
+}
+
+#[test]
 fn baseline_rejects_wrong_publication_and_nonunique_or_incomplete_dependency_scope() {
     let (_temp, engine, _writer, change, proof) = fixture();
     proof.validate_manifest(&change.manifest).unwrap();

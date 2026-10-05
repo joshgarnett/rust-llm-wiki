@@ -38,7 +38,18 @@ unverified. Run without `--dry-run` to obtain text. Forty previews and sixteen
 ordinary controls passed on small legacy/normalized vaults and an owned 10k copy;
 the slowest preview took 0.067 seconds. The original
 [occupied 10k diagnostic](validation-10k-workflow.md) remains failed at its old
-dry-read deadline. Representative public import and 25k qualification remain open.
+dry-read deadline. The [representative 1k observations](validation-representative-1k-workflow.md) now
+complete import and lifecycle controls separately; 25k qualification remains open.
+
+Candidate007 adds [normalized authored Page reorganization](page-reorganization.md),
+with scoped independent acceptance at 10/10 and no blockers. It moves a stable
+Page ID, updates known authored/plain/unadopted incoming links and immediately
+supports guarded edits, search/read/context and recovery. All 86 public commands
+completed; exact catalog and returned results matched after offline cache-loss
+reconstruction. Reached native filesystem/SQL cuts and repeated ordinary apply
+passed. Other target kinds remain unsupported on normalized catalogs, and external
+edits need explicit sync before incoming discovery. The guide explains author
+hashes, space-containing paths, immutable refusals and request-only previews.
 
 The candidate now has an actual [1,000-document collection control](validation-1k-collection.md):
 import, interrupted resume, refresh/withdrawal, recovery and complete-cache-loss

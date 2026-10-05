@@ -36,7 +36,7 @@ struct Receipt {
 }
 
 /// Namespace words are case-insensitive; source/revision IDs remain case-sensitive.
-fn tree_path(target: &VaultRelativePath) -> Result<Option<VaultRelativePath>> {
+pub(super) fn tree_path(target: &VaultRelativePath) -> Result<Option<VaultRelativePath>> {
     let parts: Vec<_> = target.as_str().split('/').collect();
     if parts.len() >= 5
         && unicase::UniCase::unicode(parts[0]).to_folded_case() == "sources"

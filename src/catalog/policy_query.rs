@@ -114,11 +114,26 @@ impl QuerySnapshot {
         key: &PolicyInputKey,
         excluded_paths: &BTreeSet<VaultRelativePath>,
     ) -> Result<Vec<(VaultRelativePath, Blake3Hash)>> {
+        self.policy_members_bounded(key, excluded_paths, 16)
+    }
+    pub(super) fn policy_members_for_page_move(
+        &self,
+        key: &PolicyInputKey,
+        excluded_paths: &BTreeSet<VaultRelativePath>,
+    ) -> Result<Vec<(VaultRelativePath, Blake3Hash)>> {
+        self.policy_members_bounded(key, excluded_paths, super::normalized_delta::MAX_ROWS)
+    }
+    fn policy_members_bounded(
+        &self,
+        key: &PolicyInputKey,
+        excluded_paths: &BTreeSet<VaultRelativePath>,
+        ceiling: usize,
+    ) -> Result<Vec<(VaultRelativePath, Blake3Hash)>> {
         self.require_policy_layout()?;
-        if excluded_paths.len() > 16 {
+        if excluded_paths.len() > ceiling {
             return Err(WikiError::new(
                 ErrorCode::BudgetExceeded,
-                "policy exclusions exceed 16",
+                "policy exclusions exceed operation allowance",
             ));
         }
         let encoded = sql::json(key)?;

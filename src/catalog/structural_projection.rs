@@ -705,7 +705,9 @@ fn adoption_integrity(
             .before
             .iter()
             .filter(|(_, expected)| **expected == ExpectedState::Absent)
-            .filter(|(path, _)| !work.overlay.contains_key(*path))
+            .filter(|(path, _)| {
+                !work.overlay.contains_key(*path) && !work.removed_paths.contains(*path)
+            })
             .map(|(path, _)| ProposedTarget {
                 path: path.clone(),
                 bytes: None,
@@ -713,6 +715,10 @@ fn adoption_integrity(
             .chain(work.overlay.iter().map(|(path, bytes)| ProposedTarget {
                 path: path.clone(),
                 bytes: Some(bytes.clone()),
+            }))
+            .chain(work.removed_paths.iter().map(|path| ProposedTarget {
+                path: path.clone(),
+                bytes: None,
             }))
             .collect(),
     };

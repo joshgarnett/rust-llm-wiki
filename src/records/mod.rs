@@ -1,5 +1,6 @@
 //! Byte-preserving Markdown records and explicit reference resolution.
 pub mod edit;
+pub(crate) mod link_rewrite;
 pub mod links;
 pub mod parse;
 

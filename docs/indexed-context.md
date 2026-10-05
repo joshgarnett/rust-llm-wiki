@@ -203,7 +203,10 @@ preserved. A batch is recoverable across sequential writes, not a multi-file
 filesystem transaction. Version-3 receipts identify the admitted write kind;
 existing version-2 source-refresh receipts keep their original replay format.
 
-These paths do not yet migrate source addition/withdrawal or page rename.
+Source addition/withdrawal also use normalized admission as described below.
+[Authored Page rename](page-reorganization.md) now preserves stable identity and
+updates known incoming links, with [independent workflow acceptance](validation-page-reorganization.md)
+at 10/10. Other rename target kinds remain unavailable on this layout.
 The normalized layout remains opt-in, and Page fixture checks do not establish
 large-vault update throughput or whole-task retrieval completeness.
 

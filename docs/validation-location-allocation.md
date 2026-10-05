@@ -90,6 +90,27 @@ two-of-five result and regression do not establish completeness. Public commands
 ordinary source-reading continuation, update behavior and resource qualification
 still need their own acceptance.
 
+## Subsequent preimplementation support gate
+
+A fresh architecture review tested a proposed lexical clause-coverage objective
+before writing another allocator. The independent critic froze a contrastive veto
+and inspected 312 correctly bound retained candidate rows on the first two exposed
+development tasks. On the output-testing task, a test-harness display passage
+covered a strict superset of the writer-injection method's lexical features and
+cost 560 fewer standalone rendered bytes. It did not explain how to test CLI output
+without spawning a subprocess. The proposed feature representation therefore failed
+its frozen support-discrimination gate. No solver, product change, provider call or
+native quality run followed; this is not a claim about the optimum complete union.
+
+The retained traces preserve exact candidate text and coordinates, but already
+follow per-owner retention and parent collapse. They cannot establish that all
+original alternatives survived. This distinguishes two problems: preserving
+evidence and recognizing whether it supplies the requested method or prerequisite.
+The accepted [source-reading workflow](validation-source-reading.md) remains useful,
+while automatic context, query parity and native HIGH remain open. Further lexical
+weight/cap tuning is deferred; a new support mechanism needs a prospective
+support-versus-distractor experiment before allocation or unseen acceptance.
+
 The six correctness groups live in
 `src/retrieval/indexed_documents_location_experiment.rs`. After building the native
 `//:unit_tests` release target as described in [the build guide](builds.md), run:

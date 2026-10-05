@@ -33,20 +33,57 @@ pub(super) fn project_policy(
     overlay: &BTreeMap<VaultRelativePath, ParsedNote>,
     access: &mut dyn PolicyInputAccess,
 ) -> Result<PolicyDelta> {
+    project_policy_inner(reader, before, overlay, &BTreeSet::new(), access, false)
+}
+pub(super) fn project_policy_for_move(
+    reader: &QuerySnapshot,
+    before: &BTreeMap<VaultRelativePath, ParsedNote>,
+    overlay: &BTreeMap<VaultRelativePath, ParsedNote>,
+    removed: &BTreeSet<VaultRelativePath>,
+    access: &mut dyn PolicyInputAccess,
+) -> Result<PolicyDelta> {
+    if removed.len() != 1 {
+        return Err(corrupt("Page move must retire exactly one policy owner"));
+    }
+    project_policy_inner(reader, before, overlay, removed, access, true)
+}
+fn project_policy_inner(
+    reader: &QuerySnapshot,
+    before: &BTreeMap<VaultRelativePath, ParsedNote>,
+    overlay: &BTreeMap<VaultRelativePath, ParsedNote>,
+    removed: &BTreeSet<VaultRelativePath>,
+    access: &mut dyn PolicyInputAccess,
+    page_move: bool,
+) -> Result<PolicyDelta> {
     reader.require_policy_layout()?;
-    if overlay.is_empty() || overlay.len() > 16 || before.keys().any(|p| !overlay.contains_key(p)) {
+    let ceiling = if page_move {
+        super::normalized_delta::MAX_ROWS
+    } else {
+        16
+    };
+    if overlay.is_empty()
+        || overlay.len().saturating_add(removed.len()) > ceiling
+        || !removed.is_disjoint(&overlay.keys().cloned().collect())
+        || removed.iter().any(|p| !before.contains_key(p))
+        || before
+            .keys()
+            .any(|p| !overlay.contains_key(p) && !removed.contains(p))
+    {
         return Err(WikiError::new(
             ErrorCode::BudgetExceeded,
-            "policy overlay requires 1–16 explicit note owners",
+            format!(
+                "policy overlay requires 1–{ceiling} explicit note owners with a closed before scope"
+            ),
         ));
     }
-    let paths: BTreeSet<_> = overlay.keys().cloned().collect();
+    let paths: BTreeSet<_> = overlay.keys().chain(removed.iter()).cloned().collect();
     let mut changed = BTreeSet::new();
     for (path, note) in before.iter().chain(overlay) {
         access.work(PolicyWork { steps: 1, bytes: 0 })?;
         changed.extend(policy_inputs::policy_membership_keys(path, note)?);
     }
     let mut delta = PolicyDelta {
+        retired_owners: removed.iter().cloned().collect(),
         memberships: Vec::new(),
         replacements: Vec::new(),
     };
@@ -113,7 +150,7 @@ pub(super) fn project_policy(
                     "policy input certificate allowance exhausted",
                 ));
             }
-            load_certificate(reader, &need, &paths, &mut notes, access)?;
+            load_certificate(reader, &need, &paths, &mut notes, access, page_move)?;
             // Certify only after the complete ordered SQL result and all named
             // witnesses were admitted. An empty result is explicit evidence.
             certificates.insert(need);
@@ -128,8 +165,13 @@ fn load_certificate(
     replaced: &BTreeSet<VaultRelativePath>,
     notes: &mut BTreeMap<VaultRelativePath, ParsedNote>,
     access: &mut dyn PolicyInputAccess,
+    page_move: bool,
 ) -> Result<()> {
-    let members = reader.policy_members(key, replaced)?;
+    let members = if page_move {
+        reader.policy_members_for_page_move(key, replaced)?
+    } else {
+        reader.policy_members(key, replaced)?
+    };
     let mut expected = BTreeMap::new();
     for (path, hash) in members {
         access.work(PolicyWork { steps: 1, bytes: 0 })?;

@@ -36,6 +36,11 @@ pub(crate) struct CatalogDelta {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
 pub(crate) enum DocumentMutation {
+    MovePage {
+        from: VaultRelativePath,
+        from_hash: Blake3Hash,
+        row: DocumentRow,
+    },
     Put {
         row: DocumentRow,
     },
@@ -147,6 +152,50 @@ impl CatalogDelta {
                             || !row.tags.is_empty())
                     {
                         return Err(invalid("captured document carries canonical metadata"));
+                    }
+                }
+                DocumentMutation::MovePage { from, row, .. } => {
+                    unique(&mut paths, from)?;
+                    unique(&mut paths, &row.path)?;
+                    if self.version != 3
+                        || from == &row.path
+                        || row.kind != Some(RecordKind::Page)
+                        || row.record_id.is_none()
+                        || row.source_id.is_some()
+                        || row.owner_revision.is_some()
+                        || !crate::sources::revision::canonical_path(from)
+                        || !crate::sources::revision::canonical_path(&row.path)
+                        || self
+                            .documents
+                            .iter()
+                            .filter(|d| matches!(d, DocumentMutation::MovePage { .. }))
+                            .count()
+                            != 1
+                        || !self.records.iter().any(|r| {
+                            Some(r.record.id()) == row.record_id.as_ref()
+                                && r.path == row.path
+                                && r.hash == row.hash
+                                && r.record.kind() == RecordKind::Page
+                        })
+                        || !self
+                            .links
+                            .iter()
+                            .any(|o| &o.path == from && o.rows.is_empty())
+                        || !self
+                            .claims
+                            .iter()
+                            .any(|o| &o.path == from && o.rows.is_empty())
+                        || !self
+                            .diagnostics
+                            .iter()
+                            .any(|o| &o.path == from && o.rows.is_empty())
+                        || !self.facts.as_ref().is_some_and(|f| {
+                            f.links.iter().any(|o| &o.path == from && o.rows.is_empty())
+                        })
+                    {
+                        return Err(invalid(
+                            "Page move must bind one same-identity destination and retire old owned rows",
+                        ));
                     }
                 }
                 DocumentMutation::Metadata { path, .. } => unique(&mut paths, path)?,
@@ -304,10 +353,82 @@ impl CatalogDelta {
         connection: &Connection,
         operation: Option<&crate::changes::indexed_refresh::IndexedWriteOperation>,
     ) -> Result<()> {
+        self.check_page_move(connection, operation)?;
         if let Some(facts) = &self.facts {
             facts.check_before(connection, self, &mut DeltaStats::default(), operation)?;
         }
         Ok(())
+    }
+    fn check_page_move(
+        &self,
+        c: &Connection,
+        operation: Option<&crate::changes::indexed_refresh::IndexedWriteOperation>,
+    ) -> Result<()> {
+        use crate::changes::indexed_refresh::IndexedWriteOperation;
+        let moves: Vec<_> = self
+            .documents
+            .iter()
+            .filter_map(|d| {
+                if let DocumentMutation::MovePage {
+                    from,
+                    from_hash,
+                    row,
+                } = d
+                {
+                    Some((from, from_hash, row))
+                } else {
+                    None
+                }
+            })
+            .collect();
+        match (moves.as_slice(), operation) {
+            ([], Some(IndexedWriteOperation::PageRename { .. })) => {
+                Err(invalid("Page rename lacks sealed document move"))
+            }
+            ([], _) => Ok(()),
+            (
+                [(from, from_hash, row)],
+                Some(IndexedWriteOperation::PageRename {
+                    page_id,
+                    from: old_path,
+                    to,
+                    from_hash: old_hash,
+                    ..
+                }),
+            ) if *from == old_path
+                && *from_hash == old_hash
+                && &row.path == to
+                && row.record_id.as_ref() == Some(page_id) =>
+            {
+                let old: Option<(String, String, String)> = c
+                    .query_row(
+                        "SELECT kind,path,hash FROM records WHERE id=?1",
+                        [page_id.as_str()],
+                        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+                    )
+                    .optional()
+                    .map_err(sql::sql_error)?;
+                if old
+                    != Some((
+                        RecordKind::Page.as_str().into(),
+                        from.as_str().into(),
+                        from_hash.as_str().into(),
+                    ))
+                {
+                    return Err(conflict("Page move old identity/path/hash changed"));
+                }
+                let valid: bool = c.query_row("SELECT EXISTS(SELECT 1 FROM documents WHERE path=?1 AND file_hash=?2 AND record_id=?3 AND kind='page' AND source_id IS NULL AND owner_revision IS NULL) AND NOT EXISTS(SELECT 1 FROM documents WHERE path=?4) AND NOT EXISTS(SELECT 1 FROM records WHERE path=?4) AND NOT EXISTS(SELECT 1 FROM identity_claims WHERE path=?4)",params![from.as_str(),from_hash.as_str(),page_id.as_str(),to.as_str()],|r|r.get(0)).map_err(sql::sql_error)?;
+                if !valid {
+                    return Err(conflict(
+                        "Page move old document or absent destination changed",
+                    ));
+                }
+                Ok(())
+            }
+            _ => Err(invalid(
+                "document move lacks matching Page rename authority",
+            )),
+        }
     }
     pub(crate) fn apply_for_operation(
         &self,
@@ -354,8 +475,21 @@ impl CatalogDelta {
         operation: Option<&crate::changes::indexed_refresh::IndexedWriteOperation>,
     ) -> Result<DeltaStats> {
         let mut stats = DeltaStats::default();
+        self.check_page_move(c, operation)?;
         if let Some(facts) = &self.facts {
             facts.check_before(c, self, &mut stats, operation)?;
+        }
+        for document in &self.documents {
+            if let DocumentMutation::MovePage {
+                from,
+                from_hash,
+                row,
+            } = document
+            {
+                if c.execute("UPDATE records SET path=?1 WHERE id=?2 AND kind='page' AND path=?3 AND hash=?4",params![row.path.as_str(),row.record_id.as_ref().unwrap().as_str(),from.as_str(),from_hash.as_str()]).map_err(sql::sql_error)? != 1
+                    || c.execute("UPDATE documents SET path=?1 WHERE path=?2 AND file_hash=?3 AND record_id=?4",params![row.path.as_str(),from.as_str(),from_hash.as_str(),row.record_id.as_ref().unwrap().as_str()]).map_err(sql::sql_error)? != 1
+                { return Err(conflict("Page move could not retire exact old location")); }
+            }
         }
         for row in &self.records {
             let same: Option<bool> = c
@@ -378,7 +512,9 @@ impl CatalogDelta {
         }
         for action in &self.documents {
             match action {
-                DocumentMutation::Put { row } => put_document(c, row, &mut stats)?,
+                DocumentMutation::Put { row } | DocumentMutation::MovePage { row, .. } => {
+                    put_document(c, row, &mut stats)?
+                }
                 DocumentMutation::Metadata {
                     path,
                     eligibility: value,
@@ -492,6 +628,24 @@ impl CatalogDelta {
         }
         if let Some(facts) = &self.facts {
             facts.apply(c, self, &mut stats)?;
+        }
+        // Retained absence guards describe the move's filesystem closure. The
+        // rebuildable relation retains an old path only for a surviving actual
+        // asset/policy dependency, never merely for an incoming link lookup key.
+        for document in &self.documents {
+            if let DocumentMutation::MovePage { from, .. } = document {
+                let referenced: bool = c.query_row("SELECT EXISTS(SELECT 1 FROM record_direct_paths WHERE path=?1) OR EXISTS(SELECT 1 FROM policy_facts WHERE family='read_path' AND key=?1)", [from.as_str()], |r| r.get(0)).map_err(sql::sql_error)?;
+                if !referenced {
+                    admit_owned(
+                        c,
+                        "SELECT path FROM dependencies WHERE path=?1",
+                        from.as_str(),
+                        &mut stats,
+                    )?;
+                    c.execute("DELETE FROM dependencies WHERE path=?1", [from.as_str()])
+                        .map_err(sql::sql_error)?;
+                }
+            }
         }
         Ok(stats)
     }

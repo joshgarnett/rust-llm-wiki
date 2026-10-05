@@ -223,7 +223,13 @@ fn require_selected_delta_scope(
 ) -> Result<()> {
     use super::{normalized_delta::DocumentMutation, policy_facts::PolicyRow};
     let selected = |path: &VaultRelativePath| {
-        if matches!(after.get(path), Some(ExpectedState::Hash(_))) {
+        if matches!(after.get(path), Some(ExpectedState::Hash(_)))
+            || (matches!(after.get(path), Some(ExpectedState::Absent))
+                && rows
+                    .documents
+                    .iter()
+                    .any(|d| matches!(d, DocumentMutation::MovePage { from, .. } if from == path)))
+        {
             Ok(())
         } else {
             Err(recovery(
@@ -272,6 +278,14 @@ fn require_selected_delta_scope(
     for document in &rows.documents {
         match document {
             DocumentMutation::Put { row } => exact(&row.path, &row.hash)?,
+            DocumentMutation::MovePage { from, row, .. } => {
+                exact(&row.path, &row.hash)?;
+                if after.get(from).copied() != Some(&ExpectedState::Absent) {
+                    return Err(recovery(
+                        "Page move old path is not retired in selected proof",
+                    ));
+                }
+            }
             DocumentMutation::Metadata { path, .. } => {
                 let revision_bound = rows.records.iter().any(|row| {
                     row.record.kind() == RecordKind::Revision
@@ -421,6 +435,141 @@ impl RetainedDelta {
                 for page in pages {
                     if written(&page.id, RecordKind::Page)?.path != page.path {
                         return Err(recovery("page operation identity is bound to another path"));
+                    }
+                }
+            }
+            IndexedWriteOperation::PageRename {
+                page_id,
+                from,
+                to,
+                from_hash,
+                rewritten_paths,
+            } => {
+                let moved = written(page_id, RecordKind::Page)?;
+                if moved.path != *to
+                    || !self.rows.owners.is_empty()
+                    || !self.rows.revisions.is_empty()
+                {
+                    return Err(recovery(
+                        "Page rename crosses its authored identity boundary",
+                    ));
+                }
+                let read_note =
+                    |path: &VaultRelativePath, side: &str| -> Result<crate::records::ParsedNote> {
+                        let (index, op) = manifest
+                            .operations
+                            .iter()
+                            .enumerate()
+                            .find(|(_, op)| &op.target == path)
+                            .ok_or_else(|| recovery("Page rename owner is absent from manifest"))?;
+                        let (payload, state, retained_side) = if side == "before" {
+                            (&op.before_payload, &op.before, "before")
+                        } else {
+                            (&op.after_payload, &op.after, "proposed")
+                        };
+                        let bytes = engine
+                            .verify_payload(
+                                &manifest.change_id,
+                                index,
+                                retained_side,
+                                path,
+                                state,
+                                payload,
+                            )?
+                            .ok_or_else(|| recovery("Page rename owner payload is absent"))?;
+                        Ok(crate::records::parse_note(&bytes))
+                    };
+                let before = read_note(from, "before")?;
+                let after = read_note(to, "after")?;
+                let old = before
+                    .canonical
+                    .as_ref()
+                    .ok_or_else(|| recovery("Page rename before envelope is not adopted"))?;
+                let new = after
+                    .canonical
+                    .as_ref()
+                    .ok_or_else(|| recovery("Page rename destination envelope is not adopted"))?;
+                if before.source_hash != *from_hash
+                    || old.id() != page_id
+                    || old.kind() != RecordKind::Page
+                    || new != &moved.record
+                    || after.source_hash != moved.hash
+                {
+                    return Err(recovery(
+                        "Page rename retained identity or author bytes differ",
+                    ));
+                }
+                // Page has no schema-defined typed Page companion. Preserve
+                // every envelope field except the pure parser rewrite helper's
+                // same-ID navigation strings, which carry no new identity.
+                let changes = crate::records::link_rewrite::rewrite_companions_selected(
+                    &before,
+                    &mut |_| Ok(crate::records::LinkResolution::Missing),
+                    page_id,
+                    to,
+                )?;
+                let mut fields = old.fields().clone();
+                fields.extend(changes);
+                if &fields != new.fields() {
+                    return Err(recovery("Page rename changes authored envelope fields"));
+                }
+                for path in rewritten_paths {
+                    let prior = read_note(path, "before")?;
+                    let next = read_note(path, "after")?;
+                    let parts: Vec<_> = path.as_str().split('/').collect();
+                    let immutable_path = parts.len() >= 4
+                        && unicase::UniCase::unicode(parts[0]).to_folded_case() == "sources"
+                        && unicase::UniCase::unicode(parts[2]).to_folded_case() == "revisions";
+                    let immutable_kind = prior
+                        .fields
+                        .as_ref()
+                        .and_then(|fields| fields.get("wiki_kind"))
+                        .and_then(serde_json::Value::as_str)
+                        .is_some_and(|kind| {
+                            matches!(kind, "revision" | "extraction_packet" | "run_event")
+                        });
+                    if immutable_path
+                        || immutable_kind
+                        || prior.canonical != next.canonical
+                        || prior.fields != next.fields
+                    {
+                        return Err(recovery(
+                            "Page rename rewrites immutable ownership or changes incoming envelope fields",
+                        ));
+                    }
+                    let row = self
+                        .rows
+                        .documents
+                        .iter()
+                        .find_map(|document| match document {
+                            super::normalized_delta::DocumentMutation::Put { row }
+                                if &row.path == path =>
+                            {
+                                Some(row)
+                            }
+                            _ => None,
+                        })
+                        .ok_or_else(|| {
+                            recovery("Page rename incoming owner lacks document replacement")
+                        })?;
+                    if row.hash != next.source_hash
+                        || row.raw_text.as_bytes() != next.raw.as_slice()
+                        || row.owner_revision.is_some()
+                        || row.source_id.is_some()
+                    {
+                        return Err(recovery(
+                            "Page rename incoming document differs from retained bytes",
+                        ));
+                    }
+                    if let Some(id) = &row.record_id {
+                        let record = next.canonical.as_ref().ok_or_else(|| {
+                            recovery("Page rename incoming adopted envelope differs")
+                        })?;
+                        if written(id, record.kind())?.record != *record {
+                            return Err(recovery(
+                                "Page rename incoming canonical row differs from bytes",
+                            ));
+                        }
                     }
                 }
             }
@@ -593,6 +742,7 @@ impl RetainedDelta {
         match &self.operation {
             Some(
                 IndexedWriteOperation::PageBatch { .. }
+                | IndexedWriteOperation::PageRename { .. }
                 | IndexedWriteOperation::SourceWithdraw { .. },
             ) if !self.rows.owners.is_empty() => {
                 return Err(recovery(

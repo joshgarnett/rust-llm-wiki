@@ -7,8 +7,12 @@ Started: 2026-09-28. Status: local M0–M4 implementation complete; P00–P21 an
 A fresh Astra priority review selects ordinary normalized-vault workflow completion,
 then automatic context completeness, then representative 10k→25k qualification.
 The first bounded package is Page reorganization: author, move with stable identity
-and repaired incoming links, search/read, recover and rebuild. This is planned work;
-normalized default activation and remaining retrieval modes are still open.
+and repaired incoming links, search/read, recover and rebuild. Its [independent
+acceptance](docs/validation-page-reorganization.md) passes at 10/10 with every mandatory
+task and no blockers: 86 public commands, exact 22-relation reconstruction, guarded
+previews and actually reached native recovery cuts. Three failed harness attempts
+remain recorded. Normalized default activation and remaining retrieval modes are
+still open. Candidate007 packages this tested binary without rebuilding.
 The [reader lifetime checkpoint](docs/validation-import-throughput.md#import-reader-lifetime-checkpoint)
 passes its native release build and 34 affected tests. Its single mechanism control
 shows checkpoint progress, but fails to establish the frozen WAL reset/reuse
@@ -18,8 +22,12 @@ are complete through updates, withdrawal, complete backup and offline rebuild.
 All 66 operational queries completed, with exact citations and unchanged results
 through reconstruction. Three supervisor attempts remain failed under their frozen
 rules; the final 22 read-only observations passed separately. No import, setup,
-rebuild or full check was repeated to finish them. Page reorganization is now in
-implementation under a fresh Astra architecture review and frozen ≥9/10 gate.
+rebuild or full check was repeated to finish them. A subsequent fresh Astra review
+prioritizes automatic context completeness. A [preimplementation support gate](docs/validation-location-allocation.md#subsequent-preimplementation-support-gate)
+rejected lexical clause packing before solver work: a topical distractor dominated
+the required testing method on all proposed features. No weights/caps were tuned.
+A fresh support-selection architecture review is choosing the next complete workflow;
+native HIGH, full command parity and 25k remain mandatory open gates.
 
 The [verified source-reading milestone](docs/validation-source-reading.md) now
 passes independent small synthetic lifecycle acceptance at 10.0/10 with no

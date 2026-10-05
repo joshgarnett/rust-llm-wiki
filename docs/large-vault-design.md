@@ -23,6 +23,9 @@ selected-dependency verified reads, mixed authored/captured document context,
 cached `read --no-sync`, document snapshot context, and indexed source capture, refresh and withdrawal
 with staged apply and recovery. Page initialization, guarded replacement and
 bounded batches also use selected admission and shared publication/replay.
+[Authored Page reorganization](page-reorganization.md) preserves identity, updates
+known incoming links and recovers through the same engine; its exact reconstruction
+and public workflow passed [scoped acceptance](validation-page-reorganization.md) at 10/10.
 Publication stores per-document rows and updates affected rows in one
 transaction. Ordinary normalized queries consult a small publication record;
 they do not audit completed operation history. Selected evidence still requires
@@ -40,8 +43,8 @@ application with the same selected-dependency proof. Explicit complete-cache-los
 reconstruction preserves outside operation authority and uses a bounded candidate
 reservation; see the [user workflow and limits](indexed-context.md).
 
-Literal, semantic, hybrid and graph queries,
-page rename and public default activation are not fully migrated. These
+Literal, semantic, hybrid and graph queries, other rename target kinds
+and public default activation are not fully migrated. These
 are required integration work, not optional omissions. Large-vault capacity and
 unseen context completeness remain unqualified. See the
 [validation protocol and measured results](testing-large-vaults.md) for actual
