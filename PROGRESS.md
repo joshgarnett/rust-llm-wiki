@@ -26,8 +26,15 @@ rebuild or full check was repeated to finish them. A subsequent fresh Astra revi
 prioritizes automatic context completeness. A [preimplementation support gate](docs/validation-location-allocation.md#subsequent-preimplementation-support-gate)
 rejected lexical clause packing before solver work: a topical distractor dominated
 the required testing method on all proposed features. No weights/caps were tuned.
-A fresh support-selection architecture review is choosing the next complete workflow;
-native HIGH, full command parity and 25k remain mandatory open gates.
+The [host-assisted compact-context trial](docs/validation-host-assisted-context.md)
+completed all 12 scheduled slots and scored 9.5/10, but failed its mandatory
+completeness rule: 11/12 strict tasks versus 3/12 automatic, with one available
+paragraph omitted by the actor. Citation/freshness/resource/isolation checks pass;
+this is development evidence, not native HIGH or generation acceptance. No retry,
+deck expansion or product tuning followed. The next reviewed slice is normalized
+named-Entity neighbors with exact support/contrary reads and Source lifecycle;
+implementation is in progress. Native HIGH, full command parity and 25k remain
+mandatory open gates.
 
 The [verified source-reading milestone](docs/validation-source-reading.md) now
 passes independent small synthetic lifecycle acceptance at 10.0/10 with no

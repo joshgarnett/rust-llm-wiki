@@ -326,3 +326,11 @@ partial cache loss or missing authority cause refusal. This explicit recovery
 route does not repair arbitrary cache contents. Readers already holding the old
 catalog retain its transaction and must still recheck selected canonical bytes.
 Dry-run only previews the request and creates no reservation or cache files.
+
+## Host-selection development evidence
+
+The [frozen compact-context trial](validation-host-assisted-context.md) improved
+strict evidence completion from 3/12 automatic to 11/12 assisted tasks. It scored
+9.5/10 but failed mandatory completeness because the actor omitted an available
+required paragraph. Citation and lifecycle checks passed. Its questions are
+development data; it establishes neither native HIGH nor generated-answer quality.
