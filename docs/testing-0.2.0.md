@@ -22,6 +22,14 @@ blockers. On the occupied fixture the candidate imported 2.208 items/s, 2.200 ti
 the prior build; the small-fixture ratio was 0.940. These single observations meet
 the frozen thresholds and do not qualify 25k capacity or complete answers.
 
+The latest candidate adds [exact source-read citations](validation-source-reading.md).
+Verified search can be followed by deeper reads and directly reusable citations
+for the newly returned bytes, with Current/historical/withdrawn state. Its small
+synthetic import/update/withdrawal/cache-loss workflow passed independent scoped
+acceptance at 10.0/10. Broad reading completed the exposed development questions
+on both old and new builds; the new build supplies citation metadata. Automatic
+context completeness and representative capacity remain separate open gates.
+
 The candidate now has an actual [1,000-document collection control](validation-1k-collection.md):
 import, interrupted resume, refresh/withdrawal, recovery and complete-cache-loss
 rebuild succeeded. The broader frozen assessment is 8.5/10 and remains failed:
@@ -57,6 +65,10 @@ printf '%s\n' '{"path":"shipment.txt"}' '{"path":"inspection.txt"}' > "$DEMO/inp
 "$LWIKI" --wiki "$DEMO/wiki" --offline search 'Atlas shipment' --verify-selected
 "$LWIKI" --wiki "$DEMO/wiki" --offline context 'Atlas shipment' \
   --max-bytes 6000 --max-tokens 1500
+# Copy a captured payload path from search's locator.path before reading it:
+# "$LWIKI" --wiki "$DEMO/wiki" --offline --json read --path "$PAYLOAD_PATH" --max-bytes 16
+# Follow data.continuation with --start/--end; copy data.source_citation.citation.
+
 "$LWIKI" --wiki "$DEMO/wiki" --offline check
 ```
 

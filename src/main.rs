@@ -108,6 +108,16 @@ fn main() {
                 "Record: {}\nHash (for --if-match): {hash}",
                 envelope.data["path"].as_str().unwrap_or_default()
             );
+            if let Some(citation) = envelope.data["source_citation"].as_object() {
+                eprintln!(
+                    "Source citation ({}): {}",
+                    citation
+                        .get("eligibility")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or("unknown"),
+                    citation.get("citation").unwrap_or(&serde_json::Value::Null)
+                );
+            }
         }
         if envelope.ok && envelope.command == "context" && envelope.data["text"].is_string() {
             if let Some(packet) = envelope.data["selection_packet"].as_object() {

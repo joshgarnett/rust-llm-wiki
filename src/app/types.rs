@@ -55,6 +55,14 @@ pub struct ReadOutcome {
     pub range: ByteSpan,
     pub truncated: bool,
     pub continuation: Option<ByteSpan>,
+    /// Exact captured bytes authenticated by an ordinary selected read.
+    /// Cached reads and authored note body ranges have no source citation.
+    pub source_citation: Option<ReadSourceCitation>,
+}
+#[derive(Debug, Clone, Serialize)]
+pub struct ReadSourceCitation {
+    pub citation: CitationRef,
+    pub eligibility: Eligibility,
 }
 #[derive(Debug, Clone, Serialize)]
 pub struct PlannedOperation {

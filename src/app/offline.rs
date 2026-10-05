@@ -473,6 +473,7 @@ impl OfflineApp {
             body: text[start..end].to_owned(),
             range: ByteSpan::new(start as u64, end as u64)?,
             truncated: end < wanted_end,
+            source_citation: None,
             diagnostics: p
                 .diagnostics
                 .into_iter()

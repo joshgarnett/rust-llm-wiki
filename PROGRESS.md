@@ -4,6 +4,18 @@ Started: 2026-09-28. Status: local M0–M4 implementation complete; P00–P21 an
 
 ## Context-quality follow-up — active
 
+The [verified source-reading milestone](docs/validation-source-reading.md) now
+passes independent small synthetic lifecycle acceptance at 10.0/10 with no
+blockers: import, deeper reads with exact citations, refresh, withdrawal/history,
+backup and offline cache reconstruction. Both baseline and candidate completed
+5/5 exposed development evidence tasks through genuine continuation; the new
+candidate adds reusable range citations rather than improved text selection.
+The [global dense development control](docs/validation-native-dense-context.md)
+failed at 2/5 with a baseline fact loss and is preserved in pushed checkpoint
+`f9ad575`; no experimental public mode was promoted. Next: package the accepted
+read slice as a fresh 0.2.0 build and qualify representative 25k behavior. Native
+HIGH, generated-answer quality and full capacity remain open.
+
 The fresh 2026-10-04 goal also covers complete import, update, search and
 maintenance workflows. The user subsequently selected 25,000 documents / roughly
 2.5 GB as the first capacity target, with 100,000 deferred, and requested a useful

@@ -271,6 +271,30 @@ throughput evidence: retained object/change namespaces and durable publication
 also contribute work. This workflow does not qualify 100k capacity or semantic
 answer completeness.
 
+## Continuing a captured-source read
+
+After verified search, use the captured payload's returned path with ordinary
+`read --path PATH --max-bytes 8192`. On a normalized catalog this authenticates
+the selected dependencies and returns an exact citation for the new source
+range. JSON `data.source_citation.citation` uses the existing source-citation
+format: Source ID, immutable Revision ID, returned span and quote hash.
+`data.source_citation.eligibility` distinguishes Current, historical and withdrawn
+evidence. Reading an older revision does not make it Current again.
+
+If the read is truncated, pass its returned `continuation.start` and
+`continuation.end` as `--start` and `--end` on the next read. These are UTF-8 byte
+coordinates in the captured payload, and the next range has its own citation.
+Do not reuse a search excerpt's quote hash for different text. The human
+continuation command retains the selected vault and cached-read mode; citation
+metadata is printed on stderr while stdout contains the exact requested text.
+
+Cached `--no-sync` reads, dry-run reads, legacy-layout reads, empty ranges and
+authored notes return no source citation. Authored read coordinates address the
+note body and are not captured-source evidence offsets. An external edit to a
+selected dependency causes ordinary verification to refuse instead of emitting
+a stale citation. As with context, verification observes sequential reads and
+does not guarantee against an edit after the final recheck.
+
 ## Rebuilding after complete derived-cache loss
 
 For a previously activated normalized vault whose entire `.wiki/cache` is absent,

@@ -8,8 +8,10 @@ use crate::{
         normalized_build::{BuildLimits, NormalizedBuilder},
         scan, selector,
     },
-    domain::{Blake3Hash, ByteSpan, RecordId},
-    sources::{CaptureRequest, ExtractionInput, SourceOrigin, SourceStore},
+    domain::{Blake3Hash, ByteSpan, CitationRef, RecordId},
+    sources::{
+        CaptureRequest, CitationScope, ExtractionInput, SourceOrigin, SourceStore, SourceView,
+    },
     vault::{VaultFs, VaultRoot, WriterPermit},
 };
 use serde_json::Value;
@@ -1914,4 +1916,278 @@ fn indexed_cli_selection_staged_source_is_current_until_apply_and_withdrawal_rej
         ],
         "USAGE",
     );
+}
+
+/// Independent canonical verification checks the citation emitted by the public
+/// read command, including its exact returned range rather than a search hit.
+fn exact_read_source_citation(
+    fixture: &Fixture,
+    read: &Value,
+    revision: &str,
+    original: &str,
+    eligibility: &str,
+    scope: CitationScope,
+) -> CitationRef {
+    assert_eq!(read["meta"]["freshness"], "indexed_evidence");
+    assert_eq!(read["data"]["source_citation"]["eligibility"], eligibility);
+    let citation: CitationRef =
+        serde_json::from_value(read["data"]["source_citation"]["citation"].clone()).unwrap();
+    let CitationRef::Source(reference) = &citation else {
+        panic!("ordinary captured read must return a direct source citation");
+    };
+    let range: ByteSpan = serde_json::from_value(read["data"]["range"].clone()).unwrap();
+    let quote = read["data"]["body"].as_str().unwrap();
+    assert_eq!(reference.source_id.as_str(), fixture.source);
+    assert_eq!(reference.source_revision.as_str(), revision);
+    assert_eq!(reference.span, range);
+    assert_eq!(range.slice(original).unwrap(), quote);
+    assert_eq!(reference.quote_hash, Blake3Hash::digest(quote.as_bytes()));
+    assert_eq!(
+        read["data"]["hash"],
+        Blake3Hash::digest(original.as_bytes()).as_str()
+    );
+    let handle = VaultFs::new(VaultRoot::explicit(&fixture.root).unwrap());
+    let verified = SourceView::from_fs(&handle)
+        .unwrap()
+        .verify(&citation, scope)
+        .unwrap();
+    assert_eq!(verified.quote, quote.as_bytes());
+    citation
+}
+
+#[test]
+fn indexed_cli_read_source_citation_unicode_continuation_and_uncited_notes() {
+    let fixture = Fixture::with_notes(&[(
+        "pages/read-authored.md",
+        b"---\nwiki_schema: '1'\nwiki_kind: page\nwiki_id: page_read_citation\ntitle: Authored read\nwiki_status: reviewed\n---\nExact authored prose.\n",
+    )], true);
+    let path = format!(
+        "sources/{}/revisions/{}/content.md",
+        fixture.source, fixture.first
+    );
+    // The byte allowance ends inside a multibyte codepoint; the public read must
+    // finish at the preceding boundary and cite only those returned bytes.
+    let cap = (FIRST.find('東').unwrap() + 1).to_string();
+    let first = fixture.cli(&["read", "--path", &path, "--max-bytes", &cap]);
+    assert_eq!(first["data"]["truncated"], true);
+    assert_eq!(first["data"]["body"], &FIRST[..FIRST.find('東').unwrap()]);
+    let first_citation = exact_read_source_citation(
+        &fixture,
+        &first,
+        &fixture.first,
+        FIRST,
+        "current",
+        CitationScope::Current,
+    );
+    let continuation: ByteSpan =
+        serde_json::from_value(first["data"]["continuation"].clone()).unwrap();
+    let initial_range: ByteSpan = serde_json::from_value(first["data"]["range"].clone()).unwrap();
+    assert_eq!(initial_range.start(), 0);
+    assert_eq!(initial_range.end(), continuation.start());
+    assert_eq!(continuation.end(), FIRST.len() as u64);
+    let start = continuation.start().to_string();
+    let end = continuation.end().to_string();
+    let next = fixture.cli(&["read", "--path", &path, "--start", &start, "--end", &end]);
+    assert_eq!(next["data"]["truncated"], false);
+    assert!(next["data"]["continuation"].is_null());
+    let next_citation = exact_read_source_citation(
+        &fixture,
+        &next,
+        &fixture.first,
+        FIRST,
+        "current",
+        CitationScope::Current,
+    );
+    let next_range: ByteSpan = serde_json::from_value(next["data"]["range"].clone()).unwrap();
+    assert_eq!(initial_range.end(), next_range.start());
+    assert_ne!(first_citation, next_citation);
+    assert_eq!(
+        format!(
+            "{}{}",
+            first["data"]["body"].as_str().unwrap(),
+            next["data"]["body"].as_str().unwrap()
+        ),
+        FIRST
+    );
+    let warning = first["warnings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(Value::as_str)
+        .find(|warning| warning.contains("continue with:"))
+        .unwrap();
+    let quoted_root = format!(
+        "'{}'",
+        fixture
+            .root
+            .canonicalize()
+            .unwrap()
+            .to_string_lossy()
+            .replace('\'', "'\\''")
+    );
+    assert!(
+        warning.contains(&format!(
+            "lwiki --wiki {quoted_root} read --path '{path}' --start {start} --end {end}"
+        )),
+        "{warning}"
+    );
+
+    let cached = fixture.cli(&["read", "--path", &path, "--no-sync", "--max-bytes", &cap]);
+    assert_eq!(cached["data"]["body"], first["data"]["body"]);
+    assert!(cached["data"]["source_citation"].is_null());
+    let cached_warning = cached["warnings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(Value::as_str)
+        .find(|warning| warning.contains("continue with:"))
+        .unwrap();
+    assert!(
+        cached_warning.contains(&format!("lwiki --wiki {quoted_root} read --path '{path}'")),
+        "{cached_warning}"
+    );
+    assert!(cached_warning.contains("--no-sync"), "{cached_warning}");
+    let authored = fixture.cli(&["read", "--id", "page_read_citation"]);
+    assert_eq!(authored["data"]["body"], "Exact authored prose.\n");
+    assert!(authored["data"]["source_citation"].is_null());
+    let empty = fixture.cli(&["read", "--path", &path, "--start", "0", "--end", "0"]);
+    assert_eq!(empty["data"]["body"], "");
+    assert!(empty["data"]["source_citation"].is_null());
+    let dry = fixture.cli(&["--dry-run", "read", "--path", &path]);
+    assert_eq!(dry["data"]["body"], FIRST);
+    assert!(dry["data"]["source_citation"].is_null());
+
+    let human = Command::new(binary())
+        .current_dir(&fixture.outside)
+        .arg("--wiki")
+        .arg(&fixture.root)
+        .args(["--offline", "read", "--path", &path, "--max-bytes", &cap])
+        .output()
+        .unwrap();
+    assert!(
+        human.status.success(),
+        "{}",
+        String::from_utf8_lossy(&human.stderr)
+    );
+    assert_eq!(
+        human.stdout,
+        first["data"]["body"].as_str().unwrap().as_bytes()
+    );
+    let stderr = String::from_utf8(human.stderr).unwrap();
+    let source_line = stderr
+        .lines()
+        .find_map(|line| line.strip_prefix("Source citation (current): "))
+        .expect("human stderr must identify Current source citation");
+    let human_citation: CitationRef = serde_json::from_str(source_line).unwrap();
+    assert_eq!(human_citation, first_citation);
+    assert!(stderr.contains(&format!("lwiki --wiki {quoted_root} read --path '{path}'")));
+}
+
+#[test]
+fn indexed_cli_read_source_citation_refresh_withdraw_and_external_edit() {
+    let fixture = Fixture::new();
+    let old_path = format!(
+        "sources/{}/revisions/{}/content.md",
+        fixture.source, fixture.first
+    );
+    let old_read = fixture.cli(&["read", "--path", &old_path]);
+    let old_citation = exact_read_source_citation(
+        &fixture,
+        &old_read,
+        &fixture.first,
+        FIRST,
+        "current",
+        CitationScope::Current,
+    );
+    let old_bytes = fs::read(fixture.root.join(&old_path)).unwrap();
+    let refreshed = fixture.refresh(SECOND, Some(TITLE), None);
+    let revision = refreshed["data"]["allocated_ids"]["revision"]
+        .as_str()
+        .unwrap();
+    assert_ne!(revision, fixture.first);
+    let new_path = format!("sources/{}/revisions/{revision}/content.md", fixture.source);
+    let current = fixture.cli(&["read", "--path", &new_path]);
+    let current_citation = exact_read_source_citation(
+        &fixture,
+        &current,
+        revision,
+        SECOND,
+        "current",
+        CitationScope::Current,
+    );
+    let historical = fixture.cli(&["read", "--path", &old_path]);
+    assert_eq!(
+        exact_read_source_citation(
+            &fixture,
+            &historical,
+            &fixture.first,
+            FIRST,
+            "historical",
+            CitationScope::Historical
+        ),
+        old_citation
+    );
+    assert_eq!(fs::read(fixture.root.join(&old_path)).unwrap(), old_bytes);
+    let handle = VaultFs::new(VaultRoot::explicit(&fixture.root).unwrap());
+    assert!(
+        SourceView::from_fs(&handle)
+            .unwrap()
+            .verify(&old_citation, CitationScope::Current)
+            .is_err()
+    );
+
+    fixture.cli(&[
+        "source",
+        "withdraw",
+        &fixture.source,
+        "--reason",
+        "Superseded read fixture",
+    ]);
+    for (path, revision, body) in [
+        (&old_path, fixture.first.as_str(), FIRST),
+        (&new_path, revision, SECOND),
+    ] {
+        let withdrawn = fixture.cli(&["read", "--path", path]);
+        exact_read_source_citation(
+            &fixture,
+            &withdrawn,
+            revision,
+            body,
+            "withdrawn",
+            CitationScope::Historical,
+        );
+    }
+    let view = SourceView::from_fs(&handle).unwrap();
+    assert!(view.verify(&old_citation, CitationScope::Current).is_err());
+    assert!(
+        view.verify(&current_citation, CitationScope::Current)
+            .is_err()
+    );
+    assert_eq!(
+        view.verify(&old_citation, CitationScope::Historical)
+            .unwrap()
+            .quote,
+        FIRST.as_bytes()
+    );
+    assert_eq!(
+        view.verify(&current_citation, CitationScope::Historical)
+            .unwrap()
+            .quote,
+        SECOND.as_bytes()
+    );
+    drop(view);
+
+    // Corrupt only this disposable selected content. The public ordinary read
+    // must refuse rather than emitting cached bytes with a stale citation.
+    let changed = "External bytes differ from the indexed immutable capture.\n";
+    fs::write(fixture.root.join(&new_path), changed).unwrap();
+    let refused = fixture.cli_error(&["read", "--path", &new_path], "FRESHNESS_CONFLICT");
+    assert!(refused["data"].is_null(), "{refused}");
+    assert_eq!(
+        fs::read(fixture.root.join(&new_path)).unwrap(),
+        changed.as_bytes()
+    );
+    let cached = fixture.cli(&["read", "--path", &new_path, "--no-sync"]);
+    assert_eq!(cached["data"]["body"], SECOND);
+    assert!(cached["data"]["source_citation"].is_null());
 }

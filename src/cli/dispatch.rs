@@ -340,7 +340,7 @@ fn execute_inner(args: &Arguments) -> Result<Envelope> {
                         "normalized read selected another catalog layout",
                     ));
                 }
-                let outcome = cached_query_read(&reader, request)?;
+                let mut outcome = cached_query_read(&reader, request)?;
                 if !*no_sync {
                     let read_proof_error = |mut error: WikiError| {
                         if error.code == ErrorCode::BudgetExceeded {
@@ -356,6 +356,13 @@ fn execute_inner(args: &Arguments) -> Result<Envelope> {
                     )
                     .map_err(read_proof_error)?;
                     proof.recheck(&catalog, &reader).map_err(read_proof_error)?;
+                    let document = proof.documents.get(&outcome.path).ok_or_else(|| {
+                        WikiError::new(
+                            ErrorCode::FreshnessConflict,
+                            "read path escaped selected proof",
+                        )
+                    })?;
+                    outcome.source_citation = authenticated_read_citation(document, &outcome)?;
                     let verification = retrieval::indexed_documents::verification(&reader)?;
                     result_metadata(&mut envelope.meta, reader.snapshot(), &verification);
                     envelope.warnings.push("Read verifies selected document dependencies against this discovery generation; global membership and identity uniqueness are not verified. Use index sync to discover external edits.".into());
@@ -392,7 +399,16 @@ fn execute_inner(args: &Arguments) -> Result<Envelope> {
             envelope.meta.partial = outcome.truncated;
             if let Some(range) = &outcome.continuation {
                 let quoted_path = format!("'{}'", outcome.path.as_str().replace('\'', "'\\''"));
-                envelope.warnings.push(format!("Read is truncated; continue with: lwiki read --path {quoted_path} --start {} --end {} --max-bytes {}", range.start(), range.end(), preferences.read_max_bytes));
+                let quoted_wiki = format!(
+                    "'{}'",
+                    app.fs()
+                        .root()
+                        .path()
+                        .to_string_lossy()
+                        .replace('\'', "'\\''")
+                );
+                let read_mode = if *no_sync { " --no-sync" } else { "" };
+                envelope.warnings.push(format!("Read is truncated; continue with: lwiki --wiki {quoted_wiki} read --path {quoted_path}{read_mode} --start {} --end {} --max-bytes {}", range.start(), range.end(), preferences.read_max_bytes));
             }
             envelope.data = value(outcome)?;
             if args.dry_run {
@@ -1633,7 +1649,42 @@ fn format_cached_read(
         body: body[start..end].to_owned(),
         range: ByteSpan::new(start as u64, end as u64)?,
         truncated: end < wanted_end,
+        source_citation: None,
     })
+}
+fn authenticated_read_citation(
+    document: &DocumentRow,
+    outcome: &ReadOutcome,
+) -> Result<Option<ReadSourceCitation>> {
+    let (Some(source), Some(revision)) = (&document.source_id, &document.owner_revision) else {
+        return Ok(None);
+    };
+    if document.path != outcome.path
+        || document.hash != outcome.hash
+        || outcome.range.slice(&document.raw_text)? != outcome.body
+    {
+        return Err(WikiError::new(
+            ErrorCode::FreshnessConflict,
+            "read range differs from authenticated source bytes",
+        ));
+    }
+    if outcome.range.is_empty()
+        || !matches!(
+            document.eligibility,
+            Eligibility::Current | Eligibility::Historical | Eligibility::Withdrawn
+        )
+    {
+        return Ok(None);
+    }
+    Ok(Some(ReadSourceCitation {
+        citation: CitationRef::Source(SourceSpanRef {
+            source_id: source.clone(),
+            source_revision: revision.clone(),
+            span: outcome.range,
+            quote_hash: Blake3Hash::digest(outcome.body.as_bytes()),
+        }),
+        eligibility: document.eligibility,
+    }))
 }
 fn input(path: &Path) -> Result<Vec<u8>> {
     let mut bytes = Vec::new();
