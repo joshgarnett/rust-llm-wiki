@@ -45,6 +45,9 @@ and Source lifecycle. Its [validation](docs/validation-named-neighbors.md) recor
 9.5/10 independent acceptance, all thirteen tasks and no correctness blockers,
 78 distinct passing checks, 115 public commands and passing 1k→25k unrelated
 occupancy read/row invariance. This diagnostic is generated, not import capacity.
+Candidate008 packages this accepted native macOS ARM64 0.2.0 binary without
+rebuilding; all 396 compiled inputs match commit `10242cf`, and version/archive
+verification passes. It is local, unsigned and requires macOS 26.5 or later.
 Native HIGH, full command parity and representative 25k/~2.5GB remain
 mandatory open gates.
 

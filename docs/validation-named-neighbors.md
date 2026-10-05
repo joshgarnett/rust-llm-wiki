@@ -151,6 +151,14 @@ Four observations do not establish a speedup or release capacity.
 
 ## Remaining gates and next milestone
 
+Native macOS ARM64 **0.2.0 candidate008** packages the accepted binary from source
+commit `10242cf6c4921507c418680af7ca35ca8b9fd33c`. All 396 compiled inputs match that
+commit; version smoke and all 31 archive members' bytes/executable permissions
+pass. Packaging performed zero product rebuilds or repeated correctness tests.
+Archive SHA-256:
+`e53a106e0a7ff80f3646730a3b8fb5b4feac20b649d4d4fa6acd7a6b78460ca9`.
+It requires macOS 26.5 or later and remains a local unsigned, unnotarized candidate.
+
 This slice does not pass automatic HIGH, generated answers, full normalized
 command parity/default activation, representative 25k/~2.5GB import/update/recovery,
 other-host compatibility, live-provider behavior or native power-loss safety.
