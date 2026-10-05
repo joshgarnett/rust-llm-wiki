@@ -53,6 +53,15 @@ and citations, and rebuilt substantive packets matched. Three supervisor failure
 remain preserved; a separate final 22-query completion passed. This mixed-binary,
 mostly synthetic diagnostic does not qualify 25k or native HIGH.
 
+The later [single-binary public 1K lifecycle](validation-public-1k-lifecycle.md)
+passes its independently reviewed mechanics checklist, including a reached
+interruption/recovery, refresh/withdrawal, complete backup/cache-loss reconstruction
+and 100/100 rebuilt query sequences. The original recorder failure and separate
+read-only completion remain distinct. Native context supplies sufficient evidence
+for 78–79/100 questions per round; the combined reading recipe reaches 89–90/100.
+Storage growth keeps 10K admission on hold. Bounded ordinary-publication WAL
+reclamation is the next measured milestone; full capacity and HIGH remain open.
+
 The [normalized Page reorganization workflow](validation-page-reorganization.md)
 passes scoped independent acceptance at 10/10 with every mandatory task and no
 blockers. Stable identity, authored/plain/unadopted incoming links, guarded editing,
