@@ -139,3 +139,7 @@ pub(crate) fn context(
 #[cfg(test)]
 #[path = "indexed_documents_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "indexed_documents_dense_experiment.rs"]
+mod dense_experiment;

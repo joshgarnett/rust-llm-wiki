@@ -39,6 +39,13 @@ crossed the unchanged performance thresholds at 2.208 occupied items/s and 2.200
 times baseline. Independent actual mechanics acceptance passed at 9.4/10 with
 no blockers; 25k remains unqualified.
 
+The [native dense discovery development control](validation-native-dense-context.md)
+also failed: global dense and hybrid context each completed 2/5 positives and lost
+baseline-supported guidance. All 79 citations passed; no experimental mode is
+promoted. Required owners reached allocation, where complementary evidence was
+lost. The next public milestone is verified search, genuine source continuation
+and reusable citations for newly read ranges, with separate acceptance.
+
 This is the current capability router for the cleanup of 0.1.2. It records implemented surfaces and the checks that can establish local correctness; local cleanup is accepted by [the exact-source aggregate evidence](execution/reports/CLEANUP-VALIDATION.md). Historical milestone plans and research designs are preserved as history. Use the running binary's `capabilities`, `schema NAME`, and command help for exact syntax.
 
 | Area | Current contract | Local evidence and limit |

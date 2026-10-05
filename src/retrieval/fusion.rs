@@ -93,15 +93,20 @@ pub(crate) fn dense_hit_for_query(
 }
 
 fn dense_hit_inner(
-    reader: &ReaderSnapshot,
+    reader: &dyn crate::catalog::query_types::QueryCatalog,
     document: &DocumentRow,
     dense: &DenseHit,
     rank: usize,
     bytes: usize,
     query: Option<&str>,
 ) -> Result<SearchHit> {
-    let record = super::filters::row(reader, document);
-    let identity = record.is_some_and(|r| {
+    let record = document
+        .record_id
+        .as_ref()
+        .map(|id| reader.record(id))
+        .transpose()?
+        .flatten();
+    let identity = record.as_ref().is_some_and(|r| {
         r.record.kind() == RecordKind::Entity
             && r.description_eligibility != Some(Eligibility::Current)
     });
@@ -124,13 +129,13 @@ fn dense_hit_inner(
     };
     let reference = if let (Some(id), Some(kind)) = (&document.record_id, document.kind) {
         Some(RecordRef {
-            vault_id: reader.projection().vault_id.clone(),
+            vault_id: reader.vault_id().clone(),
             record_id: id.clone(),
             expected_kind: kind,
         })
     } else {
         document.owner_revision.as_ref().map(|id| RecordRef {
-            vault_id: reader.projection().vault_id.clone(),
+            vault_id: reader.vault_id().clone(),
             record_id: id.clone(),
             expected_kind: RecordKind::Revision,
         })
@@ -143,9 +148,9 @@ fn dense_hit_inner(
         },
         title: document.title.clone(),
         kind: document.kind,
-        authored_status: record.and_then(|r| r.authored_status.clone()),
+        authored_status: record.as_ref().and_then(|r| r.authored_status.clone()),
         eligibility: document.eligibility,
-        identity_eligibility: record.and_then(|r| r.identity_eligibility),
+        identity_eligibility: record.as_ref().and_then(|r| r.identity_eligibility),
         excerpt,
         secondary_excerpts: vec![],
         reasons: vec![RetrievalReason::Semantic],
@@ -448,4 +453,91 @@ mod focused_excerpt_tests {
         assert!(hit.excerpt.matched_spans.is_empty());
         assert!(hit.excerpt.citation.is_none());
     }
+}
+
+#[cfg(test)]
+pub(crate) fn dense_hit_for_selected_query(
+    reader: &dyn crate::catalog::query_types::QueryCatalog,
+    document: &DocumentRow,
+    dense: &DenseHit,
+    rank: usize,
+    bytes: usize,
+    query: &str,
+) -> Result<SearchHit> {
+    dense_hit_inner(reader, document, dense, rank, bytes, Some(query))
+}
+
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum RetainedOwnerMatch {
+    Match,
+    Missing,
+    Changed,
+    Filtered,
+}
+
+/// Scalar intersection is discovery only. No old membership dependency is
+/// promoted to current authority; selected canonical authentication follows.
+#[cfg(test)]
+pub(crate) fn retained_owner_match(
+    reader: &crate::catalog::query::QuerySnapshot,
+    unit: &super::render::RenderedUnit,
+    filters: &SearchFilters,
+) -> Result<RetainedOwnerMatch> {
+    use crate::catalog::query_types::QueryCatalog;
+    use rusqlite::types::Value;
+    if !reader.normalized_layout() || unit.target != super::render::TargetKind::Document {
+        return Ok(RetainedOwnerMatch::Filtered);
+    }
+    let mut values = vec![Value::Text(unit.owner.as_str().into())];
+    let common = super::filters::catalog_sql(filters, &mut values, true);
+    let policy = super::filters::catalog_context_policy(false, true);
+    let mut statement = reader.connection().prepare(&format!(
+        "SELECT d.file_hash,coalesce(d.record_id,d.owner_revision),COALESCE(({common}) AND ({policy}),0) FROM documents d LEFT JOIN records r ON r.id=d.record_id WHERE d.path=?1"
+    )).map_err(crate::catalog::sql::sql_error)?;
+    let mut rows = statement
+        .query(rusqlite::params_from_iter(values))
+        .map_err(crate::catalog::sql::sql_error)?;
+    let Some(row) = rows.next().map_err(crate::catalog::sql::sql_error)? else {
+        return Ok(RetainedOwnerMatch::Missing);
+    };
+    reader.reserve_experimental_scalar_row(row, 3)?;
+    let hash: String = row.get(0).map_err(crate::catalog::sql::sql_error)?;
+    let identity: Option<String> = row.get(1).map_err(crate::catalog::sql::sql_error)?;
+    let allowed: bool = row.get(2).map_err(crate::catalog::sql::sql_error)?;
+    if hash != unit.source_hash.as_str()
+        || identity.as_deref() != unit.target_id.as_ref().map(RecordId::as_str)
+    {
+        return Ok(RetainedOwnerMatch::Changed);
+    }
+    Ok(if allowed {
+        RetainedOwnerMatch::Match
+    } else {
+        RetainedOwnerMatch::Filtered
+    })
+}
+
+#[cfg(test)]
+pub(crate) fn published_context_owner_count(
+    reader: &crate::catalog::query::QuerySnapshot,
+    filters: &SearchFilters,
+) -> Result<usize> {
+    use crate::catalog::query_types::QueryCatalog;
+    let mut values = Vec::new();
+    let common = super::filters::catalog_sql(filters, &mut values, true);
+    let policy = super::filters::catalog_context_policy(false, true);
+    let mut statement = reader.connection().prepare(&format!("SELECT count(*) FROM documents d LEFT JOIN records r ON r.id=d.record_id WHERE ({common}) AND ({policy})")).map_err(crate::catalog::sql::sql_error)?;
+    let mut rows = statement
+        .query(rusqlite::params_from_iter(values))
+        .map_err(crate::catalog::sql::sql_error)?;
+    let row = rows
+        .next()
+        .map_err(crate::catalog::sql::sql_error)?
+        .ok_or_else(|| {
+            WikiError::new(ErrorCode::IndexCorrupt, "published owner aggregate absent")
+        })?;
+    reader.reserve_experimental_scalar_row(row, 1)?;
+    let count: i64 = row.get(0).map_err(crate::catalog::sql::sql_error)?;
+    usize::try_from(count)
+        .map_err(|_| WikiError::new(ErrorCode::IndexCorrupt, "published owner count invalid"))
 }

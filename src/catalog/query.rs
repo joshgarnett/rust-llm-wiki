@@ -448,6 +448,18 @@ impl QuerySnapshot {
         self.usage.get()
     }
 
+    /// Experimental discovery reserves borrowed scalar columns before owning
+    /// them, with the same pinned reader's row and byte limits. It does not
+    /// authenticate those columns or establish current corpus membership.
+    #[cfg(test)]
+    pub(crate) fn reserve_experimental_scalar_row(
+        &self,
+        row: &Row<'_>,
+        columns: usize,
+    ) -> Result<()> {
+        self.reserve_refresh_row(row, columns)
+    }
+
     fn reserve(&self, bytes: usize) -> Result<()> {
         let previous = self.usage.get();
         let rows = previous.rows.checked_add(1);

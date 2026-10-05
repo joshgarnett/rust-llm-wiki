@@ -208,6 +208,24 @@ pub(crate) fn render_selected_document_for_test<'a>(
     render_document_with_dependency(document, settings, || Ok(selected_fingerprint))
 }
 
+/// Retained membership claims are discovery hints. Only an exact rerender of
+/// an authenticated current owner can bind them to its new selected proof.
+#[cfg(test)]
+pub(crate) fn require_selected_unit_agreement(
+    retained: &RenderedUnit,
+    current: &RenderedUnit,
+) -> Result<()> {
+    let mut rebound = retained.clone();
+    rebound.dependency_fingerprint = current.dependency_fingerprint.clone();
+    if rebound != *current {
+        return Err(WikiError::new(
+            ErrorCode::FreshnessConflict,
+            "retained selected unit differs from authenticated exact rerender",
+        ));
+    }
+    Ok(())
+}
+
 fn render_document_with_dependency<'a>(
     document: &'a DocumentRow,
     settings: &'a EmbeddingSettings,

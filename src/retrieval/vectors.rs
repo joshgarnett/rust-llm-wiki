@@ -9,7 +9,7 @@ use crate::{
     jobs::VectorCacheRef,
     vault::{VaultFs, WriterPermit},
 };
-use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
+use rusqlite::{Connection, OpenFlags, params};
 use serde::{Deserialize, Serialize};
 use std::{cmp::Ordering, collections::BTreeMap, time::Duration};
 const CACHE_PATH: &str = ".wiki/cache/embeddings.sqlite3";
@@ -77,6 +77,8 @@ pub struct DenseScan {
 pub struct VectorStore {
     connection: Connection,
     writable: bool,
+    #[cfg(test)]
+    retained_budget: Option<std::rc::Rc<RetainedBudget>>,
 }
 pub fn normalize(values: &[f32]) -> Result<Vec<u8>> {
     if values.is_empty() || values.len() > 65536 || values.iter().any(|x| !x.is_finite()) {
@@ -200,6 +202,8 @@ impl VectorStore {
         Ok(Self {
             connection,
             writable,
+            #[cfg(test)]
+            retained_budget: None,
         })
     }
     pub fn active(&self) -> Result<Option<SpaceState>> {
@@ -209,31 +213,39 @@ impl VectorStore {
         self.space_where("id=?1", Some(id.as_str()))
     }
     fn space_where(&self, condition: &str, id: Option<&str>) -> Result<Option<SpaceState>> {
-        let query =
-            format!("SELECT id,spec,dimensions,active FROM embedding_spaces WHERE {condition}");
+        let query = format!(
+            "SELECT CASE WHEN length(CAST(id AS BLOB))=71 THEN id ELSE '' END,CASE WHEN length(CAST(spec AS BLOB))<=1048576 THEN spec ELSE '' END,dimensions,active FROM embedding_spaces WHERE {condition}"
+        );
         let mut st = self.connection.prepare(&query).map_err(sql)?;
-        let row = if let Some(id) = id {
-            st.query_row([id], |r| {
-                Ok((
-                    r.get::<_, String>(0)?,
-                    r.get::<_, String>(1)?,
-                    r.get::<_, Option<u32>>(2)?,
-                    r.get::<_, bool>(3)?,
-                ))
-            })
+        let mut rows = if let Some(id) = id {
+            st.query([id])
         } else {
-            st.query_row([], |r| {
-                Ok((
-                    r.get::<_, String>(0)?,
-                    r.get::<_, String>(1)?,
-                    r.get::<_, Option<u32>>(2)?,
-                    r.get::<_, bool>(3)?,
-                ))
-            })
+            st.query([])
         }
-        .optional()
         .map_err(sql)?;
-        row.map(|(id, spec, actual_dimensions, active)| {
+        let Some(row) = rows.next().map_err(sql)? else {
+            return Ok(None);
+        };
+        let text = |column| -> Result<&str> {
+            row.get_ref(column).map_err(sql)?.as_str().map_err(|_| {
+                WikiError::new(ErrorCode::IndexCorrupt, "space scalar metadata invalid")
+            })
+        };
+        let id = text(0)?;
+        let spec = text(1)?;
+        #[cfg(test)]
+        if let Some(budget) = &self.retained_budget {
+            budget.reserve_space(spec.len().saturating_add(id.len()).saturating_add(16))?;
+        }
+        if id.len() != 71 {
+            return Err(WikiError::new(
+                ErrorCode::IndexCorrupt,
+                "space identity encoding length invalid",
+            ));
+        }
+        let actual_dimensions: Option<u32> = row.get(2).map_err(sql)?;
+        let active: bool = row.get(3).map_err(sql)?;
+        let state = (|| -> Result<SpaceState> {
             let spec: SpaceSpec = serde_json::from_str(&spec).map_err(|_| {
                 WikiError::new(ErrorCode::IndexCorrupt, "space configuration corrupt")
             })?;
@@ -250,8 +262,8 @@ impl VectorStore {
                 actual_dimensions,
                 active,
             })
-        })
-        .transpose()
+        })()?;
+        Ok(Some(state))
     }
     fn write_gate(&self) -> Result<()> {
         if !self.writable {
@@ -277,7 +289,43 @@ impl VectorStore {
         Ok(id)
     }
     fn raw_vector(&self, space: &Blake3Hash, input: &Blake3Hash) -> Result<Option<StoredVector>> {
-        self.connection.query_row("SELECT dimensions,CASE WHEN dimensions BETWEEN 1 AND 65536 AND length(blob)=dimensions*4 THEN blob ELSE X'' END,hash,ready FROM embedding_vectors WHERE space=?1 AND input=?2",params![space.as_str(),input.as_str()],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?))).optional().map_err(sql)
+        let mut statement = self.connection.prepare("SELECT dimensions,CASE WHEN dimensions BETWEEN 1 AND 65536 AND length(blob)=dimensions*4 THEN blob ELSE X'' END,CASE WHEN length(CAST(hash AS BLOB))=71 THEN hash ELSE '' END,ready FROM embedding_vectors WHERE space=?1 AND input=?2").map_err(sql)?;
+        let mut rows = statement
+            .query(params![space.as_str(), input.as_str()])
+            .map_err(sql)?;
+        let Some(row) = rows.next().map_err(sql)? else {
+            #[cfg(test)]
+            if let Some(budget) = &self.retained_budget {
+                budget.reserve(0, 0, false)?;
+            }
+            return Ok(None);
+        };
+        let blob = row
+            .get_ref(1)
+            .map_err(sql)?
+            .as_blob()
+            .map_err(|_| WikiError::new(ErrorCode::IndexCorrupt, "vector blob type invalid"))?;
+        let hash = row
+            .get_ref(2)
+            .map_err(sql)?
+            .as_str()
+            .map_err(|_| WikiError::new(ErrorCode::IndexCorrupt, "vector hash type invalid"))?;
+        #[cfg(test)]
+        if let Some(budget) = &self.retained_budget {
+            budget.reserve(hash.len().saturating_add(16), blob.len(), false)?;
+        }
+        if hash.len() != 71 {
+            return Err(WikiError::new(
+                ErrorCode::IndexCorrupt,
+                "vector hash encoding length invalid",
+            ));
+        }
+        Ok(Some((
+            row.get(0).map_err(sql)?,
+            blob.to_vec(),
+            hash.to_owned(),
+            row.get(3).map_err(sql)?,
+        )))
     }
     pub fn vector(&self, space: &Blake3Hash, input: &Blake3Hash) -> Result<Option<Vec<f32>>> {
         let Some((d, blob, hash, ready)) = self.raw_vector(space, input)? else {
@@ -715,5 +763,354 @@ impl VectorStore {
             available_by_target,
             owner_cap_reached_by_target,
         })
+    }
+}
+
+#[cfg(test)]
+impl VectorStore {
+    fn attach_retained_budget(&mut self, budget: std::rc::Rc<RetainedBudget>) -> Result<()> {
+        let elapsed = u64::try_from(budget.started.elapsed().as_millis()).unwrap_or(u64::MAX);
+        let remaining = budget.max_elapsed_ms.saturating_sub(elapsed);
+        if remaining == 0 {
+            return Err(WikiError::new(
+                ErrorCode::BudgetExceeded,
+                "retained read deadline exhausted",
+            ));
+        }
+        self.connection
+            .busy_timeout(Duration::from_millis(remaining.min(1000)))
+            .map_err(sql)?;
+        let observed = budget.steps.clone();
+        let started = budget.started;
+        let deadline = budget.max_elapsed_ms;
+        self.connection
+            .progress_handler(
+                1,
+                Some(move || {
+                    let count = observed.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    count >= 10_000_000 || started.elapsed().as_millis() >= u128::from(deadline)
+                }),
+            )
+            .map_err(sql)?;
+        self.retained_budget = Some(budget);
+        Ok(())
+    }
+}
+
+/// Diagnostic retained-cache scan only. This is not a fresh membership authority
+/// and does not establish a scalable candidate index.
+#[cfg(test)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub(crate) struct RetainedUsage {
+    pub metadata_rows_decoded: usize,
+    pub metadata_bytes_decoded: usize,
+    pub vector_reads: usize,
+    pub vector_bytes_scanned: usize,
+    pub space_rows_decoded: usize,
+    pub space_bytes_decoded: usize,
+    pub sql_vm_steps: u64,
+}
+#[cfg(test)]
+struct RetainedBudget {
+    started: std::time::Instant,
+    max_elapsed_ms: u64,
+    usage: std::cell::RefCell<RetainedUsage>,
+    steps: std::sync::Arc<std::sync::atomic::AtomicU64>,
+}
+#[cfg(test)]
+impl RetainedBudget {
+    fn reserve_space(&self, bytes: usize) -> Result<()> {
+        let mut usage = self.usage.borrow_mut();
+        if self.started.elapsed().as_millis() >= u128::from(self.max_elapsed_ms)
+            || bytes > 1024 * 1024
+            || usage
+                .space_bytes_decoded
+                .saturating_add(usage.metadata_bytes_decoded)
+                .saturating_add(bytes)
+                > 64 * 1024 * 1024
+        {
+            return Err(WikiError::new(
+                ErrorCode::BudgetExceeded,
+                "retained space metadata budget exhausted",
+            ));
+        }
+        usage.space_rows_decoded += 1;
+        usage.space_bytes_decoded += bytes;
+        Ok(())
+    }
+    fn reserve(&self, metadata: usize, vectors: usize, membership: bool) -> Result<()> {
+        let mut usage = self.usage.borrow_mut();
+        if self.started.elapsed().as_millis() >= u128::from(self.max_elapsed_ms)
+            || usage.metadata_rows_decoded + usize::from(membership) > 4096
+            || metadata > 1024 * 1024
+            || vectors > 65_536 * 4
+            || usage
+                .metadata_bytes_decoded
+                .saturating_add(usage.space_bytes_decoded)
+                .saturating_add(metadata)
+                > 64 * 1024 * 1024
+            || usage.vector_bytes_scanned.saturating_add(vectors) > 64 * 1024 * 1024
+            || usage.vector_reads + usize::from(!membership) > 131_072
+        {
+            return Err(WikiError::new(
+                ErrorCode::BudgetExceeded,
+                "experimental retained embedding scan budget exhausted",
+            ));
+        }
+        usage.metadata_rows_decoded += usize::from(membership);
+        usage.metadata_bytes_decoded += metadata;
+        usage.vector_reads += usize::from(!membership);
+        usage.vector_bytes_scanned += vectors;
+        Ok(())
+    }
+}
+#[cfg(test)]
+pub(crate) struct RetainedMembershipReader {
+    store: VectorStore,
+    pub state: SpaceState,
+    /// Hash of the explicit legacy embedding snapshot; deliberately separate
+    /// from the normalized catalog publication selected by the coordinator.
+    pub snapshot_key: Blake3Hash,
+}
+#[cfg(test)]
+impl RetainedMembershipReader {
+    pub(crate) fn open(
+        fs: &VaultFs,
+        expected: Option<&SpaceState>,
+        max_elapsed_ms: u64,
+    ) -> Result<Self> {
+        if max_elapsed_ms == 0
+            || max_elapsed_ms > 5000
+            || expected.is_some_and(|state| !state.active)
+        {
+            return Err(WikiError::new(
+                ErrorCode::Usage,
+                "retained scan requires active space and finite five-second deadline",
+            ));
+        }
+        let budget = std::rc::Rc::new(RetainedBudget {
+            started: std::time::Instant::now(),
+            max_elapsed_ms,
+            usage: Default::default(),
+            steps: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
+        });
+        let observed_budget = budget.clone();
+        let result = (|| -> Result<Self> {
+            let mut store = VectorStore::open(fs, None)?;
+            store.attach_retained_budget(budget)?;
+            store.connection.execute_batch("PRAGMA mmap_size=0; PRAGMA cache_size=-8192; PRAGMA temp_store=FILE; BEGIN DEFERRED;").map_err(sql)?;
+            let state = store.active()?.ok_or_else(|| {
+                WikiError::new(
+                    ErrorCode::OfflineUnavailable,
+                    "active cached embedding space absent",
+                )
+            })?;
+            if expected.is_some_and(|expected| {
+                state.id != expected.id
+                    || state.spec != expected.spec
+                    || state.actual_dimensions != expected.actual_dimensions
+            }) {
+                return Err(WikiError::new(
+                    ErrorCode::FreshnessConflict,
+                    "active embedding space/settings changed before retained pin",
+                ));
+            }
+            let mut statement = store.connection.prepare("SELECT CASE WHEN length(CAST(snapshot AS BLOB))=71 THEN snapshot ELSE '' END FROM embedding_memberships WHERE space=?1 GROUP BY snapshot LIMIT 2").map_err(sql)?;
+            let mut rows = statement.query([state.id.as_str()]).map_err(sql)?;
+            let row = rows.next().map_err(sql)?.ok_or_else(|| {
+                WikiError::new(
+                    ErrorCode::OfflineUnavailable,
+                    "retained membership snapshot absent; explicit preparation required",
+                )
+            })?;
+            let raw = row.get_ref(0).map_err(sql)?.as_str().map_err(|_| {
+                WikiError::new(
+                    ErrorCode::IndexCorrupt,
+                    "retained snapshot identity invalid",
+                )
+            })?;
+            store
+                .retained_budget
+                .as_ref()
+                .expect("retained budget")
+                .reserve_space(raw.len())?;
+            if raw.len() != 71 {
+                return Err(WikiError::new(
+                    ErrorCode::IndexCorrupt,
+                    "retained snapshot identity length invalid",
+                ));
+            }
+            let snapshot_key = Blake3Hash::new(raw)?;
+            if let Some(extra) = rows.next().map_err(sql)? {
+                let bytes = extra
+                    .get_ref(0)
+                    .map_err(sql)?
+                    .as_str()
+                    .map_err(|_| {
+                        WikiError::new(ErrorCode::IndexCorrupt, "retained snapshot scalar invalid")
+                    })?
+                    .len();
+                store
+                    .retained_budget
+                    .as_ref()
+                    .expect("retained budget")
+                    .reserve_space(bytes)?;
+                return Err(WikiError::new(
+                    ErrorCode::IndexCorrupt,
+                    "multiple explicit retained snapshots",
+                ));
+            }
+            drop(rows);
+            drop(statement);
+            Ok(Self {
+                store,
+                state,
+                snapshot_key,
+            })
+        })();
+        result.map_err(|mut error| {
+            let mut usage = observed_budget.usage.borrow().clone();
+            usage.sql_vm_steps = observed_budget
+                .steps
+                .load(std::sync::atomic::Ordering::Relaxed);
+            error.details["retained_work"] = serde_json::json!(usage);
+            error
+        })
+    }
+    pub(crate) fn store(&self) -> &VectorStore {
+        &self.store
+    }
+    pub(crate) fn units(&self) -> RetainedMembershipIter<'_> {
+        RetainedMembershipIter {
+            reader: self,
+            after: None,
+            done: false,
+        }
+    }
+    pub(crate) fn unit(&self, id: &Blake3Hash, input: &Blake3Hash) -> Result<Option<RenderedUnit>> {
+        let mut iterator = self.units();
+        iterator.after = Some((id.as_str().into(), String::new()));
+        let unit = iterator.next().transpose()?;
+        Ok(unit.filter(|unit| &unit.unit_id == id && &unit.input_hash == input))
+    }
+    pub(crate) fn usage(&self) -> RetainedUsage {
+        let budget = self
+            .store
+            .retained_budget
+            .as_ref()
+            .expect("retained budget");
+        let mut usage = budget.usage.borrow().clone();
+        usage.sql_vm_steps = budget.steps.load(std::sync::atomic::Ordering::Relaxed);
+        usage
+    }
+    pub(crate) fn recheck_active(&self, fs: &VaultFs) -> Result<()> {
+        let mut fresh = VectorStore::open(fs, None)?;
+        fresh.attach_retained_budget(
+            self.store
+                .retained_budget
+                .as_ref()
+                .expect("retained budget")
+                .clone(),
+        )?;
+        let current = fresh.active()?.ok_or_else(|| {
+            WikiError::new(
+                ErrorCode::FreshnessConflict,
+                "active embedding space disappeared",
+            )
+        })?;
+        if current.id != self.state.id
+            || current.spec != self.state.spec
+            || current.actual_dimensions != self.state.actual_dimensions
+        {
+            return Err(WikiError::new(
+                ErrorCode::FreshnessConflict,
+                "active embedding space/settings changed during selected query",
+            ));
+        }
+        Ok(())
+    }
+}
+#[cfg(test)]
+pub(crate) struct RetainedMembershipIter<'a> {
+    reader: &'a RetainedMembershipReader,
+    after: Option<(String, String)>,
+    done: bool,
+}
+#[cfg(test)]
+impl Iterator for RetainedMembershipIter<'_> {
+    type Item = Result<RenderedUnit>;
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.done {
+            return None;
+        }
+        let result = (|| -> Result<Option<RenderedUnit>> {
+            let (unit_after, input_after) = self.after.clone().unwrap_or_default();
+            let connection = &self.reader.store.connection;
+            let mut statement = connection.prepare("SELECT CASE WHEN length(CAST(unit AS BLOB))=71 THEN unit ELSE '' END,CASE WHEN length(CAST(input AS BLOB))=71 THEN input ELSE '' END,CASE WHEN length(CAST(proof AS BLOB))=71 THEN proof ELSE '' END,length(CAST(metadata AS BLOB)),CASE WHEN length(CAST(metadata AS BLOB))<=1048576 THEN metadata ELSE NULL END FROM embedding_memberships WHERE space=?1 AND snapshot=?2 AND (unit,input)>(?3,?4) ORDER BY unit,input LIMIT 1").map_err(sql)?;
+            let mut rows = statement
+                .query(params![
+                    self.reader.state.id.as_str(),
+                    self.reader.snapshot_key.as_str(),
+                    unit_after,
+                    input_after
+                ])
+                .map_err(sql)?;
+            let Some(row) = rows.next().map_err(sql)? else {
+                return Ok(None);
+            };
+            let bytes = usize::try_from(row.get::<_, i64>(3).map_err(sql)?).map_err(|_| {
+                WikiError::new(ErrorCode::IndexCorrupt, "retained metadata length invalid")
+            })?;
+            self.reader
+                .store
+                .retained_budget
+                .as_ref()
+                .expect("retained budget")
+                .reserve(bytes.saturating_add(213), 0, true)?;
+            let text = |column| -> Result<&str> {
+                row.get_ref(column).map_err(sql)?.as_str().map_err(|_| {
+                    WikiError::new(ErrorCode::IndexCorrupt, "retained scalar metadata invalid")
+                })
+            };
+            let unit_id = text(0)?;
+            let input_hash = text(1)?;
+            let proof = text(2)?;
+            if [unit_id, input_hash, proof]
+                .iter()
+                .any(|value| value.len() != 71)
+            {
+                return Err(WikiError::new(
+                    ErrorCode::IndexCorrupt,
+                    "retained membership hash length invalid",
+                ));
+            }
+            let unit: RenderedUnit = serde_json::from_str(text(4)?).map_err(|_| {
+                WikiError::new(ErrorCode::IndexCorrupt, "retained unit metadata invalid")
+            })?;
+            if unit.unit_id.as_str() != unit_id
+                || unit.input_hash.as_str() != input_hash
+                || unit.dependency_fingerprint.as_str() != proof
+                || unit.utf8.len() > self.reader.state.spec.settings.max_input_bytes
+                || Blake3Hash::digest(unit.utf8.as_bytes()) != unit.input_hash
+            {
+                return Err(WikiError::new(
+                    ErrorCode::IndexCorrupt,
+                    "retained unit columns/input hash/settings differ",
+                ));
+            }
+            self.after = Some((unit_id.into(), input_hash.into()));
+            Ok(Some(unit))
+        })();
+        match result {
+            Ok(Some(unit)) => Some(Ok(unit)),
+            Ok(None) => {
+                self.done = true;
+                None
+            }
+            Err(error) => {
+                self.done = true;
+                Some(Err(error))
+            }
+        }
     }
 }
