@@ -46,6 +46,8 @@ mod policy_query;
 mod projector_query_tests;
 pub mod publish;
 pub(crate) mod query;
+#[cfg(test)]
+pub(crate) mod query_diagnostics;
 pub(crate) mod query_types;
 pub(crate) mod rename_projection;
 #[cfg(test)]

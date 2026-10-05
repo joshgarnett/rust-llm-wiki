@@ -88,6 +88,15 @@ This is the current capability router for the cleanup of 0.1.2. It records imple
 The [occupied 10k diagnostic](validation-10k-workflow.md) completed cited evidence and recovery stages but remains failed at its dry-read timeout; generated seed occupancy is not representative public-import qualification. The [large-vault design](large-vault-design.md) defines the next architecture and validation work. The first capacity gate is now 25,000 documents / approximately 2.5 GB at the user’s request; 100,000 / 10 GB is deferred. This is a target, not a capacity established by the current tests. Selected normalized catalogs support plain lexical discovery, selected-dependency verified reads and [mixed authored/captured document context](indexed-context.md), plus explicit cached reads/snapshots and managed source capture, refresh and withdrawal. `index rebuild --normalized` explicitly activates this layout; subsequent `index sync` and `index rebuild` maintain it. `doctor` reports bounded header/operation observations with integrity and freshness checks explicitly unperformed. Explicit normalized `check` reconciles canonical records, retained revision owners and complete search-index contents using private bounded scratch; canonical diagnostics remain separate from cache agreement. Default activation, the remaining query/write modes, native check resource qualification and full scale qualification remain outstanding.
 
 The normalized layout currently has a restricted command set. Plain lexical `search` uses published discovery; `--no-sync` remains compatible.
+Exact [named Entity neighbors](named-neighbors.md) now use bounded indexed
+incidence and complete selected evidence/opposition/policy verification. Default
+metadata is `indexed_evidence`; `--no-sync` is cached and uncited, while explicit
+`--verify-selected` authenticates selected dependencies. Current-only graph lookup
+preserves direction/qualifiers and reports capped/lower-bound omissions; other
+normalized graph modes remain unavailable. [Independent acceptance](validation-named-neighbors.md)
+passes at 9.5/10, all thirteen mandatory tasks, no correctness blockers: 115 public
+commands and paired 1k→25k unrelated-occupancy read/row invariance. This generated
+cardinality diagnostic does not qualify public import or 25k/~2.5GB capacity.
 Explicit `search --verify-selected` authenticates displayed dependencies and adds
 exact captured-source citations, with fixed proof bounds and planning-only dry-run.
 Authored/empty excerpts remain uncited; global membership and unselected freshness

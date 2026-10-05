@@ -463,7 +463,7 @@ pub enum GraphCommand {
         #[command(flatten)]
         options: GraphOptions,
     },
-    /// Inspect bounded assertion and navigation links around a record.
+    /// Inspect relationships and evidence; normalized catalogs verify selected named Entity dependencies.
     Neighbors {
         /// Stable record or changeset ID returned by an earlier command.
         id: RecordId,
@@ -542,6 +542,9 @@ pub struct GraphOptions {
     /// Read the existing index snapshot without syncing; freshness is not verified.
     #[arg(long)]
     pub no_sync: bool,
+    /// Verify selected dependencies for normalized named neighbors, including with --no-sync.
+    #[arg(long)]
+    pub verify_selected: bool,
 }
 impl GraphOptions {
     pub fn plan(&self, neighbors: bool) -> crate::graph::GraphPlan {

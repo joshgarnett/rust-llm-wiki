@@ -63,6 +63,21 @@ Stream eligible rows in bounded Rust batches; keep a top-k heap per target kind.
 
 Entity seeds expand to incident directed assertions; relationship seeds expand to endpoints and evidence. Traverse only explicit typed assertions and preserve their direction, qualifiers, and status. Never infer facts from backlinks, co-occurrence, an inverse edge, or transitive paths. Page-link expansion, when requested, is a separately labeled navigation reason. Cycles use visited record/edge sets.
 
+Normalized catalogs currently implement [exact named Entity neighbors](../named-neighbors.md)
+through indexed endpoint-role streams, bounded before retained record hydration.
+Default lookup authenticates displayed records and their complete selected
+evidence/opposition/policy closure, constructs values from that proof, then
+rechecks selected bytes and operation authority. Metadata uses `indexed_evidence`
+with domain `selected_graph_neighbors` and global membership unverified.
+`--no-sync` returns uncited `index_snapshot` adjacency; explicit `--verify-selected`
+authenticates selected dependencies even with that flag. Assertion filters precede
+candidate caps; a Source filter requires Current supporting Evidence and scopes
+displayed evidence. Display caps never truncate proof membership. Stable traversal
+order is hop then Assertion ID; sentinel omission counts are lower bounds, marked
+in coverage. Unsupported normalized general-query, semantic, historical/proposed,
+navigation and cursor modes refuse explicitly. The independent workflow/access
+acceptance gates remain pending.
+
 All values below are **proposed tuning defaults**, not measured quality or provider limits:
 
 | Control | Default |

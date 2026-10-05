@@ -175,6 +175,8 @@ pub struct GraphCoverage {
     pub omitted_assertions: usize,
     pub omitted_navigation: usize,
     pub depth_limited: bool,
+    /// Sentinel-bounded discovery cannot report exact total omissions.
+    pub omissions_are_lower_bounds: bool,
 }
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct GraphResult {

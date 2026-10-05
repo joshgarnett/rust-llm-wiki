@@ -10,8 +10,10 @@ native HIGH and representative 25k gates.
 
 ## Context-quality follow-up — active
 
-A fresh Astra priority review selects ordinary normalized-vault workflow completion,
-then automatic context completeness, then representative 10k→25k qualification.
+The latest fresh Astra priority review brings representative public 10k→25k
+operation forward after the bounded graph milestone, followed by a research-gated
+native completeness mechanism and coherent normalized command/default closure.
+Further graph features and importer microbenchmark series are deferred.
 The first bounded package is Page reorganization: author, move with stable identity
 and repaired incoming links, search/read, recover and rebuild. Its [independent
 acceptance](docs/validation-page-reorganization.md) passes at 10/10 with every mandatory
@@ -38,8 +40,12 @@ completeness rule: 11/12 strict tasks versus 3/12 automatic, with one available
 paragraph omitted by the actor. Citation/freshness/resource/isolation checks pass;
 this is development evidence, not native HIGH or generation acceptance. No retry,
 deck expansion or product tuning followed. The next reviewed slice is normalized
-named-Entity neighbors with exact support/contrary reads and Source lifecycle;
-implementation is in progress. Native HIGH, full command parity and 25k remain
+[named-Entity neighbors](docs/named-neighbors.md) with exact support/contrary reads
+and Source lifecycle. Its [validation](docs/validation-named-neighbors.md) records
+9.5/10 independent acceptance, all thirteen tasks and no correctness blockers,
+78 distinct passing checks, 115 public commands and passing 1k→25k unrelated
+occupancy read/row invariance. This diagnostic is generated, not import capacity.
+Native HIGH, full command parity and representative 25k/~2.5GB remain
 mandatory open gates.
 
 The [verified source-reading milestone](docs/validation-source-reading.md) now

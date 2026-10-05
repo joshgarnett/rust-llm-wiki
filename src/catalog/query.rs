@@ -67,6 +67,12 @@ pub(crate) struct DocumentMetadata {
     pub reasons: Vec<String>,
 }
 
+/// Scalar adjacency selection; a sentinel proves only that more IDs exist.
+pub(crate) struct BoundedIncidentIds {
+    pub ids: Vec<RecordId>,
+    pub has_more: bool,
+}
+
 impl Catalog {
     pub(crate) fn query_snapshot(&self, limits: QueryReadLimits) -> Result<QuerySnapshot> {
         self.query_snapshot_with_scope(limits, QueryScope::IndexedEvidence)
@@ -241,6 +247,8 @@ fn configure_query(connection: &Connection, limits: &QueryReadLimits) -> Result<
         .progress_handler(
             interval,
             Some(move || {
+                #[cfg(test)]
+                super::query_diagnostics::vm_step();
                 if start.elapsed() >= elapsed || remaining <= interval as u64 {
                     return true;
                 }
@@ -485,6 +493,8 @@ impl QuerySnapshot {
     fn decode<T: DeserializeOwned>(&self, row: &Row<'_>, column: usize) -> Result<T> {
         let bytes = text_bytes(row, column)?;
         self.reserve(bytes.len())?;
+        #[cfg(test)]
+        super::query_diagnostics::row(row, row.as_ref().column_count());
         serde_json::from_slice(bytes).map_err(|error| corrupt(error.to_string()))
     }
 }
@@ -523,7 +533,10 @@ impl QuerySnapshot {
                 )
             })?;
         }
-        self.reserve(bytes)
+        self.reserve(bytes)?;
+        #[cfg(test)]
+        super::query_diagnostics::row(row, columns);
+        Ok(())
     }
 }
 
@@ -1525,6 +1538,8 @@ impl QueryCatalog for QuerySnapshot {
                 })?;
             }
             self.reserve(bytes)?;
+            #[cfg(test)]
+            super::query_diagnostics::row(row, 10);
             let decoded: RecordRow = serde_json::from_slice(text_bytes(row, 0)?)
                 .map_err(|error| corrupt(error.to_string()))?;
             let eligibility = |value: crate::domain::Eligibility| match value {
@@ -1730,6 +1745,8 @@ impl QueryCatalog for QuerySnapshot {
                         "selected diagnostic path differs from its indexed key",
                     ));
                 }
+                #[cfg(test)]
+                super::query_diagnostics::row(row, row.as_ref().column_count());
                 let record_id = raw_id
                     .map(|bytes| {
                         RecordId::new(utf8(bytes)?)
@@ -1794,7 +1811,10 @@ impl QueryCatalog for QuerySnapshot {
                         ErrorCode::BudgetExceeded,
                         "normalized selected byte count overflow",
                     )
-                })?)
+                })?)?;
+                #[cfg(test)]
+                super::query_diagnostics::row(row, row.as_ref().column_count());
+                Ok(())
             });
         }
         self.decode(row, column)
@@ -3600,6 +3620,120 @@ mod tests {
 }
 
 impl QuerySnapshot {
+    /// Select current assertions through indexed Entity endpoint keys before
+    /// hydrating records. Both directional streams share the caller's cap.
+    pub(crate) fn incident_assertion_ids(
+        &self,
+        entity: &RecordId,
+        filters: &crate::retrieval::SearchFilters,
+        limit: usize,
+    ) -> Result<BoundedIncidentIds> {
+        use crate::retrieval::filters::{bind, catalog_sql, normalize};
+        use rusqlite::{params_from_iter, types::Value};
+        if limit == 0 || limit > 16 {
+            return Err(WikiError::new(
+                ErrorCode::Usage,
+                "incident selection permits 1–16 assertions",
+            ));
+        }
+        let filters = normalize(filters)?;
+        self.require_fact_layout()?;
+        self.fact_requests(2, true)?;
+        let mut common = filters.clone();
+        common.source_ids.clear();
+        let mut values = vec![Value::Text(entity.as_str().into()), Value::Null];
+        let filter_sql = catalog_sql(&common, &mut values, true);
+        // A source scope requires supporting evidence, rather than merely a
+        // declared Source or a contrary evidence association.
+        let source_sql = if filters.source_ids.is_empty() {
+            "1".into()
+        } else {
+            let ids = filters
+                .source_ids
+                .iter()
+                .map(|id| bind(&mut values, Value::Text(id.as_str().into())))
+                .collect::<Vec<_>>()
+                .join(",");
+            format!(
+                "EXISTS(SELECT 1 FROM source_evidence s INDEXED BY source_assertions \
+                JOIN records er ON er.id=s.evidence_id \
+                WHERE s.source_id IN ({ids}) AND s.assertion_id=e.owner_id \
+                AND er.kind='evidence' AND er.eligibility='current' AND er.authored_status='active' \
+                AND json_extract(er.row_json,'$.record.wiki_stance')='supports')"
+            )
+        };
+        let cap = bind(&mut values, Value::Integer((limit + 1) as i64));
+        for value in &values[2..] {
+            if let Value::Text(text) = value {
+                self.reserve_fact_input(text.len())?;
+            }
+        }
+        let query = format!(
+            "SELECT e.owner_id,e.target_id,e.role_json \
+            FROM semantic_edges e INDEXED BY semantic_dependents \
+            CROSS JOIN records r ON r.id=e.owner_id \
+            CROSS JOIN documents d INDEXED BY document_record_ids ON d.record_id=e.owner_id \
+            WHERE e.target_id=?1 AND e.role_json=?2 AND r.kind='assertion' \
+            AND r.eligibility='current' AND r.authored_status='accepted' \
+            AND ({filter_sql}) AND ({source_sql}) ORDER BY e.owner_id LIMIT {cap}"
+        );
+        let mut statement = self.connection.prepare(&query).map_err(sql::sql_error)?;
+        let mut selected = BTreeSet::new();
+        let mut has_more = false;
+        for field in ["wiki_subject_id", "wiki_object_id"] {
+            let role = super::eligibility_facts::EligibilityRole::TypedReference {
+                field: field.into(),
+            };
+            let encoded = sql::json(&role)?;
+            self.reserve_fact_input(entity.as_str().len() + encoded.len())?;
+            values[1] = Value::Text(encoded.clone());
+            #[cfg(test)]
+            if super::query_diagnostics::active() {
+                let before = super::query_diagnostics::vm_count();
+                let mut explanation = self
+                    .connection
+                    .prepare(&format!("EXPLAIN QUERY PLAN {query}"))
+                    .map_err(sql::sql_error)?;
+                let details = explanation
+                    .query_map(params_from_iter(values.iter()), |row| {
+                        row.get::<_, String>(3)
+                    })
+                    .map_err(sql::sql_error)?
+                    .collect::<std::result::Result<Vec<_>, _>>()
+                    .map_err(sql::sql_error)?;
+                super::query_diagnostics::plan(
+                    &query,
+                    details,
+                    super::query_diagnostics::vm_count() - before,
+                );
+            }
+            let mut rows = statement
+                .query(params_from_iter(values.iter()))
+                .map_err(sql::sql_error)?;
+            let mut count = 0;
+            while let Some(row) = rows.next().map_err(sql::sql_error)? {
+                self.reserve_refresh_row(row, 3)?;
+                if utf8(text_bytes(row, 1)?)? != entity.as_str()
+                    || utf8(text_bytes(row, 2)?)? != encoded
+                {
+                    return Err(corrupt(
+                        "incident endpoint key differs from requested scope",
+                    ));
+                }
+                selected.insert(
+                    RecordId::new(utf8(text_bytes(row, 0)?)?).map_err(|e| corrupt(e.message))?,
+                );
+                count += 1;
+            }
+            has_more |= count > limit;
+        }
+        has_more |= selected.len() > limit;
+        Ok(BoundedIncidentIds {
+            ids: selected.into_iter().take(limit).collect(),
+            has_more,
+        })
+    }
+
     pub(crate) fn affected_assertion_navigation(
         &self,
         keys: &[super::link_facts::MatchKey],

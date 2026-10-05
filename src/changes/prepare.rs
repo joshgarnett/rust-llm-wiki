@@ -1344,10 +1344,10 @@ pub(crate) fn read_bounded(
         ));
     }
     let mut bytes = Vec::new();
-    (&mut file)
-        .take(limit as u64 + 1)
-        .read_to_end(&mut bytes)
-        .map_err(io_error)?;
+    let read = (&mut file).take(limit as u64 + 1).read_to_end(&mut bytes);
+    #[cfg(test)]
+    crate::catalog::query_diagnostics::read("managed-read", &path, bytes.len());
+    read.map_err(io_error)?;
     if bytes.len() > limit {
         return Err(WikiError::invalid("managed read exceeds limit"));
     }

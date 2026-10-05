@@ -66,6 +66,16 @@ CLI excerpts default to 240 UTF-8 bytes per search excerpt and 1,024 per context
 
 Read-side verification follows storage's manifest/dependency rules. On legacy indexes, default mode synchronizes locally and returns a verified snapshot/time. On normalized indexes, plain lexical search returns generation-scoped discovery, plain read verifies only selected dependencies, and `--no-sync` read explicitly returns cached bytes. Cached results are labeled `index_snapshot`; selected proofs are labeled `indexed_evidence`. A budgeted or stale read cannot claim the current-evidence guarantee. For `context`, `--no-sync` requires `snapshot`, `indexed-evidence` or `indexed-documents` scope; the indexed scopes verify selected dependencies while retaining generation-scoped discovery. Historical scope still requires verification of the referenced historical bytes. Literal scans bypass ranking indexes but still label whether they are discovery text or verified evidence.
 
+Normalized `graph neighbors ID` implements [selected named Entity lookup](../named-neighbors.md)
+with Current assertions and complete selected dependency verification by default.
+`--no-sync` is cached and uncited; `--verify-selected` explicitly verifies selected
+dependencies even with `--no-sync`. General graph queries, semantic seeds,
+historical/proposed views, navigation and cursors remain unavailable on normalized
+catalogs. Graph dry-run on either layout now validates the request before catalog
+or target lookup, returning null results and explicit unknown layout/freshness;
+normal vault/configuration binding still occurs. Regular legacy graph commands
+retain their established snapshot semantics.
+
 Pagination cursors encode schema version, index generation, query/filter fingerprint, and deterministic continuation position. A changed generation or query invalidates the cursor; return `CURSOR_STALE` instead of mixing snapshots. Deterministic rank ties use stable record IDs and unit IDs. Do not persist an unbounded cursor cache.
 
 ## Structured output

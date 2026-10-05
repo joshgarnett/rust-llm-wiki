@@ -75,6 +75,10 @@ The [six native GitHub release jobs](https://github.com/joshgarnett/rust-llm-wik
 
 For the packaged historical 0.1.2 release, use the [download and test-agent guide](docs/testing-0.1.2.md), including the offline regression script and live gateway checks.
 
+[Named Entity neighbors](docs/named-neighbors.md) connects reviewed relationships
+to exact supporting/contrary reads and Source lifecycle. Its [scoped validation](docs/validation-named-neighbors.md)
+passes all thirteen tasks at 9.5/10; representative import capacity remains open.
+
 The [0.2.0 candidate walkthrough](docs/testing-0.2.0.md) covers the new local
 collection workflow and its current validation limits. The first capacity
 qualification target is 25,000 documents; that gate is still open.

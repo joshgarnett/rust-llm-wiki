@@ -314,11 +314,15 @@ impl VaultFs {
     }
     pub fn read_before(&self, target: &VaultRelativePath) -> Result<Option<BeforeImage>> {
         let path = self.root.resolve(target)?;
-        match fs::read(path) {
-            Ok(bytes) => Ok(Some(BeforeImage {
-                hash: Blake3Hash::digest(&bytes),
-                bytes,
-            })),
+        match fs::read(&path) {
+            Ok(bytes) => {
+                #[cfg(test)]
+                crate::catalog::query_diagnostics::read("vault-read", &path, bytes.len());
+                Ok(Some(BeforeImage {
+                    hash: Blake3Hash::digest(&bytes),
+                    bytes,
+                }))
+            }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
             Err(e) => Err(io_error("read before-image", e)),
         }

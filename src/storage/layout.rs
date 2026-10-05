@@ -21,7 +21,7 @@ pub(crate) fn raw_read(
     max: usize,
 ) -> Result<Option<Vec<u8>>> {
     let actual = root.resolve_raw(path)?;
-    let mut file = match File::open(actual) {
+    let mut file = match File::open(&actual) {
         Ok(file) => file,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(e) => return Err(WikiError::new(ErrorCode::Internal, e.to_string())),
@@ -38,6 +38,8 @@ pub(crate) fn raw_read(
         .take((max as u64).saturating_add(1))
         .read_to_end(&mut bytes)
         .map_err(|e| WikiError::new(ErrorCode::Internal, e.to_string()))?;
+    #[cfg(test)]
+    crate::catalog::query_diagnostics::read("storage-read", &actual, bytes.len());
     if bytes.len() > max {
         return Err(WikiError::new(
             ErrorCode::BudgetExceeded,

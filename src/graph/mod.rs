@@ -1,3 +1,4 @@
+pub(crate) mod indexed_neighbors;
 pub mod query;
 pub mod rank;
 pub mod traverse;

@@ -67,6 +67,8 @@ pub(crate) fn header(
     if bytes > 16 * 1024 {
         return Err(corrupt("selected catalog header exceeds 16 KiB"));
     }
+    #[cfg(test)]
+    super::query_diagnostics::row(row, 16);
     let epoch: i64 = row.get(5).map_err(sql::sql_error)?;
     if row.get::<_, i64>(0).map_err(sql::sql_error)? != 3
         || text(row, 1)? != selection.vault_id.as_str()

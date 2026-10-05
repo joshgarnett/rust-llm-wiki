@@ -367,10 +367,12 @@ fn read(fs: &VaultFs, name: CachePath<'_>) -> Result<Option<Vec<u8>>> {
         return Err(corrupt("catalog JSON exceeds 4096 bytes"));
     }
     let mut bytes = Vec::new();
-    (&mut checked.file)
+    let read = (&mut checked.file)
         .take(JSON_LIMIT as u64 + 1)
-        .read_to_end(&mut bytes)
-        .map_err(|e| io("read catalog JSON", e))?;
+        .read_to_end(&mut bytes);
+    #[cfg(test)]
+    super::query_diagnostics::read("catalog-selector", &name, bytes.len());
+    read.map_err(|e| io("read catalog JSON", e))?;
     checked.verify()?;
     if bytes.len() > JSON_LIMIT {
         return Err(corrupt("catalog JSON exceeds 4096 bytes"));
@@ -536,6 +538,8 @@ fn journal_header(checked: &Checked) -> Result<JournalMode> {
         .map_err(|e| io("seek SQLite header", e))?;
     file.read_exact(&mut bytes)
         .map_err(|e| io("read SQLite header", e))?;
+    #[cfg(test)]
+    super::query_diagnostics::read("catalog-db-header", &checked.path, bytes.len());
     checked.verify()?;
     if &bytes[..16] != b"SQLite format 3\0" {
         return Err(corrupt("catalog SQLite header is invalid"));

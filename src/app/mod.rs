@@ -13,6 +13,11 @@ mod review;
 mod indexed_cli_tests;
 
 #[cfg(test)]
+mod indexed_graph_neighbors_tests;
+#[cfg(test)]
+mod named_neighbors_diagnostics_tests;
+
+#[cfg(test)]
 mod full_check_holder;
 #[cfg(test)]
 mod general_query_fixture;

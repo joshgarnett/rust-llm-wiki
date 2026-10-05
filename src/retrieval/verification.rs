@@ -83,6 +83,8 @@ impl Meter {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
             Err(e) => return Err(io_error(e)),
         };
+        #[cfg(test)]
+        crate::catalog::query_diagnostics::read("proof-open", &full, 0);
         self.entry()?;
         let metadata = file.metadata().map_err(io_error)?;
         if !metadata.is_file() {
@@ -99,6 +101,8 @@ impl Meter {
             self.check()?;
             let end = (offset + 64 * 1024).min(len);
             let read = file.read(&mut bytes[offset..end]).map_err(io_error)?;
+            #[cfg(test)]
+            crate::catalog::query_diagnostics::read("proof-read", &full, read);
             if read == 0 {
                 return Err(conflict("proof file shrank during read"));
             }

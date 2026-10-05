@@ -200,7 +200,7 @@ fn execute_inner(args: &Arguments) -> Result<Envelope> {
         Command::Capabilities => {
             return Ok(Envelope::success(
                 command,
-                json!({"version":env!("CARGO_PKG_VERSION"),"commands":COMMANDS,"schemas":SCHEMAS,"network":true,"search_modes":["literal","lexical","semantic","hybrid"],"selected_search":{"flag":"--verify-selected","layout":"normalized","modes":["lexical"],"no_sync_compatible":true,"scope":"displayed document dependencies","global_membership_verified":false,"dry_run":"request validation only","budget":{"max_bytes":67108864,"max_files":4096,"max_entries":16384,"max_elapsed_ms":2000}},"graph_seed_modes":["lexical","semantic"],"extraction_executors":["agent","api"],"research_executor":"agent-handoff","jsonl_commands":["index sync","index rebuild","recover","changes apply","source add","source refresh","research run","research resume","research import","doctor --probe"]}),
+                json!({"version":env!("CARGO_PKG_VERSION"),"commands":COMMANDS,"schemas":SCHEMAS,"network":true,"search_modes":["literal","lexical","semantic","hybrid"],"selected_search":{"flag":"--verify-selected","layout":"normalized","modes":["lexical"],"no_sync_compatible":true,"scope":"displayed document dependencies","global_membership_verified":false,"dry_run":"request validation only","budget":{"max_bytes":67108864,"max_files":4096,"max_entries":16384,"max_elapsed_ms":2000}},"selected_neighbors":{"command":"graph neighbors","layout":"normalized","root_kind":"entity","default_verification":true,"explicit_verification_flag":"--verify-selected","no_sync":"cached_uncited","scope":"selected_graph_neighbors","global_membership_verified":false,"current_only":true,"navigation":false,"cursor":false,"dry_run":"request validation only","limits":{"depth":2,"incident_per_seed":16,"assertions":128,"candidates":80,"hits":50,"support":2,"contrary":1},"budget":{"max_bytes":67108864,"max_files":4096,"max_entries":16384,"max_elapsed_ms":2000}},"graph_seed_modes":["lexical","semantic"],"extraction_executors":["agent","api"],"research_executor":"agent-handoff","jsonl_commands":["index sync","index rebuild","recover","changes apply","source add","source refresh","research run","research resume","research import","doctor --probe"]}),
             ));
         }
         Command::Schema { name } => {
@@ -881,7 +881,12 @@ fn execute_inner(args: &Arguments) -> Result<Envelope> {
                 GraphCommand::Neighbors { options, .. } => (options, true),
                 _ => unreachable!("extraction handled above"),
             };
-            let plan = query::validate_plan(&options.plan(neighbors))?;
+            let mut plan = query::validate_plan(&options.plan(neighbors))?;
+            if options.verify_selected && !neighbors {
+                return Err(usage(
+                    "--verify-selected supports normalized named Entity neighbors only",
+                ));
+            }
             if plan.seed_mode == crate::graph::GraphSeedMode::Semantic && !neighbors {
                 options.remote.limits()?;
             }
@@ -891,31 +896,47 @@ fn execute_inner(args: &Arguments) -> Result<Envelope> {
                 retrieval::lexical::lexical_expression(query)?;
             }
             if args.dry_run {
-                let projection = crate::catalog::scan::scan(app.fs(), app.vault_id())?;
-                if let GraphCommand::Neighbors { id, .. } = command {
-                    if projection.diagnostics.iter().any(|d| {
-                        d.record_id.as_ref() == Some(id) && d.code == ErrorCode::ReferenceAmbiguous
-                    }) {
-                        return Err(WikiError::new(
-                            ErrorCode::ReferenceAmbiguous,
-                            "neighbor ID is ambiguous",
-                        ));
-                    }
-                    if !projection.records.contains_key(id) {
-                        return Err(WikiError::new(
-                            ErrorCode::RecordNotFound,
-                            "neighbor ID is not present",
-                        ));
-                    }
+                if neighbors {
+                    plan.include_navigation = options.navigation;
                 }
-                envelope.data = json!({"plan":plan,"dry_run":true,"cache_state_unknown":true,"canonical_record_count":projection.records.len(),"results":null});
+                envelope.data = json!({"plan":plan,"dry_run":true,"cache_state_unknown":true,
+                    "layout_unknown":true,"target_resolution_performed":false,
+                    "canonical_scan_performed":false,"verification_performed":false,
+                    "legacy_default_navigation":neighbors,"results":null});
                 envelope
                     .warnings
-                    .push("graph results and index freshness are unknown during dry-run".into());
+                    .push("Dry-run validates the graph request; target existence, layout capabilities, results and freshness remain unknown. Normalized named neighbors verify selected dependencies by default; --no-sync is cached unless --verify-selected is explicit.".into());
             } else {
-                let result = if plan.seed_mode == crate::graph::GraphSeedMode::Semantic
-                    && !neighbors
-                {
+                let catalog = Catalog::with_options(
+                    app.fs().clone(),
+                    app.vault_id().clone(),
+                    CatalogOptions {
+                        busy_timeout_ms: app.options().lock_timeout_ms,
+                        fault: None,
+                    },
+                );
+                let normalized = catalog.operation_state()?.is_some();
+                let result = if normalized {
+                    let GraphCommand::Neighbors { id, .. } = command else {
+                        return Err(WikiError::new(
+                            ErrorCode::CapabilityUnavailable,
+                            "normalized graph lookup supports named Entity neighbors; discover an Entity ID with lexical search first",
+                        ));
+                    };
+                    plan.include_navigation = options.navigation;
+                    crate::graph::indexed_neighbors::neighbors(
+                        &catalog,
+                        id,
+                        &plan,
+                        &retrieval::VerificationBudget::default(),
+                        !options.no_sync || options.verify_selected,
+                    )?
+                } else if options.verify_selected {
+                    return Err(WikiError::new(
+                        ErrorCode::CapabilityUnavailable,
+                        "--verify-selected requires normalized named neighbors; legacy graph lookup uses its existing snapshot verification",
+                    ));
+                } else if plan.seed_mode == crate::graph::GraphSeedMode::Semantic && !neighbors {
                     let GraphCommand::Query { query, .. } = command else {
                         unreachable!()
                     };

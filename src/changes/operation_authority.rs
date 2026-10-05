@@ -486,6 +486,8 @@ fn read_bytes(fs: &VaultFs) -> Result<Option<Vec<u8>>> {
             .take(MAX_BYTES as u64 + 1)
             .read_to_end(&mut bytes)
             .map_err(|e| io("read operation authority", e))?;
+        #[cfg(test)]
+        crate::catalog::query_diagnostics::read("operation-authority", &path, bytes.len());
         parents.verify()?;
         same_file(&path, &file, false)?;
         if bytes.len() > MAX_BYTES {
