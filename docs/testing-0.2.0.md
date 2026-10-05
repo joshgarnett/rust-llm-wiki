@@ -14,6 +14,14 @@ public update/withdrawal/navigation/cache-loss replay passed, with independent
 scoped acceptance at 9.5/10 and no blockers. Unsupported body evidence still
 refuses; broader missing-fact and capacity failures remain open.
 
+The new candidate also includes [per-import migration validation reuse](validation-import-throughput.md#per-import-validation-reuse-and-paired-control).
+It preserves every fresh plan read/hash and marker check while skipping repeated
+semantic decoding during one import. Thirty-seven native checks and a twenty-call
+paired control passed, with independent scoped acceptance at 9.4/10 and no
+blockers. On the occupied fixture the candidate imported 2.208 items/s, 2.200 times
+the prior build; the small-fixture ratio was 0.940. These single observations meet
+the frozen thresholds and do not qualify 25k capacity or complete answers.
+
 The candidate now has an actual [1,000-document collection control](validation-1k-collection.md):
 import, interrupted resume, refresh/withdrawal, recovery and complete-cache-loss
 rebuild succeeded. The broader frozen assessment is 8.5/10 and remains failed:

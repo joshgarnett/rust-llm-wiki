@@ -7,7 +7,7 @@ use crate::{
 use serde::{Deserialize, Serialize};
 use std::{fs::File, io::Read};
 pub(crate) const ACTIVE: &str = ".wiki/state/storage/layout.json";
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Layout {
     pub version: u32,
@@ -106,7 +106,7 @@ impl ValidatedLayout {
         reader: &mut RawReader<'_>,
         on_step: &mut dyn FnMut() -> Result<()>,
     ) -> Result<Self> {
-        let retained = active_with_reader(root, reader, on_step)?;
+        let retained = active_with_reader(root, reader, on_step, false)?;
         Ok(Self {
             root: root.clone(),
             retained,
@@ -139,17 +139,23 @@ impl ValidatedLayout {
 }
 
 pub fn active(root: &VaultRoot) -> Result<bool> {
-    active_with_reader(
+    let result = active_with_reader(
         root,
         &mut |path, max| raw_read(root, path, max),
         &mut || Ok(()),
-    )
+        true,
+    );
+    if result.is_err() {
+        super::cleanup::invalidate_import_epoch(root);
+    }
+    result
 }
 
 fn active_with_reader(
     root: &VaultRoot,
     reader: &mut RawReader<'_>,
     on_step: &mut dyn FnMut() -> Result<()>,
+    native_reader: bool,
 ) -> Result<bool> {
     let Some(bytes) = read_with_reader(reader, &VaultRelativePath::new(ACTIVE)?, 4096)? else {
         if read_with_reader(reader, &VaultRelativePath::new("WIKI.md")?, 1024 * 1024)?.is_none() {
@@ -217,7 +223,11 @@ fn active_with_reader(
             "storage activation differs from vault format",
         ));
     }
-    super::cleanup::verify_activation_with_reader(&layout, reader)?;
+    if native_reader {
+        super::cleanup::verify_activation(root, &layout)?;
+    } else {
+        super::cleanup::verify_activation_with_reader(&layout, reader)?;
+    }
     Ok(true)
 }
 pub fn managed_path(path: &VaultRelativePath) -> Option<VaultRelativePath> {

@@ -77,7 +77,14 @@ on the occupied seed. Authentication explains 82.2% of the extra command time.
 The ten-call workflow passed independent mechanics assessment at 9.4/10 and its
 unchanged attribution gate. Temporary instrumentation remains separate from the
 user candidate. A root-bound per-import validation memo, retaining every full
-plan read/hash check, is the next bounded optimization; no speedup is yet claimed.
+plan read/hash check, is now implemented: 37 grouped native checks pass. A fresh
+paired release control completed twenty commands / 64 captures and crossed its
+unchanged thresholds: 2.208 occupied items/s, 2.200 times baseline, small ratio
+0.940. Its independent actual mechanics audit passed at 9.4/10 with no blockers. A prior harness-only
+partial-context assertion failure is preserved with four baseline attempts and
+all candidate arms unrun. No product change or rebuild followed that failure.
+The accepted compiled source is ready for candidate004 packaging; prioritize
+complete cited answers next; this does not qualify 25k or native HIGH.
 Full scale, whole-task quality and
 the latest strict Clippy gate remain open. These are progress checkpoints,
 not completion of the fresh goal.

@@ -67,7 +67,7 @@ Source inspection found repeated activation validation through importer path
 checks and retained Change resolution. Each validation reads, hashes and
 strict-decodes the original migration Epoch. The occupied seed's plan is 647,457
 bytes versus 1,691 bytes for the small seed; migration-history complexity is
-confounded with occupancy. This is a hypothesis, not a measured phase attribution.
+confounded with occupancy. At that checkpoint this remained a hypothesis; the subsequent phase observation below attributes the repeated authentication cost.
 
 Use bounded observational profiling before a storage change. If repeated
 activation explains the excess, assess root-bound operation-scoped validation
@@ -115,9 +115,68 @@ The narrower proposed optimization reuses successful Epoch semantic validation
 within one root-bound import invocation while **still reading and hashing the
 full plan on every check**. It would skip repeated decoding only for the same
 authenticated activation identity/version/hash. Missing, changed or invalid
-plans must retain existing refusals; errors cannot populate the memo. This
-proposal is not implemented or qualified by the observation.
+plans must retain existing refusals; errors cannot populate the memo. The subsequent implementation and paired control are recorded below; the phase observation alone did not qualify a speedup.
 
 Detailed pinned drivers and raw evidence remain local. This summary records a
 historical development control; a fresh checkout can exercise the public
 [import workflow](source-imports.md), but does not contain those frozen seeds.
+
+
+## Per-import validation reuse and paired control
+
+The importer now reuses successful migration Epoch semantic validation within
+one root-bound library `run` or `resume` invocation. Every activation still
+reads and hashes the full plan and freshly checks the layout and vault marker.
+The memo holds one exact activation/version/hash predicate, never a filesystem
+observation. Errors invalidate it; custom/budgeted readers remain uncached.
+Nested and disabled scopes suspend reuse, and thread-bound RAII teardown clears
+it on returns and unwinds. No persistent cache, dependency or public flag was added.
+
+One native macOS ARM64 release checkpoint passed **37 tests**, with no failures
+and two explicit experiments ignored. It covered eight memo invariants, five
+layout bindings and twenty-four enabled ordinary importer/lifecycle/recovery
+checks. Build/test elapsed was 213.309 seconds; tests took 113.15 seconds.
+The emitted Rust 2024 executable uses optimization level 3; all 384 compiled
+source/assets/config commitments matched. No observer remains in this binary.
+The broad suite and latest strict Clippy are separate, unrun gates.
+
+The first paired account stopped after four successful baseline commands because
+its harness incorrectly required nonpartial context for a 100 KiB input under
+1 KiB excerpts. Independent review confirmed valid Current citations and honest
+excerpt-bound omissions. Sixteen captures and all original bytes were retained;
+read and all candidate/comparator arms were unrun. That account remains failed,
+with no comparative speed result. Product code and budgets were unchanged.
+
+A separately reviewed fresh account corrected command-specific truncation
+validation and ran all four arms in the frozen small-baseline, small-candidate,
+occupied-candidate, occupied-baseline order. Each used sixteen identical 100 KiB
+UTF-8 inputs and two eight-item groups, then verified search, context and read.
+The four arms shared one absolute input list and identical manifest hash; new
+account paths differ from the failed attempt while input bytes remain identical.
+
+| Seed | Baseline items/s | Candidate items/s | Candidate / baseline |
+| --- | ---: | ---: | ---: |
+| Small | 2.877 | 2.706 | 0.940 |
+| Occupied | 1.004 | 2.208 | 2.200 |
+
+Rates are sixteen divided by unrounded prepare-plus-run launch-to-reap intervals
+from the owning process's monotonic clock. The occupied candidate crossed both
+prospective thresholds, 2.0 items/s and 1.50 times baseline; the small ratio
+crossed its 0.90 floor. These are single observations: the small rate was about
+6% lower, and OS caches, copy warming and seed migration history limit inference.
+They establish neither a latency distribution nor 25k capacity.
+
+The twenty-call fresh owner finished in 74.417 seconds within its ten-minute
+limit, with all 64 captures and preservation checks passing. Including the
+failed account there were twenty-four product attempts. Independent actual
+mechanics acceptance passed at **9.4/10 with no blockers**, with all three frozen
+performance conditions passing. The audit checked all 64 Source/Revision pairs,
+128 payloads, eight group Changes, eight empty authenticated identity hits, four
+search citations, eight context citations and four verified reads. Existing seed
+and arm bytes, mtimes and memberships, source pins and native artifacts matched.
+All four contexts returned identical passage spans/text and honestly reported
+the same six excerpt-bound omissions. Main-process observed peak RSS was about
+47.6 MiB; sampled process-tree observations do not establish an exact peak. The earlier group-four/eight gate remains failed.
+
+The next workflow milestone is complete cited answers, followed by integrated
+refresh, withdrawal/history and cache-loss behavior, and explicit 25k qualification.

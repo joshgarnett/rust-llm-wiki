@@ -220,6 +220,8 @@ impl OfflineApp {
     ) -> Result<SourceImportOutcome> {
         bounds(group_size, max_groups)?;
         self.import_options()?;
+        let _epoch_scope =
+            crate::storage::ImportEpochScope::begin(self.fs.root(), !self.options.dry_run);
         let store = ImportStore::new(self.fs.clone(), self.vault_id.clone(), key)?;
         let summary =
             validate_manifest(manifest).map_err(|error| self.import_error(&store, error))?;
@@ -274,6 +276,8 @@ impl OfflineApp {
     ) -> Result<SourceImportOutcome> {
         bounds(1, max_groups)?;
         self.import_options()?;
+        let _epoch_scope =
+            crate::storage::ImportEpochScope::begin(self.fs.root(), !self.options.dry_run);
         let store = ImportStore::new(self.fs.clone(), self.vault_id.clone(), key)?;
         let (progress, _) = store
             .load()?

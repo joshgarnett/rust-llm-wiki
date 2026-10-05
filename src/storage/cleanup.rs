@@ -10,15 +10,114 @@ use crate::{
     },
     domain::*,
     jobs::checkpoint,
-    vault::{ExpectedState, VaultFs, WriterPermit, operational::RunStore},
+    vault::{ExpectedState, VaultFs, VaultRoot, WriterPermit, operational::RunStore},
 };
 use serde::{Deserialize, Serialize};
 use std::{
+    cell::RefCell,
     collections::{BTreeMap, BTreeSet},
+    rc::Rc,
     time::Duration,
 };
 const PENDING: &str = ".wiki/state/storage/cleanup.json";
 const MAX_RECEIPT: usize = 64 * 1024 * 1024;
+
+struct ImportEpochMemo {
+    root: VaultRoot,
+    owner: Rc<()>,
+    suspended: usize,
+    validated: Option<layout::Layout>,
+}
+std::thread_local! {
+    static IMPORT_EPOCH: RefCell<Option<ImportEpochMemo>> = const { RefCell::new(None) };
+}
+
+/// One import's successful semantic predicate, never a filesystem observation.
+/// The Rc binding keeps teardown on the originating thread and prevents a
+/// stale nested guard from modifying a later operation's scope.
+pub(crate) struct ImportEpochScope {
+    binding: Option<Rc<()>>,
+    owner: bool,
+}
+impl ImportEpochScope {
+    pub(crate) fn begin(root: &VaultRoot, enabled: bool) -> Self {
+        IMPORT_EPOCH.with(|state| {
+            let mut state = state.borrow_mut();
+            if let Some(memo) = state.as_mut() {
+                memo.validated = None;
+                memo.suspended += 1;
+                return Self {
+                    binding: Some(memo.owner.clone()),
+                    owner: false,
+                };
+            }
+            let binding = enabled.then(|| Rc::new(()));
+            if let Some(owner) = &binding {
+                *state = Some(ImportEpochMemo {
+                    root: root.clone(),
+                    owner: owner.clone(),
+                    suspended: 0,
+                    validated: None,
+                });
+            }
+            Self {
+                binding,
+                owner: true,
+            }
+        })
+    }
+}
+impl Drop for ImportEpochScope {
+    fn drop(&mut self) {
+        IMPORT_EPOCH.with(|state| {
+            let mut state = state.borrow_mut();
+            let Some(memo) = state.as_mut() else {
+                return;
+            };
+            if !self
+                .binding
+                .as_ref()
+                .is_some_and(|owner| Rc::ptr_eq(owner, &memo.owner))
+            {
+                return;
+            }
+            if self.owner {
+                *state = None;
+            } else {
+                memo.suspended -= 1;
+            }
+        });
+    }
+}
+fn memoized_epoch(root: Option<&VaultRoot>, activation: &layout::Layout, remember: bool) -> bool {
+    IMPORT_EPOCH.with(|state| {
+        let mut state = state.borrow_mut();
+        let Some(memo) = state.as_mut() else {
+            return false;
+        };
+        if root != Some(&memo.root) || memo.suspended != 0 {
+            return false;
+        }
+        if remember {
+            memo.validated = Some(activation.clone());
+        }
+        let hit = memo.validated.as_ref() == Some(activation);
+        #[cfg(test)]
+        if hit && !remember {
+            import_epoch_memo_tests::reused_epoch();
+        }
+        hit
+    })
+}
+pub(crate) fn invalidate_import_epoch(root: &VaultRoot) {
+    IMPORT_EPOCH.with(|state| {
+        if let Some(memo) = state.borrow_mut().as_mut()
+            && &memo.root == root
+        {
+            memo.validated = None;
+        }
+    });
+}
 fn err(message: &str) -> WikiError {
     WikiError::new(ErrorCode::RecoveryRequired, message)
 }
@@ -388,11 +487,22 @@ pub(crate) fn verify_activation(
     root: &crate::vault::VaultRoot,
     activation: &layout::Layout,
 ) -> Result<()> {
-    verify_activation_with_reader(activation, &mut |path, max| {
+    let result = verify_activation_inner(Some(root), activation, &mut |path, max| {
         layout::raw_read(root, path, max)
-    })
+    });
+    if result.is_err() {
+        invalidate_import_epoch(root);
+    }
+    result
 }
 pub(crate) fn verify_activation_with_reader(
+    activation: &layout::Layout,
+    reader: &mut layout::RawReader<'_>,
+) -> Result<()> {
+    verify_activation_inner(None, activation, reader)
+}
+fn verify_activation_inner(
+    root: Option<&VaultRoot>,
     activation: &layout::Layout,
     reader: &mut layout::RawReader<'_>,
 ) -> Result<()> {
@@ -401,6 +511,11 @@ pub(crate) fn verify_activation_with_reader(
     if Blake3Hash::digest(&bytes) != activation.migration_hash {
         return Err(err("storage activation migration hash differs"));
     }
+    if memoized_epoch(root, activation, false) {
+        return Ok(());
+    }
+    #[cfg(test)]
+    import_epoch_memo_tests::decoded_epoch();
     let epoch: Epoch = layout::decode(&bytes)?;
     validate_epoch_bounds(&epoch)?;
     let parsed = crate::records::parse_note(&epoch.marker_original);
@@ -420,6 +535,7 @@ pub(crate) fn verify_activation_with_reader(
             "storage activation lacks exact original schema migration",
         ));
     }
+    memoized_epoch(root, activation, true);
     Ok(())
 }
 pub(crate) fn pending_activation_matches(root: &crate::vault::VaultRoot) -> Result<bool> {
@@ -1281,3 +1397,7 @@ pub fn cleanup(
     layout::put(fs, writer, &rel(PENDING)?, &encoded)?;
     resume_epoch(fs, writer, epoch, false, options)
 }
+
+#[cfg(test)]
+#[path = "import_epoch_memo_tests.rs"]
+mod import_epoch_memo_tests;
