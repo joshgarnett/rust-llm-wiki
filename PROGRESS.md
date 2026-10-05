@@ -12,8 +12,12 @@ backup and offline cache reconstruction. Both baseline and candidate completed
 candidate adds reusable range citations rather than improved text selection.
 The [global dense development control](docs/validation-native-dense-context.md)
 failed at 2/5 with a baseline fact loss and is preserved in pushed checkpoint
-`f9ad575`; no experimental public mode was promoted. Next: package the accepted
-read slice as a fresh 0.2.0 build and qualify representative 25k behavior. Native
+`f9ad575`; no experimental public mode was promoted. Accepted source-reading
+checkpoint `d4565cd` is committed and pushed. Native macOS ARM64 0.2.0 candidate005
+is packaged: all 386 compiled source/config/asset files match the commit, and
+version, archive bytes and executable permissions pass without rebuilding.
+Next: bounded larger-occupancy import/update/search/recovery qualification toward
+the first 25k target. Native
 HIGH, generated-answer quality and full capacity remain open.
 
 The fresh 2026-10-04 goal also covers complete import, update, search and
