@@ -23,6 +23,13 @@ no longer aborts verified discovery; description/body authority remains guarded.
 Actual refresh, withdrawal, historical reads and complete-cache-loss recovery
 passed on a disposable copy. The original query failure is retained as failed
 evidence, and broader quality and capacity gates remain open.
+The [import throughput comparison](validation-import-throughput.md) passed
+mechanics at 9.3/10 but failed both advancement conditions; occupied eight-item
+groups achieved 1.108 items/s. Migration-history validation is a profiling
+hypothesis, not yet an attributed bottleneck. The [public investigation control](validation-public-investigation.md)
+also failed completeness (3/5 original-query, 2/5 clause-query positives), despite
+exact citations and reads. Anchor reads repeated search excerpts; genuine
+continuation and final cited answers remain untested. Keep the whole goal active.
 
 This is the current capability router for the cleanup of 0.1.2. It records implemented surfaces and the checks that can establish local correctness; local cleanup is accepted by [the exact-source aggregate evidence](execution/reports/CLEANUP-VALIDATION.md). Historical milestone plans and research designs are preserved as history. Use the running binary's `capabilities`, `schema NAME`, and command help for exact syntax.
 

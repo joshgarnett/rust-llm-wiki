@@ -56,6 +56,20 @@ public observations and independent scoped acceptance at 9.5/10 with no blockers
 refresh/withdrawal, historical navigation, backup and cache-loss reconstruction
 all passed. A new native 0.2.0 candidate packages this repair. The broader failed
 query trial and remaining missing facts retain their separate open gates.
+Candidate003 packages that accepted source as a native macOS ARM64 0.2.0 build;
+source pins, version smoke and archive roundtrip passed without rebuilding.
+The [import throughput control](docs/validation-import-throughput.md) completed
+eight arms / 512 captures with independent mechanics acceptance at 9.3/10, but
+failed throughput advancement: occupied 100 KiB group-eight imports achieved
+1.108 items/s and 1.222 times group-four. Profile repeated migration-plan
+validation before changing storage. The [public investigation control](docs/validation-public-investigation.md)
+completed 80 commands with exact citations/reads, yet failed completeness at
+3/5 and 2/5. Its anchor reads repeated search excerpts. A fresh Astra architectural
+review selected genuine continuation versus bounded adaptive investigation, with
+final cited answers, and an integrated import→answer→refresh→recover milestone.
+These failed controls are preserved; no allocation tuning or new storage system
+is promoted. Native HIGH, normalized parity and actual 25k qualification remain
+independent blockers.
 Full scale, whole-task quality and
 the latest strict Clippy gate remain open. These are progress checkpoints,
 not completion of the fresh goal.
