@@ -118,6 +118,18 @@ without those ignored files.
 | Independent actual public audit JSON | `b08e006ec1274b120459ae38d4d667f6f7ad2100bf7c38d9330526a742251e85` |
 | Subsequent resource review JSON | `db0eb17b95d45cb950b7a862d1e55c915448c329b4540a01d6ccb7669878ba3f` |
 
+The local **0.2.0 candidate009** archive uses source commit
+`1503fd9dd3fcb26f9f08b29ee21c09dacbff8806` and the unchanged verified shipping
+CLI above. Optional local archive:
+`.artifacts/releases/0.2.0/lwiki-0.2.0-macos-arm64-candidate-009.tar.gz`, SHA-256
+`ef36f6e031d779b85899981fe5a049a704779a87ce9ef31f2d2d703fde000855`.
+Packaging verifies all 396 current source inputs against that commit, compiler
+and acceptance seals, staged version, and all 50 files through a safe archive
+roundtrip with exact bytes/permissions. It rebuilds or replays no product test.
+The bundle includes both build receipts and explicitly records the test-only
+helper delta and shipping CLI reuse. Native macOS ARM64, minimum macOS 26.5;
+unsigned/unnotarized local candidate, with no public tag or release.
+
 Native evidence completeness, useful cited Page synthesis, strict/historical and
 semantic/hybrid modes, native HIGH, 10K/25K qualification, broad checks, other
 platforms and power-loss/live-provider qualification remain separate open gates.
