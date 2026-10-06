@@ -91,6 +91,13 @@ the author note. It scored 9/10 but failed mandatory layout and prescribed-edit
 observations because those task constraints were not exposed to the operator.
 This is development evidence with an open portability gate, not full acceptance.
 
+The separately declared [Aurora normalized transfer](validation-skill-transfer.md#separate-aurora-successor--scoped-acceptance-passed)
+passes scoped independent acceptance at 10/10, all ten mandatory gates and zero
+blockers. With complete public setup/edit instructions, the unchanged export and
+binary supply all six fact groups, five exact citations, draft discovery and
+author-preserving reconciliation in 20 offline commands. The original failed
+transfer remains failed; native HIGH, semantic parity and capacity are unchanged.
+
 The [normalized Page reorganization workflow](validation-page-reorganization.md)
 passes scoped independent acceptance at 10/10 with every mandatory task and no
 blockers. Stable identity, authored/plain/unadopted incoming links, guarded editing,

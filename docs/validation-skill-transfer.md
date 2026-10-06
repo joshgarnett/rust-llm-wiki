@@ -6,12 +6,13 @@ Page and guarded author reconciliation through the maintained
 that resource, the generated command reference and executable examples. No model
 launcher or CLI operation was added.
 
-One fresh development transfer supplied all six requested fact groups and correct
-citations. Its independent score is **9/10, with the mandatory gate failed**:
-the operator received neither the declared normalized-layout setup requirement
-nor the prescribed clarification scenario. Successful content and conflict
-mechanics do not override those missing observations. Native HIGH, full layout
-parity and representative 25K capacity remain open.
+The separately declared Aurora successor transfer passes scoped independent
+acceptance at **10/10, all ten mandatory gates, zero blockers**. The unchanged
+candidate completes the required normalized question-to-draft-and-edit workflow
+when its public task carries setup authorization and the intended clarification.
+The original Cobalt transfer remains **9/10 with the mandatory gate failed**:
+those two instructions were omitted from its operator inputs. Native HIGH, full
+layout parity and representative 25K capacity remain open.
 
 ## Integration checkpoint
 
@@ -28,7 +29,7 @@ draft title search, stale-guard refusal and a full reconciled proposal. These ar
 deterministic mechanics checks, not a model-quality score. Export snapshots now
 name version 0.2.0 and six resources; the manifest is the seventh exported file.
 
-## Fresh development task
+## Original Cobalt development task — mandatory gate failed
 
 An independent Astra critic authored one Cobalt production-rollout task before
 candidate exposure: three synthetic Markdown Sources totaling 5,750 UTF-8 bytes,
@@ -68,7 +69,7 @@ The refused update preserved the author-edited file. Sync, whole reread and a ne
 guarded proposal retained draft identity, metadata, references, the retention gap
 and author note. Draft prose and author text did not become accepted graph facts.
 
-## Qualification and next step
+## Original qualification and handoff finding
 
 Keep the threshold at least 9/10, every mandatory gate and zero blockers. This run
 has no correctness or data-loss blocker, but mandatory layout and prescribed-edit
@@ -96,3 +97,46 @@ The native ARM64 executable is version 0.2.0, with actual `opt-level=3` / Rust 2
 compiler parameters. This small synthetic task does not qualify release performance,
 native completeness, live providers, other platforms, signing or capacity. Old
 failures and unseen acceptance questions remain preserved.
+
+## Separate Aurora successor — scoped acceptance passed
+
+An independent Astra critic declared a new fictional mirror-operations task before
+exposure: three Sources totaling 6,131 bytes, six positive fact groups, a missing
+retention-duration facet and a sealed author edit. The complete public task and both
+protocol files explicitly authorized normalized activation and supplied the exact
+procedure-versus-authorization clarification. Seven non-answer instruction mappings
+were checked before execution; expected support remained private. This was one new
+runtime, with unchanged binary, exported recipe, supervision and limits.
+
+| Observation | Actual result |
+| --- | --- |
+| Independent acceptance | 10/10; all ten mandatory gates pass; zero blockers |
+| Facts and citations | Six of six groups plus explicit gap; five exact SourceRefs independently verified against UTF-8 spans, quotation/content hashes and revisions |
+| Scope | Normalized lexical `indexed-documents`; selected-document indexed evidence; global membership explicitly unverified |
+| Draft workflow | Allocated draft, selected-verified title search, whole reads, prescribed clarification prepared before injection, real stale-H0 refusal, fresh-guard reconciliation preserving the exact 217-byte author note |
+| Source preservation | All 12 imported original/content/revision/header paths unchanged; binary, export and public inputs unchanged |
+| Final public check | Complete normalized canonical and cache-integrity checks; cache matches canonical; zero errors/diagnostics |
+| Native attempts | 20/24, including setup/export/schema/activation and expected conflict |
+| Evidence | Five complete packed passages; 4,842 rendered bytes / 1,211 byte-based estimated tokens; no optional gap read |
+| Selector | Exact 22,055-byte task plus 373-byte wrapper; unchanged 152-byte raw reply |
+| Elapsed and memory | Native children 3.013473 seconds; owner 795.534474 monotonic seconds through terminal write; largest main-process RSS 18,284,544 bytes |
+| Observed resources | New trial 4,849,664 allocated bytes; conservative preserved-artifacts account 53,939,412,992 bytes; free 63,014,178,816 bytes |
+| Application work | Two stages, three operator turns and one selector turn; four root deliveries, 29 visible tools and 33 usage records |
+| Available cumulative usage | 2,907,648 tokens: 2,895,723 input, including 2,755,456 cached, plus 11,925 output; reasoning is already included in output |
+
+Usage includes repeated harness context; it is not the unique task/evidence size.
+Money, inference-only time, hidden requests and exact active allocation/process-tree
+peaks remain unavailable. Thirty omitted candidates and partial/truncated flags
+remain disclosed. The final check did not audit unused retained payloads; the
+separate inventory covered all imported Source files. Root's packet-field assertion
+and exception-recording errors remain retained; neither caused a native/application
+retry or changed the selector bytes.
+
+Optional local evidence lives under `.artifacts/skill-transfer-002/`, with the frozen
+public task/protocol, private commitment, exact commands/transcripts, proposal/edit
+receipts, resource/terminal observations and independent audit. Tracked recipes and
+examples remain the fresh-checkout route; ignored evidence is not an operator
+dependency. This result does not retrospectively pass Cobalt, establish a transfer
+rate, exercise an optional gap read, or qualify native HIGH, semantic parity,
+default activation, live providers or 25K capacity. This bounded transfer is finished;
+subsequent work targets the missing normalized semantic lifecycle.

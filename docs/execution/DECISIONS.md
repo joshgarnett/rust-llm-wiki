@@ -229,3 +229,43 @@ Actual application work was substantial: 21 native calls/3.298395 child seconds,
 2,961,102 recorded tokens including cached input. Stage count is not model-call or
 cost accounting. Preserve raw traces and unavailable money/inference-only time.
 The legacy optional payload read returned no SourceRef and earned no added claim.
+
+The separately declared Aurora successor freezes the complete public setup/edit
+instructions and checks their non-answer mapping before exposure. The unchanged
+candidate passes [scoped transfer acceptance](../validation-skill-transfer.md#separate-aurora-successor--scoped-acceptance-passed)
+at 10/10, all ten mandatory gates and zero blockers: six fact groups, five exact
+citations, normalized scope, prescribed clarification and author-preserving conflict
+reconciliation. Twenty native calls, 795.534474 owning seconds and 2,907,648 recorded
+application tokens remain distinct from quality and cost. Cobalt remains failed.
+End this bounded transfer line; no additional runtime, selector tuning or host
+framework is needed. Native HIGH, full parity and 25K gates remain unchanged.
+
+## 2026-10-06 — Integrate normalized semantic preparation and retrieval
+
+A fresh wide Astra review selects the missing public normalized semantic lifecycle
+as the next executable product milestone: local coverage/preparation, offline
+semantic/hybrid search and cited context, refresh/withdrawal and safe recovery.
+This closes an actual layout refusal; it is not an assumed completeness improvement.
+Keep existing vector-space/input identity, dispatcher, ledger, selected proofs and
+packing. Do not reconstruct a legacy catalog, introduce another accounting authority,
+change ranking to rescue results or activate normalized storage by default.
+
+Independent preimplementation review requires selected canonical Run/RunEvent and
+exact compact-checkpoint publication/replay first: bootstrap and receipt settlement
+currently use the legacy publisher. Preserve immutable proofs, writer/run-lock order,
+already-Received no-resend recovery, paid invalid-output receipts and unknown holds.
+Catalog-only reconstruction cannot restore vector bytes from accounting receipts;
+offline missing coverage must be explicit. Semantic parity after recovery requires
+an actual compatible vector backup, not a fabricated receipt-derived cache.
+
+Freeze one paired public development lifecycle before candidate results: real-vector
+provenance and query caches, a separate mock-accounting branch, identical revisions
+and budgets, actual optimized binaries, finite resource/command/fault bindings.
+The prospective gate has sixteen mandatory task rows, at most 80 total CLI starts,
+50 MiB canonical text, 512 MiB new artifacts and 20 owning minutes, with existing
+stricter limits retained. Require at least 9/10, all mandatory tasks and changed
+accounting/durability invariants, and zero blockers. Missing real-vector prerequisites
+remain incomplete; mocks receive mechanics credit only. No new live acquisition.
+After one implementation and one justified grouped repair, unresolved architectural
+failures return for review. Scanning work and selected proof work are separate;
+this small workflow gives no fast-25K, native HIGH or full-parity credit.
