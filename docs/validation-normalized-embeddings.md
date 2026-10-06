@@ -507,3 +507,37 @@ Packaging took 2.248 process seconds, allocated 42,901,504 bytes before its fina
 receipt and retained 60,482,732,032 free bytes. It ran no build, application command,
 provider call or evaluation replay. This is a local trial, with no public release,
 signing, native other-platform, live-provider, broad completeness or 25K claim.
+
+## Local 0.2.0 candidate012 artifact
+
+The later unsigned macOS ARM64 trial packages production commit `3cd7b48` and
+the exact final CLI used in the invocation/recovery native and public controls.
+It reuses that release binary without another build or evaluation replay. A Git
+blob audit matches 466 frozen inputs exactly to committed source; the remaining
+three entries are the preserved private test-module hooks and two probe files,
+excluded from the production CLI. No clean-tree claim is made.
+
+Actual version, offline capabilities and fresh skill export pass. All five static
+resources equal maintained bytes; six BLAKE3 content hashes, aggregate manifest,
+53 command-help entries and 20 schema entries match. All **16 regular archive
+members** pass exact inventory, byte/hash and Unix-permission checks, including
+CLI executable mode. Packaging completes in 3.374633 owning-process seconds,
+with zero builds/provider calls; recorded allocation is 43,327,488 bytes and
+host free space is 60,730,798,080 bytes.
+
+The local artifact is named `lwiki-0.2.0-macos-arm64-candidate-012.tar.gz` under
+`.artifacts/releases/0.2.0/`; it is 11,184,138 bytes with SHA256
+`6fed7a4ef716319175cefba9eb40007ee78370724a762a7217e3cad57f84f4d0`.
+The CLI SHA256 remains
+`ed9e7fc421e1d6dc94ca411a184e15d2b27dfc02145dcccee85801fe851b5630`.
+The packaging receipt SHA256 is
+`b4d72125ef3ffc6e79e66daefec6805a10bcb5dffde9abf9f0c8a9e61d791862`.
+The bundle includes its exact command reference, exported skill, build profile
+and scoped provenance. It excludes fixture vaults, raw logs, private probes and
+credentials. Candidate011 and every failed attempt remain preserved.
+
+This provides a new local 0.2.0 trial, not a public release or whole-goal
+acceptance. Complete cited-answer quality, unseen native HIGH, affordable storage,
+fast queries and representative 25K/~2.5GB behavior remain open. Minimum macOS
+26.5, live providers, native other platforms and power-loss behavior retain their
+qualification limits.

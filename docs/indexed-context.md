@@ -157,7 +157,9 @@ queries. Semantic modes require compatible active-space and query vectors; offli
 cache misses are explicit. Host selection remains lexical only. Literal and graph
 context remain separate migration work. The [embedding checkpoint](validation-normalized-embeddings.md)
 records the affected correctness checks and the still-open public quality/capacity
-gates; packaged candidate011 predates the latest preparation and recovery changes.
+gates. The [local candidate012 trial](validation-normalized-embeddings.md#local-020-candidate012-artifact)
+packages the tested preparation/recovery binary; broad completeness and capacity
+remain unaccepted.
 Dry-run previews the resolved request
 without running its proof. Operational
 generation-output records currently require explicit cached read because their

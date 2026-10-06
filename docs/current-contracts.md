@@ -150,6 +150,12 @@ adds a shared command allowance/deadline and independent same-Run continuation
 after authenticated stale-response rejection. Exact vector scanning, measured
 storage/update costs and broad evidence completeness still prevent 25K qualification.
 
+The latest [candidate012 local 0.2.0 trial](validation-normalized-embeddings.md#local-020-candidate012-artifact)
+packages the exact invocation/recovery control binary from production commit
+`3cd7b48`. Version, capabilities, exported guidance and all 16 archive members
+pass their separate release-data checks; no rebuild or workflow replay was needed.
+It adds no broad completeness, unseen HIGH or capacity acceptance.
+
 Independent same-budget witnesses now locate the multi-source failure in
 allocation: both modes can render all five required facts with valid citations
 in 5,392 bytes. This diagnostic does not change the default or pass a quality
