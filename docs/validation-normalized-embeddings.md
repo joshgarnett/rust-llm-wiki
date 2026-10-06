@@ -2,8 +2,9 @@
 
 Current source connects bounded embedding preparation, cached semantic/hybrid
 document search and cited document context on an explicitly activated normalized
-catalog. The affected native correctness checks pass. Independent public-task
-acceptance, realistic evidence completeness and 25K capacity remain open.
+catalog. The affected native correctness checks pass, and a frozen public
+real-vector run demonstrates offline reuse and restoration. Multi-source evidence
+completeness failed; full public acceptance and 25K capacity remain open.
 This checkpoint is newer than the packaged 0.2.0 candidate010; that archive does
 not contain these changes.
 
@@ -19,7 +20,9 @@ before dispatch, on received-output recovery and before membership commit.
 `embeddings sync` uses the configured remote provider to acquire missing inputs.
 An offline sync uses only the retained active space and matching preparation
 settings, without loading private provider configuration or resuming accounting
-jobs. It reports actual missing coverage; it cannot recreate lost vectors. Empty
+jobs. It reports actual missing coverage; it cannot recreate lost vectors. Without
+an active space, check's zero counts have an unspecified, unenumerated denominator;
+they do not establish an empty corpus. Empty
 or dimensionless preparation does not replace an established active space.
 
 Current document search supports semantic and hybrid modes. It uses compatible
@@ -66,11 +69,60 @@ not a full repository suite or proof of live-provider compatibility.
 Fresh independent Astra reviews covered the job admission/rebase invariants,
 semantic coordination and the five runtime fixture failures. These source and
 component reviews do not substitute for the declared public-command assessment.
-Its real-vector tasks and recovery/resource observations remain unrun; unavailable
-public fault cuts and total preparation-work counters keep the full gate open.
+The later public observations below do not qualify unavailable public fault cuts
+or total preparation-work counters; those keep the full gate open.
 The earlier [dense development comparison](validation-native-dense-context.md)
 still failed its quality gate. No new ranking or allocation quality improvement is
 claimed here, and the unseen native HIGH questions remain isolated.
+
+## Frozen public real-vector observations
+
+A separately declared offline run executed 32 exact CLI invocations from the frozen
+64-slot protocol, using the pinned release binary and existing real provider
+vectors. Independent review verified all expanded arguments and returned evidence.
+No new embeddings or model-assisted answer stage ran.
+
+Current preparation reports **223/223 available eligible inputs**. Cache-only sync
+publishes membership with 223 reused and zero generated inputs. Request-only
+dry-run preserves the complete byte-and-mtime inventory. A mutable Source-title
+update retains immutable Revision bytes and vector reuse. Complete derived-cache
+loss produces explicit offline semantic unavailability; restoring the actual
+compatible vector backup restores coverage and identical evidence. All five
+declared lexical/restoration comparisons match substantive output exactly.
+
+Both semantic and hybrid modes complete the ordinary and paraphrased positive
+questions, but **both fail the complementary multi-source question**. All required
+owners are retrieved, while the failed packet contains only one of five required
+facts, one partial fact and three missing facts. Four Output passages consume
+most of its 5,991-byte/1,498-token packet; Testing contributes only a 153-byte closing
+paragraph. This establishes a loss after owner discovery. The returned output alone
+does not establish the rank of every discarded candidate. These exposed development
+questions do not qualify unseen HIGH or demonstrate broad quality improvement.
+
+The scoped absent-information question produces no invented requested measurement
+or global absence claim, but returns unrelated material without a useful explicit
+answerability classification. Owner retrieval, relevance, evidence completeness
+and citation integrity remain separate: **74/74 returned citation occurrences**
+pass exact UTF-8 span/text, Source/Revision/vault identity, full-source hash and
+quote-hash verification. Correct citations do not recover omitted facts.
+
+The owner completes in 85.395 seconds, 85.450 seconds cumulatively including a
+preserved pre-CLI admission failure. About 80.496 seconds are strict scans of all
+retained artifacts; summed command intervals are 3.339 seconds and include observer
+overhead. Runtime allocation is 89.596 MB. These small-fixture observations do not
+qualify shipping latency or 25K capacity; physical I/O and exact process-tree peaks
+are unavailable. Original source/vector before-and-after pins agree. External
+acquisition history is hashed initially and checked for unchanged metadata later;
+it is neither transplanted nor a demonstrated historical recovery.
+
+Thirty mock/fault slots and two stale-input slots remain unrun. The latter fixture
+edit refused a quoted title field before launching a command. A retained socket
+also caused the first admission attempt to stop with zero CLI starts; the corrected
+metadata-only disk sampler counts every retained entry without opening or removing
+it. Conservative cumulative time/read/artifact charges preserve that failure.
+Neither gap is a passing safety observation. Missing fault/telemetry rows and the
+observed completeness failure keep the unchanged >=9/10, every mandatory row,
+zero-blocker gate open. No partial full-gate score is assigned.
 
 ## Capacity boundary and next milestone
 
@@ -80,8 +132,11 @@ Those limits alone prevent qualification of 25,000 documents / roughly 2.5 GB;
 they are source constraints, not measured throughput. Whole-preparation work
 must not be described as proportional only to changed owners.
 
-After observing the frozen small public workflow, the next connected milestone is
-changed-document preparation, cited query and single-document refresh/reprepare.
+With the small public workflow observed, the next connected milestone must combine
+changed-document preparation, useful complementary cited evidence and
+single-document refresh/reprepare. A new independent architecture review examines
+where passage selection and packing discard the multi-source evidence before
+another implementation choice. More owner discovery alone cannot fix this case.
 A bounded release comparison will test winner-only second-pass rendering against
 a compact rebuildable unit inventory with paged changed-owner preparation. It must
 retain exact coverage, evidence, freshness and accounting behavior. ANN, wider

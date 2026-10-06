@@ -12,11 +12,16 @@ native HIGH and representative 25k gates.
 
 The latest [normalized embedding checkpoint](docs/validation-normalized-embeddings.md)
 connects preparation, cached semantic/hybrid document search and cited automatic
-context. All 98 distinct affected native checks pass across retained evidence;
-public real-vector workflow acceptance is the next observation. Fresh Astra review
+context. All 98 distinct affected native checks pass across retained evidence.
+A later frozen 32-command real-vector run demonstrates 223/223 offline reuse,
+restored identical evidence and 74/74 valid citations. Both semantic and hybrid
+modes complete two of three positive development questions; the multi-source task
+omits required facts despite retrieving both owners. Full acceptance remains open,
+including 32 unrun slots. A new independent Astra architecture review targets this
+downstream evidence loss before another implementation. Earlier Astra review
 found a hard 4,096-owner preparation ceiling and whole-corpus rendering, so this
 slice cannot qualify 25K. The next implementation milestone couples incremental
-preparation, cited query and changed-document refresh. The full quality/capacity
+preparation, useful complementary cited evidence and changed-document refresh. The full quality/capacity
 goal remains active; candidate010 predates this source checkpoint.
 
 An earlier fresh Astra priority review brought representative public 10k→25k

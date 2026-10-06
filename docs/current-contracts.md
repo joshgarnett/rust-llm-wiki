@@ -135,8 +135,10 @@ The [occupied 10k diagnostic](validation-10k-workflow.md) completed cited eviden
 The [normalized embedding source checkpoint](validation-normalized-embeddings.md)
 adds bounded preparation, cached semantic/hybrid document search and automatic
 cited document context. All 98 distinct affected native checks pass across retained
-evidence. Public real-vector acceptance and quality remain open, and packaged
-candidate010 predates this source. The 4,096-owner preparation ceiling and whole
+evidence. Later frozen public observations demonstrate 223/223 offline reuse,
+exact restoration and 74/74 valid citations, but both modes fail the multi-source
+evidence task after retrieving its required owners. Full acceptance and quality
+remain open, and packaged candidate010 predates this source. The 4,096-owner preparation ceiling and whole
 corpus rendering prevent 25K qualification unchanged.
 
 The normalized layout currently has a restricted command set. Plain lexical `search` uses published discovery; `--no-sync` remains compatible.
