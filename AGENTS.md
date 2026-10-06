@@ -24,6 +24,17 @@ Use subagents when a task benefits from independent research, a bounded implemen
 
 Batch related changes into a coherent end-user workflow before running integration checks. Account for build and test duration when choosing work boundaries: use cheap local checks while editing, then run focused tests on the integrated slice and broad suites at consequential milestones. Repeat a passed check only when changed code, a failure or an unresolved concern justifies it. Use long-running measurements for independent work, preserving their pinned executables, inputs and protocol; do not add competing builds or experiments that distort the measurement.
 
+Before an expensive Rust build or test, name the user-visible batch now ready for
+validation, the changed inputs and the checks that resolve an actual uncertainty.
+If implementation for that batch remains, continue it before validating. If only
+minor polish has accumulated, inspect the current priorities and combine it with
+the next high-impact feature slice. Do not make arbitrary edits to justify a run.
+After a passing checkpoint, advance the workflow rather than repeating unchanged
+checks. A failed check, changed build environment, targeted correctness concern or
+final acceptance gate is a valid explicit reason to run again. The optional
+repository checkpoint hook reinforces this policy; it does not replace required
+correctness or final acceptance checks.
+
 For consequential quality work, establish a critic before implementing. Agree on representative user tasks, observable success criteria, correctness blockers and an acceptance threshold before seeing candidate results. Have the critic assess actual commands and returned content, document missing facts or failed tasks, and replay fixes. Keep task completion, citation correctness, retrieval relevance and answer completeness separate. If the user requires a high critic score, keep the goal active until the declared gate passes; do not lower the gate or inflate claims to finish.
 
 Before consequential architecture decisions, ask an independent Astra reviewer to challenge the measured problem, expected user benefit, simpler alternatives, scaling costs and migration path. Revisit the decision when evidence or constraints change. Require a concrete experiment for uncertain tradeoffs and prioritize an integrated user workflow over additional disconnected components. Passing component tests and scoped critic scores do not establish that the architecture is useful or that integration is complete. Routine local edits do not need another architecture review.

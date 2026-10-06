@@ -1,0 +1,31 @@
+{
+  "description": "Rust checkpoint batching guard: advance finished feature batches instead of repeating unchanged passing checks.",
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/usr/bin/python3 \"$(git rev-parse --show-toplevel)/scripts/checkpoint_guard.py\"",
+            "timeout": 5,
+            "statusMessage": "Checking Rust checkpoint batching"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/usr/bin/python3 \"$(git rev-parse --show-toplevel)/scripts/checkpoint_guard.py\"",
+            "timeout": 5,
+            "statusMessage": "Checking Rust checkpoint batching"
+          }
+        ]
+      }
+    ]
+  }
+}
