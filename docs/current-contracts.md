@@ -70,6 +70,13 @@ at all 34 applicable observations; observed post-update task p95 falls from
 1.292 to 0.514 seconds. Evidence completeness is unchanged. The separate resource
 review still refuses 10K under the unchanged guard; full capacity/HIGH remain open.
 
+The [host investigation diagnostic](validation-host-investigation.md) produced a
+complete cited brief on one development question: supported facts improved from
+1/4 in native context to 4/4 in the selected packet and final brief. All citations
+and preserved-source checks passed. The mandatory observation cadence failed, so
+the diagnostic has no all-gates acceptance or native HIGH credit. The original
+ten-question trial remains INCOMPLETE; the other nine tasks are unrun.
+
 The [normalized Page reorganization workflow](validation-page-reorganization.md)
 passes scoped independent acceptance at 10/10 with every mandatory task and no
 blockers. Stable identity, authored/plain/unadopted incoming links, guarded editing,
