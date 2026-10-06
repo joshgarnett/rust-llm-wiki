@@ -644,3 +644,53 @@ accepts packet compaction and these two assisted answers. Native completeness
 remains 9/28 facts and 2/10 positive tasks; the original twelve-task trial remains
 failed, with its ten unrun tasks preserved. Publication, the full collection
 lifecycle, semantic relevance, unseen HIGH and practical 25K remain open.
+
+## Complete assisted draft lifecycle at 64 sources
+
+A prospectively declared successor reuses the two accepted answers and completes
+the remaining ten development tasks under the same questions and limits. The
+corrected twelve-answer set passes independent review at **9/10, every mandatory
+answer condition met, zero remaining correctness blockers**: all 28 requested
+facts across ten positive tasks and both explicit absent-information answers.
+The reviewer verifies 42 retained SourceRefs against returned, captured and
+original evidence. One extra archived comparison initially cites the wrong
+record; removing that comparison and its unused citation preserves the original
+failure and corrects the answer without another actor or query. The ten new
+actors use 32 extra public commands and 649.795 summed host UTC seconds.
+
+The same actual draft Page then passes save, title discovery, guarded author
+clarification and obsolete-hash refusal; Source refresh, immutable-history reads
+and prose reconciliation; withdrawal with current restore gaps and authenticated
+historical references; complete derived-cache loss, normalized rebuild, counted
+reacquisition and final guarded no-op. Both author notes, Page identity and draft
+status survive. The refreshed restore window becomes 37 minutes with new
+revision citations. After withdrawal those values remain historical evidence,
+while current deployment facts stay supported. Cache reconstruction preserves
+canonical files and retained history and advances publication identity.
+
+Independent final acceptance is **9/10, every scoped lifecycle mandatory met and
+zero remaining correctness blockers**. It checks actual receipts and 29
+reconciliation citation occurrences rather than relying on summary status. All
+72 postwithdrawal search/context captures succeed and return no SourceRef from
+the withdrawn Source. Reacquisition processes 553 corpus units and twelve query
+vectors; subsequent cached sync/check use no network and start no run. The final
+guarded edit is an authenticated no-op with identical full-file hash and body.
+
+Seven operators take 113.983 owning-process seconds, including 95.033 seconds
+for reconstruction, reacquisition and replay. The three reconciliation actors
+use fourteen verified reads, 32,710/40,216/41,207 raw evidence bytes and
+59.706/80.060/57.105 observed host UTC seconds. Cumulative synthetic transport is
+97 requests, 1,142 inputs, 12,640,725 wire bytes and 813,694,976 response-reservation
+bytes. Observed owned allocation peaks at 152,711,168 bytes, including retained
+and rebuilt caches. These are native release-opt3 development observations;
+physical I/O and model usage, cost and inference timing remain unavailable.
+
+Earlier incomplete reviews, timing failures, the original failed answer trial
+and conservative accounting holds remain preserved. Subsequent review allowances
+are funded prospectively from unused reservations within the original finite
+envelope; passing this successor does not retroactively pass those attempts.
+The exported cited-Page recipe now describes direct context and bounded targeted
+reading, with ID-only selection optional. Export/build/transfer qualification is
+a separate checkpoint. Native completeness remains **9/28 facts and 2/10 positive
+tasks**. Synthetic vectors qualify mechanics, not semantic relevance; native
+HIGH, full layout parity and practical 25K capacity remain open.
