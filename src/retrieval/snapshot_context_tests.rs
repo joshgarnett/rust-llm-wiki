@@ -20,6 +20,60 @@ const VAULT: &str = "vault_00000000-0000-7000-8000-00000000001b";
 const CLAIM: &str = "assertion_00000000-0000-7000-8000-00000000000a";
 
 #[test]
+fn omission_aggregation_preserves_exact_keys_counts_and_first_order() {
+    let omission = |record, path, reason: &str, count| ContextOmission {
+        record_id: record,
+        path,
+        reason: reason.into(),
+        count,
+    };
+    let record = Some(id(CLAIM));
+    let path = Some(VaultRelativePath::new("wiki/claim.md").unwrap());
+    let first = omission(record.clone(), path.clone(), "does_not_fit", 2);
+    let other_reason = omission(record.clone(), path.clone(), "excluded", 3);
+    let other_path = omission(
+        record.clone(),
+        Some(VaultRelativePath::new("wiki/other.md").unwrap()),
+        "does_not_fit",
+        4,
+    );
+    let other_record = omission(Some(id(VAULT)), path.clone(), "does_not_fit", 5);
+    let no_record = omission(None, path.clone(), "does_not_fit", 6);
+    let no_path = omission(record, None, "does_not_fit", 7);
+    let input = vec![
+        first.clone(),
+        other_reason.clone(),
+        omission(first.record_id.clone(), path, "does_not_fit", 8),
+        other_path.clone(),
+        other_record.clone(),
+        no_record.clone(),
+        no_path.clone(),
+        other_reason.clone(),
+    ];
+    let total: usize = input.iter().map(|item| item.count).sum();
+    let mut expected_first = first;
+    expected_first.count = 10;
+    let mut expected_reason = other_reason;
+    expected_reason.count = 6;
+    let aggregated = aggregate_omissions(input);
+    assert_eq!(
+        aggregated,
+        vec![
+            expected_first,
+            expected_reason,
+            other_path,
+            other_record,
+            no_record,
+            no_path
+        ]
+    );
+    assert_eq!(
+        aggregated.iter().map(|item| item.count).sum::<usize>(),
+        total
+    );
+}
+
+#[test]
 fn complementary_lexical_priority_survives_host_packet_card_cap() {
     // Five real owners each produce the bounded 32-proposal pool. Forty short
     // early paragraphs create many overlapping windows; one distant rare term

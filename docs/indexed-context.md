@@ -31,6 +31,11 @@ records its discovery generation, `captured_sources` evidence domain, verificati
 time and decoded catalog row/byte counters. `global_membership_verified` is false.
 The scope warning consumes the same rendered-text budget as the passages.
 
+JSON omissions group entries with the same record ID, path and reason. Their
+`count` preserves the total number of omissions; distinct targets and reasons
+remain separate, in first appearance order. This reduces repeated reporting
+without changing selected evidence or the rendered-text budget.
+
 The command checks the vault marker, selected source and revision records,
 current source heads, retained revision membership, provenance relationships,
 and complete original/content hashes. It authenticates cached text and metadata
@@ -349,6 +354,32 @@ note body and are not captured-source evidence offsets. An external edit to a
 selected dependency causes ordinary verification to refuse instead of emitting
 a stale citation. As with context, verification observes sequential reads and
 does not guarantee against an edit after the final recheck.
+
+## Reading a missing condition within a discovered source
+
+When a packet finds the right source but leaves a requested condition unsupported,
+search that captured payload for the missing condition before repeating the whole
+question. Use a payload path actually returned by verified discovery:
+
+```sh
+lwiki --offline --json --wiki VAULT search 'MISSING CONDITION' \
+  --mode lexical --path-prefix 'RETURNED PAYLOAD PATH' \
+  --limit 1 --candidates 80 --excerpt-bytes 512 --verify-selected --no-sync
+lwiki --offline --json --wiki VAULT read --path 'RETURNED PAYLOAD PATH' \
+  --start START --end END --max-bytes 4096
+```
+
+Use returned spans, anchors or bounded continuation ranges for the read. Keep
+the read's exact citation and eligibility; `--no-sync` on a read would make it
+cached and uncited. An empty search does not prove absence: an affordable verified
+read can still reveal omitted text. Distinguish approved instructions from draft
+text even when both captured revisions are Current.
+
+Set finite call, time and evidence limits before investigating. Count entire JSON
+responses, stderr, warnings and failed calls against the evidence allowance,
+including the initial packet. Stop with explicit gaps when a limit is exhausted.
+This assisted reading route does not establish automatic context completeness
+or global source coverage.
 
 ## Rebuilding after complete derived-cache loss
 

@@ -607,3 +607,40 @@ bounded reading workflow before another intervention. Keep any eventual draft
 outside `sources/`, count reacquisition after cache loss, and score native evidence
 separately from assisted answers. The complete workflow, representative 25K
 capacity and unseen HIGH remain open.
+
+## Omission compaction and targeted reading
+
+A fresh architecture critic identified repeated omission records as a concrete
+transport cost in the failed D01 and D09 packets. Context now groups identical
+record/path/reason entries in first appearance order and sums their existing
+counts. It changes neither passage selection nor the citation schema. The
+[targeted reading guide](indexed-context.md#reading-a-missing-condition-within-a-discovered-source)
+uses ordinary searches within returned source payloads and verified range reads.
+
+One grouped release-opt3 native checkpoint builds the CLI and unit tests in
+112.800 seconds, with both affected checks passing. It reuses the earlier
+unchanged correctness evidence. Exactly two public context captures compare
+against the preserved baseline: D01 falls from 30,507 to 17,270 JSON bytes
+(43.390%); D09 falls from 31,936 to 18,604 bytes (41.746%). Evidence, text,
+passages, citations, bundles, dependencies, snapshot, warnings, truncation and
+substantive usage match exactly. Only the verification timestamp and omission
+representation differ. The seven omission records in each packet preserve
+their distinct keys, first ordering and total counts of 151 and 152.
+
+Two fresh assisted tasks retain the original questions and limits. D09 completes
+its six requested fields and linked procedure with four additional public calls,
+32,146 total evidence bytes and a 4,046-byte answer. D01 completes both requested
+aspects with seven calls, 43,829 bytes and a 793-byte answer; one usage error and
+its correction remain recorded. Targeted searches miss its profile statement,
+which a bounded verified read supplies. Both stay within 12 extra calls, 48 KiB
+of full raw evidence, 6,000 answer bytes and 120 observed UTC seconds per task.
+Observed host turnaround is 66.242/113.081 seconds, including dispatch overhead;
+model usage, cost and inference time are unavailable.
+
+Independent acceptance is **9.5/10, every scoped mandatory condition passed and
+zero correctness blockers**. All ten final SourceRefs match returned evidence,
+captured and original ranges, identities, eligibility and quote hashes. This
+accepts packet compaction and these two assisted answers. Native completeness
+remains 9/28 facts and 2/10 positive tasks; the original twelve-task trial remains
+failed, with its ten unrun tasks preserved. Publication, the full collection
+lifecycle, semantic relevance, unseen HIGH and practical 25K remain open.

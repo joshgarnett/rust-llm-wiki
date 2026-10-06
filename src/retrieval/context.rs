@@ -1836,7 +1836,7 @@ pub(super) fn pack(
                 text: String::new(),
                 passages: vec![],
                 bundles: vec![],
-                omissions,
+                omissions: aggregate_omissions(omissions),
                 usage: ContextUsage {
                     rendered_bytes: 0,
                     estimated_tokens: 0,
@@ -2249,7 +2249,7 @@ pub(super) fn pack(
         text,
         passages,
         bundles,
-        omissions,
+        omissions: aggregate_omissions(omissions),
         usage: ContextUsage {
             rendered_bytes,
             estimated_tokens,
@@ -2268,6 +2268,25 @@ pub(super) fn pack(
         warnings,
         selection_packet: None,
     })
+}
+
+fn aggregate_omissions(omissions: Vec<ContextOmission>) -> Vec<ContextOmission> {
+    let mut indices: BTreeMap<_, usize> = BTreeMap::new();
+    let mut aggregated: Vec<ContextOmission> = Vec::new();
+    for omission in omissions {
+        let key = (
+            omission.record_id.clone(),
+            omission.path.clone(),
+            omission.reason.clone(),
+        );
+        if let Some(&index) = indices.get(&key) {
+            aggregated[index].count += omission.count;
+        } else {
+            indices.insert(key, aggregated.len());
+            aggregated.push(omission);
+        }
+    }
+    aggregated
 }
 
 #[cfg(test)]
