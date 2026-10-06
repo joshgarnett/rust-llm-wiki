@@ -5,6 +5,7 @@ pub mod credentials;
 #[cfg(test)]
 mod dispatch_tests;
 pub mod dispatcher;
+pub mod invocation_budget;
 pub mod retry;
 pub mod transport;
 pub mod types;

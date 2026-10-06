@@ -2072,3 +2072,691 @@ fn fixed_response_diagnostics_are_spooled_without_provider_text() {
         assert_eq!(mock.calls.load(Ordering::SeqCst), 1);
     }
 }
+
+// Exercise invocation composition against the real durable ledger arithmetic.
+use crate as lwiki;
+#[path = "../../tests/fixtures/p15/common.rs"]
+mod invocation_ledger_fixture;
+use super::invocation_budget::InvocationBudget;
+fn second_invocation_run(
+    fs: &crate::vault::VaultFs,
+    spec: &RunSpec,
+    clock: Arc<invocation_ledger_fixture::Clock>,
+) -> JobLedger {
+    let mut next = spec.clone();
+    next.run_id = invocation_ledger_fixture::id("run_invocation_second");
+    next.input_fingerprint = crate::jobs::tasks::input_fingerprint(&next).unwrap();
+    let ledger = JobLedger::new(
+        fs.clone(),
+        next.vault_id.clone(),
+        next.run_id.clone(),
+        invocation_ledger_fixture::options(clock),
+    )
+    .unwrap();
+    let writer = crate::vault::WriterPermit::acquire(fs.root(), Duration::from_secs(1)).unwrap();
+    ledger.create(&writer, next).unwrap();
+    drop(writer);
+    ledger.start().unwrap();
+    ledger
+}
+fn invocation_owned_attempt(
+    invocation: &InvocationBudget,
+    ledger: &JobLedger,
+    task: &TaskSpec,
+    bound: &AttemptBound,
+    now: i64,
+) -> AttemptRef {
+    let slot = invocation
+        .reserve(ledger, bound, now, invocation.deadline_utc_ms())
+        .unwrap();
+    let reservation = ledger.reserve(&task.key, bound.clone()).unwrap();
+    let reference = reservation.attempt().clone();
+    invocation.bind(slot, &reference).unwrap();
+    let permit = ledger.dispatch_intent(reservation).unwrap();
+    drop(ledger.begin_send(permit).unwrap());
+    reference
+}
+fn settle_invocation_response(
+    fs: &crate::vault::VaultFs,
+    ledger: &JobLedger,
+    reference: &AttemptRef,
+    known: bool,
+) {
+    let response = ResponseSpoolInput {
+        bytes: b"fixture".to_vec(),
+        metadata: ResponseMetadata {
+            provider_request_id: None,
+            returned_model: None,
+            status_code: Some(200),
+            terminal_response: true,
+            usage: KnownOrUnknown::Known(Usage {
+                request_bytes: 100,
+                response_bytes: 7,
+                billable_units: [
+                    (BillableClass::Input, 10),
+                    (BillableClass::Output, 5),
+                    (BillableClass::Reasoning, 1),
+                ]
+                .into_iter()
+                .map(|(class, count)| (class, KnownOrUnknown::Known(count)))
+                .collect(),
+            }),
+            computed_cost: if known {
+                KnownOrUnknown::Known(Money::new(Currency::new("USD").unwrap(), 1))
+            } else {
+                KnownOrUnknown::Unknown
+            },
+            failure_code: None,
+        },
+    };
+    ledger.record_response(reference, response).unwrap();
+    let plan = crate::jobs::checkpoint::receipt_plan(
+        ledger,
+        reference,
+        OutputDisposition::Rejected,
+        vec![],
+        vec![],
+        vec![],
+    )
+    .unwrap();
+    let receipt_id = plan.receipt.receipt_id.clone();
+    let operation = plan.draft.operations.last().unwrap();
+    let receipt = DurableOutputRef {
+        record: RecordRef {
+            vault_id: invocation_ledger_fixture::id("vault_test"),
+            record_id: receipt_id,
+            expected_kind: RecordKind::RunEvent,
+        },
+        path: operation.target.clone(),
+        hash: Blake3Hash::digest(operation.proposed.as_ref().unwrap()),
+    };
+    let writer = crate::vault::WriterPermit::acquire(fs.root(), Duration::from_secs(1)).unwrap();
+    let engine = crate::changes::ChangeEngine::new(fs.clone()).unwrap();
+    let prepared = engine.prepare(&writer, plan.draft).unwrap().prepared;
+    engine
+        .apply(
+            &writer,
+            &prepared,
+            &crate::catalog::CatalogGraphValidator,
+            &crate::catalog::Catalog::new(fs.clone(), invocation_ledger_fixture::id("vault_test")),
+        )
+        .unwrap();
+    drop(writer);
+    ledger
+        .outputs_committed(reference, &prepared, receipt, vec![], vec![])
+        .unwrap();
+    ledger.settle(reference).unwrap();
+}
+#[test]
+fn invocation_budget_known_settlement_recovers_response_slack_but_unknown_does_not() {
+    for known in [false, true] {
+        let (_temp, fs, job, spec, clock) = invocation_ledger_fixture::fixture(1, |_| {});
+        let second = second_invocation_run(&fs, &spec, clock);
+        let budget = InvocationBudget::new(
+            LifetimeLimits {
+                response_bytes: Some(1500),
+                ..Default::default()
+            },
+            spec.created_at_utc_ms,
+            spec.deadline_utc_ms,
+        )
+        .unwrap();
+        let bound = invocation_ledger_fixture::priced_bound(&spec.tasks[0]);
+        let reference = invocation_owned_attempt(
+            &budget,
+            &job,
+            &spec.tasks[0],
+            &bound,
+            spec.created_at_utc_ms,
+        );
+        settle_invocation_response(&fs, &job, &reference, known);
+        let selected = job
+            .invocation_accounting(std::slice::from_ref(&reference))
+            .unwrap();
+        assert_eq!(selected.settled.requests, u64::from(known));
+        assert_eq!(selected.outstanding.requests, u64::from(!known));
+        let admission = budget.reserve(
+            &second,
+            &bound,
+            spec.created_at_utc_ms,
+            spec.deadline_utc_ms,
+        );
+        assert_eq!(admission.is_ok(), known);
+        if !known {
+            assert_eq!(admission.unwrap_err().code, ErrorCode::BudgetExceeded);
+        }
+    }
+}
+#[test]
+fn invocation_budget_all_ceilings_compose_across_runs_and_not_sent_preserves_rates() {
+    for resource in [
+        "requests",
+        "request_bytes",
+        "response_bytes",
+        "class",
+        "cost",
+        "concurrency",
+        "requests_rate",
+        "tokens_rate",
+    ] {
+        let (_temp, fs, job, spec, clock) = invocation_ledger_fixture::fixture(1, |_| {});
+        let second = second_invocation_run(&fs, &spec, clock);
+        let mut limits = LifetimeLimits::default();
+        match resource {
+            "requests" => limits.requests = 1,
+            "request_bytes" => limits.request_bytes = Some(100),
+            "response_bytes" => limits.response_bytes = Some(1000),
+            "class" => {
+                limits.billable_units.insert(BillableClass::Input, 100);
+            }
+            "cost" => limits.max_cost = Some(Money::new(Currency::new("USD").unwrap(), 1)),
+            "concurrency" => limits.concurrency = 1,
+            "requests_rate" => limits.requests_per_minute = Some(1),
+            "tokens_rate" => limits.tokens_per_minute = Some(250),
+            _ => unreachable!(),
+        }
+        let budget =
+            InvocationBudget::new(limits, spec.created_at_utc_ms, spec.deadline_utc_ms).unwrap();
+        let bound = invocation_ledger_fixture::priced_bound(&spec.tasks[0]);
+        let slot = budget
+            .reserve(&job, &bound, spec.created_at_utc_ms, spec.deadline_utc_ms)
+            .unwrap();
+        let reservation = job.reserve(&spec.tasks[0].key, bound.clone()).unwrap();
+        let reference = reservation.attempt().clone();
+        budget.bind(slot, &reference).unwrap();
+        if resource.ends_with("rate") {
+            job.release_not_sent(
+                &reference,
+                NotSentObservation {
+                    reason: NotSentReason::TransportNotEntered,
+                },
+            )
+            .unwrap();
+            assert_eq!(
+                job.invocation_accounting(std::slice::from_ref(&reference))
+                    .unwrap()
+                    .outstanding
+                    .requests,
+                0
+            );
+        }
+        let refused = budget
+            .reserve(
+                &second,
+                &bound,
+                spec.created_at_utc_ms,
+                spec.deadline_utc_ms,
+            )
+            .unwrap_err();
+        assert_eq!(refused.code, ErrorCode::BudgetExceeded, "{resource}");
+        assert_eq!(second.inspect().unwrap().attempts.len(), 0);
+        assert_eq!(job.inspect().unwrap().effective_limits, spec.limits);
+    }
+}
+#[test]
+fn invocation_budget_proven_not_sent_releases_lifetime_and_concurrency_holds() {
+    let (_temp, fs, job, spec, clock) = invocation_ledger_fixture::fixture(1, |_| {});
+    let second = second_invocation_run(&fs, &spec, clock);
+    let budget = InvocationBudget::new(
+        LifetimeLimits {
+            requests: 1,
+            concurrency: 1,
+            ..Default::default()
+        },
+        spec.created_at_utc_ms,
+        spec.deadline_utc_ms,
+    )
+    .unwrap();
+    let bound = invocation_ledger_fixture::bound(&spec.tasks[0]);
+    let slot = budget
+        .reserve(&job, &bound, spec.created_at_utc_ms, spec.deadline_utc_ms)
+        .unwrap();
+    let reservation = job.reserve(&spec.tasks[0].key, bound.clone()).unwrap();
+    let reference = reservation.attempt().clone();
+    budget.bind(slot, &reference).unwrap();
+    job.release_not_sent(
+        &reference,
+        NotSentObservation {
+            reason: NotSentReason::TransportNotEntered,
+        },
+    )
+    .unwrap();
+    assert!(
+        budget
+            .reserve(
+                &second,
+                &bound,
+                spec.created_at_utc_ms,
+                spec.deadline_utc_ms
+            )
+            .is_ok()
+    );
+}
+#[test]
+fn invocation_budget_concurrent_contenders_cannot_both_reserve_last_slot() {
+    let (_temp, fs, job, spec, clock) = invocation_ledger_fixture::fixture(1, |_| {});
+    let second = second_invocation_run(&fs, &spec, clock);
+    let budget = InvocationBudget::new(
+        LifetimeLimits {
+            requests: 1,
+            concurrency: 2,
+            ..Default::default()
+        },
+        spec.created_at_utc_ms,
+        spec.deadline_utc_ms,
+    )
+    .unwrap();
+    let bound = invocation_ledger_fixture::bound(&spec.tasks[0]);
+    let gate = std::sync::Barrier::new(2);
+    let results = std::thread::scope(|scope| {
+        let one = scope.spawn(|| {
+            gate.wait();
+            budget.reserve(&job, &bound, spec.created_at_utc_ms, spec.deadline_utc_ms)
+        });
+        let two = scope.spawn(|| {
+            gate.wait();
+            budget.reserve(
+                &second,
+                &bound,
+                spec.created_at_utc_ms,
+                spec.deadline_utc_ms,
+            )
+        });
+        [one.join().unwrap(), two.join().unwrap()]
+    });
+    assert_eq!(results.iter().filter(|result| result.is_ok()).count(), 1);
+    assert_eq!(
+        results
+            .iter()
+            .filter_map(|result| result.as_ref().err())
+            .next()
+            .unwrap()
+            .code,
+        ErrorCode::BudgetExceeded
+    );
+}
+#[test]
+fn invocation_budget_retry_and_credential_refresh_each_require_new_allowance() {
+    for (status, command) in [(503, false), (429, false), (401, true)] {
+        let c = case(
+            "https://gateway.example/v1/embeddings",
+            command,
+            ExecutionPolicy::default(),
+            |_| {},
+            None,
+        );
+        let mock = Mock::new(vec![reply(status, GOOD)]);
+        let budget = InvocationBudget::new(
+            LifetimeLimits {
+                requests: 1,
+                ..Default::default()
+            },
+            c.spec.created_at_utc_ms,
+            c.spec.deadline_utc_ms,
+        )
+        .unwrap();
+        let failed = dispatch(&c, mock.clone())
+            .execute_with_invocation(
+                &c.job,
+                &c.trusted,
+                &c.spec.tasks[0].key,
+                DispatchPurpose::Task,
+                &budget,
+            )
+            .err()
+            .unwrap();
+        assert_eq!(failed.error.code, ErrorCode::BudgetExceeded);
+        assert_eq!(failed.error.details["budget_scope"], "invocation");
+        assert_eq!(mock.calls.load(Ordering::SeqCst), 1);
+        assert_eq!(c.job.inspect().unwrap().budget.dispatched_requests, 1);
+        assert!(failed.spool.is_some());
+    }
+}
+#[test]
+fn invocation_budget_original_deadline_refuses_fresh_run_and_late_credential_helper() {
+    let c = case(
+        "https://gateway.example/v1/embeddings",
+        false,
+        ExecutionPolicy::default(),
+        |_| {},
+        None,
+    );
+    let budget = InvocationBudget::new(
+        c.spec.limits.clone(),
+        c.spec.created_at_utc_ms,
+        c.spec.created_at_utc_ms + 1500,
+    )
+    .unwrap();
+    c.clock.utc.store(1000, Ordering::SeqCst);
+    let mock = Mock::new(vec![]);
+    let failed = dispatch(&c, mock.clone())
+        .execute_with_invocation(
+            &c.job,
+            &c.trusted,
+            &c.spec.tasks[0].key,
+            DispatchPurpose::Task,
+            &budget,
+        )
+        .err()
+        .unwrap();
+    assert_eq!(failed.error.code, ErrorCode::BudgetExceeded);
+    assert_eq!(mock.calls.load(Ordering::SeqCst), 0);
+    assert!(c.job.inspect().unwrap().attempts.is_empty());
+    let shared_clock: Arc<Mutex<Option<Arc<Clock>>>> = Arc::new(Mutex::new(None));
+    let helper_clock = shared_clock.clone();
+    let c = case(
+        "https://gateway.example/v1/embeddings",
+        true,
+        ExecutionPolicy::default(),
+        |_| {},
+        Some(Arc::new(move || {
+            helper_clock
+                .lock()
+                .unwrap()
+                .as_ref()
+                .unwrap()
+                .utc
+                .store(1000, Ordering::SeqCst);
+        })),
+    );
+    *shared_clock.lock().unwrap() = Some(c.clock.clone());
+    let budget = InvocationBudget::new(
+        c.spec.limits.clone(),
+        c.spec.created_at_utc_ms,
+        c.spec.created_at_utc_ms + 1500,
+    )
+    .unwrap();
+    let mock = Mock::new(vec![]);
+    let failed = dispatch(&c, mock.clone())
+        .execute_with_invocation(
+            &c.job,
+            &c.trusted,
+            &c.spec.tasks[0].key,
+            DispatchPurpose::Task,
+            &budget,
+        )
+        .err()
+        .unwrap();
+    assert_eq!(failed.error.code, ErrorCode::BudgetExceeded);
+    assert_eq!(mock.calls.load(Ordering::SeqCst), 0);
+    assert_eq!(c.runner.calls.load(Ordering::SeqCst), 1);
+    let attempt = c.job.inspect().unwrap().attempts[0].clone();
+    assert_eq!(attempt.billing, BillingDisposition::ReleasedNotSent);
+}
+
+#[test]
+fn invocation_budget_selected_projection_excludes_unrelated_history_and_tracks_reconciliation() {
+    let (_temp, fs, job, spec, _clock) = invocation_ledger_fixture::fixture(2, |_| {});
+    let bound = invocation_ledger_fixture::priced_bound(&spec.tasks[0]);
+    let budget = InvocationBudget::new(
+        spec.limits.clone(),
+        spec.created_at_utc_ms,
+        spec.deadline_utc_ms,
+    )
+    .unwrap();
+    let owned = invocation_owned_attempt(
+        &budget,
+        &job,
+        &spec.tasks[0],
+        &bound,
+        spec.created_at_utc_ms,
+    );
+    settle_invocation_response(&fs, &job, &owned, false);
+    let outside = job
+        .reserve(
+            &spec.tasks[1].key,
+            invocation_ledger_fixture::priced_bound(&spec.tasks[1]),
+        )
+        .unwrap();
+    let historical = outside.attempt().clone();
+    let permit = job.dispatch_intent(outside).unwrap();
+    drop(job.begin_send(permit).unwrap());
+    job.outcome_unknown(&historical, "independent_historical_exposure")
+        .unwrap();
+    assert_eq!(job.inspect().unwrap().budget.outstanding.requests, 2);
+    let before = job
+        .invocation_accounting(std::slice::from_ref(&owned))
+        .unwrap();
+    assert_eq!(before.outstanding.requests, 1);
+    assert_eq!(before.unknown_attempts, vec![owned.attempt_id.clone()]);
+    job.reconcile(
+        &owned,
+        true,
+        KnownOrUnknown::Known(Usage {
+            request_bytes: 100,
+            response_bytes: 7,
+            billable_units: [
+                (BillableClass::Input, 10),
+                (BillableClass::Output, 5),
+                (BillableClass::Reasoning, 1),
+            ]
+            .into_iter()
+            .map(|(class, count)| (class, KnownOrUnknown::Known(count)))
+            .collect(),
+        }),
+        KnownOrUnknown::Known(Money::new(Currency::new("USD").unwrap(), 1)),
+        "proven_later_billing",
+    )
+    .unwrap();
+    let after = job
+        .invocation_accounting(std::slice::from_ref(&owned))
+        .unwrap();
+    assert_eq!(after.outstanding.requests, 0);
+    assert_eq!(after.settled.requests, 1);
+    assert_eq!(after.settled.response_bytes, 7);
+    assert_eq!(job.inspect().unwrap().budget.outstanding.requests, 1);
+}
+
+#[test]
+fn historical_embedding_completion_preserves_live_dependency_global_descriptor_and_receipt_guards()
+{
+    for control in [
+        "dependency",
+        "global",
+        "descriptor",
+        "receipt",
+        "missing_receipt",
+        "cleanup_reconciled",
+        "failed_dependency",
+        "rejected_global",
+    ] {
+        let c = case(
+            "https://gateway.example/v1/embeddings",
+            false,
+            ExecutionPolicy::default(),
+            |_| {},
+            None,
+        );
+        let mut spec = c.spec.clone();
+        spec.run_id = id("run_history_guard");
+        let input_bytes =
+            std::fs::read(c.fs.root().resolve(&spec.tasks[0].input.path).unwrap()).unwrap();
+        let descriptor: RemoteInput = serde_json::from_slice(&input_bytes).unwrap();
+        let canonical = crate::graph::packet::canonical_json(&descriptor).unwrap();
+        let input_path = VaultRelativePath::new("inputs/historical-canonical.json").unwrap();
+        std::fs::write(c.fs.root().resolve(&input_path).unwrap(), &canonical).unwrap();
+        spec.tasks[0].stage = TaskStage::Embed;
+        spec.tasks[0].input.path = input_path;
+        spec.tasks[0].input.byte_len = canonical.len() as u64;
+        spec.tasks[0].input.hash = Blake3Hash::digest(&canonical);
+        spec.tasks[0].input_hash = Blake3Hash::digest(&canonical);
+        let guard_path = VaultRelativePath::new("historical-supplier.txt").unwrap();
+        spec.tasks[0]
+            .source_bindings
+            .push(crate::changes::ReadDependency {
+                path: guard_path.clone(),
+                expected: crate::vault::ExpectedState::Absent,
+            });
+        spec.tasks[0].key = crate::jobs::tasks::task_key(&spec.tasks[0]).unwrap();
+        let mut sibling = spec.tasks[0].clone();
+        sibling.input.path = VaultRelativePath::new("inputs/historical-sibling.json").unwrap();
+        std::fs::write(
+            c.fs.root().resolve(&sibling.input.path).unwrap(),
+            &canonical,
+        )
+        .unwrap();
+        sibling.source_bindings.clear();
+        sibling.key = crate::jobs::tasks::task_key(&sibling).unwrap();
+        if matches!(control, "dependency" | "failed_dependency") {
+            sibling.dependencies.push(spec.tasks[0].key.clone());
+        }
+        spec.tasks.push(sibling);
+        let global_path = VaultRelativePath::new("historical-global.txt").unwrap();
+        if matches!(control, "global" | "rejected_global") {
+            spec.scope
+                .read_preconditions
+                .push(crate::changes::ReadDependency {
+                    path: global_path.clone(),
+                    expected: crate::vault::ExpectedState::Absent,
+                });
+        }
+        spec.input_fingerprint = crate::jobs::tasks::input_fingerprint(&spec).unwrap();
+        let job = JobLedger::new(
+            c.fs.clone(),
+            spec.vault_id.clone(),
+            spec.run_id.clone(),
+            c.job.dispatcher_bindings().3,
+        )
+        .unwrap();
+        let writer =
+            crate::vault::WriterPermit::acquire(c.fs.root(), Duration::from_secs(1)).unwrap();
+        job.create(&writer, spec.clone()).unwrap();
+        drop(writer);
+        job.start().unwrap();
+        let mock = Mock::new(vec![reply(200, br#"{"model":"test-model","data":[{"index":0,"embedding":[1.0,0.0]}],"usage":{"prompt_tokens":1,"total_tokens":1}}"#)]);
+        let out = dispatch(&c, mock)
+            .execute(&job, &c.trusted, &spec.tasks[0].key, DispatchPurpose::Task)
+            .unwrap_or_else(|failure| panic!("{:?}", failure.error));
+        let rejected = matches!(control, "failed_dependency" | "rejected_global");
+        let plan = crate::jobs::checkpoint::receipt_plan(
+            &job,
+            &out.attempt,
+            if rejected {
+                OutputDisposition::Rejected
+            } else {
+                OutputDisposition::Validated
+            },
+            vec![],
+            vec![],
+            vec![],
+        )
+        .unwrap();
+        crate::jobs::settle_receipt(&c.fs, &job, plan).unwrap();
+        if control == "rejected_global" {
+            std::fs::write(
+                c.fs.root().resolve(&global_path).unwrap(),
+                b"changed global authority",
+            )
+            .unwrap();
+            assert_eq!(
+                job.finish_rejected_remote_task(&spec.tasks[0].key)
+                    .unwrap_err()
+                    .code,
+                ErrorCode::FreshnessConflict
+            );
+            assert_eq!(
+                job.inspect().unwrap().tasks[&spec.tasks[0].key].state,
+                TaskState::Running
+            );
+        } else if rejected {
+            job.finish_rejected_remote_task(&spec.tasks[0].key).unwrap();
+            assert!(job.ready_tasks().unwrap().is_empty());
+            assert_eq!(
+                job.reserve(
+                    &spec.tasks[1].key,
+                    invocation_ledger_fixture::bound(&spec.tasks[1])
+                )
+                .err()
+                .unwrap()
+                .code,
+                ErrorCode::FreshnessConflict
+            );
+        } else {
+            job.finish_remote_task(&spec.tasks[0].key, vec![], vec![], |_| Ok(true))
+                .unwrap();
+            // Historical authority must survive ordinary response cleanup.
+            // Corruption controls then operate on the surviving receipt alone.
+            let original_receipt = job.inspect().unwrap().attempts[0].receipt.clone().unwrap();
+            let original_bytes =
+                std::fs::read(c.fs.root().resolve(&original_receipt.path).unwrap()).unwrap();
+            let receipt = crate::jobs::checkpoint::receipt(&c.fs, &original_receipt).unwrap();
+            job.remove_spool_after_verified_commit(&out.attempt)
+                .unwrap();
+            assert!(job.inspect().unwrap().attempts[0].spool.is_none());
+            if control == "cleanup_reconciled" {
+                assert_eq!(
+                    job.inspect().unwrap().attempts[0].billing,
+                    BillingDisposition::UnknownReserved
+                );
+                job.reconcile(
+                    &out.attempt,
+                    true,
+                    receipt.usage.clone(),
+                    KnownOrUnknown::Known(Money::new(Currency::new("USD").unwrap(), 1)),
+                    "later_proven_billing",
+                )
+                .unwrap();
+                assert_eq!(
+                    job.inspect().unwrap().attempts[0].billing,
+                    BillingDisposition::KnownSettled
+                );
+                assert_eq!(
+                    std::fs::read(c.fs.root().resolve(&original_receipt.path).unwrap()).unwrap(),
+                    original_bytes
+                );
+                job.finish_remote_task(&spec.tasks[0].key, vec![], vec![], |_| Ok(true))
+                    .unwrap();
+                let ready = job.ready_tasks().unwrap();
+                assert_eq!(ready.len(), 1);
+                assert_eq!(ready[0].key, spec.tasks[1].key);
+                let fresh = Mock::new(vec![reply(200, br#"{"model":"test-model","data":[{"index":0,"embedding":[1.0,0.0]}],"usage":{"prompt_tokens":1,"total_tokens":1}}"#)]);
+                dispatch(&c, fresh.clone())
+                    .execute(&job, &c.trusted, &spec.tasks[1].key, DispatchPurpose::Task)
+                    .unwrap_or_else(|failure| panic!("{:?}", failure.error));
+                assert_eq!(fresh.calls.load(Ordering::SeqCst), 1);
+                assert_eq!(job.inspect().unwrap().budget.dispatched_requests, 2);
+                continue;
+            }
+            match control {
+                "dependency" => std::fs::write(
+                    c.fs.root().resolve(&guard_path).unwrap(),
+                    b"changed supplier",
+                )
+                .unwrap(),
+                "global" => std::fs::write(
+                    c.fs.root().resolve(&global_path).unwrap(),
+                    b"changed global authority",
+                )
+                .unwrap(),
+                "descriptor" => std::fs::write(
+                    c.fs.root().resolve(&spec.tasks[0].input.path).unwrap(),
+                    b"modified descriptor",
+                )
+                .unwrap(),
+                "missing_receipt" => {
+                    std::fs::remove_file(c.fs.root().resolve(&original_receipt.path).unwrap())
+                        .unwrap();
+                }
+                "receipt" => {
+                    let receipt = job.inspect().unwrap().attempts[0].receipt.clone().unwrap();
+                    std::fs::write(
+                        c.fs.root().resolve(&receipt.path).unwrap(),
+                        b"modified receipt",
+                    )
+                    .unwrap();
+                }
+                _ => unreachable!(),
+            }
+            assert!(job.ready_tasks().is_err(), "{control}");
+            if control == "global" {
+                assert_eq!(
+                    job.finish_remote_task(&spec.tasks[0].key, vec![], vec![], |_| Ok(true))
+                        .unwrap_err()
+                        .code,
+                    ErrorCode::FreshnessConflict
+                );
+            }
+            assert_eq!(job.inspect().unwrap().budget.dispatched_requests, 1);
+        }
+    }
+}

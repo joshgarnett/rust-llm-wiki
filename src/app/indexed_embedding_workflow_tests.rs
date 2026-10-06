@@ -727,13 +727,23 @@ fn normalized_received_source_change_rejects_paid_output_without_resend_or_hold_
     assert_ne!(changed.allocated_ids["revision"], old_revision);
 
     let resumed = runtime(&fixture.service, &dispatch);
-    let conflict = fixture
-        .app
-        .embeddings_sync(&settings, &resumed)
-        .unwrap_err();
-    assert_eq!(conflict.code, ErrorCode::FreshnessConflict, "{conflict:?}");
-    assert_eq!(responses.calls.load(Ordering::SeqCst), 1);
+    let replacement = fixture.app.embeddings_sync(&settings, &resumed).unwrap();
+    complete(&replacement, 1);
+    assert_eq!(replacement.generated_inputs, 1);
+    assert_eq!(responses.calls.load(Ordering::SeqCst), 2);
+    assert_ne!(replacement.run_id.as_ref(), Some(&before.spec.run_id));
+    assert!(
+        replacement
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("rejected embedding response"))
+    );
     let after = job.inspect().unwrap();
+    assert_eq!(after.state, RunState::Failed);
+    assert_eq!(
+        after.tasks[&before.attempts[0].attempt.task_key].state,
+        TaskState::Failed
+    );
     assert_eq!(after.attempts.len(), 1);
     let attempt = &after.attempts[0];
     assert_eq!(attempt.attempt, before.attempts[0].attempt);
@@ -759,19 +769,44 @@ fn normalized_received_source_change_rejects_paid_output_without_resend_or_hold_
         after.budget.dispatched_requests,
         before.budget.dispatched_requests
     );
-    assert!(
-        VectorStore::open(&fixture.fs, None)
-            .unwrap()
-            .active()
-            .unwrap()
-            .is_none()
+    let active = VectorStore::open(&fixture.fs, None)
+        .unwrap()
+        .active()
+        .unwrap()
+        .unwrap();
+    assert_eq!(Some(&active.id), replacement.active_space.as_ref());
+    fixture.query_seed(&fixture.spec(), "Signalneedle", vec![1.0, 0.0]);
+    let current = fixture
+        .offline()
+        .semantic_search_selected(
+            "Signalneedle",
+            &plan(SearchMode::Semantic, vec![source.clone()], 8),
+            None,
+            false,
+        )
+        .unwrap();
+    selected_verification(&current);
+    assert_eq!(current.hits.len(), 1);
+    assert_eq!(
+        current.hits[0].owner_revision.as_ref(),
+        Some(&changed.allocated_ids["revision"])
+    );
+    assert_eq!(
+        std::fs::read(
+            fixture
+                .fs
+                .root()
+                .path()
+                .join(content_path(&source, &old_revision).as_str())
+        )
+        .unwrap(),
+        FIRST.as_bytes()
     );
 
-    let replacement = fixture.app.embeddings_sync(&settings, &resumed).unwrap();
-    complete(&replacement, 1);
-    assert_eq!(replacement.generated_inputs, 1);
+    let repeated = fixture.app.embeddings_sync(&settings, &resumed).unwrap();
+    complete(&repeated, 1);
+    assert_eq!(repeated.generated_inputs, 0);
     assert_eq!(responses.calls.load(Ordering::SeqCst), 2);
-    assert_ne!(replacement.run_id.as_ref(), Some(&before.spec.run_id));
     let retained = job.inspect().unwrap();
     assert_eq!(retained.attempts, after.attempts);
     assert_eq!(

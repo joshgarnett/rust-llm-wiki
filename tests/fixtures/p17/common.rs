@@ -211,19 +211,22 @@ pub fn runtime<'a>(
     service: &'a TrustedService,
     dispatcher: &'a Dispatcher,
 ) -> EmbeddingRuntime<'a> {
-    EmbeddingRuntime {
-        requested_limits: None,
+    let job_options = options();
+    let started = job_options.clock.read().unwrap().utc_ms;
+    EmbeddingRuntime::new(
         service,
         dispatcher,
-        job_options: options(),
-        limits: LifetimeLimits {
+        job_options,
+        LifetimeLimits {
             requests: 64,
             attempts_per_task: 1,
             concurrency: 1,
             ..Default::default()
         },
-        deadline_ms: 900000,
-    }
+        started,
+        started + 900000,
+        None,
+    )
 }
 pub fn corpus(f: &Fixture) -> Vec<RenderedUnit> {
     render::corpus(&f.reader(), &EmbeddingSettings::default()).unwrap()

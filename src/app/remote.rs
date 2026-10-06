@@ -239,7 +239,7 @@ pub(crate) fn finish_provider_job(ledger: &JobLedger) -> Result<Option<String>> 
     if inspection
         .tasks
         .values()
-        .any(|task| task.state != TaskState::Completed)
+        .any(|task| !matches!(task.state, TaskState::Completed | TaskState::Failed))
     {
         return Ok(None);
     }
@@ -252,13 +252,22 @@ pub(crate) fn finish_provider_job(ledger: &JobLedger) -> Result<Option<String>> 
             ledger.pause(StopReason::OutcomeUnknown)?;
         }
         return Ok(Some(format!(
-            "Outputs are available; job {} retains an unsettled earlier attempt and its billing/concurrency holds. Inspect with jobs status --run {}.",
+            "Job {} has finished tasks but retains an unsettled earlier attempt and its billing/concurrency holds. Inspect with jobs status --run {}.",
             inspection.spec.run_id, inspection.spec.run_id
         )));
     }
+    let failed = inspection
+        .tasks
+        .values()
+        .any(|task| task.state == TaskState::Failed);
     if matches!(inspection.state, RunState::Paused | RunState::Stopped) {
         ledger.resume(None)?;
     }
-    ledger.complete_run()?;
-    Ok(None)
+    if !matches!(inspection.state, RunState::Completed | RunState::Failed) {
+        ledger.complete_run()?;
+    }
+    Ok(failed.then(|| format!(
+        "Job {} finished with rejected embedding work; unchanged tasks kept their original Run and accounting. Inspect with jobs status --run {}.",
+        inspection.spec.run_id, inspection.spec.run_id
+    )))
 }

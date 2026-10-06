@@ -85,6 +85,7 @@ struct HitScope<'a> {
     context: Option<bool>,
     graph: Option<&'a GraphPlan>,
 }
+#[derive(Clone)]
 pub struct EmbeddingRuntime<'a> {
     pub service: &'a TrustedService,
     pub dispatcher: &'a Dispatcher,
@@ -92,6 +93,59 @@ pub struct EmbeddingRuntime<'a> {
     pub limits: LifetimeLimits,
     pub deadline_ms: u64,
     pub requested_limits: Option<super::remote::RequestedJobLimits>,
+    pub created_at_utc_ms: i64,
+    pub deadline_utc_ms: i64,
+    invocation: Option<std::sync::Arc<crate::providers::invocation_budget::InvocationBudget>>,
+}
+impl<'a> EmbeddingRuntime<'a> {
+    /// Preserve the remote runtime's original operation start and deadline.
+    /// Public operations snapshot mutable caller limits when they begin.
+    pub fn new(
+        service: &'a TrustedService,
+        dispatcher: &'a Dispatcher,
+        job_options: JobOptions,
+        limits: LifetimeLimits,
+        created_at_utc_ms: i64,
+        deadline_utc_ms: i64,
+        requested_limits: Option<super::remote::RequestedJobLimits>,
+    ) -> Self {
+        Self {
+            service,
+            dispatcher,
+            job_options,
+            limits,
+            deadline_ms: deadline_utc_ms
+                .checked_sub(created_at_utc_ms)
+                .and_then(|duration| u64::try_from(duration).ok())
+                .unwrap_or(0),
+            requested_limits,
+            created_at_utc_ms,
+            deadline_utc_ms,
+            invocation: None,
+        }
+    }
+    fn scoped_for_operation(&self) -> Result<Self> {
+        let mut scoped = self.clone();
+        if scoped.invocation.is_none() {
+            // Honor caller changes made before operation entry, then freeze.
+            let deadline = self
+                .created_at_utc_ms
+                .checked_add(
+                    i64::try_from(self.deadline_ms)
+                        .map_err(|_| WikiError::invalid("embedding deadline overflow"))?,
+                )
+                .ok_or_else(|| WikiError::invalid("embedding deadline overflow"))?;
+            scoped.deadline_utc_ms = deadline;
+            scoped.invocation = Some(std::sync::Arc::new(
+                crate::providers::invocation_budget::InvocationBudget::new(
+                    self.limits.clone(),
+                    self.created_at_utc_ms,
+                    deadline,
+                )?,
+            ));
+        }
+        Ok(scoped)
+    }
 }
 #[derive(Debug, Clone, Serialize)]
 pub struct EmbeddingReport {
@@ -131,7 +185,21 @@ fn with_embedding_context(mut error: WikiError, mut context: serde_json::Value) 
             .and_then(|cause| cause.get("reason"))
             .cloned()
     });
+    let invocation = error
+        .details
+        .get("budget_scope")
+        .and_then(serde_json::Value::as_str)
+        == Some("invocation");
+    let continuation = invocation
+        .then(|| error.details.get("next_action").cloned())
+        .flatten();
     if let Some(object) = context.as_object_mut() {
+        if invocation {
+            object.insert("budget_scope".into(), serde_json::json!("invocation"));
+            if let Some(action) = continuation {
+                object.insert("next_action".into(), action);
+            }
+        }
         if let Some(reason) = reason {
             object.insert("reason".into(), reason);
         }
@@ -309,6 +377,10 @@ impl OfflineApp {
         runtime: Option<&EmbeddingRuntime<'_>>,
         probe: bool,
     ) -> Result<EmbeddingReport> {
+        let scoped_runtime = runtime
+            .map(EmbeddingRuntime::scoped_for_operation)
+            .transpose()?;
+        let runtime = scoped_runtime.as_ref();
         settings.validate()?;
         self.embedding_policy_consistent(runtime)?;
         let phase = Self::embedding_phase()?;
@@ -405,6 +477,8 @@ impl OfflineApp {
         settings: &EmbeddingSettings,
         runtime: &EmbeddingRuntime<'_>,
     ) -> Result<EmbeddingReport> {
+        let scoped_runtime = runtime.scoped_for_operation()?;
+        let runtime = &scoped_runtime;
         settings.validate()?;
         self.embedding_policy_consistent(Some(runtime))?;
         if self.options.offline {
@@ -787,14 +861,21 @@ impl OfflineApp {
                     "retained embedding marker differs from its immutable Run scope",
                 ));
             }
-            if inspection.state == RunState::Completed {
+            if matches!(inspection.state, RunState::Completed | RunState::Failed) {
+                for task in inspection
+                    .tasks
+                    .values()
+                    .filter(|task| task.state == TaskState::Failed)
+                {
+                    ledger.finish_rejected_remote_task(&task.spec.key)?;
+                }
                 continue;
             }
             let mut retired = BTreeSet::new();
             for task in inspection
                 .tasks
                 .values()
-                .filter(|t| t.state != TaskState::Completed)
+                .filter(|t| !matches!(t.state, TaskState::Completed | TaskState::Failed))
             {
                 let attempt = inspection
                     .attempts
@@ -840,6 +921,16 @@ impl OfflineApp {
                     if attempt.phase == AttemptPhase::OutputCommitted {
                         ledger.settle(&attempt.attempt)?;
                     }
+                    if task.spec.stage == TaskStage::Probe {
+                        self.verify_rejected_embedding_probe(
+                            &ledger, &marker, &task.spec, attempt, spec,
+                        )?;
+                        activity.warnings.push(format!("Rejected embedding probe in job {} retains its accounted receipt and charges; collection preparation continues independently.", inspection.spec.run_id));
+                        retired.insert(task.spec.key.clone());
+                        continue;
+                    }
+                    ledger.finish_rejected_remote_task(&task.spec.key)?;
+                    activity.warnings.push(format!("Task {} in job {} retained a rejected embedding response; unchanged siblings continue under the original Run.", task.spec.key, inspection.spec.run_id));
                     retired.insert(task.spec.key.clone());
                     continue;
                 }
@@ -870,7 +961,7 @@ impl OfflineApp {
                     attempt.phase,
                     AttemptPhase::Received | AttemptPhase::OutputCommitted | AttemptPhase::Settled
                 ) {
-                    let generated = self.dispatch_embedding_task(
+                    let generated = match self.dispatch_embedding_task(
                         &ledger,
                         &task.spec,
                         spec,
@@ -880,7 +971,51 @@ impl OfflineApp {
                             probe: marker.operation == "embeddings_check",
                             corpus: marker.operation == "embeddings_sync",
                         },
-                    )?;
+                    ) {
+                        Ok(generated) => generated,
+                        Err(error) => {
+                            // Only an exact newly committed rejected receipt
+                            // authorizes continuation; arbitrary freshness or
+                            // persistence failures still stop this operation.
+                            let after = ledger.inspect()?;
+                            let rejected = after
+                                .attempts
+                                .iter()
+                                .rev()
+                                .find(|a| a.attempt.task_key == task.spec.key)
+                                .filter(|a| {
+                                    a.phase == AttemptPhase::Settled && a.cache_outputs.is_empty()
+                                })
+                                .map(|a| self.embedding_receipt_disposition(a))
+                                .transpose()?
+                                == Some(OutputDisposition::Rejected);
+                            if !rejected {
+                                return Err(error);
+                            }
+                            if task.spec.stage == TaskStage::Probe {
+                                let attempt = after
+                                    .attempts
+                                    .iter()
+                                    .rev()
+                                    .find(|a| a.attempt.task_key == task.spec.key)
+                                    .ok_or_else(|| {
+                                        fail(
+                                            ErrorCode::RecoveryRequired,
+                                            "rejected probe attempt missing",
+                                        )
+                                    })?;
+                                self.verify_rejected_embedding_probe(
+                                    &ledger, &marker, &task.spec, attempt, spec,
+                                )?;
+                                activity.warnings.push(format!("Rejected embedding probe in job {} retains its accounted receipt and charges; collection preparation continues independently.", inspection.spec.run_id));
+                            } else {
+                                ledger.finish_rejected_remote_task(&task.spec.key)?;
+                                activity.warnings.push(format!("Task {} in job {} retained a rejected embedding response ({:?}); unchanged siblings continue under the original Run.", task.spec.key, inspection.spec.run_id, error.code));
+                            }
+                            retired.insert(task.spec.key.clone());
+                            0
+                        }
+                    };
                     activity.generated += generated;
                     if generated > 0 {
                         activity.run_id = Some(inspection.spec.run_id.clone());
@@ -903,7 +1038,7 @@ impl OfflineApp {
             for task in retained
                 .tasks
                 .values()
-                .filter(|task| task.state != TaskState::Completed)
+                .filter(|task| !matches!(task.state, TaskState::Completed | TaskState::Failed))
             {
                 if retired.contains(&task.spec.key) {
                     continue;
@@ -1544,6 +1679,12 @@ impl OfflineApp {
                         .iter()
                         .any(|a| a.cache_outputs.is_empty())
                     && (!probe || settled_rejection);
+            if inspection.state == RunState::Failed {
+                return Err(fail(
+                    ErrorCode::RecoveryRequired,
+                    "rejected embedding scope is terminal; changed inputs require a distinct scope",
+                ));
+            }
             if inspection.state == RunState::Completed || retired {
                 marker_path = VaultRelativePath::new(format!(
                     ".wiki/state/embedding-jobs/{}-{}.json",
@@ -1560,7 +1701,11 @@ impl OfflineApp {
                 return Ok((ledger, tasks));
             }
         }
-        let now = runtime.job_options.clock.read()?.utc_ms;
+        let invocation = runtime
+            .invocation
+            .as_ref()
+            .ok_or_else(|| WikiError::invalid("embedding operation allowance missing"))?;
+        let now = invocation.started_at_utc_ms();
         let run_id = RecordId::new(format!("run_{}", uuid::Uuid::now_v7()))?;
         let mut run = RunSpec {
             version: 1,
@@ -1568,9 +1713,7 @@ impl OfflineApp {
             vault_id: self.vault_id.clone(),
             title: format!("Explicit {operation}"),
             created_at_utc_ms: now,
-            deadline_utc_ms: now
-                .checked_add(runtime.deadline_ms as i64)
-                .ok_or_else(|| WikiError::invalid("deadline overflow"))?,
+            deadline_utc_ms: invocation.deadline_utc_ms(),
             scope: RunScope {
                 operation: operation.into(),
                 question: None,
@@ -1732,6 +1875,132 @@ impl OfflineApp {
         }
         Ok(())
     }
+    /// A terminal rejected service probe has no collection outputs or sibling
+    /// work. Preserve its existing receipt/holds without applying the historical
+    /// cache-only Embed terminalization rule to Probe authority.
+    fn verify_rejected_embedding_probe(
+        &self,
+        ledger: &JobLedger,
+        marker: &RunMarker,
+        task: &TaskSpec,
+        attempt: &AttemptInspection,
+        spec: &SpaceSpec,
+    ) -> Result<()> {
+        let inspection = ledger.inspect()?;
+        let attempt = inspection
+            .attempts
+            .iter()
+            .find(|recorded| recorded.attempt == attempt.attempt)
+            .ok_or_else(|| {
+                fail(
+                    ErrorCode::RecoveryRequired,
+                    "rejected probe attempt missing",
+                )
+            })?;
+        if marker.operation != "embeddings_check"
+            || !marker.expected_units.is_empty()
+            || inspection.tasks.len() != 1
+            || task.stage != TaskStage::Probe
+            || task.capability != Some(Capability::Probe)
+            || !task.dependencies.is_empty()
+            || !task.source_bindings.is_empty()
+            || !attempt.outputs.is_empty()
+            || !attempt.cache_outputs.is_empty()
+            || inspection.attempts.iter().any(|a| {
+                a.phase != AttemptPhase::Settled
+                    || a.billing != BillingDisposition::ReleasedNotSent
+                        && a.remote_exposure != RemoteExposure::TerminalConfirmed
+            })
+        {
+            return Err(fail(
+                ErrorCode::RecoveryRequired,
+                "rejected embedding probe authority differs",
+            ));
+        }
+        for guard in &inspection.spec.scope.read_preconditions {
+            let current = crate::changes::prepare::read_bounded(
+                &self.fs,
+                &guard.path,
+                crate::changes::prepare::MAX_PAYLOAD_BYTES,
+            )?
+            .map_or(ExpectedState::Absent, |bytes| {
+                ExpectedState::Hash(Blake3Hash::digest(bytes))
+            });
+            if current != guard.expected {
+                return Err(fail(
+                    ErrorCode::FreshnessConflict,
+                    "rejected probe global binding changed",
+                ));
+            }
+        }
+        let bytes = crate::changes::prepare::read_bounded(&self.fs, &task.input.path, 256 * 1024)?
+            .ok_or_else(|| {
+                fail(
+                    ErrorCode::RecoveryRequired,
+                    "rejected probe descriptor missing",
+                )
+            })?;
+        if bytes.len() as u64 != task.input.byte_len
+            || Blake3Hash::digest(&bytes) != task.input.hash
+            || task.input_hash != task.input.hash
+        {
+            return Err(fail(
+                ErrorCode::RecoveryRequired,
+                "rejected probe descriptor changed",
+            ));
+        }
+        let descriptor: RemoteInput = serde_json::from_slice(&bytes)
+            .map_err(|_| WikiError::invalid("rejected probe descriptor invalid"))?;
+        if descriptor.version != 1 || crate::graph::packet::canonical_json(&descriptor)? != bytes {
+            return Err(fail(
+                ErrorCode::RecoveryRequired,
+                "rejected probe descriptor differs",
+            ));
+        }
+        let RemoteOperation::Embed {
+            inputs,
+            representation_fingerprint,
+            ..
+        } = &descriptor.operation
+        else {
+            return Err(fail(
+                ErrorCode::RecoveryRequired,
+                "rejected probe operation differs",
+            ));
+        };
+        if inputs.len() != 1
+            || inputs[0] != spec.query("lwiki embedding check")?
+            || representation_fingerprint != &marker.space
+        {
+            return Err(fail(
+                ErrorCode::RecoveryRequired,
+                "rejected probe scope differs",
+            ));
+        }
+        let reference = attempt.receipt.as_ref().ok_or_else(|| {
+            fail(
+                ErrorCode::RecoveryRequired,
+                "rejected probe receipt missing",
+            )
+        })?;
+        let receipt = jobs::checkpoint::receipt(&self.fs, reference)?;
+        let expected = jobs::checkpoint::receipt_plan(
+            ledger,
+            &attempt.attempt,
+            OutputDisposition::Rejected,
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+        )?
+        .receipt;
+        if receipt != expected {
+            return Err(fail(
+                ErrorCode::RecoveryRequired,
+                "rejected probe receipt differs",
+            ));
+        }
+        Ok(())
+    }
     fn embedding_receipt_disposition(
         &self,
         attempt: &AttemptInspection,
@@ -1868,7 +2137,8 @@ impl OfflineApp {
                 output,
             }
         } else {
-            runtime.dispatcher.execute(ledger, runtime.service, &task.key, purpose)
+            runtime.dispatcher.execute_with_invocation(ledger, runtime.service, &task.key, purpose,
+                runtime.invocation.as_ref().ok_or_else(|| WikiError::invalid("embedding operation allowance missing"))?)
                 .map_err(|failure| {
                     // Admission exhaustion must leave the existing Run
                     // explicitly amendable without replacing its paid scope.
@@ -2103,6 +2373,10 @@ impl OfflineApp {
         text: &str,
         runtime: Option<&EmbeddingRuntime<'_>>,
     ) -> Result<(SpaceState, Vec<f32>, bool)> {
+        let scoped_runtime = runtime
+            .map(EmbeddingRuntime::scoped_for_operation)
+            .transpose()?;
+        let runtime = scoped_runtime.as_ref();
         self.embedding_policy_consistent(runtime)?;
         let budget = retrieval::vectors::VectorReadBudget::new(
             std::time::Instant::now()
@@ -2619,6 +2893,10 @@ impl OfflineApp {
         graph: Option<&GraphPlan>,
         verify_selected: bool,
     ) -> Result<HitSet> {
+        let scoped_runtime = runtime
+            .map(EmbeddingRuntime::scoped_for_operation)
+            .transpose()?;
+        let runtime = scoped_runtime.as_ref();
         retrieval::lexical::validate_plan(text, plan)?;
         let catalog = Catalog::new(self.fs.clone(), self.vault_id.clone());
         let normalized = catalog.operation_state()?.is_some();
@@ -2738,6 +3016,10 @@ impl OfflineApp {
         no_sync: bool,
         fallback: bool,
     ) -> Result<GraphResult> {
+        let scoped_runtime = runtime
+            .map(EmbeddingRuntime::scoped_for_operation)
+            .transpose()?;
+        let runtime = scoped_runtime.as_ref();
         let prepared = self.embedding_query(text, runtime);
         let (state, query, network) = match prepared {
             Ok(value) => value,
@@ -2941,6 +3223,10 @@ impl OfflineApp {
         fallback: bool,
         selection: &retrieval::context_selection_packet::SelectionAction,
     ) -> Result<ContextResult> {
+        let scoped_runtime = runtime
+            .map(EmbeddingRuntime::scoped_for_operation)
+            .transpose()?;
+        let runtime = scoped_runtime.as_ref();
         retrieval::context::validate_request(text, request)?;
         retrieval::context::validate_selection_action(request, selection)?;
         let options = ContextOptions {

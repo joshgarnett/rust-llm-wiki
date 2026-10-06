@@ -144,9 +144,11 @@ resumable preparation and selected rendering. The scoped
 [candidate011 local trial](validation-normalized-embeddings.md#local-020-candidate011-artifact)
 packages that later source and corrected embedded guidance. The subsequent
 [automatic preparation milestone](validation-normalized-embeddings.md#automatic-receipt-feasible-preparation)
-completes receipt-feasible grouping within one owner-page Run. Exact vector
-scanning, aggregate invocation budgets, mixed-stale continuation and broad
-evidence completeness still prevent 25K qualification.
+completes receipt-feasible grouping within one owner-page Run. The subsequent
+[invocation and recovery checkpoint](validation-normalized-embeddings.md#invocation-allowance-and-independent-recovery)
+adds a shared command allowance/deadline and independent same-Run continuation
+after authenticated stale-response rejection. Exact vector scanning, measured
+storage/update costs and broad evidence completeness still prevent 25K qualification.
 
 Independent same-budget witnesses now locate the multi-source failure in
 allocation: both modes can render all five required facts with valid citations
@@ -176,4 +178,4 @@ remain unverified. The search-only flag does not change context arguments. Plain
 
 For the complete local gate and external qualification boundary, see [testing-cleanup.md](testing-cleanup.md), [CLEANUP.md](execution/CLEANUP.md), and the [execution playbook](execution/README.md). Old [architecture](architecture.md) and [implementation plan](implementation-plan.md) material is historical where it describes CLI-owned research acquisition; the host-agent handoff above is authoritative for the current product.
 
-The [compact normalized preparation checkpoint](validation-normalized-embeddings.md#compact-inventory-and-resumable-preparation-candidate) connects durable owner-page preparation and changed-owner proof invalidation to compact semantic/hybrid discovery. Its aggregate 63 affected native checks pass; a labeled repair passes the small public inventory lifecycle at independent 10/10, all 17 observations, with 70 citations and 192 immutable revision files verified. The later automatic preparation milestone passes its scoped 9/10 gate, all six tasks, 61 affected checks and a 19-step public lifecycle with 91 exact citations. It acquires repeated inputs once and preserves the original page Run's limits across task partitions. Original failures remain retained. Mixed stale-supplier continuation and aggregate invocation limits/startup deadlines across multiple Runs remain integrated-workflow blockers; exact vector scanning, broad answer completeness, native HIGH and representative 25K qualification remain open. Candidate011 predates the later milestone.
+The [compact normalized preparation checkpoint](validation-normalized-embeddings.md#compact-inventory-and-resumable-preparation-candidate) connects durable owner-page preparation and changed-owner proof invalidation to compact semantic/hybrid discovery. Its aggregate 63 affected native checks pass; a labeled repair passes the small public inventory lifecycle at independent 10/10, all 17 observations, with 70 citations and 192 immutable revision files verified. The later automatic preparation milestone passes its scoped 9/10 gate, all six tasks, 61 affected checks and a 19-step public lifecycle with 91 exact citations. It acquires repeated inputs once and preserves the original page Run's limits across task partitions. The subsequent invocation/recovery batch has 205 source-qualified affected native passes and a public 129-input control: one command sends four 32-input requests and an explicit continuation sends only the remaining input. Original failures and the interrupted bootstrap sweep remain retained; this is composite evidence, not a full green suite or a new answer-quality score. Exact vector scanning, broad answer completeness, native HIGH and representative 25K qualification remain open. Candidate011 predates these later source milestones.

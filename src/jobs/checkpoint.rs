@@ -2757,7 +2757,18 @@ fn read_compact(
     }
     let retained = known.or(located.as_ref());
     let indexed = retained
-        .map(|change| ChangeEngine::new(fs.clone())?.load_indexed_refresh_proof(change))
+        .map(|change| {
+            let engine = ChangeEngine::new(fs.clone())?;
+            let (manifest, hash) = engine.load_manifest_structure(&change.change_id)?;
+            if hash != change.manifest_hash {
+                return Err(events::corrupt(
+                    "checkpoint validation manifest hash differs",
+                ));
+            }
+            let catalog = Catalog::new(fs.clone(), note_ref.record.vault_id.clone());
+            let authority = catalog.operation_state()?;
+            engine.indexed_replay_proof(&manifest, change, authority.as_ref())
+        })
         .transpose()?
         .flatten();
     let job_checkpoint = indexed.as_ref().is_some_and(|proof| {

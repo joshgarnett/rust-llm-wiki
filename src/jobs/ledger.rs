@@ -74,22 +74,23 @@ impl JobLedger {
         self.local_write()?;
         self.with(true, |g, loaded| {
             let i = &loaded.state.inspection;
-            if i.state == RunState::Completed {
+            if matches!(i.state, RunState::Completed | RunState::Failed) {
                 return loaded
                     .frames
                     .iter()
                     .rev()
                     .find_map(|f| match &f.event.payload {
-                        EventPayload::RunTransition {
-                            to: RunState::Completed,
-                            ..
-                        } => Some(events::event_ref(f)),
+                        EventPayload::RunTransition { to, .. } if *to == i.state => {
+                            Some(events::event_ref(f))
+                        }
                         _ => None,
                     })
                     .ok_or_else(|| events::corrupt("completed run event missing"));
             }
             if i.state != RunState::Running
-                || i.tasks.values().any(|t| t.state != TaskState::Completed)
+                || i.tasks
+                    .values()
+                    .any(|t| !matches!(t.state, TaskState::Completed | TaskState::Failed))
                 || i.attempts.iter().any(|a| a.phase != AttemptPhase::Settled)
             {
                 return Err(fail(
@@ -97,13 +98,22 @@ impl JobLedger {
                     "unfinished tasks or attempts cannot complete run",
                 ));
             }
+            let failed = i.tasks.values().any(|task| task.state == TaskState::Failed);
             self.append(
                 g,
                 loaded,
                 EventPayload::RunTransition {
                     from: RunState::Running,
-                    to: RunState::Completed,
-                    reason: StopReason::Completed,
+                    to: if failed {
+                        RunState::Failed
+                    } else {
+                        RunState::Completed
+                    },
+                    reason: if failed {
+                        StopReason::Failed("embedding_response_rejected".into())
+                    } else {
+                        StopReason::Completed
+                    },
                 },
             )
         })
@@ -145,7 +155,15 @@ impl JobLedger {
             {
                 return Err(WikiError::invalid("remote task cannot complete"));
             }
-            tasks::bind(&self.fs, &task.spec)?;
+            if !self.historical_embedding_receipt(
+                loaded,
+                key,
+                OutputDisposition::Validated,
+                &outputs,
+                &cache_outputs,
+            )? {
+                tasks::bind(&self.fs, &task.spec)?;
+            }
             let paid = loaded
                 .state
                 .inspection
@@ -226,6 +244,225 @@ impl JobLedger {
             )
         })
     }
+    /// A rejected, settled cache-only embedding response ends its exact task;
+    /// independent siblings retain their original Run and paid scope.
+    pub(crate) fn finish_rejected_remote_task(&self, key: &Blake3Hash) -> Result<EventRef> {
+        self.local_write()?;
+        self.with(true, |g, loaded| {
+            let task = loaded
+                .state
+                .inspection
+                .tasks
+                .get(key)
+                .ok_or_else(|| WikiError::invalid("unknown rejected task"))?;
+            if !self.historical_embedding_receipt(
+                loaded,
+                key,
+                OutputDisposition::Rejected,
+                &[],
+                &[],
+            )? {
+                return Err(fail(
+                    ErrorCode::RecoveryRequired,
+                    "rejected embedding receipt is not terminal and authenticated",
+                ));
+            }
+            if task.state == TaskState::Failed {
+                return loaded
+                    .frames
+                    .iter()
+                    .rev()
+                    .find_map(|frame| match &frame.event.payload {
+                        EventPayload::TaskFinished {
+                            task_key,
+                            state: TaskState::Failed,
+                            reason,
+                            ..
+                        } if task_key == key
+                            && reason.as_deref() == Some("embedding_response_rejected") =>
+                        {
+                            Some(events::event_ref(frame))
+                        }
+                        _ => None,
+                    })
+                    .ok_or_else(|| events::corrupt("rejected task event missing"));
+            }
+            if !matches!(task.state, TaskState::Pending | TaskState::Running)
+                || !matches!(
+                    loaded.state.inspection.state,
+                    RunState::Running | RunState::Paused | RunState::Stopped
+                )
+            {
+                return Err(fail(
+                    ErrorCode::RecoveryRequired,
+                    "rejected task already ended",
+                ));
+            }
+            self.append(
+                g,
+                loaded,
+                EventPayload::TaskFinished {
+                    task_key: key.clone(),
+                    state: TaskState::Failed,
+                    outputs: Vec::new(),
+                    cache_outputs: Vec::new(),
+                    reason: Some("embedding_response_rejected".into()),
+                },
+            )
+        })
+    }
+    /// Historical authorization authenticates immutable identity and already
+    /// committed accounting. It confers no fresh send or membership authority.
+    fn historical_embedding_receipt(
+        &self,
+        loaded: &Loaded,
+        key: &Blake3Hash,
+        disposition: OutputDisposition,
+        outputs: &[DurableOutputRef],
+        cache_outputs: &[VectorCacheRef],
+    ) -> Result<bool> {
+        let task = loaded
+            .state
+            .inspection
+            .tasks
+            .get(key)
+            .ok_or_else(|| WikiError::invalid("unknown historical task"))?;
+        if task.spec.capability != Some(Capability::Embed)
+            || task.spec.stage != TaskStage::Embed
+            || !outputs.is_empty()
+            || !task.outputs.is_empty()
+        {
+            return Ok(false);
+        }
+        self.bind_global_inputs(&loaded.state.inspection)?;
+        let bytes = read(&self.fs, &task.spec.input.path)?.ok_or_else(|| {
+            fail(
+                ErrorCode::FreshnessConflict,
+                "historical embedding descriptor missing",
+            )
+        })?;
+        if bytes.len() as u64 != task.spec.input.byte_len
+            || Blake3Hash::digest(&bytes) != task.spec.input.hash
+        {
+            return Err(fail(
+                ErrorCode::FreshnessConflict,
+                "historical embedding descriptor changed",
+            ));
+        }
+        let descriptor: crate::providers::types::RemoteInput = json(&bytes)?;
+        if !matches!(
+            descriptor.operation,
+            crate::providers::types::RemoteOperation::Embed { .. }
+        ) || crate::graph::packet::canonical_json(&descriptor)? != bytes
+        {
+            return Err(events::corrupt("historical embedding descriptor differs"));
+        }
+        let owned = loaded
+            .state
+            .inspection
+            .attempts
+            .iter()
+            .filter(|a| a.attempt.task_key == *key)
+            .collect::<Vec<_>>();
+        if owned.is_empty()
+            || owned.iter().any(|a| {
+                a.phase != AttemptPhase::Settled
+                    || a.billing != BillingDisposition::ReleasedNotSent
+                        && a.remote_exposure != RemoteExposure::TerminalConfirmed
+            })
+        {
+            return Ok(false);
+        }
+        let mut final_receipt = None;
+        for paid in owned
+            .into_iter()
+            .filter(|a| a.billing != BillingDisposition::ReleasedNotSent)
+        {
+            if paid.bound.capability != Capability::Embed
+                || paid.bound.input_hash != task.spec.input_hash
+                || !paid.outputs.is_empty()
+            {
+                return Err(events::corrupt("historical embedding attempt differs"));
+            }
+            let reference = paid
+                .receipt
+                .as_ref()
+                .ok_or_else(|| events::corrupt("historical paid receipt missing"))?;
+            let receipt = checkpoint::receipt(&self.fs, reference)?;
+            // Temporary response metadata may have been legitimately pruned.
+            // Immutable receipt authority remains in the complete journal.
+            let committed = loaded.frames.iter().any(|frame| matches!(
+                &frame.event.payload,
+                EventPayload::OutputsCommitted { attempt, receipt: recorded, outputs, cache_outputs, .. }
+                    if attempt == &paid.attempt && recorded == reference
+                        && outputs == &paid.outputs && cache_outputs == &paid.cache_outputs
+            ));
+            let settled = loaded.frames.iter().any(|frame| {
+                matches!(
+                    &frame.event.payload,
+                    EventPayload::Settled { attempt, billing, usage, cost }
+                        if attempt == &paid.attempt && billing == &receipt.billing
+                            && usage == &receipt.usage && cost == &receipt.computed_cost
+                )
+            });
+            let terminal = loaded.frames.iter().any(|frame| {
+                matches!(
+                    &frame.event.payload,
+                    EventPayload::Reconciled { attempt, terminal_confirmed: true, .. }
+                        if attempt == &paid.attempt
+                )
+            });
+            if !committed
+                || !settled
+                || !terminal
+                || reference.record.vault_id != self.vault_id
+                || receipt.attempt != paid.attempt
+                || receipt.capability != paid.bound.capability
+                || receipt.profile_id != paid.bound.profile_id
+                || receipt.endpoint_fingerprint != paid.bound.endpoint_fingerprint
+                || receipt.input_hash != paid.bound.input_hash
+                || receipt.requested_model != paid.bound.requested_model
+                || receipt.reservation != paid.allowance.cost
+                || receipt.rate_card_fingerprint
+                    != paid
+                        .bound
+                        .rate_card
+                        .as_ref()
+                        .map(|card| card.fingerprint.clone())
+                || receipt.outputs != paid.outputs
+                || receipt.cache_outputs != paid.cache_outputs
+            {
+                return Err(events::corrupt(
+                    "historical embedding receipt binding differs",
+                ));
+            }
+            if loaded
+                .state
+                .received_meta
+                .contains_key(&paid.attempt.attempt_id)
+            {
+                let expected = checkpoint::receipt_plan_locked(
+                    self,
+                    loaded,
+                    &paid.attempt,
+                    receipt.output_disposition,
+                    paid.outputs.clone(),
+                    paid.cache_outputs.clone(),
+                    Vec::new(),
+                )?
+                .receipt;
+                if receipt != expected {
+                    return Err(events::corrupt("historical response metadata differs"));
+                }
+            }
+            final_receipt = Some(receipt);
+        }
+        Ok(final_receipt.is_some_and(|receipt| {
+            receipt.output_disposition == disposition
+                && receipt.outputs == outputs
+                && receipt.cache_outputs == cache_outputs
+        }))
+    }
     pub(crate) fn dispatcher_bindings(&self) -> (VaultFs, RecordId, RecordId, JobOptions) {
         (
             self.fs.clone(),
@@ -279,7 +516,7 @@ impl JobLedger {
                     "only planned/paused/stopped jobs may amend retained limits",
                 ));
             }
-            self.bind_inputs(&l.state.inspection)?;
+            self.bind_inputs(l)?;
             let now = self.options.clock.read()?.utc_ms;
             let amendment = LimitAmendment {
                 requested_at_utc_ms: now,
@@ -306,7 +543,7 @@ impl JobLedger {
                     "only paused/stopped runs may explicitly resume",
                 ));
             }
-            self.bind_inputs(&l.state.inspection)?;
+            self.bind_inputs(l)?;
             if let Some(mut amendment) = amendment {
                 let now = self.options.clock.read()?.utc_ms;
                 if stamp_request {
@@ -612,7 +849,7 @@ impl JobLedger {
                 "run is not admitting attempts",
             ));
         }
-        self.bind_inputs(i)?;
+        self.bind_inputs(loaded)?;
         Ok(now)
     }
     /// Flushes can cross a deadline or observe cancellation. Durable intent is
@@ -688,7 +925,7 @@ impl JobLedger {
         }
         Ok(now)
     }
-    pub(super) fn bind_inputs(&self, i: &LedgerInspection) -> Result<()> {
+    fn bind_global_inputs(&self, i: &LedgerInspection) -> Result<()> {
         for dep in &i.spec.scope.read_preconditions {
             let actual = read(&self.fs, &dep.path)?.map_or(ExpectedState::Absent, |b| {
                 ExpectedState::Hash(Blake3Hash::digest(b))
@@ -700,8 +937,54 @@ impl JobLedger {
                 ));
             }
         }
+        Ok(())
+    }
+    pub(super) fn bind_inputs(&self, loaded: &Loaded) -> Result<()> {
+        let i = &loaded.state.inspection;
+        self.bind_global_inputs(i)?;
+        // A terminal task consumed by live work is still a live dependency.
+        // Preserve its complete freshness guards, including transitive owners.
+        let mut live_dependencies = std::collections::BTreeSet::new();
+        let mut pending_dependencies = i
+            .tasks
+            .values()
+            .filter(|task| matches!(task.state, TaskState::Pending | TaskState::Running))
+            .flat_map(|task| task.spec.dependencies.clone())
+            .collect::<Vec<_>>();
+        while let Some(key) = pending_dependencies.pop() {
+            if live_dependencies.insert(key.clone()) {
+                let dependency = i
+                    .tasks
+                    .get(&key)
+                    .ok_or_else(|| events::corrupt("live dependency missing"))?;
+                pending_dependencies.extend(dependency.spec.dependencies.iter().cloned());
+            }
+        }
         for task in i.tasks.values() {
-            tasks::bind(&self.fs, &task.spec)?;
+            let historical = if live_dependencies.contains(&task.spec.key) {
+                false
+            } else {
+                match task.state {
+                    TaskState::Completed => self.historical_embedding_receipt(
+                        loaded,
+                        &task.spec.key,
+                        OutputDisposition::Validated,
+                        &task.outputs,
+                        &task.cache_outputs,
+                    )?,
+                    TaskState::Failed => self.historical_embedding_receipt(
+                        loaded,
+                        &task.spec.key,
+                        OutputDisposition::Rejected,
+                        &[],
+                        &[],
+                    )?,
+                    _ => false,
+                }
+            };
+            if !historical {
+                tasks::bind(&self.fs, &task.spec)?;
+            }
             for output in &task.outputs {
                 checkpoint::output(&self.fs, output)?;
                 if output.record.vault_id != self.vault_id {
@@ -710,6 +993,38 @@ impl JobLedger {
             }
         }
         Ok(())
+    }
+    /// Exact accounting for this operation's new attempts, excluding unrelated
+    /// retained history. Reuse replay's settlement, uncertainty and overrun rules.
+    pub(crate) fn invocation_accounting(
+        &self,
+        attempts: &[AttemptRef],
+    ) -> Result<BudgetInspection> {
+        if attempts.len() > RUN_MAX_TASKS * 16 {
+            return Err(fail(
+                ErrorCode::BudgetExceeded,
+                "invocation registry ceiling reached",
+            ));
+        }
+        self.with(false, |_, loaded| {
+            let selected = attempts
+                .iter()
+                .map(|a| a.attempt_id.clone())
+                .collect::<std::collections::BTreeSet<_>>();
+            if selected.len() != attempts.len() {
+                return Err(events::corrupt("duplicate invocation attempt"));
+            }
+            for reference in attempts {
+                attempt(loaded, reference)?;
+            }
+            loaded
+                .state
+                .inspection
+                .attempts
+                .retain(|a| selected.contains(&a.attempt.attempt_id));
+            replay::recount(&mut loaded.state)?;
+            Ok(loaded.state.inspection.budget.clone())
+        })
     }
     pub(super) fn admission(
         &self,
@@ -1133,7 +1448,7 @@ impl JobLedgerApi for JobLedger {
                 }
             }
             if !self.options.policy.dry_run{self.refresh_observations(g,l)?;self.recover_committed_receipts(g,l)?;self.sync_head(g,l)?;}
-            let fresh=self.bind_inputs(&l.state.inspection).is_ok();
+            let fresh=self.bind_inputs(l).is_ok();
             if !fresh{report.warnings.push("source/task/config inputs changed; retained outputs are stale and not reusable".into());}
             for a in &l.state.inspection.attempts {
                 if let Some(receipt) = &a.receipt
@@ -1213,7 +1528,7 @@ impl JobLedgerApi for JobLedger {
         self.local_write()?;
         self.with(true, |g, l| {
             self.control_gate(l)?;
-            self.bind_inputs(&l.state.inspection)?;
+            self.bind_inputs(l)?;
             self.append(
                 g,
                 l,
@@ -1258,7 +1573,7 @@ impl JobLedgerApi for JobLedger {
     }
     fn ready_tasks(&self) -> Result<Vec<TaskSpec>> {
         self.with(true, |_, l| {
-            self.bind_inputs(&l.state.inspection)?;
+            self.bind_inputs(l)?;
             Ok(tasks::ready(&l.state.inspection.tasks))
         })
     }

@@ -1490,6 +1490,7 @@ fn inventory_automatic_guard_changed_received_supplier_cannot_borrow_unchanged_d
     )
     .unwrap();
     let before = job.inspect().unwrap();
+    let original_paid_inputs = paid_inputs(&fixture, &before);
     let task = &before.tasks.values().next().unwrap().spec;
     assert!(
         task.source_bindings
@@ -1509,13 +1510,48 @@ fn inventory_automatic_guard_changed_received_supplier_cannot_borrow_unchanged_d
     .unwrap();
     fixture.app.index_sync(false).unwrap();
     let resumed = runtime(&fixture.service, &dispatch);
-    let error = fixture
+    let replacement = fixture
         .app
         .embeddings_sync(&ordinary_settings(), &resumed)
-        .unwrap_err();
-    assert_eq!(error.code, ErrorCode::FreshnessConflict);
-    assert_eq!(responses.calls.load(Ordering::SeqCst), 1);
+        .unwrap();
+    complete(&replacement, 2);
+    assert_eq!(replacement.generated_inputs, 2);
+    assert!(
+        replacement
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("rejected"))
+    );
+    assert_ne!(replacement.run_id.as_ref(), Some(&before.spec.run_id));
+    assert_eq!(responses.calls.load(Ordering::SeqCst), 3);
+    let replacement_ledger = ledger(&fixture, &replacement).inspect().unwrap();
+    let replacement_inputs = paid_inputs(&fixture, &replacement_ledger);
+    assert_eq!(
+        replacement_inputs.len(),
+        2,
+        "old supplier authority cannot fund the unchanged duplicate"
+    );
+    assert!(
+        replacement_inputs
+            .iter()
+            .any(|input| input.utf8.contains("17 amber tokens"))
+    );
+    assert!(
+        replacement_inputs
+            .iter()
+            .any(|input| input.utf8.contains("29 violet tokens"))
+    );
     let after = job.inspect().unwrap();
+    assert_eq!(after.state, RunState::Failed);
+    assert_eq!(
+        after.tasks.values().next().unwrap().state,
+        TaskState::Failed
+    );
+    assert_eq!(after.effective_limits, before.effective_limits);
+    assert_eq!(
+        after.effective_deadline_utc_ms,
+        before.effective_deadline_utc_ms
+    );
     assert_eq!(after.attempts[0].attempt, before.attempts[0].attempt);
     assert_eq!(after.attempts[0].phase, AttemptPhase::Settled);
     assert!(after.attempts[0].cache_outputs.is_empty());
@@ -1533,8 +1569,24 @@ fn inventory_automatic_guard_changed_received_supplier_cannot_borrow_unchanged_d
             .unwrap()
             .active()
             .unwrap()
-            .is_none()
+            .is_some()
     );
+    for path in ["a-supplier.md", "z-duplicate.md"] {
+        let (binding, _) = owner_state(&fixture, &ordinary_settings(), &rel(path));
+        assert!(
+            VectorStore::open(&fixture.fs, None)
+                .unwrap()
+                .owner_binding_ready(&fixture.spec().id().unwrap(), &binding)
+                .unwrap()
+        );
+    }
+    assert_eq!(
+        fs::read(fixture.fs.root().resolve(&task.input.path).unwrap())
+            .unwrap()
+            .len() as u64,
+        task.input.byte_len
+    );
+    assert!(paid_inputs(&fixture, &after) == original_paid_inputs);
     complete(
         &fixture
             .app
@@ -1631,7 +1683,7 @@ fn inventory_automatic_guard_packing_reserved_scope_conflicts_and_encoded_single
 }
 
 #[test]
-fn inventory_automatic_guard_mixed_stale_received_preserves_pending_run_and_holds() {
+fn inventory_automatic_guard_mixed_stale_received_continues_same_run_and_retains_holds() {
     let fixture = normalized();
     for (path, id, body) in [
         ("a-mixed.md", "page_a_mixed", FIRST),
@@ -1688,56 +1740,75 @@ fn inventory_automatic_guard_mixed_stale_received_preserves_pending_run_and_hold
     .unwrap();
     fixture.app.index_sync(false).unwrap();
     let resumed = runtime(&fixture.service, &dispatch);
-    assert_eq!(
-        fixture
-            .app
-            .embeddings_sync(&ordinary_settings(), &resumed)
-            .unwrap_err()
-            .code,
-        ErrorCode::FreshnessConflict
-    );
-    let rejected = job.inspect().unwrap();
-    assert_eq!(rejected.attempts[0].phase, AttemptPhase::Settled);
-    assert_eq!(rejected.attempts[0].attempt, before.attempts[0].attempt);
-    assert!(rejected.attempts[0].cache_outputs.is_empty());
-    assert_eq!(rejected.budget.outstanding, before.budget.outstanding);
-    assert_eq!(
-        rejected.budget.unknown_attempts,
-        before.budget.unknown_attempts
-    );
-    // This records the existing all-task binding limitation for separate
-    // architectural judgment: no replacement Run or implicit funding is used.
-    assert_eq!(
-        fixture
-            .app
-            .embeddings_sync(&ordinary_settings(), &resumed)
-            .unwrap_err()
-            .code,
-        ErrorCode::FreshnessConflict
-    );
-    let blocked = job.inspect().unwrap();
-    assert_eq!(blocked.attempts, rejected.attempts);
-    assert_eq!(blocked.budget.outstanding, rejected.budget.outstanding);
-    assert_eq!(
-        blocked.budget.unknown_attempts,
-        rejected.budget.unknown_attempts
-    );
-    assert_eq!(blocked.budget.dispatched_requests, 1);
+    let report = fixture
+        .app
+        .embeddings_sync(&ordinary_settings(), &resumed)
+        .unwrap();
+    complete(&report, 2);
     assert!(
-        blocked
+        report
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("rejected"))
+    );
+    let after = job.inspect().unwrap();
+    assert_eq!(after.state, RunState::Failed);
+    assert_eq!(
+        after.attempts.len(),
+        2,
+        "unchanged sibling uses the original Run"
+    );
+    assert_eq!(after.attempts[0].attempt, before.attempts[0].attempt);
+    assert_eq!(after.attempts[0].phase, AttemptPhase::Settled);
+    assert!(after.attempts[0].cache_outputs.is_empty());
+    assert_eq!(after.budget.unknown_attempts.len(), 2);
+    assert_eq!(after.budget.outstanding.requests, 2);
+    assert_eq!(
+        after
             .tasks
             .values()
-            .any(|task| task.state == TaskState::Pending)
+            .filter(|task| task.state == TaskState::Failed)
+            .count(),
+        1
     );
-    assert_eq!(responses.calls.load(Ordering::SeqCst), 1);
-    assert_eq!(retained_marker_count(&fixture), 1);
-    assert!(
-        VectorStore::open(&fixture.fs, None)
-            .unwrap()
-            .active()
-            .unwrap()
-            .is_none()
+    assert_eq!(
+        after
+            .tasks
+            .values()
+            .filter(|task| task.state == TaskState::Completed)
+            .count(),
+        1
     );
+    assert_eq!(after.effective_limits, before.effective_limits);
+    assert_eq!(
+        after.effective_deadline_utc_ms,
+        before.effective_deadline_utc_ms
+    );
+    assert_eq!(
+        responses.calls.load(Ordering::SeqCst),
+        3,
+        "original response, unchanged sibling, changed input replacement"
+    );
+    assert_eq!(retained_marker_count(&fixture), 2);
+    let ended = job.complete_run().unwrap();
+    assert_eq!(job.complete_run().unwrap(), ended);
+    let failed_key = after
+        .tasks
+        .values()
+        .find(|task| task.state == TaskState::Failed)
+        .unwrap()
+        .spec
+        .key
+        .clone();
+    let event = job.finish_rejected_remote_task(&failed_key).unwrap();
+    assert_eq!(job.finish_rejected_remote_task(&failed_key).unwrap(), event);
+    let repeated = fixture
+        .app
+        .embeddings_sync(&ordinary_settings(), &resumed)
+        .unwrap();
+    complete(&repeated, 2);
+    assert_eq!(responses.calls.load(Ordering::SeqCst), 3);
+    assert_eq!(job.inspect().unwrap().last_event, after.last_event);
 }
 
 struct SecondTimeout {
@@ -2025,4 +2096,349 @@ fn inventory_automatic_guard_released_not_sent_retries_existing_run_without_rece
     assert_eq!(after.budget.dispatched_requests, 2);
     assert_eq!(after.budget.unknown_attempts.len(), 2);
     cached_noop(&fixture, &ordinary_settings(), 2);
+}
+
+#[test]
+fn inventory_invocation_budget_129_owners_stops_at_four_requests_and_continues_one_input() {
+    let mut fixture = normalized();
+    for index in 0..129 {
+        fs::write(
+            fixture
+                .fs
+                .root()
+                .path()
+                .join(format!("invocation-{index:03}.md")),
+            page_bytes(
+                &format!("page_invocation_{index:03}"),
+                None,
+                &format!(
+                    "Distinct owner {index:03} stores {} violet tokens.\n",
+                    index + 11
+                ),
+            ),
+        )
+        .unwrap();
+    }
+    fixture.app.index_sync(false).unwrap();
+    let (dispatch, responses) = batch_dispatch(&mut fixture);
+    let mut limited = runtime(&fixture.service, &dispatch);
+    limited.limits.requests = 4;
+    let error = fixture
+        .app
+        .embeddings_sync(&ordinary_settings(), &limited)
+        .unwrap_err();
+    assert_eq!(error.code, ErrorCode::BudgetExceeded);
+    assert_eq!(error.details["budget_scope"], "invocation");
+    assert!(
+        error.details["next_action"]
+            .as_str()
+            .unwrap()
+            .contains("Continue explicitly")
+    );
+    assert_eq!(error.hint.as_deref(), error.details["next_action"].as_str());
+    assert_eq!(responses.calls.load(Ordering::SeqCst), 4);
+    assert_eq!(responses.items.load(Ordering::SeqCst), 128);
+    assert_eq!(error.details["generated_inputs"], 128);
+    assert_eq!(retained_marker_count(&fixture), 2);
+    let run = serde_json::from_value(error.details["run_id"].clone()).unwrap();
+    let pending = JobLedger::new(
+        fixture.fs.clone(),
+        fixture.app.vault_id().clone(),
+        run,
+        options(),
+    )
+    .unwrap();
+    let before = pending.inspect().unwrap();
+    assert_eq!(before.state, RunState::Paused);
+    assert!(before.attempts.is_empty());
+    assert_eq!(before.spec.created_at_utc_ms, limited.created_at_utc_ms);
+    assert_eq!(before.spec.deadline_utc_ms, limited.deadline_utc_ms);
+    assert_eq!(before.effective_limits.requests, 4);
+    for index in 0..128 {
+        let (binding, _) = owner_state(
+            &fixture,
+            &ordinary_settings(),
+            &rel(&format!("invocation-{index:03}.md")),
+        );
+        assert!(
+            VectorStore::open(&fixture.fs, None)
+                .unwrap()
+                .owner_binding_ready(&fixture.spec().id().unwrap(), &binding)
+                .unwrap()
+        );
+    }
+    let (final_binding, _) = owner_state(&fixture, &ordinary_settings(), &rel("invocation-128.md"));
+    assert!(
+        !VectorStore::open(&fixture.fs, None)
+            .unwrap()
+            .owner_binding_ready(&fixture.spec().id().unwrap(), &final_binding)
+            .unwrap()
+    );
+    let report = fixture
+        .app
+        .embeddings_sync(&ordinary_settings(), &limited)
+        .unwrap();
+    complete(&report, 129);
+    assert_eq!(report.generated_inputs, 1);
+    assert_eq!(responses.calls.load(Ordering::SeqCst), 5);
+    assert_eq!(responses.items.load(Ordering::SeqCst), 129);
+    let after = pending.inspect().unwrap();
+    assert_eq!(after.state, RunState::Completed);
+    assert_eq!(after.spec, before.spec);
+    assert_eq!(after.budget.unknown_attempts.len(), 1);
+    cached_noop(&fixture, &ordinary_settings(), 129);
+}
+struct AfterCommittedCut {
+    fired: AtomicBool,
+}
+impl LedgerFault for AfterCommittedCut {
+    fn check(&self, point: LedgerCheckpoint) -> Result<()> {
+        if point == LedgerCheckpoint::AfterOutputsCommitted
+            && !self.fired.swap(true, Ordering::SeqCst)
+        {
+            return Err(WikiError::new(
+                ErrorCode::Internal,
+                "cut after committed validated receipt",
+            ));
+        }
+        Ok(())
+    }
+}
+struct SecondReceivedCut {
+    count: AtomicUsize,
+}
+impl LedgerFault for SecondReceivedCut {
+    fn check(&self, point: LedgerCheckpoint) -> Result<()> {
+        if point == LedgerCheckpoint::AfterReceived
+            && self.count.fetch_add(1, Ordering::SeqCst) == 1
+        {
+            return Err(WikiError::new(
+                ErrorCode::Internal,
+                "cut after first task completed",
+            ));
+        }
+        Ok(())
+    }
+}
+#[test]
+fn inventory_mixed_stale_validated_committed_and_completed_history_continue_siblings() {
+    for completed in [false, true] {
+        let fixture = normalized();
+        for (path, id, body) in [
+            ("a-history.md", "page_a_history", FIRST),
+            ("z-history.md", "page_z_history", SECOND),
+        ] {
+            fs::write(
+                fixture.fs.root().path().join(path),
+                page_bytes(id, None, body),
+            )
+            .unwrap();
+        }
+        fixture.app.index_sync(false).unwrap();
+        let responses = Arc::new(Responses::new());
+        let dispatch = dispatcher(&fixture.fs, responses.clone());
+        let mut interrupted = runtime(&fixture.service, &dispatch);
+        interrupted.job_options.fault = Some(if completed {
+            Arc::new(SecondReceivedCut {
+                count: AtomicUsize::new(0),
+            }) as Arc<dyn LedgerFault>
+        } else {
+            Arc::new(AfterCommittedCut {
+                fired: AtomicBool::new(false),
+            }) as Arc<dyn LedgerFault>
+        });
+        let stopped = fixture
+            .app
+            .embeddings_sync(&ordinary_settings(), &interrupted)
+            .unwrap_err();
+        let run = serde_json::from_value(stopped.details["run_id"].clone()).unwrap();
+        let job = JobLedger::new(
+            fixture.fs.clone(),
+            fixture.app.vault_id().clone(),
+            run,
+            options(),
+        )
+        .unwrap();
+        let before = job.inspect().unwrap();
+        let paid = &before.attempts[0];
+        assert_eq!(
+            paid.phase,
+            if completed {
+                AttemptPhase::Settled
+            } else {
+                AttemptPhase::OutputCommitted
+            }
+        );
+        let task = &before.tasks[&paid.attempt.task_key].spec;
+        let supplier = task
+            .source_bindings
+            .iter()
+            .find(|guard| guard.path == rel("a-history.md") || guard.path == rel("z-history.md"))
+            .unwrap();
+        let id = if supplier.path == rel("a-history.md") {
+            "page_a_history"
+        } else {
+            "page_z_history"
+        };
+        let receipt = paid.receipt.clone();
+        fs::write(
+            fixture.fs.root().path().join(supplier.path.as_str()),
+            page_bytes(
+                id,
+                None,
+                "Changed historical owner stores 83 copper tokens.\n",
+            ),
+        )
+        .unwrap();
+        fixture.app.index_sync(false).unwrap();
+        let resumed = runtime(&fixture.service, &dispatch);
+        let report = fixture
+            .app
+            .embeddings_sync(&ordinary_settings(), &resumed)
+            .unwrap();
+        complete(&report, 2);
+        let after = job.inspect().unwrap();
+        assert_eq!(after.state, RunState::Completed);
+        assert_eq!(after.attempts.len(), 2);
+        assert_eq!(after.attempts[0].attempt, paid.attempt);
+        assert_eq!(after.attempts[0].receipt, receipt);
+        assert_eq!(after.effective_limits, before.effective_limits);
+        assert_eq!(
+            after.effective_deadline_utc_ms,
+            before.effective_deadline_utc_ms
+        );
+        assert_eq!(after.budget.unknown_attempts.len(), 2);
+        assert_eq!(responses.calls.load(Ordering::SeqCst), 3);
+        fixture
+            .app
+            .embeddings_sync(&ordinary_settings(), &resumed)
+            .unwrap();
+        assert_eq!(responses.calls.load(Ordering::SeqCst), 3);
+    }
+}
+
+#[test]
+fn inventory_mixed_stale_budget_pause_preserves_siblings_for_same_run_continuation() {
+    let fixture = normalized();
+    for index in 0..3 {
+        fs::write(
+            fixture
+                .fs
+                .root()
+                .path()
+                .join(format!("stale-budget-{index}.md")),
+            page_bytes(
+                &format!("page_stale_budget_{index}"),
+                None,
+                &format!(
+                    "Distinct stale budget owner {index} holds {} amber tokens.\n",
+                    index + 31
+                ),
+            ),
+        )
+        .unwrap();
+    }
+    fixture.app.index_sync(false).unwrap();
+    let responses = Arc::new(Responses::new());
+    let dispatch = dispatcher(&fixture.fs, responses.clone());
+    let mut interrupted = runtime(&fixture.service, &dispatch);
+    interrupted.job_options.fault = Some(Arc::new(ReceivedOnce {
+        armed: AtomicBool::new(true),
+    }));
+    let stopped = fixture
+        .app
+        .embeddings_sync(&ordinary_settings(), &interrupted)
+        .unwrap_err();
+    let run = serde_json::from_value(stopped.details["run_id"].clone()).unwrap();
+    let job = JobLedger::new(
+        fixture.fs.clone(),
+        fixture.app.vault_id().clone(),
+        run,
+        options(),
+    )
+    .unwrap();
+    let before = job.inspect().unwrap();
+    assert_eq!(before.tasks.len(), 3);
+    let first = &before.tasks[&before.attempts[0].attempt.task_key].spec;
+    let supplier = first
+        .source_bindings
+        .iter()
+        .find(|guard| guard.path.as_str().starts_with("stale-budget-"))
+        .unwrap();
+    let supplier_index: usize = supplier
+        .path
+        .as_str()
+        .trim_start_matches("stale-budget-")
+        .trim_end_matches(".md")
+        .parse()
+        .unwrap();
+    fs::write(
+        fixture.fs.root().path().join(supplier.path.as_str()),
+        page_bytes(
+            &format!("page_stale_budget_{supplier_index}"),
+            None,
+            "Changed stale budget owner holds 97 copper tokens.\n",
+        ),
+    )
+    .unwrap();
+    fixture.app.index_sync(false).unwrap();
+    let mut limited = runtime(&fixture.service, &dispatch);
+    limited.limits.requests = 1;
+    // No retained override is requested; this is an independent invocation
+    // envelope around inherited Run authority, as for default CLI limits.
+    limited.requested_limits = Some(crate::app::remote::RequestedJobLimits {
+        limits: limited.limits.clone(),
+        specified: Default::default(),
+        deadline_ms: None,
+    });
+    let stopped = fixture
+        .app
+        .embeddings_sync(&ordinary_settings(), &limited)
+        .unwrap_err();
+    assert_eq!(stopped.code, ErrorCode::BudgetExceeded);
+    assert_eq!(responses.calls.load(Ordering::SeqCst), 2);
+    let paused = job.inspect().unwrap();
+    assert_eq!(paused.state, RunState::Paused);
+    assert_eq!(paused.effective_limits, before.effective_limits);
+    assert_eq!(paused.spec, before.spec);
+    assert_eq!(paused.attempts.len(), 2);
+    assert_eq!(
+        paused
+            .tasks
+            .values()
+            .filter(|task| task.state == TaskState::Failed)
+            .count(),
+        1
+    );
+    assert_eq!(
+        paused
+            .tasks
+            .values()
+            .filter(|task| task.state == TaskState::Completed)
+            .count(),
+        1
+    );
+    assert_eq!(
+        paused
+            .tasks
+            .values()
+            .filter(|task| task.state == TaskState::Pending)
+            .count(),
+        1
+    );
+    assert_eq!(retained_marker_count(&fixture), 1);
+    let resumed = runtime(&fixture.service, &dispatch);
+    let report = fixture
+        .app
+        .embeddings_sync(&ordinary_settings(), &resumed)
+        .unwrap();
+    complete(&report, 3);
+    assert_eq!(responses.calls.load(Ordering::SeqCst), 4);
+    let after = job.inspect().unwrap();
+    assert_eq!(after.state, RunState::Failed);
+    assert_eq!(after.attempts.len(), 3);
+    assert_eq!(after.attempts[0].attempt, before.attempts[0].attempt);
+    assert_eq!(after.budget.unknown_attempts.len(), 3);
+    assert_eq!(after.spec, before.spec);
+    assert_eq!(retained_marker_count(&fixture), 2);
 }

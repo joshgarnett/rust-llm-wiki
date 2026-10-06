@@ -391,16 +391,94 @@ information. Detailed local evidence is optional under the sibling
 `guard-preparation-001/` and `critic/public/` artifact directories. Preserved private
 test hooks remain local; the compiled source is disclosed as dirty.
 
-This milestone is later than packaged candidate011 below. Mixed stale suppliers
-with unsent sibling tasks remain safely stranded. A separate source review also
-finds that per-Run limits and recomputed deadlines do not establish an aggregate
-invocation allowance or startup deadline across multiple fresh/resumed Runs;
-its proposed public reproduction is unrun. Both are blockers for the integrated
+This milestone is later than packaged candidate011 below. At that checkpoint,
+mixed stale suppliers with unsent sibling tasks remained safely stranded. A
+separate source review found that per-Run limits and recomputed deadlines did not
+establish an aggregate invocation allowance or startup deadline across multiple
+fresh/resumed Runs; its proposed public reproduction was then unrun. Both were blockers for the integrated
 collection workflow, outside this one-page partitioning gate. Exact vector scans,
 broad fact completeness, native HIGH and practical 25K qualification remain open.
 The next work is a complete cited-brief/update/recovery workflow and one admitted
 default-geometry collection attribution experiment, with task completeness,
 citation integrity and resource measurements assessed separately.
+
+## Invocation allowance and independent recovery
+
+The later 2026-10-06 batch addresses two blockers in ordinary preparation. One
+operation-owned allowance now composes request, byte, unit, cost, concurrency and
+rate limits across owner pages, recovered pending tasks and retries. The original
+operation deadline composes with retained Run deadlines. Exact owned attempts
+are projected from the existing ledger; authenticated settlement can recover
+slack, while unknown charges remain reserved. Replaying a received response
+does not send another request. A fresh explicit command gets a fresh operation
+allowance without changing a retained Run's lifetime limits or deadline.
+
+Historical authority is limited to authenticated cache-only embedding work.
+Immutable descriptors, original hash-bound receipts and original settlement
+events remain required after legitimate spool cleanup or later billing
+reconciliation. Pending work, live dependency closures and global Run guards
+stay current. Authenticated rejected tasks finish failed; independent current
+tasks continue in their original Run, which truthfully finishes failed if any
+task failed. A distinct current input may be prepared under remaining allowance;
+an equivalent failed scope does not silently fund replacement work.
+
+Rejected setup probes have a separate narrow continuation check. A settled,
+terminal, one-task embedding-check rejection with exact descriptor, receipt,
+Space and current global guards can be left paused with its warning and unknown
+holds while ordinary collection preparation proceeds. Tampered receipts or
+unresolved attempts refuse before another corpus request. This does not finish
+the probe, release its holds or broaden historical embedding authority. The batch
+also restores strict retained change-proof decoding for the existing legacy and
+indexed variants; no ledger, receipt, marker or catalog format changed.
+
+There are **205 distinct source-qualified affected native passes**: 138 unit,
+28 semantic retrieval, 21 API extraction and 18 remote CLI checks. Passing
+unchanged controls are retained from the earlier frozen checkpoints; changed
+paths received targeted replays. This is composite evidence, not one green broad
+suite. The 532-cut ledger fault sweep passed. The 370-cut bootstrap sweep timed
+out and remains unqualified; four ignored helper/diagnostic tests are not passes.
+Compile, runtime and runner failures remain retained. Repairs were grouped after
+serial checkpoints; their cumulative owning-process interval was
+1,387.762983542 seconds within the original 1,500-second ceiling.
+
+The baseline public CLI actually sent five requests under a four-request command
+limit. With the final release binary, the same 129 distinct short Pages, provider
+batch maximum 32, default 12,000-byte geometry and no quality target produce
+**four requests of 32 inputs**, then `BUDGET_EXCEEDED` with 128 generated inputs,
+the retained Run ID and explicit continuation advice. Repeating the identical
+authorized command sends **only the remaining input**. Final online and offline
+preparation both report 129/129 cached coverage. Original Run specifications,
+limits, start/deadline, receipts and unknown-charge holds remain intact; the
+first command's incomplete active-space state has an explicit offline refusal.
+The recorder's owning-process interval was 7.448774 seconds; the eight children's
+own duration sum was 6.921723 seconds. There were five loopback mock requests and
+zero real-provider calls. Independent Astra inspection passes the declared
+mechanics control: actual input bodies, original Run specifications/deadlines,
+journal prefixes, receipts, markers, immutable Pages and accounting holds match
+the continuation contract. Mixed-stale paths have affected native evidence,
+not a separately accepted public lifecycle. This adds no answer-quality score.
+
+The final CLI SHA256 is
+`ed9e7fc421e1d6dc94ca411a184e15d2b27dfc02145dcccee85801fe851b5630`;
+the 469-input source freeze SHA256 is
+`0a0ca4858c079ac26132bd1ca56706c2c62211b9c40ef10196bba6b7fa2949d1`.
+The public summary SHA256 is
+`4b210cd4f4db52a62bec113b1e69556e2ccd750690c83943cef392f63debe2b7`.
+The independent acceptance JSON SHA256 is
+`22782436c32e9c6f76f7e7b3c4d80dd459b8f3e2c9d12391558425b081baf15d`.
+Actual compiler actions use rustc 1.98.0, macOS ARM64, edition 2024, optimization
+level 3, debug information disabled and minimum macOS 26.5. Detailed optional
+evidence is under `invocation-budget-001/`; preserved private test hooks remain
+disclosed and excluded from production CLI code.
+
+This closes narrow preparation defects rather than broad retrieval quality.
+The next milestone is a complete cited investigation through factual refresh and
+reconstruction, with one admitted default-geometry collection attribution run
+to choose the storage or bounded-discovery intervention. The allowance currently
+replays enrolled journals on admission, so its work costs still need attribution.
+Exact vector scans, broad completeness, unseen native HIGH and practical
+25K/~2.5GB qualification remain open; 100K is deferred. No mock or local native
+check establishes live-provider, power-loss or other-platform qualification.
 
 ## Local 0.2.0 candidate011 artifact
 

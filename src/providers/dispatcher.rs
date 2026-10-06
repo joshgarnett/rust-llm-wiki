@@ -304,6 +304,26 @@ impl Dispatcher {
         task: &Blake3Hash,
         purpose: DispatchPurpose,
     ) -> std::result::Result<DispatchOutcome, Box<DispatchFailure>> {
+        self.execute_scoped(ledger, service, task, purpose, None)
+    }
+    pub fn execute_with_invocation(
+        &self,
+        ledger: &JobLedger,
+        service: &TrustedService,
+        task: &Blake3Hash,
+        purpose: DispatchPurpose,
+        invocation: &super::invocation_budget::InvocationBudget,
+    ) -> std::result::Result<DispatchOutcome, Box<DispatchFailure>> {
+        self.execute_scoped(ledger, service, task, purpose, Some(invocation))
+    }
+    fn execute_scoped(
+        &self,
+        ledger: &JobLedger,
+        service: &TrustedService,
+        task: &Blake3Hash,
+        purpose: DispatchPurpose,
+        invocation: Option<&super::invocation_budget::InvocationBudget>,
+    ) -> std::result::Result<DispatchOutcome, Box<DispatchFailure>> {
         if tokio::runtime::Handle::try_current().is_ok() {
             return Err(failure(
                 WikiError::new(
@@ -322,7 +342,8 @@ impl Dispatcher {
                     None,
                 )
             })?;
-        let result = runtime.block_on(self.execute_inner(ledger, service, task, purpose));
+        let result =
+            runtime.block_on(self.execute_inner(ledger, service, task, purpose, invocation));
         // OS DNS work may be uncancellable; shutdown must never join it indefinitely.
         runtime.shutdown_timeout(Duration::from_millis(50));
         result
@@ -333,6 +354,7 @@ impl Dispatcher {
         service: &TrustedService,
         key: &Blake3Hash,
         purpose: DispatchPurpose,
+        invocation: Option<&super::invocation_budget::InvocationBudget>,
     ) -> std::result::Result<DispatchOutcome, Box<DispatchFailure>> {
         let (fs, vault_id, _, options) = ledger.dispatcher_bindings();
         let mut retry_state = RetryState::default();
@@ -349,7 +371,8 @@ impl Dispatcher {
 
             loop {
                 let inspection = ledger.inspect().map_err(|e| failure(e, None))?;
-                let deadline = inspection.effective_deadline_utc_ms;
+                let deadline = invocation.map_or(inspection.effective_deadline_utc_ms,
+                    |budget| budget.deadline_utc_ms().min(inspection.effective_deadline_utc_ms));
                 policy(&options, None, deadline).map_err(|e| failure(e, None))?;
                 let task = inspection
                     .tasks
@@ -387,8 +410,26 @@ impl Dispatcher {
                     deadline,
                 )
                 .map_err(|e| failure(e, None))?;
-                let reservation = ledger.reserve(key, bound.clone()).map_err(|e| failure(e, None))?;
+                let invocation_slot = invocation
+                    .map(|budget| budget.reserve(ledger, &bound, now.utc_ms, deadline))
+                    .transpose().map_err(|e| failure(e, None))?;
+                let reservation = match ledger.reserve(key, bound.clone()) {
+                    Ok(reservation) => reservation,
+                    Err(error) => {
+                        // An append/sync failure may have reserved durably. Keep
+                        // the provisional allowance and prohibit another send.
+                        if let Some(budget) = invocation { budget.block(); }
+                        return Err(failure(error, None));
+                    }
+                };
                 let attempt = reservation.attempt().clone();
+                if let (Some(budget), Some(slot)) = (invocation, invocation_slot) {
+                    if let Err(error) = budget.bind(slot, &attempt) {
+                        budget.block();
+                        let _ = ledger.release_not_sent(&attempt, NotSentObservation { reason: NotSentReason::TransportNotEntered });
+                        return Err(failure(error, Some(attempt)));
+                    }
+                }
                 let permit = match ledger.dispatch_intent(reservation) {
                     Ok(p) => p,
                     Err(e) => {
@@ -461,6 +502,10 @@ impl Dispatcher {
                     );
                     return Err(failure(e, Some(attempt)));
                 }
+                if let Err(error) = policy(&options, Some(now), deadline) {
+                    let _ = ledger.release_not_sent(&attempt, NotSentObservation { reason: NotSentReason::TransportNotEntered });
+                    return Err(failure(error, Some(attempt)));
+                }
                 let mut authorization = match ledger.begin_send(permit) {
                     Ok(value) => value,
                     Err(e) => {
@@ -484,6 +529,14 @@ impl Dispatcher {
                 if let Err(error)=authorization.check_before_entry() {
                     let _=ledger.release_not_sent(&attempt,NotSentObservation { reason:NotSentReason::TransportNotEntered });
                     return Err(failure(error,Some(attempt)));
+                }
+                // The shared deadline may be tighter than this Run's deadline;
+                // re-quote after helper and durable authorization IO as well.
+                if let Err(error) = policy(&options, Some(now), deadline).and_then(|current| {
+                    jobs::budgets::quote_bound(&bound, &inspection.effective_limits, current.utc_ms, deadline).map(|_| ())
+                }) {
+                    let _ = ledger.release_not_sent(&attempt, NotSentObservation { reason: NotSentReason::TransportNotEntered });
+                    return Err(failure(error, Some(attempt)));
                 }
                 let connect_timeout_ms =
                     u64::from(service.service().connect_timeout_seconds.unwrap_or(10)) * 1000;
@@ -888,12 +941,25 @@ fn redacted(error: WikiError) -> WikiError {
         );
         return safe;
     }
-    super::diagnostics::error(
+    let invocation = error
+        .details
+        .get("budget_scope")
+        .and_then(serde_json::Value::as_str)
+        == Some("invocation");
+    let mut safe = super::diagnostics::error(
         error.code,
         super::diagnostics::reason(&error)
             .or_else(|| super::diagnostics::local(&error))
             .unwrap_or(""),
-    )
+    );
+    if invocation {
+        safe.details["budget_scope"] = serde_json::json!("invocation");
+        safe.details["next_action"] = serde_json::json!(
+            "Continue explicitly with the same embeddings command; already completed inputs are reused. Inspect jobs status first if the retained Run also needs an explicit amendment. Unknown charges remain reserved."
+        );
+        safe.hint = safe.details["next_action"].as_str().map(str::to_owned);
+    }
+    safe
 }
 fn failure(error: WikiError, attempt: Option<AttemptRef>) -> Box<DispatchFailure> {
     Box::new(DispatchFailure {
@@ -1470,5 +1536,20 @@ mod diagnostic_redaction_tests {
             "credential file unavailable or invalid",
         ));
         assert_eq!(wrong_code.message, "bounded provider operation failed");
+
+        let mut exhausted = WikiError::new(ErrorCode::BudgetExceeded, "secret-marker");
+        exhausted.details = serde_json::json!({
+            "budget_scope": "invocation", "next_action": "secret-marker"
+        });
+        let safe = redacted(exhausted);
+        assert_eq!(safe.details["budget_scope"], "invocation");
+        assert_eq!(safe.hint.as_deref(), safe.details["next_action"].as_str());
+        assert!(
+            safe.hint
+                .as_deref()
+                .unwrap()
+                .contains("Continue explicitly")
+        );
+        assert!(!format!("{safe:?}").contains("secret-marker"));
     }
 }

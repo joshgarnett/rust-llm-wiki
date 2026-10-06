@@ -77,6 +77,8 @@ A successful sync reports published coverage. Normalized preparation retains ack
 
 Request limits include retries. Each embedding attempt conservatively reserves **8 MiB of response allowance**, even when its eventual response is smaller. A `--max-response-bytes` ceiling must cover settled usage plus outstanding and proposed reservations. Without a complete trusted rate card, monetary cost remains unknown and conservative reservations can remain after successful output. This is not a report of zero spend or a claim that no token usage was returned. Inspect `jobs status --run RUN_ID` before changing a budget. A failed probe is retained and paused; correcting configuration and rerunning the probe creates a new run, preserving earlier accounting.
 
+An embedding command also has one allowance for all its new attempts, including internal preparation pages, resumed pending tasks and retries. Request, byte, billable-unit, cost, concurrency and rate ceilings compose with each Run's retained lifetime limits. Every attempt uses the earlier of the operation's original deadline and the Run's effective deadline. Replaying an already received response sends no new request. Unknown charges remain reserved; only proven not-sent work or authenticated known settlement can release its corresponding allowance.
+
 The [live usability evaluation](execution/reports/UX-VALIDATION.md) records the exact tested corpus, model and limitations. Other endpoints, models and generation adapters still require their own checks.
 
 ## Manual checks
@@ -111,6 +113,8 @@ For multi-section articles, an explicitly authorized sync with `--quality-target
 ## Retained jobs and safe diagnostics
 
 `jobs status --run RUN` shows effective cumulative limits, progress and unknown attempts. Raise selected bounds with `jobs amend --run RUN --reason REASON --max-requests N` (and other explicit limit flags); omitted bounds and consumed reservations remain. A resumed CLI command inherits retained bounds unless a flag is supplied; a differing explicit flag requires an amendment. Library runtimes with no override mask must pass the effective retained limits. Retry an uncertain send only with `--retry-uncertain`; successful output can coexist with an older unresolved billing/concurrency hold. A changed current input is refused before resend.
+
+The command allowance never amends a retained Run. With no explicit flags, default command limits still bound new attempts across Runs. When only this command's allowance is exhausted, repeat the explicit command to continue its remaining work; completed inputs are reused. If the retained Run's lifetime limit or deadline is exhausted too, inspect and amend that Run first. A settled, authenticated rejected embedding response can end its task as failed while independent unchanged tasks continue in that same Run. Its status remains `failed` after those tasks finish, and its receipts and unknown charges remain available. Pending inputs, live dependencies and global Run guards must still be current.
 
 Generation output is limited by the service's `max_output_tokens` (default 4096) and caller bounds. Requests above a known service cap fail before packet/job creation. A provider-free dry run cannot check service configuration or credentials and reports those unchecked dimensions.
 

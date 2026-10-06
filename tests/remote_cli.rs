@@ -775,9 +775,12 @@ fn rejected_probe_retains_accounting_and_same_space_can_probe_then_sync() {
     let listener = std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).unwrap();
     embedding_mock_config(&f, listener.local_addr().unwrap());
     listener.set_nonblocking(true).unwrap();
+    let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let observed_calls = calls.clone();
     let server = std::thread::spawn(move || {
         for invalid in [true, false, false] {
             let mut socket = accept_embedding_request(&listener);
+            observed_calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             send_embedding_response(&mut socket, invalid);
         }
     });
@@ -787,11 +790,42 @@ fn rejected_probe_retains_accounting_and_same_space_can_probe_then_sync() {
     assert_eq!(first["error"]["details"]["reason"], "usage_invalid");
     let old_run: RecordId =
         serde_json::from_value(first["error"]["details"]["run_id"].clone()).unwrap();
+    let ledger = lwiki::jobs::JobLedger::new(
+        f.fs.clone(),
+        f.app.vault_id().clone(),
+        old_run.clone(),
+        embedding_fixture::options(),
+    )
+    .unwrap();
+    let before = ledger.inspect().unwrap();
+    assert_eq!(before.attempts.len(), 1);
+    let original = before.attempts[0].clone();
+    assert_eq!(original.phase, lwiki::jobs::AttemptPhase::Settled);
+    assert_eq!(
+        original.billing,
+        lwiki::jobs::BillingDisposition::UnknownReserved
+    );
+    let receipt_path =
+        f.fs.root()
+            .resolve(&original.receipt.as_ref().unwrap().path)
+            .unwrap();
+    let receipt_bytes = std::fs::read(&receipt_path).unwrap();
+    assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
     let (second, success) = embedding_cli(&f, &["embeddings", "check", "--probe"]);
     assert!(success, "{second}");
     let (third, success) = embedding_cli(&f, &["embeddings", "sync"]);
     assert!(success, "{third}");
     assert_eq!(third["data"]["published"], true);
+    assert!(
+        third["data"]["warnings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|warning| warning
+                .as_str()
+                .is_some_and(|warning| warning.contains("Rejected embedding probe"))),
+        "{third}"
+    );
     server.join().unwrap();
     let ledger = lwiki::jobs::JobLedger::new(
         f.fs.clone(),
@@ -801,6 +835,20 @@ fn rejected_probe_retains_accounting_and_same_space_can_probe_then_sync() {
     )
     .unwrap();
     let inspection = ledger.inspect().unwrap();
+    assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 3);
+    assert_eq!(inspection.attempts[0], original);
+    assert_eq!(inspection.budget.outstanding, before.budget.outstanding);
+    assert_eq!(
+        inspection.budget.unknown_attempts,
+        before.budget.unknown_attempts
+    );
+    assert_eq!(inspection.effective_limits, before.effective_limits);
+    assert_eq!(
+        inspection.effective_deadline_utc_ms,
+        before.effective_deadline_utc_ms
+    );
+    assert_eq!(inspection.state, before.state);
+    assert_eq!(std::fs::read(&receipt_path).unwrap(), receipt_bytes);
     assert_eq!(inspection.attempts.len(), 1);
     assert_eq!(
         inspection.attempts[0].phase,
@@ -1252,4 +1300,77 @@ fn native_cli_successful_fallback_keeps_prior_paid_network_activity() {
         envelope["warnings"].to_string().contains("fallback"),
         "{envelope}"
     );
+}
+
+#[test]
+fn rejected_probe_corrupt_receipt_and_unresolved_probe_refuse_before_corpus_payment() {
+    for unresolved in [false, true] {
+        let f = embedding_fixture::Fixture::new();
+        f.page("one", "Alpha");
+        let listener = std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).unwrap();
+        embedding_mock_config(&f, listener.local_addr().unwrap());
+        listener.set_nonblocking(true).unwrap();
+        let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let observed = calls.clone();
+        let server = std::thread::spawn(move || {
+            let mut socket = accept_embedding_request(&listener);
+            observed.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            if !unresolved {
+                send_embedding_response(&mut socket, true);
+            }
+        });
+        let (first, success) = embedding_cli(&f, &["embeddings", "check", "--probe"]);
+        assert!(!success, "{first}");
+        server.join().unwrap();
+        let run: RecordId =
+            serde_json::from_value(first["error"]["details"]["run_id"].clone()).unwrap();
+        let ledger = lwiki::jobs::JobLedger::new(
+            f.fs.clone(),
+            f.app.vault_id().clone(),
+            run,
+            embedding_fixture::options(),
+        )
+        .unwrap();
+        let before = ledger.inspect().unwrap();
+        assert_eq!(before.attempts.len(), 1);
+        if unresolved {
+            assert_eq!(
+                before.attempts[0].phase,
+                lwiki::jobs::AttemptPhase::DispatchIntent
+            );
+            assert_eq!(
+                before.attempts[0].remote_exposure,
+                lwiki::jobs::RemoteExposure::PossiblyInFlight
+            );
+        } else {
+            assert_eq!(before.attempts[0].phase, lwiki::jobs::AttemptPhase::Settled);
+            let path =
+                f.fs.root()
+                    .resolve(&before.attempts[0].receipt.as_ref().unwrap().path)
+                    .unwrap();
+            std::fs::write(path, b"substituted receipt without its authenticated hash").unwrap();
+        }
+        let marker_path = f.fs.root().path().join(".wiki/state/embedding-jobs");
+        let markers = files(&marker_path);
+        let (refused, success) = embedding_cli(&f, &["embeddings", "sync"]);
+        assert!(!success, "{refused}");
+        assert_eq!(refused["meta"]["network_used"], false);
+        if unresolved {
+            assert_eq!(refused["error"]["code"], "RECOVERY_REQUIRED");
+        }
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+        assert_eq!(
+            files(&marker_path),
+            markers,
+            "refusal must not create fresh funded collection scope"
+        );
+        let after = ledger.inspect().unwrap();
+        assert_eq!(after.attempts, before.attempts);
+        assert_eq!(after.budget.outstanding, before.budget.outstanding);
+        assert_eq!(
+            after.budget.unknown_attempts,
+            before.budget.unknown_attempts
+        );
+        assert_eq!(after.budget.dispatched_requests, 1);
+    }
 }

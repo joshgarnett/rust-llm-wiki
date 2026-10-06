@@ -53,8 +53,12 @@ acceptance with exact citations. Subsequent automatic preparation assigns each
 paid input a feasible authenticated supplier, completes repeated-input groups and
 preserves one page Run's limits across task partitions. Its scoped independent
 9/10 gate, 61 affected checks and 19-step public lifecycle pass. Intrinsically
-oversized unique suppliers still refuse; mixed-stale continuation and aggregate
-invocation budgets/startup deadlines across Runs remain workflow blockers.
+oversized unique suppliers still refuse. The subsequent
+[invocation and recovery checkpoint](validation-normalized-embeddings.md#invocation-allowance-and-independent-recovery)
+shares one command allowance/deadline across Runs and permits independent current
+work after authenticated stale-response rejection, preserving receipts and holds.
+Its affected native controls pass and the public command records four bounded
+requests followed by one remaining input in an explicit continuation.
 Ordinary queries still scan compatible vectors, so this path cannot qualify 25K
 unchanged. The next work is a complete cited-brief/update/recovery workflow and
 one default-geometry collection attribution experiment to choose the measured

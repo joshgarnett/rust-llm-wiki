@@ -157,7 +157,7 @@ queries. Semantic modes require compatible active-space and query vectors; offli
 cache misses are explicit. Host selection remains lexical only. Literal and graph
 context remain separate migration work. The [embedding checkpoint](validation-normalized-embeddings.md)
 records the affected correctness checks and the still-open public quality/capacity
-gates; packaged candidate011 predates the latest automatic preparation milestone.
+gates; packaged candidate011 predates the latest preparation and recovery changes.
 Dry-run previews the resolved request
 without running its proof. Operational
 generation-output records currently require explicit cached read because their
@@ -171,11 +171,21 @@ with required/available guard counts. Compatible cached inputs remain reusable.
 Interrupted tasks retain their original Run, accounting holds and limits; explicit
 retained-limit amendment is required when that Run's budget is exhausted.
 
-Per-Run limits currently do not establish an aggregate invocation allowance or
-startup deadline across multiple fresh/resumed Runs. Mixed stale-supplier work
-with unsent siblings also lacks a usable ordinary continuation. These are open
-integrated-workflow blockers; the scoped preparation acceptance does not qualify
-whole-command spending, broad answer completeness or large-vault capacity.
+An embedding command now shares one allowance and original deadline across new
+owner pages, resumed pending tasks and retries, alongside each Run's retained
+lifetime limits. If only the command allowance is exhausted, explicitly repeat
+the command; completed inputs are reused. A retained Run that also exhausted its
+limits or deadline still needs inspection and explicit amendment.
+
+Authenticated, settled stale embedding responses can finish their original tasks
+as failed while independent current siblings continue in that same Run. Historical
+receipts and unknown charges remain; pending inputs, live dependencies and global
+guards stay strict. A failed setup probe remains separately paused and accounted
+for, with a warning, while an authenticated terminal rejection permits ordinary
+collection preparation. Tampered receipts or unresolved exposure still refuse.
+The [invocation and recovery checkpoint](validation-normalized-embeddings.md#invocation-allowance-and-independent-recovery)
+records the narrow controls. Broad answer completeness and representative capacity
+remain open.
 
 Lexical indexed-document context also supports the existing host-selection
 workflow. Prepare with the same query, filters and budgets you will apply:

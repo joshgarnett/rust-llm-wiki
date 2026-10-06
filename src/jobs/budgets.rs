@@ -213,7 +213,7 @@ pub fn quote_bound(
         cost,
     })
 }
-pub(super) fn zero() -> Allowance {
+pub(crate) fn zero() -> Allowance {
     Allowance {
         requests: 0,
         request_bytes: 0,
@@ -222,7 +222,7 @@ pub(super) fn zero() -> Allowance {
         cost: None,
     }
 }
-pub(super) fn add(a: &mut Allowance, b: &Allowance) -> Result<()> {
+pub(crate) fn add(a: &mut Allowance, b: &Allowance) -> Result<()> {
     a.requests = a.requests.checked_add(b.requests).ok_or_else(overflow)?;
     a.request_bytes = a
         .request_bytes
@@ -245,7 +245,7 @@ pub(super) fn add(a: &mut Allowance, b: &Allowance) -> Result<()> {
     };
     Ok(())
 }
-pub(super) fn fits(
+pub(crate) fn fits(
     settled: &Allowance,
     outstanding: &Allowance,
     proposed: &Allowance,

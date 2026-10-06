@@ -419,3 +419,48 @@ must not multiply an explicit caller ceiling. Verify the proposed ordinary
 then enforce both invocation and retained-Run allowances across all dispatch
 paths. Fold this and mixed-stale continuation into the integrated workflow;
 do not create another isolated scored milestone or a general repair framework.
+
+## 2026-10-06 — Share command admission; preserve historical paid authority
+
+The public 129-input reproduction confirms the defect: one four-request command
+sends five requests because internal pages allocate separate Runs. Keep existing
+Run limits and compose them with one operation-owned allowance and original
+deadline at the Dispatcher boundary, covering pending work and retries. Track
+exact owned AttemptRefs and project existing ledger events; do not subtract
+whole-Run histories or discard unknown holds. A new explicit command gets its own
+allowance; it never silently amends retained limits.
+
+[AWS's retry documentation](https://docs.aws.amazon.com/sdkref/latest/guide/feature-retry-behavior.html)
+describes shared client retry/rate buckets, and Microsoft's
+[client-side HTTP rate limiter](https://learn.microsoft.com/en-us/dotnet/core/extensions/http-ratelimiter)
+acquires a permit before dispatch. These mechanisms support investigating one
+admission boundary shared by internal requests. Our scope is an explicit wiki
+operation, with persistent monetary/unknown-exposure accounting in the existing
+ledger. Generic rate permits alone cannot establish that accounting. No external
+limiter dependency or provider-wide quota service is added. The testable
+hypothesis is four actual sends across internal Runs, retained 128 inputs and
+one remaining input on a separately explicit continuation; the public candidate
+records that result. Replaying enrolled journals is exact but adds work, which
+the next collection attribution must measure before considering an optimization.
+
+Permit historical completion only for authenticated cache-only embedding work,
+using immutable descriptors and the original receipt/commit/settlement authority.
+Legitimate spool cleanup and later Unknown-to-Known billing reconciliation do not
+erase that proof. Keep live dependents and global guards strict. End authenticated
+rejected tasks with the existing failed-task event, continue independent current
+siblings in their original Run, and preserve its honest failed status and charges.
+
+Trace the failed-probe continuation through the actual public command. Its stage
+is Probe, not corpus Embed, so preserve the separately paused probe and validate
+its exact one-task rejection before excluding it from pending collection work.
+Both Received recovery and already rejected cuts use that check. Tampered receipt
+and unresolved attempt controls refuse before another corpus payment. No general
+repair, propagation subsystem or ledger exemption is needed.
+
+Retain the 205 source-qualified affected native passes, the passed 532-cut ledger
+sweep and all failures. The timed-out 370-cut bootstrap sweep remains unqualified;
+do not rerun unchanged passing suites or present composite checks as one full
+green run. Close actual independent public-result review, commit this batch and
+package the same tested binary as a local 0.2.0 candidate. Return immediately to
+cited-answer completeness, affordable collection behavior and practical 25K
+qualification; this batch adds no broad quality score or capacity claim.

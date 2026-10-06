@@ -2314,15 +2314,15 @@ mod import_error_presentation_tests {
 fn embedding_runtime(
     runtime: &crate::app::remote::RemoteRuntime,
 ) -> crate::app::embeddings::EmbeddingRuntime<'_> {
-    crate::app::embeddings::EmbeddingRuntime {
-        service: &runtime.service,
-        dispatcher: &runtime.dispatcher,
-        job_options: runtime.job_options.clone(),
-        requested_limits: runtime.requested_limits.clone(),
-        limits: runtime.limits.clone(),
-        deadline_ms: u64::try_from(runtime.deadline_utc_ms - runtime.created_at_utc_ms)
-            .unwrap_or(0),
-    }
+    crate::app::embeddings::EmbeddingRuntime::new(
+        &runtime.service,
+        &runtime.dispatcher,
+        runtime.job_options.clone(),
+        runtime.limits.clone(),
+        runtime.created_at_utc_ms,
+        runtime.deadline_utc_ms,
+        runtime.requested_limits.clone(),
+    )
 }
 // Fallback is allowed to return a local result after a remote failure. Keep
 // invocation activity on that successful result, including its nested graph.
