@@ -26,8 +26,11 @@ are not a promise that every layout supports them. On an already normalized vaul
 use lexical documents and `--scope indexed-documents`; selected verification is an
 observation against the discovery generation, not a global Current audit. On legacy
 vaults use lexical documents with `--scope current`. Never silently substitute a
-mode/scope for one the user requested. Normalized strict current/historical and
-literal/semantic/hybrid parity remains unavailable. Do not activate normalized
+mode/scope for one the user requested. This ID-only host selection recipe uses
+lexical mode on normalized vaults. Automatic semantic/hybrid document context is
+available with compatible prepared vectors and an exact cached query for offline
+use; it does not support this selection stage. Normalized strict current/historical
+and literal context remain unavailable. Do not activate normalized
 layout to follow this recipe; `index rebuild --normalized` is an explicit choice.
 Plain normalized search is cached discovery; `search QUERY --mode lexical
 --verify-selected` verifies displayed dependencies when citations are needed.

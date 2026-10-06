@@ -45,11 +45,15 @@ reservation; see the [user workflow and limits](indexed-context.md).
 
 The [normalized embedding checkpoint](validation-normalized-embeddings.md) connects
 bounded preparation, cached semantic/hybrid document search and automatic cited
-document context. Its affected native checks pass; public-task acceptance remains
-open. Whole preparation still has a 4,096-owner ceiling, and exact discovery renders
-the eligible corpus twice. This path cannot qualify 25K unchanged. The next
-connected milestone is paged changed-document preparation, cited query and refresh,
-selected through a bounded release comparison rather than additional ranking rules.
+document context. Compact policy-bound descriptors now connect durable owner-page
+preparation and changed-dependency invalidation to discovery without whole-corpus
+rendering. Its 63 affected native checks and small synthetic mock-backed public
+refresh/reprepare/reconstruction workflow pass; the latter has independent 10/10
+acceptance with exact citations. Ordinary queries still scan compatible vectors,
+and high-fanout shared inputs can exceed receipt guard limits. This path cannot
+qualify 25K unchanged. The next connected milestone is automatic receipt-feasible
+preparation and bounded discovery, selected through a controlled release attribution
+experiment within the ordinary collection lifecycle.
 
 Literal and graph context, other rename target kinds
 and public default activation are not fully migrated. These

@@ -348,3 +348,31 @@ owners. Inventory-derived retained coverage is a separate reported quantity and
 never a full vector-health audit. Exact schema checking admits the base catalog
 or the entire optional inventory schema; canonical catalog/FTS agreement does
 not certify semantic inventory or vector completeness.
+
+
+## 2026-10-06 — Accept the small public inventory lifecycle; prepare local 0.2
+
+Independent actual-command assessment passes the frozen small synthetic
+mock-backed lifecycle at 10/10, every one of 17 mandatory observations and zero
+observed blockers. The repaired packet has three helpers and 14 offline CLI
+commands, 70 exact citations, immutable refresh and offline reconstruction reuse.
+Keep the first setup failure and its full allowance as a separate labeled attempt.
+This closes that scoped workflow gate; it does not change the failed broad
+completeness controls, native HIGH or practical 25K qualification.
+
+Align the three embedded agent-guidance Markdown files with verified normalized
+semantic/hybrid behavior before packaging. Host ID-only selection remains lexical
+on normalized vaults; automatic semantic/hybrid context needs a prepared space
+and an exact cached query offline. Strict whole-vault scope and literal parity
+remain unavailable. One planned release build is needed because the guidance is
+embedded in the CLI; preserve unchanged core-code checks and verify the new
+binary's version, capabilities and exact exported guidance separately. Disclose
+precursor workflow binary versus final artifact binary and retained local test
+hooks rather than claiming a clean tree or a new public replay.
+
+A fresh Astra architecture review prioritizes automatic receipt-feasible owner
+partitioning, then bounded semantic discovery selected by a controlled release
+attribution experiment, while treating downstream fact loss separately. Advance
+the integrated ordinary collection lifecycle through admitted controls toward
+25K/~2.5GB under the unchanged 40GiB free-space floor. Do not tune the failed
+packing surrogates, raise discovery caps or add a general repair subsystem.

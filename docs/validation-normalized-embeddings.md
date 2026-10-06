@@ -270,16 +270,69 @@ B-tree/index checks and canonical catalog/FTS comparison remain in force. Their
 canonical-agreement result does not certify semantic inventory completeness or
 vector-cache health. Selected preparation and query proof checks remain separate.
 
-A fresh independent Astra critic froze a small synthetic mock-backed public
-inventory lifecycle: initial offline consumption, factual refresh/missing coverage,
-reprepare, exact current citations and reconstruction. Its 17 planned invocations
-include three existing helpers and 14 public CLI commands. The scoped gate remains
-at least 9/10, every mandatory observation and zero blockers, before a new local
-0.2.0 trial. The first public-packet attempt stopped after export when its mock configuration
-was outside the existing helper's required vault-parent directory. No public CLI
-command or provider call launched; this is a preserved setup failure, not an
-acceptance pass or product-capacity result. Broader native completeness,
-HIGH, fast query and representative 25K capacity remain open.
+The prospectively declared small synthetic mock-backed public inventory lifecycle
+now passes independent acceptance at **10/10, all 17 mandatory observations and
+zero observed correctness blockers**. Its repaired packet ran three existing
+helpers and 14 actual offline CLI commands on the pinned release binary. The
+original setup failure remains separate: two helpers, zero CLI/provider calls,
+with its complete failed-stage allowance retained. No result was overwritten.
+
+Initial preparation acquired 192 inputs in 12 mock requests. Unchanged offline
+preparation reported complete 192/192 coverage with zero generated/reused work.
+Both semantic and hybrid context returned the exact old observation and Unicode
+phrase. Managed refresh preserved the Source ID and every old immutable asset;
+offline preparation truthfully reported 191/192 available and one missing input.
+The interim context disclosed incomplete coverage and emitted no stale marker.
+Authorized mock reprepare acquired exactly one new input and reused two selected
+inputs. Both complete-state modes returned the new fact with its new immutable
+Revision citation. Catalog reconstruction changed physical incarnation; offline
+preparation reused 192 inputs, and rebuilt passage objects matched their prior
+versions exactly. The final check completed with canonical/cache agreement and
+zero diagnostics.
+
+Independent inspection verified **70/70 citations** against exact UTF-8 slices,
+full-content and quote hashes, vault/Source/Revision identity, Current labels and
+literal rendered citations, plus **192 initial immutable revision files**. Every
+context packet uses 11,703 bytes / 2,926 estimated tokens below the declared
+12,000/3,000 limits. Packets remain truncated/partial with distractors and omissions;
+only the narrow requested fact is complete in all six complete-state observations.
+The incomplete-state query is a coverage/refusal task, not an answer-quality pass.
+The fixed mock geometry supplies mechanics evidence, not learned relevance.
+
+Across the preserved failure and repaired packet there are 19 child invocations
+and 25.005783084 charged recorder seconds. Observed combined allocation is
+24,522,752 bytes with 60,576,096,256 free bytes at independent verification.
+Monotonic recorder intervals and asynchronous review wall time are separate;
+these small synthetic observations do not establish shipping latency. Logical
+reservations and disclosed reads were reconciled conservatively at
+2,145,963,032 / 2,147,483,648 bytes, including the failed stage, admission reads,
+validator reads, CLI counters and finalization allowances. This is not a complete
+physical-I/O measurement. The evaluation is closed; packaging is separate work.
+
+Production journals retain all 13 settled mock attempts as `unknown_reserved`;
+billable units/cost remain unknown. Every actual public CLI observation reports
+network false. This is not public online setup or live-provider compatibility.
+Compatible-input acquisition and later complete offline reuse pass the declared
+workflow; this is not a separate byte-for-byte audit of every retained vector blob.
+
+The independent result JSON SHA256 is
+`ef61b92aa197b20e5756b599bd5a61a4bb6ad54a2a8b62786cdff2a854d68f95`;
+the Markdown SHA256 is
+`7296632dda121d01d0c595a1d207c3ca938d01a2a665c434df22a4edbc8d76e6`.
+The tested release CLI SHA256 is
+`75458e73a89b4b55aeae583868c69772a0a4095b7e9fbe55ee72bc6e27553eec`.
+Original and labeled-repair protocols remain frozen, with no query/geometry,
+retrieval-bound or acceptance-threshold change.
+
+This is a useful point for a new scoped local 0.2.0 trial. The release review found
+stale embedded agent guidance denying implemented normalized semantic/hybrid
+retrieval; its correction is a separately verified release-data change, with
+core workflow checks retained rather than represented as new-binary replays.
+The next consequential milestone is the ordinary collection loop: automatic
+receipt-feasible owner groups, bounded semantic discovery chosen after controlled
+release attribution, cited investigation, factual refresh and recovery through
+representative tiers toward 25K. Broad answer completeness, normalized parity and
+default activation, native HIGH, fast queries and capacity remain open.
 
 Optional local protocols, source freezes and complete failure logs are retained
 under `.artifacts/normalized-semantic-lifecycle-001/inventory-001/`; independent
