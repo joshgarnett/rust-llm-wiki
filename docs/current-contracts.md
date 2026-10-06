@@ -62,6 +62,14 @@ for 78–79/100 questions per round; the combined reading recipe reaches 89–90
 Storage growth keeps 10K admission on hold. Bounded ordinary-publication WAL
 reclamation is the next measured milestone; full capacity and HIGH remain open.
 
+The subsequent [bounded WAL lifecycle](validation-wal-lifecycle.md) passes all
+six scoped mandatory conditions independently, including 700 query workflows,
+exact citations, recovery and 100 rebuilt sequences. Twenty-six affected native
+checks pass with original failures preserved. Selected WAL stays below 64 MiB
+at all 34 applicable observations; observed post-update task p95 falls from
+1.292 to 0.514 seconds. Evidence completeness is unchanged. The separate resource
+review still refuses 10K under the unchanged guard; full capacity/HIGH remain open.
+
 The [normalized Page reorganization workflow](validation-page-reorganization.md)
 passes scoped independent acceptance at 10/10 with every mandatory task and no
 blockers. Stable identity, authored/plain/unadopted incoming links, guarded editing,

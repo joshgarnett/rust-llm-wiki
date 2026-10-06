@@ -473,6 +473,9 @@ impl OfflineApp {
             outcome.reused = true;
             return Ok(outcome);
         };
+        // The owned projection pins its base; publication acquires and checks
+        // its own reader. Release this planner before the WAL checkpoint.
+        drop(reader);
         let draft = projected.draft();
         outcome.plan = summarize(&draft.title, &draft.read_preconditions, &draft.operations);
         let writer = self.writer()?;
@@ -703,6 +706,7 @@ impl OfflineApp {
                 let capture = plan.capture_state;
                 let projected =
                     project_capture(&self.fs, &reader, plan, &RefreshProjectionLimits::default())?;
+                drop(reader);
                 return self.publish_source_write(&catalog, projected, capture);
             }
             return Err(WikiError::new(
@@ -832,6 +836,7 @@ impl OfflineApp {
         };
         #[cfg(test)]
         drop(profile_project);
+        drop(reader);
         let draft = projected.draft();
         outcome.plan = summarize(&draft.title, &draft.read_preconditions, &draft.operations);
         if self.options.dry_run {
@@ -893,6 +898,7 @@ impl OfflineApp {
                 reason,
                 &crate::catalog::source_projection::RefreshProjectionLimits::default(),
             )?;
+            drop(reader);
             return match projected {
                 Some(projected) => self.publish_source_write(&catalog, projected, None),
                 None => Ok(MutationOutcome {

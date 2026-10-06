@@ -769,15 +769,86 @@ fn writable(path: &Path) -> Result<Connection> {
 /// The connection cannot escape either its shared lifetime lease or the writer
 /// permit. The root adapter supplies the immediate row+FTS+epoch transaction.
 pub(crate) struct DeltaWriter<'a> {
-    selected: Selected<Connection>,
+    selected: Selected<DeltaConnection>,
     _writer: &'a WriterPermit,
+}
+struct DeltaConnection {
+    connection: Connection,
+    database: Checked,
+    sidecars: Vec<Checked>,
+}
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum WalCheckpoint {
+    Complete,
+    Deferred,
+}
+#[cfg(test)]
+thread_local! { static CHECKPOINT_ERROR: std::cell::Cell<Option<i32>> = const { std::cell::Cell::new(None) }; }
+#[cfg(test)]
+pub(crate) fn checkpoint_error(code: Option<i32>) -> Option<i32> {
+    CHECKPOINT_ERROR.with(|fault| fault.replace(code))
 }
 impl DeltaWriter<'_> {
     pub(crate) fn connection(&self) -> &Connection {
-        self.selected.value()
+        &self.selected.value().connection
     }
     pub(crate) fn selection(&self) -> &CatalogSelection {
         self.selected.selection()
+    }
+    /// One opportunity after publication and owned readers/statements release.
+    /// TRUNCATE preserves persistent sidecar inodes. External readers may defer
+    /// it; neither a retry nor another publication belongs to this operation.
+    pub(crate) fn checkpoint_wal(&self) -> Result<WalCheckpoint> {
+        let verify = || {
+            self.selected._lease.checked.verify()?;
+            self.selected.value().database.verify()?;
+            verify_sidecars(&self.selected.value().sidecars)
+        };
+        verify()?;
+        self.connection()
+            .busy_timeout(Duration::ZERO)
+            .map_err(super::sql::sql_error)?;
+        let run = || -> rusqlite::Result<(i64, i64, i64)> {
+            #[cfg(test)]
+            if let Some(code) = checkpoint_error(None) {
+                return Err(rusqlite::Error::SqliteFailure(
+                    rusqlite::ffi::Error::new(code),
+                    Some("injected WAL checkpoint error".into()),
+                ));
+            }
+            self.connection()
+                .query_row("PRAGMA main.wal_checkpoint(TRUNCATE)", [], |row| {
+                    Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+                })
+        };
+        let result = run(); // query_row's statement is gone before validation.
+        if let Err(identity) = verify() {
+            // Preserve both diagnostics if native I/O and identity validation
+            // fail together. Neither result can be treated as busy deferral.
+            return Err(match result {
+                Err(error) => {
+                    let mut error = super::sql::sql_error(error);
+                    error.details = serde_json::json!({"identity_error": identity});
+                    error
+                }
+                Ok(_) => identity,
+            });
+        }
+        match result {
+            Ok((0, 0, 0)) => Ok(WalCheckpoint::Complete),
+            Ok((1, log, copied))
+                if (log >= 0 && copied >= 0 && copied <= log) || (log == -1 && copied == -1) =>
+            {
+                Ok(WalCheckpoint::Deferred)
+            }
+            Err(rusqlite::Error::SqliteFailure(error, _))
+                if error.code == rusqlite::ErrorCode::DatabaseBusy =>
+            {
+                Ok(WalCheckpoint::Deferred)
+            }
+            Err(error) => Err(super::sql::sql_error(error)),
+            Ok(tuple) => Err(corrupt(format!("invalid WAL checkpoint result: {tuple:?}"))),
+        }
     }
 }
 /// Caller must verify the durable operational authority and compare its
@@ -806,7 +877,13 @@ pub(crate) fn open_delta<'a>(
             ));
         }
         super::normalized_read::header(&connection, selected)?;
-        Ok(connection)
+        let database = Checked::open(name, false, true)?;
+        let sidecars = checked_sidecars(fs, selected, &database, false)?;
+        Ok(DeltaConnection {
+            connection,
+            database,
+            sidecars,
+        })
     })?
     .ok_or_else(|| corrupt("delta catalog selection is absent"))?;
     Ok(DeltaWriter {

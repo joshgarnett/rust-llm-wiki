@@ -33,7 +33,7 @@ use std::{
         Arc, Mutex,
         atomic::{AtomicBool, Ordering},
     },
-    time::{Duration, SystemTime},
+    time::{Duration, Instant, SystemTime},
 };
 
 const KEY: &str = "controller test import 茶";
@@ -1468,4 +1468,632 @@ fn public_import_preserves_external_reader_across_run_resume_and_replay() {
         assert!(checked.complete);
         assert_eq!(checked.error_count, 0, "{:?}", checked.diagnostics);
     }
+}
+
+// Finite mechanism fixtures; these are not public capacity qualification.
+const WAL_INPUT_BYTES: usize = 102_400;
+const WAL_CAP: u64 = 64 * 1024 * 1024;
+fn wal_input(ordinal: usize) -> Vec<u8> {
+    let mut body = Vec::with_capacity(WAL_INPUT_BYTES);
+    for line in 0.. {
+        let text = format!(
+            "Walneedle{ordinal:04} line {line:05}: vessel {} carries {} amber tokens.\n",
+            ordinal * 17 + line,
+            line * 31 + ordinal
+        );
+        let remaining = WAL_INPUT_BYTES - body.len();
+        body.extend_from_slice(&text.as_bytes()[..remaining.min(text.len())]);
+        if body.len() == WAL_INPUT_BYTES {
+            return body;
+        }
+    }
+    unreachable!()
+}
+fn wal_fixture(count: usize) -> Fixture {
+    Fixture::with_inputs(
+        true,
+        (0..count)
+            .map(|n| (format!("wal-{n}.txt"), wal_input(n)))
+            .collect(),
+    )
+}
+fn wal_fixture_bounds(fixture: &Fixture, started: Instant) {
+    use std::os::unix::fs::MetadataExt;
+    fn allocated(path: &Path) -> u64 {
+        let metadata = fs::symlink_metadata(path).unwrap();
+        let children = if metadata.is_dir() {
+            fs::read_dir(path)
+                .unwrap()
+                .map(|e| allocated(&e.unwrap().path()))
+                .sum()
+        } else {
+            0
+        };
+        metadata.blocks() * 512 + children
+    }
+    assert!(
+        started.elapsed() < Duration::from_secs(600),
+        "fixture deadline exceeded"
+    );
+    assert!(
+        allocated(fixture.temp.path()) <= 512 * 1024 * 1024,
+        "fixture allocation ceiling exceeded"
+    );
+    let mut usage = std::mem::MaybeUninit::<libc::rusage>::uninit();
+    assert_eq!(
+        unsafe { libc::getrusage(libc::RUSAGE_SELF, usage.as_mut_ptr()) },
+        0
+    );
+    let peak = unsafe { usage.assume_init() }.ru_maxrss as u64;
+    #[cfg(target_os = "macos")]
+    let peak_bytes = peak;
+    #[cfg(not(target_os = "macos"))]
+    let peak_bytes = peak * 1024;
+    assert!(
+        peak_bytes <= 1024 * 1024 * 1024,
+        "test-process RSS ceiling exceeded"
+    );
+}
+fn wal_state(app: &OfflineApp) -> crate::changes::operation_authority::Publication {
+    let catalog = Catalog::new(app.fs().clone(), app.vault_id().clone());
+    let state = catalog.operation_state().unwrap().unwrap();
+    assert!(state.active().is_none());
+    state.publication().clone()
+}
+fn wal_under_cap(app: &OfflineApp) {
+    use std::os::unix::fs::MetadataExt;
+    let state = wal_state(app);
+    for suffix in ["wal", "shm"] {
+        let path = app
+            .fs()
+            .root()
+            .resolve(&rel(format!(
+                ".wiki/cache/catalogs/{}.sqlite-{suffix}",
+                state.file_id
+            )))
+            .unwrap();
+        let metadata = fs::symlink_metadata(path).unwrap();
+        assert!(metadata.is_file() && !metadata.file_type().is_symlink());
+        if suffix == "wal" {
+            assert!(
+                metadata.len() <= WAL_CAP,
+                "WAL logical size {}",
+                metadata.len()
+            );
+            assert!(
+                metadata.blocks() * 512 <= WAL_CAP,
+                "WAL allocated size {}",
+                metadata.blocks() * 512
+            );
+        }
+    }
+}
+fn wal_is_reset(app: &OfflineApp) {
+    wal_under_cap(app);
+    let state = wal_state(app);
+    let wal = app
+        .fs()
+        .root()
+        .resolve(&rel(format!(
+            ".wiki/cache/catalogs/{}.sqlite-wal",
+            state.file_id
+        )))
+        .unwrap();
+    assert_eq!(
+        fs::metadata(wal).unwrap().len(),
+        0,
+        "unpinned ordinary publication must reclaim WAL"
+    );
+}
+fn wal_search(reader: &impl QueryCatalog, ordinal: usize, source: &RecordId, revision: &RecordId) {
+    let hits = search_indexed_sources(
+        reader,
+        &format!("Walneedle{ordinal:04}"),
+        &QueryPlan {
+            filters: SearchFilters {
+                source_ids: vec![source.clone()],
+                ..Default::default()
+            },
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    assert!(
+        hits.hits
+            .iter()
+            .any(|hit| hit.source_id.as_ref() == Some(source)
+                && hit.owner_revision.as_ref() == Some(revision)),
+        "atomic Source FTS missing"
+    );
+}
+fn wal_read(
+    app: &OfflineApp,
+    source: &RecordId,
+    revision: &RecordId,
+    body: &[u8],
+    eligibility: crate::domain::Eligibility,
+) {
+    use clap::Parser;
+    // The public verified dispatcher authenticates selected dependencies and
+    // attaches Source citations. OfflineApp::read is the uncited body API,
+    // even with an explicit range. Use the existing in-process CLI pattern.
+    let path = rel(format!("sources/{source}/revisions/{revision}/content.md"));
+    let cap = WAL_INPUT_BYTES.to_string();
+    let args = crate::cli::Arguments::try_parse_from([
+        "lwiki",
+        "--wiki",
+        app.fs().root().path().to_str().unwrap(),
+        "--offline",
+        "--json",
+        "read",
+        "--path",
+        path.as_str(),
+        "--max-bytes",
+        &cap,
+    ])
+    .unwrap();
+    let (envelope, exit) = crate::cli::execute(&args);
+    assert_eq!(exit, 0, "{}", serde_json::to_string(&envelope).unwrap());
+    assert_eq!(envelope.meta.freshness.as_deref(), Some("indexed_evidence"));
+    let read = envelope.data;
+    assert_eq!(read["path"], path.as_str());
+    assert_eq!(read["body"].as_str().unwrap().as_bytes(), body);
+    assert_eq!(read["hash"], Blake3Hash::digest(body).as_str());
+    assert_eq!(read["truncated"], false);
+    assert!(read["continuation"].is_null());
+    let range: crate::domain::ByteSpan = serde_json::from_value(read["range"].clone()).unwrap();
+    assert_eq!(range.start(), 0);
+    assert_eq!(range.end(), body.len() as u64);
+    assert_eq!(
+        read["source_citation"]["eligibility"],
+        serde_json::to_value(eligibility).unwrap()
+    );
+    let citation: CitationRef =
+        serde_json::from_value(read["source_citation"]["citation"].clone()).unwrap();
+    let CitationRef::Source(reference) = citation else {
+        panic!("not Source citation")
+    };
+    assert_eq!(&reference.source_id, source);
+    assert_eq!(&reference.source_revision, revision);
+    assert_eq!(reference.span, range);
+    assert_eq!(reference.quote_hash, Blake3Hash::digest(body));
+}
+fn wal_revision_images(
+    fixture: &Fixture,
+    items: &[(u64, RecordId, RecordId)],
+) -> BTreeMap<PathBuf, Entry> {
+    let mut result = BTreeMap::new();
+    for (_, source, revision) in items {
+        let directory = fixture.physical(&rel(format!("sources/{source}/revisions/{revision}")));
+        for (path, entry) in snapshot(&directory) {
+            result.insert(directory.join(path), entry);
+        }
+    }
+    result
+}
+#[test]
+fn public_import_unpinned_wal_is_bounded_after_each_of_32_groups() {
+    let started = Instant::now();
+    let fixture = wal_fixture(256);
+    assert_eq!(
+        fixture.bytes.iter().map(Vec::len).sum::<usize>(),
+        26_214_400
+    );
+    fixture.prepare();
+    let app = fixture.app();
+    let mut previous = wal_state(&app);
+    let mut items = vec![];
+    for group in 0..32 {
+        let mutation = Instant::now();
+        let result = if group == 0 {
+            app.source_import_run(&fixture.manifest, KEY, 8, 1)
+        } else {
+            app.source_import_resume(KEY, 1)
+        }
+        .unwrap();
+        assert!(mutation.elapsed() < Duration::from_secs(60));
+        assert_eq!(result.groups_committed, group + 1);
+        assert_eq!(result.completed, group == 31);
+        let current = wal_state(&app);
+        assert_eq!(current.file_id, previous.file_id);
+        assert_eq!(current.epoch, previous.epoch + 1);
+        let group_items = mapping(result.last_group.as_ref().unwrap());
+        assert_eq!(group_items.len(), 8);
+        let catalog = Catalog::new(app.fs().clone(), app.vault_id().clone());
+        let reader = catalog
+            .cached_query_snapshot(QueryReadLimits::default())
+            .unwrap();
+        assert_eq!(reader.snapshot().generation, current.epoch);
+        for (ordinal, source, revision) in &group_items {
+            assert!(reader.record(source).unwrap().is_some());
+            assert!(reader.record(revision).unwrap().is_some());
+            wal_search(&reader, *ordinal as usize, source, revision);
+        }
+        drop(reader);
+        wal_under_cap(&app);
+        items.extend(group_items);
+        previous = current;
+        wal_fixture_bounds(&fixture, started);
+    }
+    assert_eq!(
+        items.iter().map(|i| i.0).collect::<Vec<_>>(),
+        (0..256).collect::<Vec<_>>()
+    );
+    assert_eq!(
+        items.iter().map(|i| &i.1).collect::<BTreeSet<_>>().len(),
+        256
+    );
+    assert_eq!(
+        items.iter().map(|i| &i.2).collect::<BTreeSet<_>>().len(),
+        256
+    );
+    let check = app.check().unwrap();
+    assert!(
+        check.complete && check.error_count == 0,
+        "{:?}",
+        check.diagnostics
+    );
+    wal_fixture_bounds(&fixture, started);
+}
+#[test]
+fn public_import_held_reader_defers_wal_then_next_publication_reclaims() {
+    use crate::catalog::selector;
+    use crate::domain::Eligibility;
+    let started = Instant::now();
+    let fixture = wal_fixture(48);
+    fixture.prepare();
+    let app = fixture.app();
+    let mutation = Instant::now();
+    let first = app.source_import_run(&fixture.manifest, KEY, 8, 1).unwrap();
+    assert!(mutation.elapsed() < Duration::from_secs(60));
+    let initial = mapping(first.last_group.as_ref().unwrap());
+    let images = wal_revision_images(&fixture, &initial);
+    wal_under_cap(&app);
+    let catalog = Catalog::new(app.fs().clone(), app.vault_id().clone());
+    let held_interval = Instant::now();
+    let old = catalog
+        .cached_query_snapshot(QueryReadLimits::default())
+        .unwrap();
+    let base = old.snapshot().clone();
+    let initial_rows: Vec<_> = initial.iter().map(|i| old.record(&i.1).unwrap()).collect();
+    for (_, source, revision) in &initial[..2] {
+        let path = rel(format!("sources/{source}/revisions/{revision}/content.md"));
+        crate::retrieval::selected_documents::authenticate(
+            &catalog,
+            &old,
+            &[path],
+            &Default::default(),
+        )
+        .expect("unchanged captured source must authenticate before mutation");
+    }
+    assert!(held_interval.elapsed() < Duration::from_secs(30));
+    let mut added = vec![];
+    let mut previous = wal_state(&app);
+    for group in 1..=4 {
+        let mutation = Instant::now();
+        let result = app.source_import_resume(KEY, 1).unwrap();
+        assert!(mutation.elapsed() < Duration::from_secs(60));
+        assert_eq!(result.groups_committed, group + 1);
+        let current = wal_state(&app);
+        assert_eq!(current.epoch, previous.epoch + 1);
+        let group_items = mapping(result.last_group.as_ref().unwrap());
+        let new = catalog
+            .cached_query_snapshot(QueryReadLimits::default())
+            .unwrap();
+        assert_eq!(new.snapshot().generation, current.epoch);
+        for (ordinal, source, revision) in &group_items {
+            wal_search(&new, *ordinal as usize, source, revision);
+        }
+        drop(new);
+        added.extend(group_items);
+        previous = current;
+        wal_fixture_bounds(&fixture, started);
+    }
+    let refreshed_body = wal_input(999);
+    let mutation = Instant::now();
+    let refreshed = app
+        .source_refresh(
+            initial[0].1.clone(),
+            CaptureRequest {
+                title: "Finite held reader refresh".into(),
+                origin_kind: SourceOrigin::LocalFile,
+                origin: "finite-refresh.txt".into(),
+                original: refreshed_body.clone(),
+                extraction: ExtractionInput::Utf8Preserve,
+                media_type: None,
+            },
+        )
+        .unwrap();
+    assert!(mutation.elapsed() < Duration::from_secs(60));
+    let refreshed_revision = &refreshed.allocated_ids["revision"];
+    assert_ne!(refreshed_revision, &initial[0].2);
+    assert_eq!(wal_state(&app).epoch, previous.epoch + 1);
+    previous = wal_state(&app);
+    let mutation = Instant::now();
+    app.source_withdraw(initial[1].1.clone(), "finite held reader withdrawal")
+        .unwrap();
+    assert!(mutation.elapsed() < Duration::from_secs(60));
+    assert_eq!(wal_state(&app).epoch, previous.epoch + 1);
+    assert!(
+        held_interval.elapsed() < Duration::from_secs(30),
+        "held reader interval exceeded its existing deadline"
+    );
+    assert_eq!(old.snapshot(), &base);
+    for (index, (ordinal, source, revision)) in initial.iter().enumerate() {
+        assert_eq!(old.record(source).unwrap(), initial_rows[index]);
+        wal_search(&old, *ordinal as usize, source, revision);
+        assert!(held_interval.elapsed() < Duration::from_secs(30));
+    }
+    for (_, source, revision) in &added {
+        assert!(old.record(source).unwrap().is_none());
+        assert!(old.record(revision).unwrap().is_none());
+        assert!(held_interval.elapsed() < Duration::from_secs(30));
+    }
+    for (_, source, revision) in &initial[..2] {
+        let path = rel(format!("sources/{source}/revisions/{revision}/content.md"));
+        let error = crate::retrieval::selected_documents::authenticate(
+            &catalog,
+            &old,
+            &[path],
+            &Default::default(),
+        )
+        .err()
+        .expect("old cache must not authorize newly verified Current");
+        assert_eq!(error.code, crate::domain::ErrorCode::FreshnessConflict);
+        // capture() reports its exact changed dependency in message (details
+        // are empty); prove failure is the updated Source note, not a generic
+        // reader budget/unsupported-layout failure.
+        assert_eq!(
+            error.message,
+            format!("selected dependency differs from pinned catalog: sources/{source}/source.md")
+        );
+        assert!(held_interval.elapsed() < Duration::from_secs(30));
+    }
+    let new = catalog
+        .cached_query_snapshot(QueryReadLimits::default())
+        .unwrap();
+    assert_eq!(new.snapshot().generation, wal_state(&app).epoch);
+    wal_search(&new, 999, &initial[0].1, refreshed_revision);
+    assert_eq!(
+        new.record(&initial[0].1)
+            .unwrap()
+            .unwrap()
+            .record
+            .string("wiki_current_revision"),
+        Some(refreshed_revision.as_str())
+    );
+    assert_eq!(
+        new.record(&initial[1].1)
+            .unwrap()
+            .unwrap()
+            .record
+            .string("wiki_status"),
+        Some("withdrawn")
+    );
+    drop(new);
+    wal_read(
+        &app,
+        &initial[0].1,
+        &initial[0].2,
+        &fixture.bytes[0],
+        Eligibility::Historical,
+    );
+    wal_read(
+        &app,
+        &initial[1].1,
+        &initial[1].2,
+        &fixture.bytes[1],
+        Eligibility::Withdrawn,
+    );
+    wal_read(
+        &app,
+        &initial[0].1,
+        refreshed_revision,
+        &refreshed_body,
+        Eligibility::Current,
+    );
+    assert_eq!(wal_revision_images(&fixture, &initial), images);
+    let deferred_publication = wal_state(&app);
+    {
+        let writer = WriterPermit::acquire(app.fs().root(), Duration::ZERO).unwrap();
+        let selected =
+            selector::delta_selection(app.fs(), &writer, app.vault_id(), Duration::ZERO).unwrap();
+        let delta = selector::open_delta(app.fs(), &writer, &selected, Duration::ZERO).unwrap();
+        let synchronous: i64 = delta
+            .connection()
+            .pragma_query_value(None, "synchronous", |row| row.get(0))
+            .unwrap();
+        assert_eq!(synchronous, 2, "maintenance writer must retain FULL");
+        let attempt = Instant::now();
+        assert_eq!(
+            delta.checkpoint_wal().unwrap(),
+            selector::WalCheckpoint::Deferred
+        );
+        assert!(
+            attempt.elapsed() < Duration::from_secs(1),
+            "busy checkpoint waited"
+        );
+    }
+    assert_eq!(wal_state(&app), deferred_publication);
+    wal_fixture_bounds(&fixture, started);
+    assert!(held_interval.elapsed() < Duration::from_secs(30));
+    drop(old);
+    let before = wal_state(&app);
+    let mutation = Instant::now();
+    let last = app.source_import_resume(KEY, 1).unwrap();
+    assert!(mutation.elapsed() < Duration::from_secs(60));
+    assert!(last.completed);
+    assert_eq!(last.groups_committed, 6);
+    assert_eq!(last.imported_items, 48);
+    assert_eq!(wal_state(&app).epoch, before.epoch + 1);
+    wal_under_cap(&app); // ordinary publication, no test maintenance after release
+    let final_items = mapping(last.last_group.as_ref().unwrap());
+    let new = catalog
+        .cached_query_snapshot(QueryReadLimits::default())
+        .unwrap();
+    for (ordinal, source, revision) in &final_items {
+        wal_search(&new, *ordinal as usize, source, revision);
+    }
+    drop(new);
+    let mut all = initial.clone();
+    all.extend(added);
+    all.extend(final_items);
+    assert_eq!(all.iter().map(|i| &i.1).collect::<BTreeSet<_>>().len(), 48);
+    assert_eq!(all.iter().map(|i| &i.2).collect::<BTreeSet<_>>().len(), 48);
+    assert_eq!(wal_revision_images(&fixture, &initial), images);
+    assert_eq!(49 * WAL_INPUT_BYTES, 5_017_600);
+    let check = app.check().unwrap();
+    assert!(
+        check.complete && check.error_count == 0,
+        "{:?}",
+        check.diagnostics
+    );
+    wal_fixture_bounds(&fixture, started);
+}
+#[test]
+fn public_import_checkpoint_io_error_recovers_committed_publication_once() {
+    use crate::catalog::selector;
+    let started = Instant::now();
+    let fixture = wal_fixture(8);
+    fixture.prepare();
+    let app = fixture.app();
+    let base = wal_state(&app);
+    assert_eq!(
+        selector::checkpoint_error(Some(rusqlite::ffi::SQLITE_IOERR)),
+        None
+    );
+    let mutation = Instant::now();
+    let error = app
+        .source_import_run(&fixture.manifest, KEY, 8, 1)
+        .unwrap_err();
+    assert!(mutation.elapsed() < Duration::from_secs(60));
+    assert_eq!(
+        selector::checkpoint_error(None),
+        None,
+        "fault must have been reached"
+    );
+    assert_eq!(error.code, crate::domain::ErrorCode::IndexCorrupt);
+    assert!(error.message.contains("injected WAL checkpoint error"));
+    assert_eq!(error.details["maintenance"], "wal_checkpoint_truncate");
+    assert_eq!(error.details["publication_committed"], true);
+    let catalog = Catalog::new(app.fs().clone(), app.vault_id().clone());
+    let authority = catalog.operation_state().unwrap().unwrap();
+    let active = authority.active().unwrap();
+    assert_eq!(active.starting, base);
+    assert_eq!(active.intended.epoch, base.epoch + 1);
+    let reader = catalog
+        .cached_query_snapshot(QueryReadLimits::default())
+        .unwrap();
+    let intended = reader.snapshot().clone();
+    assert_eq!(intended.generation, active.intended.epoch);
+    assert_eq!(
+        serde_json::to_value(&intended).unwrap(),
+        error.details["intended_snapshot"]
+    );
+    drop(reader);
+    let images = snapshot(&fixture.physical(&rel("sources")));
+    // Re-arming proves ordinary AlreadyPublished recovery does not retry this
+    // optional maintenance and cannot get stuck on a repeat checkpoint error.
+    assert_eq!(
+        selector::checkpoint_error(Some(rusqlite::ffi::SQLITE_IOERR)),
+        None
+    );
+    let recovery = Instant::now();
+    app.recover().unwrap();
+    assert!(recovery.elapsed() < Duration::from_secs(60));
+    assert_eq!(
+        selector::checkpoint_error(None),
+        Some(rusqlite::ffi::SQLITE_IOERR)
+    );
+    assert_eq!(wal_state(&app), active.intended);
+    let mutation = Instant::now();
+    let resumed = app.source_import_resume(KEY, 1).unwrap();
+    assert!(mutation.elapsed() < Duration::from_secs(60));
+    assert!(resumed.completed);
+    assert_eq!(resumed.groups_committed, 1);
+    assert_eq!(resumed.imported_items, 8);
+    assert_eq!(wal_state(&app), active.intended);
+    assert_eq!(snapshot(&fixture.physical(&rel("sources"))), images);
+    let items = mapping(resumed.last_group.as_ref().unwrap());
+    assert_eq!(items.len(), 8);
+    assert_eq!(items.iter().map(|i| &i.1).collect::<BTreeSet<_>>().len(), 8);
+    assert_eq!(items.iter().map(|i| &i.2).collect::<BTreeSet<_>>().len(), 8);
+    for (ordinal, source, revision) in &items {
+        wal_read(
+            &app,
+            source,
+            revision,
+            &fixture.bytes[*ordinal as usize],
+            crate::domain::Eligibility::Current,
+        );
+    }
+    // Tiny ordinary-path checks share this existing finite fixture. They prove
+    // product-owned caller readers do not continually defer reclamation.
+    let capture = |body: Vec<u8>| CaptureRequest {
+        title: "Unpinned ordinary capture".into(),
+        origin_kind: SourceOrigin::LocalFile,
+        origin: "finite-ordinary.txt".into(),
+        original: body,
+        extraction: ExtractionInput::Utf8Preserve,
+        media_type: None,
+    };
+    let mut previous = wal_state(&app);
+    let mutation = Instant::now();
+    let added = app.source_add(capture(wal_input(998))).unwrap();
+    assert!(mutation.elapsed() < Duration::from_secs(60));
+    assert_eq!(wal_state(&app).epoch, previous.epoch + 1);
+    wal_is_reset(&app);
+    previous = wal_state(&app);
+    let mutation = Instant::now();
+    app.source_refresh(
+        added.allocated_ids["source"].clone(),
+        capture(wal_input(999)),
+    )
+    .unwrap();
+    assert!(mutation.elapsed() < Duration::from_secs(60));
+    assert_eq!(wal_state(&app).epoch, previous.epoch + 1);
+    wal_is_reset(&app);
+    previous = wal_state(&app);
+    let mutation = Instant::now();
+    app.source_withdraw(
+        added.allocated_ids["source"].clone(),
+        "finite ordinary withdrawal",
+    )
+    .unwrap();
+    assert!(mutation.elapsed() < Duration::from_secs(60));
+    assert_eq!(wal_state(&app).epoch, previous.epoch + 1);
+    wal_is_reset(&app);
+    let page = |id: &str| {
+        format!("---\nwiki_schema: '1'\nwiki_kind: page\nwiki_id: {id}\ntitle: {id}\nwiki_status: reviewed\n---\nFinite authored prose.\n").into_bytes()
+    };
+    previous = wal_state(&app);
+    let mutation = Instant::now();
+    app.page_put(rel("pages/wal-one.md"), page("page_wal_one"), None)
+        .unwrap();
+    assert!(mutation.elapsed() < Duration::from_secs(60));
+    assert_eq!(wal_state(&app).epoch, previous.epoch + 1);
+    wal_is_reset(&app);
+    previous = wal_state(&app);
+    let mutation = Instant::now();
+    app.page_batch(super::pages::PageBatchRequest {
+        title: "Finite WAL Page batch".into(),
+        read_preconditions: vec![],
+        pages: vec![super::pages::PageUpdate {
+            path: rel("pages/wal-two.md"),
+            markdown: String::from_utf8(page("page_wal_two")).unwrap(),
+            if_match: None,
+        }],
+    })
+    .unwrap();
+    assert!(mutation.elapsed() < Duration::from_secs(60));
+    assert_eq!(wal_state(&app).epoch, previous.epoch + 1);
+    wal_is_reset(&app);
+    assert_eq!(10 * WAL_INPUT_BYTES, 1_024_000);
+    let check = app.check().unwrap();
+    assert!(
+        check.complete && check.error_count == 0,
+        "{:?}",
+        check.diagnostics
+    );
+    wal_fixture_bounds(&fixture, started);
 }

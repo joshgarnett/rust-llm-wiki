@@ -113,6 +113,12 @@ active import ≤449.215 seconds and unchanged correctness/resource checks. This
 does not authorize a schema migration, replay-format redesign or periodic rebuild.
 Larger-tier admission must be reconsidered from actual candidate measurements.
 
+The subsequent [WAL lifecycle comparison](validation-wal-lifecycle.md) passes
+its independent scoped gate. Ordinary publication keeps the selected WAL within
+64 MiB at every applicable observation and completes the same 700 tasks with
+unchanged evidence grades. The separate growth review still retains 10K HOLD;
+this improvement does not establish the full capacity or native HIGH gates.
+
 ## Evidence bindings and scope
 
 Optional local receipts are under

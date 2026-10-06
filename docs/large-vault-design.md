@@ -563,9 +563,14 @@ its resource and concurrency costs in actual workflow tests before activation.
 For ordinary updates, use a transaction on the selected database with SQLite WAL:
 old read transactions retain their snapshot, and new transactions see committed
 rows and postings together. The candidate now validates normal WAL sidecars and
-retains them across connection close. Public source refresh uses this path;
-public full reconstruction and other writers still need integration.
-Bound checkpoint and retained-WAL costs when readers remain open. The successful
+retains them across connection close. Normalized Source and Page publication
+now releases owned planning readers and offers one zero-timeout TRUNCATE
+checkpoint after commit and publication verification, before acknowledgment.
+External readers may defer it; other errors retain committed-state diagnostics
+for ordinary recovery without another publication or maintenance retry.
+The [WAL lifecycle observation](validation-wal-lifecycle.md) records finite native
+checks and the public 1K comparison, with larger-capacity acceptance separate.
+Bound retained-WAL costs when external readers remain open. The successful
 public update response must acknowledge index visibility, not merely an accepted
 background job. SQLite's [WAL documentation](https://www.sqlite.org/wal.html),
 Tantivy's explicit [reader reload policy](https://docs.rs/tantivy/0.26.2/tantivy/enum.ReloadPolicy.html)

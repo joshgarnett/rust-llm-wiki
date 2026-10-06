@@ -7,6 +7,14 @@ target is now 25,000 documents / roughly 2.5 GB of text. Capacity and unseen
 retrieval completeness remain unqualified; the version number does not certify
 those gates.
 
+Candidate009 adds [bounded ordinary-publication WAL reclamation](validation-wal-lifecycle.md).
+Independent scoped acceptance passes all six mandatory conditions: 26 affected
+native checks, 700 public query workflows, citations, recovery and 100 rebuilt
+result sequences. The largest observed selected WAL is 8 KiB allocated;
+post-update whole-task p95 is 0.514 seconds versus the baseline's 1.292 seconds.
+Evidence completeness is unchanged. The existing disk guard still refuses 10K;
+representative 25K and native HIGH remain open.
+
 The latest candidate also includes the [selected identity repair](validation-selected-identity.md):
 an empty authenticated Current Entity hit no longer aborts verified discovery
 when its description is unsupported. Sixteen native tests and a 54-observation

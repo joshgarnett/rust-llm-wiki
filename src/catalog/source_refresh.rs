@@ -1531,7 +1531,28 @@ impl<'a> IndexedRefreshSession<'a> {
         if let Some(fault) = &self.catalog.options.fault {
             fault.check(PublicationCheckpoint::AfterCommit)?;
         }
-        self.verify_published()
+        let snapshot = self.verify_published()?;
+        // The SQL publication is durable; only its acknowledgement remains.
+        // AlreadyPublished recovery verifies/finalizes without retrying optional
+        // maintenance. Busy external readers are a normal deferred outcome.
+        self.sql_writer.checkpoint_wal().map_err(|error| {
+            let mut error = retained_error(error, &self.proof.change);
+            let details = error
+                .details
+                .as_object_mut()
+                .expect("retained error details");
+            details.insert(
+                "maintenance".into(),
+                serde_json::json!("wal_checkpoint_truncate"),
+            );
+            details.insert("publication_committed".into(), serde_json::json!(true));
+            details.insert(
+                "intended_snapshot".into(),
+                serde_json::json!(self.proof.intended),
+            );
+            error
+        })?;
+        Ok(snapshot)
     }
 
     pub(crate) fn verify_published(&self) -> Result<ReadSnapshot> {
