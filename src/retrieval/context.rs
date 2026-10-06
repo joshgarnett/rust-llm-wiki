@@ -81,7 +81,10 @@ fn normalize_request(request: &ContextRequest) -> Result<ContextRequest> {
             || request.graph.is_some()
             || !matches!(
                 request.documents.mode,
-                SearchMode::Lexical | SearchMode::Semantic | SearchMode::Hybrid
+                SearchMode::Literal
+                    | SearchMode::Lexical
+                    | SearchMode::Semantic
+                    | SearchMode::Hybrid
             )
             || request.documents.filters.include_historical
             || request.documents.filters.include_proposed)
@@ -179,6 +182,9 @@ impl QueryCatalog for OwnerCatalog<'_> {
     }
     fn connection(&self) -> &rusqlite::Connection {
         self.reader.connection()
+    }
+    fn check_query_budget(&self) -> Result<()> {
+        self.reader.check_query_budget()
     }
     fn snapshot(&self) -> &ReadSnapshot {
         self.reader.snapshot()
@@ -1062,7 +1068,6 @@ fn validate_bounded_document_assembly(
     ) || request.target != ContextTarget::Documents
         || (request.scope == ContextScope::Snapshot
             && request.documents.mode != SearchMode::Lexical)
-        || request.documents.mode == SearchMode::Literal
         || request.graph.is_some()
     {
         return Err(WikiError::new(

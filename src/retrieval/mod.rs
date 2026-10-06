@@ -16,6 +16,8 @@ pub(crate) mod indexed_semantic;
 pub(crate) mod indexed_units;
 pub mod lexical;
 pub mod literal;
+#[cfg(test)]
+mod normalized_literal_workflow_tests;
 pub(crate) mod selected_documents;
 pub mod selected_search;
 #[cfg(test)]

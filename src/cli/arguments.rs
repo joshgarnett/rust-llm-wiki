@@ -588,7 +588,7 @@ impl GraphOptions {
 pub struct SearchCommandArguments {
     #[command(flatten)]
     pub search: SearchArguments,
-    /// Verify displayed dependencies and cite captured excerpts (normalized lexical, semantic or hybrid search).
+    /// Verify displayed dependencies and cite captured excerpts (normalized literal, lexical, semantic or hybrid search).
     /// Compatible with --no-sync. Uses a 64 MiB/4096-file/16384-entry/2-second bound.
     /// Dry-run validates the plan without opening the index or verifying evidence.
     #[arg(long)]

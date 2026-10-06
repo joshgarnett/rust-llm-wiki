@@ -115,14 +115,38 @@ the identity and selected dependencies; it does not promote that description to
 evidence. Invalid or unsupported body excerpts still refuse. Discovery ordering,
 limits and cursor bindings are unchanged.
 
-Current source supports explicit verification for normalized lexical, semantic
-and hybrid document search:
+Current source supports explicit verification for normalized literal, lexical,
+semantic and hybrid document search:
 
 ```sh
 lwiki --wiki /path/to/wiki --offline search 'release checklist' --verify-selected --no-sync
 lwiki --wiki /path/to/wiki --offline --json search 'release checklist' --verify-selected
 lwiki --wiki /path/to/wiki --offline --dry-run search 'release checklist' --verify-selected
 ```
+
+Exact symbols and punctuation can use literal mode in a normalized vault:
+
+```sh
+lwiki --wiki /path/to/wiki --offline search 'Vec<T>' --mode literal --verify-selected
+lwiki --wiki /path/to/wiki --offline context 'Vec<T>' --mode literal
+```
+
+Literal mode matches the exact case-sensitive UTF-8 substring, including quotes,
+`%`, `_`, backslashes and authored front matter. It does not interpret wildcards,
+regular expressions or FTS operators. Captured citations use original byte spans;
+authored spans and body reads retain their different offset spaces described below.
+Literal context uses the existing bounded automatic assembly; host selection is
+still lexical only. Refresh and withdrawal update current eligibility while old
+captured revisions remain readable.
+
+Literal matching scans filtered cached text; it has no substring index. Exact
+match counts and capped candidate selection can scan that text twice. Candidate
+limits bound decoded results, not scanned bytes. Existing query limits include a
+30-second cooperative clock, distinct from the 2-second selected-evidence proof.
+SQLite callbacks cannot interrupt inside a single native substring call; checks
+after native work and assembly refuse elapsed-budget overruns. Narrow large scans
+with existing `--source-id` or `--path-prefix` filters. This capability does not
+establish 25K capacity or improve natural-language answer completeness.
 
 `--verify-selected` preserves the published result order, excerpts, filters and
 cursors. It authenticates displayed documents and their supporting dependencies,
@@ -167,10 +191,9 @@ completeness remain unverified. Run `index sync` to discover external edits and
 
 Explicit `--scope current` keeps its stronger meaning and remains unsupported on
 normalized indexes. `read --no-sync` and `context --scope snapshot` retain cached
-behavior. Indexed document context supports lexical, semantic and hybrid document
+behavior. Indexed document context supports literal, lexical, semantic and hybrid document
 queries. Semantic modes require compatible active-space and query vectors; offline
-cache misses are explicit. Host selection remains lexical only. Literal and graph
-context remain separate migration work. The [embedding checkpoint](validation-normalized-embeddings.md)
+cache misses are explicit. Host selection remains lexical only. Graph context remains separate migration work. The [embedding checkpoint](validation-normalized-embeddings.md)
 records the affected correctness checks and the still-open public quality/capacity
 gates. The [local candidate012 trial](validation-normalized-embeddings.md#local-020-candidate012-artifact)
 packages the tested preparation/recovery binary; broad completeness and capacity

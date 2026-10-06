@@ -187,9 +187,22 @@ also passes at 9.2/10, all mandatory observations and no blockers, with 159 exac
 citations and complete source/Page/cache-loss preservation. Queries remain below
 0.349 seconds, refresh takes 1.636 seconds and rebuild 6.991 seconds. Import rate
 stays near 2.9 items/second, while retained payload/delta storage and check costs
-grow. A bounded experiment with existing storage coordination precedes further
-growth. Raw completeness, semantic readiness, ordinary evidence defaults,
+grow. The subsequent existing-cleanup experiment saves 8.85%, below its 10%
+whole-vault benefit target, and exposes a normalized publication bug. The literal
+workflow checkpoint includes the CLI publication fix; larger-vault sync latency
+remains unqualified. Raw completeness, semantic readiness, ordinary evidence defaults,
 universal layout integration and practical 25K capacity remain open.
+
+
+The [normalized literal workflow](validation-normalized-literal.md) closes exact
+symbol discovery through verified search, original-byte reads, omitted-scope
+context, guarded Source/Page updates and whole-cache-loss reconstruction. Its
+276 affected tests pass; twelve fixed literal commands take 0.017–0.106 seconds
+on an accepted256 copy, and eight lexical controls preserve returned evidence.
+Independent feature correctness passes at 9.3/10, all eight task groups and zero
+blockers; the reviewer command-envelope timing failed separately. This earns no default completeness,
+semantic readiness or 25K credit. The next priority is complete, correctly scoped
+evidence in ordinary context under the unchanged quality and output gates.
 
 Independent same-budget witnesses now locate the multi-source failure in
 allocation: both modes can render all five required facts with valid citations
@@ -202,7 +215,7 @@ task-aware investigation and factual-refresh workflow to assess next. Incrementa
 preparation must be paired with scalable discovery and measured storage/rebuild
 costs; exhaustive vector scanning still conflicts with the fast-query contract.
 
-The normalized layout currently has a restricted command set. Plain lexical `search` uses published discovery; `--no-sync` remains compatible.
+The normalized layout currently has a restricted command set. Plain lexical and exact literal `search` use published discovery; `--no-sync` remains compatible.
 Exact [named Entity neighbors](named-neighbors.md) now use bounded indexed
 incidence and complete selected evidence/opposition/policy verification. Default
 metadata is `indexed_evidence`; `--no-sync` is cached and uncited, while explicit

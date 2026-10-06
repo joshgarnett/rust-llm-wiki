@@ -224,3 +224,27 @@ This qualifies the declared lexical workflow at this corpus/history. It does not
 qualify broad default completeness, semantic relevance/readiness, unused retained
 payload validation, universal normalized activation, native HIGH or practical
 25K/~2.5GB capacity. No new build, remote provider or answer actor is involved.
+
+## Separate storage cleanup experiment
+
+A disposable copy of the accepted 256-Source vault tested the existing guarded
+schema-2 cleanup with its default retention of twenty undo operations. Immediate
+whole-vault logical size fell from **268,298,586 to 244,549,546 bytes**: a saving
+of **23,749,040 bytes (8.85%)**, below the prospectively declared 10% benefit gate.
+Migration metadata and retained operation evidence remain in that denominator.
+The plan's estimated reduction is not an observed whole-vault saving.
+
+Cleanup resumed an exact pinned pending operation and completed in 162.605
+observed seconds. The preceding attempt was stopped by a supervisor race while
+sampling a temporary file; its failure and unrun tasks remain recorded. Canonical
+source revisions, Page bytes and protected authority checks passed immediately
+after cleanup. The next public `check` failed with `INDEX_CORRUPT`: the normalized
+identity claim differed from canonical projection. Thirty later workflow tasks
+were unrun, so this experiment does not establish a completed migration workflow.
+
+Source inspection identified a likely missing normalized publication after the
+vault's schema change. One bounded diagnostic using the old executable timed out
+during `index sync` after ten seconds; its subsequent check was unrun. That
+diagnostic does not prove the remedy or qualify larger-vault sync latency.
+No additional cleanup trials or storage subsystem were added to pursue the
+failed benefit threshold.

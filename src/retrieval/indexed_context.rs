@@ -36,6 +36,9 @@ struct SelectedCatalog<'a> {
 }
 
 impl QueryCatalog for SelectedCatalog<'_> {
+    fn check_query_budget(&self) -> Result<()> {
+        self.reader.check_query_budget()
+    }
     fn publication_id(&self) -> Option<&str> {
         self.reader.publication_id()
     }
