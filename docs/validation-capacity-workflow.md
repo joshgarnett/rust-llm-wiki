@@ -98,3 +98,70 @@ withdrawal and complete-cache-loss rebuild are unrun in this control. The earlie
 [collection control](validation-1k-collection.md), accepted
 [selected search](validation-verified-search.md), and failed
 [allocation experiment](validation-location-allocation.md) remain separate.
+
+## Separate native 256-current lifecycle
+
+A separate staged control on 2026-10-06 uses the packaged candidate013 0.2.0
+CLI, SHA-256
+`64744ed8c8f0bf236c0dc169db4f6a7fbc79327bb015dcb931861f7c2faecaf1`,
+on native macOS ARM64 with release optimization level 3. It extends a complete
+clone of the accepted 64-Source draft workflow; the earlier 1,000-Source control
+and its failed query trial above remain separate.
+
+The starting vault has 64 retained Sources, 63 current and one withdrawn. Import
+of 193 distinct frozen UTF-8 originals creates **256 current Sources and 257
+retained Sources**. Both captured original and extracted Markdown copies match
+every input's full size and SHA-256. A controlled, same-size edit of one newly
+imported Source creates a distinct immutable revision; withdrawal then leaves
+255 current and two withdrawn Sources. The full original vault remains unchanged.
+
+All 72 continuation commands complete: accepted current/historical range reads,
+the existing cited draft's read and title discovery, all twelve ordinary lexical
+search/context pairs, guarded unchanged draft replacement, actual obsolete-hash
+refusal, source refresh and withdrawal, complete-cache relocation and normalized
+rebuild, plus full checks before and after rebuild. The draft's identity, body,
+author notes and hash survive. All existing peer/history files remain unchanged
+through the new Source's churn. Exact range-read data and same-tier post-churn
+D01/D09 search/context packets match after reconstruction, apart from declared
+publication/time/work fields. This does not qualify cursor continuation across
+reconstruction.
+
+| Operation | Owning supervisor elapsed time |
+| --- | ---: |
+| Import 193 originals in 49 default four-item groups | 66.733 seconds |
+| 24 ordinary lexical search/context commands | 0.057–0.128 seconds each |
+| Refresh one 110,426-byte Source | 0.653 seconds |
+| Withdraw that Source | 0.290 seconds |
+| Complete-cache-loss normalized rebuild | 1.704 seconds |
+| Full occupied / rebuilt checks | 2.739 / 2.530 seconds |
+
+The continuation finishes in 97.402 owning seconds. One preserved predecessor
+read returns correct application output but its optional `time -l` wrapper
+fails because the sandbox denies `sysctl kern.clockrate`. A prospectively admitted
+continuation removes that wrapper, reuses the verified clone and repeats only
+that failed invocation: **73 cumulative CLI invocations**, including the original
+measurement failure. Cumulative owning execution is 100.874 seconds; external
+review/launch gaps are separate. The original deadline and cumulative resource
+limits remain in force. RSS and physical I/O are unavailable.
+
+Sampled new owned allocation peaks at 397,766,656 bytes, including the complete
+clone and retained/rebuilt caches; sampling is not an exact instantaneous peak.
+The final free-space observation is 58,310,987,776 bytes. Supervisor logical
+inspection totals 2,388,645,742 bytes across both attempts. Public decoder work
+and canonical verification counters remain separate from that inspection.
+These bytes are logical work, not measured physical I/O.
+
+Independent actual acceptance passes at **9.2/10**, every scoped mandatory
+observation and zero correctness blockers. The critic authenticates 164 SourceRef
+occurrences (105 distinct references), including all ten references embedded in
+the saved draft, against exact immutable source slices and history membership.
+The original instrumentation failure remains failed. The critic completed its
+report 28 seconds beyond the separate 240-second review allowance; that process
+timing gate failed, and the scoped correctness judgment is reported separately.
+This control uses lexical commands,
+no embedding reacquisition, answer actors or new build. Ordinary relevance is
+observational; the previously failed default completeness gate, semantic
+readiness, unseen HIGH and practical 25K/~2.5GB capacity remain open. Import
+accounts for most measured execution time; query latency supplies no current
+reason to optimize decoder counters. Growth to 1,024 current Sources requires
+separate admission using the complete workflow and measured resource headroom.

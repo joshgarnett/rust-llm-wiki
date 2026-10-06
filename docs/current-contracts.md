@@ -174,6 +174,18 @@ All thirteen missing structural-native facts survive candidate reduction and are
 lost before final output. Fresh whole-flow architecture review addresses task
 scope and final allocation before another implementation or scale qualification.
 
+The separately accepted [256-current native workflow](validation-capacity-workflow.md#separate-native-256-current-lifecycle)
+passes scoped independent review at 9.2/10, all mandatory observations and zero
+correctness blockers. It preserves the cited draft and historical reads through
+public import, revision/withdrawal, actual stale-author refusal and complete-cache
+reconstruction. All 164 inspected SourceRef occurrences authenticate. Ordinary
+lexical queries take 0.057–0.128 seconds, refresh 0.653 seconds and rebuild 1.704
+seconds; importing 193 originals dominates at 66.733 seconds. The original
+measurement-wrapper failure and missed review deadline remain recorded.
+The next separately funded tier
+is 1,024 current Sources; raw completeness, semantic readiness, default layout
+integration and practical 25K capacity remain open.
+
 Independent same-budget witnesses now locate the multi-source failure in
 allocation: both modes can render all five required facts with valid citations
 in 5,392 bytes. This diagnostic does not change the default or pass a quality
