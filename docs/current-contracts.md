@@ -138,8 +138,13 @@ cited document context. All 98 distinct affected native checks pass across retai
 evidence. Later frozen public observations demonstrate 223/223 offline reuse,
 exact restoration and 74/74 valid citations, but both modes fail the multi-source
 evidence task after retrieving its required owners. Full acceptance and quality
-remain open, and packaged candidate010 predates this source. The 4,096-owner preparation ceiling and whole
-corpus rendering prevent 25K qualification unchanged.
+remain open. That checkpoint retained a 4,096-owner preparation ceiling and whole
+corpus rendering; the later compact inventory replaces those mechanisms with
+resumable preparation and selected rendering. The scoped
+[candidate011 local trial](validation-normalized-embeddings.md#local-020-candidate011-artifact)
+packages that later source and corrected embedded guidance. Exact vector scanning,
+receipt-feasible preparation groups and broad evidence completeness still prevent
+25K qualification.
 
 Independent same-budget witnesses now locate the multi-source failure in
 allocation: both modes can render all five required facts with valid citations

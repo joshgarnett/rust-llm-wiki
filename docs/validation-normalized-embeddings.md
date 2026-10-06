@@ -339,3 +339,31 @@ under `.artifacts/normalized-semantic-lifecycle-001/inventory-001/`; independent
 source reviews and the prospectively frozen public protocol are under the sibling
 `critic/public/` directory. Tracked documentation does not require those ignored
 artifacts to understand these limits.
+
+## Local 0.2.0 candidate011 artifact
+
+The new unsigned macOS ARM64 trial packages production commit `08dd303` and
+embedded-guidance commit `5ce278a`. Its one planned release build passed in
+55.512 process seconds with native rustc 1.98.0, edition 2024, optimization level 3,
+debug information disabled and minimum macOS 26.5. All 346 prior core/test/build
+inputs remain unchanged; the final freeze additionally records the five embedded
+static skill resources. Preserved local private test hooks make the source tree
+dirty and are disclosed; they are excluded from the production CLI and bundle.
+
+The final binary passed actual version, capabilities and fresh skill-export
+checks. All five static exported resources equal maintained source bytes; all six
+content BLAKE3 hashes and the aggregate manifest checksum match. Generated help
+covers all 53 registered commands and 20 schemas. The earlier public workflow
+and native aggregate bind the precursor binary, not these different final bytes;
+unchanged passing checks were retained rather than repeated.
+
+The package verifier checked all 15 regular archive members against exact file
+bytes and Unix permissions, including executable permissions. The archive is
+11,135,579 bytes with SHA256
+`a6002d31f2a9d49308c2354a1d0355a8ef0b9c86216f7ed70f4a903335c0f378`;
+the final CLI SHA256 is
+`b9759d308bb3e3514170e2ed711f42d0579d62042e2c72289c04685b2f3f9152`.
+Packaging took 2.248 process seconds, allocated 42,901,504 bytes before its final
+receipt and retained 60,482,732,032 free bytes. It ran no build, application command,
+provider call or evaluation replay. This is a local trial, with no public release,
+signing, native other-platform, live-provider, broad completeness or 25K claim.
