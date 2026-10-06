@@ -1,4 +1,4 @@
-# Implemented lwiki commands
+# Implemented lwiki 0.2.0 commands
 
 Generated from the release command registry and argument parser. Run `lwiki --json capabilities` before use.
 
@@ -286,7 +286,7 @@ Options:
           [possible values: human, json, jsonl]
 
       --path <PATH>
-          Destination vault-relative path; defaults to pages/<record-id>.md
+          Destination path; existing IDs preserve their indexed path. Omit in dry-run to leave destination and author-guard checks unresolved
 
       --if-match <IF_MATCH>
           Required current BLAKE3 hash when replacing an existing page
@@ -607,6 +607,219 @@ Arguments:
 Options:
       --reason <REASON>
           Reason recorded with the withdrawal
+
+      --wiki <WIKI>
+          Wiki root containing WIKI.md; defaults to discovery from the current directory
+
+      --format <FORMAT>
+          Output format: human-readable text, a JSON envelope or JSON Lines events
+
+          [possible values: human, json, jsonl]
+
+      --json
+          Emit one structured JSON envelope
+
+      --jsonl
+          Emit JSON Lines events for supported streaming commands
+
+      --offline
+          Prevent provider requests and credential helper calls; local operations remain available
+
+      --dry-run
+          Preview without writes, provider requests or credential resolution
+
+      --stage
+          Retain a guarded preparation for a later explicit changes apply
+
+      --preferences <PREFERENCES>
+          Explicit trusted local JSON preferences; never read ambient credentials
+
+      --profile <PROFILE>
+          Trusted provider profile name from the private provider configuration
+
+      --lock-timeout-ms <LOCK_TIMEOUT_MS>
+          Maximum writer-lock wait in milliseconds (default: 5000; preferences may override)
+
+  -h, --help
+          Print help
+
+```
+
+## source import prepare
+
+```text
+Hash an explicit JSON Lines list into a new manifest without opening a wiki
+
+Usage: lwiki source import prepare [OPTIONS] --input-list <INPUT_LIST> --output <OUTPUT>
+
+Options:
+      --input-list <INPUT_LIST>
+          JSON Lines local input declarations; relative paths use this list's directory
+
+      --wiki <WIKI>
+          Wiki root containing WIKI.md; defaults to discovery from the current directory
+
+      --format <FORMAT>
+          Output format: human-readable text, a JSON envelope or JSON Lines events
+
+          [possible values: human, json, jsonl]
+
+      --output <OUTPUT>
+          New manifest file; the parent must exist and existing files are preserved
+
+      --json
+          Emit one structured JSON envelope
+
+      --jsonl
+          Emit JSON Lines events for supported streaming commands
+
+      --offline
+          Prevent provider requests and credential helper calls; local operations remain available
+
+      --dry-run
+          Preview without writes, provider requests or credential resolution
+
+      --stage
+          Retain a guarded preparation for a later explicit changes apply
+
+      --preferences <PREFERENCES>
+          Explicit trusted local JSON preferences; never read ambient credentials
+
+      --profile <PROFILE>
+          Trusted provider profile name from the private provider configuration
+
+      --lock-timeout-ms <LOCK_TIMEOUT_MS>
+          Maximum writer-lock wait in milliseconds (default: 5000; preferences may override)
+
+  -h, --help
+          Print help
+
+```
+
+## source import run
+
+```text
+Import a prepared manifest in bounded committed groups, or continue the same key
+
+Usage: lwiki source import run [OPTIONS] --manifest <MANIFEST> --key <KEY>
+
+Options:
+      --manifest <MANIFEST>
+          Immutable manifest produced by source import prepare
+
+      --wiki <WIKI>
+          Wiki root containing WIKI.md; defaults to discovery from the current directory
+
+      --format <FORMAT>
+          Output format: human-readable text, a JSON envelope or JSON Lines events
+
+          [possible values: human, json, jsonl]
+
+      --key <KEY>
+          Caller-chosen import identity; reusing the key requires the same manifest
+
+      --group-size <GROUP_SIZE>
+          Maximum sources per committed group (1–8); group members become visible together
+
+          [default: 4]
+
+      --json
+          Emit one structured JSON envelope
+
+      --jsonl
+          Emit JSON Lines events for supported streaming commands
+
+      --max-groups <MAX_GROUPS>
+          Maximum groups to process in this invocation (1–10000)
+
+          [default: 64]
+
+      --offline
+          Prevent provider requests and credential helper calls; local operations remain available
+
+      --dry-run
+          Preview without writes, provider requests or credential resolution
+
+      --stage
+          Retain a guarded preparation for a later explicit changes apply
+
+      --preferences <PREFERENCES>
+          Explicit trusted local JSON preferences; never read ambient credentials
+
+      --profile <PROFILE>
+          Trusted provider profile name from the private provider configuration
+
+      --lock-timeout-ms <LOCK_TIMEOUT_MS>
+          Maximum writer-lock wait in milliseconds (default: 5000; preferences may override)
+
+  -h, --help
+          Print help
+
+```
+
+## source import resume
+
+```text
+Continue an import using its retained manifest and exact pending group
+
+Usage: lwiki source import resume [OPTIONS] --key <KEY>
+
+Options:
+      --key <KEY>
+          Caller-chosen identity supplied to source import run
+
+      --wiki <WIKI>
+          Wiki root containing WIKI.md; defaults to discovery from the current directory
+
+      --format <FORMAT>
+          Output format: human-readable text, a JSON envelope or JSON Lines events
+
+          [possible values: human, json, jsonl]
+
+      --max-groups <MAX_GROUPS>
+          Maximum groups to process in this invocation (1–10000)
+
+          [default: 64]
+
+      --json
+          Emit one structured JSON envelope
+
+      --jsonl
+          Emit JSON Lines events for supported streaming commands
+
+      --offline
+          Prevent provider requests and credential helper calls; local operations remain available
+
+      --dry-run
+          Preview without writes, provider requests or credential resolution
+
+      --stage
+          Retain a guarded preparation for a later explicit changes apply
+
+      --preferences <PREFERENCES>
+          Explicit trusted local JSON preferences; never read ambient credentials
+
+      --profile <PROFILE>
+          Trusted provider profile name from the private provider configuration
+
+      --lock-timeout-ms <LOCK_TIMEOUT_MS>
+          Maximum writer-lock wait in milliseconds (default: 5000; preferences may override)
+
+  -h, --help
+          Print help
+
+```
+
+## source import status
+
+```text
+Read retained import progress and committed source/revision mappings
+
+Usage: lwiki source import status [OPTIONS] --key <KEY>
+
+Options:
+      --key <KEY>
+          Caller-chosen identity supplied to source import run
 
       --wiki <WIKI>
           Wiki root containing WIKI.md; defaults to discovery from the current directory
@@ -1019,7 +1232,7 @@ Options:
 ## search
 
 ```text
-Find text with literal, lexical, semantic or hybrid retrieval
+Find text with literal, lexical, semantic or hybrid retrieval. Normalized search uses cached discovery by default; --verify-selected adds bounded evidence verification
 
 Usage: lwiki search [OPTIONS] <QUERY>
 
@@ -1160,6 +1373,9 @@ Options:
 
       --no-sync
           Use published discovery without synchronization; context scope determines evidence verification
+
+      --verify-selected
+          Verify displayed dependencies and cite captured excerpts (normalized lexical search only). Compatible with --no-sync. Uses a 64 MiB/4096-file/16384-entry/2-second bound. Dry-run validates the plan without opening the index or verifying evidence
 
   -h, --help
           Print help
@@ -1312,10 +1528,10 @@ Options:
           Use published discovery without synchronization; context scope determines evidence verification
 
       --prepare-selection
-          Prepare a bounded candidate packet for one host-agent selection; does not run a model
+          Prepare a bounded candidate packet for one host-agent selection; current context or lexical indexed-documents
 
       --selection <FILE>
-          Apply an ID-only host reply to the exact current candidate packet (file or - for stdin)
+          Apply an ID-only host reply to its exact candidate packet (file or - for stdin)
 
       --scope <SCOPE>
           Evidence scope. Defaults to indexed-documents on normalized vaults, current otherwise. Indexed-documents verifies selected authored/captured dependencies; indexed-evidence is captured-only
@@ -1930,6 +2146,9 @@ Options:
       --no-sync
           Read the existing index snapshot without syncing; freshness is not verified
 
+      --verify-selected
+          Verify selected dependencies for normalized named neighbors, including with --no-sync
+
   -h, --help
           Print help
 
@@ -1938,7 +2157,7 @@ Options:
 ## graph neighbors
 
 ```text
-Inspect bounded assertion and navigation links around a record
+Inspect relationships and evidence; normalized catalogs verify selected named Entity dependencies
 
 Usage: lwiki graph neighbors [OPTIONS] <ID>
 
@@ -2115,6 +2334,9 @@ Options:
 
       --no-sync
           Read the existing index snapshot without syncing; freshness is not verified
+
+      --verify-selected
+          Verify selected dependencies for normalized named neighbors, including with --no-sync
 
   -h, --help
           Print help

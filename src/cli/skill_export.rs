@@ -139,6 +139,10 @@ fn package(target: &str) -> Result<BTreeMap<String, Vec<u8>>> {
             include_bytes!("../../skills/llm-wiki/references/workflows.md").to_vec(),
         ),
         (
+            "references/cited-page.md".into(),
+            include_bytes!("../../skills/llm-wiki/references/cited-page.md").to_vec(),
+        ),
+        (
             "references/examples.json".into(),
             include_bytes!("../../skills/llm-wiki/references/examples.json").to_vec(),
         ),

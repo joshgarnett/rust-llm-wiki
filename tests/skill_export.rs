@@ -131,7 +131,7 @@ fn skill_exports_correct_single_discovery_layout() {
             serde_json::from_slice(&fs::read(root.join("manifest.json")).unwrap()).unwrap();
         assert_eq!(manifest["target"], target);
         let files = manifest["files"].as_object().unwrap();
-        assert_eq!(files.len(), 5);
+        assert_eq!(files.len(), 6);
         for (path, hash) in files {
             assert_eq!(
                 blake3::hash(&fs::read(root.join(path)).unwrap())
@@ -321,8 +321,17 @@ fn substitute(v: &Value, bindings: &BTreeMap<String, String>) -> Value {
 }
 #[test]
 fn skill_examples_execute_against_release_binary() {
+    execute_maintained_examples("steps");
+}
+#[test]
+fn skill_cited_page_examples_preserve_verified_refs_and_author_edits() {
+    execute_maintained_examples("cited_page_steps");
+}
+fn execute_maintained_examples(recipe: &str) {
     let temp = temporary();
-    let root = temp.path();
+    let wiki = temp.path().join("wiki with spaces");
+    fs::create_dir(&wiki).unwrap();
+    let root = wiki.as_path();
     fs::write(root.join("WIKI.md"),"---\nwiki_schema: \"1\"\nwiki_id: Vault.Portable\nwiki_kind: vault\ntitle: Portable fixture\n---\n").unwrap();
     let export_temp = temporary();
     let (exit, exported, _) = export(root, "codex", export_temp.path(), false);
@@ -338,17 +347,23 @@ fn skill_examples_execute_against_release_binary() {
     .unwrap();
     let mut bindings = BTreeMap::new();
     let mut imported = Value::Null;
-    for step in examples["steps"].as_array().unwrap() {
+    let mut author_snapshot = None;
+    let mut draft_record = Value::Null;
+    for step in examples[recipe].as_array().unwrap() {
         // Simulate an author's external edit only in this disposable fixture.
         if let Some(edit) = step.get("fixture_edit") {
             let path = root.join(edit["path"].as_str().unwrap());
-            assert_eq!(path, root.join("pages/portable.md"));
+            assert!(matches!(
+                edit["path"].as_str().unwrap(),
+                "pages/portable.md" | "pages/cited-brief.md"
+            ));
             fs::OpenOptions::new()
                 .append(true)
-                .open(path)
+                .open(&path)
                 .unwrap()
                 .write_all(edit["append"].as_str().unwrap().as_bytes())
                 .unwrap();
+            author_snapshot = Some(fs::read(path).unwrap());
         }
         let args = substitute(&step["args"], &bindings)
             .as_array()
@@ -377,7 +392,175 @@ fn skill_examples_execute_against_release_binary() {
                 bindings.insert(k.clone(), s.into());
             }
         }
+        if let Some(m) = step["serialized_bindings"].as_object() {
+            for (k, pointer) in m {
+                let value = v.pointer(pointer.as_str().unwrap()).unwrap();
+                bindings.insert(k.clone(), serde_json::to_string(value).unwrap());
+            }
+        }
+        if let Some(m) = step["selector_bindings"].as_object() {
+            let task: Value = serde_json::from_str(
+                v["data"]["selection_packet"]["selector_input"]
+                    .as_str()
+                    .unwrap(),
+            )
+            .unwrap();
+            for (k, pointer) in m {
+                bindings.insert(
+                    k.clone(),
+                    task.pointer(pointer.as_str().unwrap())
+                        .unwrap()
+                        .as_str()
+                        .unwrap()
+                        .into(),
+                );
+            }
+        }
         match step["check"].as_str().unwrap_or("") {
+            "cited_selector" => {
+                let task: Value = serde_json::from_str(
+                    v["data"]["selection_packet"]["selector_input"]
+                        .as_str()
+                        .unwrap(),
+                )
+                .unwrap();
+                assert_eq!(task["packet_fingerprint"], bindings["cited_fingerprint"]);
+                assert!(!task["payload"]["cards"].as_array().unwrap().is_empty());
+            }
+            "cited_packed" => {
+                assert_eq!(v["meta"]["freshness"], "indexed_evidence");
+                assert!(v["data"]["usage"]["rendered_bytes"].as_u64().unwrap() <= 6000);
+                assert!(v["data"]["omissions"].as_array().unwrap().is_empty());
+                let passages = v["data"]["passages"].as_array().unwrap();
+                assert!(!passages.is_empty());
+                let handle =
+                    lwiki::vault::VaultFs::new(lwiki::vault::VaultRoot::explicit(root).unwrap());
+                let view = lwiki::sources::SourceView::from_fs(&handle).unwrap();
+                for passage in passages {
+                    assert_eq!(passage["eligibility"], "current");
+                    for citation in passage["citations"].as_array().unwrap() {
+                        let reference: lwiki::domain::CitationRef =
+                            serde_json::from_value(citation.clone()).unwrap();
+                        let verified = view
+                            .verify(&reference, lwiki::sources::CitationScope::Current)
+                            .unwrap();
+                        assert_eq!(verified.quote, passage["text"].as_str().unwrap().as_bytes());
+                        assert_eq!(citation["reference"]["source_id"], bindings["cited_source"]);
+                        assert_eq!(
+                            citation["reference"]["source_revision"],
+                            bindings["cited_revision"]
+                        );
+                    }
+                }
+                assert!(!passages[0]["citations"].as_array().unwrap().is_empty());
+                let packed_text = v["data"]["text"].as_str().unwrap();
+                assert!(packed_text.contains("a charged battery"));
+                assert!(packed_text.contains("closing the cover before pressing START"));
+                assert!(
+                    v["data"]["text"]
+                        .as_str()
+                        .unwrap()
+                        .contains(passages[0]["text"].as_str().unwrap())
+                );
+            }
+            "cited_draft_read" | "cited_reconcile" => {
+                assert_eq!(v["meta"]["partial"], false);
+                assert_eq!(v["data"]["truncated"], false);
+                assert_eq!(v["data"]["record"]["wiki_status"], "draft");
+                assert_eq!(v["data"]["record"]["wiki_id"], bindings["cited_page_id"]);
+                assert_eq!(v["data"]["path"], "pages/cited-brief.md");
+                assert_eq!(
+                    v["data"]["hash"],
+                    format!(
+                        "blake3:{}",
+                        blake3::hash(&fs::read(root.join("pages/cited-brief.md")).unwrap())
+                            .to_hex()
+                    )
+                );
+                let record = v["data"]["record"].as_object().unwrap();
+                let body = v["data"]["body"].as_str().unwrap();
+                if step["check"] == "cited_reconcile" {
+                    assert_eq!(v["data"]["record"], draft_record);
+                    assert!(body.contains("Author observation: keep the spare battery nearby."));
+                    assert_ne!(
+                        bindings["cited_reconciled_hash"],
+                        bindings["cited_page_hash"]
+                    );
+                } else {
+                    draft_record = v["data"]["record"].clone();
+                }
+                // Serialize every observed metadata field; read.body is not a full file.
+                let mut proposal = String::from("---\n");
+                for (field, value) in record {
+                    proposal.push_str(&format!(
+                        "{field}: {}\n",
+                        serde_json::to_string(value).unwrap()
+                    ));
+                }
+                proposal.push_str("---\n");
+                proposal.push_str(body);
+                proposal.push_str(
+                    "\nClarification: this brief describes only the verified revision snapshot.\n",
+                );
+                bindings.insert("cited_full_proposal".into(), proposal);
+            }
+            "cited_search" => {
+                assert!(
+                    v["data"]["hits"].as_array().unwrap().iter().any(|hit| {
+                        hit["locator"]["record"]["record_id"] == bindings["cited_page_id"]
+                            && hit["path"] == bindings["cited_page_path"]
+                            && hit["authored_status"] == "draft"
+                    }),
+                    "draft title not discoverable: {v}"
+                );
+            }
+            "cited_author_preserved" => {
+                assert_eq!(exit, 4);
+                assert_eq!(
+                    fs::read(root.join("pages/cited-brief.md")).unwrap(),
+                    *author_snapshot.as_ref().unwrap()
+                );
+            }
+            "cited_author_preserved_after_sync" => {
+                assert_eq!(
+                    fs::read(root.join("pages/cited-brief.md")).unwrap(),
+                    *author_snapshot.as_ref().unwrap()
+                );
+            }
+            "cited_final" => {
+                assert_eq!(v["data"]["record"], draft_record);
+                let body = v["data"]["body"].as_str().unwrap();
+                assert!(body.contains("Author observation: keep the spare battery nearby."));
+                assert!(body.contains(
+                    "Clarification: this brief describes only the verified revision snapshot."
+                ));
+                assert!(
+                    body.contains("The returned evidence does not document a warranty duration.")
+                );
+                let encoded = body
+                    .split("```json\n")
+                    .nth(1)
+                    .unwrap()
+                    .split("\n```")
+                    .next()
+                    .unwrap();
+                let references: Value = serde_json::from_str(encoded).unwrap();
+                assert_eq!(
+                    references,
+                    serde_json::from_str::<Value>(&bindings["cited_refs"]).unwrap()
+                );
+                assert!(body.contains(&format!("[Source](../{})", bindings["cited_source_note"])));
+                assert!(body.contains(&format!(
+                    "[immutable revision](../{})",
+                    bindings["cited_revision_note"]
+                )));
+                assert!(
+                    !v["data"]["record"]
+                        .as_object()
+                        .unwrap()
+                        .contains_key("wiki_depends_on_ids")
+                );
+            }
             "capabilities" => {
                 let modes = v["data"]["search_modes"].as_array().unwrap();
                 for mode in ["literal", "lexical", "semantic", "hybrid"] {

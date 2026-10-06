@@ -84,6 +84,13 @@ It passes scoped independent acceptance at 10/10, every mandatory gate and zero
 blockers, with eight offline commands and no new build or answer actor. The Page
 remains a draft; native HIGH and representative capacity are unchanged.
 
+The maintained export includes the [question-to-draft recipe](../skills/llm-wiki/references/cited-page.md)
+and a 15-command conflict fixture. A [fresh three-Source transfer](validation-skill-transfer.md)
+supplied all six requested fact groups with five verified SourceRefs and preserved
+the author note. It scored 9/10 but failed mandatory layout and prescribed-edit
+observations because those task constraints were not exposed to the operator.
+This is development evidence with an open portability gate, not full acceptance.
+
 The [normalized Page reorganization workflow](validation-page-reorganization.md)
 passes scoped independent acceptance at 10/10 with every mandatory task and no
 blockers. Stable identity, authored/plain/unadopted incoming links, guarded editing,

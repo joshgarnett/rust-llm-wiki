@@ -209,3 +209,23 @@ storage is the simplest capacity alternative; otherwise require a jointly measur
 representation and lifecycle change. Do not launch a larger run, delete retained
 evidence or weaken the guard to obtain a passing result. Native support completeness,
 normalized mode parity/default activation and full capacity remain separate work.
+
+The maintained six-resource export and 15-command normalized conflict fixture are
+implemented. The initial focused gate passed four cases and exposed an intended
+external-edit reread conflict; one grouped sync/reconciliation repair and the single
+affected retest passed. The original failure remains recorded.
+
+A [fresh independent transfer](../validation-skill-transfer.md) supplies all six
+requested fact groups and five exact SourceRefs, plus draft discovery and meaningful
+author reconciliation. Its numerical score is 9/10 but M7/M9 fail: normalized
+activation and the prescribed clarification were not supplied to the operator.
+The public task handoff, not retrieval/packing, lost those non-answer requirements.
+Keep the original gate/result and explicitly carry setup authorization and intended
+edit into any separately declared public task before execution. Expected facts stay
+private. Do not retune selection, add another host framework or lower acceptance.
+
+Actual application work was substantial: 21 native calls/3.298395 child seconds,
+776.622196 owning seconds, two host stages/four orchestration deliveries and
+2,961,102 recorded tokens including cached input. Stage count is not model-call or
+cost accounting. Preserve raw traces and unavailable money/inference-only time.
+The legacy optional payload read returned no SourceRef and earned no added claim.

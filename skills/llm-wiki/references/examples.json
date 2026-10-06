@@ -730,5 +730,234 @@
         "${page_batch_change}"
       ]
     }
+  ],
+  "cited_page_steps": [
+    {
+      "name": "cited-capabilities",
+      "args": [
+        "capabilities"
+      ],
+      "check": "capabilities"
+    },
+    {
+      "name": "cited-normalized-fixture",
+      "args": [
+        "index",
+        "rebuild",
+        "--normalized"
+      ],
+      "operator": "Explicit opt-in only for this disposable normalized fixture."
+    },
+    {
+      "name": "cited-capture",
+      "args": [
+        "source",
+        "add",
+        "-",
+        "--title",
+        "Beacon startup checklist"
+      ],
+      "stdin": "Beacon startup requires a charged battery.\nBeacon startup also requires closing the cover before pressing START.\n",
+      "bindings": {
+        "cited_source": "/data/allocated_ids/source",
+        "cited_revision": "/data/allocated_ids/revision"
+      }
+    },
+    {
+      "name": "cited-source-link",
+      "args": [
+        "read",
+        "--id",
+        "${cited_source}"
+      ],
+      "bindings": {
+        "cited_source_note": "/data/path"
+      }
+    },
+    {
+      "name": "cited-revision-link",
+      "args": [
+        "read",
+        "--id",
+        "${cited_revision}"
+      ],
+      "bindings": {
+        "cited_revision_note": "/data/path"
+      }
+    },
+    {
+      "name": "cited-prepare",
+      "args": [
+        "context",
+        "What does the beacon startup checklist require, and what warranty duration is documented?",
+        "--mode",
+        "lexical",
+        "--scope",
+        "indexed-documents",
+        "--limit",
+        "5",
+        "--candidates",
+        "80",
+        "--max-bytes",
+        "6000",
+        "--max-tokens",
+        "1500",
+        "--prepare-selection"
+      ],
+      "bindings": {
+        "cited_fingerprint": "/data/selection_packet/fingerprint"
+      },
+      "selector_bindings": {
+        "cited_first_card": "/payload/cards/0/id"
+      },
+      "check": "cited_selector",
+      "operator": "The fixture chooses its supplied first card mechanically; this tests bindings, not model selection quality."
+    },
+    {
+      "name": "cited-pack",
+      "args": [
+        "context",
+        "What does the beacon startup checklist require, and what warranty duration is documented?",
+        "--mode",
+        "lexical",
+        "--scope",
+        "indexed-documents",
+        "--limit",
+        "5",
+        "--candidates",
+        "80",
+        "--max-bytes",
+        "6000",
+        "--max-tokens",
+        "1500",
+        "--selection",
+        "-"
+      ],
+      "stdin": {
+        "packet_fingerprint": "${cited_fingerprint}",
+        "ordered_ids": [
+          "${cited_first_card}"
+        ]
+      },
+      "bindings": {
+        "cited_quote": "/data/passages/0/text",
+        "cited_payload_path": "/data/passages/0/locator/path"
+      },
+      "serialized_bindings": {
+        "cited_refs": "/data/passages/0/citations"
+      },
+      "check": "cited_packed"
+    },
+    {
+      "name": "cited-init",
+      "args": [
+        "page",
+        "init",
+        "--file",
+        "-",
+        "--title",
+        "Beacon cited startup brief",
+        "--path",
+        "pages/cited-brief.md"
+      ],
+      "stdin": "# Beacon cited startup brief\n\nDraft from a selected, verified revision snapshot; global membership is unverified.\n\nThe captured startup checklist says:\n\n${cited_quote}\n\n## Gaps\n\nThe returned evidence does not document a warranty duration.\n\n## Provenance\n\n[Source](../${cited_source_note}) / [immutable revision](../${cited_revision_note}).\n\nExact SourceRefs:\n```json\n${cited_refs}\n```\n",
+      "bindings": {
+        "cited_page_id": "/data/allocated_ids/pages~1cited-brief.md"
+      }
+    },
+    {
+      "name": "cited-draft-read",
+      "args": [
+        "read",
+        "--id",
+        "${cited_page_id}"
+      ],
+      "bindings": {
+        "cited_page_path": "/data/path",
+        "cited_page_hash": "/data/hash"
+      },
+      "check": "cited_draft_read",
+      "operator": "Build cited_full_proposal from every returned record field and the complete body, adding a snapshot clarification."
+    },
+    {
+      "name": "cited-title-search",
+      "args": [
+        "search",
+        "Beacon cited startup brief",
+        "--mode",
+        "lexical",
+        "--kind",
+        "page",
+        "--status",
+        "draft",
+        "--verify-selected"
+      ],
+      "check": "cited_search"
+    },
+    {
+      "name": "cited-author-conflict",
+      "fixture_edit": {
+        "path": "pages/cited-brief.md",
+        "append": "\nAuthor observation: keep the spare battery nearby.\n"
+      },
+      "args": [
+        "page",
+        "put",
+        "--file",
+        "-",
+        "--path",
+        "${cited_page_path}",
+        "--if-match",
+        "${cited_page_hash}"
+      ],
+      "stdin": "${cited_full_proposal}",
+      "expect_error": "CONTENT_CONFLICT",
+      "check": "cited_author_preserved"
+    },
+    {
+      "name": "cited-discover-author-edit",
+      "args": [
+        "index",
+        "sync"
+      ],
+      "operator": "The preceding refusal preserved an intended external author edit. Refresh discovery once before the verified reread; reconciliation still uses the actual new body and full-file author hash.",
+      "check": "cited_author_preserved_after_sync"
+    },
+    {
+      "name": "cited-reread",
+      "args": [
+        "read",
+        "--id",
+        "${cited_page_id}"
+      ],
+      "bindings": {
+        "cited_reconciled_hash": "/data/hash"
+      },
+      "check": "cited_reconcile",
+      "operator": "Reread and incorporate the author observation and intended snapshot clarification into a full proposal; do not replay the stale proposal."
+    },
+    {
+      "name": "cited-reconciled-edit",
+      "args": [
+        "page",
+        "put",
+        "--file",
+        "-",
+        "--path",
+        "${cited_page_path}",
+        "--if-match",
+        "${cited_reconciled_hash}"
+      ],
+      "stdin": "${cited_full_proposal}"
+    },
+    {
+      "name": "cited-final-read",
+      "args": [
+        "read",
+        "--id",
+        "${cited_page_id}"
+      ],
+      "check": "cited_final"
+    }
   ]
 }

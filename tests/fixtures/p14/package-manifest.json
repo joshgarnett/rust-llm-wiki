@@ -13,6 +13,10 @@
     "source add",
     "source refresh",
     "source withdraw",
+    "source import prepare",
+    "source import run",
+    "source import resume",
+    "source import status",
     "evidence revalidate",
     "index sync",
     "index rebuild",
@@ -52,13 +56,14 @@
     "migrate"
   ],
   "files": {
-    "SKILL.md": "1bd5ce9e2e6614c32da481611bda61bca2d7bfd72130c1d922af20d5ab173eb8",
+    "SKILL.md": "af80a160102ff46e347ec672baf01a19deedf9444ccf0902629e1183cfba7aa5",
     "agents/openai.yaml": "307ad222dc5d27d563d54b0a0466264fd035378ce2d103bcbf8de4ed2ea1b144",
-    "references/commands.md": "435cbb1ff99ea9af1b6d5a7d7c6e38b44d2c1ce4ef1b3f19fda62e0ceb9f8741",
-    "references/examples.json": "094b0c0347788127dbf124464d03b1405b81272755c20ddf6696cf04f85f45e1",
-    "references/workflows.md": "f8d3ac3971556b8de5efa1430d6f125c4452d2b66bc86a6668e063f914463dc5"
+    "references/cited-page.md": "5ae9aa0b6d4c00a453f4902d59947348aedf09a579c3ebe96cf49b77c8be28e5",
+    "references/commands.md": "b4ed41b751ae44b0c2a90818a93a265a289c636db50c808b2ef037bdcc1e5494",
+    "references/examples.json": "c9e5471d1b1506317c140e37f051145d5017e6ef077e7350f771468f88eb6d89",
+    "references/workflows.md": "aa77ef0448277b37803cd5694e20ee68de6462222778bae3ed16087870db9617"
   },
-  "package_checksum": "64250f3a1247a0cb021fde349b33e04423ab67e0b9267189757297b98c5346d3",
+  "package_checksum": "00b8e01d56bc03cf13ffc417f7aeadaa61cf1d9cd6630a3422b1d845805676eb",
   "schema": "lwiki.skill-manifest.v1",
   "schemas": [
     "context-selection",
@@ -83,5 +88,5 @@
     "research-submission"
   ],
   "target": "codex",
-  "version": "0.1.2"
+  "version": "0.2.0"
 }
