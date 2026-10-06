@@ -7,6 +7,22 @@ target is now 25,000 documents / roughly 2.5 GB of text. Capacity and unseen
 retrieval completeness remain unqualified; the version number does not certify
 those gates.
 
+Candidate010 includes the maintained [question-to-draft skill recipe](../skills/llm-wiki/references/cited-page.md)
+and its 15-command normalized author-conflict fixture. A [fresh three-Source task](validation-skill-transfer.md)
+supplied all six requested facts with five verified SourceRefs and preserved the
+author note. The independent score is 9/10, but mandatory layout and prescribed-edit
+gates failed because their instructions were omitted from the operator handoff.
+Those failures remain explicit; this is a development checkpoint.
+
+The local unsigned macOS ARM64 archive is
+`lwiki-0.2.0-macos-arm64-candidate-010.tar.gz`, SHA256
+`a54ec99a47f0c9409c992fdacc8c5cc46e474dd2fe9d819af100b9bff11d1d73`.
+It packages the optimized executable from source commit
+`942fd4486cc4d3904eec15045bf7000517e9490c` and the exact seven-file tested export.
+Thirteen bundled files passed byte/permission checks, and all 282 recorded build
+inputs matched that committed tree. Packaging reused the pinned binary without
+another build or native replay; no public release, signing or notarization occurred.
+
 Candidate009 adds [bounded ordinary-publication WAL reclamation](validation-wal-lifecycle.md).
 Independent scoped acceptance passes all six mandatory conditions: 26 affected
 native checks, 700 public query workflows, citations, recovery and 100 rebuilt
