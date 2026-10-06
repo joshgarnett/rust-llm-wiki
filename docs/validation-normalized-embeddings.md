@@ -762,3 +762,51 @@ reduction and final packing under unchanged limits. A persistent passage index,
 another weight sweep and larger packets are not justified by this result.
 Native HIGH, default-layout parity, bounded semantic candidate discovery and
 practical 25K capacity remain open.
+
+## Fixed contextual passage reference
+
+One prospectively frozen, test-only comparison ranks the same generated readable
+cores using ordinary FTS5 BM25 over core text, document title and original ancestor
+headings. It uses equal field weights, the existing lexical query construction,
+the same five discovered owners and unchanged excerpt, candidate and rendered
+budgets. It adds no providers, model stage, persistent passage index or query
+tuning. All twelve native replays match the frozen structural packets after
+removing verification timestamps.
+
+Independent review finds **16/28 supported facts and 5/10 complete positive
+tasks**. The reference fails the unchanged advancement gate. D01 and D06 become
+complete, but D09 and D10 remain incomplete; two original-baseline facts and six
+structural-candidate facts regress. All 79 final SourceRef occurrences authenticate
+against exact captured and original bytes, identities, current eligibility and
+quote hashes. Both absent tasks retain bounded unsupported outcomes. Ranking-only
+titles, headings and traces receive no fact credit.
+
+The traces locate all thirteen structural-native missing facts after generation
+and the retained per-owner candidate set, before final output. Eleven of the
+reference's twelve missing facts also survive its per-owner reduction but fail
+final admission; the remaining D09 condition is lost at that reduction. The native
+trace does not establish individual rejection causes. Thirty-five complex Cargo
+feature-body hashes remain independently unverified; final Cargo citations are
+fully verified. Complete cores and contextual ranking therefore do not establish
+whole-task completeness under the packet budget.
+
+All twelve cases finish without operational errors; the largest measured helper
+retrieval interval is 0.143452 seconds, excluding serialization and final writes.
+The child takes 2.124 seconds and produces 6,271,110 bytes. Helper logical reads
+are 296,095,790 bytes; separate root pin inspection adds 189,435,423 bytes, within
+the declared combined 512 MiB envelope. Physical I/O is unavailable. These are
+64-source causal observations, with no shipping latency or capacity claim.
+
+Grouped compilation retains two initial SQL type errors and their minimal
+correction. The first runtime stops before producing reference evidence because
+the full diagnostic trace exceeds its existing bound; eleven tasks remain unrun.
+A separately admitted, outcome-neutral trace compression preserves the algorithm
+and limits. The continuation retains the earlier failure and unknown error-path
+read consumption. Builds reuse already passing checks; the test target's implicit
+CLI dependency is rebuilt but its new CLI is not evaluated or promoted.
+
+Neither failed mechanism changes the accepted native default. Fresh whole-flow
+architecture review must address task scope and final evidence allocation together
+before another implementation. Native HIGH, layout parity and practical 25K
+capacity remain open; the accepted assisted lifecycle and candidate013 remain
+separate useful milestones.

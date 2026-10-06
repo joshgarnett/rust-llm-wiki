@@ -167,9 +167,12 @@ The subsequent [native structural evidence development comparison](validation-no
 improves a frozen candidate to 15/28 supported facts and 5/10 complete tasks,
 but fails the unchanged advancement gate and loses one baseline-supported fact.
 All expected owners and exact citations are present; task-relevant passage
-selection remains the blocker. The failed candidate is not promoted. The next
-causal comparison tests contextual structural-passage relevance under unchanged
-budgets before further scale qualification.
+selection remains the blocker. The failed candidate is not promoted. The subsequent
+[fixed contextual passage reference](validation-normalized-embeddings.md#fixed-contextual-passage-reference)
+also fails: 16/28 facts and 5/10 complete tasks, with supported-fact regressions.
+All thirteen missing structural-native facts survive candidate reduction and are
+lost before final output. Fresh whole-flow architecture review addresses task
+scope and final allocation before another implementation or scale qualification.
 
 Independent same-budget witnesses now locate the multi-source failure in
 allocation: both modes can render all five required facts with valid citations
