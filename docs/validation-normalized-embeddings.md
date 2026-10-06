@@ -541,3 +541,52 @@ acceptance. Complete cited-answer quality, unseen native HIGH, affordable storag
 fast queries and representative 25K/~2.5GB behavior remain open. Minimum macOS
 26.5, live providers, native other platforms and power-loss behavior retain their
 qualification limits.
+
+## Default-geometry collection attribution checkpoint
+
+A separate development fixture uses 64 captured files, totaling 6,251,835 bytes:
+two licensed Cargo 0.85 documentation files and 62 varied synthetic operational
+documents. Twelve development questions remain outside indexed content. The
+shipping candidate012 CLI is unchanged; a narrowly scoped ignored test helper
+adds manifest-bound application dispatch, compact inventory and observations.
+It uses input-only synthetic vectors with 1,536 dimensions, default 12,000-byte
+inputs and no quality target. The transport is in-process: there are no HTTP or
+live-provider calls, and its vectors establish no semantic relevance.
+
+One grouped helper compilation checkpoint passes with actual release opt3
+parameters. The sandbox startup refusal and subsequent adapter type mismatch
+remain recorded; cumulative checkpoint time is 138.161 seconds. No previously
+passing production tests or shipping CLI build were repeated.
+
+The initial public run completes all 231 planned commands in 135.998 owning-process
+seconds. Import stops at four acknowledged items with 60 remaining, then resumes
+under the same key to complete all 64. Preparation publishes 562 units; all 12
+query embeddings are cached, and the cached preparation control sends no new
+requests. Total synthetic dispatch is 48 requests/574 inputs with 6,362,968 request
+bytes and 402,653,184 response-reservation bytes. Unknown billing holds remain
+reserved. Final observed owned allocation is 89,624,576 bytes; sampled active
+allocation reaches 97,333,248 bytes. Exact peaks and physical I/O are unavailable.
+
+**The native content baseline fails.** Its mistaken `--kind source` filter excludes
+captured payload rows, leaving all 108 context packets with only a 165-byte scope
+header and no passages. Successful command exits establish mechanics only.
+Independent source/output inspection identifies this as an evaluation-scope
+mistake, without establishing a shipping defect. The original run is preserved.
+
+An independently admitted six-command D09 control replaces that kind filter with
+`--path-prefix sources/` on the same CLI, vault, query and caches. All three searches
+return five cited captured hits. Lexical context returns five captured passages
+in 5,980 rendered bytes; synthetic semantic/hybrid contexts return three passages
+in 4,854/4,844 bytes. The control takes 1.263 owning-process seconds and makes no
+provider calls. Independent inspection confirms the filter correction and these
+returned-content counts, without assigning a fact-completeness, semantic-quality
+or workflow score. The control exceeds its small logical-read reservation by
+31,325,376 bytes of executable verification; retain the full 840,826,048-byte debit
+against the remaining whole-workflow allowance. Its standalone resource quote
+does not pass, and these valid filter observations do not require a replay.
+
+Next complete the corrected all-task baseline and the maintained brief's guarded
+edit, refresh, withdrawal and cache-loss reconstruction at 64 documents before
+growth. Keep the draft Page outside `sources/`, count fresh vector acquisition
+after cache loss, and score native evidence separately from assisted answers.
+The complete workflow, representative 25K capacity and unseen HIGH remain open.

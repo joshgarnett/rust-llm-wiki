@@ -1528,6 +1528,569 @@ mod scale_attribution {
         file.write_all(&bytes).unwrap();
         file.sync_all().unwrap();
     }
+
+    // Separate supervisor-owned lifecycle entry point. The four-cell control above
+    // deliberately retains its original fixture rules and diagnostic oracle.
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct LifecycleLimits {
+        requests: u64,
+        items: usize,
+        request_bytes: u64,
+        response_bytes: u64,
+        deadline_ms: u64,
+    }
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct LifecycleTask {
+        version: u32,
+        experiment_id: String,
+        invocation_id: String,
+        mode: String,
+        vault: PathBuf,
+        vault_id: RecordId,
+        config: PathBuf,
+        config_hash: Blake3Hash,
+        report: PathBuf,
+        queries: Option<PathBuf>,
+        query_hash: Option<Blake3Hash>,
+        limits: LifecycleLimits,
+    }
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct LifecycleQuery {
+        task_id: String,
+        text: String,
+    }
+    fn lifecycle_label(value: &str) -> bool {
+        !value.is_empty()
+            && value.len() <= 64
+            && value
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b"_-".contains(&b))
+    }
+    fn lifecycle_read(path: &Path, cap: u64) -> Result<Vec<u8>> {
+        plain(path)?;
+        let info = fs::symlink_metadata(path)
+            .map_err(|_| WikiError::invalid("lifecycle input metadata unavailable"))?;
+        if !info.is_file() || info.len() > cap {
+            return Err(WikiError::invalid("lifecycle regular input ceiling"));
+        }
+        let mut bytes = Vec::new();
+        use std::io::Read;
+        fs::File::open(path)
+            .map_err(|_| WikiError::invalid("lifecycle input unavailable"))?
+            .take(cap + 1)
+            .read_to_end(&mut bytes)
+            .map_err(|_| WikiError::invalid("lifecycle input read failed"))?;
+        if bytes.len() as u64 != info.len() || bytes.len() as u64 > cap {
+            return Err(WikiError::invalid(
+                "lifecycle input changed or exceeded ceiling",
+            ));
+        }
+        Ok(bytes)
+    }
+    fn lifecycle_vector(input: &[u8]) -> Vec<f32> {
+        let mut xof = blake3::Hasher::new();
+        xof.update(input);
+        let mut bytes = [0_u8; DIMENSIONS * 4];
+        xof.finalize_xof().fill(&mut bytes);
+        let magnitude = 1.0 / (DIMENSIONS as f32).sqrt();
+        bytes
+            .chunks_exact(4)
+            .map(|word| {
+                if word[0] & 1 == 0 {
+                    magnitude
+                } else {
+                    -magnitude
+                }
+            })
+            .collect()
+    }
+    #[derive(Default)]
+    struct LifecycleCounters {
+        requests: u64,
+        items: usize,
+        wire_bytes: u64,
+        immutable_task_bytes: u64,
+        response_bytes: u64,
+        response_reservations: u64,
+        ledger_inspections: usize,
+        observed_journal_bytes: u64,
+        requests_observed: Vec<Value>,
+        transport_errors: Vec<Value>,
+        runs: BTreeSet<RecordId>,
+    }
+    struct LifecycleMock {
+        fs: VaultFs,
+        vault: RecordId,
+        options: JobOptions,
+        limits: LifecycleLimits,
+        deadline: Instant,
+        counters: std::sync::Mutex<LifecycleCounters>,
+    }
+    impl LifecycleMock {
+        fn reply(&self, request: AuthenticatedRequest<'_>) -> Result<TransportReply> {
+            let summary = request.summary();
+            {
+                let mut counts = self.counters.lock().unwrap();
+                counts.requests += 1;
+                counts.wire_bytes = counts
+                    .wire_bytes
+                    .checked_add(summary.request_bytes)
+                    .ok_or_else(|| WikiError::invalid("lifecycle wire count overflow"))?;
+                counts.response_reservations += 8 * 1024 * 1024;
+                counts.runs.insert(summary.attempt.run_id.clone());
+                counts
+                    .requests_observed
+                    .push(json!({"summary":summary,"authenticated":false}));
+                if Instant::now() >= self.deadline
+                    || counts.requests > self.limits.requests
+                    || counts.wire_bytes > self.limits.request_bytes
+                    || counts.response_reservations > self.limits.response_bytes
+                    || summary.request_bytes > 262144
+                {
+                    return Err(WikiError::new(
+                        ErrorCode::BudgetExceeded,
+                        "lifecycle mock safety ceiling",
+                    ));
+                }
+            }
+            let ledger = JobLedger::new(
+                self.fs.clone(),
+                self.vault.clone(),
+                summary.attempt.run_id.clone(),
+                self.options.clone(),
+            )?;
+            let inspection = ledger.inspect()?;
+            {
+                let mut counts = self.counters.lock().unwrap();
+                counts.ledger_inspections += 1;
+                counts.observed_journal_bytes += inspection.budget.journal_bytes_used;
+            }
+            let task = inspection
+                .tasks
+                .get(&summary.attempt.task_key)
+                .ok_or_else(|| WikiError::invalid("lifecycle retained task absent"))?;
+            let reference = &task.spec.input;
+            let bytes = lifecycle_read(
+                &self.fs.root().path().join(reference.path.as_str()),
+                512 * 1024,
+            )?;
+            if bytes.len() as u64 != reference.byte_len
+                || Blake3Hash::digest(&bytes) != reference.hash
+            {
+                return Err(WikiError::invalid("lifecycle immutable task differs"));
+            }
+            let input: RemoteInput = serde_json::from_slice(&bytes)
+                .map_err(|_| WikiError::invalid("lifecycle immutable task malformed"))?;
+            if crate::graph::packet::canonical_json(&input)? != bytes {
+                return Err(WikiError::invalid("lifecycle task encoding differs"));
+            }
+            let RemoteOperation::Embed {
+                inputs,
+                expected_dimensions,
+                ..
+            } = input.operation
+            else {
+                return Err(WikiError::invalid(
+                    "lifecycle mock accepts only embedding tasks",
+                ));
+            };
+            if inputs.is_empty()
+                || inputs.len() > 16
+                || expected_dimensions != Some(DIMENSIONS as u32)
+                || inputs
+                    .iter()
+                    .any(|input| Blake3Hash::digest(input.utf8.as_bytes()) != input.input_hash)
+            {
+                return Err(WikiError::invalid("lifecycle embedding input differs"));
+            }
+            {
+                let mut counts = self.counters.lock().unwrap();
+                counts.items = counts
+                    .items
+                    .checked_add(inputs.len())
+                    .ok_or_else(|| WikiError::invalid("lifecycle item count overflow"))?;
+                counts.immutable_task_bytes += bytes.len() as u64;
+                if counts.items > self.limits.items {
+                    return Err(WikiError::new(
+                        ErrorCode::BudgetExceeded,
+                        "lifecycle mock item ceiling",
+                    ));
+                }
+            }
+            let data: Vec<_> = inputs.iter().enumerate().map(|(index,input)|
+                json!({"index":index,"embedding":lifecycle_vector(input.utf8.as_bytes())})).collect();
+            let body =
+                serde_json::to_vec(&json!({"model":"lifecycle-attribution-mock-v1","data":data}))
+                    .map_err(|_| WikiError::invalid("lifecycle response encoding failed"))?;
+            {
+                let mut counts = self.counters.lock().unwrap();
+                counts.response_bytes += body.len() as u64;
+                let entry = counts.requests_observed.last_mut().unwrap();
+                entry["authenticated"] = json!(true);
+                entry["immutable_task_bytes"] = json!(bytes.len());
+                entry["inputs"] = json!(
+                    inputs
+                        .iter()
+                        .map(|i| json!({"hash":i.input_hash,"bytes":i.utf8.len()}))
+                        .collect::<Vec<_>>()
+                );
+                entry["response_bytes"] = json!(body.len());
+                entry["response_hash"] = json!(Blake3Hash::digest(&body));
+            }
+            // Deliberately no usage: retained production accounting remains unknown.
+            TransportReply::new(200, vec![], body)
+        }
+    }
+    impl Transport for LifecycleMock {
+        fn execute<'a>(
+            &'a self,
+            request: AuthenticatedRequest<'a>,
+            _: TransportContext,
+        ) -> TransportFuture<'a> {
+            let result = self.reply(request).map_err(|error| {
+                self.counters
+                    .lock()
+                    .unwrap()
+                    .transport_errors
+                    .push(json!(error));
+                TransportFailure::new(TransportFailureCode::InvalidResponse)
+            });
+            Box::pin(async move { result })
+        }
+    }
+    fn lifecycle_inventory(
+        catalog: &Catalog,
+        settings: &EmbeddingSettings,
+        deadline: Instant,
+    ) -> Value {
+        use crate::retrieval::{
+            indexed_units::InventoryDocumentUnits, unit_inventory_types::RenderPolicyId,
+        };
+        let start = Instant::now();
+        let outcome = (|| -> Result<Value> {
+            let reader = catalog.cached_query_snapshot(QueryReadLimits::default())?;
+            let policy =
+                RenderPolicyId::for_settings(&reader.snapshot().parser_fingerprint, settings)?;
+            let state = reader.unit_inventory_state(&policy)?;
+            let mut value = json!({"state":state.as_ref().map(|s| json!({"complete":s.complete,
+                "after_owner":s.after_owner,"through_seq":s.through_seq,"unit_count":s.unit_count})),
+                "scope":"cached compact observation; no canonical authority"});
+            let budget = UnitBudget::with_deadline(
+                UnitLimits::default(),
+                deadline.min(Instant::now() + Duration::from_secs(30)),
+            )?;
+            let observation = (|| -> Result<Value> {
+                let inventory = InventoryDocumentUnits::new(&reader, settings, &budget)?;
+                let mut owners = BTreeSet::new();
+                let mut hashes = BTreeSet::new();
+                let mut digest = blake3::Hasher::new();
+                let mut count = 0usize;
+                for descriptor in inventory.replay(&budget)? {
+                    let descriptor = descriptor?;
+                    owners.insert(descriptor.owner.clone());
+                    hashes.insert(descriptor.input_hash.clone());
+                    let bytes = crate::graph::packet::canonical_json(&descriptor)?;
+                    digest.update(&(bytes.len() as u64).to_le_bytes());
+                    digest.update(&bytes);
+                    count += 1;
+                }
+                Ok(
+                    json!({"owners":owners.len(),"units":count,"unique_inputs":hashes.len(),
+                    "descriptor_digest":format!("blake3:{}",digest.finalize())}),
+                )
+            })();
+            value["observation"] = match observation {
+                Ok(v) => json!({"ok":true,"data":v}),
+                Err(e) => json!({"ok":false,"error":e}),
+            };
+            let usage = budget.usage();
+            let reads = reader.usage();
+            value["work"] = json!({"descriptors":usage.descriptors,"descriptor_bytes":usage.descriptor_bytes,
+                "rendered_units":usage.units,"rendered_bytes":usage.render_bytes,
+                "cache_rows":reads.rows,"cache_bytes":reads.bytes});
+            Ok(value)
+        })();
+        json!({"elapsed_ns":start.elapsed().as_nanos(),"result":match outcome {Ok(v)=>json!({"ok":true,"data":v}),Err(e)=>json!({"ok":false,"error":e})}})
+    }
+    fn lifecycle_run(task: &LifecycleTask) -> Result<Value> {
+        let started = Instant::now();
+        let lim = &task.limits;
+        let acquisition_limits_valid = if task.mode == "inventory" {
+            lim.requests == 0 && lim.items == 0 && lim.request_bytes == 0 && lim.response_bytes == 0
+        } else {
+            lim.requests > 0
+                && lim.requests <= 128
+                && lim.items > 0
+                && lim.items <= 2048
+                && lim.request_bytes > 0
+                && lim.request_bytes <= 32 * 1024 * 1024
+                && lim.response_bytes > 0
+                && lim.response_bytes <= 1024 * 1024 * 1024
+                && lim.response_bytes >= lim.requests * 8 * 1024 * 1024
+        };
+        if task.version != 1
+            || !lifecycle_label(&task.experiment_id)
+            || !lifecycle_label(&task.invocation_id)
+            || !matches!(task.mode.as_str(), "sync" | "queries" | "inventory")
+            || !acquisition_limits_valid
+            || lim.deadline_ms == 0
+            || lim.deadline_ms > 120000
+            || (task.mode == "queries") != (task.queries.is_some() && task.query_hash.is_some())
+            || (task.mode != "queries" && (task.queries.is_some() || task.query_hash.is_some()))
+        {
+            return Err(WikiError::invalid("unfrozen lifecycle task"));
+        }
+        plain(&task.vault)?;
+        plain(&task.report)?;
+        if fs::symlink_metadata(&task.report).is_ok() || !task.vault.is_dir() {
+            return Err(WikiError::invalid("lifecycle vault/report differs"));
+        }
+        let config_bytes = lifecycle_read(&task.config, 65536)?;
+        if Blake3Hash::digest(config_bytes) != task.config_hash {
+            return Err(WikiError::invalid("lifecycle config hash differs"));
+        }
+        let fs = VaultFs::new(VaultRoot::explicit(&task.vault)?);
+        let app = OfflineApp::new(fs.clone(), OperationOptions::default())?;
+        if app.vault_id() != &task.vault_id {
+            return Err(WikiError::invalid("lifecycle vault identity differs"));
+        }
+        let catalog = Catalog::new(fs.clone(), app.vault_id().clone());
+        if catalog.operation_state()?.is_none() {
+            return Err(WikiError::invalid("lifecycle requires normalized vault"));
+        }
+        let settings = EmbeddingSettings::default();
+        let service = ProviderConfig::load(&task.config)?.authorize(
+            &fs,
+            app.vault_id(),
+            "primary",
+            Capability::Embed,
+        )?;
+        let spec = SpaceSpec::from_service(&service, settings.clone())?;
+        use crate::config::providers::{AuthConfig, StaticSource};
+        if spec.model != "lifecycle-attribution-mock-v1"
+            || spec.dimensions != Some(DIMENSIONS as u32)
+            || service.service().max_batch_items != Some(16)
+            || service.service().max_batch_bytes != Some(262144)
+            || !service.service().url.starts_with("http://127.0.0.1:")
+            || !service.service().secret_headers.is_empty()
+            || !matches!(&service.service().auth,AuthConfig::Static {source:StaticSource::Literal(v),..} if v==b"SYNTHETIC")
+        {
+            return Err(WikiError::invalid("lifecycle synthetic profile differs"));
+        }
+        let space_id = spec.id()?;
+        let clock: Arc<dyn JobClock> = Arc::new(NativeCredentialClock::default());
+        let options = JobOptions {
+            clock: clock.clone(),
+            fault: None,
+            cancel: CancellationToken::default(),
+            policy: ExecutionPolicy::default(),
+            lock_timeout_ms: 1000,
+        };
+        let now = clock.read()?;
+        let deadline = started + Duration::from_millis(lim.deadline_ms);
+        let transport = Arc::new(LifecycleMock {
+            fs: fs.clone(),
+            vault: app.vault_id().clone(),
+            options: options.clone(),
+            limits: LifecycleLimits {
+                requests: lim.requests,
+                items: lim.items,
+                request_bytes: lim.request_bytes,
+                response_bytes: lim.response_bytes,
+                deadline_ms: lim.deadline_ms,
+            },
+            deadline,
+            counters: Default::default(),
+        });
+        let dispatch = Dispatcher::new(
+            fs.clone(),
+            DispatchOptions {
+                broker: Arc::new(CredentialBroker::new(CredentialOptions {
+                    clock: clock.clone(),
+                    inputs: Arc::new(NoExternalSecrets),
+                    runner: Arc::new(NoHelpers),
+                })),
+                transport: transport.clone(),
+                jitter: Arc::new(NoJitter),
+            },
+        );
+        let limits = LifetimeLimits {
+            requests: lim.requests,
+            attempts_per_task: 1,
+            concurrency: 1,
+            request_bytes: Some(lim.request_bytes),
+            response_bytes: Some(lim.response_bytes),
+            ..Default::default()
+        };
+        let requested = super::super::remote::RequestedJobLimits {
+            limits: limits.clone(),
+            specified: BTreeSet::from([
+                "requests",
+                "attempts_per_task",
+                "concurrency",
+                "request_bytes",
+                "response_bytes",
+            ]),
+            deadline_ms: None,
+        };
+        let runtime = crate::app::embeddings::EmbeddingRuntime::new(
+            &service,
+            &dispatch,
+            options.clone(),
+            limits,
+            now.utc_ms,
+            now.utc_ms + lim.deadline_ms as i64,
+            Some(requested),
+        );
+        let mut result = json!({"experiment_id":task.experiment_id,"invocation_id":task.invocation_id,
+            "mode":task.mode,"settings":settings,"space":spec,"dimensions":DIMENSIONS,
+            "clock":"shared NativeCredentialClock for runtime/ledger/credentials; owning Instant intervals",
+            "mock_rule":"input-only BLAKE3 XOF 1536 low-bit signs / sqrt(1536); mechanics only",
+            "inventory_before":lifecycle_inventory(&catalog,&settings,deadline)});
+        let mut extra_runs = BTreeSet::new();
+        if task.mode == "sync" {
+            let phase = Instant::now();
+            let (outcome, observation) =
+                super::super::indexed_embedding_inputs::attribution::with_observation(|| {
+                    app.embeddings_sync(&settings, &runtime)
+                });
+            result["sync_elapsed_ns"] = json!(phase.elapsed().as_nanos());
+            result["sync_observation"] = serde_json::to_value(observation).unwrap();
+            result["sync"] = match outcome {
+                Ok(report) => {
+                    if let Some(id) = &report.run_id {
+                        extra_runs.insert(id.clone());
+                    }
+                    json!({"ok":true,"report":report})
+                }
+                Err(error) => {
+                    if let Some(id) = error
+                        .details
+                        .get("run_id")
+                        .and_then(Value::as_str)
+                        .and_then(|v| RecordId::new(v).ok())
+                    {
+                        extra_runs.insert(id);
+                    }
+                    json!({"ok":false,"error":error})
+                }
+            };
+        } else if task.mode == "queries" {
+            let bytes = lifecycle_read(task.queries.as_ref().unwrap(), 16384)?;
+            if Some(Blake3Hash::digest(&bytes)) != task.query_hash {
+                return Err(WikiError::invalid("lifecycle query hash differs"));
+            }
+            let queries: Vec<LifecycleQuery> = serde_json::from_slice(&bytes)
+                .map_err(|_| WikiError::invalid("lifecycle queries malformed"))?;
+            let mut ids = BTreeSet::new();
+            let mut texts = BTreeSet::new();
+            if queries.len() != 12
+                || queries.iter().any(|q| {
+                    !lifecycle_label(&q.task_id)
+                        || q.text.is_empty()
+                        || q.text.len() > 12000
+                        || !ids.insert(q.task_id.clone())
+                        || !texts.insert(q.text.clone())
+                })
+            {
+                return Err(WikiError::invalid(
+                    "lifecycle requires twelve unique external queries",
+                ));
+            }
+            let mut rows = Vec::new();
+            let mut stopped = false;
+            for query in queries {
+                if stopped || Instant::now() >= deadline {
+                    rows.push(json!({"task_id":query.task_id,"status":"UNRUN"}));
+                    stopped = true;
+                    continue;
+                }
+                let start = Instant::now();
+                let mut query_plan = plan(SearchMode::Semantic, vec![], 5);
+                query_plan.limits.candidates = 80;
+                query_plan.filters.kinds = vec![RecordKind::Source];
+                let outcome =
+                    app.semantic_search_selected(&query.text, &query_plan, Some(&runtime), false);
+                let input = spec.query(&query.text)?;
+                let cached = (|| -> Result<bool> {
+                    let store = VectorStore::open(&fs, None)?;
+                    if store.active()?.is_none_or(|s| s.id != space_id) {
+                        return Ok(false);
+                    }
+                    Ok(store.vector(&space_id, &input.input_hash)?.is_some())
+                })();
+                let acquired = matches!(&cached, Ok(true));
+                stopped = !acquired;
+                rows.push(json!({"task_id":query.task_id,"elapsed_ns":start.elapsed().as_nanos(),
+                    "query_input_hash":input.input_hash,"query_cached":match cached {Ok(v)=>json!({"ok":true,"cached":v}),Err(e)=>json!({"ok":false,"error":e})},
+                    "search":match outcome {Ok(v)=>json!({"ok":true,"report":v}),Err(e)=>json!({"ok":false,"error":e})}}));
+            }
+            result["queries"] = json!(rows);
+        }
+        result["inventory_after"] = lifecycle_inventory(&catalog, &settings, deadline);
+        let counts = transport.counters.lock().unwrap();
+        extra_runs.extend(counts.runs.iter().cloned());
+        result["mock"] = json!({"requests":counts.requests,"items":counts.items,"wire_bytes":counts.wire_bytes,
+            "immutable_task_read_bytes":counts.immutable_task_bytes,"observed_response_bytes":counts.response_bytes,
+            "response_reservations":counts.response_reservations,"mock_ledger_inspections":counts.ledger_inspections,
+            "sum_observed_journal_bytes_at_mock_inspection":counts.observed_journal_bytes,
+            "journal_observation_scope":"recorded prefix sizes; not measured physical IO or all inspect reads",
+            "requests_observed":counts.requests_observed,"usage":"UNKNOWN; preserve actual ledger holds"});
+        result["mock"]["transport_errors"] = json!(counts.transport_errors);
+        drop(counts);
+        let mut retained = Vec::new();
+        for run in extra_runs {
+            let inspection = JobLedger::new(
+                fs.clone(),
+                task.vault_id.clone(),
+                run.clone(),
+                options.clone(),
+            )
+            .and_then(|l| l.inspect());
+            retained.push(match inspection {Ok(i)=>json!({"run_id":run,"state":i.state,"effective_limits":i.effective_limits,
+                "effective_deadline_utc_ms":i.effective_deadline_utc_ms,"budget":i.budget,"attempts":i.attempts}),
+                Err(e)=>json!({"run_id":run,"error":e})});
+        }
+        result["retained_runs"] = json!(retained);
+        result["elapsed_ns"] = json!(started.elapsed().as_nanos());
+        Ok(result)
+    }
+    #[test]
+    #[ignore = "explicit manifest-bound supervisor-owned lifecycle attribution only"]
+    fn manifest_lifecycle_attribution() {
+        let task_path = PathBuf::from(
+            std::env::var_os("LWIKI_LIFECYCLE_ATTRIBUTION_TASK").expect("explicit lifecycle task"),
+        );
+        let task: LifecycleTask =
+            serde_json::from_slice(&lifecycle_read(&task_path, 16384).unwrap()).unwrap();
+        let started = Instant::now();
+        let outcome = lifecycle_run(&task);
+        let envelope = match outcome {
+            Ok(data) => {
+                json!({"ok":true,"meta":{"network_used":false,"transport":"in-process synthetic only"},"data":data})
+            }
+            Err(error) => {
+                json!({"ok":false,"error":error,"elapsed_ns":started.elapsed().as_nanos(),
+                "partial_counters":"unavailable; supervisor retains entire prospective invocation debit"})
+            }
+        };
+        let bytes = serde_json::to_vec_pretty(&envelope).unwrap();
+        assert!(
+            bytes.len() <= 2 * 1024 * 1024,
+            "lifecycle report ceiling; retain full prospective debit"
+        );
+        plain(&task.report).unwrap();
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&task.report)
+            .unwrap();
+        file.write_all(&bytes).unwrap();
+        file.sync_all().unwrap();
+    }
 }
 
 #[path = "indexed_embedding_inventory_tests.rs"]

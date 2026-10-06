@@ -92,6 +92,16 @@ record/path/hash locators and no fabricated source citations; captured passages
 retain exact source revision/span/hash citations. Kind, tag, status, source and
 path filters use the existing document filtering rules.
 
+`--kind source` selects canonical Source records, whose notes can be empty. It
+does not select captured payloads: those document rows have Source/Revision
+ownership but no record kind. `--kind revision` also excludes the payloads.
+For a controlled vault whose captured files live under `sources/` and authored
+Pages live elsewhere, `--path-prefix sources/` includes captured text in lexical,
+semantic and hybrid search/context. This is a namespace restriction; it also
+includes Source/Revision metadata. Only returned `captured_source` passages with
+exact SourceRefs support source-backed claims. Do not place an authored answer
+under that prefix when comparing retrieval against its original sources.
+
 ### Selected search citations
 
 An authenticated Current Entity identity can remain an empty, uncited navigation
