@@ -126,6 +126,26 @@ zero-blocker gate open. No partial full-gate score is assigned.
 
 ## Capacity boundary and next milestone
 
+A bounded, zero-provider lineage replay reproduces all eight development packets
+exactly apart from their verification timestamps. Independent inspection finds
+existing admitted proposals for every missing multi-source fact. Two four-proposal
+counterfactual packets, one per mode, fit the unchanged renderer and limits at
+**5,392 bytes / 1,348 estimated tokens**. The critic verifies all five required
+facts in each rendered packet and all eight quote hashes. This establishes
+allocation loss for this exposed task: complete evidence fits the existing budget.
+The critic-selected witness is diagnostic evidence, not an automatic selection
+workflow or a quality acceptance pass. The production default remains unchanged.
+
+The next selection experiment was declared before candidate results: compare the
+unchanged allocator with literal query-term coverage and two bounded vector-set
+coverage strategies on the same four tasks in both modes. Preserve candidate
+formation, exact citation rendering, freshness, excerpt/owner limits and the
+shared two-second proof deadline. A candidate must recover every multi-source
+fact in both modes while preserving the passing tasks; choose the simplest
+passing strategy. The exposed questions remain development data. Follow the
+selection comparison with ordinary changed-source refresh and unrelated-vector
+reuse; none of these observations substitutes for unseen acceptance or capacity.
+
 Preparation currently retains at most 4,096 owners. Exact semantic discovery
 renders the eligible corpus twice under a shared 64 MiB/65,536-unit allowance.
 Those limits alone prevent qualification of 25,000 documents / roughly 2.5 GB;
@@ -134,9 +154,8 @@ must not be described as proportional only to changed owners.
 
 With the small public workflow observed, the next connected milestone must combine
 changed-document preparation, useful complementary cited evidence and
-single-document refresh/reprepare. A new independent architecture review examines
-where passage selection and packing discard the multi-source evidence before
-another implementation choice. More owner discovery alone cannot fix this case.
+single-document refresh/reprepare. Independent architecture review supports the
+bounded selection comparison above. More owner discovery alone cannot fix this case.
 A bounded release comparison will test winner-only second-pass rendering against
 a compact rebuildable unit inventory with paged changed-owner preparation. It must
 retain exact coverage, evidence, freshness and accounting behavior. ANN, wider

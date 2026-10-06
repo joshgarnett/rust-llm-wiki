@@ -141,6 +141,12 @@ evidence task after retrieving its required owners. Full acceptance and quality
 remain open, and packaged candidate010 predates this source. The 4,096-owner preparation ceiling and whole
 corpus rendering prevent 25K qualification unchanged.
 
+Independent same-budget witnesses now locate the multi-source failure in
+allocation: both modes can render all five required facts with valid citations
+in 5,392 bytes. This diagnostic does not change the default or pass a quality
+gate. The linked checkpoint records the prospectively declared selection
+comparison and connected changed-source workflow that must establish improvement.
+
 The normalized layout currently has a restricted command set. Plain lexical `search` uses published discovery; `--no-sync` remains compatible.
 Exact [named Entity neighbors](named-neighbors.md) now use bounded indexed
 incidence and complete selected evidence/opposition/policy verification. Default
