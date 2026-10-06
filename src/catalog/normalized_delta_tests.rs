@@ -561,3 +561,290 @@ fn old_derivative_admission_and_identity_refusal_happen_before_token_changes() {
     assert_eq!(hits(&c, "documents_fts", "oldtoken"), 1);
     assert_eq!(hits(&c, "documents_fts", "newtoken"), 0);
 }
+
+#[test]
+fn exact_job_fact_admission_requires_v3_target_facts_and_registry_and_keeps_events_immutable() {
+    use super::{
+        eligibility_facts::EligibilityFact,
+        link_facts::registry_keys,
+        normalized_fact_delta::{FactDelta, OwnedRegistryKeys, RecordFactMutation},
+        structural_rules::StructuralFact,
+    };
+    use crate::{
+        changes::indexed_refresh::{
+            IndexedCheckpointTarget, IndexedJobTarget, IndexedWriteOperation,
+        },
+        records::RegistryEntry,
+    };
+
+    let c = db();
+    let run_id = id("run_fact_admission");
+    let make_row = |record_id: &RecordId, kind, location: &str, body: &[u8]| {
+        let mut fields = common(record_id, kind, "Job envelope");
+        if kind == RecordKind::Run {
+            fields.insert("wiki_status".into(), json!("planned"));
+            fields.insert("wiki_created_at".into(), json!("2026-10-06T00:00:00Z"));
+        } else {
+            fields.insert("wiki_run_id".into(), json!(run_id));
+            fields.insert("wiki_sequence".into(), json!(1));
+            fields.insert("wiki_event_type".into(), json!("usage_receipt"));
+            fields.insert("wiki_occurred_at".into(), json!("2026-10-06T00:00:00Z"));
+        }
+        let bytes =
+            record_bytes(crate::domain::CanonicalRecord::new(fields).unwrap(), body).unwrap();
+        RecordRow {
+            record: parse_note(&bytes).canonical.unwrap(),
+            path: path(location),
+            hash: Blake3Hash::digest(&bytes),
+            authored_status: (kind == RecordKind::Run).then(|| "planned".into()),
+            eligibility: Eligibility::Current,
+            reasons: vec![],
+            identity_eligibility: None,
+            description_eligibility: None,
+            disputed: false,
+            dependencies: vec![],
+        }
+    };
+    let facts_for = |row: &RecordRow| {
+        let structural = StructuralFact::default();
+        FactDelta {
+            policy: None,
+            records: vec![RecordFactMutation {
+                record_id: row.record.id().clone(),
+                fact: EligibilityFact {
+                    baseline: structural.baseline(),
+                    structural,
+                    direct_paths: std::collections::BTreeSet::from([row.path.clone()]),
+                },
+            }],
+            edge_inserts: vec![],
+            edge_deletes: vec![],
+            links: vec![],
+            registry: vec![OwnedRegistryKeys {
+                record_id: row.record.id().clone(),
+                path: row.path.clone(),
+                keys: registry_keys(&RegistryEntry {
+                    id: row.record.id().clone(),
+                    path: row.path.clone(),
+                    kind: row.record.kind(),
+                    aliases: vec![],
+                })
+                .unwrap(),
+            }],
+        }
+    };
+    let operation_for = |row: &RecordRow| IndexedWriteOperation::JobBatch {
+        run_id: run_id.clone(),
+        records: vec![IndexedJobTarget {
+            path: row.path.clone(),
+            id: row.record.id().clone(),
+            kind: row.record.kind(),
+        }],
+        checkpoint: None,
+    };
+    // This fixture isolates pre-replacement admission, not a sealed job plan or
+    // policy-maintenance proof. Full delta.apply and public workflow gates have
+    // their own policy/sealing assertions; check_before cannot replace them.
+    let check =
+        |delta: &CatalogDelta, facts: &FactDelta, operation: Option<&IndexedWriteOperation>| {
+            facts.check_before(&c, delta, &mut DeltaStats::default(), operation)
+        };
+    let rows = [
+        make_row(
+            &run_id,
+            RecordKind::Run,
+            "runs/run_fact_admission/run.md",
+            b"planned\n",
+        ),
+        make_row(
+            &id("event_fact_admission"),
+            RecordKind::RunEvent,
+            "runs/run_fact_admission/events/event_fact_admission.md",
+            b"receipt\n",
+        ),
+    ];
+    for row in &rows {
+        let facts = facts_for(row);
+        let mut delta = empty();
+        delta.version = 3;
+        delta.records = vec![row.clone()];
+        delta.facts = Some(facts.clone());
+        let operation = operation_for(row);
+        operation.validate().unwrap();
+        check(&delta, &facts, Some(&operation)).unwrap();
+        assert_eq!(
+            check(&delta, &facts, None).unwrap_err().code,
+            ErrorCode::IndexCorrupt
+        );
+        let mut older = delta.clone();
+        older.version = 2;
+        assert_eq!(
+            check(&older, &facts, Some(&operation)).unwrap_err().code,
+            ErrorCode::IndexCorrupt
+        );
+        let unrelated = IndexedWriteOperation::SourceRefresh {
+            source_id: id("source_other"),
+        };
+        assert_eq!(
+            check(&delta, &facts, Some(&unrelated)).unwrap_err().code,
+            ErrorCode::IndexCorrupt
+        );
+        for member in ["id", "path", "kind"] {
+            let mut spoof = operation.clone();
+            let IndexedWriteOperation::JobBatch { records, .. } = &mut spoof else {
+                unreachable!()
+            };
+            match member {
+                "id" => records[0].id = id("forged_job_id"),
+                "path" => records[0].path = path("runs/other/run.md"),
+                "kind" => records[0].kind = RecordKind::Page,
+                _ => unreachable!(),
+            }
+            assert_eq!(
+                check(&delta, &facts, Some(&spoof)).unwrap_err().code,
+                ErrorCode::IndexCorrupt,
+                "{member}"
+            );
+        }
+        for missing in ["fact", "registry"] {
+            let mut incomplete = facts.clone();
+            if missing == "fact" {
+                incomplete.records.clear();
+            } else {
+                incomplete.registry.clear();
+            }
+            assert_eq!(
+                check(&delta, &incomplete, Some(&operation))
+                    .unwrap_err()
+                    .code,
+                ErrorCode::IndexCorrupt,
+                "{missing}"
+            );
+        }
+        assert_eq!(
+            c.query_row("SELECT count(*) FROM records", [], |r| r.get::<_, i64>(0))
+                .unwrap(),
+            0
+        );
+    }
+
+    // Adopt old rows through the existing fixture helpers, then install exact
+    // own-path facts and actual registry keys in the normalized schema.
+    for row in &rows {
+        let mut seed = empty();
+        seed.records = vec![row.clone()];
+        seed.dependencies = vec![ReadDependency {
+            path: row.path.clone(),
+            expected: ExpectedState::Hash(row.hash.clone()),
+        }];
+        seed.apply(&c).unwrap();
+        facts_for(row)
+            .apply(&c, &seed, &mut DeltaStats::default())
+            .unwrap();
+    }
+    let changed_run = make_row(
+        &run_id,
+        RecordKind::Run,
+        rows[0].path.as_str(),
+        b"checkpointed\n",
+    );
+    let facts = facts_for(&changed_run);
+    let mut delta = empty();
+    delta.version = 3;
+    delta.records = vec![changed_run.clone()];
+    delta.facts = Some(facts.clone());
+    let mut checkpoint = operation_for(&changed_run);
+    let IndexedWriteOperation::JobBatch {
+        checkpoint: asset, ..
+    } = &mut checkpoint
+    else {
+        unreachable!()
+    };
+    *asset = Some(IndexedCheckpointTarget {
+        path: path(&format!(
+            "runs/{run_id}/checkpoints/{}.json",
+            changed_run.hash.hex()
+        )),
+        hash: Blake3Hash::digest(b"compact fixture"),
+        run_hash: changed_run.hash.clone(),
+    });
+    checkpoint.validate().unwrap();
+    check(&delta, &facts, Some(&checkpoint)).unwrap();
+    assert_eq!(
+        check(&delta, &facts, None).unwrap_err().code,
+        ErrorCode::ContentConflict
+    );
+    // Existing rows can rely on an adopted fact. Missing the adopted fact must
+    // still refuse even though the exact Run discriminator admits the update.
+    let mut retained = facts.clone();
+    retained.records.clear();
+    check(&delta, &retained, Some(&checkpoint)).unwrap();
+    c.execute(
+        "DELETE FROM record_eligibility_facts WHERE record_id=?1",
+        [run_id.as_str()],
+    )
+    .unwrap();
+    assert_eq!(
+        check(&delta, &retained, Some(&checkpoint))
+            .unwrap_err()
+            .code,
+        ErrorCode::IndexCorrupt
+    );
+    for wrong in ["path", "kind"] {
+        let mut changed = changed_run.clone();
+        if wrong == "path" {
+            changed.path = path("runs/run_fact_admission/moved.md");
+        } else {
+            changed = make_row(
+                &run_id,
+                RecordKind::RunEvent,
+                changed_run.path.as_str(),
+                b"kind spoof\n",
+            );
+        }
+        let mut wrong_delta = delta.clone();
+        wrong_delta.records = vec![changed.clone()];
+        // Deliberately match the forged tuple: old identity checks must reject
+        // independently of operation.validate's earlier sealed-path boundary.
+        assert_eq!(
+            check(
+                &wrong_delta,
+                &facts_for(&changed),
+                Some(&operation_for(&changed))
+            )
+            .unwrap_err()
+            .code,
+            ErrorCode::ContentConflict,
+            "{wrong}"
+        );
+    }
+    let changed_event = make_row(
+        rows[1].record.id(),
+        RecordKind::RunEvent,
+        rows[1].path.as_str(),
+        b"overwritten receipt\n",
+    );
+    delta.records = vec![changed_event.clone()];
+    assert_eq!(
+        check(
+            &delta,
+            &facts_for(&changed_event),
+            Some(&operation_for(&changed_event))
+        )
+        .unwrap_err()
+        .code,
+        ErrorCode::ContentConflict
+    );
+    // check_before itself never changes the selected bytes or row identity.
+    for row in &rows {
+        assert_eq!(
+            c.query_row(
+                "SELECT hash FROM records WHERE id=?1",
+                [row.record.id().as_str()],
+                |r| r.get::<_, String>(0)
+            )
+            .unwrap(),
+            row.hash.as_str()
+        );
+    }
+}

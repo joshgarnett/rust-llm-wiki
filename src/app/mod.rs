@@ -6,6 +6,9 @@ pub mod types;
 pub use types::*;
 pub mod decisions;
 pub mod embeddings;
+mod indexed_embedding_inputs;
+#[cfg(test)]
+mod indexed_embedding_workflow_tests;
 pub mod remote;
 mod review;
 

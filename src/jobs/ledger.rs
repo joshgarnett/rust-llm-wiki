@@ -922,6 +922,10 @@ impl JobLedgerApi for JobLedger {
                 "Markdown-only run cannot recreate old accounting history",
             ));
         }
+        let normalized = Catalog::new(self.fs.clone(), self.vault_id.clone())
+            .operation_state()?
+            .is_some();
+        let named_bootstrap = checkpoint::retain_bootstrap_intent(self, writer, &spec, existing)?;
         let store = if existing {
             let journal = read(
                 &self.fs,
@@ -1004,12 +1008,16 @@ impl JobLedgerApi for JobLedger {
             ));
         }
         let run_bytes = checkpoint::run_bytes(&initial_inspection(&spec)?)?;
-        let legacy_mirror = checkpoint::legacy_bootstrap_mirror(
-            &self.fs,
-            &spec,
-            &loaded.frames[0],
-            &Blake3Hash::digest(&run_bytes),
-        )?;
+        let legacy_mirror = if normalized {
+            None
+        } else {
+            checkpoint::legacy_bootstrap_mirror(
+                &self.fs,
+                &spec,
+                &loaded.frames[0],
+                &Blake3Hash::digest(&run_bytes),
+            )?
+        };
         let mut d = checkpoint::draft("Create durable planned run", &spec);
         d.read_preconditions = spec.scope.read_preconditions.clone();
         d.operations.push(checkpoint::write(
@@ -1021,10 +1029,18 @@ impl JobLedgerApi for JobLedger {
             d.operations.push(mirror);
         }
         drop(g);
-        let engine = ChangeEngine::new(self.fs.clone())?;
-        let prepared = find_or_prepare(&engine, writer, &d)?;
-        let catalog = Catalog::new(self.fs.clone(), self.vault_id.clone());
-        engine.apply(writer,&prepared,&CatalogGraphValidator,&catalog).map_err(|mut e|{e.details=serde_json::json!({"run_id":self.run_id,"change_id":prepared.change_id,"manifest_hash":prepared.manifest_hash,"context":e.details});e})?;
+        if normalized {
+            if named_bootstrap {
+                checkpoint::publish_job_draft(&self.fs, writer, self, d)?;
+            }
+            // Complete legacy accounting under a normalized cache remains valid;
+            // it must not acquire a new bootstrap identity or reset its ledger.
+        } else {
+            let engine = ChangeEngine::new(self.fs.clone())?;
+            let prepared = find_or_prepare(&engine, writer, &d)?;
+            let catalog = Catalog::new(self.fs.clone(), self.vault_id.clone());
+            engine.apply(writer,&prepared,&CatalogGraphValidator,&catalog).map_err(|mut e|{e.details=serde_json::json!({"run_id":self.run_id,"change_id":prepared.change_id,"manifest_hash":prepared.manifest_hash,"context":e.details});e})?;
+        }
         loaded
             .state
             .inspection
@@ -1423,7 +1439,7 @@ impl JobLedgerApi for JobLedger {
         self.with(false, |g, l| self.ack_checkpoint(g, l, change))
     }
 }
-fn initial_inspection(spec: &RunSpec) -> Result<LedgerInspection> {
+pub(super) fn initial_inspection(spec: &RunSpec) -> Result<LedgerInspection> {
     let path = checkpoint::run_path(&spec.run_id)?;
     let placeholder = reference(
         &spec.vault_id,
@@ -1636,7 +1652,7 @@ pub(super) fn validate_amendment(l: &Loaded, a: &LimitAmendment, now: i64) -> Re
         &a.limits,
     )
 }
-fn find_or_prepare(
+pub(super) fn find_or_prepare(
     engine: &ChangeEngine,
     writer: &WriterPermit,
     draft: &ChangeDraft,
@@ -2505,20 +2521,45 @@ impl JobLedger {
             );
             let receipt = checkpoint::receipt(&self.fs, &reference)?;
             let engine = ChangeEngine::new(self.fs.clone())?;
-            let mut found = None;
-            for id in engine.change_ids()? {
-                let inspected = engine.inspect_history(&id)?;
-                if inspected.status == ChangeStatus::Committed
-                    && inspected.manifest.operations.iter().any(|op| {
-                        op.target == path && op.after == ExpectedState::Hash(reference.hash.clone())
-                    })
+            let named = checkpoint::named_job_committed(
+                &self.fs,
+                &self.vault_id,
+                &self.run_id,
+                checkpoint::JobPublicationKey::Receipt {
+                    receipt_id: receipt.receipt_id.clone(),
+                },
+                &path,
+                &reference.hash,
+            )?;
+            let change = if let Some(change) = named {
+                change
+            } else {
+                if Catalog::new(self.fs.clone(), self.vault_id.clone())
+                    .operation_state()?
+                    .is_some()
                 {
-                    found = Some(inspected.prepared);
-                    break;
+                    return Err(events::corrupt(
+                        "unnamed normalized pending receipt requires explicit maintenance; accounting retained",
+                    ));
                 }
-            }
-            let change = found
-                .ok_or_else(|| events::corrupt("receipt has no verified committed changeset"))?;
+                let mut found = None;
+                for id in engine.change_ids()? {
+                    let inspected = engine.inspect_history(&id)?;
+                    if inspected.status == ChangeStatus::Committed
+                        && inspected.manifest.operations.iter().any(|op| {
+                            op.target == path
+                                && op.after == ExpectedState::Hash(reference.hash.clone())
+                        })
+                    {
+                        found = Some(inspected.prepared);
+                        break;
+                    }
+                }
+                let change = found.ok_or_else(|| {
+                    events::corrupt("receipt has no verified committed changeset")
+                })?;
+                change
+            };
             self.ack_outputs(
                 g,
                 l,
@@ -2558,6 +2599,27 @@ impl JobLedger {
         })?;
         let hash = Blake3Hash::digest(actual);
         let engine = ChangeEngine::new(self.fs.clone())?;
+        if let Some(change) = checkpoint::named_job_committed(
+            &self.fs,
+            &self.vault_id,
+            &self.run_id,
+            checkpoint::JobPublicationKey::Checkpoint {
+                run_hash: hash.clone(),
+            },
+            &path,
+            &hash,
+        )? {
+            self.ack_checkpoint(g, l, &change)?;
+            return Ok(());
+        }
+        if Catalog::new(self.fs.clone(), self.vault_id.clone())
+            .operation_state()?
+            .is_some()
+        {
+            return Err(events::corrupt(
+                "unnamed normalized checkpoint needs explicit maintenance; accounting retained",
+            ));
+        }
         for id in engine.change_ids()? {
             let inspected = engine.inspect_history(&id)?;
             if inspected.status == ChangeStatus::Committed

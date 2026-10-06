@@ -9,7 +9,7 @@ use crate::{
         query_types::QueryCatalog,
         row_projection,
     },
-    changes::{ProposedTarget, ScanDocument, ValidationInput},
+    changes::{ProposedTarget, ReadDependency, ScanDocument, ValidationInput},
     domain::*,
     records::parse_note,
     sources::{
@@ -25,6 +25,9 @@ pub(crate) struct SelectedDocuments {
     pub(crate) records: BTreeMap<RecordId, RecordRow>,
     pub(crate) documents: BTreeMap<VaultRelativePath, DocumentRow>,
     pub(crate) fingerprint: Blake3Hash,
+    /// Stable membership domain, distinct from the publication-bound read proof.
+    /// Embedding callers authenticate exactly one owner per binding.
+    pub(crate) embedding_dependency_fingerprint: Blake3Hash,
     states: BTreeMap<VaultRelativePath, ExpectedState>,
     meter: Meter,
 }
@@ -36,6 +39,29 @@ fn conflict(message: impl Into<String>) -> WikiError {
 impl SelectedDocuments {
     pub(super) fn meter(&self) -> &Meter {
         &self.meter
+    }
+    pub(crate) fn read_preconditions_iter(
+        &self,
+    ) -> impl Iterator<Item = (&VaultRelativePath, &ExpectedState)> {
+        self.states.iter()
+    }
+    pub(crate) fn read_preconditions(&self) -> Vec<ReadDependency> {
+        self.states
+            .iter()
+            .map(|(path, expected)| ReadDependency {
+                path: path.clone(),
+                expected: expected.clone(),
+            })
+            .collect()
+    }
+    pub(crate) fn recheck_with_remaining(
+        &mut self,
+        catalog: &Catalog,
+        reader: &QuerySnapshot,
+        remaining: &VerificationBudget,
+    ) -> Result<()> {
+        self.meter.tighten_remaining(remaining)?;
+        self.recheck(catalog, reader)
     }
     pub(crate) fn recheck(&mut self, catalog: &Catalog, reader: &QuerySnapshot) -> Result<()> {
         self.meter.check()?;
@@ -618,10 +644,21 @@ pub(crate) fn authenticate(
     ))
     .map_err(|e| WikiError::new(ErrorCode::Internal, e.to_string()))?;
     let fingerprint = Blake3Hash::digest(encoded);
+    let embedding_dependency_fingerprint = Blake3Hash::digest(
+        serde_json::to_vec(&(
+            "lwiki-normalized-document-embedding-dependencies-v1",
+            catalog.vault_id(),
+            &reader.snapshot().parser_fingerprint,
+            &states,
+            &missing,
+        ))
+        .map_err(|e| WikiError::new(ErrorCode::Internal, e.to_string()))?,
+    );
     Ok(SelectedDocuments {
         records,
         documents,
         fingerprint,
+        embedding_dependency_fingerprint,
         states,
         meter,
     })

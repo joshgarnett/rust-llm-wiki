@@ -121,7 +121,28 @@ pub(super) fn empty_delta(policy: PolicyDelta) -> CatalogDelta {
 pub(crate) fn project_pages(
     fs: &VaultFs,
     reader: &QuerySnapshot,
+    draft: ChangeDraft,
+    limits: &RefreshProjectionLimits,
+) -> Result<Option<ProjectedWrite>> {
+    project_selected(fs, reader, draft, None, limits)
+}
+
+/// The sealed draft was regenerated against the one existing operational ledger.
+pub(crate) fn project_jobs(
+    fs: &VaultFs,
+    reader: &QuerySnapshot,
+    validated: crate::jobs::checkpoint::ValidatedJobDraft,
+    limits: &RefreshProjectionLimits,
+) -> Result<Option<ProjectedWrite>> {
+    let (draft, operation) = validated.into_parts();
+    project_selected(fs, reader, draft, Some(operation), limits)
+}
+
+fn project_selected(
+    fs: &VaultFs,
+    reader: &QuerySnapshot,
     mut draft: ChangeDraft,
+    job: Option<IndexedWriteOperation>,
     limits: &RefreshProjectionLimits,
 ) -> Result<Option<ProjectedWrite>> {
     reader.require_policy_layout()?;
@@ -131,7 +152,7 @@ pub(crate) fn project_pages(
     }
     if draft.origin.is_some()
         || draft.inverse_of.is_some()
-        || !draft.allocated_ids.is_empty()
+        || (job.is_none() && !draft.allocated_ids.is_empty())
         || draft.title.trim().is_empty()
         || draft.title.len() > 4096
     {
@@ -166,8 +187,34 @@ pub(crate) fn project_pages(
     let mut changed = Vec::new();
     for operation in &draft.operations {
         work.tick()?;
+        if let Some(IndexedWriteOperation::JobBatch {
+            checkpoint: Some(asset),
+            ..
+        }) = &job
+        {
+            if operation.target == asset.path {
+                let bytes = operation
+                    .proposed
+                    .as_ref()
+                    .ok_or_else(|| WikiError::invalid("compact asset cannot be deleted"))?;
+                if operation.expected != ExpectedState::Absent
+                    || Blake3Hash::digest(bytes) != asset.hash
+                    || !operation.apply_after.is_empty()
+                    || !paths.insert(operation.target.clone())
+                {
+                    return Err(WikiError::invalid(
+                        "compact asset differs from sealed job draft",
+                    ));
+                }
+                work.charge(bytes.len())?;
+                work.capture(&operation.target, &operation.expected)?;
+                work.overlay.insert(operation.target.clone(), bytes.clone());
+                changed.push(operation.clone());
+                continue;
+            }
+        }
         if !canonical_path(&operation.target)
-            || !operation.apply_after.is_empty()
+            || (job.is_none() && !operation.apply_after.is_empty())
             || !paths.insert(operation.target.clone())
         {
             return Err(WikiError::invalid(
@@ -183,7 +230,17 @@ pub(crate) fn project_pages(
         let record = note
             .canonical
             .as_ref()
-            .filter(|r| r.kind() == RecordKind::Page)
+            .filter(|r| {
+                if let Some(IndexedWriteOperation::JobBatch { records, .. }) = &job {
+                    records.iter().any(|target| {
+                        target.path == operation.target
+                            && target.id == *r.id()
+                            && target.kind == r.kind()
+                    })
+                } else {
+                    r.kind() == RecordKind::Page
+                }
+            })
             .ok_or_else(|| WikiError::invalid("Page operation lacks a valid Page envelope"))?;
         let id = record.id().clone();
         if !identities.insert(id.clone()) {
@@ -210,9 +267,9 @@ pub(crate) fn project_pages(
                     .ok_or_else(|| conflict("Page replacement lacks an adopted prior identity"))?;
                 if old.path != operation.target
                     || old.hash != *hash
-                    || old.record.kind() != RecordKind::Page
+                    || old.record.kind() != record.kind()
                     || claim.as_ref().is_none_or(|c| {
-                        c.path != old.path || c.hash != old.hash || c.kind != Some(RecordKind::Page)
+                        c.path != old.path || c.hash != old.hash || c.kind != Some(record.kind())
                     })
                 {
                     return Err(conflict(
@@ -456,7 +513,22 @@ pub(crate) fn project_pages(
     work.recheck()?;
     Ok(Some(ProjectedWrite {
         parts: ProjectedWriteParts {
-            operation: IndexedWriteOperation::PageBatch { pages },
+            operation: match job {
+                Some(IndexedWriteOperation::JobBatch {
+                    run_id,
+                    records,
+                    checkpoint,
+                }) => IndexedWriteOperation::JobBatch {
+                    run_id,
+                    records: records
+                        .into_iter()
+                        .filter(|r| pages.iter().any(|p| p.path == r.path))
+                        .collect(),
+                    checkpoint,
+                },
+                Some(_) => unreachable!("sealed job operation"),
+                None => IndexedWriteOperation::PageBatch { pages },
+            },
             draft,
             base,
             before: deps(work.before),

@@ -456,6 +456,61 @@ impl QuerySnapshot {
         self.usage.get()
     }
 
+    /// Cached document discovery only. Uses the unique BINARY path index and
+    /// reserves borrowed scalar bytes before owning paths. Every replay debits
+    /// this same reader's cumulative rows, bytes, VM work and SQL deadline.
+    pub(crate) fn embedding_document_paths(
+        &self,
+        after: Option<&VaultRelativePath>,
+        limit: usize,
+    ) -> Result<Vec<VaultRelativePath>> {
+        self.require_refresh_publication()?;
+        if limit == 0 || limit > 128 {
+            return Err(WikiError::new(
+                ErrorCode::Usage,
+                "embedding document path page must contain 1..=128 paths",
+            ));
+        }
+        let cursor = after.map_or("", VaultRelativePath::as_str);
+        self.reserve_fact_input(cursor.len())?;
+        // Captured content has kind NULL, as does unmanaged Markdown. All
+        // canonical graph and operational records are deliberately excluded.
+        let mut statement = self
+            .connection
+            .prepare(
+                "SELECT path FROM documents INDEXED BY sqlite_autoindex_documents_1 \
+             WHERE path COLLATE BINARY > ?1 AND eligibility='current' \
+             AND (kind IS NULL OR kind='page') \
+             ORDER BY path COLLATE BINARY LIMIT ?2",
+            )
+            .map_err(sql::sql_error)?;
+        let mut rows = statement
+            .query(params![cursor, limit as i64])
+            .map_err(sql::sql_error)?;
+        let mut paths = Vec::new();
+        while let Some(row) = rows.next().map_err(sql::sql_error)? {
+            self.reserve_refresh_row(row, 1)?;
+            let path = VaultRelativePath::new(utf8(text_bytes(row, 0)?)?)?;
+            if path.as_str() <= cursor
+                || paths
+                    .last()
+                    .is_some_and(|last: &VaultRelativePath| last >= &path)
+            {
+                return Err(corrupt(
+                    "embedding document path order differs from its key",
+                ));
+            }
+            paths.push(path);
+        }
+        Ok(paths)
+    }
+
+    /// Production scalar lookup reservation, before constructing owned values.
+    /// Cached metadata remains discovery; this grants no canonical authority.
+    pub(crate) fn reserve_scalar_row(&self, row: &Row<'_>, columns: usize) -> Result<()> {
+        self.reserve_refresh_row(row, columns)
+    }
+
     /// Experimental discovery reserves borrowed scalar columns before owning
     /// them, with the same pinned reader's row and byte limits. It does not
     /// authenticate those columns or establish current corpus membership.
@@ -465,7 +520,7 @@ impl QuerySnapshot {
         row: &Row<'_>,
         columns: usize,
     ) -> Result<()> {
-        self.reserve_refresh_row(row, columns)
+        self.reserve_scalar_row(row, columns)
     }
 
     fn reserve(&self, bytes: usize) -> Result<()> {

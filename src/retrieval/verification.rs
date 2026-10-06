@@ -49,9 +49,34 @@ impl Meter {
             .max_elapsed_ms
             .saturating_sub(u64::try_from(self.start.elapsed().as_millis()).unwrap_or(u64::MAX))
     }
-    #[cfg(test)]
     pub(super) fn work(&self) -> (usize, usize, usize) {
         (self.bytes, self.files, self.entries)
+    }
+    /// An earlier owner proof cannot retain a larger allowance than the
+    /// operation has left when its final recheck starts. Never reset usage.
+    pub(super) fn tighten_remaining(&mut self, remaining: &VerificationBudget) -> Result<()> {
+        self.check()?;
+        if remaining.max_elapsed_ms == 0 {
+            return Err(budget_error("elapsed final-proof deadline exceeded"));
+        }
+        self.budget.max_bytes = self
+            .budget
+            .max_bytes
+            .min(self.bytes.saturating_add(remaining.max_bytes));
+        self.budget.max_files = self
+            .budget
+            .max_files
+            .min(self.files.saturating_add(remaining.max_files));
+        self.budget.max_entries = self
+            .budget
+            .max_entries
+            .min(self.entries.saturating_add(remaining.max_entries));
+        self.budget.max_elapsed_ms = self.budget.max_elapsed_ms.min(
+            u64::try_from(self.start.elapsed().as_millis())
+                .unwrap_or(u64::MAX)
+                .saturating_add(remaining.max_elapsed_ms),
+        );
+        self.check()
     }
     fn entry(&mut self) -> Result<()> {
         self.check()?;

@@ -683,14 +683,15 @@ impl OfflineApp {
             self.fs.root(),
             Duration::from_millis(self.options.lock_timeout_ms),
         )?;
-        let engine = ChangeEngine::new(self.fs.clone())?;
-        let prepared = engine.prepare(&writer, draft)?.prepared;
-        engine.apply(
-            &writer,
-            &prepared,
-            &CatalogGraphValidator,
-            &Catalog::new(self.fs.clone(), self.vault_id.clone()),
-        )?;
+        let catalog = Catalog::new(self.fs.clone(), self.vault_id.clone());
+        let prepared = if catalog.operation_state()?.is_some() {
+            crate::jobs::checkpoint::publish_job_draft(&self.fs, &writer, ledger, draft)?
+        } else {
+            let engine = ChangeEngine::new(self.fs.clone())?;
+            let prepared = engine.prepare(&writer, draft)?.prepared;
+            engine.apply(&writer, &prepared, &CatalogGraphValidator, &catalog)?;
+            prepared
+        };
         drop(writer);
         ledger.checkpoint_committed(&prepared)?;
         Ok(())

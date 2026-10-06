@@ -43,7 +43,15 @@ application with the same selected-dependency proof. Explicit complete-cache-los
 reconstruction preserves outside operation authority and uses a bounded candidate
 reservation; see the [user workflow and limits](indexed-context.md).
 
-Literal, semantic, hybrid and graph queries, other rename target kinds
+The [normalized embedding checkpoint](validation-normalized-embeddings.md) connects
+bounded preparation, cached semantic/hybrid document search and automatic cited
+document context. Its affected native checks pass; public-task acceptance remains
+open. Whole preparation still has a 4,096-owner ceiling, and exact discovery renders
+the eligible corpus twice. This path cannot qualify 25K unchanged. The next
+connected milestone is paged changed-document preparation, cited query and refresh,
+selected through a bounded release comparison rather than additional ranking rules.
+
+Literal and graph context, other rename target kinds
 and public default activation are not fully migrated. These
 are required integration work, not optional omissions. Large-vault capacity and
 unseen context completeness remain unqualified. See the

@@ -10,7 +10,16 @@ native HIGH and representative 25k gates.
 
 ## Context-quality follow-up — active
 
-The latest fresh Astra priority review brings representative public 10k→25k
+The latest [normalized embedding checkpoint](docs/validation-normalized-embeddings.md)
+connects preparation, cached semantic/hybrid document search and cited automatic
+context. All 98 distinct affected native checks pass across retained evidence;
+public real-vector workflow acceptance is the next observation. Fresh Astra review
+found a hard 4,096-owner preparation ceiling and whole-corpus rendering, so this
+slice cannot qualify 25K. The next implementation milestone couples incremental
+preparation, cited query and changed-document refresh. The full quality/capacity
+goal remains active; candidate010 predates this source checkpoint.
+
+An earlier fresh Astra priority review brought representative public 10k→25k
 operation forward after the bounded graph milestone, followed by a research-gated
 native completeness mechanism and coherent normalized command/default closure.
 Further graph features and importer microbenchmark series are deferred.

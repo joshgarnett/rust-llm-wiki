@@ -14,7 +14,13 @@ use serde::{Deserialize, Serialize};
 use std::{cmp::Ordering, collections::BTreeMap, time::Duration};
 const CACHE_PATH: &str = ".wiki/cache/embeddings.sqlite3";
 fn sql(e: rusqlite::Error) -> WikiError {
-    WikiError::new(ErrorCode::IndexCorrupt, format!("embedding cache: {e}"))
+    let code = match e.sqlite_error_code() {
+        Some(rusqlite::ErrorCode::OperationInterrupted | rusqlite::ErrorCode::TooBig) => {
+            ErrorCode::BudgetExceeded
+        }
+        _ => ErrorCode::IndexCorrupt,
+    };
+    WikiError::new(code, format!("embedding cache: {e}"))
 }
 fn snapshot_key(snapshot: &ReadSnapshot) -> Result<String> {
     Ok(
@@ -77,8 +83,7 @@ pub struct DenseScan {
 pub struct VectorStore {
     connection: Connection,
     writable: bool,
-    #[cfg(test)]
-    retained_budget: Option<std::rc::Rc<RetainedBudget>>,
+    retained_budget: Option<std::rc::Rc<VectorReadBudget>>,
 }
 pub fn normalize(values: &[f32]) -> Result<Vec<u8>> {
     if values.is_empty() || values.len() > 65536 || values.iter().any(|x| !x.is_finite()) {
@@ -154,6 +159,46 @@ pub fn cosine(a: &[f32], b: &[f32]) -> Result<f64> {
     Ok((dot / (na.sqrt() * nb.sqrt())).clamp(-1.0, 1.0))
 }
 impl VectorStore {
+    pub(crate) fn bind_read_budget(
+        &mut self,
+        budget: &std::rc::Rc<VectorReadBudget>,
+    ) -> Result<()> {
+        if self
+            .retained_budget
+            .as_ref()
+            .is_some_and(|old| !std::rc::Rc::ptr_eq(old, budget))
+        {
+            return Err(WikiError::new(
+                ErrorCode::Usage,
+                "vector read budget cannot be replaced",
+            ));
+        }
+        self.attach_retained_budget(budget.clone())
+    }
+    pub(crate) fn open_bounded(
+        fs: &VaultFs,
+        budget: &std::rc::Rc<VectorReadBudget>,
+    ) -> Result<Self> {
+        budget.check()?;
+        let mut store = Self::open(fs, None)?;
+        store.attach_retained_budget(budget.clone())?;
+        budget.check()?;
+        Ok(store)
+    }
+    pub(crate) fn open_bounded_snapshot(
+        fs: &VaultFs,
+        budget: &std::rc::Rc<VectorReadBudget>,
+    ) -> Result<Self> {
+        let store = Self::open_bounded(fs, budget)?;
+        store.connection.execute_batch(
+            "PRAGMA mmap_size=0; PRAGMA cache_size=-8192; PRAGMA temp_store=FILE; BEGIN DEFERRED;",
+        ).map_err(sql)?;
+        // Establish the SQLite read view before callers inspect corpus/query
+        // vectors; the active row belongs to the same pinned view.
+        store.active()?;
+        budget.check()?;
+        Ok(store)
+    }
     pub fn open(fs: &VaultFs, writer: Option<&WriterPermit>) -> Result<Self> {
         let writable = writer.is_some();
         if let Some(w) = writer {
@@ -202,7 +247,6 @@ impl VectorStore {
         Ok(Self {
             connection,
             writable,
-            #[cfg(test)]
             retained_budget: None,
         })
     }
@@ -233,7 +277,6 @@ impl VectorStore {
         };
         let id = text(0)?;
         let spec = text(1)?;
-        #[cfg(test)]
         if let Some(budget) = &self.retained_budget {
             budget.reserve_space(spec.len().saturating_add(id.len()).saturating_add(16))?;
         }
@@ -294,7 +337,6 @@ impl VectorStore {
             .query(params![space.as_str(), input.as_str()])
             .map_err(sql)?;
         let Some(row) = rows.next().map_err(sql)? else {
-            #[cfg(test)]
             if let Some(budget) = &self.retained_budget {
                 budget.reserve(0, 0, false)?;
             }
@@ -310,7 +352,6 @@ impl VectorStore {
             .map_err(sql)?
             .as_str()
             .map_err(|_| WikiError::new(ErrorCode::IndexCorrupt, "vector hash type invalid"))?;
-        #[cfg(test)]
         if let Some(budget) = &self.retained_budget {
             budget.reserve(hash.len().saturating_add(16), blob.len(), false)?;
         }
@@ -513,6 +554,17 @@ impl VectorStore {
         activate: bool,
         spec: Option<&SpaceSpec>,
     ) -> Result<Coverage> {
+        self.memberships_with_spec_checked(space, snapshot, units, activate, spec, || Ok(()))
+    }
+    pub(crate) fn memberships_with_spec_checked(
+        &mut self,
+        space: &Blake3Hash,
+        snapshot: &ReadSnapshot,
+        units: &[RenderedUnit],
+        activate: bool,
+        spec: Option<&SpaceSpec>,
+        mut before_commit: impl FnMut() -> Result<()>,
+    ) -> Result<Coverage> {
         self.write_gate()?;
         if let Some(spec) = spec
             && (spec.id()? != *space || !activate)
@@ -565,6 +617,7 @@ impl VectorStore {
             params![space.as_str(), key],
         )
         .map_err(sql)?;
+        before_commit()?;
         tx.commit().map_err(sql)?;
         Ok(coverage)
     }
@@ -766,9 +819,8 @@ impl VectorStore {
     }
 }
 
-#[cfg(test)]
 impl VectorStore {
-    fn attach_retained_budget(&mut self, budget: std::rc::Rc<RetainedBudget>) -> Result<()> {
+    fn attach_retained_budget(&mut self, budget: std::rc::Rc<VectorReadBudget>) -> Result<()> {
         let elapsed = u64::try_from(budget.started.elapsed().as_millis()).unwrap_or(u64::MAX);
         let remaining = budget.max_elapsed_ms.saturating_sub(elapsed);
         if remaining == 0 {
@@ -799,7 +851,6 @@ impl VectorStore {
 
 /// Diagnostic retained-cache scan only. This is not a fresh membership authority
 /// and does not establish a scalable candidate index.
-#[cfg(test)]
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub(crate) struct RetainedUsage {
     pub metadata_rows_decoded: usize,
@@ -810,15 +861,55 @@ pub(crate) struct RetainedUsage {
     pub space_bytes_decoded: usize,
     pub sql_vm_steps: u64,
 }
-#[cfg(test)]
-struct RetainedBudget {
+pub(crate) struct VectorReadBudget {
     started: std::time::Instant,
     max_elapsed_ms: u64,
     usage: std::cell::RefCell<RetainedUsage>,
     steps: std::sync::Arc<std::sync::atomic::AtomicU64>,
 }
-#[cfg(test)]
-impl RetainedBudget {
+impl VectorReadBudget {
+    pub(crate) fn remaining_ms(&self) -> Result<u64> {
+        self.check()?;
+        let elapsed = u64::try_from(self.started.elapsed().as_millis()).unwrap_or(u64::MAX);
+        let remaining = self.max_elapsed_ms.saturating_sub(elapsed);
+        if remaining == 0 {
+            return Err(WikiError::new(
+                ErrorCode::BudgetExceeded,
+                "vector phase deadline exceeded",
+            ));
+        }
+        Ok(remaining)
+    }
+    pub(crate) fn new(deadline: std::time::Instant) -> Result<std::rc::Rc<Self>> {
+        let started = std::time::Instant::now();
+        let remaining = deadline.saturating_duration_since(started).as_millis();
+        if remaining == 0 || remaining > 30_000 {
+            return Err(WikiError::new(
+                ErrorCode::BudgetExceeded,
+                "vector read deadline is exhausted or exceeds thirty seconds",
+            ));
+        }
+        Ok(std::rc::Rc::new(Self {
+            started,
+            max_elapsed_ms: remaining as u64,
+            usage: Default::default(),
+            steps: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
+        }))
+    }
+    fn check(&self) -> Result<()> {
+        if self.started.elapsed().as_millis() >= u128::from(self.max_elapsed_ms) {
+            return Err(WikiError::new(
+                ErrorCode::BudgetExceeded,
+                "vector read deadline exceeded",
+            ));
+        }
+        Ok(())
+    }
+    pub(crate) fn usage(&self) -> RetainedUsage {
+        let mut usage = self.usage.borrow().clone();
+        usage.sql_vm_steps = self.steps.load(std::sync::atomic::Ordering::Relaxed);
+        usage
+    }
     fn reserve_space(&self, bytes: usize) -> Result<()> {
         let mut usage = self.usage.borrow_mut();
         if self.started.elapsed().as_millis() >= u128::from(self.max_elapsed_ms)
@@ -854,7 +945,7 @@ impl RetainedBudget {
         {
             return Err(WikiError::new(
                 ErrorCode::BudgetExceeded,
-                "experimental retained embedding scan budget exhausted",
+                "bounded embedding read budget exhausted",
             ));
         }
         usage.metadata_rows_decoded += usize::from(membership);
@@ -888,7 +979,7 @@ impl RetainedMembershipReader {
                 "retained scan requires active space and finite five-second deadline",
             ));
         }
-        let budget = std::rc::Rc::new(RetainedBudget {
+        let budget = std::rc::Rc::new(VectorReadBudget {
             started: std::time::Instant::now(),
             max_elapsed_ms,
             usage: Default::default(),

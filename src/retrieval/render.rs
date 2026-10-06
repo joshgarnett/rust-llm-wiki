@@ -196,6 +196,18 @@ pub(crate) fn render_document_iter<'a>(
     })
 }
 
+/// Exact production renderer for an already selected or cached document row.
+/// The caller supplies its dependency domain; rendering alone authenticates
+/// neither canonical bytes nor embedding membership.
+pub(crate) fn render_document_with_fingerprint<'a>(
+    document: &'a DocumentRow,
+    settings: &'a EmbeddingSettings,
+    dependency_fingerprint: Blake3Hash,
+) -> Result<Box<dyn Iterator<Item = Result<RenderedUnit>> + 'a>> {
+    settings.validate()?;
+    render_document_with_dependency(document, settings, || Ok(dependency_fingerprint))
+}
+
 /// Diagnostic rendering shares exact input bytes with the legacy renderer.
 /// A selected proof is not authority for an old embedding membership.
 #[cfg(test)]
@@ -204,13 +216,11 @@ pub(crate) fn render_selected_document_for_test<'a>(
     settings: &'a EmbeddingSettings,
     selected_fingerprint: Blake3Hash,
 ) -> Result<Box<dyn Iterator<Item = Result<RenderedUnit>> + 'a>> {
-    settings.validate()?;
-    render_document_with_dependency(document, settings, || Ok(selected_fingerprint))
+    render_document_with_fingerprint(document, settings, selected_fingerprint)
 }
 
 /// Retained membership claims are discovery hints. Only an exact rerender of
 /// an authenticated current owner can bind them to its new selected proof.
-#[cfg(test)]
 pub(crate) fn require_selected_unit_agreement(
     retained: &RenderedUnit,
     current: &RenderedUnit,

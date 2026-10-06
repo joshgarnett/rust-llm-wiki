@@ -311,6 +311,45 @@ impl ChangeEngine {
         self.seal_plan(draft, plan, identity)
     }
 
+    /// Separate internally validated JobBatch admission. Capture's fresh-only
+    /// constraints and namespace remain unchanged.
+    pub(crate) fn seal_named_job(
+        &self,
+        permit: &WriterPermit,
+        identity: NamedChangeIdentity,
+        operation: &crate::changes::indexed_refresh::IndexedWriteOperation,
+        draft: ChangeDraft,
+    ) -> Result<NamedPreparation> {
+        permit.require_root(self.fs.root())?;
+        if draft.operations.is_empty()
+            || draft.operations.len() > 3
+            || draft.read_preconditions.len() > 4096
+        {
+            return Err(WikiError::invalid(
+                "named JobBatch exceeds selected admission bound",
+            ));
+        }
+        crate::jobs::checkpoint::require_named_job_identity(
+            &self.vault_id,
+            operation,
+            &draft,
+            &identity,
+        )?;
+        crate::jobs::checkpoint::validate_job_payloads(
+            &self.fs,
+            &self.vault_id,
+            operation,
+            &draft,
+        )?;
+        time::OffsetDateTime::parse(
+            &identity.created_at,
+            &time::format_description::well_known::Rfc3339,
+        )
+        .map_err(|e| WikiError::invalid(format!("invalid named Job time: {e}")))?;
+        let plan = self.plan(&draft)?;
+        self.seal_plan(draft, plan, identity)
+    }
+
     fn seal_plan(
         &self,
         draft: ChangeDraft,

@@ -38,6 +38,11 @@ pub(crate) enum IndexedWriteOperation {
     PageBatch {
         pages: Vec<IndexedPageTarget>,
     },
+    JobBatch {
+        run_id: RecordId,
+        records: Vec<IndexedJobTarget>,
+        checkpoint: Option<IndexedCheckpointTarget>,
+    },
     PageRename {
         page_id: RecordId,
         from: VaultRelativePath,
@@ -56,6 +61,22 @@ pub(crate) struct IndexedPageTarget {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub(crate) struct IndexedJobTarget {
+    pub path: VaultRelativePath,
+    pub id: RecordId,
+    pub kind: crate::domain::RecordKind,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct IndexedCheckpointTarget {
+    pub path: VaultRelativePath,
+    pub hash: Blake3Hash,
+    pub run_hash: Blake3Hash,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct IndexedCaptureTarget {
     pub source_id: RecordId,
     pub revision_id: RecordId,
@@ -64,6 +85,39 @@ pub(crate) struct IndexedCaptureTarget {
 impl IndexedWriteOperation {
     pub(crate) fn validate(&self) -> Result<()> {
         match self {
+            Self::JobBatch {
+                run_id,
+                records,
+                checkpoint,
+            } => {
+                use crate::domain::RecordKind;
+                let ids: std::collections::BTreeSet<_> = records.iter().map(|r| &r.id).collect();
+                if records.is_empty()
+                    || records.len() > 2
+                    || ids.len() != records.len()
+                    || !records.windows(2).all(|p| p[0].path < p[1].path)
+                    || records.iter().any(|r| match r.kind {
+                        RecordKind::Run => {
+                            r.id != *run_id || r.path.as_str() != format!("runs/{run_id}/run.md")
+                        }
+                        RecordKind::RunEvent => {
+                            r.id == *run_id
+                                || r.path.as_str() != format!("runs/{run_id}/events/{}.md", r.id)
+                        }
+                        _ => true,
+                    })
+                    || checkpoint.as_ref().is_some_and(|c| {
+                        c.path.as_str()
+                            != format!("runs/{run_id}/checkpoints/{}.json", c.run_hash.hex())
+                            || !records.iter().any(|r| r.kind == RecordKind::Run)
+                    })
+                {
+                    return Err(recovery(
+                        "job operation crosses its exact Run/event/checkpoint identity boundary",
+                    ));
+                }
+                Ok(())
+            }
             Self::SourceRefresh { .. } | Self::SourceWithdraw { .. } => Ok(()),
             Self::SourceCapture {
                 source_id,
@@ -261,6 +315,74 @@ impl IndexedRefreshProof {
     }
     pub(crate) fn validate_manifest(&self, manifest: &ChangeManifest) -> Result<()> {
         self.validate(&manifest.vault_id, &self.change)?;
+        if let Some(IndexedWriteOperation::JobBatch {
+            records,
+            checkpoint,
+            ..
+        }) = &self.operation
+        {
+            let written_asset = checkpoint
+                .as_ref()
+                .and_then(|c| manifest.operations.iter().find(|op| op.target == c.path));
+            if manifest.operations.len() != records.len() + usize::from(written_asset.is_some())
+                || records.iter().any(|r| {
+                    !manifest.operations.iter().any(|op| {
+                        op.target == r.path
+                            && matches!(op.after, ExpectedState::Hash(_))
+                            && (r.kind != crate::domain::RecordKind::RunEvent
+                                || op.before == ExpectedState::Absent)
+                    })
+                })
+            {
+                return Err(recovery(
+                    "job manifest has mixed targets, deletion or mutable event",
+                ));
+            }
+            if let Some(c) = checkpoint {
+                let run = manifest
+                    .operations
+                    .iter()
+                    .find(|op| {
+                        records.iter().any(|r| {
+                            r.kind == crate::domain::RecordKind::Run && r.path == op.target
+                        })
+                    })
+                    .ok_or_else(|| recovery("compact checkpoint has no guarded Run"))?;
+                if !matches!(run.before, ExpectedState::Hash(_))
+                    || run.after != ExpectedState::Hash(c.run_hash.clone())
+                    || written_asset.is_some_and(|op| {
+                        op.before != ExpectedState::Absent
+                            || op.after != ExpectedState::Hash(c.hash.clone())
+                            || !op.apply_after.is_empty()
+                    })
+                    || (written_asset.is_some()
+                        && run.apply_after
+                            != vec![
+                                manifest
+                                    .operations
+                                    .iter()
+                                    .position(|op| op.target == c.path)
+                                    .expect("written asset"),
+                            ])
+                    || (written_asset.is_none()
+                        && (!run.apply_after.is_empty()
+                            || !self.before.iter().any(|dep| {
+                                dep.path == c.path
+                                    && dep.expected == ExpectedState::Hash(c.hash.clone())
+                            })))
+                {
+                    return Err(recovery(
+                        "compact asset must precede its exact guarded Run after-image",
+                    ));
+                }
+            } else if manifest
+                .operations
+                .iter()
+                .any(|op| !op.apply_after.is_empty())
+            {
+                return Err(recovery("ordinary job batch has unexpected ordering"));
+            }
+        }
         if let Some(IndexedWriteOperation::SourceWithdraw { .. }) = &self.operation {
             if manifest.operations.len() != 1
                 || !matches!(manifest.operations[0].before, ExpectedState::Hash(_))

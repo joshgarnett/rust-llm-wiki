@@ -431,6 +431,77 @@ impl RetainedDelta {
                     ));
                 }
             }
+            IndexedWriteOperation::JobBatch {
+                records,
+                checkpoint,
+                ..
+            } => {
+                let mut draft = crate::changes::ChangeDraft {
+                    title: manifest.title.clone(),
+                    origin: manifest.origin.clone(),
+                    inverse_of: manifest.inverse_of.clone(),
+                    allocated_ids: manifest.allocated_ids.clone(),
+                    read_preconditions: manifest.read_preconditions.clone(),
+                    operations: vec![],
+                };
+                for (index, op) in manifest.operations.iter().enumerate() {
+                    let bytes = engine
+                        .verify_payload(
+                            &manifest.change_id,
+                            index,
+                            "proposed",
+                            &op.target,
+                            &op.after,
+                            &op.after_payload,
+                        )?
+                        .ok_or_else(|| recovery("job retained payload missing"))?;
+                    draft.operations.push(crate::changes::ExpectedWrite {
+                        target: op.target.clone(),
+                        expected: op.before.clone(),
+                        proposed: Some(bytes),
+                        apply_after: op
+                            .apply_after
+                            .iter()
+                            .map(|index| manifest.operations[*index].target.clone())
+                            .collect(),
+                    });
+                }
+                crate::jobs::checkpoint::validate_job_payloads(
+                    engine.fs(),
+                    &self.vault_id,
+                    operation,
+                    &draft,
+                )?;
+                for record in records {
+                    let row = written(&record.id, record.kind)?;
+                    let bytes = draft
+                        .operations
+                        .iter()
+                        .find(|op| op.target == record.path)
+                        .and_then(|op| op.proposed.as_deref())
+                        .ok_or_else(|| recovery("job row payload absent"))?;
+                    let parsed = crate::records::parse_note(bytes);
+                    let document =
+                        super::row_projection::canonical_document(&record.path, &parsed, Some(row));
+                    if row.path != record.path || parsed.canonical.as_ref() != Some(&row.record)
+                        || !self.rows.documents.iter().any(|d| matches!(d,
+                            super::normalized_delta::DocumentMutation::Put { row } if row == &document))
+                    {
+                        return Err(recovery("job record/document rows differ from exact canonical after-image"));
+                    }
+                }
+                if !self.rows.owners.is_empty() || !self.rows.revisions.is_empty()
+                    || checkpoint.as_ref().is_some_and(|c| self.rows.documents.iter().any(|d| {
+                        matches!(d, super::normalized_delta::DocumentMutation::Put { row } if row.path == c.path)
+                    }))
+                    || self.rows.documents.iter().any(|d| matches!(d,
+                        super::normalized_delta::DocumentMutation::Put { row }
+                            if matches!(row.kind, Some(RecordKind::Run | RecordKind::RunEvent))
+                                && (!row.body.is_empty() || !row.headings.is_empty())))
+                {
+                    return Err(recovery("job publication leaks assets or bookkeeping into document evidence"));
+                }
+            }
             IndexedWriteOperation::PageBatch { pages } => {
                 for page in pages {
                     if written(&page.id, RecordKind::Page)?.path != page.path {
@@ -742,6 +813,7 @@ impl RetainedDelta {
         match &self.operation {
             Some(
                 IndexedWriteOperation::PageBatch { .. }
+                | IndexedWriteOperation::JobBatch { .. }
                 | IndexedWriteOperation::PageRename { .. }
                 | IndexedWriteOperation::SourceWithdraw { .. },
             ) if !self.rows.owners.is_empty() => {
@@ -841,13 +913,20 @@ impl<'a> IndexedRefreshSession<'a> {
     ) -> Result<SealedIndexedPreparation> {
         let mut parts = projected.into_parts();
         if !matches!(
-            parts.operation,
+            &parts.operation,
             IndexedWriteOperation::SourceCaptureBatch { .. }
+                | IndexedWriteOperation::JobBatch { .. }
         ) {
-            return Err(recovery("named import requires one admitted capture batch"));
+            return Err(recovery(
+                "named preparation requires admitted capture or exact JobBatch",
+            ));
         }
         let engine = Self::admitted_engine(catalog, writer, &parts)?;
-        let change = engine.seal_named(writer, identity, parts.draft)?;
+        let change = if matches!(&parts.operation, IndexedWriteOperation::JobBatch { .. }) {
+            engine.seal_named_job(writer, identity, &parts.operation, parts.draft)?
+        } else {
+            engine.seal_named(writer, identity, parts.draft)?
+        };
         parts.delta.owners = engine.sealed_revision_owners(&change)?;
         parts.delta.validate()?;
         let delta = RetainedDelta {
@@ -950,6 +1029,9 @@ impl<'a> IndexedRefreshSession<'a> {
         mut parts: super::write_projection::ProjectedWriteParts,
     ) -> Result<Self> {
         let engine = Self::admitted_engine(catalog, writer, &parts)?;
+        if matches!(&parts.operation, IndexedWriteOperation::JobBatch { .. }) {
+            return Err(recovery("JobBatch requires exact frozen named intent"));
+        }
         let change = engine.prepare(writer, parts.draft)?.prepared;
         let retained_change = change.clone();
         let result: Result<Self> = (|| {

@@ -100,7 +100,8 @@ the identity and selected dependencies; it does not promote that description to
 evidence. Invalid or unsupported body excerpts still refuse. Discovery ordering,
 limits and cursor bindings are unchanged.
 
-The 0.2.0 candidate adds explicit verification to normalized lexical search:
+Current source supports explicit verification for normalized lexical, semantic
+and hybrid document search:
 
 ```sh
 lwiki --wiki /path/to/wiki --offline search 'release checklist' --verify-selected --no-sync
@@ -123,7 +124,7 @@ edits or exhausted limits refuse the complete verified page; reduce the page or
 inspect changes before an explicit `index sync`. Plain search remains cached
 discovery. `--no-sync` can accompany verification because it selects published
 discovery without refreshing the index. This flag belongs only to search, and
-initially requires normalized lexical mode without graph expansion.
+requires a supported document mode without graph expansion.
 
 Results use `indexed_evidence`, a selected dependency fingerprint and an explicit
 warning that global membership, uniqueness, completeness and unselected
@@ -151,9 +152,13 @@ completeness remain unverified. Run `index sync` to discover external edits and
 
 Explicit `--scope current` keeps its stronger meaning and remains unsupported on
 normalized indexes. `read --no-sync` and `context --scope snapshot` retain cached
-behavior. Indexed document context supports lexical document queries only;
-semantic, hybrid, literal and graph queries remain separate migration
-work. Dry-run previews the resolved request without running its proof. Operational
+behavior. Indexed document context supports lexical, semantic and hybrid document
+queries. Semantic modes require compatible active-space and query vectors; offline
+cache misses are explicit. Host selection remains lexical only. Literal and graph
+context remain separate migration work. The [embedding checkpoint](validation-normalized-embeddings.md)
+records the affected correctness checks and the still-open public quality/capacity
+gates; packaged candidate010 predates it. Dry-run previews the resolved request
+without running its proof. Operational
 generation-output records currently require explicit cached read because their
 selected verification is not implemented.
 

@@ -455,7 +455,6 @@ mod focused_excerpt_tests {
     }
 }
 
-#[cfg(test)]
 pub(crate) fn dense_hit_for_selected_query(
     reader: &dyn crate::catalog::query_types::QueryCatalog,
     document: &DocumentRow,

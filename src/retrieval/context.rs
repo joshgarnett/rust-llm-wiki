@@ -79,13 +79,16 @@ fn normalize_request(request: &ContextRequest) -> Result<ContextRequest> {
     if request.scope == ContextScope::IndexedDocuments
         && (request.target != ContextTarget::Documents
             || request.graph.is_some()
-            || request.documents.mode != SearchMode::Lexical
+            || !matches!(
+                request.documents.mode,
+                SearchMode::Lexical | SearchMode::Semantic | SearchMode::Hybrid
+            )
             || request.documents.filters.include_historical
             || request.documents.filters.include_proposed)
     {
         return Err(WikiError::new(
             ErrorCode::Usage,
-            "indexed-documents supports current eligible documents in lexical mode only",
+            "indexed-documents supports current eligible document context without graph expansion",
         ));
     }
     if request.scope == ContextScope::IndexedEvidence
@@ -954,12 +957,14 @@ fn validate_bounded_document_assembly(
         request.scope,
         ContextScope::Snapshot | ContextScope::IndexedDocuments
     ) || request.target != ContextTarget::Documents
-        || request.documents.mode != SearchMode::Lexical
+        || (request.scope == ContextScope::Snapshot
+            && request.documents.mode != SearchMode::Lexical)
+        || request.documents.mode == SearchMode::Literal
         || request.graph.is_some()
     {
         return Err(WikiError::new(
             ErrorCode::Usage,
-            "bounded document assembly requires snapshot or authenticated indexed-documents lexical context",
+            "bounded document assembly requires lexical snapshot or authenticated indexed-documents context",
         ));
     }
     Ok(())
@@ -967,6 +972,19 @@ fn validate_bounded_document_assembly(
 
 #[cfg(test)]
 pub(super) fn assemble_bounded_documents_with_signals_for_test(
+    reader: &dyn QueryCatalog,
+    request: &ContextRequest,
+    hits: &HitSet,
+    query: &str,
+    signals: &ContextSelectionSignals,
+    selection: &SelectionAction,
+) -> Result<ContextDraft> {
+    assemble_bounded_documents_with_signals(reader, request, hits, query, signals, selection)
+}
+
+/// The indexed semantic coordinator supplies authenticated documents and exact
+/// vector/input cues; selection and packing retain the same allocation rules.
+pub(crate) fn assemble_bounded_documents_with_signals(
     reader: &dyn QueryCatalog,
     request: &ContextRequest,
     hits: &HitSet,

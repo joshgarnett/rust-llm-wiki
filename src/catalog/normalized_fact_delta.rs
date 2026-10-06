@@ -239,6 +239,11 @@ impl FactDelta {
         operation: Option<&crate::changes::indexed_refresh::IndexedWriteOperation>,
     ) -> Result<()> {
         for row in &delta.records {
+            // Only the sealed, exact job targets may introduce or update these
+            // operational envelopes. Untyped deltas retain the old restriction.
+            let job_record = delta.version == 3
+                && matches!(row.record.kind(), RecordKind::Run | RecordKind::RunEvent)
+                && matches!(operation, Some(crate::changes::indexed_refresh::IndexedWriteOperation::JobBatch { records, .. }) if records.iter().any(|target| target.id == *row.record.id() && target.path == row.path && target.kind == row.record.kind()));
             match load_record(c, row.record.id(), stats)? {
                 Some(old) => {
                     if let Some(
@@ -277,6 +282,7 @@ impl FactDelta {
                         && old.record == row.record;
                     if old.record.kind() != RecordKind::Source
                         && !navigation_rewrite
+                        && !(job_record && old.record.kind() == RecordKind::Run)
                         && !(delta.version == 3 && old.record.kind() == RecordKind::Page)
                         && (old.record != row.record || old.hash != row.hash)
                     {
@@ -331,6 +337,7 @@ impl FactDelta {
                 }
                 None => {
                     if !(row.record.kind() == RecordKind::Revision
+                        || job_record
                         || delta.version == 3
                             && matches!(row.record.kind(), RecordKind::Page | RecordKind::Source))
                         || !self

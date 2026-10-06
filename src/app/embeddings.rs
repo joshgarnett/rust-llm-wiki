@@ -1,5 +1,8 @@
 //! Explicit remote embedding work; all paid requests use production dispatcher and ledger.
-use super::OfflineApp;
+use super::{
+    OfflineApp,
+    indexed_embedding_inputs::{self, NormalizedEmbeddingInputs},
+};
 use crate::config::providers::TrustedService;
 use crate::{
     catalog::{Catalog, CatalogGraphValidator, ReaderSnapshot},
@@ -29,6 +32,45 @@ use std::{
 struct TaskMaterialization {
     probe: bool,
     corpus: bool,
+}
+enum EmbeddingCorpus {
+    Legacy {
+        reader: ReaderSnapshot,
+        units: Vec<RenderedUnit>,
+    },
+    Normalized(NormalizedEmbeddingInputs),
+}
+impl EmbeddingCorpus {
+    fn take_units(&mut self) -> Vec<RenderedUnit> {
+        match self {
+            Self::Legacy { units, .. } => std::mem::take(units),
+            Self::Normalized(inputs) => std::mem::take(&mut inputs.units),
+        }
+    }
+    fn units(&self) -> &[RenderedUnit] {
+        match self {
+            Self::Legacy { units, .. } => units,
+            Self::Normalized(inputs) => &inputs.units,
+        }
+    }
+    fn snapshot(&self) -> &ReadSnapshot {
+        match self {
+            Self::Legacy { reader, .. } => reader.snapshot(),
+            Self::Normalized(inputs) => &inputs.snapshot,
+        }
+    }
+    fn recheck(&mut self, catalog: &Catalog) -> Result<()> {
+        match self {
+            Self::Legacy { .. } => Ok(()),
+            Self::Normalized(inputs) => inputs.recheck(catalog),
+        }
+    }
+    fn into_units(self) -> Vec<RenderedUnit> {
+        match self {
+            Self::Legacy { units, .. } => units,
+            Self::Normalized(inputs) => inputs.units,
+        }
+    }
 }
 #[derive(Default)]
 struct RecoveredEmbeddingWork {
@@ -113,6 +155,105 @@ fn same_units(expected: &[RenderedUnit], actual: &[RenderedUnit]) -> bool {
     })
 }
 impl OfflineApp {
+    fn embedding_marker_version(&self) -> Result<u32> {
+        let catalog = Catalog::new(self.fs.clone(), self.vault_id.clone());
+        Ok(if catalog.operation_state()?.is_some() {
+            2
+        } else {
+            1
+        })
+    }
+    /// A normalized corpus is admitted from bounded selected closures. Explicit
+    /// full preparation may enumerate owners; per-task checks name only owners
+    /// retained before dispatch. Legacy commands retain their existing boundary.
+    fn embedding_inputs(
+        &self,
+        settings: &EmbeddingSettings,
+        no_sync: bool,
+        writer: Option<&WriterPermit>,
+        paths: Option<&[VaultRelativePath]>,
+    ) -> Result<EmbeddingCorpus> {
+        self.embedding_inputs_bounded(
+            settings,
+            no_sync,
+            writer,
+            paths,
+            &VerificationBudget::default(),
+        )
+    }
+    fn embedding_inputs_bounded(
+        &self,
+        settings: &EmbeddingSettings,
+        no_sync: bool,
+        writer: Option<&WriterPermit>,
+        paths: Option<&[VaultRelativePath]>,
+        budget: &VerificationBudget,
+    ) -> Result<EmbeddingCorpus> {
+        let catalog = Catalog::new(self.fs.clone(), self.vault_id.clone());
+        if catalog.operation_state()?.is_some() {
+            return indexed_embedding_inputs::materialize(&catalog, settings, paths, budget)
+                .map(EmbeddingCorpus::Normalized);
+        }
+        let reader = if let Some(writer) = writer {
+            catalog.verified_snapshot(Some(writer))?
+        } else {
+            self.embedding_reader(no_sync)?
+        };
+        let units = render::corpus(&reader, settings)?;
+        Ok(EmbeddingCorpus::Legacy { reader, units })
+    }
+    fn embedding_phase() -> Result<std::rc::Rc<retrieval::vectors::VectorReadBudget>> {
+        retrieval::vectors::VectorReadBudget::new(
+            std::time::Instant::now()
+                + Duration::from_millis(VerificationBudget::default().max_elapsed_ms),
+        )
+    }
+    fn embedding_phase_proof_budget(
+        phase: &retrieval::vectors::VectorReadBudget,
+    ) -> Result<VerificationBudget> {
+        let mut budget = VerificationBudget::default();
+        budget.max_elapsed_ms = budget.max_elapsed_ms.min(phase.remaining_ms()?);
+        Ok(budget)
+    }
+    fn embedding_owner_paths(units: &[RenderedUnit]) -> Vec<VaultRelativePath> {
+        units
+            .iter()
+            .map(|unit| unit.owner.clone())
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect()
+    }
+    fn embedding_targets_current(
+        &self,
+        spec: &SpaceSpec,
+        expected: &[RenderedUnit],
+        writer: &WriterPermit,
+    ) -> Result<bool> {
+        let catalog = Catalog::new(self.fs.clone(), self.vault_id.clone());
+        let normalized = catalog.operation_state()?.is_some();
+        let paths = Self::embedding_owner_paths(expected);
+        let result: Result<bool> = (|| {
+            let mut inputs =
+                self.embedding_inputs(&spec.settings, false, Some(writer), Some(&paths))?;
+            if !same_units(expected, inputs.units()) {
+                return Ok(false);
+            }
+            inputs.recheck(&catalog)?;
+            Ok(true)
+        })();
+        match result {
+            Err(error)
+                if normalized
+                    && matches!(
+                        error.code,
+                        ErrorCode::FreshnessConflict | ErrorCode::CapabilityUnavailable
+                    ) =>
+            {
+                Ok(false)
+            }
+            other => other,
+        }
+    }
     fn embedding_writer(&self) -> Result<WriterPermit> {
         WriterPermit::acquire(
             self.fs.root(),
@@ -165,11 +306,11 @@ impl OfflineApp {
     ) -> Result<EmbeddingReport> {
         settings.validate()?;
         self.embedding_policy_consistent(runtime)?;
-        let reader = self.embedding_reader(self.options.dry_run)?;
+        let phase = Self::embedding_phase()?;
         let candidate = runtime
             .map(|r| SpaceSpec::from_service(r.service, settings.clone()))
             .transpose()?;
-        let store = match VectorStore::open(&self.fs, None) {
+        let store = match VectorStore::open_bounded(&self.fs, &phase) {
             Ok(store) => Some(store),
             Err(e) if e.code == ErrorCode::OfflineUnavailable => None,
             Err(e) => return Err(e),
@@ -180,11 +321,19 @@ impl OfflineApp {
             .transpose()?
             .flatten();
         let spec = candidate.or_else(|| active.as_ref().map(|s| s.spec.clone()));
-        let units = spec
+        let mut inputs = spec
             .as_ref()
-            .map(|s| render::corpus(&reader, &s.settings))
-            .transpose()?
-            .unwrap_or_default();
+            .map(|spec| {
+                self.embedding_inputs_bounded(
+                    &spec.settings,
+                    self.options.dry_run,
+                    None,
+                    None,
+                    &Self::embedding_phase_proof_budget(&phase)?,
+                )
+            })
+            .transpose()?;
+        let units = inputs.as_ref().map(EmbeddingCorpus::units).unwrap_or(&[]);
         let space = spec.as_ref().map(SpaceSpec::id).transpose()?;
         let coverage = if let (Some(store), Some(space)) = (&store, &space) {
             store.coverage(space, &units)?
@@ -195,6 +344,12 @@ impl OfflineApp {
                 ..Default::default()
             }
         };
+        if let Some(inputs) = &mut inputs {
+            inputs.recheck(&Catalog::new(self.fs.clone(), self.vault_id.clone()))?;
+        }
+        phase.remaining_ms()?;
+        drop(inputs);
+        drop(store);
         let mut report=EmbeddingReport {space:space.clone(),active_space:active.map(|s|s.id),settings:spec.as_ref().map(|s|s.settings.clone()),coverage,generated_inputs:0,reused_inputs:0,published:false,dry_run:self.options.dry_run,network_used:false,run_id:None,warnings:vec!["local check does not establish provider compatibility; missing/corrupt cache is missing coverage".into()]};
         if probe && !self.options.dry_run {
             let runtime = runtime.ok_or_else(|| {
@@ -247,10 +402,21 @@ impl OfflineApp {
     ) -> Result<EmbeddingReport> {
         settings.validate()?;
         self.embedding_policy_consistent(Some(runtime))?;
+        if self.options.offline {
+            return self.embeddings_sync_cached(settings);
+        }
+        let phase = Self::embedding_phase()?;
         let spec = SpaceSpec::from_service(runtime.service, settings.clone())?;
         let space = spec.id()?;
-        let reader = self.embedding_reader(self.options.dry_run)?;
-        let units = render::corpus(&reader, settings)?;
+        let catalog = Catalog::new(self.fs.clone(), self.vault_id.clone());
+        let mut inputs = self.embedding_inputs_bounded(
+            settings,
+            self.options.dry_run,
+            None,
+            None,
+            &Self::embedding_phase_proof_budget(&phase)?,
+        )?;
+        let units = inputs.units();
         let writer = if self.options.dry_run {
             None
         } else {
@@ -261,13 +427,16 @@ impl OfflineApp {
             Err(e) if self.options.dry_run && e.code == ErrorCode::OfflineUnavailable => None,
             Err(e) => return Err(e),
         };
+        if let Some(store) = &mut store {
+            store.bind_read_budget(&phase)?;
+        }
         let old_active = store
             .as_ref()
             .map(VectorStore::active)
             .transpose()?
             .flatten();
         let mut unique = BTreeMap::new();
-        for unit in &units {
+        for unit in units {
             unique
                 .entry(unit.input_hash.clone())
                 .or_insert_with(|| unit.input());
@@ -310,6 +479,8 @@ impl OfflineApp {
             } else {
                 report.coverage
             };
+            inputs.recheck(&catalog)?;
+            phase.remaining_ms()?;
             report
                 .warnings
                 .push("dry-run leaves index, jobs, cache, helpers and providers untouched".into());
@@ -317,15 +488,18 @@ impl OfflineApp {
         }
         let store_ref = store.as_mut().expect("writable store");
         store_ref.prepare_space(&spec)?;
+        inputs.recheck(&catalog)?;
+        phase.remaining_ms()?;
+        let units = inputs.into_units();
         drop(writer);
-        drop(reader);
         drop(store);
         let recovered = self.recover_embedding_jobs(&spec, runtime)?;
         report.generated_inputs += recovered.generated;
         report.network_used |= recovered.generated > 0;
         report.run_id = recovered.run_id;
         report.warnings.extend(recovered.warnings);
-        let available = VectorStore::open(&self.fs, None)?;
+        let availability_phase = Self::embedding_phase()?;
+        let available = VectorStore::open_bounded_snapshot(&self.fs, &availability_phase)?;
         let mut pending = Vec::new();
         for input in missing {
             if available.vector(&space, &input.input_hash)?.is_none() {
@@ -335,6 +509,8 @@ impl OfflineApp {
             }
         }
         missing = pending;
+        availability_phase.remaining_ms()?;
+        drop(available);
         if !missing.is_empty() {
             self.remote_gate(runtime)?;
             let batches = self.embedding_batches(runtime, &missing)?;
@@ -360,24 +536,61 @@ impl OfflineApp {
         }
         let writer = self.embedding_writer()?;
         let catalog = Catalog::new(self.fs.clone(), self.vault_id.clone());
-        let fresh = catalog.verified_snapshot(Some(&writer))?;
-        let current = render::corpus(&fresh, settings)?;
+        let phase = Self::embedding_phase()?;
+        let mut fresh = self.embedding_inputs_bounded(
+            settings,
+            false,
+            Some(&writer),
+            None,
+            &Self::embedding_phase_proof_budget(&phase)?,
+        )?;
+        let current = fresh.take_units();
+        let snapshot = fresh.snapshot().clone();
         let mut store = VectorStore::open(&self.fs, Some(&writer))?;
+        store.bind_read_budget(&phase)?;
         let coverage = store.coverage(&space, &current)?;
-        let complete = coverage.missing_units == 0;
-        report.coverage = store.memberships_with_spec(
+        let complete = coverage.eligible_units > 0
+            && coverage.missing_units == 0
+            && store
+                .space(&space)?
+                .is_some_and(|state| state.actual_dimensions.is_some());
+        report.coverage = store.memberships_with_spec_checked(
             &space,
-            fresh.snapshot(),
+            &snapshot,
             &current,
             complete,
             if complete { Some(&spec) } else { None },
+            || {
+                fresh.recheck(&catalog)?;
+                phase.remaining_ms()?;
+                Ok(())
+            },
         )?;
         report.published = complete;
         if let Some(old) = old_active.filter(|old| old.id != space)
             && !complete
         {
-            let old_units = render::corpus(&fresh, &old.spec.settings)?;
-            let old_coverage = store.memberships(&old.id, fresh.snapshot(), &old_units, false)?;
+            let mut old_inputs = self.embedding_inputs_bounded(
+                &old.spec.settings,
+                false,
+                Some(&writer),
+                None,
+                &Self::embedding_phase_proof_budget(&phase)?,
+            )?;
+            let old_units = old_inputs.take_units();
+            let old_snapshot = old_inputs.snapshot().clone();
+            let old_coverage = store.memberships_with_spec_checked(
+                &old.id,
+                &old_snapshot,
+                &old_units,
+                false,
+                None,
+                || {
+                    old_inputs.recheck(&catalog)?;
+                    phase.remaining_ms()?;
+                    Ok(())
+                },
+            )?;
             report.warnings.push(format!(
                 "replacement incomplete; retained active space coverage {}/{}",
                 old_coverage.available_units, old_coverage.eligible_units
@@ -385,11 +598,99 @@ impl OfflineApp {
         }
         report.active_space = store.active()?.map(|s| s.id);
         if !complete {
-            report.warnings.push(
-                "current inputs missing/corrupt; replacement pointer remains unchanged".into(),
-            );
+            report.warnings.push(if current.is_empty() {
+                "No eligible embedding inputs; retained active space remains unchanged.".into()
+            } else { "current inputs missing/corrupt or dimensions unestablished; replacement pointer remains unchanged".into() });
         }
         Ok(report)
+    }
+    /// Publish only coverage already present in the retained active space. This
+    /// route needs no provider profile or credentials and does not resume jobs.
+    pub fn embeddings_sync_cached(&self, settings: &EmbeddingSettings) -> Result<EmbeddingReport> {
+        let phase = Self::embedding_phase()?;
+        settings.validate()?;
+        let store = VectorStore::open_bounded_snapshot(&self.fs, &phase)?;
+        let active = store.active()?.ok_or_else(|| {
+            fail(
+                ErrorCode::OfflineUnavailable,
+                "cache-only sync requires a retained active embedding space",
+            )
+        })?;
+        if &active.spec.settings != settings {
+            return Err(fail(
+                ErrorCode::CapabilityUnavailable,
+                "cache-only sync settings differ from the retained active space",
+            ));
+        }
+        drop(store);
+        let writer = if self.options.dry_run {
+            None
+        } else {
+            Some(self.embedding_writer()?)
+        };
+        let catalog = Catalog::new(self.fs.clone(), self.vault_id.clone());
+        let mut inputs = self.embedding_inputs_bounded(
+            settings,
+            self.options.dry_run,
+            writer.as_ref(),
+            None,
+            &Self::embedding_phase_proof_budget(&phase)?,
+        )?;
+        let units = inputs.take_units();
+        let snapshot = inputs.snapshot().clone();
+        let mut store = VectorStore::open(&self.fs, writer.as_ref())?;
+        store.bind_read_budget(&phase)?;
+        let current_active = VectorStore::open_bounded(&self.fs, &phase)?.active()?;
+        if current_active.is_none_or(|current| {
+            current.id != active.id
+                || current.spec != active.spec
+                || current.actual_dimensions != active.actual_dimensions
+        }) {
+            return Err(fail(
+                ErrorCode::FreshnessConflict,
+                "active space changed before cache-only sync",
+            ));
+        }
+        let coverage = store.coverage(&active.id, &units)?;
+        let complete = coverage.eligible_units > 0
+            && coverage.missing_units == 0
+            && active.actual_dimensions.is_some();
+        let mut reused_inputs = 0;
+        for hash in units
+            .iter()
+            .map(|unit| &unit.input_hash)
+            .collect::<BTreeSet<_>>()
+        {
+            if store.vector(&active.id, hash)?.is_some() {
+                reused_inputs += 1;
+            }
+        }
+        let coverage = if self.options.dry_run {
+            inputs.recheck(&catalog)?;
+            phase.remaining_ms()?;
+            coverage
+        } else {
+            store.memberships_with_spec_checked(
+                &active.id,
+                &snapshot,
+                &units,
+                complete,
+                if complete { Some(&active.spec) } else { None },
+                || {
+                    inputs.recheck(&catalog)?;
+                    phase.remaining_ms()?;
+                    Ok(())
+                },
+            )?
+        };
+        Ok(EmbeddingReport {
+            space: Some(active.id.clone()), active_space: Some(active.id),
+            settings: Some(active.spec.settings), coverage, generated_inputs: 0,
+            reused_inputs,
+            published: complete && !self.options.dry_run, dry_run: self.options.dry_run,
+            network_used: false, run_id: None,
+            warnings: vec!["Cache-only sync uses retained vectors; missing inputs remain missing and retained accounting jobs are untouched.".into()],
+        })
     }
     /// Reconcile previously paid outputs before constructing replacement tasks. The
     /// immutable marker retains the exact pre-request target proof, including decisions.
@@ -440,7 +741,7 @@ impl OfflineApp {
             }
             let marker: RunMarker = serde_json::from_slice(&bytes)
                 .map_err(|_| WikiError::invalid("embedding marker invalid"))?;
-            if marker.version != 1 || marker.space != spec.id()? {
+            if marker.version != self.embedding_marker_version()? || marker.space != spec.id()? {
                 continue;
             }
             let ledger = JobLedger::new(
@@ -616,10 +917,7 @@ impl OfflineApp {
             ));
         }
         let writer = self.embedding_writer()?;
-        let catalog = Catalog::new(self.fs.clone(), self.vault_id.clone());
-        let snapshot = catalog.verified_snapshot(Some(&writer))?;
-        let current = render::corpus(&snapshot, &spec.settings)?;
-        if !same_units(&retained, &current) {
+        if !self.embedding_targets_current(spec, &retained, &writer)? {
             return Err(fail(
                 ErrorCode::FreshnessConflict,
                 "embedding source changed before new dispatch; retained unknown attempt remains protected",
@@ -757,6 +1055,26 @@ impl OfflineApp {
     ) -> Result<(JobLedger, Vec<TaskSpec>)> {
         self.remote_gate(runtime)?;
         let writer = self.embedding_writer()?;
+        let catalog = Catalog::new(self.fs.clone(), self.vault_id.clone());
+        let normalized_inputs = if catalog.operation_state()?.is_some() && !units.is_empty() {
+            let paths = Self::embedding_owner_paths(units);
+            let mut inputs = indexed_embedding_inputs::materialize(
+                &catalog,
+                &spec.settings,
+                Some(&paths),
+                &VerificationBudget::default(),
+            )?;
+            if !same_units(units, &inputs.units) {
+                return Err(fail(
+                    ErrorCode::FreshnessConflict,
+                    "embedding inputs changed before task guards were frozen",
+                ));
+            }
+            inputs.recheck(&catalog)?;
+            Some(inputs)
+        } else {
+            None
+        };
         for directory in [".wiki/state/embedding-inputs", ".wiki/state/embedding-jobs"] {
             self.fs
                 .ensure_directory(&VaultRelativePath::new(directory)?, &writer)?;
@@ -766,6 +1084,8 @@ impl OfflineApp {
         store.prepare_space(spec)?;
         let state = store.space(&space)?.expect("prepared space");
         let mut tasks = Vec::new();
+        let mut guard_entries = 0usize;
+        let mut guard_bytes = 0usize;
         for batch in batches {
             let remote = RemoteInput {
                 version: 1,
@@ -789,11 +1109,57 @@ impl OfflineApp {
             let fp = crate::providers::wire::task_fingerprints(runtime.service, &remote)?;
             let hashes = batch.iter().map(|i| &i.input_hash).collect::<BTreeSet<_>>();
             let mut guards = BTreeMap::new();
-            for unit in units.iter().filter(|u| hashes.contains(&u.input_hash)) {
-                guards.insert(
-                    unit.owner.clone(),
-                    ExpectedState::Hash(unit.source_hash.clone()),
-                );
+            if let Some(inputs) = &normalized_inputs {
+                for hash in &hashes {
+                    for guard in inputs.source_bindings.get(*hash).ok_or_else(|| {
+                        fail(
+                            ErrorCode::FreshnessConflict,
+                            "embedding input lost its authenticated owner guards",
+                        )
+                    })? {
+                        if let Some(old) = guards.get(&guard.path) {
+                            if old != &guard.expected {
+                                return Err(fail(
+                                    ErrorCode::FreshnessConflict,
+                                    "embedding batch has conflicting source guards",
+                                ));
+                            }
+                            continue;
+                        }
+                        let bytes = std::mem::size_of::<ReadDependency>()
+                            + guard.path.as_str().len()
+                            + match &guard.expected {
+                                ExpectedState::Absent => 0,
+                                ExpectedState::Hash(hash) => hash.as_str().len(),
+                            };
+                        guard_entries = guard_entries
+                            .checked_add(1)
+                            .filter(|n| *n <= 65_536)
+                            .ok_or_else(|| {
+                                fail(
+                                    ErrorCode::BudgetExceeded,
+                                    "embedding task guard count exhausted",
+                                )
+                            })?;
+                        guard_bytes = guard_bytes
+                            .checked_add(bytes)
+                            .filter(|n| *n <= 64 * 1024 * 1024)
+                            .ok_or_else(|| {
+                                fail(
+                                    ErrorCode::BudgetExceeded,
+                                    "embedding task guard bytes exhausted",
+                                )
+                            })?;
+                        guards.insert(guard.path.clone(), guard.expected.clone());
+                    }
+                }
+            } else {
+                for unit in units.iter().filter(|u| hashes.contains(&u.input_hash)) {
+                    guards.insert(
+                        unit.owner.clone(),
+                        ExpectedState::Hash(unit.source_hash.clone()),
+                    );
+                }
             }
             let mut task = TaskSpec {
                 key: Blake3Hash::digest([]),
@@ -827,12 +1193,20 @@ impl OfflineApp {
             task.key = jobs::tasks::task_key(&task)?;
             tasks.push(task);
         }
-        let invocation = Blake3Hash::digest(crate::graph::packet::canonical_json(&(
+        let legacy_identity = (
             operation,
             &space,
             tasks.iter().map(|t| &t.key).collect::<Vec<_>>(),
             proof(units)?,
-        ))?);
+        );
+        let invocation = Blake3Hash::digest(if self.embedding_marker_version()? == 2 {
+            crate::graph::packet::canonical_json(&(
+                "lwiki-normalized-embedding-job-v2",
+                &legacy_identity,
+            ))?
+        } else {
+            crate::graph::packet::canonical_json(&legacy_identity)?
+        });
         let mut marker_path = VaultRelativePath::new(format!(
             ".wiki/state/embedding-jobs/{}.json",
             invocation.as_str().trim_start_matches("blake3:")
@@ -844,7 +1218,7 @@ impl OfflineApp {
         )? {
             let marker: RunMarker = serde_json::from_slice(&bytes)
                 .map_err(|_| WikiError::invalid("embedding run marker corrupt"))?;
-            if marker.version != 1
+            if marker.version != self.embedding_marker_version()?
                 || marker.space != space
                 || marker.operation != operation
                 || marker.task_keys != tasks.iter().map(|t| t.key.clone()).collect::<Vec<_>>()
@@ -963,7 +1337,7 @@ impl OfflineApp {
         )?;
         ledger.create(&writer, run)?;
         let marker = RunMarker {
-            version: 1,
+            version: self.embedding_marker_version()?,
             space,
             run_id,
             operation: operation.into(),
@@ -991,8 +1365,52 @@ impl OfflineApp {
         let writer = self.embedding_writer()?;
         let engine = ChangeEngine::new(self.fs.clone())?;
         let catalog = Catalog::new(self.fs.clone(), self.vault_id.clone());
-        let prepared = engine.prepare(&writer, plan.draft)?.prepared;
-        engine.apply(&writer, &prepared, &CatalogGraphValidator, &catalog)?;
+        let normalized = catalog.operation_state()?.is_some();
+        if normalized {
+            jobs::checkpoint::recover_job_active(&self.fs, &writer, &self.vault_id)?;
+        }
+        if normalized {
+            let existing = jobs::checkpoint::inspect_for_publication(ledger)?;
+            if let Some(actual) = existing
+                .attempts
+                .iter()
+                .find(|attempt| attempt.attempt == plan.attempt)
+                .and_then(|attempt| attempt.receipt.as_ref())
+            {
+                if jobs::checkpoint::receipt(&self.fs, actual)? != plan.receipt {
+                    return Err(WikiError::invalid("retained embedding receipt differs"));
+                }
+                jobs::checkpoint::named_job_committed(
+                    &self.fs, &self.vault_id, &plan.attempt.run_id,
+                    jobs::checkpoint::JobPublicationKey::Receipt { receipt_id: plan.receipt.receipt_id.clone() },
+                    &actual.path, &actual.hash,
+                )?.ok_or_else(|| WikiError::invalid("normalized receipt lacks named committed publication; maintenance required"))?;
+                drop(writer);
+                ledger.settle(&plan.attempt)?;
+                return Ok(());
+            }
+            if let Some((change, reference)) =
+                jobs::checkpoint::retained_receipt_publication(&self.fs, ledger, &plan.receipt)?
+            {
+                drop(writer);
+                ledger.outputs_committed(
+                    &plan.attempt,
+                    &change,
+                    reference,
+                    plan.receipt.outputs,
+                    plan.receipt.cache_outputs,
+                )?;
+                ledger.settle(&plan.attempt)?;
+                return Ok(());
+            }
+        }
+        let prepared = if normalized {
+            jobs::checkpoint::publish_job_draft(&self.fs, &writer, ledger, plan.draft)?
+        } else {
+            let prepared = engine.prepare(&writer, plan.draft)?.prepared;
+            engine.apply(&writer, &prepared, &CatalogGraphValidator, &catalog)?;
+            prepared
+        };
         let receipt_path = VaultRelativePath::new(format!(
             "runs/{}/events/{}.md",
             plan.attempt.run_id, plan.receipt.receipt_id
@@ -1192,8 +1610,6 @@ impl OfflineApp {
         let materialized = (|| -> Result<_> {
             let writer = self.embedding_writer()?;
             let catalog = Catalog::new(self.fs.clone(), self.vault_id.clone());
-            let fresh = catalog.verified_snapshot(Some(&writer))?;
-            let current = render::corpus(&fresh, &spec.settings)?;
             let input_bytes =
                 crate::changes::prepare::read_bounded(&self.fs, &task.input.path, 256 * 1024)?
                     .ok_or_else(|| WikiError::invalid("embedding descriptor missing"))?;
@@ -1225,7 +1641,9 @@ impl OfflineApp {
                 .filter(|u| input_hashes.contains(&u.input_hash))
                 .cloned()
                 .collect::<Vec<_>>();
-            let valid = probe || !corpus || same_units(&target_expected, &current);
+            let valid = probe
+                || !corpus
+                || self.embedding_targets_current(spec, &target_expected, &writer)?;
             let mut store = VectorStore::open(&self.fs, Some(&writer))?;
             let space = store.prepare_space(spec)?;
             let refs = match outcome.output.clone() {
@@ -1249,7 +1667,6 @@ impl OfflineApp {
                     ));
                 }
             };
-            drop(fresh);
             drop(writer);
             Ok((
                 valid,
@@ -1306,8 +1723,7 @@ impl OfflineApp {
         if let Err(error) = committed {
             let targets_changed = if error.code == ErrorCode::FreshnessConflict && corpus {
                 let writer = self.embedding_writer()?;
-                let fresh = catalog.verified_snapshot(Some(&writer))?;
-                !same_units(&target_expected, &render::corpus(&fresh, &spec.settings)?)
+                !self.embedding_targets_current(spec, &target_expected, &writer)?
             } else {
                 false
             };
@@ -1346,15 +1762,29 @@ impl OfflineApp {
         // Rebind fresh membership after own receipt changes; never the pre-HTTP generation.
         if corpus {
             let writer = self.embedding_writer()?;
-            let fresh = catalog.verified_snapshot(Some(&writer))?;
-            let units = render::corpus(&fresh, &spec.settings)?;
-            if !same_units(&target_expected, &units) {
+            let paths = Self::embedding_owner_paths(&target_expected);
+            let phase = Self::embedding_phase()?;
+            let mut fresh = self.embedding_inputs_bounded(
+                &spec.settings,
+                false,
+                Some(&writer),
+                Some(&paths),
+                &Self::embedding_phase_proof_budget(&phase)?,
+            )?;
+            if !same_units(&target_expected, fresh.units()) {
                 return Err(fail(
                     ErrorCode::FreshnessConflict,
                     "embedding targets changed after receipt; current membership withheld",
                 ));
             }
-            store.memberships(&space, fresh.snapshot(), &units, false)?;
+            let units = fresh.take_units();
+            let snapshot = fresh.snapshot().clone();
+            store.bind_read_budget(&phase)?;
+            store.memberships_with_spec_checked(&space, &snapshot, &units, false, None, || {
+                fresh.recheck(&catalog)?;
+                phase.remaining_ms()?;
+                Ok(())
+            })?;
         }
         Ok(if new_dispatch { input_count } else { 0 })
     }
@@ -1366,7 +1796,11 @@ impl OfflineApp {
     fn require_active_space(&self, state: &SpaceState) -> Result<()> {
         if VectorStore::open(&self.fs, None)?
             .active()?
-            .is_none_or(|active| active.id != state.id || active.spec != state.spec)
+            .is_none_or(|active| {
+                active.id != state.id
+                    || active.spec != state.spec
+                    || active.actual_dimensions != state.actual_dimensions
+            })
         {
             return Err(fail(
                 ErrorCode::FreshnessConflict,
@@ -1381,7 +1815,11 @@ impl OfflineApp {
         runtime: Option<&EmbeddingRuntime<'_>>,
     ) -> Result<(SpaceState, Vec<f32>, bool)> {
         self.embedding_policy_consistent(runtime)?;
-        let store = VectorStore::open(&self.fs, None)?;
+        let budget = retrieval::vectors::VectorReadBudget::new(
+            std::time::Instant::now()
+                + Duration::from_millis(VerificationBudget::default().max_elapsed_ms),
+        )?;
+        let store = VectorStore::open_bounded_snapshot(&self.fs, &budget)?;
         let state = store.active()?.ok_or_else(|| {
             fail(
                 ErrorCode::CapabilityUnavailable,
@@ -1398,6 +1836,7 @@ impl OfflineApp {
         if let Some(vector) = store.vector(&state.id, &input.input_hash)? {
             return Ok((state, vector, false));
         }
+        drop(store);
         if self.options.offline {
             return Err(fail(
                 ErrorCode::OfflineUnavailable,
@@ -1810,6 +2249,14 @@ impl OfflineApp {
         Ok(result)
     }
     fn fallback_search(&self, text: &str, plan: &QueryPlan, no_sync: bool) -> Result<HitSet> {
+        let catalog = Catalog::new(self.fs.clone(), self.vault_id.clone());
+        if catalog.operation_state()?.is_some() {
+            let reader = catalog
+                .cached_query_snapshot(crate::catalog::query_types::QueryReadLimits::default())?;
+            let hits = retrieval::lexical::search_catalog(&reader, text, plan)?;
+            reader.verify_operations(&catalog)?;
+            return Ok(hits);
+        }
         for attempt in 0..2 {
             let reader = self.embedding_reader(no_sync)?;
             let mut hits = retrieval::lexical::search(&reader, text, plan)?;
@@ -1862,7 +2309,39 @@ impl OfflineApp {
         fallback: bool,
         graph: Option<&GraphPlan>,
     ) -> Result<HitSet> {
+        self.semantic_search_impl(text, plan, runtime, no_sync, fallback, graph, false)
+    }
+    pub fn semantic_search_selected(
+        &self,
+        text: &str,
+        plan: &QueryPlan,
+        runtime: Option<&EmbeddingRuntime<'_>>,
+        fallback: bool,
+    ) -> Result<HitSet> {
+        self.semantic_search_impl(text, plan, runtime, true, fallback, None, true)
+    }
+    fn semantic_search_impl(
+        &self,
+        text: &str,
+        plan: &QueryPlan,
+        runtime: Option<&EmbeddingRuntime<'_>>,
+        no_sync: bool,
+        fallback: bool,
+        graph: Option<&GraphPlan>,
+        verify_selected: bool,
+    ) -> Result<HitSet> {
         retrieval::lexical::validate_plan(text, plan)?;
+        let catalog = Catalog::new(self.fs.clone(), self.vault_id.clone());
+        let normalized = catalog.operation_state()?.is_some();
+        if normalized
+            && (graph.is_some() || plan.filters.include_historical || plan.filters.include_proposed)
+            || verify_selected && !normalized
+        {
+            return Err(fail(
+                ErrorCode::CapabilityUnavailable,
+                "normalized semantic search requires current documents without graph expansion",
+            ));
+        }
         let prepared = self.embedding_query(text, runtime);
         let (state, query, network) = match prepared {
             Ok(value) => value,
@@ -1877,13 +2356,39 @@ impl OfflineApp {
             {
                 let mut lexical = plan.clone();
                 lexical.mode = SearchMode::Lexical;
-                let mut hits = self.fallback_search(text, &lexical, no_sync)?;
+                let mut hits = if verify_selected {
+                    retrieval::selected_search::search(
+                        &catalog,
+                        text,
+                        &lexical,
+                        &VerificationBudget::default(),
+                    )?
+                } else {
+                    self.fallback_search(text, &lexical, no_sync)?
+                };
                 hits.warnings
                     .push(format!("explicit lexical fallback: {:?}", e.code));
                 return Ok(hits);
             }
             Err(e) => return Err(e),
         };
+        if normalized {
+            let mut hits = retrieval::indexed_semantic::search(
+                &catalog,
+                text,
+                plan,
+                &state,
+                &query,
+                verify_selected,
+                &VerificationBudget::default(),
+            )?;
+            hits.network_used = network;
+            if network {
+                hits.warnings
+                    .push("uncached query embedded by an accounted remote request".into());
+            }
+            return Ok(hits);
+        }
         for attempt in 0..2 {
             let reader = self.embedding_reader(no_sync)?;
             let mut hits = self.embedding_hitset(
@@ -2153,6 +2658,26 @@ impl OfflineApp {
             selection: selection.clone(),
             ..Default::default()
         };
+        let catalog = Catalog::new(self.fs.clone(), self.vault_id.clone());
+        let normalized = catalog.operation_state()?.is_some();
+        if normalized
+            && (request.scope != ContextScope::IndexedDocuments
+                || request.target != ContextTarget::Documents
+                || request.graph.is_some()
+                || !matches!(
+                    request.documents.mode,
+                    SearchMode::Semantic | SearchMode::Hybrid
+                )
+                || !matches!(
+                    selection,
+                    retrieval::context_selection_packet::SelectionAction::Automatic
+                ))
+        {
+            return Err(fail(
+                ErrorCode::CapabilityUnavailable,
+                "normalized semantic context requires current indexed-documents with automatic selection",
+            ));
+        }
         let (state, query, network) = match self.embedding_query(text, runtime) {
             Ok(value) => value,
             Err(e)
@@ -2189,6 +2714,18 @@ impl OfflineApp {
             }
             Err(e) => return Err(e),
         };
+        if normalized {
+            let mut result = retrieval::indexed_semantic::context(
+                &catalog, text, request, &options, &state, &query,
+            )?;
+            result.network_used = network;
+            if network {
+                result
+                    .warnings
+                    .push("uncached context query embedded by an accounted remote request".into());
+            }
+            return Ok(result);
+        }
         let catalog = Catalog::new(self.fs.clone(), self.vault_id.clone());
         let writer = if no_sync || self.options.dry_run {
             None

@@ -69,7 +69,7 @@ fn bind_excerpt(excerpt: &mut SearchExcerpt, hit: &SearchHit, raw: &str) -> Resu
     Ok(())
 }
 
-fn bind_hit(
+pub(super) fn bind_hit(
     hit: &mut SearchHit,
     proof: &selected_documents::SelectedDocuments,
     vault: &RecordId,
@@ -251,10 +251,13 @@ fn coordinate(
 /// Validate a request without opening any catalog, proving evidence or producing hits.
 pub fn preview(query: &str, plan: &QueryPlan) -> Result<serde_json::Value> {
     let plan = lexical::validate_plan(query, plan)?;
-    if plan.mode != SearchMode::Lexical {
+    if !matches!(
+        plan.mode,
+        SearchMode::Lexical | SearchMode::Semantic | SearchMode::Hybrid
+    ) {
         return Err(WikiError::new(
             ErrorCode::CapabilityUnavailable,
-            "selected search planning requires lexical mode",
+            "selected search planning requires lexical, semantic or hybrid document mode",
         ));
     }
     Ok(

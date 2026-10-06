@@ -800,7 +800,7 @@ impl Write for Counter {
         Ok(())
     }
 }
-pub(super) fn counted<T: Serialize>(value: &T, limit: usize) -> Result<usize> {
+pub(crate) fn counted<T: Serialize>(value: &T, limit: usize) -> Result<usize> {
     let mut counter = Counter { bytes: 0, limit };
     serde_json::to_writer(&mut counter, value)
         .map_err(|_| budget("catalog delta exceeds byte ceiling"))?;

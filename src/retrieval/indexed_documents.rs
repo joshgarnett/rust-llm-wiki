@@ -18,9 +18,9 @@ use std::collections::BTreeSet;
 
 /// Shared packing may only obtain authenticated objects, never fall back to
 /// unselected cached records or decode more documents through this adapter.
-struct SelectedCatalog<'a> {
-    reader: &'a QuerySnapshot,
-    proof: &'a selected_documents::SelectedDocuments,
+pub(super) struct SelectedCatalog<'a> {
+    pub(super) reader: &'a QuerySnapshot,
+    pub(super) proof: &'a selected_documents::SelectedDocuments,
 }
 impl QueryCatalog for SelectedCatalog<'_> {
     fn normalized_layout(&self) -> bool {
@@ -89,10 +89,13 @@ pub(crate) fn context(
     let meter = Meter::new(&request.verification_budget);
     let request = context::validate_request(query, request)?;
     context::validate_selection_action(&request, &options.selection)?;
-    if request.scope != ContextScope::IndexedDocuments || catalog.operation_state()?.is_none() {
+    if request.scope != ContextScope::IndexedDocuments
+        || request.documents.mode != super::SearchMode::Lexical
+        || catalog.operation_state()?.is_none()
+    {
         return Err(WikiError::new(
             ErrorCode::CapabilityUnavailable,
-            "indexed-documents requires a selected normalized index; use current context on legacy vaults",
+            "lexical indexed-documents requires a selected normalized index; semantic modes use their selected vector coordinator",
         ));
     }
     meter.check()?;
