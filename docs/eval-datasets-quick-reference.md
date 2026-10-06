@@ -20,7 +20,7 @@ Use [the context protocol](evaluating-context.md), [dataset acquisition/adaptati
 | [BRIGHT](#bright) | Reasoning-intensive retrieval, code and domain transfer | 332 queries / 165,195 short documents or 2,951 long documents | Three domains acquired/audited; local context adapter, span labels and CLI evaluation pending |
 | [DevDex](#devdex-public-release) | Paraphrased developer reference retrieval | 594 tasks across docs, issue/PR and repository tracks | Tasks/notices acquired; linked source snapshots and sufficient-span labels pending |
 | [Other public candidates](#other-public-candidates-considered) | Multihop, relevance, support/refutation, freshness and judge calibration | See candidate table | Considered; no acquired evaluation corpus or local result recorded |
-| [Public CLI/Rust/SQLite documentation](#public-documentation-development-corpora) | Realistic user tasks and source/citation lifecycle | Original 25 sources / 357,839 bytes; four-document transfer adds 238,115 bytes | Used in development and historical query tests; 12-slot assisted trial scored 9.5 but failed mandatory completeness; [later single-question investigation](validation-host-investigation.md) recovered all four facts but failed supervision |
+| [Public CLI/Rust/SQLite documentation](#public-documentation-development-corpora) | Realistic user tasks and source/citation lifecycle | Original 25 sources / 357,839 bytes; four-document transfer adds 238,115 bytes | Used in development and historical query tests; 12-slot assisted trial scored 9.5 but failed mandatory completeness; [later single-question investigation](validation-host-investigation.md) recovered all four facts but failed supervision. Its separate draft Page/read/search/guarded-edit slice passes 10/10/all mandatory/no blockers; no native HIGH credit |
 | [Repository synthetic fixtures](#repository-fixtures-and-operational-corpora) | Identity, graph direction, UTF-8, freshness, bounds, offline/crash mechanics | Bootstrap/P08/P21 plus bounded lifecycle corpora | Reproducible local mechanics; synthetic vectors do not qualify semantic quality |
 | [1k / occupied 10k / proposed 25k](#repository-fixtures-and-operational-corpora) | Public import, search/read, churn, reconstruction and resource costs | ~100 MB at 1k; generated 10k seed plus 64 imported notebooks; target ~2.5 GB at 25k | [Public 1K mechanics](validation-public-1k-lifecycle.md) and [subsequent WAL lifecycle](validation-wal-lifecycle.md) pass their scoped gates: 700 query workflows, unchanged native evidence 78–79/100 and combined 89–90/100 per round; prior failures preserved; 10K on hold and representative 25k unrun |
 | [Private native HIGH pilot](#current-gates-and-status) | Unseen task completion, strata, absence and integrity | 24 tasks: 20 positive + four absent controls | Questions/labels remain quarantined; **UNRUN**, no answer examples included here |
@@ -165,6 +165,14 @@ The complete-document transfer corpus and fresh four-document trial have equal t
 A Wixom-style synthetic restaurant/research scenario was also specified for product cleanup: long roundups, repeated names, later recommendations, dates, contradictory claims, edited pages and changed/withdrawn sources. It is a workflow requirement rather than a public dataset; see [cleanup acceptance scenario](execution/CLEANUP.md). No independently acquired real restaurant corpus or complete dataset-style size/license/hash is recorded for that scenario.
 
 The exposed public-document questions also served the [location-allocation development controls](validation-location-allocation.md). These are additional experiments on existing source families, not another independent dataset: the completeness gate failed and a required-fact regression remained despite passing citation integrity. Retain that failure alongside dense, reading and host-assisted results.
+
+The existing four-document investigation corpus also supplied a separately frozen
+[draft Page milestone](validation-host-investigation.md#separate-accepted-draft-page-milestone):
+eight offline commands saved the complete cited brief, confirmed public read/search,
+applied a guarded clarification and preserved it after the planned stale-hash refusal.
+Independent scoped acceptance is 10/10, all mandatory checks, zero blockers. This
+reuses development evidence without a new model stage, dataset or unseen quality
+claim; the original trial and supervision failures remain unchanged.
 
 ## How evaluations are run
 

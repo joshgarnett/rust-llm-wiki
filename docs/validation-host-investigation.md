@@ -78,6 +78,51 @@ semantic tuning or replay is justified to erase the supervision failure.
 
 ## Using and reproducing the workflow
 
+### Separate accepted draft Page milestone
+
+A later, prospectively frozen eight-command workflow saved the exact checked brief
+as an authored draft Page, found it through public read/search and verified guarded
+editing. Independent Astra acceptance is **10/10, every mandatory gate passed,
+zero blockers**. This uses the same candidate009 executable and gives no acceptance
+credit to the earlier diagnostic or ten-question trial.
+
+An ordinary disposable copy retained all canonical files and idle operation
+authority, omitted only its rebuildable cache and writer lock, and reconstructed
+the normalized index through the public CLI. The sequence was `index rebuild
+--normalized`, `page init`, a whole verified `read`, lexical title `search --kind
+page --no-sync --verify-selected`, `page put` guarded by the observed full-file hash,
+a second put deliberately using that stale hash, a final whole read and `check`.
+All commands ran offline with isolated configuration. The stale put returned the
+planned exit 4 / `CONTENT_CONFLICT`; the other seven commands exited successfully.
+
+The Page retained its stable ID and all four supported facts and three exact Source
+references. The provenance clarification preserved the brief byte for byte. Both
+reads returned the complete body and independently verified author hash. Search
+reported the authored status as `draft`; document freshness eligibility does not
+promote it into reviewed Current context. All 73 canonical/noncache state files and
+eight cache/lock files were unchanged across the stale attempt, including publication
+authority and the successful edit. All 104 sealed pins, 59 old canonical inventory
+entries and 16 copied Source-tree files passed independent preservation checks.
+The final canonical/cache check was complete and clean; its additional unused
+retained-payload scan was not performed. File snapshots do not cover directory metadata.
+
+The final Page is 2,155 bytes, with a 1,992-byte body containing the exact 1,610-byte
+brief. Native command intervals sum to 1.066079459 seconds, nested within 1.339275042
+owner-process monotonic seconds through final state/result writes. Maximum native
+main-process RSS was 19,742,720 bytes. Terminal owner allocation was 2,756,608 bytes;
+including every preserved prior host owner, shared allocation was 6,742,016 bytes.
+Exact active allocation peak is unavailable. No new answer actor, provider call or
+build was used. This is one small workflow observation, not a latency distribution,
+Page fault-suite result or large-vault qualification.
+
+Optional local acceptance reports: .artifacts/host-investigation-001/critic/public/
+page-from-brief-result-001.md and .json. The actual Page is under
+.artifacts/host-investigation-001/root/page-from-brief-001/vault/pages/
+argparse-parent-parser-evidence-note.md, SHA256
+dfd41f615205d766931fb437568ba221acaad0301a44fffc91f0cef2951be498.
+
+### Remaining delivery work
+
 The public CLI preparation and fingerprint-bound replay steps are in
 [context selection](context-selection.md). Inspect actual packed evidence and
 omissions before generating an answer; the candidate deck is not final support.

@@ -77,6 +77,13 @@ and preserved-source checks passed. The mandatory observation cadence failed, so
 the diagnostic has no all-gates acceptance or native HIGH credit. The original
 ten-question trial remains INCOMPLETE; the other nine tasks are unrun.
 
+A separate [draft Page workflow](validation-host-investigation.md#separate-accepted-draft-page-milestone)
+saved that exact brief, verified read/title-search visibility, applied one guarded
+clarification and rejected a stale author hash without changing the successful edit.
+It passes scoped independent acceptance at 10/10, every mandatory gate and zero
+blockers, with eight offline commands and no new build or answer actor. The Page
+remains a draft; native HIGH and representative capacity are unchanged.
+
 The [normalized Page reorganization workflow](validation-page-reorganization.md)
 passes scoped independent acceptance at 10/10 with every mandatory task and no
 blockers. Stable identity, authored/plain/unadopted incoming links, guarded editing,

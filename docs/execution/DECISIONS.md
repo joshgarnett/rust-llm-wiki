@@ -179,3 +179,33 @@ ConditionalQA exposed two independent input issues: HTML-like paragraphs supplie
 [The query-limit comparison](../query-limits.md) distinguishes API bytes, analyzed Boolean clauses, parser depth and relevance-driven token dropping. These are application choices, not claims that SQLite requires256 terms. A bundled SQLite3.53.2 stress measurement on10,000 matching documents found median256-clause ranking around0.57 seconds,512 around1.69 and1,024 around6.12; this supports starting at256 instead of borrowing a server engine's1,024-clause allowance. Retain Unicode byte boundaries, final-qualifier retrieval, full-prefix embedding budget and explicit rejection regressions. These mechanics do not establish answer completeness.
 
 Independent Astra review found that the new input ceiling exposed a smaller8,192-byte semantic graph-key bound after embedding preparation. Raise that internal bound to the shared query limit plus128 prefix bytes. Preserve full query/space binding and existing cursor encoding; do not truncate or hash away query input used by retrieval. Actual16KiB semantic graph, hybrid graph and graph-context tests pass, including last-byte query mutation invalidating a cursor.
+
+## 2026-10-06 — Deliver the complete cited Page workflow
+
+A fresh independent Astra review selected the maintained exported skill as the next
+delivery boundary: question → inspect actual selected evidence → checked cited brief
+→ searchable draft Page → guarded edit. The [single-question development result](../validation-host-investigation.md)
+shows a content gain but retains its failed supervision gate. Promote the useful
+workflow into existing skill resources and executable examples; do not add another
+host runtime, general evaluation framework or CLI generation subsystem. Preserve
+layout restrictions, actual output bindings, immutable Source references and author
+changes. A draft remains separate from reviewed Current context and accepted graph
+evidence.
+
+Before running the transfer test, freeze one new public development task with
+complementary facts, an unsupported subquestion and a simulated author edit. Require
+a fresh export with no ignored-artifact dependency, at most 24 native calls, two host
+stages, one optional 4 KiB verified read and 6 KiB/1,500 estimated tokens of final
+evidence. Use a disposable vault, finite time/resource limits and independent scoped
+acceptance of at least 9/10, every mandatory gate and zero blockers. Record host work
+and available usage separately; unavailable inference time or cost stays unavailable.
+This portability gate gives no native HIGH or representative capacity credit.
+
+Keep 10K admission on HOLD and the user's first 25K/~2.5 GB target open. Saved
+post-WAL allocation is dominated by retained history (40.87%), cache (32.29%) and
+canonical Sources (25.36%). Under the unchanged admission guard, a replay-only or
+catalog-only change has no demonstrated path to 25K. Sufficient additional available
+storage is the simplest capacity alternative; otherwise require a jointly measured
+representation and lifecycle change. Do not launch a larger run, delete retained
+evidence or weaken the guard to obtain a passing result. Native support completeness,
+normalized mode parity/default activation and full capacity remain separate work.
