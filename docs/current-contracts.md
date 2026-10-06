@@ -150,11 +150,18 @@ adds a shared command allowance/deadline and independent same-Run continuation
 after authenticated stale-response rejection. Exact vector scanning, measured
 storage/update costs and broad evidence completeness still prevent 25K qualification.
 
-The latest [candidate012 local 0.2.0 trial](validation-normalized-embeddings.md#local-020-candidate012-artifact)
+The earlier [candidate012 local 0.2.0 trial](validation-normalized-embeddings.md#local-020-candidate012-artifact)
 packages the exact invocation/recovery control binary from production commit
 `3cd7b48`. Version, capabilities, exported guidance and all 16 archive members
 pass their separate release-data checks; no rebuild or workflow replay was needed.
 It adds no broad completeness, unseen HIGH or capacity acceptance.
+
+The latest [candidate013 local 0.2.0 trial](validation-normalized-embeddings.md#local-020-candidate013-artifact)
+packages omission compaction and revised embedded guidance. Its native optimized
+CLI, archive and exported skill pass separate integrity checks. The complete
+assisted draft lifecycle at 64 sources passes independent review at 9/10;
+default context completeness remains 9/28 facts and 2/10 positive tasks. Neither
+checkpoint establishes native HIGH or practical 25K capacity.
 
 Independent same-budget witnesses now locate the multi-source failure in
 allocation: both modes can render all five required facts with valid citations

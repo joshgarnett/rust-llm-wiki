@@ -694,3 +694,23 @@ reading, with ID-only selection optional. Export/build/transfer qualification is
 a separate checkpoint. Native completeness remains **9/28 facts and 2/10 positive
 tasks**. Synthetic vectors qualify mechanics, not semantic relevance; native
 HIGH, full layout parity and practical 25K capacity remain open.
+
+## Local 0.2.0 candidate013 artifact
+
+Candidate013 packages production commit `e74b042`, including omission compaction
+and the revised embedded cited-Page guide. The native ARM64 CLI reports
+`lwiki 0.2.0`; its actual compiler arguments retain optimization level 3 and
+debug information level 0. Binary SHA-256 is
+`64744ed8c8f0bf236c0dc169db4f6a7fbc79327bb015dcb931861f7c2faecaf1`.
+The 11,143,316-byte archive and its checksum pass byte comparisons for all four
+members, including executable permissions. Archive SHA-256 is
+`b4ce37da9b9e591b7a532d0c0b2f1d240b6289dd47466898dc68112d4ba42dce`.
+
+The copied CLI successfully exports the Codex skill. All seven exported files,
+every manifest BLAKE3 digest and the package checksum pass; both changed guide
+assets match repository bytes. One optimized CLI build runs after correcting
+sandbox startup and cache-selection failures, both preserved before compilation.
+The checkout retains unfinished test-only source edits, so source provenance
+remains informational. This is a local candidate and export-integrity checkpoint;
+fresh-host transfer, full release qualification, native quality, HIGH and 25K
+remain separate. Candidate012 is preserved; no tag or release is published.
