@@ -269,3 +269,45 @@ remain incomplete; mocks receive mechanics credit only. No new live acquisition.
 After one implementation and one justified grouped repair, unresolved architectural
 failures return for review. Scanning work and selected proof work are separate;
 this small workflow gives no fast-25K, native HIGH or full-parity credit.
+
+## 2026-10-06 — Reject coverage surrogates; reassess the connected workflow
+
+The frozen 32-cell development comparison selects no new allocator. Literal
+query-term coverage loses full support on the complementary-fact task; both
+query-weighted facility variants also regress previously complete ordinary tasks.
+All required owners remain retrieved and all 148 citations pass exact checks.
+Complete same-pool witnesses fit the original budget. Preserve the failed arms,
+unchanged default and strict promotion criteria; do not tune weights, expand
+context or treat topic coverage as fact completeness. Detailed outcomes and
+accounting are curated in [the normalized checkpoint](../validation-normalized-embeddings.md).
+
+A fresh Astra review and primary-source research favor one separately frozen,
+blind task-aware same-pool selection control, alongside the existing public
+lexical investigation, checked cited brief and factual-refresh workflow. Reuse
+the host recipe; add no CLI answer runtime. Count host input, calls, usage and
+observed turnaround separately. If exact native replay is unavailable, start
+with read-only selection and leave packet acceptance untested. A passing assisted
+control would not pass deterministic native HIGH or the failed original gate.
+
+The mechanism hypothesis is that selecting support for unresolved requested
+conditions preserves complementary clauses better than scalar topic similarity.
+[GenSco's original method](https://arxiv.org/html/2407.10245v1#S3) conditions passage
+selection on intermediate questions; its local scorer is outside this project's
+scope. A bounded host set-selection control tests the idea without adopting its
+implementation. [Query-decomposition results](https://arxiv.org/html/2507.00355v1#S5.SS2)
+also show why improved answer metrics cannot substitute for supporting-fact
+completeness. Neither paper establishes efficacy here.
+
+Continue incremental preparation and query/storage attribution independently.
+Use one controlled release-profile workflow for initial/no-op prepare, one-owner
+refresh/reprepare, query and reconstruction. Attribute source rendering, compatible
+vector decoding/scoring and durable publication separately. A compact derived
+unit inventory must serve both preparation and discovery. Exhaustive vector
+scanning still violates the fast-query contract; retain exact retrieval as the
+oracle before choosing a bounded candidate-generation design. Do not raise caps,
+delete protected evidence or add a general repair subsystem to admit 25K.
+
+Build a new scoped local 0.2.0 trial after useful public investigation and factual
+refresh/reprepare pass their declared independent gate. Native completeness,
+HIGH, full parity/default activation and representative capacity remain separate
+open requirements; an updated trial does not complete the full goal.

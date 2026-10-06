@@ -136,15 +136,51 @@ allocation loss for this exposed task: complete evidence fits the existing budge
 The critic-selected witness is diagnostic evidence, not an automatic selection
 workflow or a quality acceptance pass. The production default remains unchanged.
 
-The next selection experiment was declared before candidate results: compare the
-unchanged allocator with literal query-term coverage and two bounded vector-set
-coverage strategies on the same four tasks in both modes. Preserve candidate
-formation, exact citation rendering, freshness, excerpt/owner limits and the
-shared two-second proof deadline. A candidate must recover every multi-source
-fact in both modes while preserving the passing tasks; choose the simplest
-passing strategy. The exposed questions remain development data. Follow the
-selection comparison with ordinary changed-source refresh and unrelated-vector
-reuse; none of these observations substitutes for unseen acceptance or capacity.
+The prospectively declared selection comparison is closed: **no candidate
+qualifies; retain the unchanged default.** It compared baseline B, literal
+positive-IDF query-term coverage L, query-weighted facility coverage F0 and the
+same facility objective with one exchange sweep F1. All 32 internal app-dispatch
+development calls completed on the same four tasks in both modes, with unchanged
+candidate formation, exact rendering, freshness, excerpt/owner limits and the
+shared two-second proof deadline. These calls do not establish public CLI parity.
+
+| Arm | h02 full facts, semantic / hybrid | q02 full facts, semantic / hybrid | q03 full / partial / missing, semantic / hybrid |
+| --- | --- | --- | --- |
+| B | 3 / 3 | 4 / 4 | 1 / 1 / 3 in both |
+| L | 3 / 3 | 4 / 4 | 0 / 2 / 3 in both |
+| F0 | 0 / 0 | 2 / 2 | 1 / 0 / 4 in both |
+| F1 | 0 / 0 | 3 / 2 | 1 / 0 / 4 in both |
+
+Every positive output retained the expected owners. All 148 citations matched
+freshly checked immutable source slices, full-source and quote hashes, and the
+literal citation JSON in rendered text. All packet, excerpt and per-owner caps
+passed. The eight q23 packets invented no measurement or global absence claim,
+but returned irrelevant evidence. Owner retrieval, citation integrity and topic
+coverage therefore do not demonstrate requested-fact completeness. L loses full
+q03 support; F0/F1 also discard evidence that made ordinary questions complete.
+The earlier complete 5,392-byte witnesses rule out insufficient final capacity
+as the explanation for this exposed case.
+
+The optimized native experiment made zero provider calls and 2,141 exact render
+trials. Its owning process measured 2.001 seconds including observation and
+cleanup; this is a small internal diagnostic, not shipping or inference latency.
+Counted/reserved reads were 919,004,833 bytes under 1 GiB. Critic read accounting
+remained within the reserved 16 MiB; retaining an additional 600-second review
+debit made cumulative charged work 963.001 seconds under 1,200. Physical I/O and
+exact process-tree peak memory were unavailable. One failed compile and one
+grouped caller repair precede the successful native build; 18 focused mechanics
+checks passed, with three local mock acquisitions isolated from the real fixture.
+This is not a full repository suite or live-provider qualification.
+
+Optional local evidence is under
+`.artifacts/normalized-semantic-lifecycle-001/critic/public/evidence-set-results-001.{md,json}`;
+the JSON SHA256 is
+`6a49891d93cbaa7039ea94b2f7fc777134e3bf9ceb57c63a49bafaa97974eef9`.
+It records every cell, regression, omission and output hash. The frozen protocol
+SHA256 is `271970d28bca573e4cd89cdf16636ca9723f98e2bf6603ef348fd1cdcce29a1a`;
+the owned test executable SHA256 is
+`f58060252927a2370a8134b8e629981a1a43d49ec179f8453126e6fb6563c54b`.
+The exposed questions remain development data; native HIGH remains quarantined.
 
 Preparation currently retains at most 4,096 owners. Exact semantic discovery
 renders the eligible corpus twice under a shared 64 MiB/65,536-unit allowance.
@@ -152,13 +188,28 @@ Those limits alone prevent qualification of 25,000 documents / roughly 2.5 GB;
 they are source constraints, not measured throughput. Whole-preparation work
 must not be described as proportional only to changed owners.
 
-With the small public workflow observed, the next connected milestone must combine
-changed-document preparation, useful complementary cited evidence and
-single-document refresh/reprepare. Independent architecture review supports the
-bounded selection comparison above. More owner discovery alone cannot fix this case.
-A bounded release comparison will test winner-only second-pass rendering against
-a compact rebuildable unit inventory with paged changed-owner preparation. It must
-retain exact coverage, evidence, freshness and accounting behavior. ANN, wider
-limits and another repair subsystem are not justified by current evidence.
+Fresh architecture review rejects further tuning of these surrogate objectives.
+One separately declared, blind task-aware selection control on the existing
+exact candidates can test whether explicit interpretation of requested conditions
+recovers the missing support. It must account for host input, calls, usage and
+observed turnaround, and gets no deterministic or unseen acceptance credit.
+If unchanged native replay is unavailable, a read-only selection diagnostic must
+leave final packing untested. Reuse the existing public lexical investigation and
+[cited-Page workflow](context-selection.md) for a separately assessed complete
+question-to-brief, immutable factual refresh and unrelated-vector reuse milestone.
+Normalized public host selection remains lexical only. Do not add a CLI answer
+runtime or present an assisted score as a native pass.
+
+The scale milestone must connect changed-owner preparation, useful discovery and
+storage/rebuild attribution in one release-profile control. Compare repeated
+corpus rendering with a compact rebuildable unit inventory on fixed small
+owner/payload sizes, initial/no-op preparation, one-owner refresh, query and
+reconstruction. Attribute rendering, compatible-vector decoding/scoring and
+durable publication separately. Paged preparation alone cannot qualify 25K:
+the [fast-query contract](testing-large-vaults.md) also forbids exhaustive vector
+scanning per ordinary query. Preserve exact retrieval as the comparison oracle;
+choose a bounded candidate-generation design only after measuring the remaining
+work and its effect on actual evidence. Wider caps, new dependencies and a general
+repair subsystem are not justified by this experiment.
 Representative capacity, default activation, full command parity and native HIGH
 remain separate acceptance gates.

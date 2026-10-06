@@ -144,8 +144,13 @@ corpus rendering prevent 25K qualification unchanged.
 Independent same-budget witnesses now locate the multi-source failure in
 allocation: both modes can render all five required facts with valid citations
 in 5,392 bytes. This diagnostic does not change the default or pass a quality
-gate. The linked checkpoint records the prospectively declared selection
-comparison and connected changed-source workflow that must establish improvement.
+gate. The declared 32-cell selection comparison subsequently found no qualifying
+arm: literal coverage still loses multi-source support, and facility coverage
+also regresses ordinary tasks, despite 148/148 correct citations. The default
+remains unchanged. The linked checkpoint records the failures and the separate
+task-aware investigation and factual-refresh workflow to assess next. Incremental
+preparation must be paired with scalable discovery and measured storage/rebuild
+costs; exhaustive vector scanning still conflicts with the fast-query contract.
 
 The normalized layout currently has a restricted command set. Plain lexical `search` uses published discovery; `--no-sync` remains compatible.
 Exact [named Entity neighbors](named-neighbors.md) now use bounded indexed
