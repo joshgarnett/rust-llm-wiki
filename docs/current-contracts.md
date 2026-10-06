@@ -182,9 +182,14 @@ reconstruction. All 164 inspected SourceRef occurrences authenticate. Ordinary
 lexical queries take 0.057–0.128 seconds, refresh 0.653 seconds and rebuild 1.704
 seconds; importing 193 originals dominates at 66.733 seconds. The original
 measurement-wrapper failure and missed review deadline remain recorded.
-The next separately funded tier
-is 1,024 current Sources; raw completeness, semantic readiness, default layout
-integration and practical 25K capacity remain open.
+The subsequent [1,024-current native workflow](validation-capacity-workflow.md#separate-native-1024-current-lifecycle)
+also passes at 9.2/10, all mandatory observations and no blockers, with 159 exact
+citations and complete source/Page/cache-loss preservation. Queries remain below
+0.349 seconds, refresh takes 1.636 seconds and rebuild 6.991 seconds. Import rate
+stays near 2.9 items/second, while retained payload/delta storage and check costs
+grow. A bounded experiment with existing storage coordination precedes further
+growth. Raw completeness, semantic readiness, ordinary evidence defaults,
+universal layout integration and practical 25K capacity remain open.
 
 Independent same-budget witnesses now locate the multi-source failure in
 allocation: both modes can render all five required facts with valid citations

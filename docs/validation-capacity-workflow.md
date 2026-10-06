@@ -165,3 +165,62 @@ readiness, unseen HIGH and practical 25K/~2.5GB capacity remain open. Import
 accounts for most measured execution time; query latency supplies no current
 reason to optimize decoder counters. Growth to 1,024 current Sources requires
 separate admission using the complete workflow and measured resource headroom.
+
+## Separate native 1,024-current lifecycle
+
+The same packaged candidate013 binary completes the next prospectively admitted
+whole workflow at **1,024 current / 1,026 retained Sources**, then 1,023 current
+and three withdrawn after a new Source's revision and withdrawal. Import adds
+769 distinct frozen originals, totaling 77,235,641 bytes, in 193 default four-item
+groups. Twenty-six new development originals extend the existing corpus using
+its pinned generator; labels remain outside indexed content. Both captured copies
+of every input match complete size/hash pins. The accepted 256-stage vault is
+cloned once and remains unchanged.
+
+Independent actual assessment passes at **9.2/10**, every mandatory observation
+and zero correctness blockers. All 72 commands complete; 159 SourceRef occurrences
+(105 distinct), including ten embedded draft references, authenticate against
+exact immutable source slices, revision history and phase-specific eligibility.
+The draft's identity, body, both author notes and hash survive guarded no-op,
+obsolete-hash refusal, refresh/withdrawal and reconstruction. Five previously
+accepted reads and four post-churn D01/D09 search/context pairs match after
+cache-loss rebuild with only the declared publication/time/work normalization.
+Both full checks report zero errors.
+
+| Operation | Owning supervisor elapsed time |
+| --- | ---: |
+| Import 769 originals in 193 groups | 264.500 seconds |
+| Largest ordinary lexical query observation | 0.348 seconds |
+| Refresh one 90,415-byte Source | 1.636 seconds |
+| Withdraw that Source | 0.319 seconds |
+| Complete-cache-loss normalized rebuild | 6.991 seconds |
+| Full occupied / rebuilt checks | 11.734 / 11.180 seconds |
+
+The stage completes in 371.121 owning seconds. Conservatively summed owner time
+is 471.994 seconds across the staged control; external review/launch gaps are
+separate. All 145 cumulative invocations include the preserved first-stage
+instrumentation failure. Import accounts for about 71% of this stage. Observed
+import rates are similar, 2.907 versus 2.892 items/second; different occupancy and
+input batches are not a causal paired performance test or a 25K projection.
+
+Across 610 allocation samples, total owned peak allocation is 1,666,273,280 bytes
+and peak logical size 1,616,164,994 bytes, including both vaults and retained old
+caches. Minimum sampled free space is 57,059,971,072 bytes. Cumulative supervisor
+inspection is 8,606,283,716 logical bytes and streams 1,316,226 bytes. These remain
+within the independently admitted ceilings. Sampling is not an exact peak; RSS
+and physical I/O remain unavailable. The critic completes within its separate
+time/read allowance; the prior 256-review deadline failure stays recorded.
+
+Storage is the next measured capacity concern. The accepted 256-vault inventory
+contains 58,279,151 bytes of retained indexed deltas and 53,342,969 bytes of
+proposed text/binary payloads, beyond the 51,798,938 canonical captured bytes.
+Existing schema-2 storage coordination can share immutable proposed objects.
+A bounded disposable-copy experiment with that existing coordinator precedes
+another deduplicator or larger growth; repeated bytes are not automatically
+reclaimable, and migration may temporarily increase allocation. Protected
+recovery/accounting history, original source paths and author content must survive.
+
+This qualifies the declared lexical workflow at this corpus/history. It does not
+qualify broad default completeness, semantic relevance/readiness, unused retained
+payload validation, universal normalized activation, native HIGH or practical
+25K/~2.5GB capacity. No new build, remote provider or answer actor is involved.
