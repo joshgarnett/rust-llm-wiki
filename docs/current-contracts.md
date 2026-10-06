@@ -163,6 +163,14 @@ assisted draft lifecycle at 64 sources passes independent review at 9/10;
 default context completeness remains 9/28 facts and 2/10 positive tasks. Neither
 checkpoint establishes native HIGH or practical 25K capacity.
 
+The subsequent [native structural evidence development comparison](validation-normalized-embeddings.md#native-structural-evidence-development-comparison)
+improves a frozen candidate to 15/28 supported facts and 5/10 complete tasks,
+but fails the unchanged advancement gate and loses one baseline-supported fact.
+All expected owners and exact citations are present; task-relevant passage
+selection remains the blocker. The failed candidate is not promoted. The next
+causal comparison tests contextual structural-passage relevance under unchanged
+budgets before further scale qualification.
+
 Independent same-budget witnesses now locate the multi-source failure in
 allocation: both modes can render all five required facts with valid citations
 in 5,392 bytes. This diagnostic does not change the default or pass a quality

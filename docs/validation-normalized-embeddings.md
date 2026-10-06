@@ -714,3 +714,51 @@ The checkout retains unfinished test-only source edits, so source provenance
 remains informational. This is a local candidate and export-integrity checkpoint;
 fresh-host transfer, full release qualification, native quality, HIGH and 25K
 remain separate. Candidate012 is preserved; no tag or release is published.
+
+## Native structural evidence development comparison
+
+A frozen native candidate retains readable HTML through lexical normalization,
+exact original-byte mapping and structural passage selection. Complete bounded
+definition pairs remain together, and lexical packing charges rendered cost
+without rewarding surrounding padding. Parser-fingerprint migration rebuilds the
+derived catalog automatically; the affected cache-only test retains immutable
+sources and reuses compatible vectors without network calls. Forty-three distinct
+focused checks pass. The initial migration-fixture failure and its test-only
+correction remain recorded; unchanged passing checks are reused.
+
+The candidate improves this development set from **9/28 to 15/28 supported facts**
+and **2/10 to 5/10 complete positive tasks**, but **fails advancement**. The frozen
+gate requires 24/28 facts, 8/10 complete tasks including D01/D09/D10, and retention
+of every baseline-supported fact. D01 and D09 remain incomplete; D09 loses one
+previously supported restore-volume condition. D10 becomes complete. Both absent
+tasks retain bounded unsupported outcomes.
+
+Both executables query the same 64 original sources and immutable identities,
+with independently rebuilt catalogs, offline lexical discovery and identical
+5-owner/80-candidate/1024-byte excerpt/6000-byte/1500-token limits. All 48 paired
+search/context commands succeed. Independent inspection authenticates all 52
+baseline and 85 candidate context citation occurrences, plus 51 search citation
+occurrences per arm. Every expected owner is found. Exact citations and owner
+hits therefore do not establish complete task evidence: a correctly cited
+captured archived draft can still be irrelevant to a request for approved guidance.
+
+The setup guard initially stopped before any quality query because it treated a
+mutable writer-lock PID diagnostic as immutable evidence. The preserved, reviewed
+continuation excludes that diagnostic, checks the released lock and idle authority,
+and reuses the prepared fixtures. Cumulative work is 57 children and 34.826 owning
+process seconds, with no provider calls or excluded questions. Every query is
+below five seconds; observed maxima are 0.081538 seconds for baseline and 0.079020
+for candidate. These single 64-source observations do not establish a speedup or
+large-vault capacity.
+
+Candidate CLI SHA-256 is
+`5388d17864c01820a9e92cb36f8ee4120f6f0fbb4b5f01c933fddd955f28c0b8`;
+the paired baseline is candidate013 above. Both use release optimization level 3.
+The failed quality candidate is not promoted. Fresh architectural review identifies
+loss of command subject, procedure scope and complementary evidence after owner
+discovery. The next experiment compares one fixed contextual structural-passage
+BM25 reference against the frozen candidate, tracing generation, candidate
+reduction and final packing under unchanged limits. A persistent passage index,
+another weight sweep and larger packets are not justified by this result.
+Native HIGH, default-layout parity, bounded semantic candidate discovery and
+practical 25K capacity remain open.
