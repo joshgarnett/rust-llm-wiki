@@ -257,12 +257,12 @@ loss/restoration with retained compatible-vector reuse. Providers are local mock
 
 The original shared-input fixture exposed an unpublishable receipt: 128 identical
 Pages require 129 source guards plus the current Run guard, exceeding the existing
-128-precondition publication limit. The candidate now rejects more than 127 source
-guards before dispatch, with a zero-call workflow check. It preserves the complete
-guard union and existing receipt/accounting contracts. Completing such large
-shared-input groups remains a usability gap; a safe refusal alone does not pass
-large-vault preparation. The valid paged-resume case uses two 64-owner shared-input
-groups with one input per request, then a distinct final owner.
+128-precondition publication limit. That checkpoint rejected more than 127 source
+guards before dispatch, with a zero-call workflow check. It preserved the complete
+guard union and existing receipt/accounting contracts, while leaving shared-input
+completion open. The later automatic preparation milestone below replaces that
+all-owner paid scope with authenticated supplier scopes. Intrinsically oversized,
+uniquely supplied inputs and selected-reader resource limits remain bounded refusals.
 
 Exact schema checking admits either the original catalog schema or the complete
 optional inventory schema, rejecting partial or arbitrary extra objects. Native
@@ -339,6 +339,68 @@ under `.artifacts/normalized-semantic-lifecycle-001/inventory-001/`; independent
 source reviews and the prospectively frozen public protocol are under the sibling
 `critic/public/` directory. Tracked documentation does not require those ignored
 artifacts to understand these limits.
+
+## Automatic receipt-feasible preparation
+
+Normalized preparation now selects one authenticated feasible supplier for each
+missing input before merging paid-task guards. It packs distinct inputs by the
+actual guard union, provider item count and encoded wire bytes, reserving the
+current Run guard within the existing 128-precondition limit. It acknowledges
+every reusing owner through its separate current proof. Identical content no
+longer requires users to rearrange documents or acquire the same vector repeatedly.
+An intrinsically oversized unique supplier refuses before page dispatch, with
+required/available counts; another feasible supplier or a compatible cached vector
+permits fully authenticated reuse. No receipt, catalog or vector-store format changes.
+
+Tasks within one preparation page retain one Run and its lifetime allowance.
+Received outputs replay before pending paid work. Terminal reconciliation does
+not grant a new Run or release unknown charges; uncertain retry remains explicit.
+Proven pre-send releases retry within the same Run. Budget exhaustion pauses that
+Run so the existing explicit amendment can continue it.
+
+Independent acceptance passes at **9/10, all six frozen mandatory tasks and zero
+observed blockers within that scope**. There are **61 distinct affected native
+passes**: 30 unit and 28 semantic integration passes, followed by three corrected
+test replays. Twelve new regressions cover 128/129/257 repeated owners, exact
+126/127/128 guard boundaries, overlapping and disjoint scopes, recovery and
+two-request exhaustion/resume/amendment. This is aggregate evidence, not a full
+suite or an originally green run. Compiler and runtime failures remain retained.
+Two repaired mechanism fixtures use authenticated historical Entity incidence;
+their original dense-Evidence read refusal and the disjoint failure's unavailable
+underlying error are not promoted into resolved capacity findings.
+
+The pinned native release CLI completed 19 public lifecycle steps: three existing
+mock/fixture helpers and 16 offline commands outside a vault path containing
+spaces. Independent verification checked **91 exact citations**, all 192 original
+Revision assets and 63 unchanged unrelated Source envelopes. Initial preparation
+acquired 192 inputs in 12 mock requests; factual refresh acquired one new input in
+one request, reused unchanged inputs and truthfully exposed 191/192 coverage
+before acquisition. No-op preparation generated/reused nothing. Ordinary offline
+reconstruction reused all 192 inputs; substantive cited evidence matched the
+prepared packet, and final canonical/cache checking reported zero diagnostics.
+All 13 validated attempts retain unknown accounting charges.
+
+The CLI SHA256 is
+`3cb2e7a3ed00b6ca1d7ac0a10c2e89aea10edd1e4e633acadf1ddc2339592caf`.
+Its complete 468-input native freeze has SHA256
+`f1c0a5dfe00bacdbb97b303c5263670ea570c917e536bb61b2500c06345504e9`;
+the public summary has SHA256
+`9e4f8efd63a30ed2b4115f99eb57abbbbf45c6a7fee6013518cafa0fb631881f`.
+The native build uses rustc 1.98.0, macOS ARM64, optimization level 3 and no debug
+information. Detailed local evidence is optional under the sibling
+`guard-preparation-001/` and `critic/public/` artifact directories. Preserved private
+test hooks remain local; the compiled source is disclosed as dirty.
+
+This milestone is later than packaged candidate011 below. Mixed stale suppliers
+with unsent sibling tasks remain safely stranded. A separate source review also
+finds that per-Run limits and recomputed deadlines do not establish an aggregate
+invocation allowance or startup deadline across multiple fresh/resumed Runs;
+its proposed public reproduction is unrun. Both are blockers for the integrated
+collection workflow, outside this one-page partitioning gate. Exact vector scans,
+broad fact completeness, native HIGH and practical 25K qualification remain open.
+The next work is a complete cited-brief/update/recovery workflow and one admitted
+default-geometry collection attribution experiment, with task completeness,
+citation integrity and resource measurements assessed separately.
 
 ## Local 0.2.0 candidate011 artifact
 

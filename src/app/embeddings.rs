@@ -737,6 +737,7 @@ impl OfflineApp {
         }
         paths.sort();
         let mut read_bytes = 0;
+        let mut retained_jobs = Vec::new();
         for name in paths {
             let name = name
                 .to_str()
@@ -766,13 +767,30 @@ impl OfflineApp {
             let ledger = JobLedger::new(
                 self.fs.clone(),
                 self.vault_id.clone(),
-                marker.run_id,
+                marker.run_id.clone(),
                 runtime.job_options.clone(),
             )?;
             let inspection = ledger.replay()?.inspection;
+            if marker.operation != inspection.spec.scope.operation
+                || marker.task_keys
+                    != inspection
+                        .spec
+                        .tasks
+                        .iter()
+                        .map(|task| task.key.clone())
+                        .collect::<Vec<_>>()
+                || inspection.spec.scope.scope_payload_hash.as_ref()
+                    != Some(&proof(&marker.expected_units)?)
+            {
+                return Err(fail(
+                    ErrorCode::RecoveryRequired,
+                    "retained embedding marker differs from its immutable Run scope",
+                ));
+            }
             if inspection.state == RunState::Completed {
                 continue;
             }
+            let mut retired = BTreeSet::new();
             for task in inspection
                 .tasks
                 .values()
@@ -784,6 +802,35 @@ impl OfflineApp {
                     .rev()
                     .find(|a| a.attempt.task_key == task.spec.key);
                 let Some(attempt) = attempt else { continue };
+                // A proven pre-send release has no paid receipt. Its task is
+                // pending again, with the existing Run's attempt ceiling.
+                if attempt.billing == BillingDisposition::ReleasedNotSent {
+                    if attempt.phase != AttemptPhase::Settled || attempt.receipt.is_some() {
+                        return Err(with_embedding_context(
+                            fail(
+                                ErrorCode::RecoveryRequired,
+                                "retained pre-send release has inconsistent receipt state",
+                            ),
+                            serde_json::json!({"run_id":inspection.spec.run_id}),
+                        ));
+                    }
+                    continue;
+                }
+                match attempt.phase {
+                    AttemptPhase::Reserved | AttemptPhase::DispatchIntent => continue,
+                    AttemptPhase::Received => {}
+                    AttemptPhase::OutputCommitted | AttemptPhase::Settled => {
+                        if attempt.receipt.is_none() {
+                            return Err(with_embedding_context(
+                                fail(
+                                    ErrorCode::RecoveryRequired,
+                                    "retained embedding output lacks its accounted receipt",
+                                ),
+                                serde_json::json!({"run_id":inspection.spec.run_id}),
+                            ));
+                        }
+                    }
+                }
                 if matches!(
                     attempt.phase,
                     AttemptPhase::OutputCommitted | AttemptPhase::Settled
@@ -793,6 +840,7 @@ impl OfflineApp {
                     if attempt.phase == AttemptPhase::OutputCommitted {
                         ledger.settle(&attempt.attempt)?;
                     }
+                    retired.insert(task.spec.key.clone());
                     continue;
                 }
                 if matches!(
@@ -814,6 +862,7 @@ impl OfflineApp {
                         }
                         // Already-accounted immutable receipt survives; no invented completion.
                         // This explicit sync is allowed to schedule a replacement below.
+                        retired.insert(task.spec.key.clone());
                         continue;
                     }
                 }
@@ -842,38 +891,126 @@ impl OfflineApp {
                                 .map(|output| output.input_hash.clone()),
                         );
                     }
-                } else if attempt.remote_exposure == RemoteExposure::PossiblyInFlight {
-                    if !runtime.job_options.policy.retry_uncertain {
-                        return Err(fail(
-                            ErrorCode::RecoveryRequired,
-                            "prior embedding send outcome remains unknown; no repeat send authorized without --retry-uncertain",
-                        ));
+                }
+            }
+            retained_jobs.push((marker, ledger, retired));
+        }
+        // All retained Received/output-committed scopes are replayed before
+        // any fresh exposure, including pending tasks in a different marker.
+        for (marker, ledger, retired) in retained_jobs {
+            let retained = ledger.replay()?.inspection;
+            let mut pending = Vec::new();
+            for task in retained
+                .tasks
+                .values()
+                .filter(|task| task.state != TaskState::Completed)
+            {
+                if retired.contains(&task.spec.key) {
+                    continue;
+                }
+                let attempt = retained
+                    .attempts
+                    .iter()
+                    .rev()
+                    .find(|attempt| attempt.attempt.task_key == task.spec.key);
+                let context =
+                    || serde_json::json!({"run_id":retained.spec.run_id,"space":marker.space});
+                match attempt {
+                    None => {
+                        if marker.version == 2 && marker.operation == "embeddings_sync" {
+                            pending.push(task.spec.clone());
+                        }
                     }
-                    super::remote::validate_retained_arguments(
-                        &inspection,
-                        &runtime.limits,
-                        runtime.deadline_ms,
-                        runtime.requested_limits.as_ref(),
-                    )?;
-                    if matches!(inspection.state, RunState::Paused | RunState::Stopped) {
-                        ledger.resume(None)?;
-                    }
+                    Some(attempt) => match attempt.phase {
+                        AttemptPhase::Reserved => {
+                            return Err(with_embedding_context(
+                                fail(
+                                    ErrorCode::RecoveryRequired,
+                                    "retained embedding reservation remains unresolved; inspect the existing Run before admitting replacement work",
+                                ),
+                                context(),
+                            ));
+                        }
+                        AttemptPhase::DispatchIntent => {
+                            match attempt.remote_exposure {
+                                RemoteExposure::PossiblyInFlight
+                                | RemoteExposure::TerminalConfirmed => {
+                                    // Terminal reconciliation does not create an output,
+                                    // release unknown billing, or fund another Run. Use
+                                    // the existing explicit retry policy and allowances.
+                                    if !runtime.job_options.policy.retry_uncertain {
+                                        return Err(with_embedding_context(
+                                            fail(
+                                                ErrorCode::RecoveryRequired,
+                                                "retained embedding send has no committed output; continuation requires --retry-uncertain under the existing Run's limits",
+                                            ),
+                                            context(),
+                                        ));
+                                    }
+                                    pending.push(task.spec.clone());
+                                }
+                                RemoteExposure::NotStarted => {
+                                    return Err(with_embedding_context(
+                                        fail(
+                                            ErrorCode::RecoveryRequired,
+                                            "retained embedding dispatch intent requires existing-Run reconciliation",
+                                        ),
+                                        context(),
+                                    ));
+                                }
+                            }
+                        }
+                        AttemptPhase::Settled
+                            if attempt.billing == BillingDisposition::ReleasedNotSent =>
+                        {
+                            pending.push(task.spec.clone());
+                        }
+                        AttemptPhase::Received
+                        | AttemptPhase::OutputCommitted
+                        | AttemptPhase::Settled => {
+                            return Err(with_embedding_context(
+                                fail(
+                                    ErrorCode::RecoveryRequired,
+                                    "retained embedding task remains incomplete after receipt recovery; inspect its existing Run",
+                                ),
+                                context(),
+                            ));
+                        }
+                    },
+                }
+            }
+            if !pending.is_empty() {
+                super::remote::validate_retained_arguments(
+                    &retained,
+                    &runtime.limits,
+                    runtime.deadline_ms,
+                    runtime.requested_limits.as_ref(),
+                )?;
+                if retained.state == RunState::Planned {
+                    ledger.start()?;
+                }
+                if matches!(retained.state, RunState::Paused | RunState::Stopped) {
+                    ledger.resume(None).map_err(|error| {
+                        with_embedding_context(
+                            error,
+                            serde_json::json!({"run_id":retained.spec.run_id,"space":marker.space}),
+                        )
+                    })?;
+                }
+                for task in pending {
                     let generated = self.dispatch_embedding_task(
-                        &ledger,
-                        &task.spec,
-                        spec,
-                        &marker.expected_units,
-                        runtime,
+                        &ledger, &task, spec, &marker.expected_units, runtime,
                         TaskMaterialization {
                             probe: marker.operation == "embeddings_check",
                             corpus: marker.operation == "embeddings_sync",
                         },
-                    )?;
+                    ).map_err(|error| with_embedding_context(error,
+                        serde_json::json!({"run_id":retained.spec.run_id,"space":marker.space})))?;
                     activity.generated += generated;
                     if generated > 0 {
-                        activity.run_id = Some(inspection.spec.run_id.clone());
+                        activity.run_id = Some(retained.spec.run_id.clone());
                         activity.generated_hashes.extend(
-                            ledger.inspect()?.tasks[&task.spec.key]
+                            ledger.inspect()?.tasks[&task.key]
                                 .cache_outputs
                                 .iter()
                                 .map(|output| output.input_hash.clone()),
@@ -949,6 +1086,18 @@ impl OfflineApp {
         runtime: &EmbeddingRuntime<'_>,
         inputs: &[EmbeddingInput],
     ) -> Result<Vec<Vec<EmbeddingInput>>> {
+        self.embedding_guard_batches(runtime, inputs, None, &[])
+    }
+    /// Count the complete receipt union: supplier guards, declared scope guards
+    /// and the current Run guard added by receipt_plan_locked. Scope guards are
+    /// never removed to make a task fit; current embedding Runs declare none.
+    pub(super) fn embedding_guard_batches(
+        &self,
+        runtime: &EmbeddingRuntime<'_>,
+        inputs: &[EmbeddingInput],
+        bindings: Option<&BTreeMap<Blake3Hash, Vec<ReadDependency>>>,
+        scope_guards: &[ReadDependency],
+    ) -> Result<Vec<Vec<EmbeddingInput>>> {
         let max_items =
             usize::from(runtime.service.service().max_batch_items.unwrap_or(32)).min(32);
         let max_bytes = runtime
@@ -959,12 +1108,76 @@ impl OfflineApp {
             .min(256 * 1024) as usize;
         let mut out = Vec::new();
         let mut batch = Vec::new();
+        let mut declared = BTreeMap::new();
+        for guard in scope_guards.iter().chain(inputs.iter().flat_map(|input| {
+            bindings
+                .and_then(|b| b.get(&input.input_hash))
+                .into_iter()
+                .flatten()
+        })) {
+            if declared
+                .insert(&guard.path, &guard.expected)
+                .is_some_and(|old| old != &guard.expected)
+            {
+                return Err(fail(
+                    ErrorCode::FreshnessConflict,
+                    "embedding paid scope has conflicting source or scope guards",
+                ));
+            }
+        }
+        let union = |batch: &[EmbeddingInput]| -> Result<usize> {
+            let mut guards = BTreeMap::new();
+            for guard in scope_guards.iter().chain(batch.iter().flat_map(|input| {
+                bindings
+                    .and_then(|b| b.get(&input.input_hash))
+                    .into_iter()
+                    .flatten()
+            })) {
+                if guards
+                    .insert(&guard.path, &guard.expected)
+                    .is_some_and(|old| old != &guard.expected)
+                {
+                    return Err(fail(
+                        ErrorCode::FreshnessConflict,
+                        "embedding batch has conflicting source or scope guards",
+                    ));
+                }
+            }
+            if bindings
+                .is_some_and(|b| batch.iter().any(|input| !b.contains_key(&input.input_hash)))
+            {
+                return Err(fail(
+                    ErrorCode::FreshnessConflict,
+                    "embedding input lost its authenticated supplier guards",
+                ));
+            }
+            Ok(guards.len().saturating_add(1))
+        };
+        let encoded_size = |batch: &[EmbeddingInput]| -> Result<usize> {
+            serde_json::to_vec(&serde_json::json!({"model":runtime.service.summary().model,
+                "input":batch.iter().map(|i| &i.utf8).collect::<Vec<_>>(),
+                "encoding_format":"float", "dimensions":65536}))
+            .map(|bytes| bytes.len())
+            .map_err(|_| WikiError::invalid("batch encoding"))
+        };
         for input in inputs {
+            // Preflight every singleton too, including one following a full
+            // batch. Refuse the entire page before any task is dispatched.
+            if max_items == 0
+                || encoded_size(std::slice::from_ref(input))? > max_bytes
+                || union(std::slice::from_ref(input))? > 128
+            {
+                return Err(fail(
+                    ErrorCode::BudgetExceeded,
+                    "one rendered input exceeds encoded provider or receipt guard bound",
+                ));
+            }
             let mut candidate = batch.clone();
             candidate.push(input.clone());
-            // Bound actual JSON string escapes plus fixed wire model/options overhead.
-            let size=serde_json::to_vec(&serde_json::json!({"model":runtime.service.summary().model,"input":candidate.iter().map(|i|&i.utf8).collect::<Vec<_>>(),"encoding_format":"float","dimensions":65536})).map_err(|_|WikiError::invalid("batch encoding"))?.len();
-            if candidate.len() > max_items || size > max_bytes {
+            if candidate.len() > max_items
+                || encoded_size(&candidate)? > max_bytes
+                || union(&candidate)? > 128
+            {
                 if batch.is_empty() {
                     return Err(fail(
                         ErrorCode::BudgetExceeded,
@@ -989,6 +1202,8 @@ impl OfflineApp {
         Ok(out)
     }
     pub(crate) fn prior_accounting_for_new_run(&self) -> Result<PriorAccounting> {
+        #[cfg(test)]
+        indexed_embedding_inputs::attribution::prior_accounting_discovery();
         let mut prior = BTreeSet::new();
         let mut entries = 0;
         let paths = self.fs.root().scan_markdown_budgeted(&mut || {
@@ -1072,28 +1287,42 @@ impl OfflineApp {
         operation: &str,
         probe: bool,
     ) -> Result<(JobLedger, Vec<TaskSpec>)> {
+        self.embedding_job_with_bindings(spec, batches, units, runtime, operation, probe, None)
+    }
+    fn embedding_job_with_bindings(
+        &self,
+        spec: &SpaceSpec,
+        batches: &[Vec<EmbeddingInput>],
+        units: &[RenderedUnit],
+        runtime: &EmbeddingRuntime<'_>,
+        operation: &str,
+        probe: bool,
+        paid_bindings: Option<&BTreeMap<Blake3Hash, Vec<ReadDependency>>>,
+    ) -> Result<(JobLedger, Vec<TaskSpec>)> {
         self.remote_gate(runtime)?;
         let writer = self.embedding_writer()?;
         let catalog = Catalog::new(self.fs.clone(), self.vault_id.clone());
-        let normalized_inputs = if catalog.operation_state()?.is_some() && !units.is_empty() {
-            let paths = Self::embedding_owner_paths(units);
-            let mut inputs = indexed_embedding_inputs::materialize(
-                &catalog,
-                &spec.settings,
-                Some(&paths),
-                &VerificationBudget::default(),
-            )?;
-            if !same_units(units, &inputs.units) {
-                return Err(fail(
-                    ErrorCode::FreshnessConflict,
-                    "embedding inputs changed before task guards were frozen",
-                ));
-            }
-            inputs.recheck(&catalog)?;
-            Some(inputs)
-        } else {
-            None
-        };
+        let normalized_inputs =
+            if paid_bindings.is_none() && catalog.operation_state()?.is_some() && !units.is_empty()
+            {
+                let paths = Self::embedding_owner_paths(units);
+                let mut inputs = indexed_embedding_inputs::materialize(
+                    &catalog,
+                    &spec.settings,
+                    Some(&paths),
+                    &VerificationBudget::default(),
+                )?;
+                if !same_units(units, &inputs.units) {
+                    return Err(fail(
+                        ErrorCode::FreshnessConflict,
+                        "embedding inputs changed before task guards were frozen",
+                    ));
+                }
+                inputs.recheck(&catalog)?;
+                Some(inputs)
+            } else {
+                None
+            };
         for directory in [".wiki/state/embedding-inputs", ".wiki/state/embedding-jobs"] {
             self.fs
                 .ensure_directory(&VaultRelativePath::new(directory)?, &writer)?;
@@ -1128,9 +1357,13 @@ impl OfflineApp {
             let fp = crate::providers::wire::task_fingerprints(runtime.service, &remote)?;
             let hashes = batch.iter().map(|i| &i.input_hash).collect::<BTreeSet<_>>();
             let mut guards = BTreeMap::new();
-            if let Some(inputs) = &normalized_inputs {
+            if let Some(source_bindings) = paid_bindings.or_else(|| {
+                normalized_inputs
+                    .as_ref()
+                    .map(|inputs| &inputs.source_bindings)
+            }) {
                 for hash in &hashes {
-                    for guard in inputs.source_bindings.get(*hash).ok_or_else(|| {
+                    for guard in source_bindings.get(*hash).ok_or_else(|| {
                         fail(
                             ErrorCode::FreshnessConflict,
                             "embedding input lost its authenticated owner guards",
@@ -1535,10 +1768,11 @@ impl OfflineApp {
             .rev()
             .find(|a| a.attempt.task_key == task.key);
         if let Some(previous) = previous.filter(|a| {
-            matches!(
-                a.phase,
-                AttemptPhase::OutputCommitted | AttemptPhase::Settled
-            )
+            a.billing != BillingDisposition::ReleasedNotSent
+                && matches!(
+                    a.phase,
+                    AttemptPhase::OutputCommitted | AttemptPhase::Settled
+                )
         }) {
             let writer = self.embedding_writer()?;
             let mut store = VectorStore::open(&self.fs, Some(&writer))?;
@@ -1634,7 +1868,18 @@ impl OfflineApp {
                 output,
             }
         } else {
-            runtime.dispatcher.execute(ledger,runtime.service,&task.key,purpose).map_err(|failure| with_embedding_context(failure.error,serde_json::json!({"run_id":inspection.spec.run_id,"attempt":failure.attempt,"spool":failure.spool})))?
+            runtime.dispatcher.execute(ledger, runtime.service, &task.key, purpose)
+                .map_err(|failure| {
+                    // Admission exhaustion must leave the existing Run
+                    // explicitly amendable without replacing its paid scope.
+                    if failure.error.code == ErrorCode::BudgetExceeded
+                        && ledger.inspect().is_ok_and(|state| state.state == RunState::Running) {
+                        let _ = ledger.pause(StopReason::Budget);
+                    }
+                    with_embedding_context(failure.error, serde_json::json!({
+                        "run_id":inspection.spec.run_id,"attempt":failure.attempt,"spool":failure.spool,
+                    }))
+                })?
         };
         let materialized = (|| -> Result<_> {
             let writer = self.embedding_writer()?;

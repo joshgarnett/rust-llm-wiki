@@ -215,14 +215,28 @@ impl OfflineApp {
             if !missing.is_empty() {
                 if let Some(runtime) = runtime {
                     paid = true;
-                    let batches = self.embedding_batches(runtime, &missing)?;
-                    let (ledger, tasks) = self.embedding_job(
+                    let scope = prepared
+                        .as_ref()
+                        .ok_or_else(|| {
+                            changed(
+                                "missing embedding inputs lost their authenticated owner proofs",
+                            )
+                        })?
+                        .paid_scope(&units, &missing, 127)?;
+                    let batches = self.embedding_guard_batches(
+                        runtime,
+                        &missing,
+                        Some(&scope.source_bindings),
+                        &[],
+                    )?;
+                    let (ledger, tasks) = self.embedding_job_with_bindings(
                         &spec,
                         &batches,
-                        &units,
+                        &scope.units,
                         runtime,
                         "embeddings_sync",
                         false,
+                        Some(&scope.source_bindings),
                     )?;
                     report.run_id = Some(ledger.inspect()?.spec.run_id.clone());
                     for task in tasks {
@@ -239,7 +253,7 @@ impl OfflineApp {
                                 &ledger,
                                 &task,
                                 &spec,
-                                &units,
+                                &scope.units,
                                 runtime,
                                 TaskMaterialization {
                                     probe: false,

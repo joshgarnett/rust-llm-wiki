@@ -49,11 +49,18 @@ document context. Compact policy-bound descriptors now connect durable owner-pag
 preparation and changed-dependency invalidation to discovery without whole-corpus
 rendering. Its 63 affected native checks and small synthetic mock-backed public
 refresh/reprepare/reconstruction workflow pass; the latter has independent 10/10
-acceptance with exact citations. Ordinary queries still scan compatible vectors,
-and high-fanout shared inputs can exceed receipt guard limits. This path cannot
-qualify 25K unchanged. The next connected milestone is automatic receipt-feasible
-preparation and bounded discovery, selected through a controlled release attribution
-experiment within the ordinary collection lifecycle.
+acceptance with exact citations. Subsequent automatic preparation assigns each
+paid input a feasible authenticated supplier, completes repeated-input groups and
+preserves one page Run's limits across task partitions. Its scoped independent
+9/10 gate, 61 affected checks and 19-step public lifecycle pass. Intrinsically
+oversized unique suppliers still refuse; mixed-stale continuation and aggregate
+invocation budgets/startup deadlines across Runs remain workflow blockers.
+Ordinary queries still scan compatible vectors, so this path cannot qualify 25K
+unchanged. The next work is a complete cited-brief/update/recovery workflow and
+one default-geometry collection attribution experiment to choose the measured
+storage or bounded-discovery intervention. Admit that experiment from concrete
+manifests and resources; the older 1,000-byte segmentation projection is not
+current-default capacity admission.
 
 Literal and graph context, other rename target kinds
 and public default activation are not fully migrated. These

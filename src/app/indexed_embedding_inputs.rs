@@ -22,6 +22,13 @@ use std::{
     time::{Duration, Instant},
 };
 
+/// A newly declared paid scope. Reuse acknowledgment still authenticates all
+/// owners; these units and guards identify only the suppliers of paid inputs.
+pub(super) struct PaidEmbeddingScope {
+    pub units: Vec<RenderedUnit>,
+    pub source_bindings: BTreeMap<Blake3Hash, Vec<ReadDependency>>,
+}
+
 const MAX_OWNERS: usize = 4096;
 const MAX_PATH_BYTES: usize = 8 * 1024 * 1024;
 const MAX_BINDING_ENTRIES: usize = 65_536;
@@ -49,6 +56,7 @@ pub(super) mod attribution {
         pub canonical_entries: usize,
         pub incomplete_stages: usize,
         pub unavailable_failed_owner_proof: usize,
+        pub prior_accounting_discovery_calls: usize,
     }
 
     std::thread_local! {
@@ -137,6 +145,9 @@ pub(super) mod attribution {
             o.canonical_files += work.1;
             o.canonical_entries += work.2;
         });
+    }
+    pub(in crate::app) fn prior_accounting_discovery() {
+        update(|observation| observation.prior_accounting_discovery_calls += 1);
     }
 }
 fn exhausted(message: &str) -> WikiError {
@@ -260,6 +271,95 @@ pub(super) struct NormalizedEmbeddingInputs {
     failed: bool,
 }
 impl NormalizedEmbeddingInputs {
+    pub(super) fn paid_scope(
+        &self,
+        units: &[RenderedUnit],
+        missing: &[crate::providers::types::EmbeddingInput],
+        available_guards: usize,
+    ) -> Result<PaidEmbeddingScope> {
+        self.allowance.milliseconds()?;
+        if self.failed {
+            return Err(conflict(
+                "cannot plan paid inputs from a failed owner proof",
+            ));
+        }
+        let wanted: BTreeSet<_> = missing.iter().map(|input| &input.input_hash).collect();
+        let mut by_owner: BTreeMap<_, BTreeMap<_, Vec<_>>> = BTreeMap::new();
+        for unit in units
+            .iter()
+            .filter(|unit| wanted.contains(&unit.input_hash))
+        {
+            by_owner
+                .entry(&unit.owner)
+                .or_default()
+                .entry(&unit.input_hash)
+                .or_default()
+                .push(unit);
+        }
+        let mut suppliers = BTreeMap::new();
+        let mut oversized = BTreeMap::new();
+        // Owners were admitted in path order. Inspect each complete proof once,
+        // before freezing a paid input's guards; the all-owner equal-hash union
+        // in source_bindings is deliberately not used for paid scope selection.
+        for owner in &self.owners {
+            self.allowance.milliseconds()?;
+            let path = owner
+                .proof
+                .documents
+                .keys()
+                .next()
+                .ok_or_else(|| conflict("authenticated embedding supplier disappeared"))?;
+            let Some(owner_units) = by_owner.get(path) else {
+                continue;
+            };
+            let guards = owner.read_preconditions();
+            for hash in owner_units.keys().copied() {
+                if guards.len() <= available_guards {
+                    suppliers
+                        .entry(hash.clone())
+                        .or_insert_with(|| (path.clone(), guards.clone()));
+                } else {
+                    let candidate = oversized
+                        .entry(hash.clone())
+                        .or_insert((path.clone(), guards.len()));
+                    if guards.len() < candidate.1 {
+                        *candidate = (path.clone(), guards.len());
+                    }
+                }
+            }
+        }
+        let mut scope = PaidEmbeddingScope {
+            units: Vec::new(),
+            source_bindings: BTreeMap::new(),
+        };
+        for input in missing {
+            self.allowance.milliseconds()?;
+            let Some((owner, guards)) = suppliers.remove(&input.input_hash) else {
+                if let Some((owner, required)) = oversized.get(&input.input_hash) {
+                    let mut error = exhausted(&format!(
+                        "embedding input {} supplied by {} requires {} source guards; only {} are available (one additional Run guard is reserved)",
+                        input.input_hash, owner, required, available_guards,
+                    ));
+                    error.details = serde_json::json!({"input_hash":input.input_hash,"owner":owner,
+                        "required_source_guards":required,"available_source_guards":available_guards,
+                        "reserved_run_guards":1});
+                    return Err(error);
+                }
+                return Err(conflict(
+                    "missing embedding input has no authenticated supplier",
+                ));
+            };
+            scope.units.extend(
+                by_owner[&owner][&input.input_hash]
+                    .iter()
+                    .map(|unit| (**unit).clone()),
+            );
+            scope
+                .source_bindings
+                .insert(input.input_hash.clone(), guards);
+        }
+        Ok(scope)
+    }
     pub(super) fn owner_dependencies(
         &self,
     ) -> Result<Vec<(VaultRelativePath, Vec<ReadDependency>)>> {

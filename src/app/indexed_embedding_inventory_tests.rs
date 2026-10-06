@@ -92,8 +92,10 @@ fn inventory_multiple_pages_received_resume_skips_ready_owners_and_noop_renders_
             .join(format!("inventory-{index:03}.md"));
         let body = if index == 128 {
             "Resumeprobe final owner has 29 violet tokens. café 東京 🦀.\n"
-        } else {
+        } else if index < 64 {
             "Resumeprobe shared first-page fact has 17 amber tokens. café 東京 🦀.\n"
+        } else {
+            "Resumeprobe second shared first-page fact has 23 green tokens. café 東京 🦀.\n"
         };
         fs::write(
             path,
@@ -105,44 +107,13 @@ fn inventory_multiple_pages_received_resume_skips_ready_owners_and_noop_renders_
     let settings = ordinary_settings();
     let responses = Arc::new(Responses::new());
     let dispatch = dispatcher(&fixture.fs, responses.clone());
-    let preflight = runtime(&fixture.service, &dispatch);
-    let too_many_guards = fixture
-        .app
-        .embeddings_sync(&settings, &preflight)
-        .unwrap_err();
-    assert_eq!(
-        too_many_guards.code,
-        ErrorCode::BudgetExceeded,
-        "{too_many_guards:?}"
-    );
-    assert_eq!(
-        responses.calls.load(Ordering::SeqCst),
-        0,
-        "the 128-owner shared-input guard union must refuse before dispatch"
-    );
-    for index in 64..128 {
-        fs::write(
-            fixture
-                .fs
-                .root()
-                .path()
-                .join(format!("inventory-{index:03}.md")),
-            page_bytes(
-                &format!("page_inventory_{index:03}"),
-                None,
-                "Resumeprobe second shared first-page fact has 23 green tokens. café 東京 🦀.\n",
-            ),
-        )
-        .unwrap();
-    }
-    fixture.app.index_sync(false).unwrap();
     let fault = Arc::new(ThirdReceivedCut {
         received: AtomicUsize::new(0),
     });
     let mut interrupted = runtime(&fixture.service, &dispatch);
     interrupted.job_options.fault = Some(fault.clone());
-    // The first 128-owner preparation page contains two shared inputs, each
-    // with 64 owner guards plus WIKI.md, inside the 128-guard receipt limit.
+    // The first page acquires two shared inputs from one authenticated
+    // supplier each; all 128 owners receive separate fresh acknowledgments.
     // A third distinct input belongs to the final owner on the next page.
     // Each attempt retains its real 8 MiB
     // reservation if accounting is unknown. No finite response ceiling is set.
@@ -704,4 +675,1354 @@ fn inventory_catalog_rebuild_and_retained_cache_restore_reuse_vectors_offline() 
     exact_source_hit(&hits.hits[0], &source, &revision, FIRST);
     cached_noop(&fixture, &settings, 1);
     assert_eq!(responses.calls.load(Ordering::SeqCst), 1);
+}
+
+fn retained_marker_count(fixture: &Fixture) -> usize {
+    fs::read_dir(fixture.fs.root().path().join(".wiki/state/embedding-jobs"))
+        .unwrap()
+        .count()
+}
+
+/// Inspect the actual named canonical receipt publication, rather than a
+/// freshly calculated partition or a later reconstruction of its preconditions.
+fn assert_receipt_guards(fixture: &Fixture, inspection: &LedgerInspection) {
+    let engine = crate::changes::ChangeEngine::new(fixture.fs.clone()).unwrap();
+    for attempt in &inspection.attempts {
+        let reference = attempt.receipt.as_ref().unwrap();
+        let receipt = crate::jobs::checkpoint::receipt(&fixture.fs, reference).unwrap();
+        assert_eq!(receipt.output_disposition, OutputDisposition::Validated);
+        let committed = crate::jobs::checkpoint::named_job_committed(
+            &fixture.fs,
+            fixture.app.vault_id(),
+            &inspection.spec.run_id,
+            crate::jobs::checkpoint::JobPublicationKey::Receipt {
+                receipt_id: receipt.receipt_id.clone(),
+            },
+            &reference.path,
+            &reference.hash,
+        )
+        .unwrap()
+        .unwrap();
+        let (manifest, hash) = engine.load_manifest(&committed.change_id).unwrap();
+        assert_eq!(hash, committed.manifest_hash);
+        let task = &inspection.tasks[&attempt.attempt.task_key].spec;
+        let mut expected = BTreeMap::new();
+        for guard in inspection
+            .spec
+            .scope
+            .read_preconditions
+            .iter()
+            .chain(&task.source_bindings)
+        {
+            assert!(
+                expected
+                    .insert(&guard.path, &guard.expected)
+                    .is_none_or(|previous| previous == &guard.expected)
+            );
+            assert!(manifest.read_preconditions.contains(guard));
+        }
+        assert_eq!(manifest.read_preconditions.len(), expected.len() + 1);
+        assert!(manifest.read_preconditions.len() <= 128);
+        let run = inspection.run_note.as_ref().unwrap();
+        assert!(
+            manifest
+                .read_preconditions
+                .iter()
+                .any(|guard| guard.path == run.path)
+        );
+    }
+}
+
+#[test]
+fn inventory_automatic_guard_identical_128_129_257_acquires_once_and_noop_has_zero_owner_work() {
+    for owners in [128, 129, 257] {
+        let fixture = normalized();
+        for index in 0..owners {
+            fs::write(
+                fixture
+                    .fs
+                    .root()
+                    .path()
+                    .join(format!("identical-{index:03}.md")),
+                page_bytes(
+                    &format!("page_identical_{index:03}"),
+                    None,
+                    "One identical corpus input stores 17 amber tokens. café 東京 🦀.\n",
+                ),
+            )
+            .unwrap();
+        }
+        fixture.app.index_sync(false).unwrap();
+        let responses = Arc::new(Responses::new());
+        let dispatch = dispatcher(&fixture.fs, responses.clone());
+        let runtime = runtime(&fixture.service, &dispatch);
+        let report = fixture
+            .app
+            .embeddings_sync(&ordinary_settings(), &runtime)
+            .unwrap();
+        complete(&report, owners);
+        assert_eq!(report.generated_inputs, 1);
+        assert_eq!(responses.calls.load(Ordering::SeqCst), 1);
+        assert_eq!(retained_marker_count(&fixture), 1);
+        let job = ledger(&fixture, &report);
+        let inspection = job.inspect().unwrap();
+        assert_eq!(inspection.tasks.len(), 1);
+        assert_eq!(inspection.attempts.len(), 1);
+        let task = &inspection.tasks.values().next().unwrap().spec;
+        assert_eq!(
+            task.source_bindings.len(),
+            2,
+            "supplier owner and WIKI.md only"
+        );
+        assert_receipt_guards(&fixture, &inspection);
+        let marker: serde_json::Value = serde_json::from_slice(
+            &fs::read(
+                fs::read_dir(fixture.fs.root().path().join(".wiki/state/embedding-jobs"))
+                    .unwrap()
+                    .next()
+                    .unwrap()
+                    .unwrap()
+                    .path(),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(marker["expected_units"].as_array().unwrap().len(), 1);
+        assert_eq!(marker["expected_units"][0]["owner"], "identical-000.md");
+        cached_noop(&fixture, &ordinary_settings(), owners);
+        assert_eq!(responses.calls.load(Ordering::SeqCst), 1);
+    }
+}
+
+/// Grow an actual selected support closure to the requested guard count. Each
+/// extra valid Evidence adds exactly one canonical path to the same Assertion.
+/// The corpus still has one Source and one authored Page, rather than hundreds
+/// of artificial provider inputs or hand-injected read guards.
+fn owner_with_guard_count(
+    fixture: &Fixture,
+    prefix: &str,
+    guards: usize,
+    body: &str,
+) -> VaultRelativePath {
+    let (source, revision) = add(fixture, TITLE, &format!("{prefix}-support.txt"), FIRST);
+    let assertion = format!("assertion_{prefix}");
+    let entity = format!("entity_{prefix}");
+    fs::write(fixture.fs.root().path().join(format!("{prefix}-entity.md")),
+        format!("---\nwiki_schema: '1'\nwiki_kind: entity\nwiki_id: {entity}\ntitle: Guard identity\nwiki_status: active\nwiki_entity_type: component\n---\n")).unwrap();
+    fs::write(fixture.fs.root().path().join(format!("{prefix}-assertion.md")),
+        format!("---\nwiki_schema: '1'\nwiki_kind: assertion\nwiki_id: {assertion}\ntitle: Guard support\nwiki_status: accepted\nwiki_subject_id: {entity}\nwiki_object_id: {entity}\nwiki_predicate: uses\n---\nSupported proposition.\n")).unwrap();
+    let evidence = |index: usize| {
+        let mut bytes = format!("---\nwiki_schema: '1'\nwiki_kind: evidence\nwiki_id: evidence_{prefix}_{index:03}\ntitle: Exact guard support\nwiki_status: active\nwiki_assertion_id: {assertion}\nwiki_source_id: '{source}'\nwiki_source_revision: '{revision}'\nwiki_stance: supports\nwiki_locator_kind: utf8-bytes\nwiki_span_start: 0\nwiki_span_end: {}\nwiki_quote_hash: {}\n---\n", FIRST.len(), Blake3Hash::digest(FIRST.as_bytes())).into_bytes();
+        bytes.extend(
+            crate::sources::evidence::exact_quote_body(FIRST.as_bytes(), "\n", "Support").unwrap(),
+        );
+        fs::write(
+            fixture
+                .fs
+                .root()
+                .path()
+                .join(format!("{prefix}-evidence-{index:03}.md")),
+            bytes,
+        )
+        .unwrap();
+    };
+    evidence(0);
+    let owner = rel(&format!("{prefix}-page.md"));
+    fs::write(
+        fixture.fs.root().path().join(owner.as_str()),
+        page_bytes(&format!("page_{prefix}"), Some(&assertion), body),
+    )
+    .unwrap();
+    fixture.app.index_sync(false).unwrap();
+    let catalog = Catalog::new(fixture.fs.clone(), fixture.app.vault_id().clone());
+    let proof = super::super::indexed_embedding_inputs::materialize(
+        &catalog,
+        &ordinary_settings(),
+        Some(std::slice::from_ref(&owner)),
+        &crate::retrieval::context_types::VerificationBudget::default(),
+    )
+    .unwrap();
+    let base = proof.owner_dependencies().unwrap()[0].1.len();
+    assert!(base <= guards);
+    drop(proof);
+    for index in 1..=guards - base {
+        evidence(index);
+    }
+    fixture.app.index_sync(false).unwrap();
+    let proof = super::super::indexed_embedding_inputs::materialize(
+        &catalog,
+        &ordinary_settings(),
+        Some(std::slice::from_ref(&owner)),
+        &crate::retrieval::context_types::VerificationBudget::default(),
+    )
+    .unwrap();
+    assert_eq!(proof.owner_dependencies().unwrap()[0].1.len(), guards);
+    owner
+}
+
+/// Historical merged identities are part of the selected subject's complete
+/// reverse-incidence proof, with one canonical path per identity. This keeps
+/// the receipt guard geometry exact without repeating a captured payload's
+/// multiple direct-path/edge rows for every extra Evidence record.
+fn owner_with_identity_guard_count(
+    fixture: &Fixture,
+    prefix: &str,
+    guards: usize,
+    body: &str,
+) -> VaultRelativePath {
+    let base_guards = 12;
+    assert!(guards >= base_guards);
+    let owner = owner_with_guard_count(fixture, prefix, base_guards, body);
+    for index in 0..guards - base_guards {
+        let bytes = format!(
+            "---\nwiki_schema: '1'\nwiki_kind: entity\nwiki_id: entity_{prefix}_historical_{index:03}\ntitle: Historical merged guard identity\nwiki_status: superseded\nwiki_entity_type: component\nwiki_superseded_by_id: entity_{prefix}\n---\n"
+        );
+        let parsed = crate::records::parse_note(bytes.as_bytes());
+        assert_eq!(
+            parsed.canonical.as_ref().unwrap().kind(),
+            RecordKind::Entity
+        );
+        fs::write(
+            fixture
+                .fs
+                .root()
+                .path()
+                .join(format!("{prefix}-historical-{index:03}.md")),
+            bytes,
+        )
+        .unwrap();
+    }
+    fixture.app.index_sync(false).unwrap();
+    let catalog = Catalog::new(fixture.fs.clone(), fixture.app.vault_id().clone());
+    let proof = super::super::indexed_embedding_inputs::materialize(
+        &catalog,
+        &ordinary_settings(),
+        Some(std::slice::from_ref(&owner)),
+        &crate::retrieval::context_types::VerificationBudget::default(),
+    )
+    .unwrap();
+    assert_eq!(proof.owner_dependencies().unwrap()[0].1.len(), guards);
+    assert!(
+        proof.units.len() > 0,
+        "current supported Page must remain eligible"
+    );
+    owner
+}
+
+#[test]
+fn inventory_automatic_guard_actual_126_127_receipts_and_unique_128_preflight() {
+    for guards in [126, 127, 128] {
+        let fixture = normalized();
+        let owner = owner_with_guard_count(
+            &fixture,
+            "boundary",
+            guards,
+            "The uniquely supplied Page stores 59 silver tokens.\n",
+        );
+        let responses = Arc::new(Responses::new());
+        let dispatch = dispatcher(&fixture.fs, responses.clone());
+        let runtime = runtime(&fixture.service, &dispatch);
+        let result = fixture.app.embeddings_sync(&ordinary_settings(), &runtime);
+        if guards == 128 {
+            let error = result.unwrap_err();
+            assert_eq!(error.code, ErrorCode::BudgetExceeded);
+            assert!(error.message.contains("128 source guards"));
+            assert!(error.message.contains("127 are available"));
+            assert_eq!(error.details["owner"], owner.as_str());
+            assert_eq!(responses.calls.load(Ordering::SeqCst), 0);
+            assert!(
+                !fixture
+                    .fs
+                    .root()
+                    .path()
+                    .join(".wiki/state/embedding-jobs")
+                    .exists()
+            );
+        } else {
+            let report = result.unwrap();
+            complete(&report, 2);
+            let inspection = ledger(&fixture, &report).inspect().unwrap();
+            assert!(
+                inspection
+                    .tasks
+                    .values()
+                    .any(|task| task.spec.source_bindings.len() == guards)
+            );
+            assert_receipt_guards(&fixture, &inspection);
+            assert_eq!(responses.calls.load(Ordering::SeqCst), 2);
+            cached_noop(&fixture, &ordinary_settings(), 2);
+        }
+    }
+}
+
+#[test]
+fn inventory_automatic_guard_oversized_first_supplier_uses_alternate_and_cached_rebuild() {
+    let fixture = normalized();
+    let body = "An oversized owner reuses exactly these 59 silver tokens.\n";
+    let oversized = owner_with_guard_count(&fixture, "aoversized", 128, body);
+    let alternate = rel("z-feasible.md");
+    fs::write(
+        fixture.fs.root().path().join(alternate.as_str()),
+        page_bytes("page_feasible", None, body),
+    )
+    .unwrap();
+    fixture.app.index_sync(false).unwrap();
+    let responses = Arc::new(Responses::new());
+    let dispatch = dispatcher(&fixture.fs, responses.clone());
+    let runtime = runtime(&fixture.service, &dispatch);
+    let report = fixture
+        .app
+        .embeddings_sync(&ordinary_settings(), &runtime)
+        .unwrap();
+    complete(&report, 3);
+    let inspection = ledger(&fixture, &report).inspect().unwrap();
+    assert_eq!(paid_inputs(&fixture, &inspection).len(), 2);
+    assert_eq!(responses.calls.load(Ordering::SeqCst), 2);
+    assert!(inspection.tasks.values().any(|task| {
+        task.spec
+            .source_bindings
+            .iter()
+            .any(|guard| guard.path == alternate)
+    }));
+    assert!(inspection.tasks.values().all(|task| {
+        task.spec
+            .source_bindings
+            .iter()
+            .all(|guard| guard.path != oversized)
+    }));
+    assert_receipt_guards(&fixture, &inspection);
+    cached_noop(&fixture, &ordinary_settings(), 3);
+    // The oversized owner can subsequently reuse the compatible paid vector
+    // without any remaining feasible authored supplier or a new receipt.
+    fs::remove_file(fixture.fs.root().path().join(alternate.as_str())).unwrap();
+    fixture.app.index_sync(false).unwrap();
+    fixture.app.index_rebuild_normalized().unwrap();
+    let (rebuilt, work) = attribution::with_observation(|| {
+        fixture
+            .offline()
+            .embeddings_sync_cached(&ordinary_settings())
+    });
+    complete(&rebuilt.unwrap(), 2);
+    assert_eq!(work.authenticated_owners, 2);
+    assert_eq!(responses.calls.load(Ordering::SeqCst), 2);
+    cached_noop(&fixture, &ordinary_settings(), 2);
+}
+
+#[test]
+fn inventory_automatic_guard_two_request_three_task_resume_requires_existing_amendment() {
+    let fixture = normalized();
+    for index in 0..3 {
+        fs::write(
+            fixture.fs.root().path().join(format!("budget-{index}.md")),
+            page_bytes(
+                &format!("page_budget_{index}"),
+                None,
+                &format!("Unique corpus fact number {index} stores amber tokens.\n"),
+            ),
+        )
+        .unwrap();
+    }
+    fixture.app.index_sync(false).unwrap();
+    let responses = Arc::new(Responses::new());
+    let dispatch = dispatcher(&fixture.fs, responses.clone());
+    let mut limited = runtime(&fixture.service, &dispatch);
+    limited.limits.requests = 2;
+    let error = fixture
+        .app
+        .embeddings_sync(&ordinary_settings(), &limited)
+        .unwrap_err();
+    assert_eq!(error.code, ErrorCode::BudgetExceeded);
+    assert_eq!(responses.calls.load(Ordering::SeqCst), 2);
+    let run = serde_json::from_value(error.details["run_id"].clone()).unwrap();
+    let job = JobLedger::new(
+        fixture.fs.clone(),
+        fixture.app.vault_id().clone(),
+        run,
+        options(),
+    )
+    .unwrap();
+    let before = job.inspect().unwrap();
+    assert_eq!(before.tasks.len(), 3);
+    assert_eq!(before.attempts.len(), 2);
+    assert_eq!(before.budget.dispatched_requests, 2);
+    assert_eq!(before.budget.unknown_attempts.len(), 2);
+    assert_eq!(retained_marker_count(&fixture), 1);
+    let again = fixture
+        .app
+        .embeddings_sync(&ordinary_settings(), &limited)
+        .unwrap_err();
+    assert_eq!(again.code, ErrorCode::BudgetExceeded);
+    assert_eq!(
+        again.details["run_id"],
+        serde_json::to_value(&before.spec.run_id).unwrap()
+    );
+    assert_eq!(responses.calls.load(Ordering::SeqCst), 2);
+    let stopped = job.inspect().unwrap();
+    assert_eq!(stopped.attempts, before.attempts);
+    assert_eq!(stopped.budget.outstanding, before.budget.outstanding);
+    assert_eq!(
+        stopped.budget.unknown_attempts,
+        before.budget.unknown_attempts
+    );
+    assert_eq!(retained_marker_count(&fixture), 1);
+    limited.limits.requests = 3;
+    job.amend_retained_limits(
+        limited.limits.clone(),
+        before.effective_deadline_utc_ms,
+        "Explicit allowance for the existing third receipt".into(),
+    )
+    .unwrap();
+    let report = fixture
+        .app
+        .embeddings_sync(&ordinary_settings(), &limited)
+        .unwrap();
+    complete(&report, 3);
+    assert_eq!(report.run_id, Some(before.spec.run_id.clone()));
+    assert_eq!(responses.calls.load(Ordering::SeqCst), 3);
+    assert_eq!(retained_marker_count(&fixture), 1);
+    let after = job.inspect().unwrap();
+    assert_eq!(after.attempts.len(), 3);
+    assert_eq!(after.budget.dispatched_requests, 3);
+    assert_eq!(&after.attempts[..2], before.attempts.as_slice());
+    assert_eq!(after.budget.unknown_attempts.len(), 3);
+    assert_receipt_guards(&fixture, &after);
+    cached_noop(&fixture, &ordinary_settings(), 3);
+}
+
+struct BatchResponses {
+    fs: crate::vault::VaultFs,
+    vault: RecordId,
+    calls: AtomicUsize,
+    items: AtomicUsize,
+}
+impl crate::providers::types::Transport for BatchResponses {
+    fn execute<'a>(
+        &'a self,
+        request: crate::providers::types::AuthenticatedRequest<'a>,
+        _: crate::providers::types::TransportContext,
+    ) -> crate::providers::types::TransportFuture<'a> {
+        let summary = request.summary();
+        let job = JobLedger::new(
+            self.fs.clone(),
+            self.vault.clone(),
+            summary.attempt.run_id.clone(),
+            options(),
+        )
+        .unwrap();
+        let inspection = job.inspect().unwrap();
+        let reference = &inspection.tasks[&summary.attempt.task_key].spec.input;
+        let bytes = fs::read(self.fs.root().path().join(reference.path.as_str())).unwrap();
+        assert_eq!(Blake3Hash::digest(&bytes), reference.hash);
+        let remote: RemoteInput = serde_json::from_slice(&bytes).unwrap();
+        let RemoteOperation::Embed { inputs, .. } = remote.operation else {
+            panic!("embedding task");
+        };
+        assert!(!inputs.is_empty() && inputs.len() <= 32);
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        self.items.fetch_add(inputs.len(), Ordering::SeqCst);
+        let data: Vec<_> = inputs
+            .iter()
+            .enumerate()
+            .map(|(index, input)| {
+                assert_eq!(Blake3Hash::digest(input.utf8.as_bytes()), input.input_hash);
+                serde_json::json!({"index":index,"embedding":[1.0,0.0]})
+            })
+            .collect();
+        Box::pin(async move {
+            Ok(crate::providers::types::TransportReply::new(
+                200,
+                vec![],
+                serde_json::to_vec(&serde_json::json!({"model":"test-model","data":data})).unwrap(),
+            )
+            .unwrap())
+        })
+    }
+}
+struct NoBatchJitter;
+impl crate::providers::types::JitterSource for NoBatchJitter {
+    fn sample_inclusive(&self, _: u64) -> Result<u64> {
+        Ok(0)
+    }
+}
+fn batch_dispatch(
+    fixture: &mut Fixture,
+) -> (
+    crate::providers::dispatcher::Dispatcher,
+    Arc<BatchResponses>,
+) {
+    let config = fs::read_to_string(&fixture.config)
+        .unwrap()
+        .replace("max_batch_items=1", "max_batch_items=32");
+    common::private_write(&fixture.config, config);
+    fixture.service = crate::config::providers::ProviderConfig::load(&fixture.config)
+        .unwrap()
+        .authorize(
+            &fixture.fs,
+            fixture.app.vault_id(),
+            "primary",
+            Capability::Embed,
+        )
+        .unwrap();
+    let responses = Arc::new(BatchResponses {
+        fs: fixture.fs.clone(),
+        vault: fixture.app.vault_id().clone(),
+        calls: AtomicUsize::new(0),
+        items: AtomicUsize::new(0),
+    });
+    let dispatch = crate::providers::dispatcher::Dispatcher::new(
+        fixture.fs.clone(),
+        crate::providers::types::DispatchOptions {
+            broker: Arc::new(crate::providers::credentials::CredentialBroker::new(
+                crate::providers::credentials::CredentialOptions {
+                    clock: Arc::new(common::TestClock),
+                    inputs: Arc::new(crate::providers::credentials::NativeSecretInputs),
+                    runner: Arc::new(crate::providers::credentials::NativeHelperRunner),
+                },
+            )),
+            transport: responses.clone(),
+            jitter: Arc::new(NoBatchJitter),
+        },
+    );
+    (dispatch, responses)
+}
+
+#[test]
+fn inventory_automatic_guard_overlapping_multi_unit_scopes_fit_actual_shared_union() {
+    let mut fixture = normalized();
+    let body = format!(
+        "{}{}",
+        "Alpha guard body stores 59 silver tokens.\n".repeat(240),
+        "Beta guard body stores 61 violet tokens.\n".repeat(240)
+    );
+    let owner = owner_with_identity_guard_count(&fixture, "overlap", 126, &body);
+    let original = fs::read(fixture.fs.root().path().join(owner.as_str())).unwrap();
+    // A duplicate owner with the same support closure and two distinct units
+    // is acknowledged independently, while each input is acquired once.
+    let duplicate = String::from_utf8(original)
+        .unwrap()
+        .replace("wiki_id: page_overlap", "wiki_id: page_overlap_duplicate");
+    fs::write(
+        fixture.fs.root().path().join("overlap-duplicate.md"),
+        duplicate,
+    )
+    .unwrap();
+    fixture.app.index_sync(false).unwrap();
+    let (dispatch, responses) = batch_dispatch(&mut fixture);
+    let runtime = runtime(&fixture.service, &dispatch);
+    let report = fixture
+        .app
+        .embeddings_sync(&ordinary_settings(), &runtime)
+        .unwrap();
+    let inspection = ledger(&fixture, &report).inspect().unwrap();
+    let submitted = paid_inputs(&fixture, &inspection);
+    assert_eq!(
+        submitted
+            .iter()
+            .map(|input| &input.input_hash)
+            .collect::<std::collections::BTreeSet<_>>()
+            .len(),
+        submitted.len()
+    );
+    assert!(submitted.len() >= 3, "two Page units and one Source input");
+    assert_eq!(
+        inspection.tasks.len(),
+        1,
+        "overlapping complete guards count once"
+    );
+    assert_eq!(
+        inspection
+            .tasks
+            .values()
+            .next()
+            .unwrap()
+            .spec
+            .source_bindings
+            .len(),
+        126
+    );
+    assert_eq!(responses.calls.load(Ordering::SeqCst), 1);
+    assert_eq!(responses.items.load(Ordering::SeqCst), submitted.len());
+    assert_eq!(retained_marker_count(&fixture), 1);
+    assert_receipt_guards(&fixture, &inspection);
+    let catalog = Catalog::new(fixture.fs.clone(), fixture.app.vault_id().clone());
+    let reader = catalog
+        .cached_query_snapshot(QueryReadLimits::default())
+        .unwrap();
+    let policy =
+        RenderPolicyId::for_settings(&reader.snapshot().parser_fingerprint, &ordinary_settings())
+            .unwrap();
+    let count = reader
+        .unit_inventory_state(&policy)
+        .unwrap()
+        .unwrap()
+        .unit_count;
+    complete(&report, count);
+    drop(reader);
+    cached_noop(&fixture, &ordinary_settings(), count);
+}
+
+#[test]
+fn inventory_automatic_guard_three_disjoint_scopes_share_one_limited_run() {
+    let mut fixture = normalized();
+    for index in 0..3 {
+        owner_with_identity_guard_count(
+            &fixture,
+            &format!("disjoint{index}"),
+            70,
+            &format!("The unique disjoint supplier {index} stores 59 silver tokens.\n"),
+        );
+    }
+    let (dispatch, responses) = batch_dispatch(&mut fixture);
+    let mut limited = runtime(&fixture.service, &dispatch);
+    limited.limits.requests = 2;
+    let (error, initial_work) = attribution::with_observation(|| {
+        fixture.app.embeddings_sync(&ordinary_settings(), &limited)
+    });
+    let error = error.unwrap_err();
+    assert_eq!(error.code, ErrorCode::BudgetExceeded, "{error:?}");
+    assert_eq!(
+        initial_work.prior_accounting_discovery_calls, 1,
+        "fixture must reach paid Run allocation; actual error: {error:?}; authenticated owners: {}; cache rows: {}",
+        initial_work.authenticated_owners, initial_work.cache_rows
+    );
+    assert_eq!(responses.calls.load(Ordering::SeqCst), 2);
+    let run = serde_json::from_value(error.details["run_id"].clone()).unwrap();
+    let job = JobLedger::new(
+        fixture.fs.clone(),
+        fixture.app.vault_id().clone(),
+        run,
+        options(),
+    )
+    .unwrap();
+    let before = job.inspect().unwrap();
+    assert_eq!(
+        before.tasks.len(),
+        3,
+        "actual guard unions force three receipts despite 32-item allowance"
+    );
+    assert_eq!(before.attempts.len(), 2);
+    assert_receipt_guards(&fixture, &before);
+    let (again, resume_work) = attribution::with_observation(|| {
+        fixture.app.embeddings_sync(&ordinary_settings(), &limited)
+    });
+    let again = again.unwrap_err();
+    assert_eq!(resume_work.prior_accounting_discovery_calls, 0);
+    assert_eq!(again.code, ErrorCode::BudgetExceeded);
+    assert_eq!(responses.calls.load(Ordering::SeqCst), 2);
+    assert_eq!(retained_marker_count(&fixture), 1);
+    assert_eq!(job.inspect().unwrap().attempts, before.attempts);
+    limited.limits.requests = 3;
+    job.amend_retained_limits(
+        limited.limits.clone(),
+        before.effective_deadline_utc_ms,
+        "Explicit third guard-constrained receipt".into(),
+    )
+    .unwrap();
+    let (report, amended_work) = attribution::with_observation(|| {
+        fixture.app.embeddings_sync(&ordinary_settings(), &limited)
+    });
+    let report = report.unwrap();
+    assert_eq!(amended_work.prior_accounting_discovery_calls, 0);
+    complete(&report, 6);
+    assert_eq!(report.run_id, Some(before.spec.run_id.clone()));
+    assert_eq!(responses.calls.load(Ordering::SeqCst), 3);
+    assert_eq!(
+        responses.items.load(Ordering::SeqCst),
+        4,
+        "three unique Page inputs plus one shared Source input"
+    );
+    assert_eq!(retained_marker_count(&fixture), 1);
+    let after = job.inspect().unwrap();
+    assert_eq!(&after.attempts[..2], before.attempts.as_slice());
+    assert_eq!(after.attempts.len(), 3);
+    assert_eq!(after.budget.unknown_attempts.len(), 3);
+    assert_receipt_guards(&fixture, &after);
+    cached_noop(&fixture, &ordinary_settings(), 6);
+}
+
+#[test]
+fn inventory_automatic_guard_received_same_page_replays_before_pending_without_resend() {
+    let fixture = normalized();
+    for index in 0..3 {
+        fs::write(
+            fixture
+                .fs
+                .root()
+                .path()
+                .join(format!("received-{index}.md")),
+            page_bytes(
+                &format!("page_received_{index}"),
+                None,
+                &format!("A unique Received supplier {index} stores amber tokens.\n"),
+            ),
+        )
+        .unwrap();
+    }
+    fixture.app.index_sync(false).unwrap();
+    let fault = Arc::new(ReceivedOnce {
+        armed: AtomicBool::new(true),
+    });
+    let responses = Arc::new(Responses::new());
+    let dispatch = dispatcher(&fixture.fs, responses.clone());
+    let mut interrupted = runtime(&fixture.service, &dispatch);
+    interrupted.job_options.fault = Some(fault);
+    let stopped = fixture
+        .app
+        .embeddings_sync(&ordinary_settings(), &interrupted)
+        .unwrap_err();
+    let run = serde_json::from_value(stopped.details["run_id"].clone()).unwrap();
+    let job = JobLedger::new(
+        fixture.fs.clone(),
+        fixture.app.vault_id().clone(),
+        run,
+        options(),
+    )
+    .unwrap();
+    let before = job.inspect().unwrap();
+    assert_eq!(before.tasks.len(), 3);
+    assert_eq!(before.attempts.len(), 1);
+    assert_eq!(before.attempts[0].phase, AttemptPhase::Received);
+    let received_spool = before.attempts[0]
+        .spool
+        .as_ref()
+        .expect("durable Received spool");
+    for reference in [&received_spool.response, &received_spool.metadata] {
+        let bytes = fs::read(fixture.fs.root().path().join(reference.path.as_str())).unwrap();
+        assert_eq!(bytes.len() as u64, reference.byte_len);
+        assert_eq!(Blake3Hash::digest(&bytes), reference.hash);
+    }
+    assert_eq!(responses.calls.load(Ordering::SeqCst), 1);
+    let resumed = runtime(&fixture.service, &dispatch);
+    let report = fixture
+        .app
+        .embeddings_sync(&ordinary_settings(), &resumed)
+        .unwrap();
+    complete(&report, 3);
+    assert_eq!(responses.calls.load(Ordering::SeqCst), 3);
+    assert_eq!(retained_marker_count(&fixture), 1);
+    let after = job.inspect().unwrap();
+    assert_eq!(after.attempts.len(), 3);
+    assert_eq!(after.attempts[0].attempt, before.attempts[0].attempt);
+    assert!(
+        after.attempts[0].spool.is_none(),
+        "verified settled response is pruned"
+    );
+    let history =
+        crate::jobs::checkpoint::storage_run_history(&fixture.fs, &after.spec.run_id).unwrap();
+    assert!(
+        history.frames.iter().any(|frame| matches!(
+            &frame.event.payload, EventPayload::SpoolRemoved { attempt }
+                if attempt == &before.attempts[0].attempt
+        )),
+        "head-authenticated history must record exact spool removal"
+    );
+    assert!(
+        !fixture
+            .fs
+            .root()
+            .path()
+            .join(received_spool.response.path.as_str())
+            .exists()
+    );
+    assert!(
+        !fixture
+            .fs
+            .root()
+            .path()
+            .join(received_spool.metadata.path.as_str())
+            .exists()
+    );
+    let receipt = crate::jobs::checkpoint::receipt(
+        &fixture.fs,
+        after.attempts[0]
+            .receipt
+            .as_ref()
+            .expect("retained receipt survives cleanup"),
+    )
+    .unwrap();
+    assert_eq!(receipt.attempt, before.attempts[0].attempt);
+    assert_eq!(receipt.output_disposition, OutputDisposition::Validated);
+    assert_eq!(receipt.cache_outputs, after.attempts[0].cache_outputs);
+    assert!(!receipt.cache_outputs.is_empty());
+    assert_eq!(
+        after.tasks[&before.attempts[0].attempt.task_key].cache_outputs,
+        receipt.cache_outputs
+    );
+    assert_eq!(after.attempts[0].phase, AttemptPhase::Settled);
+    assert_eq!(after.budget.dispatched_requests, 3);
+    assert_eq!(after.budget.unknown_attempts.len(), 3);
+    assert_eq!(
+        after.attempts[0].billing,
+        BillingDisposition::UnknownReserved
+    );
+    assert_eq!(after.attempts[0].allowance, before.attempts[0].allowance);
+    assert_receipt_guards(&fixture, &after);
+    cached_noop(&fixture, &ordinary_settings(), 3);
+}
+
+#[test]
+fn inventory_automatic_guard_changed_received_supplier_cannot_borrow_unchanged_duplicate_proof() {
+    let fixture = normalized();
+    for name in ["a-supplier", "z-duplicate"] {
+        fs::write(
+            fixture.fs.root().path().join(format!("{name}.md")),
+            page_bytes(&format!("page_{}", name.replace('-', "_")), None, FIRST),
+        )
+        .unwrap();
+    }
+    fixture.app.index_sync(false).unwrap();
+    let responses = Arc::new(Responses::new());
+    let dispatch = dispatcher(&fixture.fs, responses.clone());
+    let mut interrupted = runtime(&fixture.service, &dispatch);
+    interrupted.job_options.fault = Some(Arc::new(ReceivedOnce {
+        armed: AtomicBool::new(true),
+    }));
+    let stopped = fixture
+        .app
+        .embeddings_sync(&ordinary_settings(), &interrupted)
+        .unwrap_err();
+    let run = serde_json::from_value(stopped.details["run_id"].clone()).unwrap();
+    let job = JobLedger::new(
+        fixture.fs.clone(),
+        fixture.app.vault_id().clone(),
+        run,
+        options(),
+    )
+    .unwrap();
+    let before = job.inspect().unwrap();
+    let task = &before.tasks.values().next().unwrap().spec;
+    assert!(
+        task.source_bindings
+            .iter()
+            .any(|guard| guard.path == rel("a-supplier.md"))
+    );
+    assert!(
+        !task
+            .source_bindings
+            .iter()
+            .any(|guard| guard.path == rel("z-duplicate.md"))
+    );
+    fs::write(
+        fixture.fs.root().path().join("a-supplier.md"),
+        page_bytes("page_a_supplier", None, SECOND),
+    )
+    .unwrap();
+    fixture.app.index_sync(false).unwrap();
+    let resumed = runtime(&fixture.service, &dispatch);
+    let error = fixture
+        .app
+        .embeddings_sync(&ordinary_settings(), &resumed)
+        .unwrap_err();
+    assert_eq!(error.code, ErrorCode::FreshnessConflict);
+    assert_eq!(responses.calls.load(Ordering::SeqCst), 1);
+    let after = job.inspect().unwrap();
+    assert_eq!(after.attempts[0].attempt, before.attempts[0].attempt);
+    assert_eq!(after.attempts[0].phase, AttemptPhase::Settled);
+    assert!(after.attempts[0].cache_outputs.is_empty());
+    let receipt =
+        crate::jobs::checkpoint::receipt(&fixture.fs, after.attempts[0].receipt.as_ref().unwrap())
+            .unwrap();
+    assert_eq!(receipt.output_disposition, OutputDisposition::Rejected);
+    assert_eq!(
+        after.budget.unknown_attempts,
+        before.budget.unknown_attempts
+    );
+    assert_eq!(after.budget.outstanding, before.budget.outstanding);
+    assert!(
+        VectorStore::open(&fixture.fs, None)
+            .unwrap()
+            .active()
+            .unwrap()
+            .is_none()
+    );
+    complete(
+        &fixture
+            .app
+            .embeddings_sync(&ordinary_settings(), &resumed)
+            .unwrap(),
+        2,
+    );
+    assert_eq!(responses.calls.load(Ordering::SeqCst), 3);
+    assert_eq!(job.inspect().unwrap().attempts, after.attempts);
+}
+
+#[test]
+fn inventory_automatic_guard_packing_reserved_scope_conflicts_and_encoded_singletons() {
+    use crate::changes::ReadDependency;
+    use crate::vault::ExpectedState;
+    let mut fixture = normalized();
+    let (dispatch, responses) = batch_dispatch(&mut fixture);
+    let runtime = runtime(&fixture.service, &dispatch);
+    let input = |text: &str| EmbeddingInput {
+        utf8: text.into(),
+        input_hash: Blake3Hash::digest(text.as_bytes()),
+    };
+    let inputs = vec![input("first"), input("second")];
+    let shared: Vec<_> = (0..126)
+        .map(|index| ReadDependency {
+            path: rel(&format!("shared-{index:03}.md")),
+            expected: ExpectedState::Absent,
+        })
+        .collect();
+    let mut bindings = BTreeMap::new();
+    for (index, item) in inputs.iter().enumerate() {
+        let mut guards = shared.clone();
+        guards.push(ReadDependency {
+            path: rel(&format!("unique-{index}.md")),
+            expected: ExpectedState::Absent,
+        });
+        bindings.insert(item.input_hash.clone(), guards);
+    }
+    let packed = fixture
+        .app
+        .embedding_guard_batches(&runtime, &inputs, Some(&bindings), &[])
+        .unwrap();
+    assert_eq!(
+        packed.len(),
+        2,
+        "128 distinct source guards plus the reserved Run guard cannot share one receipt"
+    );
+    let one = std::slice::from_ref(&inputs[0]);
+    assert_eq!(
+        fixture
+            .app
+            .embedding_guard_batches(&runtime, one, Some(&bindings), &shared[..1])
+            .unwrap()
+            .len(),
+        1,
+        "a scope guard already in the task union counts once"
+    );
+    let scope = [ReadDependency {
+        path: rel("scope-only.md"),
+        expected: ExpectedState::Absent,
+    }];
+    assert_eq!(
+        fixture
+            .app
+            .embedding_guard_batches(&runtime, one, Some(&bindings), &scope)
+            .err()
+            .expect("packing must reject the invalid scope or input")
+            .code,
+        ErrorCode::BudgetExceeded
+    );
+    bindings.get_mut(&inputs[1].input_hash).unwrap()[0].expected =
+        ExpectedState::Hash(Blake3Hash::digest(b"changed"));
+    assert_eq!(
+        fixture
+            .app
+            .embedding_guard_batches(&runtime, &inputs, Some(&bindings), &[])
+            .err()
+            .expect("packing must reject the invalid scope or input")
+            .code,
+        ErrorCode::FreshnessConflict
+    );
+    let escaped = input(&"\"\\\n".repeat(60_000));
+    assert_eq!(
+        fixture
+            .app
+            .embedding_guard_batches(&runtime, &[inputs[0].clone(), escaped], None, &[])
+            .err()
+            .expect("packing must reject the invalid scope or input")
+            .code,
+        ErrorCode::BudgetExceeded,
+        "a singleton that follows a full encoded batch must be checked before any dispatch"
+    );
+    assert_eq!(responses.calls.load(Ordering::SeqCst), 0);
+}
+
+#[test]
+fn inventory_automatic_guard_mixed_stale_received_preserves_pending_run_and_holds() {
+    let fixture = normalized();
+    for (path, id, body) in [
+        ("a-mixed.md", "page_a_mixed", FIRST),
+        ("z-mixed.md", "page_z_mixed", SECOND),
+    ] {
+        fs::write(
+            fixture.fs.root().path().join(path),
+            page_bytes(id, None, body),
+        )
+        .unwrap();
+    }
+    fixture.app.index_sync(false).unwrap();
+    let responses = Arc::new(Responses::new());
+    let dispatch = dispatcher(&fixture.fs, responses.clone());
+    let mut interrupted = runtime(&fixture.service, &dispatch);
+    interrupted.job_options.fault = Some(Arc::new(ReceivedOnce {
+        armed: AtomicBool::new(true),
+    }));
+    let stopped = fixture
+        .app
+        .embeddings_sync(&ordinary_settings(), &interrupted)
+        .unwrap_err();
+    let run = serde_json::from_value(stopped.details["run_id"].clone()).unwrap();
+    let job = JobLedger::new(
+        fixture.fs.clone(),
+        fixture.app.vault_id().clone(),
+        run,
+        options(),
+    )
+    .unwrap();
+    let before = job.inspect().unwrap();
+    assert_eq!(before.tasks.len(), 2);
+    assert_eq!(before.attempts.len(), 1);
+    assert_eq!(before.attempts[0].phase, AttemptPhase::Received);
+    let task = &before.tasks[&before.attempts[0].attempt.task_key].spec;
+    let supplier = task
+        .source_bindings
+        .iter()
+        .find(|guard| guard.path == rel("a-mixed.md") || guard.path == rel("z-mixed.md"))
+        .unwrap();
+    let id = if supplier.path == rel("a-mixed.md") {
+        "page_a_mixed"
+    } else {
+        "page_z_mixed"
+    };
+    fs::write(
+        fixture.fs.root().path().join(supplier.path.as_str()),
+        page_bytes(
+            id,
+            None,
+            "A changed supplier now stores 83 copper tokens.\n",
+        ),
+    )
+    .unwrap();
+    fixture.app.index_sync(false).unwrap();
+    let resumed = runtime(&fixture.service, &dispatch);
+    assert_eq!(
+        fixture
+            .app
+            .embeddings_sync(&ordinary_settings(), &resumed)
+            .unwrap_err()
+            .code,
+        ErrorCode::FreshnessConflict
+    );
+    let rejected = job.inspect().unwrap();
+    assert_eq!(rejected.attempts[0].phase, AttemptPhase::Settled);
+    assert_eq!(rejected.attempts[0].attempt, before.attempts[0].attempt);
+    assert!(rejected.attempts[0].cache_outputs.is_empty());
+    assert_eq!(rejected.budget.outstanding, before.budget.outstanding);
+    assert_eq!(
+        rejected.budget.unknown_attempts,
+        before.budget.unknown_attempts
+    );
+    // This records the existing all-task binding limitation for separate
+    // architectural judgment: no replacement Run or implicit funding is used.
+    assert_eq!(
+        fixture
+            .app
+            .embeddings_sync(&ordinary_settings(), &resumed)
+            .unwrap_err()
+            .code,
+        ErrorCode::FreshnessConflict
+    );
+    let blocked = job.inspect().unwrap();
+    assert_eq!(blocked.attempts, rejected.attempts);
+    assert_eq!(blocked.budget.outstanding, rejected.budget.outstanding);
+    assert_eq!(
+        blocked.budget.unknown_attempts,
+        rejected.budget.unknown_attempts
+    );
+    assert_eq!(blocked.budget.dispatched_requests, 1);
+    assert!(
+        blocked
+            .tasks
+            .values()
+            .any(|task| task.state == TaskState::Pending)
+    );
+    assert_eq!(responses.calls.load(Ordering::SeqCst), 1);
+    assert_eq!(retained_marker_count(&fixture), 1);
+    assert!(
+        VectorStore::open(&fixture.fs, None)
+            .unwrap()
+            .active()
+            .unwrap()
+            .is_none()
+    );
+}
+
+struct SecondTimeout {
+    exposures: AtomicUsize,
+    successes: Responses,
+}
+impl crate::providers::types::Transport for SecondTimeout {
+    fn execute<'a>(
+        &'a self,
+        request: crate::providers::types::AuthenticatedRequest<'a>,
+        context: crate::providers::types::TransportContext,
+    ) -> crate::providers::types::TransportFuture<'a> {
+        if self.exposures.fetch_add(1, Ordering::SeqCst) == 1 {
+            Box::pin(async {
+                Err(crate::providers::types::TransportFailure::new(
+                    crate::providers::types::TransportFailureCode::Timeout,
+                ))
+            })
+        } else {
+            crate::providers::types::Transport::execute(&self.successes, request, context)
+        }
+    }
+}
+fn timeout_dispatch(
+    fixture: &Fixture,
+    transport: Arc<SecondTimeout>,
+) -> crate::providers::dispatcher::Dispatcher {
+    crate::providers::dispatcher::Dispatcher::new(
+        fixture.fs.clone(),
+        crate::providers::types::DispatchOptions {
+            broker: Arc::new(crate::providers::credentials::CredentialBroker::new(
+                crate::providers::credentials::CredentialOptions {
+                    clock: Arc::new(common::TestClock),
+                    inputs: Arc::new(crate::providers::credentials::NativeSecretInputs),
+                    runner: Arc::new(crate::providers::credentials::NativeHelperRunner),
+                },
+            )),
+            transport,
+            jitter: Arc::new(NoBatchJitter),
+        },
+    )
+}
+fn two_distinct_guard_pages(fixture: &Fixture) {
+    for (name, body) in [("a-terminal", FIRST), ("z-terminal", SECOND)] {
+        fs::write(
+            fixture.fs.root().path().join(format!("{name}.md")),
+            page_bytes(&format!("page_{}", name.replace('-', "_")), None, body),
+        )
+        .unwrap();
+    }
+    fixture.app.index_sync(false).unwrap();
+}
+
+#[test]
+fn inventory_automatic_guard_terminal_reconciled_attempt_keeps_run_budget_until_explicit_amendment()
+{
+    use crate::jobs::DispatcherLedgerApi;
+    let fixture = normalized();
+    two_distinct_guard_pages(&fixture);
+    let transport = Arc::new(SecondTimeout {
+        exposures: AtomicUsize::new(0),
+        successes: Responses::new(),
+    });
+    let dispatch = timeout_dispatch(&fixture, transport.clone());
+    let mut limited = runtime(&fixture.service, &dispatch);
+    limited.limits.requests = 2;
+    limited.limits.attempts_per_task = 2;
+    let stopped = fixture
+        .app
+        .embeddings_sync(&ordinary_settings(), &limited)
+        .unwrap_err();
+    assert_eq!(transport.exposures.load(Ordering::SeqCst), 2);
+    let run: RecordId = serde_json::from_value(stopped.details["run_id"].clone()).unwrap();
+    let job = JobLedger::new(
+        fixture.fs.clone(),
+        fixture.app.vault_id().clone(),
+        run.clone(),
+        options(),
+    )
+    .unwrap();
+    let unknown = job.inspect().unwrap();
+    assert_eq!(unknown.tasks.len(), 2);
+    assert_eq!(unknown.attempts.len(), 2);
+    assert_eq!(
+        unknown
+            .tasks
+            .values()
+            .filter(|task| task.state == TaskState::Completed)
+            .count(),
+        1
+    );
+    let unresolved = &unknown.attempts[1];
+    assert_eq!(unresolved.phase, AttemptPhase::DispatchIntent);
+    assert_eq!(unresolved.remote_exposure, RemoteExposure::PossiblyInFlight);
+    assert!(unresolved.spool.is_none() && unresolved.receipt.is_none());
+    // Use the actual reconciliation entry point; do not synthesize or rewrite
+    // operational event bytes or fabricate a receipt/output.
+    job.reconcile(
+        &unresolved.attempt,
+        true,
+        KnownOrUnknown::Unknown,
+        KnownOrUnknown::Unknown,
+        "operator_terminal_confirmation",
+    )
+    .unwrap();
+    let reconciled = job.inspect().unwrap();
+    assert_eq!(reconciled.attempts[1].phase, AttemptPhase::DispatchIntent);
+    assert_eq!(
+        reconciled.attempts[1].remote_exposure,
+        RemoteExposure::TerminalConfirmed
+    );
+    assert_eq!(
+        reconciled.budget.unknown_attempts,
+        unknown.budget.unknown_attempts
+    );
+    assert_eq!(reconciled.budget.outstanding, unknown.budget.outstanding);
+    let without_retry = fixture
+        .app
+        .embeddings_sync(&ordinary_settings(), &limited)
+        .unwrap_err();
+    assert_eq!(without_retry.code, ErrorCode::RecoveryRequired);
+    assert_eq!(
+        without_retry.details["run_id"],
+        serde_json::to_value(&run).unwrap()
+    );
+    assert_eq!(transport.exposures.load(Ordering::SeqCst), 2);
+    assert_eq!(retained_marker_count(&fixture), 1);
+    assert_eq!(job.inspect().unwrap().attempts, reconciled.attempts);
+    // The existing retry policy is still explicit after terminal confirmation.
+    limited.job_options.policy.retry_uncertain = true;
+    let (exhausted, work) = attribution::with_observation(|| {
+        fixture.app.embeddings_sync(&ordinary_settings(), &limited)
+    });
+    let exhausted = exhausted.unwrap_err();
+    assert_eq!(exhausted.code, ErrorCode::BudgetExceeded);
+    assert_eq!(
+        exhausted.details["run_id"],
+        serde_json::to_value(&run).unwrap()
+    );
+    assert_eq!(work.prior_accounting_discovery_calls, 0);
+    assert_eq!(transport.exposures.load(Ordering::SeqCst), 2);
+    let blocked = job.inspect().unwrap();
+    assert_eq!(blocked.state, RunState::Paused);
+    assert_eq!(blocked.attempts, reconciled.attempts);
+    assert_eq!(
+        blocked.budget.unknown_attempts,
+        reconciled.budget.unknown_attempts
+    );
+    assert_eq!(blocked.budget.outstanding, reconciled.budget.outstanding);
+    assert_eq!(retained_marker_count(&fixture), 1);
+    limited.limits.requests = 3;
+    job.amend_retained_limits(
+        limited.limits.clone(),
+        blocked.effective_deadline_utc_ms,
+        "Explicit additional exposure within the same reconciled Run".into(),
+    )
+    .unwrap();
+    let (report, work) = attribution::with_observation(|| {
+        fixture.app.embeddings_sync(&ordinary_settings(), &limited)
+    });
+    let report = report.unwrap();
+    complete(&report, 2);
+    assert_eq!(report.run_id, Some(run));
+    assert_eq!(work.prior_accounting_discovery_calls, 0);
+    assert_eq!(transport.exposures.load(Ordering::SeqCst), 3);
+    assert_eq!(retained_marker_count(&fixture), 1);
+    let after = job.inspect().unwrap();
+    assert_eq!(after.attempts.len(), 3);
+    assert_eq!(&after.attempts[..2], reconciled.attempts.as_slice());
+    assert_eq!(
+        after.attempts[2].attempt.task_key,
+        unresolved.attempt.task_key
+    );
+    assert_eq!(after.attempts[2].attempt.number, 2);
+    assert_eq!(after.budget.dispatched_requests, 3);
+    assert_eq!(after.budget.unknown_attempts.len(), 3);
+    assert_eq!(after.attempts[1].allowance, unresolved.allowance);
+    assert!(after.attempts[1].receipt.is_none());
+    cached_noop(&fixture, &ordinary_settings(), 2);
+}
+
+struct SecondBeforeSendCut {
+    reached: AtomicUsize,
+}
+impl LedgerFault for SecondBeforeSendCut {
+    fn check(&self, point: LedgerCheckpoint) -> Result<()> {
+        if point == LedgerCheckpoint::BeforeSendAuthorityFlush
+            && self.reached.fetch_add(1, Ordering::SeqCst) == 1
+        {
+            Err(WikiError::new(
+                ErrorCode::Internal,
+                "stop before the second send authority flush",
+            ))
+        } else {
+            Ok(())
+        }
+    }
+}
+
+#[test]
+fn inventory_automatic_guard_released_not_sent_retries_existing_run_without_receipt_lookup() {
+    let fixture = normalized();
+    two_distinct_guard_pages(&fixture);
+    let responses = Arc::new(Responses::new());
+    let dispatch = dispatcher(&fixture.fs, responses.clone());
+    let mut interrupted = runtime(&fixture.service, &dispatch);
+    interrupted.limits.requests = 2;
+    interrupted.job_options.fault = Some(Arc::new(SecondBeforeSendCut {
+        reached: AtomicUsize::new(0),
+    }));
+    let stopped = fixture
+        .app
+        .embeddings_sync(&ordinary_settings(), &interrupted)
+        .unwrap_err();
+    assert_eq!(responses.calls.load(Ordering::SeqCst), 1);
+    let run: RecordId = serde_json::from_value(stopped.details["run_id"].clone()).unwrap();
+    let job = JobLedger::new(
+        fixture.fs.clone(),
+        fixture.app.vault_id().clone(),
+        run.clone(),
+        options(),
+    )
+    .unwrap();
+    let before = job.inspect().unwrap();
+    assert_eq!(before.tasks.len(), 2);
+    assert_eq!(before.attempts.len(), 2);
+    assert_eq!(before.attempts[1].phase, AttemptPhase::Settled);
+    assert_eq!(
+        before.attempts[1].billing,
+        BillingDisposition::ReleasedNotSent
+    );
+    assert!(before.attempts[1].receipt.is_none());
+    assert_eq!(
+        before
+            .tasks
+            .values()
+            .filter(|task| task.state == TaskState::Completed)
+            .count(),
+        1
+    );
+    let mut resumed = runtime(&fixture.service, &dispatch);
+    resumed.limits.requests = 2;
+    let exhausted = fixture
+        .app
+        .embeddings_sync(&ordinary_settings(), &resumed)
+        .unwrap_err();
+    assert_eq!(
+        exhausted.code,
+        ErrorCode::BudgetExceeded,
+        "the original task attempt ceiling still applies"
+    );
+    assert_eq!(
+        exhausted.details["run_id"],
+        serde_json::to_value(&run).unwrap()
+    );
+    let blocked = job.inspect().unwrap();
+    assert_eq!(blocked.state, RunState::Paused);
+    assert_eq!(blocked.attempts, before.attempts);
+    assert_eq!(blocked.budget.outstanding, before.budget.outstanding);
+    assert_eq!(
+        blocked.budget.unknown_attempts,
+        before.budget.unknown_attempts
+    );
+    assert_eq!(responses.calls.load(Ordering::SeqCst), 1);
+    assert_eq!(retained_marker_count(&fixture), 1);
+    resumed.limits.attempts_per_task = 2;
+    job.amend_retained_limits(
+        resumed.limits.clone(),
+        blocked.effective_deadline_utc_ms,
+        "Explicit retry of the proven pre-send release".into(),
+    )
+    .unwrap();
+    let report = fixture
+        .app
+        .embeddings_sync(&ordinary_settings(), &resumed)
+        .unwrap();
+    complete(&report, 2);
+    assert_eq!(report.run_id, Some(run));
+    assert_eq!(responses.calls.load(Ordering::SeqCst), 2);
+    assert_eq!(retained_marker_count(&fixture), 1);
+    let after = job.inspect().unwrap();
+    assert_eq!(&after.attempts[..2], before.attempts.as_slice());
+    assert_eq!(after.attempts.len(), 3);
+    assert_eq!(after.attempts[2].attempt.number, 2);
+    assert_eq!(after.budget.dispatched_requests, 2);
+    assert_eq!(after.budget.unknown_attempts.len(), 2);
+    cached_noop(&fixture, &ordinary_settings(), 2);
 }

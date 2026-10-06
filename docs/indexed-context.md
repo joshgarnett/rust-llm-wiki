@@ -157,10 +157,25 @@ queries. Semantic modes require compatible active-space and query vectors; offli
 cache misses are explicit. Host selection remains lexical only. Literal and graph
 context remain separate migration work. The [embedding checkpoint](validation-normalized-embeddings.md)
 records the affected correctness checks and the still-open public quality/capacity
-gates; packaged candidate010 predates it. Dry-run previews the resolved request
+gates; packaged candidate011 predates the latest automatic preparation milestone.
+Dry-run previews the resolved request
 without running its proof. Operational
 generation-output records currently require explicit cached read because their
 selected verification is not implemented.
+
+Online normalized preparation automatically groups paid inputs within each bounded
+owner page. Identical inputs use one feasible authenticated supplier; every owner
+is independently verified before reuse is acknowledged. A uniquely supplying
+owner whose complete proof exceeds the receipt limit refuses before page dispatch,
+with required/available guard counts. Compatible cached inputs remain reusable.
+Interrupted tasks retain their original Run, accounting holds and limits; explicit
+retained-limit amendment is required when that Run's budget is exhausted.
+
+Per-Run limits currently do not establish an aggregate invocation allowance or
+startup deadline across multiple fresh/resumed Runs. Mixed stale-supplier work
+with unsent siblings also lacks a usable ordinary continuation. These are open
+integrated-workflow blockers; the scoped preparation acceptance does not qualify
+whole-command spending, broad answer completeness or large-vault capacity.
 
 Lexical indexed-document context also supports the existing host-selection
 workflow. Prepare with the same query, filters and budgets you will apply:

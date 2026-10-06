@@ -376,3 +376,46 @@ attribution experiment, while treating downstream fact loss separately. Advance
 the integrated ordinary collection lifecycle through admitted controls toward
 25K/~2.5GB under the unchanged 40GiB free-space floor. Do not tune the failed
 packing surrogates, raise discovery caps or add a general repair subsystem.
+
+## 2026-10-06 — Complete paid supplier grouping; return to whole-user outcomes
+
+Declare paid-input suppliers before the all-owner guard union. Select one feasible
+authenticated owner per missing input and pack actual supplier/scope/Run guards,
+provider item counts and encoded bytes within unchanged limits. Separately
+authenticate all reusing owners before acknowledgment. Keep the page's tasks in
+one original Run; recover Received output before new exposure, preserve unknown
+holds, and require existing explicit amendment/retry policy. Marker, ledger,
+catalog and vector-store formats remain unchanged.
+
+The frozen page-level preparation/lifecycle gate passes independently at 9/10,
+all six tasks and zero observed blockers in scope. There are 61 affected native
+passes and 19 public lifecycle steps with 91 exact citations. Preserve original
+compiler/runtime failures and validator corrections. Mixed stale suppliers with
+unsent siblings remain a usability blocker and cap recovery at 1/2. This source
+milestone is later than packaged candidate011; neither completes the active goal.
+
+A fresh wide review finds that narrow mechanics acceptance is crowding out
+whole-user outcomes. Prioritize a maintained collection-to-complete-cited-brief
+workflow with refresh, interruption and reconstruction; then affordable storage
+and bounded discovery in that same workflow; then actual 25K qualification with
+separate native HIGH. Keep native and explicitly assisted completeness distinct.
+
+The next attribution control should use current 12,000-byte/1536-dimensional
+geometry, realistic varied approximately 100 KB sources and nested 64/256/1024
+checkpoints in one vault. Reuse the existing recorder and source-only licensed/
+synthetic inputs. Adapt the cfg(test) helper's whole-corpus admission before use;
+do not raise shipping limits to accommodate the diagnostic. Freeze finite input,
+request, accounting, physical-allocation, time and evaluator allowances from a
+concrete manifest. Admit 64 first and larger tiers from measured growth. The
+older 1,000-byte-unit 99 GB projection is not admission for current defaults.
+
+Source review exposes a separate public-budget boundary: internal owner pages
+and recovered Runs each receive/enforce per-Run limits, while prior accounting
+discloses unknown histories without deducting aggregate invocation consumption.
+Run deadlines are also recomputed rather than proving a startup-wide deadline.
+The public multi-Run composition contract is underspecified. Internal pagination
+must not multiply an explicit caller ceiling. Verify the proposed ordinary
+129-distinct-Page/four-request case with a mock able to record request five,
+then enforce both invocation and retained-Run allowances across all dispatch
+paths. Fold this and mixed-stale continuation into the integrated workflow;
+do not create another isolated scored milestone or a general repair framework.
