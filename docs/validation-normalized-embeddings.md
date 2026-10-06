@@ -182,11 +182,12 @@ the owned test executable SHA256 is
 `f58060252927a2370a8134b8e629981a1a43d49ec179f8453126e6fb6563c54b`.
 The exposed questions remain development data; native HIGH remains quarantined.
 
-Preparation currently retains at most 4,096 owners. Exact semantic discovery
-renders the eligible corpus twice under a shared 64 MiB/65,536-unit allowance.
-Those limits alone prevent qualification of 25,000 documents / roughly 2.5 GB;
-they are source constraints, not measured throughput. Whole-preparation work
-must not be described as proportional only to changed owners.
+The preceding preparation path retained at most 4,096 owners and rendered the
+eligible corpus twice for exact semantic discovery under a shared
+64 MiB/65,536-unit allowance. The compact inventory milestone below replaces
+that whole-corpus rendering path. Exact discovery still scans compatible vectors
+and retains finite descriptor/vector-read limits, so 25,000 documents / roughly
+2.5 GB remains unqualified. These are source constraints, not measured throughput.
 
 Fresh architecture review rejects further tuning of these surrogate objectives.
 One separately declared, blind task-aware selection control on the existing
@@ -213,3 +214,75 @@ work and its effect on actual evidence. Wider caps, new dependencies and a gener
 repair subsystem are not justified by this experiment.
 Representative capacity, default activation, full command parity and native HIGH
 remain separate acceptance gates.
+
+
+## Compact inventory and resumable preparation candidate
+
+The normalized candidate now stores policy-bound compact unit descriptors and
+a durable owner inventory in the rebuildable catalog. Policies bind parser,
+renderer, segmentation and all embedding settings separately from embedding-space
+identity. Preparation backfills in 128-owner pages and acknowledges authenticated
+owner versions in the retained vector store. Each invocation has a finite deadline
+and page allowance; repeated commands resume durable progress. A physical catalog
+rebuild changes acknowledgment authority while retaining compatible vector blobs.
+
+Managed publications update changed document descriptors and invalidate enrolled
+proof dependencies even when eligibility and rendered input stay unchanged.
+Unchanged acknowledged owners need no canonical reread or rendering during repeat
+preparation. Generated/reused input counts describe selected work during that
+invocation; available-unit coverage describes the retained inventory separately.
+The report explicitly does not claim a complete vector-blob integrity audit.
+
+Exact semantic and hybrid discovery consume compact descriptors, select winning
+owners through indexed lookup, then authenticate and rerender only selected
+canonical evidence. They still perform a finite exact vector scan. This is an
+intermediate oracle, with no fast-query, 25K-capacity or retrieval-quality claim.
+The failed allocator comparison and unchanged production Baseline remain intact.
+
+Three integrated native macOS ARM64 release checkpoints supply 63 distinct passing
+affected checks. The first runtime gate retained 44 passes and five
+failures; grouped fixes replayed the affected workflows and native/compact audits
+with 36 passes, one replacement-fixture failure and two ignored diagnostics.
+The remaining fixture used an unquoted 39-digit Source ID, which invalidated its
+Evidence envelope; its quoted-ID correction and explicit Current-chain assertions
+passed one focused replay. These are aggregate affected checks, not a full
+suite, a single green run or independent public-command acceptance.
+
+Passing workflows include 129-owner paged preparation with an interrupted durable
+Received response, no resend and stable ready-owner acknowledgments; unchanged
+preparation with zero owner authentications or rendered bytes; immutable factual
+refresh with truthful offline missing coverage, unrelated-vector preservation and
+new exact cited semantic/hybrid results; and catalog reconstruction/cache
+loss/restoration with retained compatible-vector reuse. Providers are local mocks.
+
+The original shared-input fixture exposed an unpublishable receipt: 128 identical
+Pages require 129 source guards plus the current Run guard, exceeding the existing
+128-precondition publication limit. The candidate now rejects more than 127 source
+guards before dispatch, with a zero-call workflow check. It preserves the complete
+guard union and existing receipt/accounting contracts. Completing such large
+shared-input groups remains a usability gap; a safe refusal alone does not pass
+large-vault preparation. The valid paged-resume case uses two 64-owner shared-input
+groups with one input per request, then a distinct final owner.
+
+Exact schema checking admits either the original catalog schema or the complete
+optional inventory schema, rejecting partial or arbitrary extra objects. Native
+B-tree/index checks and canonical catalog/FTS comparison remain in force. Their
+canonical-agreement result does not certify semantic inventory completeness or
+vector-cache health. Selected preparation and query proof checks remain separate.
+
+A fresh independent Astra critic froze a small synthetic mock-backed public
+inventory lifecycle: initial offline consumption, factual refresh/missing coverage,
+reprepare, exact current citations and reconstruction. Its 17 planned invocations
+include three existing helpers and 14 public CLI commands. The scoped gate remains
+at least 9/10, every mandatory observation and zero blockers, before a new local
+0.2.0 trial. The first public-packet attempt stopped after export when its mock configuration
+was outside the existing helper's required vault-parent directory. No public CLI
+command or provider call launched; this is a preserved setup failure, not an
+acceptance pass or product-capacity result. Broader native completeness,
+HIGH, fast query and representative 25K capacity remain open.
+
+Optional local protocols, source freezes and complete failure logs are retained
+under `.artifacts/normalized-semantic-lifecycle-001/inventory-001/`; independent
+source reviews and the prospectively frozen public protocol are under the sibling
+`critic/public/` directory. Tracked documentation does not require those ignored
+artifacts to understand these limits.

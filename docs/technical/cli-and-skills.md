@@ -138,6 +138,13 @@ of document bodies. Source input and publication authority are rechecked before
 success. Managed writes wait while this maintenance command holds the permit;
 ordinary reads can continue.
 
+Native integrity checking admits the exact optional compact retrieval-inventory
+schema as well as older catalogs without it. Canonical agreement covers the
+record relations and search indexes described above; it does not certify the
+semantic completeness of prepared unit descriptors, owner acknowledgments or
+the retained vector cache. Preparation and selected query verification check
+those derived inputs separately.
+
 The result separates `canonical_check_performed`,
 `cache_integrity_check_performed`, `cache_matches_canonical`, `complete` and
 `checked_snapshot`. A faithful cache can agree with invalid canonical documents;

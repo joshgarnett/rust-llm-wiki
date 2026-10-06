@@ -3,6 +3,8 @@ use super::{
     OfflineApp,
     indexed_embedding_inputs::{self, NormalizedEmbeddingInputs},
 };
+#[path = "indexed_embedding_sync.rs"]
+mod indexed_sync;
 use crate::config::providers::TrustedService;
 use crate::{
     catalog::{Catalog, CatalogGraphValidator, ReaderSnapshot},
@@ -99,6 +101,9 @@ pub struct EmbeddingReport {
     pub settings: Option<EmbeddingSettings>,
     pub coverage: Coverage,
     pub generated_inputs: usize,
+    /// Distinct compatible cached inputs consulted during this invocation.
+    /// Normalized preparation excludes already acknowledged owners and inputs
+    /// generated or recovered by this invocation; total coverage is separate.
     pub reused_inputs: usize,
     pub published: bool,
     pub dry_run: bool,
@@ -405,6 +410,13 @@ impl OfflineApp {
         if self.options.offline {
             return self.embeddings_sync_cached(settings);
         }
+        if !self.options.dry_run
+            && Catalog::new(self.fs.clone(), self.vault_id.clone())
+                .operation_state()?
+                .is_some()
+        {
+            return self.embeddings_sync_indexed(settings, Some(runtime));
+        }
         let phase = Self::embedding_phase()?;
         let spec = SpaceSpec::from_service(runtime.service, settings.clone())?;
         let space = spec.id()?;
@@ -607,6 +619,13 @@ impl OfflineApp {
     /// Publish only coverage already present in the retained active space. This
     /// route needs no provider profile or credentials and does not resume jobs.
     pub fn embeddings_sync_cached(&self, settings: &EmbeddingSettings) -> Result<EmbeddingReport> {
+        if !self.options.dry_run
+            && Catalog::new(self.fs.clone(), self.vault_id.clone())
+                .operation_state()?
+                .is_some()
+        {
+            return self.embeddings_sync_indexed(settings, None);
+        }
         let phase = Self::embedding_phase()?;
         settings.validate()?;
         let store = VectorStore::open_bounded_snapshot(&self.fs, &phase)?;
@@ -1160,6 +1179,16 @@ impl OfflineApp {
                         ExpectedState::Hash(unit.source_hash.clone()),
                     );
                 }
+            }
+            // Receipt publication admits 128 read preconditions and adds the
+            // current Run guard to this task's exact source-guard union.
+            // Refuse before dispatch rather than retain an unpublishable paid
+            // response. Do not weaken or discard owner guards to fit.
+            if guards.len() > 127 {
+                return Err(fail(
+                    ErrorCode::BudgetExceeded,
+                    "embedding batch has too many source dependencies to publish its receipt safely",
+                ));
             }
             let mut task = TaskSpec {
                 key: Blake3Hash::digest([]),
@@ -1780,11 +1809,26 @@ impl OfflineApp {
             let units = fresh.take_units();
             let snapshot = fresh.snapshot().clone();
             store.bind_read_budget(&phase)?;
-            store.memberships_with_spec_checked(&space, &snapshot, &units, false, None, || {
+            if catalog.operation_state()?.is_some() {
+                // Normalized readiness is acknowledged by the owner-page
+                // coordinator. A paid receipt must not replace the entire
+                // snapshot's legacy JSON membership with its task subset.
                 fresh.recheck(&catalog)?;
                 phase.remaining_ms()?;
-                Ok(())
-            })?;
+            } else {
+                store.memberships_with_spec_checked(
+                    &space,
+                    &snapshot,
+                    &units,
+                    false,
+                    None,
+                    || {
+                        fresh.recheck(&catalog)?;
+                        phase.remaining_ms()?;
+                        Ok(())
+                    },
+                )?;
+            }
         }
         Ok(if new_dispatch { input_count } else { 0 })
     }

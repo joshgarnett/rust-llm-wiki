@@ -479,6 +479,7 @@ impl CatalogDelta {
         if let Some(facts) = &self.facts {
             facts.check_before(c, self, &mut stats, operation)?;
         }
+        let affected_units = super::unit_inventory::affected_before(c, self)?;
         for document in &self.documents {
             if let DocumentMutation::MovePage {
                 from,
@@ -647,6 +648,7 @@ impl CatalogDelta {
                 }
             }
         }
+        super::unit_inventory::apply_after(c, self, &affected_units)?;
         Ok(stats)
     }
 }

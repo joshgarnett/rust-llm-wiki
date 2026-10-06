@@ -62,6 +62,7 @@ pub mod sql;
 mod structural_projection;
 pub(crate) mod structural_rules;
 pub mod types;
+pub(crate) mod unit_inventory;
 pub(crate) mod withdraw_projection;
 pub(crate) mod write_projection;
 pub use types::*;

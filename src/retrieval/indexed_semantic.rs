@@ -1,14 +1,15 @@
 //! Exact cached-vector discovery followed by the existing selected evidence boundary.
 //! The corpus scan is finite linear work; it is separate from winner verification.
 use super::{
-    context,
+    context, context_evidence,
     context_selection_packet::SelectionAction,
     context_types::*,
     cursor, filters, fusion,
     indexed_documents::{self, SelectedCatalog},
-    indexed_units::{self, CachedDocumentUnits, UnitBudget, UnitLimits},
+    indexed_units::{self, InventoryDocumentUnits, UnitBudget, UnitLimits},
     lexical, render, selected_documents, selected_search,
     types::*,
+    unit_inventory_types::UnitDescriptor,
     vectors::{self, DenseHit, SpaceState, VectorReadBudget, VectorStore},
     verification::{Meter, seal},
 };
@@ -41,11 +42,74 @@ fn require_space(store: &VectorStore, state: &SpaceState) -> Result<()> {
     Ok(())
 }
 
+/// Reauthenticate the already frozen proposal owners for an ID-only renderer
+/// witness. This does no discovery, rendering of embedding inputs or scoring.
+#[cfg(test)]
+pub(crate) fn with_lineage_witness_catalog_for_test(
+    catalog: &Catalog,
+    request: &ContextRequest,
+    snapshot: &serde_json::Value,
+    fingerprint: &Blake3Hash,
+    paths: &[VaultRelativePath],
+    state: &SpaceState,
+    run: impl FnOnce(&dyn QueryCatalog) -> Result<serde_json::Value>,
+) -> Result<serde_json::Value> {
+    if request.scope != ContextScope::IndexedDocuments
+        || request.target != ContextTarget::Documents
+        || request.graph.is_some()
+        || !matches!(
+            request.documents.mode,
+            SearchMode::Semantic | SearchMode::Hybrid
+        )
+        || paths.len() > request.documents.limits.hits
+    {
+        return Err(WikiError::invalid(
+            "witness requires the frozen semantic document owners",
+        ));
+    }
+    let meter = Meter::new(&request.verification_budget);
+    catalog.guard_query()?;
+    let reader = catalog.cached_query_snapshot(QueryReadLimits {
+        max_elapsed_ms: meter.remaining_ms(),
+        ..Default::default()
+    })?;
+    if &serde_json::to_value(reader.snapshot())
+        .map_err(|_| conflict("witness snapshot serialization"))?
+        != snapshot
+    {
+        return Err(conflict(
+            "witness catalog differs from frozen automatic result",
+        ));
+    }
+    let mut budget = request.verification_budget.clone();
+    budget.max_elapsed_ms = meter.remaining_ms();
+    let mut proof = selected_documents::authenticate(catalog, &reader, paths, &budget)?;
+    if &proof.fingerprint != fingerprint {
+        return Err(conflict(
+            "witness dependencies differ from frozen automatic proof",
+        ));
+    }
+    require_space(&VectorStore::open(catalog.fs(), None)?, state)?;
+    let result = run(&SelectedCatalog {
+        reader: &reader,
+        proof: &proof,
+    })?;
+    proof.recheck(catalog, &reader)?;
+    require_space(&VectorStore::open(catalog.fs(), None)?, state)?;
+    meter.check()?;
+    Ok(serde_json::json!({
+        "witness": result, "snapshot": reader.snapshot(), "dependency_fingerprint": proof.fingerprint,
+        "verification": indexed_documents::verification(&reader)?,
+        "canonical_proof_work": proof.meter().work(),
+        "catalog_decoded_work": {"rows": reader.usage().rows, "bytes": reader.usage().bytes},
+    }))
+}
+
 /// Filter before exact top-owner selection, using this same pinned SQL view.
 /// Borrowed scalar fields are charged before ownership; no legacy gen join.
 fn allowed(
     reader: &QuerySnapshot,
-    unit: &render::RenderedUnit,
+    unit: &UnitDescriptor,
     filter: &SearchFilters,
     for_context: bool,
 ) -> Result<bool> {
@@ -71,7 +135,7 @@ fn allowed(
     let row = rows
         .next()
         .map_err(crate::catalog::sql::sql_error)?
-        .ok_or_else(|| conflict("rendered document escaped the pinned corpus"))?;
+        .ok_or_else(|| conflict("inventory document escaped the pinned corpus"))?;
     reader.reserve_scalar_row(row, 3)?;
     let hash = row
         .get_ref(0)
@@ -83,7 +147,7 @@ fn allowed(
         || target.as_deref() != unit.target_id.as_ref().map(RecordId::as_str)
     {
         return Err(conflict(
-            "semantic owner identity differs from its exact render",
+            "semantic owner identity differs from its inventory descriptor",
         ));
     }
     row.get(2).map_err(crate::catalog::sql::sql_error)
@@ -117,14 +181,15 @@ fn discover(
         ));
     }
     require_space(store, state)?;
-    let corpus = CachedDocumentUnits::new(reader, &state.spec.settings)?;
-    let scan = store.exact_stream(
+    let corpus = InventoryDocumentUnits::new(reader, &state.spec.settings, units)?;
+    let scan = store.exact_descriptor_stream(
         &state.id,
         query,
         || corpus.replay(units),
         &[render::TargetKind::Document],
         plan.limits.candidates,
         |unit| allowed(reader, unit, &plan.filters, for_context),
+        |paths| corpus.selected_owners(paths, units),
     )?;
     let mut dense = BTreeMap::new();
     let mut dense_hits = Vec::new();
@@ -244,11 +309,11 @@ fn discover(
         .take(end.saturating_sub(offset))
         .collect();
     let usage = units.usage();
-    warnings.push(format!("semantic coverage {}/{} eligible units; {} missing, {} corrupt, {} pending; exact linear scan. Both passes rendered {} units / {} bytes; catalog work is separate from selected proof.",
+    warnings.push(format!("semantic coverage {}/{} eligible units; {} missing, {} corrupt, {} pending; exact linear scan. Discovery read {} compact descriptors / {} logical field bytes and rendered {} units / {} UTF-8 bytes; catalog work is separate from selected proof.",
         scan.coverage.available_units, scan.coverage.eligible_units,
         scan.coverage.missing_units, scan.coverage.corrupt_units, scan.coverage.pending_units,
-        usage.units, usage.render_bytes));
-    warnings.push("Discovery uses published document eligibility and exact rendered input hashes. Global membership and unselected canonical freshness are unverified; index sync discovers external edits.".into());
+        usage.descriptors, usage.descriptor_bytes, usage.units, usage.render_bytes));
+    warnings.push("Discovery uses published document eligibility and compact policy-bound unit identities. Compatible vectors are intersected with current descriptors; unselected canonical freshness is unverified and index sync discovers external edits.".into());
     require_space(store, state)?;
     Ok(Discovery {
         hits: HitSet {
@@ -436,6 +501,12 @@ pub(crate) fn context(
         proof: &proof,
     };
     let mut signals = ContextSelectionSignals::default();
+    let mut evidence_sets = match context_evidence::policy() {
+        context_evidence::Policy::Candidate(arm) if request.documents.limits.candidates <= 80 => {
+            Some(context_evidence::Inputs::new(arm, deadline, state)?)
+        }
+        _ => None,
+    };
     let mut source_bytes = 0usize;
     let mut scored_units = 0usize;
     let mut vector_bytes = 0usize;
@@ -459,6 +530,14 @@ pub(crate) fn context(
             }
             scored_units += 1;
             let Some(vector) = store.vector(&state.id, &unit.input_hash)? else {
+                #[cfg(test)]
+                context::record_lineage_event("scored_units", || {
+                    serde_json::json!({
+                    "unit_id": unit.unit_id, "owner": path, "owner_hash": document.hash,
+                    "source_hash": unit.source_hash, "span": unit.source_span, "input_hash": unit.input_hash,
+                    "target_id": unit.target_id, "space": state.id, "outcome": "missing_vector",
+                    "vector_hash": null, "cosine": null})
+                });
                 complete = false;
                 continue;
             };
@@ -476,6 +555,19 @@ pub(crate) fn context(
                 span,
                 cosine: vectors::cosine(query, &vector)?,
             });
+            #[cfg(test)]
+            context::record_lineage_event("scored_units", || {
+                serde_json::json!({
+                "unit_id": unit.unit_id, "owner": path, "owner_hash": document.hash,
+                "source_hash": unit.source_hash, "span": unit.source_span, "input_hash": unit.input_hash,
+                "target_id": unit.target_id, "space": state.id, "outcome": "scored",
+                "vector_hash": Blake3Hash::digest(vector.iter().flat_map(|f| f.to_le_bytes()).collect::<Vec<_>>()),
+                "vector_hash_encoding": "decoded f32 little-endian bytes; not SQLite blob provenance",
+                "cosine": signals.semantic.last().unwrap().cosine})
+            });
+            if let Some(inputs) = &mut evidence_sets {
+                inputs.retain(unit, signals.semantic.last().unwrap().cosine, vector)?;
+            }
         }
     }
     signals.semantic_complete = complete
@@ -486,13 +578,13 @@ pub(crate) fn context(
     if !signals.semantic_complete {
         signals.warnings.push("Selected owners lack complete compatible semantic cues or reached the existing scoring reservation; unchanged local passage allocation remains in use for unscored evidence.".into());
     }
-    let mut draft = context::assemble_bounded_documents_with_signals(
+    let mut draft = context::assemble_bounded_documents_with_evidence(
         &selected,
         &request,
         &discovery.hits,
         text,
         &signals,
-        &SelectionAction::Automatic,
+        evidence_sets,
     )?;
     draft.warnings.extend(discovery.hits.warnings);
     if let Some(fault) = &options.fault {
@@ -502,6 +594,36 @@ pub(crate) fn context(
     require_space(&VectorStore::open_bounded(catalog.fs(), &vectors)?, state)?;
     meter.check()?;
     let usage = vectors.usage();
+    #[cfg(test)]
+    context_evidence::record_summary_for_test(
+        "normalized_read_work",
+        serde_json::json!({
+            "canonical_proof_bytes": proof.meter().work().0,
+            "cache_source_bytes": units.usage().source_bytes,
+            "compact_descriptors": units.usage().descriptors,
+            "compact_descriptor_bytes": units.usage().descriptor_bytes,
+            "rendered_units": units.usage().units,
+            "rendered_utf8_bytes": units.usage().render_bytes,
+            "vector_bytes": usage.vector_bytes_scanned,
+            "metadata_bytes": usage.metadata_bytes_decoded + usage.space_bytes_decoded,
+            "sql_vm_steps": usage.sql_vm_steps,
+            "physical_io": "unavailable; logical counters only"
+        }),
+    );
+    #[cfg(test)]
+    context::record_lineage_event("normalized_read_work", || {
+        serde_json::json!({
+        "canonical_proof_bytes": proof.meter().work().0,
+        "cache_source_bytes": units.usage().source_bytes,
+        "compact_descriptors": units.usage().descriptors,
+        "compact_descriptor_bytes": units.usage().descriptor_bytes,
+        "rendered_units": units.usage().units,
+        "rendered_utf8_bytes": units.usage().render_bytes,
+        "vector_bytes": usage.vector_bytes_scanned,
+        "metadata_bytes": usage.metadata_bytes_decoded + usage.space_bytes_decoded,
+        "sql_vm_steps": usage.sql_vm_steps,
+        "physical_io": "unavailable; existing logical counters only"})
+    });
     draft.warnings.push(format!("Vector read work: {} reads / {} bytes, {} metadata bytes, {} SQL VM steps; shared across discovery and scoring.",
         usage.vector_reads, usage.vector_bytes_scanned,
         usage.metadata_bytes_decoded + usage.space_bytes_decoded, usage.sql_vm_steps));

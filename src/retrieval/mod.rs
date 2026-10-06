@@ -1,11 +1,13 @@
 //! Deterministic discovery and exact-byte excerpts.
 pub mod bundles;
 pub mod context;
+pub(crate) mod context_evidence;
 pub(crate) mod context_selection;
 pub mod context_selection_packet;
 pub mod context_types;
 pub(crate) mod context_units;
 pub mod cursor;
+mod evidence_set_selection;
 pub mod excerpts;
 pub mod filters;
 pub(crate) mod indexed_context;
@@ -19,6 +21,7 @@ pub mod selected_search;
 #[cfg(test)]
 mod selected_search_experiment;
 pub mod types;
+pub(crate) mod unit_inventory_types;
 pub mod verification;
 pub use context_types::*;
 pub use lexical::search;

@@ -436,6 +436,8 @@ pub(super) struct Packet {
     pub(super) selection_ordinal: Option<usize>,
     pub(super) selection: Option<super::context_selection::SelectionCandidate>,
     pub(super) unit_score: Option<f64>,
+    /// Exact representative before child focusing and parent deduplication.
+    pub(super) unit_origin: Option<(ByteSpan, f64)>,
     pub(super) fallback: Option<ContextPassage>,
     pub(super) unit_clipped: bool,
 }
@@ -468,7 +470,7 @@ std::thread_local! {
 }
 
 #[cfg(test)]
-pub(super) fn with_candidate_ordering_trace<T>(
+pub(crate) fn with_candidate_ordering_trace<T>(
     run: impl FnOnce() -> T,
 ) -> (T, Vec<serde_json::Value>) {
     struct ClearTrace;
@@ -490,13 +492,77 @@ pub(super) fn with_candidate_ordering_trace<T>(
 }
 
 #[cfg(test)]
-fn record_candidate_ordering_trace(stage: &str, rows: impl FnOnce() -> serde_json::Value) {
+pub(super) fn record_candidate_ordering_trace(
+    stage: &str,
+    rows: impl FnOnce() -> serde_json::Value,
+) {
     CANDIDATE_ORDERING_TRACE.with(|trace| {
         if let Some(trace) = trace.borrow_mut().as_mut() {
             assert!(trace.len() < 16, "bounded ordering trace stage count");
             trace.push(serde_json::json!({"stage": stage, "rows": rows()}));
+            check_lineage_bounds(trace);
         }
     });
+}
+
+#[cfg(test)]
+fn check_lineage_bounds(trace: &[serde_json::Value]) {
+    let rows = trace
+        .iter()
+        .map(|stage| {
+            stage["rows"]
+                .as_array()
+                .map(Vec::len)
+                .or_else(|| stage["rows"]["proposals"].as_array().map(Vec::len))
+                .unwrap_or(1)
+        })
+        .sum::<usize>();
+    assert!(
+        trace.len() <= 16 && rows <= 4096,
+        "bounded lineage envelopes/rows"
+    );
+    assert!(
+        serde_json::to_vec(trace).unwrap().len() <= 2 * 1024 * 1024,
+        "bounded compact lineage; complete pretty envelope checked by leaf"
+    );
+}
+
+// Append only values already computed by the production path. The existing
+// collector owns these development-only rows; no new observer runtime exists.
+#[cfg(test)]
+pub(super) fn record_lineage_event(stage: &str, row: impl FnOnce() -> serde_json::Value) {
+    CANDIDATE_ORDERING_TRACE.with(|trace| {
+        if let Some(trace) = trace.borrow_mut().as_mut() {
+            let position = trace.iter().position(|entry| entry["stage"] == stage);
+            let position = position.unwrap_or_else(|| {
+                assert!(trace.len() < 16, "bounded ordering trace stage count");
+                trace.push(serde_json::json!({"stage": stage, "rows": []}));
+                trace.len() - 1
+            });
+            trace[position]["rows"].as_array_mut().unwrap().push(row());
+            check_lineage_bounds(trace);
+        }
+    });
+}
+
+// Diagnostic stable ID: production packet key + immutable owner + source span.
+// The key distinguishes the associated child fallback from its parent.
+#[cfg(test)]
+pub(crate) fn lineage_proposal_id(
+    key: &str,
+    path: &VaultRelativePath,
+    hash: &Blake3Hash,
+    span: ByteSpan,
+) -> Blake3Hash {
+    Blake3Hash::digest(serde_json::to_vec(&(key, path, hash, span)).unwrap())
+}
+
+#[cfg(test)]
+fn packet_lineage_identity(packet: &Packet) -> serde_json::Value {
+    serde_json::json!({"key": packet.key, "proposals": packet.passages.iter().map(|p| {
+        serde_json::json!({"proposal_id": lineage_proposal_id(&packet.key, &p.locator.path, &p.locator.observed_hash, p.span),
+            "owner": p.locator.path, "owner_hash": p.locator.observed_hash, "span": p.span})
+    }).collect::<Vec<_>>()})
 }
 
 #[cfg(test)]
@@ -509,14 +575,26 @@ fn passage_ordering_row(passage: &ContextPassage) -> serde_json::Value {
 }
 
 #[cfg(test)]
-fn packet_ordering_rows(packets: &[Packet]) -> Vec<serde_json::Value> {
+fn packet_ordering_rows(packets: &[Packet], authenticate: bool) -> Vec<serde_json::Value> {
     packets
         .iter()
         .map(|packet| {
+            let passages = packet.passages.iter().map(|passage| {
+                let mut row = passage_ordering_row(passage);
+                if authenticate {
+                    row["authenticated_passage"] = serde_json::json!(passage);
+                }
+                row
+            }).collect::<Vec<_>>();
             serde_json::json!({
+                "identity": packet_lineage_identity(packet),
                 "key": packet.key, "ordinal": packet.selection_ordinal, "score": packet.score,
                 "unit_score": packet.unit_score, "fallback": packet.fallback, "unit_clipped": packet.unit_clipped,
-                "passages": packet.passages.iter().map(passage_ordering_row).collect::<Vec<_>>(),
+                "fallback_identity": packet.fallback.as_ref().map(|p| serde_json::json!({
+                    "proposal_id": lineage_proposal_id(&format!("{}:child", packet.key), &p.locator.path, &p.locator.observed_hash, p.span),
+                    "key": format!("{}:child", packet.key), "owner": p.locator.path, "owner_hash": p.locator.observed_hash, "span": p.span,
+                })),
+                "passages": passages,
                 "lexical_candidate": packet.selection.as_ref().map(|candidate| serde_json::json!({
                     "owner_index": candidate.owner_index, "span": candidate.span,
                     "covered_terms": candidate.covered_terms, "local_relevance": candidate.local_relevance,
@@ -756,7 +834,7 @@ fn render(
 
 #[cfg(test)]
 #[derive(Clone, Copy, Default, serde::Serialize)]
-pub(super) struct ContextRenderCountsForTest {
+pub(crate) struct ContextRenderCountsForTest {
     pub calls: usize,
     pub bytes: u64,
 }
@@ -767,7 +845,7 @@ std::thread_local! {
 }
 
 #[cfg(test)]
-pub(super) fn with_context_render_counts_for_test<T>(
+pub(crate) fn with_context_render_counts_for_test<T>(
     max_calls: usize,
     f: impl FnOnce() -> T,
 ) -> (T, ContextRenderCountsForTest) {
@@ -788,7 +866,7 @@ pub(super) fn with_context_render_counts_for_test<T>(
 }
 
 #[cfg(test)]
-pub(super) fn render_documents_for_test(
+pub(crate) fn render_documents_for_test(
     reader: &dyn QueryCatalog,
     request: &ContextRequest,
     passages: &[ContextPassage],
@@ -796,46 +874,55 @@ pub(super) fn render_documents_for_test(
     render(reader, request.scope, passages, &[], &[]).map(|(text, _)| text)
 }
 
-/// One incremental document trial; this diagnostic does not repack old cores.
-/// The predicates mirror document admission in pack and require equivalence
-/// checks before the experimental planner can be used for quality measurements.
-#[cfg(test)]
-pub(super) fn admit_document_for_test(
+/// The document allocator's exact admission authority. Callers supply original
+/// proposal membership; coalesced output is never used to remove an origin.
+pub(super) struct DocumentTrial {
+    pub passages: Vec<ContextPassage>,
+    pub text: String,
+    pub counts: BTreeMap<String, usize>,
+    pub reason: Option<&'static str>,
+}
+pub(super) fn document_trial(
     reader: &dyn QueryCatalog,
     request: &ContextRequest,
     current: &[ContextPassage],
-    candidate: &ContextPassage,
-) -> Result<std::result::Result<(Vec<ContextPassage>, String), &'static str>> {
+    additions: &[ContextPassage],
+) -> Result<DocumentTrial> {
     if request.target != ContextTarget::Documents
         || request.graph.is_some()
-        || request.documents.mode != SearchMode::Lexical
+        || !matches!(
+            request.documents.mode,
+            SearchMode::Lexical | SearchMode::Semantic | SearchMode::Hybrid
+        )
         || !matches!(
             request.scope,
             ContextScope::IndexedDocuments | ContextScope::Snapshot
         )
         || current
             .iter()
-            .chain(std::iter::once(candidate))
+            .chain(additions)
             .any(|p| !p.contributors.is_empty())
     {
         return Err(WikiError::invalid(
-            "location trial requires document-only passages",
+            "document trial requires document-only passages",
         ));
     }
     let mut next = current.to_vec();
-    let mut merged = false;
-    for existing in &mut next {
-        if bundles::merge(existing, candidate, reader)? {
-            merged = true;
-            break;
+    for candidate in additions {
+        let mut merged = false;
+        for existing in &mut next {
+            if bundles::merge(existing, candidate, reader)? {
+                merged = true;
+                break;
+            }
         }
-    }
-    if !merged {
-        next.push(candidate.clone());
+        if !merged {
+            next.push(candidate.clone());
+        }
     }
     bundles::coalesce(&mut next, reader)?;
     compact_direct_citations(&mut next);
-    let rendered = render_documents_for_test(reader, request, &next)?;
+    let (text, _) = render(reader, request.scope, &next, &[], &[])?;
     let mut counts = BTreeMap::new();
     for passage in &next {
         *counts.entry(bundles::owner(passage)).or_insert(0usize) += 1;
@@ -844,14 +931,14 @@ pub(super) fn admit_document_for_test(
         .budget
         .max_bytes
         .checked_sub(request.budget.instruction_bytes)
-        .and_then(|bytes| bytes.checked_sub(request.budget.output_bytes))
-        .ok_or_else(|| WikiError::invalid("location trial byte reservation exceeds budget"))?;
+        .and_then(|n| n.checked_sub(request.budget.output_bytes))
+        .ok_or_else(|| WikiError::invalid("document trial byte reservation exceeds budget"))?;
     let available_tokens = request
         .budget
         .max_tokens
         .checked_sub(request.budget.instruction_tokens)
-        .and_then(|tokens| tokens.checked_sub(request.budget.output_tokens))
-        .ok_or_else(|| WikiError::invalid("location trial token reservation exceeds budget"))?;
+        .and_then(|n| n.checked_sub(request.budget.output_tokens))
+        .ok_or_else(|| WikiError::invalid("document trial token reservation exceeds budget"))?;
     let reason = if next
         .iter()
         .any(|p| p.text.len() > request.documents.limits.excerpt_bytes)
@@ -859,14 +946,30 @@ pub(super) fn admit_document_for_test(
         Some("merged_passage_exceeds_excerpt_bound")
     } else if counts.values().any(|n| *n > 4) {
         Some("document_passage_cap")
-    } else if rendered.len() > available_bytes || rendered.len().div_ceil(4) > available_tokens {
+    } else if text.len() > available_bytes || text.len().div_ceil(4) > available_tokens {
         Some("required_bundle_or_passage_does_not_fit")
     } else {
         None
     };
-    Ok(match reason {
+    Ok(DocumentTrial {
+        passages: next,
+        text,
+        counts,
+        reason,
+    })
+}
+
+#[cfg(test)]
+pub(crate) fn admit_document_for_test(
+    reader: &dyn QueryCatalog,
+    request: &ContextRequest,
+    current: &[ContextPassage],
+    candidate: &ContextPassage,
+) -> Result<std::result::Result<(Vec<ContextPassage>, String), &'static str>> {
+    let trial = document_trial(reader, request, current, std::slice::from_ref(candidate))?;
+    Ok(match trial.reason {
         Some(reason) => Err(reason),
-        None => Ok((next, rendered)),
+        None => Ok((trial.passages, trial.text)),
     })
 }
 pub fn assemble(
@@ -1015,6 +1118,52 @@ fn assemble_inner(
     signals: &ContextSelectionSignals,
     selection_action: &SelectionAction,
 ) -> Result<ContextDraft> {
+    assemble_inner_with_evidence(
+        reader,
+        strict_reader,
+        request,
+        hits,
+        graph,
+        query,
+        signals,
+        selection_action,
+        None,
+    )
+}
+
+pub(crate) fn assemble_bounded_documents_with_evidence(
+    reader: &dyn QueryCatalog,
+    request: &ContextRequest,
+    hits: &HitSet,
+    query: &str,
+    signals: &ContextSelectionSignals,
+    evidence_sets: Option<super::context_evidence::Inputs>,
+) -> Result<ContextDraft> {
+    validate_bounded_document_assembly(request, &SelectionAction::Automatic)?;
+    assemble_inner_with_evidence(
+        reader,
+        None,
+        request,
+        hits,
+        None,
+        Some(query),
+        signals,
+        &SelectionAction::Automatic,
+        evidence_sets,
+    )
+}
+
+fn assemble_inner_with_evidence(
+    reader: &dyn QueryCatalog,
+    strict_reader: Option<&ReaderSnapshot>,
+    request: &ContextRequest,
+    hits: &HitSet,
+    graph: Option<&GraphResult>,
+    query: Option<&str>,
+    signals: &ContextSelectionSignals,
+    selection_action: &SelectionAction,
+    evidence_sets: Option<super::context_evidence::Inputs>,
+) -> Result<ContextDraft> {
     let request = normalize_request(request)?;
     if request.scope == ContextScope::IndexedEvidence
         || (request.scope == ContextScope::IndexedDocuments && strict_reader.is_some())
@@ -1161,6 +1310,7 @@ fn assemble_inner(
                         selection_ordinal: Some(selection_ordinal),
                         selection: Some(candidate),
                         unit_score: None,
+                        unit_origin: None,
                         fallback: None,
                         unit_clipped: false,
                     });
@@ -1258,6 +1408,7 @@ fn assemble_inner(
                         selection_ordinal: Some(selection_ordinal),
                         selection: None,
                         unit_score: Some(candidate.score),
+                        unit_origin: Some((candidate.origin_span, candidate.origin_cosine)),
                         fallback,
                         unit_clipped: candidate.clipped,
                     });
@@ -1286,6 +1437,7 @@ fn assemble_inner(
                         selection_ordinal: None,
                         selection: None,
                         unit_score: None,
+                        unit_origin: None,
                         fallback: None,
                         unit_clipped: false,
                     })
@@ -1365,6 +1517,7 @@ fn assemble_inner(
                     selection_ordinal: None,
                     selection: None,
                     unit_score: None,
+                    unit_origin: None,
                     fallback: None,
                     unit_clipped: false,
                 })
@@ -1411,6 +1564,7 @@ fn assemble_inner(
                     selection_ordinal: None,
                     selection: None,
                     unit_score: None,
+                    unit_origin: None,
                     fallback: None,
                     unit_clipped: false,
                 });
@@ -1497,6 +1651,7 @@ fn assemble_inner(
             hits,
             graph,
             dependency_fingerprint,
+            evidence_sets,
         },
     )
 }
@@ -1513,6 +1668,7 @@ pub(super) struct PackingInput<'a> {
     pub hits: &'a HitSet,
     pub graph: Option<&'a GraphResult>,
     pub dependency_fingerprint: Blake3Hash,
+    pub evidence_sets: Option<super::context_evidence::Inputs>,
 }
 
 /// Existing adaptive packet priority, shared with the bounded diagnostic.
@@ -1576,6 +1732,7 @@ pub(super) fn pack(
         hits,
         graph,
         dependency_fingerprint,
+        evidence_sets,
     } = input;
     let preserve_selection_order = !matches!(selection_action, SelectionAction::Automatic);
     #[cfg(test)]
@@ -1588,7 +1745,7 @@ pub(super) fn pack(
                 .then(packets[a].key.cmp(&packets[b].key))
         });
         serde_json::json!({
-            "proposals": packet_ordering_rows(&packets),
+            "proposals": packet_ordering_rows(&packets, true),
             "legacy_order": legacy_order.into_iter().map(|index| &packets[index].key).collect::<Vec<_>>(),
             "preserve_selection_order": preserve_selection_order,
             "term_weights": term_weights,
@@ -1597,13 +1754,15 @@ pub(super) fn pack(
     sort_packets(&mut packets, preserve_selection_order);
     #[cfg(test)]
     record_candidate_ordering_trace("sorted_packets", || {
-        serde_json::json!(packet_ordering_rows(&packets))
+        serde_json::json!(packet_ordering_rows(&packets, false))
     });
     let reserved_bytes = request.budget.instruction_bytes + request.budget.output_bytes;
     let reserved_tokens = request.budget.instruction_tokens + request.budget.output_tokens;
     let available_bytes = request.budget.max_bytes - reserved_bytes;
     let available_tokens = request.budget.max_tokens - reserved_tokens;
     let mut passages: Vec<ContextPassage> = Vec::new();
+    #[cfg(test)]
+    let mut accepted_lineage_ids = Vec::new();
     let mut bundles: Vec<EvidenceBundle> = Vec::new();
     let mut navigation: Vec<NavigationEdge> = Vec::new();
     let (mut text, mut graph_bytes) =
@@ -1732,6 +1891,60 @@ pub(super) fn pack(
             }
         }
     }
+    if let Some(evidence_sets) = evidence_sets {
+        if signals.semantic_complete && packets.iter().all(|p| p.unit_origin.is_some()) {
+            let arm = evidence_sets.arm;
+            match super::context_evidence::allocate(
+                reader,
+                request,
+                &packets,
+                query.expect("evidence-set requires source-aware query"),
+                evidence_sets,
+            )? {
+                super::evidence_set_selection::Outcome::Fallback(reason) => {
+                    selection_warnings.push(format!(
+                        "evidence-set {:?} fallback {:?}; existing allocation retained",
+                        arm, reason
+                    ));
+                }
+                super::evidence_set_selection::Outcome::Selected {
+                    choices,
+                    state,
+                    statistics,
+                    ..
+                } => {
+                    if let Some(state) = state {
+                        passages = state.passages;
+                        text = state.text;
+                    }
+                    for (origin, packet) in packets.iter().enumerate() {
+                        if let Some(choice) = choices.iter().find(|choice| choice.origin == origin)
+                        {
+                            if choice.variant == super::evidence_set_selection::Variant::Core
+                                && (packet.unit_clipped || packet.fallback.is_some())
+                            {
+                                selection_warnings.push("a bounded evidence-unit child was selected because its complete structural parent did not fit; inspect its cited source for omitted text".into());
+                            }
+                        } else {
+                            omissions.push(ContextOmission {
+                                record_id: packet.passages[0]
+                                    .locator
+                                    .record
+                                    .as_ref()
+                                    .map(|r| r.record_id.clone()),
+                                path: Some(packet.passages[0].locator.path.clone()),
+                                reason: "not_selected_by_evidence_set".into(),
+                                count: 1,
+                            });
+                        }
+                    }
+                    selection_warnings.push(format!("evidence-set {:?}: {} origins, {} exact rendering trials, representation coverage {:.6}; selection is not proof of answer completeness",
+                        arm, choices.len(), statistics.trials(), statistics.objective_value));
+                    packets.clear();
+                }
+            }
+        }
+    }
     let mut covered_terms = vec![false; term_weights.len()];
     let total_weight = term_weights.iter().copied().sum::<u64>().max(1) as f64;
     let rendered_costs = packets
@@ -1770,6 +1983,8 @@ pub(super) fn pack(
             })
             .expect("nonempty packets");
         let mut packet = packets.remove(best);
+        #[cfg(test)]
+        let lineage_identity = packet_lineage_identity(&packet);
         if (packet.selection.is_some() || packet.unit_score.is_some())
             && packet.passages.iter().all(|p| {
                 passages.iter().any(|old| {
@@ -1779,91 +1994,167 @@ pub(super) fn pack(
                 })
             })
         {
+            #[cfg(test)]
+            record_lineage_event("packing_trials", || {
+                serde_json::json!({
+                    "identity": lineage_identity, "outcome": "contained_in_accepted_passage",
+                    "accepted_proposal_ids_before": accepted_lineage_ids,
+                    "actual_render_cost": null, "accepted": passages.iter().map(passage_ordering_row).collect::<Vec<_>>()
+                })
+            });
             continue;
         }
-        let mut next = passages.clone();
-        let mut next_bundles = bundles.clone();
-        let mut next_navigation = navigation.clone();
-        if let Some(edge) = &packet.navigation {
-            next_navigation.push(edge.clone());
-        }
-        let mut indices = Vec::new();
-        for p in packet.passages {
-            let mut found = None;
-            for (i, existing) in next.iter_mut().enumerate() {
-                if bundles::merge(existing, &p, reader)? {
-                    found = Some(i);
-                    break;
-                }
-            }
-            let index = found.unwrap_or_else(|| {
-                let i = next.len();
-                next.push(p);
-                i
-            });
-            if !indices.contains(&index) {
-                indices.push(index)
-            }
-        }
-        let mapping = bundles::coalesce(&mut next, reader)?;
-        if source_aware {
-            compact_direct_citations(&mut next);
-        }
-        for bundle in &mut next_bundles {
-            for index in &mut bundle.passage_indices {
-                *index = mapping[*index]
-            }
-            bundle.passage_indices.sort_unstable();
-            bundle.passage_indices.dedup();
-        }
-        for index in &mut indices {
-            *index = mapping[*index]
-        }
-        indices.sort_unstable();
-        indices.dedup();
         let id = packet
             .bundle
             .as_ref()
             .map(|b| b.assertion.record_id.clone());
-        if let Some(mut bundle) = packet.bundle {
-            bundle.passage_indices = indices;
-            next_bundles.push(bundle)
-        }
-        let mut counts = BTreeMap::new();
-        for p in &next {
-            *counts.entry(bundles::owner(p)).or_insert(0usize) += 1
-        }
-        let (rendered, next_graph) = render(
-            reader,
-            request.scope,
-            &next,
-            &next_bundles,
-            &next_navigation,
-        )?;
-        let bytes = rendered.len();
-        let tokens = bytes.div_ceil(4);
-        let graph_tokens = next_graph.div_ceil(4);
-        let passage_cap = if source_aware && request.target != ContextTarget::Graph {
-            4
-        } else {
-            2
-        };
-        let reason = if (packet.selection.is_some() || packet.unit_score.is_some())
-            && next.iter().any(|p| {
-                p.contributors.is_empty() && p.text.len() > request.documents.limits.excerpt_bytes
-            }) {
-            Some("merged_passage_exceeds_excerpt_bound")
-        } else if counts.values().any(|n| *n > passage_cap) {
-            Some("document_passage_cap")
-        } else if bytes > available_bytes || tokens > available_tokens {
-            Some("required_bundle_or_passage_does_not_fit")
-        } else if request.target == ContextTarget::Combined
-            && (next_graph > available_bytes / 2 || graph_tokens > available_tokens / 2)
+        let (
+            next,
+            next_bundles,
+            next_navigation,
+            rendered,
+            next_graph,
+            _bytes,
+            _tokens,
+            _graph_tokens,
+            _passage_cap,
+            _counts,
+            reason,
+        ) = if source_aware
+            && request.scope == ContextScope::IndexedDocuments
+            && request.target == ContextTarget::Documents
+            && packet.bundle.is_none()
+            && packet.navigation.is_none()
+            && bundles.is_empty()
+            && navigation.is_empty()
+            && (packet.selection.is_some() || packet.unit_score.is_some())
         {
-            Some("combined_graph_share_cap")
+            let trial = document_trial(reader, request, &passages, &packet.passages)?;
+            let bytes = trial.text.len();
+            (
+                trial.passages,
+                Vec::new(),
+                Vec::new(),
+                trial.text,
+                0,
+                bytes,
+                bytes.div_ceil(4),
+                0,
+                4,
+                trial.counts,
+                trial.reason,
+            )
         } else {
-            None
+            let mut next = passages.clone();
+            let mut next_bundles = bundles.clone();
+            let mut next_navigation = navigation.clone();
+            if let Some(edge) = &packet.navigation {
+                next_navigation.push(edge.clone());
+            }
+            let mut indices = Vec::new();
+            for p in packet.passages.iter().cloned() {
+                let mut found = None;
+                for (i, existing) in next.iter_mut().enumerate() {
+                    if bundles::merge(existing, &p, reader)? {
+                        found = Some(i);
+                        break;
+                    }
+                }
+                let index = found.unwrap_or_else(|| {
+                    let i = next.len();
+                    next.push(p);
+                    i
+                });
+                if !indices.contains(&index) {
+                    indices.push(index)
+                }
+            }
+            let mapping = bundles::coalesce(&mut next, reader)?;
+            if source_aware {
+                compact_direct_citations(&mut next);
+            }
+            for bundle in &mut next_bundles {
+                for index in &mut bundle.passage_indices {
+                    *index = mapping[*index]
+                }
+                bundle.passage_indices.sort_unstable();
+                bundle.passage_indices.dedup();
+            }
+            for index in &mut indices {
+                *index = mapping[*index]
+            }
+            indices.sort_unstable();
+            indices.dedup();
+            if let Some(mut bundle) = packet.bundle.clone() {
+                bundle.passage_indices = indices;
+                next_bundles.push(bundle)
+            }
+            let mut counts = BTreeMap::new();
+            for p in &next {
+                *counts.entry(bundles::owner(p)).or_insert(0usize) += 1
+            }
+            let (rendered, next_graph) = render(
+                reader,
+                request.scope,
+                &next,
+                &next_bundles,
+                &next_navigation,
+            )?;
+            let bytes = rendered.len();
+            let tokens = bytes.div_ceil(4);
+            let graph_tokens = next_graph.div_ceil(4);
+            let passage_cap = if source_aware && request.target != ContextTarget::Graph {
+                4
+            } else {
+                2
+            };
+            let reason = if (packet.selection.is_some() || packet.unit_score.is_some())
+                && next.iter().any(|p| {
+                    p.contributors.is_empty()
+                        && p.text.len() > request.documents.limits.excerpt_bytes
+                }) {
+                Some("merged_passage_exceeds_excerpt_bound")
+            } else if counts.values().any(|n| *n > passage_cap) {
+                Some("document_passage_cap")
+            } else if bytes > available_bytes || tokens > available_tokens {
+                Some("required_bundle_or_passage_does_not_fit")
+            } else if request.target == ContextTarget::Combined
+                && (next_graph > available_bytes / 2 || graph_tokens > available_tokens / 2)
+            {
+                Some("combined_graph_share_cap")
+            } else {
+                None
+            };
+            (
+                next,
+                next_bundles,
+                next_navigation,
+                rendered,
+                next_graph,
+                bytes,
+                tokens,
+                graph_tokens,
+                passage_cap,
+                counts,
+                reason,
+            )
         };
+        #[cfg(test)]
+        record_lineage_event("packing_trials", || {
+            serde_json::json!({
+                "identity": lineage_identity, "actual_render_cost": {"bytes": _bytes, "estimated_tokens": _tokens,
+                    "graph_bytes": next_graph, "graph_estimated_tokens": _graph_tokens},
+                "accepted_proposal_ids_before": accepted_lineage_ids,
+                "caps": {"bytes": available_bytes, "estimated_tokens": available_tokens,
+                    "excerpt_bytes": request.documents.limits.excerpt_bytes, "per_owner": _passage_cap},
+                "owner_counts": _counts.iter().map(|(owner, count)| serde_json::json!({"owner": owner, "count": count})).collect::<Vec<_>>(),
+                "cap_reason": reason, "outcome": if reason.is_none() {"accepted"} else if packet.fallback.is_some() {"enqueue_child_fallback"} else {"omitted"},
+                "fallback_identity": packet.fallback.as_ref().map(|p| serde_json::json!({
+                    "proposal_id": lineage_proposal_id(&format!("{}:child", packet.key), &p.locator.path, &p.locator.observed_hash, p.span),
+                    "key": format!("{}:child", packet.key), "owner": p.locator.path, "owner_hash": p.locator.observed_hash, "span": p.span})),
+                "coalesced_trial": next.iter().map(passage_ordering_row).collect::<Vec<_>>()
+            })
+        });
         if let Some(reason) = reason {
             if let Some(child) = packet.fallback.take() {
                 // Keep one child fallback associated with its ranked unit;
@@ -1877,6 +2168,7 @@ pub(super) fn pack(
                     selection_ordinal: packet.selection_ordinal,
                     selection: None,
                     unit_score: packet.unit_score,
+                    unit_origin: packet.unit_origin,
                     fallback: None,
                     unit_clipped: true,
                 });
@@ -1910,12 +2202,27 @@ pub(super) fn pack(
         if packet.unit_clipped {
             selection_warnings.push("a bounded evidence-unit child was selected because its complete structural parent did not fit; inspect its cited source for omitted text".into());
         }
+        #[cfg(test)]
+        accepted_lineage_ids.extend(
+            lineage_identity["proposals"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|row| row["proposal_id"].clone()),
+        );
         passages = next;
         bundles = next_bundles;
         navigation = next_navigation;
         text = rendered;
         graph_bytes = next_graph;
     }
+    #[cfg(test)]
+    record_lineage_event("final_accepted", || {
+        serde_json::json!({
+            "accepted_proposal_ids": accepted_lineage_ids,
+            "passages": passages.iter().map(passage_ordering_row).collect::<Vec<_>>(),
+        })
+    });
     let mut warnings = vec![
         "tokens are UTF-8 byte estimates (ceil(bytes/4)); no exact tokenizer accounting".into(),
     ];

@@ -243,6 +243,9 @@ impl<'a> NormalizedBuilder<'a> {
         connection
             .execute_batch(normalized_schema::SCHEMA)
             .map_err(build_sql_error)?;
+        connection
+            .execute_batch(super::unit_inventory::SCHEMA)
+            .map_err(build_sql_error)?;
         let selection = &identity.selection;
         connection.execute("INSERT INTO catalog_meta(singleton,schema_version,vault_id,file_id,creation_epoch,creation_header_hash,epoch,state,origin_change_id,origin_manifest_hash,vector_cache_lost,vector_loss_unknown) VALUES(1,3,?1,?2,?3,?4,?3,'building',?5,?6,?7,?8)", params![
             selection.vault_id.as_str(), selection.file_id, sql::integer(selection.creation_epoch)?, selection.creation_header_hash.as_str(),

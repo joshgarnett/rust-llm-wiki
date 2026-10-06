@@ -1794,7 +1794,7 @@ fn verify_dependencies(
     Ok(())
 }
 
-fn configure_delta(connection: &rusqlite::Connection) -> Result<()> {
+pub(super) fn configure_delta(connection: &rusqlite::Connection) -> Result<()> {
     connection
         .set_limit(Limit::SQLITE_LIMIT_LENGTH, 8 * 1024 * 1024)
         .map_err(sql::sql_error)?;

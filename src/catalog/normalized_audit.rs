@@ -293,7 +293,14 @@ pub(crate) fn validate_schema(copy: &Connection) -> Result<()> {
     expected
         .execute_batch(normalized_schema::SCHEMA)
         .map_err(sql::sql_error)?;
-    if schema_rows(copy)? != schema_rows(&expected)? || sql::version(copy)? != 3 {
+    let actual = schema_rows(copy)?;
+    let base = schema_rows(&expected)?;
+    expected
+        .execute_batch(super::unit_inventory::SCHEMA)
+        .map_err(sql::sql_error)?;
+    // Older version-3 catalogs may lack this optional derived capability.
+    // Admit its entire exact schema, never arbitrary extra or partial objects.
+    if (actual != base && actual != schema_rows(&expected)?) || sql::version(copy)? != 3 {
         return Err(corrupt(
             "normalized schema differs from the exact catalog schema",
         ));
@@ -549,6 +556,30 @@ mod tests {
         ];
         for mutation in cases {
             let (_temp, path) = fixture();
+            mutate(&path, mutation);
+            assert_eq!(
+                validate_index(&pinned(&path), &AuditLimits::default())
+                    .unwrap_err()
+                    .code,
+                ErrorCode::IndexCorrupt,
+                "{mutation}"
+            );
+        }
+    }
+    #[test]
+    fn optional_unit_inventory_requires_its_entire_exact_schema() {
+        let (_temp, path) = fixture();
+        validate_index(&pinned(&path), &AuditLimits::default()).unwrap();
+        mutate(&path, super::super::unit_inventory::SCHEMA);
+        validate_index(&pinned(&path), &AuditLimits::default()).unwrap();
+        for mutation in [
+            "DROP INDEX unit_owner_changes;",
+            "DROP TABLE retrieval_units;",
+            "DROP TABLE unit_policies; CREATE TABLE unit_policies(policy TEXT);",
+            "CREATE TABLE unit_unexpected(x);",
+        ] {
+            let (_temp, path) = fixture();
+            mutate(&path, super::super::unit_inventory::SCHEMA);
             mutate(&path, mutation);
             assert_eq!(
                 validate_index(&pinned(&path), &AuditLimits::default())

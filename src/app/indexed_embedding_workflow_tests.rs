@@ -34,6 +34,85 @@ fn normalized() -> Fixture {
     fixture
 }
 
+#[test]
+fn normalized_evidence_set_final_proof_rejects_changed_selected_source() {
+    use crate::retrieval::{
+        ContextCheckpoint, ContextFault, ContextOptions, ContextRequest, ContextScope,
+        context_evidence, indexed_semantic,
+    };
+    struct ChangeBeforeEmission {
+        path: std::path::PathBuf,
+        reached: AtomicBool,
+    }
+    impl ContextFault for ChangeBeforeEmission {
+        fn check(&self, checkpoint: ContextCheckpoint) -> Result<()> {
+            assert_eq!(
+                checkpoint,
+                ContextCheckpoint::BeforeFinalVerification { attempt: 0 }
+            );
+            assert!(!self.reached.swap(true, Ordering::SeqCst));
+            std::fs::write(&self.path, SECOND).unwrap();
+            Ok(())
+        }
+    }
+    // The private coordinator is the same route used by ordinary app dispatch.
+    // Each arm gets an independent disposable vault; no paid/live evidence is
+    // changed and the fault runs only after allocation, before final proof.
+    for arm in ["L", "F0", "F1"] {
+        let fixture = normalized();
+        let (source, revision) = add(&fixture, TITLE, "allocation-proof.txt", FIRST);
+        let responses = Arc::new(Responses::new());
+        let dispatch = dispatcher(&fixture.fs, responses.clone());
+        let runtime = runtime(&fixture.service, &dispatch);
+        let synced = fixture
+            .app
+            .embeddings_sync(&EmbeddingSettings::default(), &runtime)
+            .unwrap();
+        complete(&synced, 1);
+        let store = VectorStore::open(&fixture.fs, None).unwrap();
+        let state = store.active().unwrap().unwrap();
+        let fault = Arc::new(ChangeBeforeEmission {
+            path: fixture
+                .fs
+                .root()
+                .path()
+                .join(content_path(&source, &revision).as_str()),
+            reached: AtomicBool::new(false),
+        });
+        let options = ContextOptions {
+            fault: Some(fault.clone()),
+            ..Default::default()
+        };
+        let request = ContextRequest {
+            scope: ContextScope::IndexedDocuments,
+            documents: plan(SearchMode::Semantic, vec![source], 8),
+            ..Default::default()
+        };
+        let catalog = Catalog::new(fixture.fs.clone(), fixture.app.vault_id().clone());
+        let result = context_evidence::with_policy_for_test(arm, || {
+            indexed_semantic::context(
+                &catalog,
+                "Signalneedle",
+                &request,
+                &options,
+                &state,
+                &[1.0, 0.0],
+            )
+        });
+        assert_eq!(
+            result.unwrap_err().code,
+            ErrorCode::FreshnessConflict,
+            "{arm}"
+        );
+        assert!(fault.reached.load(Ordering::SeqCst), "{arm}");
+        assert_eq!(
+            responses.calls.load(Ordering::SeqCst),
+            1,
+            "only fixture vector acquisition"
+        );
+    }
+}
+
 fn capture(title: &str, origin: &str, body: &str) -> CaptureRequest {
     CaptureRequest {
         title: title.into(),
@@ -222,7 +301,7 @@ fn normalized_accounted_sync_reuses_exact_capture_after_own_jobs_and_source_titl
     let repeat = fixture.app.embeddings_sync(&settings, &runtime).unwrap();
     complete(&repeat, 1);
     assert_eq!(repeat.generated_inputs, 0);
-    assert_eq!(repeat.reused_inputs, 1);
+    assert_eq!(repeat.reused_inputs, 0);
     assert!(!repeat.network_used);
 
     let renamed = fixture
@@ -279,7 +358,7 @@ fn normalized_cached_semantic_and_hybrid_filter_before_cap_emit_exact_utf8_sourc
     let synced = fixture.app.embeddings_sync(&settings, &runtime).unwrap();
     complete(&synced, 2);
     assert_eq!(synced.generated_inputs, 1);
-    assert_eq!(synced.reused_inputs, 1);
+    assert_eq!(synced.reused_inputs, 0);
     assert_eq!(responses.calls.load(Ordering::SeqCst), 2);
     fixture.query_seed(&fixture.spec(), "Signalneedle", vec![1.0, 0.0]);
     let offline = fixture.offline();
@@ -477,7 +556,7 @@ fn normalized_refresh_new_owner_and_withdrawal_use_only_current_vector_membershi
     let replacement = fixture.app.embeddings_sync(&settings, &runtime).unwrap();
     complete(&replacement, 3);
     assert_eq!(replacement.generated_inputs, 2);
-    assert_eq!(replacement.reused_inputs, 1);
+    assert_eq!(replacement.reused_inputs, 0);
     assert_eq!(responses.calls.load(Ordering::SeqCst), 4);
     let current = fixture
         .offline()
@@ -939,3 +1018,482 @@ fn normalized_semantic_cursor_tracks_relevant_cache_contents() {
     assert_ne!(second.hits[0].locator.path, first.hits[0].locator.path);
     assert_eq!(responses.calls.load(Ordering::SeqCst), 2);
 }
+
+// Explicit, supervisor-owned cost control. This never opens retained live fixtures.
+mod scale_attribution {
+    use super::*;
+    use crate::{
+        catalog::query_types::{QueryCatalog, QueryReadLimits},
+        config::providers::ProviderConfig,
+        providers::{credentials::*, dispatcher::Dispatcher, types::*},
+        retrieval::{
+            indexed_units::{CachedDocumentUnits, UnitBudget, UnitLimits},
+            render::TargetKind,
+            spaces::SpaceSpec,
+            vectors::{DenseScan, VectorReadBudget},
+        },
+        vault::{VaultFs, VaultRoot, WriterPermit},
+    };
+    use serde::Deserialize;
+    use serde_json::{Value, json};
+    use std::{
+        collections::BTreeSet,
+        fs::{self, OpenOptions},
+        io::Write,
+        path::{Path, PathBuf},
+        sync::atomic::AtomicUsize,
+        time::{Duration, Instant},
+    };
+
+    const DIMENSIONS: usize = 1536;
+    const QUERY: &str = "refreshprobe000000";
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Task {
+        version: u32,
+        cell: String,
+        mode: String,
+        owners: usize,
+        bytes_per_source: usize,
+        vault: PathBuf,
+        config: PathBuf,
+        report: PathBuf,
+        max_input_bytes: usize,
+        quality_target_bytes: Option<usize>,
+    }
+    fn plain(path: &Path) -> Result<()> {
+        if !path.is_absolute() {
+            return Err(WikiError::invalid("scale path must be absolute"));
+        }
+        for ancestor in path.ancestors() {
+            if fs::symlink_metadata(ancestor).is_ok_and(|m| m.file_type().is_symlink()) {
+                return Err(WikiError::invalid("scale path has a symlink component"));
+            }
+        }
+        Ok(())
+    }
+    fn vector(target: bool) -> Vec<f32> {
+        let mut value = vec![0.0; DIMENSIONS];
+        value[usize::from(!target)] = 1.0;
+        value
+    }
+    struct NoJitter;
+    impl JitterSource for NoJitter {
+        fn sample_inclusive(&self, _: u64) -> Result<u64> {
+            Ok(0)
+        }
+    }
+    struct NoExternalSecrets;
+    impl SecretInputs for NoExternalSecrets {
+        fn environment(&self, _: &str, _: usize) -> Result<Option<SecretBytes>> {
+            Err(WikiError::invalid(
+                "scale mock forbids environment credentials",
+            ))
+        }
+        fn file(&self, _: &Path, _: usize) -> Result<SecretBytes> {
+            Err(WikiError::invalid("scale mock forbids credential files"))
+        }
+    }
+    struct NoHelpers;
+    impl HelperRunner for NoHelpers {
+        fn run(
+            &self,
+            _: &HelperInvocation,
+            _: &HelperLimits,
+            _: &dyn JobClock,
+            _: &CancellationToken,
+        ) -> Result<HelperOutput> {
+            Err(WikiError::invalid("scale mock forbids credential helpers"))
+        }
+    }
+    struct Mock {
+        fs: VaultFs,
+        vault: RecordId,
+        calls: AtomicUsize,
+        items: AtomicUsize,
+        task_read_bytes: AtomicUsize,
+        max_calls: usize,
+    }
+    impl Transport for Mock {
+        fn execute<'a>(
+            &'a self,
+            request: AuthenticatedRequest<'a>,
+            _: TransportContext,
+        ) -> TransportFuture<'a> {
+            // Sealed request bytes stay private. Authenticate its retained task.
+            let summary = request.summary();
+            assert!(self.calls.fetch_add(1, Ordering::SeqCst) < self.max_calls);
+            let ledger = JobLedger::new(
+                self.fs.clone(),
+                self.vault.clone(),
+                summary.attempt.run_id.clone(),
+                options(),
+            )
+            .unwrap();
+            let inspection = ledger.inspect().unwrap();
+            let reference = &inspection.tasks[&summary.attempt.task_key].spec.input;
+            assert!(reference.byte_len <= 512 * 1024);
+            let path = self.fs.root().path().join(reference.path.as_str());
+            plain(&path).unwrap();
+            assert!(fs::symlink_metadata(&path).unwrap().is_file());
+            let bytes = fs::read(path).unwrap();
+            assert_eq!(bytes.len() as u64, reference.byte_len);
+            assert_eq!(Blake3Hash::digest(&bytes), reference.hash);
+            self.task_read_bytes
+                .fetch_add(bytes.len(), Ordering::SeqCst);
+            let input: RemoteInput = serde_json::from_slice(&bytes).unwrap();
+            assert_eq!(crate::graph::packet::canonical_json(&input).unwrap(), bytes);
+            let RemoteOperation::Embed {
+                inputs,
+                expected_dimensions,
+                ..
+            } = input.operation
+            else {
+                panic!("scale mock received a non-embedding task");
+            };
+            assert!(!inputs.is_empty() && inputs.len() <= 16);
+            assert_eq!(expected_dimensions, Some(DIMENSIONS as u32));
+            self.items.fetch_add(inputs.len(), Ordering::SeqCst);
+            let data: Vec<_> = inputs
+                .iter()
+                .enumerate()
+                .map(|(index, input)| {
+                    assert_eq!(Blake3Hash::digest(input.utf8.as_bytes()), input.input_hash);
+                    json!({"index":index,"embedding":vector(input.utf8.contains(QUERY))})
+                })
+                .collect();
+            // Omitted usage remains unknown in the actual ledger; no fake cost.
+            let reply = TransportReply::new(
+                200,
+                vec![],
+                serde_json::to_vec(&json!({
+                    "model":"scale-attribution-mock", "data":data,
+                }))
+                .unwrap(),
+            )
+            .unwrap();
+            Box::pin(async move { Ok(reply) })
+        }
+    }
+    fn scan_value(scan: &DenseScan) -> Value {
+        json!({"hits":scan.hits,"coverage":scan.coverage,
+            "available_by_target":scan.available_by_target,
+            "owner_cap_reached_by_target":scan.owner_cap_reached_by_target})
+    }
+    fn run(task: &Task) -> Result<Value> {
+        if task.version != 1
+            || task.max_input_bytes != 12000
+            || task.quality_target_bytes.is_some()
+            || !matches!(
+                (task.cell.as_str(), task.owners, task.bytes_per_source),
+                ("A", 64, 16384) | ("B", 256, 16384) | ("C", 64, 1024) | ("D", 64, 102400)
+            )
+            || !matches!(task.mode.as_str(), "initial" | "changed" | "exact")
+        {
+            return Err(WikiError::invalid("unfrozen scale attribution task"));
+        }
+        for path in [&task.vault, &task.config, &task.report] {
+            plain(path)?;
+        }
+        if task.report.exists()
+            || !task.vault.is_dir()
+            || !task.config.is_file()
+            || !task.config.starts_with(task.vault.parent().unwrap())
+        {
+            return Err(WikiError::invalid("scale attribution ownership differs"));
+        }
+        let fs = VaultFs::new(VaultRoot::explicit(&task.vault)?);
+        let app = OfflineApp::new(fs.clone(), OperationOptions::default())?;
+        let catalog = Catalog::new(fs.clone(), app.vault_id().clone());
+        let settings = EmbeddingSettings::default();
+        let service = ProviderConfig::load(&task.config)?.authorize(
+            &fs,
+            app.vault_id(),
+            "primary",
+            Capability::Embed,
+        )?;
+        let spec = SpaceSpec::from_service(&service, settings.clone())?;
+        if spec.model != "scale-attribution-mock"
+            || spec.dimensions != Some(DIMENSIONS as u32)
+            || service.service().max_batch_items != Some(16)
+            || service.service().max_batch_bytes != Some(262144)
+        {
+            return Err(WikiError::invalid("scale mock profile differs"));
+        }
+        let deadline = Instant::now() + Duration::from_millis(2000);
+        let reader = catalog.cached_query_snapshot(QueryReadLimits::default())?;
+        let units_budget = UnitBudget::with_deadline(UnitLimits::default(), deadline)?;
+        let corpus = CachedDocumentUnits::new(&reader, &settings)?;
+        let construction = Instant::now();
+        let mut compact = Vec::new();
+        let mut owners = BTreeSet::new();
+        let mut unique = BTreeSet::new();
+        let mut compact_bytes = 0usize;
+        let mut identity_hash = blake3::Hasher::new();
+        for unit in corpus.replay(&units_budget)? {
+            let mut unit = unit?;
+            owners.insert(unit.owner.clone());
+            unique.insert(unit.input_hash.clone());
+            unit.utf8.clear();
+            unit.utf8.shrink_to_fit();
+            let bytes =
+                serde_json::to_vec(&unit).map_err(|_| WikiError::invalid("compact unit"))?;
+            compact_bytes += bytes.len();
+            if compact.len() >= 4096 || compact_bytes > 4 * 1024 * 1024 {
+                return Err(WikiError::new(
+                    ErrorCode::BudgetExceeded,
+                    "compact attribution ceiling",
+                ));
+            }
+            identity_hash.update(&(bytes.len() as u64).to_le_bytes());
+            identity_hash.update(&bytes);
+            compact.push(unit);
+        }
+        let construction_ns = construction.elapsed().as_nanos();
+        let (initial_ceiling, initial_requests) = match task.cell.as_str() {
+            "A" => (256, 16),
+            "B" => (800, 50),
+            "C" => (128, 8),
+            "D" => (704, 44),
+            _ => (0, 0),
+        };
+        if owners.len() != task.owners || unique.len() > initial_ceiling {
+            return Err(WikiError::new(
+                ErrorCode::BudgetExceeded,
+                "scale owner/input admission",
+            ));
+        }
+        let construction_work = units_budget.usage();
+        let construction_cache = reader.usage();
+        let mut result = json!({"settings":settings,"dimensions":DIMENSIONS,
+            "construction_ns":construction_ns,"owners":owners.len(),"units":compact.len(),
+            "unique_inputs":unique.len(),"compact_bytes":compact_bytes,
+            "identity_hash":format!("blake3:{}",identity_hash.finalize()),
+            "construction_work":{"rendered_units":construction_work.units,
+                "rendered_bytes":construction_work.render_bytes,"cache_rows":construction_cache.rows,
+                "cache_bytes":construction_cache.bytes},
+            "construction_scope":"separate cached rendering for admission; no canonical authority",
+            "mock_requests":0,"mock_items":0,"immutable_mock_task_read_bytes":0,
+            "application_invocations":0,"explicit_query_cache_writes":0,
+            "logical_unmeasured_stage_reservation_bytes":512_u64*1024*1024});
+        if task.mode == "exact" {
+            let phase = VectorReadBudget::new(deadline)?;
+            let store = VectorStore::open_bounded_snapshot(&fs, &phase)?;
+            let active = store.active()?.ok_or_else(|| {
+                WikiError::new(ErrorCode::OfflineUnavailable, "scale active space missing")
+            })?;
+            if active.spec != spec {
+                return Err(WikiError::invalid("scale space changed"));
+            }
+            let start = Instant::now();
+            let cached = store.exact_stream(
+                &active.id,
+                &vector(true),
+                || corpus.replay(&units_budget),
+                &[TargetKind::Document],
+                80,
+                |_| Ok(true),
+            )?;
+            result["cached_scan_ns"] = json!(start.elapsed().as_nanos());
+            result["cached_scan_vector_work"] = serde_json::to_value(phase.usage()).unwrap();
+            let before = phase.usage();
+            let start = Instant::now();
+            let compact_scan = store.exact_stream(
+                &active.id,
+                &vector(true),
+                || Ok(compact.iter().cloned().map(Ok)),
+                &[TargetKind::Document],
+                80,
+                |_| Ok(true),
+            )?;
+            result["compact_scan_ns"] = json!(start.elapsed().as_nanos());
+            let after = phase.usage();
+            result["compact_scan_vector_work"] = json!({
+                "vector_reads":after.vector_reads-before.vector_reads,
+                "vector_bytes_scanned":after.vector_bytes_scanned-before.vector_bytes_scanned,
+                "metadata_bytes":after.metadata_bytes_decoded-before.metadata_bytes_decoded,
+                "sql_vm_steps":after.sql_vm_steps-before.sql_vm_steps});
+            if scan_value(&cached) != scan_value(&compact_scan) {
+                return Err(WikiError::invalid("exact compact/cached scan mismatch"));
+            }
+            if store
+                .active()?
+                .is_none_or(|now| now.id != active.id || now.spec != active.spec)
+            {
+                return Err(WikiError::new(
+                    ErrorCode::FreshnessConflict,
+                    "scale active space changed",
+                ));
+            }
+            result["exact_scan_equal"] = json!(true);
+            result["exact_scan_result_hash"] = json!(Blake3Hash::digest(
+                crate::graph::packet::canonical_json(&scan_value(&cached))?
+            ));
+            let final_work = units_budget.usage();
+            result["cached_render_work"] = json!({"units":final_work.units-construction_work.units,
+                "bytes":final_work.render_bytes-construction_work.render_bytes});
+            drop(store);
+            drop(reader);
+            let start = Instant::now();
+            let (outcome, observation) =
+                super::super::indexed_embedding_inputs::attribution::with_observation(|| {
+                    app.embeddings_sync_cached(&settings)
+                });
+            result["diagnostic_cached_sync_ns"] = json!(start.elapsed().as_nanos());
+            result["diagnostic_cached_sync_observation"] =
+                serde_json::to_value(observation).unwrap();
+            result["diagnostic_cached_sync"] = serde_json::to_value(outcome?).unwrap();
+            result["application_invocations"] = json!(1);
+            return Ok(result);
+        }
+        let expected_reused = if task.mode == "initial" {
+            0
+        } else {
+            let policy = crate::retrieval::unit_inventory_types::RenderPolicyId::for_settings(
+                &reader.snapshot().parser_fingerprint,
+                &settings,
+            )?;
+            let store = VectorStore::open(&fs, None)?;
+            let space = spec.id()?;
+            let mut pending_owners = BTreeSet::new();
+            for owner in &owners {
+                if match reader.unit_owner_binding(&policy, owner)? {
+                    Some(binding) => !store.owner_binding_ready(&space, &binding)?,
+                    None => true,
+                } {
+                    pending_owners.insert(owner.clone());
+                }
+            }
+            let pending_hashes = compact
+                .iter()
+                .filter(|unit| pending_owners.contains(&unit.owner))
+                .map(|unit| unit.input_hash.clone())
+                .collect::<BTreeSet<_>>();
+            pending_hashes.iter().try_fold(0usize, |count, hash| {
+                Ok::<_, WikiError>(count + usize::from(store.vector(&space, hash)?.is_some()))
+            })?
+        };
+        result["expected_selected_reused_inputs"] = json!(expected_reused);
+        drop(reader);
+        let missing = if task.mode == "initial" {
+            unique.len()
+        } else {
+            let store = VectorStore::open(&fs, None)?;
+            unique.iter().try_fold(0usize, |count, hash| {
+                Ok::<_, WikiError>(count + usize::from(store.vector(&spec.id()?, hash)?.is_none()))
+            })?
+        };
+        let request_ceiling = if task.mode == "changed" {
+            1
+        } else {
+            initial_requests
+        };
+        if missing == 0
+            || (task.mode == "changed" && missing > 16)
+            || missing.div_ceil(16) > request_ceiling
+        {
+            return Err(WikiError::new(
+                ErrorCode::BudgetExceeded,
+                "scale mock request/input admission",
+            ));
+        }
+        result["missing_inputs_before_sync"] = json!(missing);
+        let transport = Arc::new(Mock {
+            fs: fs.clone(),
+            vault: app.vault_id().clone(),
+            calls: AtomicUsize::new(0),
+            items: AtomicUsize::new(0),
+            task_read_bytes: AtomicUsize::new(0),
+            max_calls: request_ceiling,
+        });
+        let dispatch = Dispatcher::new(
+            fs.clone(),
+            DispatchOptions {
+                broker: Arc::new(CredentialBroker::new(CredentialOptions {
+                    clock: Arc::new(common::TestClock),
+                    inputs: Arc::new(NoExternalSecrets),
+                    runner: Arc::new(NoHelpers),
+                })),
+                transport: transport.clone(),
+                jitter: Arc::new(NoJitter),
+            },
+        );
+        let mut runtime = runtime(&service, &dispatch);
+        runtime.limits.requests = request_ceiling as u64;
+        runtime.limits.request_bytes = Some(16 * 1024 * 1024);
+        runtime.limits.response_bytes = Some(request_ceiling as u64 * 8 * 1024 * 1024);
+        let start = Instant::now();
+        let (outcome, observation) =
+            super::super::indexed_embedding_inputs::attribution::with_observation(|| {
+                app.embeddings_sync(&settings, &runtime)
+            });
+        result["sync_elapsed_ns"] = json!(start.elapsed().as_nanos());
+        result["sync_observation"] = serde_json::to_value(observation).unwrap();
+        result["application_invocations"] = json!(1);
+        result["mock_requests"] = json!(transport.calls.load(Ordering::SeqCst));
+        result["mock_items"] = json!(transport.items.load(Ordering::SeqCst));
+        result["immutable_mock_task_read_bytes"] =
+            json!(transport.task_read_bytes.load(Ordering::SeqCst));
+        match outcome {
+            Err(error) => {
+                result["sync_error"] = serde_json::to_value(&error).unwrap();
+                return Ok(result);
+            }
+            Ok(report) => {
+                if !report.published
+                    || report.generated_inputs != missing
+                    || report.reused_inputs != expected_reused
+                    || report.coverage.available_units != compact.len()
+                {
+                    return Err(WikiError::invalid("scale sync coverage/count mismatch"));
+                }
+                result["sync_report"] = serde_json::to_value(report).unwrap();
+            }
+        }
+        let writer = WriterPermit::acquire(fs.root(), Duration::from_secs(1))?;
+        let mut store = VectorStore::open(&fs, Some(&writer))?;
+        let query = spec.query(QUERY)?;
+        store.put_batch(
+            &spec.id()?,
+            &[query.input_hash],
+            &[vector(true)],
+            false,
+            &Blake3Hash::digest([]),
+        )?;
+        result["explicit_query_cache_writes"] = json!(1);
+        Ok(result)
+    }
+
+    #[test]
+    #[ignore = "explicit four-cell supervisor-owned mock/attribution control only"]
+    fn fixed_scale_attribution() {
+        let path = PathBuf::from(
+            std::env::var_os("LWIKI_SCALE_ATTRIBUTION_TASK").expect("explicit scale task"),
+        );
+        plain(&path).unwrap();
+        let info = fs::symlink_metadata(&path).unwrap();
+        assert!(info.is_file() && info.len() <= 16384);
+        let task: Task = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        let outcome = run(&task);
+        let envelope = match outcome {
+            Ok(data) => json!({"ok":data.get("sync_error").is_none(),"meta":{"network_used":false,
+                "transport":"in-process synthetic only"},"data":data}),
+            Err(error) => json!({"ok":false,"meta":{"network_used":false},"error":error,
+                "logical_unmeasured_stage_reservation_bytes":512_u64*1024*1024,
+                "partial_counters":"unavailable; retain whole-stage reservation"}),
+        };
+        let bytes = serde_json::to_vec_pretty(&envelope).unwrap();
+        assert!(bytes.len() <= 65536);
+        plain(&task.report).unwrap();
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&task.report)
+            .unwrap();
+        file.write_all(&bytes).unwrap();
+        file.sync_all().unwrap();
+    }
+}
+
+#[path = "indexed_embedding_inventory_tests.rs"]
+mod inventory;

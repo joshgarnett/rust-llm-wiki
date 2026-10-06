@@ -3,6 +3,9 @@ type StoredVector = (i64, Vec<u8>, String, bool);
 use super::{
     render::{RenderedUnit, TargetKind},
     spaces::SpaceSpec,
+    unit_inventory_types::{
+        INVENTORY_VERSION, PreparationCursor, RenderPolicyId, UnitDescriptor, UnitOwnerBinding,
+    },
 };
 use crate::{
     domain::*,
@@ -11,8 +14,71 @@ use crate::{
 };
 use rusqlite::{Connection, OpenFlags, params};
 use serde::{Deserialize, Serialize};
-use std::{cmp::Ordering, collections::BTreeMap, time::Duration};
+use std::{
+    cmp::Ordering,
+    collections::{BTreeMap, BTreeSet},
+    time::Duration,
+};
 const CACHE_PATH: &str = ".wiki/cache/embeddings.sqlite3";
+const MAX_ACK_BYTES: usize = 16 * 1024;
+const MAX_INVENTORY_BYTES: usize = 64 * 1024 * 1024;
+const MAX_INVENTORY_ITEMS: usize = 65_536;
+fn inventory_budget() -> WikiError {
+    WikiError::new(
+        ErrorCode::BudgetExceeded,
+        "bounded unit metadata budget exhausted",
+    )
+}
+fn bounded_inventory_json<T: Serialize>(value: &T, limit: usize) -> Result<Vec<u8>> {
+    struct BoundedJson {
+        bytes: Vec<u8>,
+        limit: usize,
+    }
+    impl std::io::Write for BoundedJson {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            if self.bytes.len().saturating_add(bytes.len()) > self.limit {
+                return Err(std::io::Error::other("unit metadata byte limit"));
+            }
+            self.bytes.extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let mut writer = BoundedJson {
+        bytes: Vec::new(),
+        limit,
+    };
+    serde_json::to_writer(&mut writer, value).map_err(|_| inventory_budget())?;
+    Ok(writer.bytes)
+}
+fn validate_owner_binding(binding: &UnitOwnerBinding) -> Result<()> {
+    if binding.unit_count > MAX_INVENTORY_ITEMS {
+        return Err(inventory_budget());
+    }
+    if binding.tombstone && binding.unit_count != 0 {
+        return Err(WikiError::invalid("tombstone owner has units"));
+    }
+    bounded_inventory_json(binding, MAX_ACK_BYTES)?;
+    Ok(())
+}
+fn validate_preparation_cursor(cursor: &PreparationCursor) -> Result<()> {
+    if cursor.version != INVENTORY_VERSION
+        || cursor.since_seq > cursor.through_seq
+        || cursor
+            .after
+            .as_ref()
+            .is_some_and(|after| after.modified_seq > cursor.through_seq)
+    {
+        return Err(WikiError::invalid(
+            "preparation cursor version/range invalid",
+        ));
+    }
+    bounded_inventory_json(cursor, MAX_ACK_BYTES)?;
+    Ok(())
+}
+
 fn sql(e: rusqlite::Error) -> WikiError {
     let code = match e.sqlite_error_code() {
         Some(rusqlite::ErrorCode::OperationInterrupted | rusqlite::ErrorCode::TooBig) => {
@@ -229,7 +295,7 @@ impl VectorStore {
             .busy_timeout(Duration::from_secs(1))
             .map_err(sql)?;
         if writable {
-            connection.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; CREATE TABLE IF NOT EXISTS embedding_spaces(id TEXT PRIMARY KEY,spec TEXT NOT NULL,dimensions INTEGER,active INTEGER NOT NULL DEFAULT 0); CREATE UNIQUE INDEX IF NOT EXISTS one_active_embedding_space ON embedding_spaces(active) WHERE active=1; CREATE TABLE IF NOT EXISTS embedding_vectors(space TEXT NOT NULL,input TEXT NOT NULL,dimensions INTEGER NOT NULL,blob BLOB NOT NULL,hash TEXT NOT NULL,ready INTEGER NOT NULL DEFAULT 0,PRIMARY KEY(space,input)); CREATE TABLE IF NOT EXISTS embedding_memberships(space TEXT NOT NULL,snapshot TEXT NOT NULL,unit TEXT NOT NULL,input TEXT NOT NULL,proof TEXT NOT NULL,metadata TEXT NOT NULL,PRIMARY KEY(space,snapshot,unit,input)); CREATE INDEX IF NOT EXISTS embedding_membership_scan ON embedding_memberships(space,snapshot,unit,input);").map_err(sql)?;
+            connection.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; CREATE TABLE IF NOT EXISTS embedding_spaces(id TEXT PRIMARY KEY,spec TEXT NOT NULL,dimensions INTEGER,active INTEGER NOT NULL DEFAULT 0); CREATE UNIQUE INDEX IF NOT EXISTS one_active_embedding_space ON embedding_spaces(active) WHERE active=1; CREATE TABLE IF NOT EXISTS embedding_vectors(space TEXT NOT NULL,input TEXT NOT NULL,dimensions INTEGER NOT NULL,blob BLOB NOT NULL,hash TEXT NOT NULL,ready INTEGER NOT NULL DEFAULT 0,PRIMARY KEY(space,input)); CREATE TABLE IF NOT EXISTS embedding_memberships(space TEXT NOT NULL,snapshot TEXT NOT NULL,unit TEXT NOT NULL,input TEXT NOT NULL,proof TEXT NOT NULL,metadata TEXT NOT NULL,PRIMARY KEY(space,snapshot,unit,input)); CREATE INDEX IF NOT EXISTS embedding_membership_scan ON embedding_memberships(space,snapshot,unit,input); CREATE TABLE IF NOT EXISTS embedding_unit_owners(space TEXT NOT NULL,policy TEXT NOT NULL,owner TEXT NOT NULL,version INTEGER NOT NULL,binding TEXT NOT NULL,PRIMARY KEY(space,policy,owner)); CREATE TABLE IF NOT EXISTS embedding_preparation_cursors(space TEXT NOT NULL,policy TEXT NOT NULL,incarnation TEXT NOT NULL,version INTEGER NOT NULL,cursor TEXT NOT NULL,PRIMARY KEY(space,policy,incarnation));").map_err(sql)?;
         }
         if writable {
             let mut statement = connection
@@ -535,6 +601,289 @@ impl VectorStore {
         }
         Ok(coverage)
     }
+    fn optional_table(&self, table: &str) -> Result<bool> {
+        self.connection
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name=?1)",
+                [table],
+                |row| row.get(0),
+            )
+            .map_err(sql)
+    }
+
+    /// Exact metadata acknowledgment only: this does not reread vector blobs.
+    pub(crate) fn owner_binding_ready(
+        &self,
+        space: &Blake3Hash,
+        binding: &UnitOwnerBinding,
+    ) -> Result<bool> {
+        validate_owner_binding(binding)?;
+        if !self.optional_table("embedding_unit_owners")? {
+            return Ok(false);
+        }
+        let mut statement = self.connection.prepare(
+            "SELECT version,length(CAST(binding AS BLOB)),CASE WHEN length(CAST(binding AS BLOB))<=16384 THEN binding ELSE NULL END FROM embedding_unit_owners WHERE space=?1 AND policy=?2 AND owner=?3",
+        ).map_err(sql)?;
+        let mut rows = statement
+            .query(params![
+                space.as_str(),
+                binding.policy.as_str(),
+                binding.owner.as_str()
+            ])
+            .map_err(sql)?;
+        let Some(row) = rows.next().map_err(sql)? else {
+            return Ok(false);
+        };
+        let version: u32 = row.get(0).map_err(sql)?;
+        let bytes = usize::try_from(row.get::<_, i64>(1).map_err(sql)?).map_err(|_| {
+            WikiError::new(
+                ErrorCode::IndexCorrupt,
+                "invalid owner acknowledgment byte length",
+            )
+        })?;
+        if bytes > MAX_ACK_BYTES {
+            return Err(inventory_budget());
+        }
+        if let Some(budget) = &self.retained_budget {
+            budget.reserve_descriptor(bytes)?;
+        }
+        if version != INVENTORY_VERSION {
+            return Ok(false);
+        }
+        let json: String = row.get(2).map_err(sql)?;
+        let stored: UnitOwnerBinding = serde_json::from_str(&json).map_err(|_| {
+            WikiError::new(
+                ErrorCode::IndexCorrupt,
+                "owner acknowledgment encoding invalid",
+            )
+        })?;
+        Ok(stored == *binding)
+    }
+
+    pub(crate) fn preparation_cursor(
+        &self,
+        space: &Blake3Hash,
+        policy: &RenderPolicyId,
+        incarnation: &Blake3Hash,
+    ) -> Result<Option<PreparationCursor>> {
+        if !self.optional_table("embedding_preparation_cursors")? {
+            return Ok(None);
+        }
+        let mut statement = self.connection.prepare(
+            "SELECT version,length(CAST(cursor AS BLOB)),CASE WHEN length(CAST(cursor AS BLOB))<=16384 THEN cursor ELSE NULL END FROM embedding_preparation_cursors WHERE space=?1 AND policy=?2 AND incarnation=?3",
+        ).map_err(sql)?;
+        let mut rows = statement
+            .query(params![
+                space.as_str(),
+                policy.as_str(),
+                incarnation.as_str()
+            ])
+            .map_err(sql)?;
+        let Some(row) = rows.next().map_err(sql)? else {
+            return Ok(None);
+        };
+        let version: u32 = row.get(0).map_err(sql)?;
+        let bytes = usize::try_from(row.get::<_, i64>(1).map_err(sql)?).map_err(|_| {
+            WikiError::new(
+                ErrorCode::IndexCorrupt,
+                "invalid preparation cursor byte length",
+            )
+        })?;
+        if bytes > MAX_ACK_BYTES {
+            return Err(inventory_budget());
+        }
+        if let Some(budget) = &self.retained_budget {
+            budget.reserve_descriptor(bytes)?;
+        }
+        if version != INVENTORY_VERSION {
+            return Ok(None);
+        }
+        let json: String = row.get(2).map_err(sql)?;
+        let cursor: PreparationCursor = serde_json::from_str(&json).map_err(|_| {
+            WikiError::new(
+                ErrorCode::IndexCorrupt,
+                "preparation cursor encoding invalid",
+            )
+        })?;
+        validate_preparation_cursor(&cursor)?;
+        if cursor.policy != *policy || cursor.incarnation != *incarnation {
+            return Err(WikiError::new(
+                ErrorCode::IndexCorrupt,
+                "preparation cursor identity differs",
+            ));
+        }
+        Ok(Some(cursor))
+    }
+
+    /// Caller authenticates these owners under its WriterPermit. No descriptor or
+    /// corpus text is stored here, and other owners' acknowledgments are untouched.
+    pub(crate) fn acknowledge_unit_owners_checked(
+        &mut self,
+        space: &Blake3Hash,
+        owners: &[(UnitOwnerBinding, Vec<UnitDescriptor>)],
+        cursor: Option<&PreparationCursor>,
+        activate: bool,
+        expected_spec: &SpaceSpec,
+        final_check: impl FnOnce() -> Result<()>,
+    ) -> Result<Coverage> {
+        self.write_gate()?;
+        if expected_spec.id()? != *space {
+            return Err(WikiError::invalid("owner acknowledgment space differs"));
+        }
+        let state = self
+            .space(space)?
+            .ok_or_else(|| WikiError::invalid("space missing"))?;
+        if owners.len() > MAX_INVENTORY_ITEMS {
+            return Err(inventory_budget());
+        }
+        if let Some(cursor) = cursor {
+            validate_preparation_cursor(cursor)?;
+        }
+        if activate && cursor.is_none_or(|cursor| !cursor.complete) {
+            return Err(WikiError::invalid(
+                "activation requires a complete preparation cursor",
+            ));
+        }
+        let scope = cursor
+            .map(|c| (&c.policy, &c.incarnation))
+            .or_else(|| owners.first().map(|(b, _)| (&b.policy, &b.incarnation)));
+        let mut seen = BTreeSet::new();
+        let mut count = 0usize;
+        let mut bytes = 0usize;
+        let mut encoded = Vec::with_capacity(owners.len());
+        for (binding, descriptors) in owners {
+            validate_owner_binding(binding)?;
+            if scope.is_some_and(|(p, i)| p != &binding.policy || i != &binding.incarnation)
+                || cursor.is_some_and(|cursor| binding.modified_seq > cursor.through_seq)
+                || binding.unit_count != descriptors.len()
+                || !seen.insert(&binding.owner)
+            {
+                return Err(WikiError::invalid(
+                    "owner acknowledgment identities/count differ",
+                ));
+            }
+            count = count
+                .checked_add(descriptors.len())
+                .ok_or_else(inventory_budget)?;
+            if count > MAX_INVENTORY_ITEMS {
+                return Err(inventory_budget());
+            }
+            let json = bounded_inventory_json(binding, MAX_ACK_BYTES)?;
+            bytes = bytes.saturating_add(json.len());
+            let mut units = BTreeSet::new();
+            for descriptor in descriptors {
+                if descriptor.policy != binding.policy
+                    || descriptor.owner != binding.owner
+                    || !units.insert(&descriptor.unit_id)
+                {
+                    return Err(WikiError::invalid("owner descriptor identity differs"));
+                }
+                bytes =
+                    bytes.saturating_add(bounded_inventory_json(descriptor, MAX_ACK_BYTES)?.len());
+                if bytes > MAX_INVENTORY_BYTES {
+                    return Err(inventory_budget());
+                }
+            }
+            if bytes > MAX_INVENTORY_BYTES {
+                return Err(inventory_budget());
+            }
+            encoded.push(json);
+        }
+        let cursor_json = cursor
+            .map(|c| bounded_inventory_json(c, MAX_ACK_BYTES))
+            .transpose()?;
+        let spec_json = bounded_inventory_json(expected_spec, 1024 * 1024)?;
+        bytes = bytes
+            .saturating_add(cursor_json.as_ref().map_or(0, Vec::len))
+            .saturating_add(spec_json.len());
+        if bytes > MAX_INVENTORY_BYTES {
+            return Err(inventory_budget());
+        }
+        // Successful validation reads one established-dimension blob per unit.
+        // Reject an oversized page before allocating or scanning its vectors.
+        if count
+            .saturating_mul(state.actual_dimensions.unwrap_or(0) as usize)
+            .saturating_mul(4)
+            > MAX_INVENTORY_BYTES
+        {
+            return Err(inventory_budget());
+        }
+        // All metadata is bounded before starting a write. The unchecked API
+        // permits our immutable vector helpers to read within this transaction.
+        let tx = self.connection.unchecked_transaction().map_err(sql)?;
+        let mut coverage = Coverage {
+            eligible_units: count,
+            ..Default::default()
+        };
+        for (_, descriptors) in owners {
+            for descriptor in descriptors {
+                self.count_descriptor_vector(space, descriptor, &mut coverage)?;
+            }
+        }
+        // An acknowledgment represents complete readiness, regardless of activation.
+        if coverage.missing_units != 0 {
+            return Err(WikiError::new(
+                ErrorCode::CapabilityUnavailable,
+                "owner coverage incomplete",
+            ));
+        }
+        for ((binding, _), json) in owners.iter().zip(encoded) {
+            let json =
+                std::str::from_utf8(&json).map_err(|_| WikiError::invalid("owner encoding"))?;
+            tx.execute("INSERT INTO embedding_unit_owners(space,policy,owner,version,binding) VALUES(?1,?2,?3,?4,?5) ON CONFLICT(space,policy,owner) DO UPDATE SET version=excluded.version,binding=excluded.binding",
+                params![space.as_str(), binding.policy.as_str(), binding.owner.as_str(), INVENTORY_VERSION, json]).map_err(sql)?;
+        }
+        if let (Some(cursor), Some(json)) = (cursor, cursor_json) {
+            let json =
+                std::str::from_utf8(&json).map_err(|_| WikiError::invalid("cursor encoding"))?;
+            tx.execute("INSERT INTO embedding_preparation_cursors(space,policy,incarnation,version,cursor) VALUES(?1,?2,?3,?4,?5) ON CONFLICT(space,policy,incarnation) DO UPDATE SET version=excluded.version,cursor=excluded.cursor",
+                params![space.as_str(), cursor.policy.as_str(), cursor.incarnation.as_str(), INVENTORY_VERSION, json]).map_err(sql)?;
+        }
+        if activate {
+            let json = std::str::from_utf8(&spec_json)
+                .map_err(|_| WikiError::invalid("space encoding"))?;
+            tx.execute(
+                "UPDATE embedding_spaces SET spec=?2 WHERE id=?1",
+                params![space.as_str(), json],
+            )
+            .map_err(sql)?;
+            tx.execute("UPDATE embedding_spaces SET active=0 WHERE active=1", [])
+                .map_err(sql)?;
+            tx.execute(
+                "UPDATE embedding_spaces SET active=1 WHERE id=?1",
+                [space.as_str()],
+            )
+            .map_err(sql)?;
+        }
+        final_check()?;
+        tx.commit().map_err(sql)?;
+        Ok(coverage)
+    }
+
+    fn count_descriptor_vector(
+        &self,
+        space: &Blake3Hash,
+        unit: &UnitDescriptor,
+        coverage: &mut Coverage,
+    ) -> Result<Option<Vec<f32>>> {
+        if let Some(vector) = self.vector(space, &unit.input_hash)? {
+            coverage.available_units += 1;
+            return Ok(Some(vector));
+        }
+        coverage.missing_units += 1;
+        if let Some((d, blob, hash, ready)) = self.raw_vector(space, &unit.input_hash)? {
+            let valid = u32::try_from(d).ok().is_some_and(|d| {
+                Blake3Hash::digest(&blob).as_str() == hash && decode(&blob, d).is_ok()
+            });
+            if !ready && valid {
+                coverage.pending_units += 1;
+            } else {
+                coverage.corrupt_units += 1;
+            }
+        }
+        Ok(None)
+    }
+
     /// Caller holds vault writer and fresh canonical proof. Publish coverage and active
     /// pointer together in one disposable-cache transaction, never across databases.
     pub fn memberships(
@@ -817,6 +1166,223 @@ impl VectorStore {
             owner_cap_reached_by_target,
         })
     }
+    fn reserve_scan_descriptor(
+        &self,
+        descriptor: &UnitDescriptor,
+        bytes: &mut usize,
+        count: &mut usize,
+    ) -> Result<()> {
+        let encoded = bounded_inventory_json(descriptor, MAX_ACK_BYTES)?;
+        *bytes = bytes.saturating_add(encoded.len());
+        *count = count.saturating_add(1);
+        if *bytes > MAX_INVENTORY_BYTES || *count > 2 * MAX_INVENTORY_ITEMS {
+            return Err(inventory_budget());
+        }
+        if let Some(budget) = &self.retained_budget {
+            budget.reserve_descriptor(encoded.len())?;
+        }
+        Ok(())
+    }
+
+    /// Stream the pinned compact inventory once, then retrieve descriptors only
+    /// for winning owners by indexed lookup. These identities are never proofs.
+    pub(crate) fn exact_descriptor_stream<I, S, F, G>(
+        &self,
+        space: &Blake3Hash,
+        query: &[f32],
+        units: S,
+        targets: &[TargetKind],
+        k: usize,
+        allowed: F,
+        selected_units: G,
+    ) -> Result<DenseScan>
+    where
+        S: Fn() -> Result<I>,
+        I: IntoIterator<Item = Result<UnitDescriptor>>,
+        F: Fn(&UnitDescriptor) -> Result<bool>,
+        G: Fn(&[VaultRelativePath]) -> Result<Vec<UnitDescriptor>>,
+    {
+        if k == 0 || k > 160 {
+            return Err(WikiError::new(
+                ErrorCode::Usage,
+                "exact candidate cap exceeds 160",
+            ));
+        }
+        let state = self
+            .space(space)?
+            .ok_or_else(|| WikiError::new(ErrorCode::OfflineUnavailable, "space missing"))?;
+        if state.actual_dimensions != Some(query.len() as u32) {
+            return Err(WikiError::new(
+                ErrorCode::CapabilityUnavailable,
+                "query/corpus dimensions differ",
+            ));
+        }
+        // First pass identifies exact top owners using only their best unit.
+        // A rejected owner may later win, so its earlier second-best unit
+        // cannot be retained correctly with a one-pass O(k) selection.
+        let mut owners: BTreeMap<TargetKind, BTreeMap<VaultRelativePath, DenseHit>> = targets
+            .iter()
+            .map(|target| (*target, BTreeMap::new()))
+            .collect();
+        let mut coverage = Coverage::default();
+        let mut identities: BTreeMap<(TargetKind, VaultRelativePath), UnitDescriptor> =
+            BTreeMap::new();
+        let mut descriptor_bytes = 0usize;
+        let mut descriptor_count = 0usize;
+        let mut owner_cap_reached_by_target = BTreeMap::new();
+        for unit in units()? {
+            let unit = unit?;
+            self.reserve_scan_descriptor(&unit, &mut descriptor_bytes, &mut descriptor_count)?;
+            if !targets.contains(&unit.target) || !allowed(&unit)? {
+                continue;
+            }
+            coverage.eligible_units += 1;
+            let Some(vector) = self.count_descriptor_vector(space, &unit, &mut coverage)? else {
+                continue;
+            };
+            let score = cosine(query, &vector)?;
+            let hit = DenseHit {
+                unit_id: unit.unit_id.clone(),
+                target: unit.target,
+                owner: unit.owner.clone(),
+                target_id: unit.target_id.clone(),
+                source_span: unit.source_span,
+                input_hash: unit.input_hash.clone(),
+                score,
+            };
+            let selected = owners.get_mut(&hit.target).expect("selected target");
+            if let Some(best) = selected.get_mut(&hit.owner) {
+                if hit < *best {
+                    identities.insert((hit.target, hit.owner.clone()), unit);
+                    *best = hit;
+                }
+                continue;
+            }
+            if selected.len() == k {
+                owner_cap_reached_by_target.insert(hit.target, true);
+                let worst_owner = selected
+                    .iter()
+                    .max_by(|(_, a), (_, b)| a.cmp(b))
+                    .map(|(owner, best)| (owner.clone(), best.clone()))
+                    .expect("full owner selection");
+                if hit >= worst_owner.1 {
+                    continue;
+                }
+                selected.remove(&worst_owner.0);
+                identities.remove(&(hit.target, worst_owner.0));
+            }
+            identities.insert((hit.target, hit.owner.clone()), unit);
+            selected.insert(hit.owner.clone(), hit);
+        }
+        let available_by_target = owners
+            .iter()
+            .map(|(target, selected)| (*target, selected.len()))
+            .collect();
+        let selected_owners = owners
+            .values()
+            .flat_map(|selected| selected.keys().cloned())
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect::<Vec<_>>();
+        // Lookup is deliberately invoked only once, with the final owner set.
+        let selected_descriptors = selected_units(&selected_owners)?;
+        if selected_descriptors.len() > MAX_INVENTORY_ITEMS {
+            return Err(inventory_budget());
+        }
+        let mut selected_identities = BTreeMap::new();
+        let mut passages: BTreeMap<TargetKind, BTreeMap<VaultRelativePath, Vec<DenseHit>>> = owners
+            .iter()
+            .map(|(target, selected)| {
+                (
+                    *target,
+                    selected
+                        .keys()
+                        .cloned()
+                        .map(|owner| (owner, Vec::new()))
+                        .collect(),
+                )
+            })
+            .collect();
+        for unit in selected_descriptors {
+            self.reserve_scan_descriptor(&unit, &mut descriptor_bytes, &mut descriptor_count)?;
+            if selected_owners.binary_search(&unit.owner).is_err() {
+                return Err(WikiError::new(
+                    ErrorCode::IndexCorrupt,
+                    "selected descriptor lookup returned unrequested owner",
+                ));
+            }
+            let owner_key = (unit.target, unit.owner.clone());
+            if identities
+                .get(&owner_key)
+                .is_some_and(|best| best.unit_id == unit.unit_id)
+            {
+                if identities.get(&owner_key) != Some(&unit) {
+                    return Err(WikiError::new(
+                        ErrorCode::FreshnessConflict,
+                        "selected descriptor identity changed",
+                    ));
+                }
+                selected_identities.insert(owner_key, unit.clone());
+            }
+            if !passages
+                .get(&unit.target)
+                .is_some_and(|selected| selected.contains_key(&unit.owner))
+                || !allowed(&unit)?
+            {
+                continue;
+            }
+            // Missing units were counted in the first pass and remain absent
+            // from ranking. A vanished winning unit is caught by the final
+            // best-hit comparison below.
+            let Some(vector) = self.vector(space, &unit.input_hash)? else {
+                continue;
+            };
+            let score = cosine(query, &vector)?;
+            let selected = passages
+                .get_mut(&unit.target)
+                .expect("selected target")
+                .get_mut(&unit.owner)
+                .expect("selected owner");
+            selected.push(DenseHit {
+                unit_id: unit.unit_id.clone(),
+                target: unit.target,
+                owner: unit.owner.clone(),
+                target_id: unit.target_id.clone(),
+                source_span: unit.source_span,
+                input_hash: unit.input_hash.clone(),
+                score,
+            });
+            selected.sort();
+            selected.truncate(2);
+        }
+        for (target, selected) in &owners {
+            for (owner, best) in selected {
+                if passages[target][owner].first() != Some(best)
+                    || selected_identities.get(&(*target, owner.clone()))
+                        != identities.get(&(*target, owner.clone()))
+                {
+                    return Err(WikiError::new(
+                        ErrorCode::FreshnessConflict,
+                        "selected owner changed during indexed lookup",
+                    ));
+                }
+            }
+        }
+        let hits = passages
+            .into_iter()
+            .map(|(target, selected)| {
+                let mut groups = selected.into_values().collect::<Vec<_>>();
+                groups.sort_by(|a, b| a[0].cmp(&b[0]));
+                (target, groups.into_iter().flatten().collect())
+            })
+            .collect();
+        Ok(DenseScan {
+            hits,
+            coverage,
+            available_by_target,
+            owner_cap_reached_by_target,
+        })
+    }
 }
 
 impl VectorStore {
@@ -927,6 +1493,23 @@ impl VectorReadBudget {
         }
         usage.space_rows_decoded += 1;
         usage.space_bytes_decoded += bytes;
+        Ok(())
+    }
+    fn reserve_descriptor(&self, bytes: usize) -> Result<()> {
+        self.check()?;
+        let mut usage = self.usage.borrow_mut();
+        if bytes > MAX_ACK_BYTES
+            || usage.metadata_rows_decoded.saturating_add(1) > 2 * MAX_INVENTORY_ITEMS
+            || usage
+                .metadata_bytes_decoded
+                .saturating_add(usage.space_bytes_decoded)
+                .saturating_add(bytes)
+                > MAX_INVENTORY_BYTES
+        {
+            return Err(inventory_budget());
+        }
+        usage.metadata_rows_decoded += 1;
+        usage.metadata_bytes_decoded += bytes;
         Ok(())
     }
     fn reserve(&self, metadata: usize, vectors: usize, membership: bool) -> Result<()> {
@@ -1203,5 +1786,572 @@ impl Iterator for RetainedMembershipIter<'_> {
                 Some(Err(error))
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod incremental_vector_tests {
+    use super::*;
+    use crate::retrieval::{spaces::EmbeddingSettings, unit_inventory_types::UnitOwnerCursor};
+    use std::cell::{Cell, RefCell};
+
+    fn spec() -> SpaceSpec {
+        SpaceSpec {
+            version: 1,
+            endpoint_fingerprint: Blake3Hash::digest(b"incremental mock endpoint"),
+            profile_id: "test".into(),
+            service_id: "mock".into(),
+            model: "fixed".into(),
+            revision: None,
+            dimensions: Some(2),
+            metric: "cosine".into(),
+            normalization: "float64-l2-to-f32-le-v1".into(),
+            render_version: super::super::spaces::RENDER_VERSION.into(),
+            settings: EmbeddingSettings::default(),
+        }
+    }
+    fn store(inventory: bool) -> VectorStore {
+        let connection = Connection::open_in_memory().unwrap();
+        connection.execute_batch("CREATE TABLE embedding_spaces(id TEXT PRIMARY KEY,spec TEXT NOT NULL,dimensions INTEGER,active INTEGER NOT NULL DEFAULT 0); CREATE UNIQUE INDEX one_active_embedding_space ON embedding_spaces(active) WHERE active=1; CREATE TABLE embedding_vectors(space TEXT NOT NULL,input TEXT NOT NULL,dimensions INTEGER NOT NULL,blob BLOB NOT NULL,hash TEXT NOT NULL,ready INTEGER NOT NULL DEFAULT 0,PRIMARY KEY(space,input)); CREATE TABLE embedding_memberships(space TEXT NOT NULL,snapshot TEXT NOT NULL,unit TEXT NOT NULL,input TEXT NOT NULL,proof TEXT NOT NULL,metadata TEXT NOT NULL,PRIMARY KEY(space,snapshot,unit,input));").unwrap();
+        if inventory {
+            connection.execute_batch("CREATE TABLE embedding_unit_owners(space TEXT NOT NULL,policy TEXT NOT NULL,owner TEXT NOT NULL,version INTEGER NOT NULL,binding TEXT NOT NULL,PRIMARY KEY(space,policy,owner)); CREATE TABLE embedding_preparation_cursors(space TEXT NOT NULL,policy TEXT NOT NULL,incarnation TEXT NOT NULL,version INTEGER NOT NULL,cursor TEXT NOT NULL,PRIMARY KEY(space,policy,incarnation));").unwrap();
+        }
+        VectorStore {
+            connection,
+            writable: true,
+            retained_budget: None,
+        }
+    }
+    fn descriptor(owner: &str, label: &str) -> UnitDescriptor {
+        UnitDescriptor {
+            policy: RenderPolicyId::for_settings(
+                &Blake3Hash::digest(b"test parser"),
+                &spec().settings,
+            )
+            .unwrap(),
+            owner: VaultRelativePath::new(owner).unwrap(),
+            target: TargetKind::Document,
+            target_id: None,
+            source_hash: Blake3Hash::digest(owner.as_bytes()),
+            source_span: Some(ByteSpan::new(0, label.len() as u64).unwrap()),
+            unit_id: Blake3Hash::digest(format!("{owner}:{label}").as_bytes()),
+            input_hash: Blake3Hash::digest(label.as_bytes()),
+        }
+    }
+    fn binding(unit: &UnitDescriptor, count: usize) -> UnitOwnerBinding {
+        UnitOwnerBinding {
+            incarnation: Blake3Hash::digest(b"physical catalog one"),
+            policy: unit.policy.clone(),
+            owner: unit.owner.clone(),
+            render_token: Blake3Hash::digest(b"owner render one"),
+            proof_version: 2,
+            modified_seq: 3,
+            tombstone: false,
+            unit_count: count,
+        }
+    }
+    fn cursor(binding: &UnitOwnerBinding, complete: bool) -> PreparationCursor {
+        PreparationCursor {
+            version: INVENTORY_VERSION,
+            incarnation: binding.incarnation.clone(),
+            policy: binding.policy.clone(),
+            since_seq: 0,
+            through_seq: binding.modified_seq,
+            after: Some(UnitOwnerCursor {
+                modified_seq: binding.modified_seq,
+                owner: binding.owner.clone(),
+            }),
+            complete,
+        }
+    }
+    fn put(store: &mut VectorStore, space: &Blake3Hash, unit: &UnitDescriptor, vector: Vec<f32>) {
+        store
+            .put_batch(
+                space,
+                &[unit.input_hash.clone()],
+                &[vector],
+                true,
+                &Blake3Hash::digest(b"mock input guard"),
+            )
+            .unwrap();
+    }
+
+    #[test]
+    fn exact_owner_acknowledgment_binds_every_version_and_incarnation() {
+        let mut store = store(true);
+        let space = store.prepare_space(&spec()).unwrap();
+        let unit = descriptor("notes/a.md", "original");
+        let binding = binding(&unit, 1);
+        let cursor = cursor(&binding, true);
+        put(&mut store, &space, &unit, vec![1.0, 0.0]);
+        store
+            .acknowledge_unit_owners_checked(
+                &space,
+                &[(binding.clone(), vec![unit.clone()])],
+                Some(&cursor),
+                true,
+                &spec(),
+                || Ok(()),
+            )
+            .unwrap();
+        assert!(store.owner_binding_ready(&space, &binding).unwrap());
+        let mut alternatives = Vec::new();
+        let mut stale = binding.clone();
+        stale.incarnation = Blake3Hash::digest(b"rebuilt same epoch");
+        alternatives.push(stale);
+        let mut stale = binding.clone();
+        stale.policy = RenderPolicyId(Blake3Hash::digest(b"other segmentation"));
+        alternatives.push(stale);
+        let mut stale = binding.clone();
+        stale.owner = VaultRelativePath::new("notes/b.md").unwrap();
+        alternatives.push(stale);
+        let mut stale = binding.clone();
+        stale.render_token = Blake3Hash::digest(b"new render");
+        alternatives.push(stale);
+        let mut stale = binding.clone();
+        stale.proof_version += 1;
+        alternatives.push(stale);
+        let mut stale = binding.clone();
+        stale.modified_seq += 1;
+        alternatives.push(stale);
+        let mut stale = binding.clone();
+        stale.unit_count = 0;
+        alternatives.push(stale);
+        let mut stale = binding.clone();
+        stale.tombstone = true;
+        stale.unit_count = 0;
+        alternatives.push(stale);
+        for stale in alternatives {
+            assert!(!store.owner_binding_ready(&space, &stale).unwrap());
+        }
+        assert_eq!(
+            store
+                .preparation_cursor(&space, &binding.policy, &binding.incarnation)
+                .unwrap(),
+            Some(cursor)
+        );
+        assert!(
+            store
+                .preparation_cursor(
+                    &space,
+                    &binding.policy,
+                    &Blake3Hash::digest(b"rebuilt same epoch")
+                )
+                .unwrap()
+                .is_none()
+        );
+        // Readiness remains a metadata acknowledgment, even after blob corruption.
+        store
+            .connection
+            .execute("UPDATE embedding_vectors SET blob=X'00'", [])
+            .unwrap();
+        assert!(store.owner_binding_ready(&space, &binding).unwrap());
+        assert!(store.vector(&space, &unit.input_hash).unwrap().is_none());
+        store
+            .connection
+            .execute("UPDATE embedding_unit_owners SET version=999", [])
+            .unwrap();
+        assert!(!store.owner_binding_ready(&space, &binding).unwrap());
+    }
+
+    #[test]
+    fn acknowledgment_rolls_back_cursor_activation_and_owner_then_reconciles_tombstone() {
+        let mut store = store(true);
+        let old_spec = spec();
+        let old_space = store.prepare_space(&old_spec).unwrap();
+        store
+            .connection
+            .execute("UPDATE embedding_spaces SET active=1", [])
+            .unwrap();
+        let mut next_spec = spec();
+        next_spec.model = "replacement".into();
+        let space = store.prepare_space(&next_spec).unwrap();
+        let unit = descriptor("notes/a.md", "one");
+        let binding = binding(&unit, 1);
+        let cursor = cursor(&binding, true);
+        put(&mut store, &space, &unit, vec![1.0, 0.0]);
+        store.connection.execute("INSERT INTO embedding_memberships VALUES(?1,'old','unit','input','proof','legacy text')", [space.as_str()]).unwrap();
+        let failed = store.acknowledge_unit_owners_checked(
+            &space,
+            &[(binding.clone(), vec![unit.clone()])],
+            Some(&cursor),
+            true,
+            &next_spec,
+            || {
+                Err(WikiError::new(
+                    ErrorCode::FreshnessConflict,
+                    "guard changed",
+                ))
+            },
+        );
+        assert_eq!(failed.unwrap_err().code, ErrorCode::FreshnessConflict);
+        assert!(!store.owner_binding_ready(&space, &binding).unwrap());
+        assert!(
+            store
+                .preparation_cursor(&space, &binding.policy, &binding.incarnation)
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(store.active().unwrap().unwrap().id, old_space);
+        store
+            .acknowledge_unit_owners_checked(
+                &space,
+                &[(binding.clone(), vec![unit.clone()])],
+                Some(&cursor),
+                true,
+                &next_spec,
+                || Ok(()),
+            )
+            .unwrap();
+        let mut tombstone = binding.clone();
+        tombstone.tombstone = true;
+        tombstone.unit_count = 0;
+        tombstone.modified_seq += 1;
+        let next_cursor = self::cursor(&tombstone, true);
+        assert!(
+            store
+                .acknowledge_unit_owners_checked(
+                    &space,
+                    &[(tombstone.clone(), vec![])],
+                    Some(&next_cursor),
+                    false,
+                    &next_spec,
+                    || Err(WikiError::new(
+                        ErrorCode::FreshnessConflict,
+                        "withdrawal changed"
+                    )),
+                )
+                .is_err()
+        );
+        assert!(store.owner_binding_ready(&space, &binding).unwrap());
+        assert_eq!(
+            store
+                .preparation_cursor(&space, &binding.policy, &binding.incarnation)
+                .unwrap(),
+            Some(cursor)
+        );
+        let coverage = store
+            .acknowledge_unit_owners_checked(
+                &space,
+                &[(tombstone.clone(), vec![])],
+                Some(&next_cursor),
+                false,
+                &next_spec,
+                || Ok(()),
+            )
+            .unwrap();
+        assert_eq!(coverage.eligible_units, 0);
+        assert!(store.owner_binding_ready(&space, &tombstone).unwrap());
+        assert!(!store.owner_binding_ready(&space, &binding).unwrap());
+        assert!(store.vector(&space, &unit.input_hash).unwrap().is_some());
+        let legacy: String = store
+            .connection
+            .query_row("SELECT metadata FROM embedding_memberships", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(legacy, "legacy text");
+        assert_eq!(store.active().unwrap().unwrap().id, space);
+    }
+
+    #[test]
+    fn legacy_read_only_memberships_never_supply_inventory_readiness() {
+        let mut store = store(false);
+        let space = store.prepare_space(&spec()).unwrap();
+        let unit = descriptor("notes/old.md", "old");
+        let binding = binding(&unit, 1);
+        store.connection.execute("INSERT INTO embedding_memberships VALUES(?1,'old','unit','input','proof','not inventory')", [space.as_str()]).unwrap();
+        store
+            .connection
+            .execute_batch("PRAGMA query_only=ON")
+            .unwrap();
+        store.writable = false;
+        assert!(!store.owner_binding_ready(&space, &binding).unwrap());
+        assert!(
+            store
+                .preparation_cursor(&space, &binding.policy, &binding.incarnation)
+                .unwrap()
+                .is_none()
+        );
+        assert!(!store.optional_table("embedding_unit_owners").unwrap());
+        assert!(
+            !store
+                .optional_table("embedding_preparation_cursors")
+                .unwrap()
+        );
+    }
+
+    #[test]
+    fn acknowledgment_rejects_missing_pending_and_bad_identity_before_writes() {
+        let mut store = store(true);
+        let space = store.prepare_space(&spec()).unwrap();
+        let unit = descriptor("notes/a.md", "not ready");
+        let binding = binding(&unit, 1);
+        let cursor = cursor(&binding, true);
+        let fail = |store: &mut VectorStore, units| {
+            store
+                .acknowledge_unit_owners_checked(
+                    &space,
+                    &[(binding.clone(), units)],
+                    Some(&cursor),
+                    true,
+                    &spec(),
+                    || Ok(()),
+                )
+                .unwrap_err()
+        };
+        assert_eq!(
+            fail(&mut store, vec![unit.clone()]).code,
+            ErrorCode::CapabilityUnavailable
+        );
+        store
+            .put_batch_staged(
+                &space,
+                &[unit.input_hash.clone()],
+                &[vec![1.0, 0.0]],
+                true,
+                &Blake3Hash::digest(b"staged"),
+            )
+            .unwrap();
+        assert_eq!(
+            fail(&mut store, vec![unit.clone()]).code,
+            ErrorCode::CapabilityUnavailable
+        );
+        assert!(!store.owner_binding_ready(&space, &binding).unwrap());
+        put(&mut store, &space, &unit, vec![1.0, 0.0]);
+        store
+            .connection
+            .execute("UPDATE embedding_vectors SET blob=X'00'", [])
+            .unwrap();
+        assert_eq!(
+            fail(&mut store, vec![unit.clone()]).code,
+            ErrorCode::CapabilityUnavailable
+        );
+        put(&mut store, &space, &unit, vec![1.0, 0.0]);
+        let mut wrong = unit.clone();
+        wrong.policy = RenderPolicyId(Blake3Hash::digest(b"wrong policy"));
+        assert!(fail(&mut store, vec![wrong]).code != ErrorCode::CapabilityUnavailable);
+        assert!(fail(&mut store, vec![]).code != ErrorCode::CapabilityUnavailable);
+        assert!(
+            store
+                .acknowledge_unit_owners_checked(
+                    &space,
+                    &[(binding.clone(), vec![unit])],
+                    Some(&self::cursor(&binding, false)),
+                    true,
+                    &spec(),
+                    || Ok(())
+                )
+                .is_err()
+        );
+        assert!(!store.owner_binding_ready(&space, &binding).unwrap());
+    }
+
+    #[test]
+    fn descriptor_scan_ranks_exactly_and_indexes_only_final_owners_with_full_coverage() {
+        let mut store = store(true);
+        let space = store.prepare_space(&spec()).unwrap();
+        let early_b = descriptor("notes/b.md", "b second");
+        let a = descriptor("notes/a.md", "a");
+        let best_b = descriptor("notes/b.md", "b best");
+        let tie_z = descriptor("notes/z.md", "z tie");
+        let missing = descriptor("notes/missing.md", "missing");
+        let pending = descriptor("notes/pending.md", "pending");
+        let corrupt = descriptor("notes/corrupt.md", "corrupt");
+        for (unit, vector) in [
+            (&early_b, vec![0.6, 0.8]),
+            (&a, vec![0.8, 0.6]),
+            (&best_b, vec![1.0, 0.0]),
+            (&tie_z, vec![1.0, 0.0]),
+            (&corrupt, vec![1.0, 0.0]),
+        ] {
+            put(&mut store, &space, unit, vector);
+        }
+        store
+            .put_batch_staged(
+                &space,
+                &[pending.input_hash.clone()],
+                &[vec![1.0, 0.0]],
+                true,
+                &Blake3Hash::digest(b"pending"),
+            )
+            .unwrap();
+        store
+            .connection
+            .execute(
+                "UPDATE embedding_vectors SET blob=X'00' WHERE input=?1",
+                [corrupt.input_hash.as_str()],
+            )
+            .unwrap();
+        let universe = vec![
+            early_b.clone(),
+            a,
+            best_b.clone(),
+            tie_z,
+            missing,
+            pending,
+            corrupt,
+        ];
+        let streams = Cell::new(0);
+        let looked_up = RefCell::new(Vec::new());
+        let budget =
+            VectorReadBudget::new(std::time::Instant::now() + Duration::from_secs(10)).unwrap();
+        store.bind_read_budget(&budget).unwrap();
+        let scan = store
+            .exact_descriptor_stream(
+                &space,
+                &[1.0, 0.0],
+                || {
+                    streams.set(streams.get() + 1);
+                    Ok(universe.clone().into_iter().map(Ok))
+                },
+                &[TargetKind::Document],
+                1,
+                |_| Ok(true),
+                |owners| {
+                    looked_up.borrow_mut().extend_from_slice(owners);
+                    Ok(vec![early_b.clone(), best_b.clone()])
+                },
+            )
+            .unwrap();
+        assert_eq!(streams.get(), 1);
+        assert_eq!(*looked_up.borrow(), vec![best_b.owner.clone()]);
+        let hits = &scan.hits[&TargetKind::Document];
+        assert_eq!(hits.len(), 2);
+        assert_eq!(hits[0].unit_id, best_b.unit_id);
+        assert_eq!(hits[1].unit_id, early_b.unit_id);
+        assert_eq!(hits[0].score, 1.0);
+        assert!(hits[1].score > 0.59 && hits[1].score < 0.61);
+        assert_eq!(scan.available_by_target[&TargetKind::Document], 1);
+        assert!(scan.owner_cap_reached_by_target[&TargetKind::Document]);
+        assert_eq!(
+            (
+                scan.coverage.eligible_units,
+                scan.coverage.available_units,
+                scan.coverage.missing_units,
+                scan.coverage.pending_units,
+                scan.coverage.corrupt_units
+            ),
+            (7, 4, 3, 1, 1)
+        );
+        assert_eq!(budget.usage().vector_reads, 12); // seven first reads, three missing rechecks, two selected reads
+        assert_eq!(budget.usage().metadata_rows_decoded, 9);
+    }
+
+    #[test]
+    fn selected_lookup_rejects_changed_full_descriptor_and_unrequested_owner() {
+        let mut store = store(true);
+        let space = store.prepare_space(&spec()).unwrap();
+        let unit = descriptor("notes/a.md", "selected");
+        put(&mut store, &space, &unit, vec![1.0, 0.0]);
+        let mut changed = unit.clone();
+        changed.source_hash = Blake3Hash::digest(b"changed source, same dense hit");
+        for returned in [changed, descriptor("notes/unrequested.md", "other")] {
+            let error = store
+                .exact_descriptor_stream(
+                    &space,
+                    &[1.0, 0.0],
+                    || Ok(vec![Ok(unit.clone())]),
+                    &[TargetKind::Document],
+                    1,
+                    |_| Ok(true),
+                    |_| Ok(vec![returned.clone()]),
+                )
+                .err()
+                .unwrap();
+            assert!(matches!(
+                error.code,
+                ErrorCode::FreshnessConflict | ErrorCode::IndexCorrupt
+            ));
+        }
+    }
+
+    #[test]
+    fn bounded_inventory_metadata_and_all_vector_passes_share_limits() {
+        let mut store = store(true);
+        let space = store.prepare_space(&spec()).unwrap();
+        let unit = descriptor("notes/a.md", "selected");
+        put(&mut store, &space, &unit, vec![1.0, 0.0]);
+        let mut binding = binding(&unit, 0);
+        binding.tombstone = true;
+        binding.owner =
+            VaultRelativePath::new(format!("notes/{}.md", "x".repeat(MAX_ACK_BYTES))).unwrap();
+        let error = store
+            .acknowledge_unit_owners_checked(
+                &space,
+                &[(binding, vec![])],
+                None,
+                false,
+                &spec(),
+                || Ok(()),
+            )
+            .unwrap_err();
+        assert_eq!(error.code, ErrorCode::BudgetExceeded);
+        let count: i64 = store
+            .connection
+            .query_row("SELECT count(*) FROM embedding_unit_owners", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(count, 0);
+        let valid_binding = self::binding(&unit, 0);
+        store
+            .connection
+            .execute(
+                "INSERT INTO embedding_preparation_cursors VALUES(?1,?2,?3,?4,?5)",
+                params![
+                    space.as_str(),
+                    unit.policy.as_str(),
+                    valid_binding.incarnation.as_str(),
+                    INVENTORY_VERSION,
+                    "x".repeat(MAX_ACK_BYTES + 1)
+                ],
+            )
+            .unwrap();
+        assert_eq!(
+            store
+                .preparation_cursor(&space, &unit.policy, &valid_binding.incarnation)
+                .unwrap_err()
+                .code,
+            ErrorCode::BudgetExceeded
+        );
+        let mut oversized_count = valid_binding;
+        oversized_count.unit_count = MAX_INVENTORY_ITEMS + 1;
+        assert_eq!(
+            store
+                .owner_binding_ready(&space, &oversized_count)
+                .unwrap_err()
+                .code,
+            ErrorCode::BudgetExceeded
+        );
+        let mut bytes = MAX_INVENTORY_BYTES;
+        let mut count = 0;
+        assert_eq!(
+            store
+                .reserve_scan_descriptor(&unit, &mut bytes, &mut count)
+                .unwrap_err()
+                .code,
+            ErrorCode::BudgetExceeded
+        );
+        let budget =
+            VectorReadBudget::new(std::time::Instant::now() + Duration::from_secs(10)).unwrap();
+        budget.usage.borrow_mut().vector_bytes_scanned = MAX_INVENTORY_BYTES - 8;
+        store.bind_read_budget(&budget).unwrap();
+        // First pass consumes the last eight vector bytes; indexed replay must
+        // charge its read as well and fail rather than resetting the budget.
+        let error = store
+            .exact_descriptor_stream(
+                &space,
+                &[1.0, 0.0],
+                || Ok(vec![Ok(unit.clone())]),
+                &[TargetKind::Document],
+                1,
+                |_| Ok(true),
+                |_| Ok(vec![unit.clone()]),
+            )
+            .err()
+            .unwrap();
+        assert_eq!(error.code, ErrorCode::BudgetExceeded);
+        assert_eq!(budget.usage().vector_reads, 1);
     }
 }

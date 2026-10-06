@@ -26,6 +26,9 @@ pub(crate) struct UnitDocument<'a> {
 #[derive(Clone, Debug)]
 pub(crate) struct UnitCandidate {
     pub owner_index: usize,
+    /// Exact retained unit before focusing or structural-parent deduplication.
+    pub origin_span: ByteSpan,
+    pub origin_cosine: f64,
     pub parent_span: ByteSpan,
     pub child_span: ByteSpan,
     pub score: f64,
@@ -487,6 +490,14 @@ pub(crate) fn select_units(
                     input.owner_index,
                     "context_unit_outside_scanned_body",
                 );
+                #[cfg(test)]
+                super::context::record_lineage_event("unit_parent_decisions", || {
+                    serde_json::json!({
+                    "owner_index": input.owner_index, "owner": input.document.path,
+                    "owner_hash": input.document.hash, "scored_unit_span": span, "cosine": cosine,
+                    "parent_span": null, "child_span": null,
+                    "outcome": "context_unit_outside_scanned_body"})
+                });
                 continue;
             }
             let text = span.slice(raw)?;
@@ -542,6 +553,16 @@ pub(crate) fn select_units(
                     owner.input.owner_index,
                     "context_unit_focus_scan_byte_cap",
                 );
+                #[cfg(test)]
+                trace_unit_decision(
+                    owner,
+                    &unit,
+                    None,
+                    None,
+                    "context_unit_focus_scan_byte_cap",
+                    result.candidates.len(),
+                    candidate_limit,
+                );
                 continue;
             }
             owner_focus_bytes[unit.owner] += bytes;
@@ -563,6 +584,16 @@ pub(crate) fn select_units(
                 owner.input.owner_index,
                 "context_unit_excerpt_empty",
             );
+            #[cfg(test)]
+            trace_unit_decision(
+                owner,
+                &unit,
+                None,
+                None,
+                "context_unit_excerpt_empty",
+                result.candidates.len(),
+                candidate_limit,
+            );
             continue;
         }
         let (parent, clipped) = if child != unit.span {
@@ -573,6 +604,16 @@ pub(crate) fn select_units(
         // Units are already in score order: retain the strongest representative
         // and its fallback, without adding votes from another matching child.
         if !parents.insert((unit.owner, parent.start(), parent.end())) {
+            #[cfg(test)]
+            trace_unit_decision(
+                owner,
+                &unit,
+                Some(child),
+                Some(parent),
+                "parent_deduplicated",
+                result.candidates.len(),
+                candidate_limit,
+            );
             continue;
         }
         if result.candidates.len() == candidate_limit {
@@ -581,10 +622,32 @@ pub(crate) fn select_units(
                 owner.input.owner_index,
                 "context_unit_candidate_cap",
             );
+            #[cfg(test)]
+            trace_unit_decision(
+                owner,
+                &unit,
+                Some(child),
+                Some(parent),
+                "context_unit_candidate_cap",
+                result.candidates.len(),
+                candidate_limit,
+            );
             continue;
         }
+        #[cfg(test)]
+        trace_unit_decision(
+            owner,
+            &unit,
+            Some(child),
+            Some(parent),
+            "retained_parent",
+            result.candidates.len(),
+            candidate_limit,
+        );
         result.candidates.push(UnitCandidate {
             owner_index: owner.input.owner_index,
+            origin_span: unit.span,
+            origin_cosine: unit.cosine,
             parent_span: parent,
             child_span: child,
             score: unit.score,
@@ -593,6 +656,35 @@ pub(crate) fn select_units(
         });
     }
     Ok(result)
+}
+
+#[cfg(test)]
+fn trace_unit_decision(
+    owner: &Owner<'_>,
+    unit: &RankedUnit,
+    child: Option<ByteSpan>,
+    parent: Option<ByteSpan>,
+    outcome: &str,
+    candidate_count: usize,
+    candidate_limit: usize,
+) {
+    super::context::record_lineage_event("unit_parent_decisions", || {
+        let key = parent.map(|p| {
+            format!(
+                "unit:{}:{:020}:{:020}",
+                owner.input.document.path,
+                p.start(),
+                p.end()
+            )
+        });
+        serde_json::json!({"owner_index": owner.input.owner_index, "owner": owner.input.document.path,
+            "owner_hash": owner.input.document.hash, "scored_unit_span": unit.span,
+            "cosine": unit.cosine, "score": unit.score, "rank_contributions": unit.contributions,
+            "child_span": child, "parent_span": parent, "parent_key": key,
+            "parent_proposal_id": parent.zip(key.as_ref()).map(|(p,k)| super::context::lineage_proposal_id(k, &owner.input.document.path, &owner.input.document.hash, p)),
+            "child_proposal_id": child.zip(key.as_ref()).map(|(p,k)| super::context::lineage_proposal_id(&format!("{k}:child"), &owner.input.document.path, &owner.input.document.hash, p)),
+            "outcome": outcome, "candidate_count_before": candidate_count, "candidate_limit": candidate_limit})
+    });
 }
 
 #[cfg(test)]

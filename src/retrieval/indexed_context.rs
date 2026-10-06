@@ -560,6 +560,7 @@ pub(super) fn context(
             selection: Some(candidate),
             selection_ordinal: None,
             unit_score: None,
+            unit_origin: None,
             fallback: None,
             unit_clipped: false,
         });
@@ -589,6 +590,7 @@ pub(super) fn context(
             hits: &hits,
             graph: None,
             dependency_fingerprint: selected.fingerprint.clone(),
+            evidence_sets: None,
         },
     )?;
     meter.check()?;

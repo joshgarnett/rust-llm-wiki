@@ -683,6 +683,7 @@ fn same_packet_automatic(
                 selection_ordinal: row["ordinal"].as_u64().map(|ordinal| ordinal as usize),
                 selection: Some(candidate),
                 unit_score: None,
+                unit_origin: None,
                 fallback: None,
                 unit_clipped: false,
             }
@@ -712,6 +713,7 @@ fn same_packet_automatic(
             hits: &hits,
             graph: None,
             dependency_fingerprint: proof.fingerprint.clone(),
+            evidence_sets: None,
         },
     )?;
     proof.recheck(catalog, &reader)?;
@@ -1364,6 +1366,7 @@ fn coverage_trial_pack(
                 selection_ordinal: Some(candidate.ordinal),
                 selection: Some(candidate.lexical.clone()),
                 unit_score: Some(1.0 / (rank + 1) as f64),
+                unit_origin: None,
                 fallback: None,
                 unit_clipped: false,
             }
@@ -1384,6 +1387,7 @@ fn coverage_trial_pack(
             hits: env.hits,
             graph: None,
             dependency_fingerprint: env.fingerprint.clone(),
+            evidence_sets: None,
         },
     );
     match &result {

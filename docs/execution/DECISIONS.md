@@ -311,3 +311,40 @@ Build a new scoped local 0.2.0 trial after useful public investigation and factu
 refresh/reprepare pass their declared independent gate. Native completeness,
 HIGH, full parity/default activation and representative capacity remain separate
 open requirements; an updated trial does not complete the full goal.
+
+
+## 2026-10-06 — Connect compact preparation and discovery
+
+Implement one coherent intermediate workflow: policy-bound compact descriptors
+in the rebuildable normalized catalog, publication-time changed-owner/dependency
+invalidation, durable paged preparation and per-owner acknowledgments in the
+retained vector store. Discovery uses those descriptors and indexed winning-owner
+lookup before canonical selected rerendering. Render policy binds every parser,
+renderer, segmentation and embedding setting; catalog acknowledgment authority
+binds the physical publication incarnation. Compatible vector blobs survive
+reconstruction. This keeps canonical Markdown and paid-input/evidence proofs
+authoritative without rebuilding or rendering unchanged owners on every sync.
+
+The 63-check affected native aggregate passes; original compiler/runtime failures
+and grouped repair evidence remain preserved. Exact vector scanning is retained
+as an oracle, not a fast-25K solution. Assess the prospectively frozen small public
+refresh/reprepare/reconstruction lifecycle independently before a new local 0.2.0
+trial. Broader evidence completeness, native HIGH, storage and representative
+25K qualification remain separate requirements.
+
+Trace an observed shared-input failure through the actual allocation and receipt
+rules: task guards union every authenticated owner, receipt publication adds the
+current Run guard, and 128 read preconditions is the existing hard limit. Admit
+at most 127 source guards per embedding batch before dispatch; preserve all guards,
+Received bytes and unknown accounting holds. Do not raise a receipt constant or
+add a general repair subsystem. This prevents new unpublishable paid work, but
+large shared-input owner groups still require a bounded allocation strategy before
+they qualify as a finished workflow. The valid 129-owner resume fixture deliberately
+uses two 64-owner input groups with one input per request plus a final owner.
+
+Generated/reused counts describe distinct inputs actually worked on in the current
+invocation, excluding generated/recovered overlap and unchanged acknowledged
+owners. Inventory-derived retained coverage is a separate reported quantity and
+never a full vector-health audit. Exact schema checking admits the base catalog
+or the entire optional inventory schema; canonical catalog/FTS agreement does
+not certify semantic inventory or vector completeness.

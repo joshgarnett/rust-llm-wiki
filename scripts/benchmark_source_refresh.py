@@ -110,7 +110,7 @@ def validate_preseed(args, runner):
                 "files", "generator"}
     if set(data) != required or data["version"] != 1 or data["kind"] != "normalized-refresh-fixture":
         raise ValueError("unsupported preseed envelope")
-    count = TIERS[args.tier]
+    count = args.source_count if getattr(args, "scale_attribution", False) else TIERS[args.tier]
     expected = {"seed": args.seed, "bytes_per_source": args.bytes_per_source,
                 "source_count": count, "current_content_bytes": count * args.bytes_per_source,
                 "target_prior_extra_revisions": 0, "proof_layout_version": 2,
@@ -234,25 +234,40 @@ class Runner:
             raise ValueError("whole-run elapsed ceiling")
         resources = inventory(self.args.account_root)
         resources["free_bytes"] = shutil.disk_usage(self.args.workdir).free
-        if resources["allocated_bytes"] > self.args.max_disk_gib * GIB:
+        ceiling = getattr(self.args, "attribution_allocation_limit", self.args.max_disk_gib * GIB)
+        if resources["allocated_bytes"] > ceiling:
             raise ValueError("disposable allocated-disk ceiling")
-        if resources["free_bytes"] < 32 * GIB:
-            raise ValueError("32 GiB free-space floor")
+        floor = (40 if getattr(self.args, "scale_attribution", False) else 32) * GIB
+        if resources["free_bytes"] < floor:
+            raise ValueError("free-space floor including declared reserve" if getattr(self.args, "scale_attribution", False) else "32 GiB free-space floor")
         return resources, remaining
 
-    def run(self, binary, vault, words, phase, label, case=None):
+    def run(self, binary, vault, words, phase, label, case=None, *, driver_task=None,
+            expected_error=None, export_environment=None):
         before, remaining = self.check_resources()
         if digest(binary) != self.pins[str(binary)]:
             raise ValueError("pinned binary changed")
         number = len(self.commands)
         stem = self.args.workdir / "commands" / f"{number:05d}-{label}"
         stdout, stderr = Path(str(stem) + ".stdout.json"), Path(str(stem) + ".stderr.txt")
-        argv = [str(binary), "--json", "--offline", "--wiki", str(vault), *map(str, words)]
+        argv = ([str(binary), *map(str, words)] if driver_task or export_environment else
+                [str(binary), "--json", "--offline", "--wiki", str(vault), *map(str, words)])
+        child_env = dict(self.env)
+        if driver_task:
+            child_env["LWIKI_SCALE_ATTRIBUTION_TASK"] = str(driver_task)
+        if export_environment:
+            child_env.update(export_environment)
         timed = ["/usr/bin/time", "-l" if sys.platform == "darwin" else "-v", *argv]
         record = dict(label=label, phase=phase, case=case, argv=argv, supervisor_argv=timed,
                       cwd=str(self.args.workdir), binary_sha256=self.pins[str(binary)],
                       stdout=str(stdout), stderr=str(stderr), resource_before=before,
                       evidence_path=str(stem) + ".command.json")
+        if driver_task:
+            record["driver_task"] = str(driver_task)
+        if export_environment:
+            record["export_environment"] = export_environment
+        if expected_error:
+            record["expected_error"] = expected_error
         self.commands.append(record)
         write_json(Path(str(stem) + ".command.json"), record)
         done = threading.Event()
@@ -271,7 +286,7 @@ class Runner:
                     monitor["ps_seconds"] += time.monotonic() - poll_started
                     if monitor["rss_peak_bytes"] > rss_limit:
                         monitor["violation"] = "process-tree RSS ceiling"
-                    if shutil.disk_usage(self.args.workdir).free < 32 * GIB:
+                    if shutil.disk_usage(self.args.workdir).free < (40 if getattr(self.args, "scale_attribution", False) else 32) * GIB:
                         monitor["violation"] = "free-space floor during command"
                     if stdout.stat().st_size + stderr.stat().st_size > 4 * 1024 * 1024:
                         monitor["violation"] = "command output ceiling"
@@ -280,7 +295,7 @@ class Runner:
                         resources = inventory(self.args.account_root)
                         monitor["timed_inventory_sweeps"] += 1
                         monitor["timed_inventory_seconds"] += time.monotonic() - sweep_started
-                        if resources["allocated_bytes"] > self.args.max_disk_gib * GIB:
+                        if resources["allocated_bytes"] > getattr(self.args, "attribution_allocation_limit", self.args.max_disk_gib * GIB):
                             monitor["violation"] = "allocated disk ceiling during command"
                         next_disk = time.monotonic() + 5
                 except Exception as error:
@@ -293,7 +308,7 @@ class Runner:
         with stdout.open("xb") as out, stderr.open("xb") as err:
             start = time.monotonic()
             proc = subprocess.Popen(timed, stdout=out, stderr=err, cwd=self.args.workdir,
-                                    env=self.env, start_new_session=True)
+                                    env=child_env, start_new_session=True)
             watcher = threading.Thread(target=supervise, args=(proc,), daemon=True)
             watcher.start()
             def expire():
@@ -339,9 +354,30 @@ class Runner:
                 raise ValueError("native peak RSS unavailable")
             if record["native_peak_rss_bytes"] > rss_limit:
                 raise ValueError("native peak RSS ceiling")
-            envelope = json.loads(stdout.read_text())
+            if export_environment:
+                exported = Path(export_environment["LWIKI_FIXTURE_EXPORT"])
+                if code or monitor["violation"] or not (exported / "corpus.json").is_file():
+                    raise ValueError("fixture exporter failed or omitted manifest")
+                record["passed"] = True
+                return {}, record
+            if driver_task:
+                driver_report = Path(json.loads(driver_task.read_text())["report"])
+                record["driver_report"] = str(driver_report)
+                if not driver_report.is_file() or driver_report.stat().st_size > 65536:
+                    raise ValueError("missing/oversized scale driver report")
+                envelope = json.loads(driver_report.read_text(), object_pairs_hook=strict_object)
+                record["driver_data"] = envelope.get("data")
+            else:
+                envelope = json.loads(stdout.read_text())
+            if (expected_error and not monitor["violation"] and envelope.get("ok") is False
+                    and envelope.get("error", {}).get("code") == expected_error):
+                record.update(passed=False, expected_refusal=True, returncode=code,
+                              meta=envelope.get("meta"))
+                return envelope.get("error"), record
             if code or monitor["violation"] or envelope.get("ok") is not True:
-                raise ValueError(f"CLI failed: {monitor['violation'] or envelope.get('error') or code}")
+                failure = (monitor["violation"] or envelope.get("error") or
+                           (envelope.get("data") or {}).get("sync_error") or code)
+                raise ValueError(f"CLI failed: {failure}")
             if envelope.get("meta", {}).get("network_used") is not False:
                 raise ValueError("offline network_used evidence missing/true")
             record["passed"] = True
@@ -406,6 +442,9 @@ def arguments():
     parser.add_argument("--command-seconds", type=int, default=900)
     parser.add_argument("--run-seconds", type=int, default=3600)
     parser.add_argument("--max-disk-gib", type=int, default=8, help="Disposable allocation ceiling, maximum 100 GiB")
+    parser.add_argument("--scale-attribution", action="store_true", help="Fixed A/B/C/D cost control; no quality qualification")
+    parser.add_argument("--unit-test-binary", type=Path, help="Matching pinned native unit_tests for fixed attribution mode")
+    parser.add_argument("--shared-reserved-bytes", type=int, help="Attribution mode: root-owned executable/build reservation deducted from the same 2 GiB new-space ceiling")
     args = parser.parse_args()
     if not 1024 <= args.bytes_per_source <= 1024 * 1024 or not 1 <= args.trials <= 20:
         parser.error("source bytes must be 1 KiB..1 MiB; trials 1..20")
@@ -417,11 +456,305 @@ def arguments():
         parser.error("native RSS monitoring is available only on macOS/Linux")
     if args.preseed and (not args.account_root or blake3 is None):
         parser.error("--preseed requires --account-root and the blake3 Python package")
+    if args.scale_attribution:
+        if not args.unit_test_binary or blake3 is None or args.preseed or args.baseline_binary:
+            parser.error("attribution requires matching unit_tests/Python blake3 and fresh four-cell exports")
+        if not args.account_root or args.shared_reserved_bytes != GIB or args.max_disk_gib < 2:
+            parser.error("attribution requires --account-root and exactly 1 GiB compiler-growth reservation within the 2 GiB ceiling")
+        args.command_seconds = min(args.command_seconds, 120)
+        args.run_seconds = min(args.run_seconds, 1200)
+        args.max_disk_gib = min(args.max_disk_gib, 2)
+        args.attribution_allocation_limit = args.max_disk_gib*GIB-args.shared_reserved_bytes
+        if args.attribution_allocation_limit <= 0:
+            parser.error("shared reservation leaves no fixture allocation allowance")
     return args
+
+
+def scale_attribution(args):
+    """Fixed four-cell work control; the ordinary benchmark above is unchanged."""
+    cells = (("A", 64, 16384), ("B", 256, 16384), ("C", 64, 1024), ("D", 64, 102400))
+    driver_filter = "app::indexed_embedding_workflow_tests::scale_attribution::fixed_scale_attribution"
+    exporter_filter = "app::refresh_fixture_export::export_normalized_refresh_fixture"
+    args.binary = args.binary.expanduser().resolve(strict=True)
+    args.unit_test_binary = args.unit_test_binary.expanduser().resolve(strict=True)
+    args.workdir = args.workdir.expanduser().absolute()
+    if args.workdir.exists() or args.workdir.is_symlink():
+        raise ValueError("fixed attribution workdir must be new")
+    args.account_root = args.account_root.expanduser().resolve(strict=True)
+    if args.workdir == args.account_root or not args.workdir.is_relative_to(args.account_root):
+        raise ValueError("fixed attribution workdir must be new beneath the owned account root")
+    args.seed, args.history_revisions = 731, 0
+    for binary in (args.binary, args.unit_test_binary):
+        if not binary.is_file() or not os.access(binary, os.X_OK):
+            raise ValueError("attribution executables must be explicit regular files")
+        if not binary.is_relative_to(args.account_root):
+            raise ValueError("attribution executables must be within the accounted owned tree")
+    args.workdir.mkdir(mode=0o700)
+    (args.workdir / "commands").mkdir()
+    (args.workdir / "config").mkdir()
+    pins = {str(binary): digest(binary) for binary in (args.binary, args.unit_test_binary)}
+    runner = Runner(args, pins)
+    report = dict(version=1, status="incomplete", scope="four-cell baseline cost attribution; no quality/import/25K qualification",
+                  cells=[], commands=runner.commands, binary_pins=pins,
+                  harness_sha256=digest(Path(__file__)), settings=dict(max_input_bytes=12000, quality_target_bytes=None),
+                  dimensions=1536, limits=dict(children=50, mock_requests=160, initial_unique_inputs=2048,
+                  changed_unique_inputs=64, compact_units=4096, execution_seconds=args.run_seconds,
+                  per_cell_initial_admission={"A":{"inputs":256,"requests":16},"B":{"inputs":800,"requests":50},
+                      "C":{"inputs":128,"requests":8},"D":{"inputs":704,"requests":44}},
+                  per_cell_changed_admission=dict(inputs=16,requests=1),mock_items_per_request=16,
+                  per_child_seconds=args.command_seconds, combined_new_allocated_bytes=args.max_disk_gib*GIB,
+                  shared_executable_build_reserved_bytes=args.shared_reserved_bytes,
+                  owned_tree_allocated_bytes=args.attribution_allocation_limit,
+                  free_floor_and_reserve_bytes=40*GIB, logical_work_bytes=32*GIB),
+                  counts=dict(mock_requests=0, initial_unique_inputs=0, changed_unique_inputs=0,
+                              application_invocations=0, explicit_query_cache_writes=0, immutable_mock_task_read_bytes=0),
+                  reserved_admission=dict(mock_requests=0,initial_unique_inputs=0,changed_unique_inputs=0),
+                  logical_work=dict(measured_bytes=0, reserved_unmeasured_bytes=0),
+                  predicted_unrun=[dict(owners=128, bytes_per_source=102400, minimum_proof_bytes=75*1024*1024),
+                                   dict(owners=256, bytes_per_source=102400, minimum_proof_bytes=150*1024*1024)],
+                  unavailable=["nested SQL publication time/rows", "physical I/O byte peaks",
+                               "partial lower-layer proof work on driver outer failure"],
+                  interpretation="Default segmentation distinct from 1000-byte quality fixture. Test-only mock/stream counters do not exist in shipping CLI. Diagnostic cached sync repeats separately once per cell. Filesystem hash/copy work warms pages; all errors retained. Entire owned account root includes executables/receipts/workdirs, plus fixed unmeasured 1 GiB compiler-growth reserve within the same 2 GiB ceiling.")
+    write_json(args.workdir / "protocol.json", report)
+    def reserve(size):
+        total = report["logical_work"]["measured_bytes"] + report["logical_work"]["reserved_unmeasured_bytes"]
+        if total + size > 32*GIB:
+            raise ValueError("logical work reservation ceiling")
+        report["logical_work"]["reserved_unmeasured_bytes"] += size
+    def measured(size):
+        report["logical_work"]["measured_bytes"] += size
+        if sum(report["logical_work"].values()) > 32*GIB:
+            raise ValueError("logical work ceiling")
+    def call(binary, vault, words, phase, label, **kwargs):
+        if len(runner.commands) >= 50:
+            raise ValueError("fixed child ceiling")
+        reserve((512 if kwargs.get("driver_task") else 256 if kwargs.get("export_environment") else 64)*1024*1024)
+        measured(2*binary.stat().st_size)  # Runner hashes pre/post command, outside interval.
+        try:
+            return runner.run(binary, vault, words, phase, label, **kwargs)
+        finally:
+            write_json(args.workdir / "summary.json", report)
+    def storage(root):
+        buckets = {}
+        for path in root.rglob("*"):
+            info = path.lstat()
+            if not (stat.S_ISREG(info.st_mode) or stat.S_ISDIR(info.st_mode)):
+                raise ValueError("unsafe attribution storage entry")
+            if not stat.S_ISREG(info.st_mode):
+                continue
+            if info.st_nlink != 1:
+                raise ValueError("hardlinked attribution storage entry")
+            relative = str(path.relative_to(root))
+            bucket = ("complete_backup" if relative.startswith("backup/") else
+                      "cache_loss_sibling" if relative.startswith("lost-cache/") else
+                      "captured_original" if path.name == "original.bin" else
+                      "captured_content" if path.name == "content.md" else
+                      "vectors" if "embeddings.sqlite3" in path.name else
+                      "catalog" if "/cache/catalogs/" in relative else
+                      "retained_operations" if "/state/" in relative or "/retained/" in relative else
+                      "canonical_markdown" if path.suffix == ".md" else "other")
+            row = buckets.setdefault(bucket, dict(logical_bytes=0, allocated_bytes=0, files=0))
+            row["logical_bytes"] += info.st_size
+            row["allocated_bytes"] += info.st_blocks*512
+            row["files"] += 1
+        return dict(buckets=buckets, total=inventory(root))
+    def hashes(root):
+        result = {}
+        for path in root.rglob("*"):
+            if path.is_file():
+                measured(path.stat().st_size)
+                result[str(path.relative_to(root))] = blake_digest(path)
+        return result
+    def verify(data, vault, source, revision, expected, marker, size):
+        if data.get("verification", {}).get("mode") != "indexed_evidence" or not data.get("passages"):
+            raise ValueError("missing indexed evidence verification/passages")
+        found = False
+        for passage in data["passages"]:
+            relative = passage["locator"]["path"]
+            match = re.fullmatch(r"sources/([^/]+)/revisions/([^/]+)/content\.md", relative)
+            if not match or passage.get("eligibility") != "current" or passage.get("label") != "captured_source":
+                raise ValueError("noncurrent/noncaptured attribution passage")
+            path = vault / relative
+            if path.is_symlink() or not path.is_file() or path.stat().st_size != size:
+                raise ValueError("unsafe attribution citation payload")
+            body = path.read_bytes(); measured(len(body))
+            start, end = passage["span"]["start"], passage["span"]["end"]
+            if not 0 <= start < end <= len(body) or body[start:end].decode() != passage["text"]:
+                raise ValueError("citation span/text mismatch")
+            citations = passage.get("citations", [])
+            if len(citations) != 1 or citations[0].get("kind") != "source":
+                raise ValueError("missing exact source citation")
+            ref = citations[0]["reference"]
+            if (ref.get("source_id"), ref.get("source_revision"), ref.get("span"), ref.get("quote_hash")) != (
+                    match[1], match[2], passage["span"], "blake3:"+blake3.blake3(body[start:end]).hexdigest()):
+                raise ValueError("source citation binding/hash mismatch")
+            if match[1] == source and marker in passage["text"]:
+                if match[2] != revision or body != expected:
+                    raise ValueError("target source revision/fact mismatch")
+                found = True
+        if not found:
+            raise ValueError("cited target old/new fact absent")
+    def query(vault, cell, mode, suffix, source, revision, expected, marker, size, *, missing=False):
+        words = ["context", "refreshprobe000000", "--scope", "indexed-documents", "--mode", mode,
+                 "--limit", "5", "--candidates", "80", "--max-bytes", "6000", "--max-tokens", "1500"]
+        data, record = call(args.binary, vault, words, "context", f"{cell}-{suffix}-{mode}",
+                            expected_error="OFFLINE_UNAVAILABLE" if missing else None)
+        if missing:
+            if not record.get("expected_refusal"):
+                raise ValueError("cache-loss semantic query did not refuse")
+        else:
+            verify(data, vault, source, revision, expected, marker, size)
+        return record
+    def driver(root, vault, cell, owners, size, mode, config):
+        ceilings = {"A":(256,16),"B":(800,50),"C":(128,8),"D":(704,44)}
+        inputs, requests = (ceilings[cell] if mode=="initial" else (16,1) if mode=="changed" else (0,0))
+        reserved = report["reserved_admission"]
+        reserved["mock_requests"] += requests
+        if mode=="initial": reserved["initial_unique_inputs"] += inputs
+        if mode=="changed": reserved["changed_unique_inputs"] += inputs
+        if reserved["mock_requests"]>160 or reserved["initial_unique_inputs"]>2048 or reserved["changed_unique_inputs"]>64:
+            raise ValueError("prospective aggregate driver admission ceiling")
+        task = root / f"{mode}-task.json"
+        write_json(task, dict(version=1, cell=cell, mode=mode, owners=owners, bytes_per_source=size,
+                             vault=str(vault), config=str(config), report=str(root/f"{mode}-driver.json"),
+                             max_input_bytes=12000, quality_target_bytes=None))
+        command_count = len(runner.commands)
+        try:
+            return call(args.unit_test_binary, vault, [driver_filter,"--ignored","--exact","--nocapture"],
+                        "driver", f"{cell}-{mode}", driver_task=task)[0]
+        finally:
+            data = (runner.commands[-1].get("driver_data") or {}) if len(runner.commands)>command_count else {}
+            if not data:
+                report.setdefault("unavailable_driver_counts",[]).append(dict(cell=cell,mode=mode,
+                    reserved_requests=requests,reserved_inputs=inputs,reason="outer error/panic/missing report; reservations retained"))
+            counts = report["counts"]
+            for field in ("mock_requests","application_invocations","explicit_query_cache_writes","immutable_mock_task_read_bytes"):
+                counts[field] += data.get(field,0)
+            if mode == "initial": counts["initial_unique_inputs"] += data.get("unique_inputs",0)
+            if mode == "changed": counts["changed_unique_inputs"] += data.get("missing_inputs_before_sync",0)
+            measured(data.get("immutable_mock_task_read_bytes",0))
+            if counts["mock_requests"] > 160 or counts["initial_unique_inputs"] > 2048 or counts["changed_unique_inputs"] > 64:
+                raise ValueError("aggregate attribution input/request ceiling")
+    def expired(*_):
+        raise TimeoutError("fixed whole-run deadline")
+    signal.signal(signal.SIGALRM, expired)
+    signal.setitimer(signal.ITIMER_REAL,args.run_seconds)
+    try:
+        runner.check_resources()
+        for cell, owners, size in cells:
+            row = dict(cell=cell,owners=owners,bytes_per_source=size,status="incomplete")
+            report["cells"].append(row)
+            root = args.workdir/cell; root.mkdir()
+            args.source_count, args.bytes_per_source = owners, size
+            args.preseed = root/"export"
+            vault = root/"vault"
+            try:
+                call(args.unit_test_binary, vault, [exporter_filter,"--ignored","--exact","--nocapture"],
+                     "setup", f"{cell}-export", export_environment={"LWIKI_FIXTURE_EXPORT":str(args.preseed),
+                     "LWIKI_FIXTURE_SOURCE_COUNT":str(owners),"LWIKI_FIXTURE_BYTES_PER_SOURCE":str(size),"LWIKI_FIXTURE_SEED":"731"})
+                reserve(256*1024*1024)  # Export admission/inventory payload reads.
+                corpus, corpus_hash = validate_preseed(args,runner)
+                row["corpus_sha256"] = corpus_hash
+                row["generator"] = corpus["generator"]
+                seed_allocated = inventory(args.preseed/"vault")["allocated_bytes"]
+                resources, _ = runner.check_resources()
+                forecast = seed_allocated*(3 if cell=="A" else 1)+64*1024*1024
+                if resources["allocated_bytes"]+forecast > args.attribution_allocation_limit or resources["free_bytes"]-forecast < 40*GIB:
+                    raise ValueError("closed seed/working/backup forecast admission")
+                reserve(inventory(args.preseed/"vault")["logical_bytes"])
+                shutil.copytree(args.preseed/"vault",vault)
+                for entry in corpus["files"]:
+                    measured(entry["bytes"])
+                    if blake_digest(vault/entry["path"]) != entry["blake3"]:
+                        raise ValueError("working clone differs from closed export")
+                config = root/"mock.toml"
+                config.write_text("version=1\n[profiles.primary]\nembedding='embed'\n[services.embed]\nadapter='embeddings-v1'\nurl='https://mock.invalid/v1/embeddings'\nmodel='scale-attribution-mock'\nrevision='fixed-v1'\ndimensions=1536\nmax_batch_items=16\nmax_batch_bytes=262144\n[services.embed.auth]\nkind='static'\nkey='synthetic-no-secret'\n[vault_bindings.main]\nroot="+json.dumps(str(vault))+"\nwiki_id="+json.dumps(corpus["vault_id"])+"\nallowed_profiles=['primary']\n")
+                config.chmod(0o600)
+                target = corpus["sources"][0]
+                source, revision, marker = target["source_id"], target["revision_id"], target["marker"]
+                current_path = vault/f"sources/{source}/revisions/{revision}/content.md"
+                current = current_path.read_bytes(); measured(len(current))
+                row["before_prepare"] = storage(root)
+                row["initial_driver"] = driver(root,vault,cell,owners,size,"initial",config)
+                call(args.binary,vault,["embeddings","sync"],"prepare",f"{cell}-noop")
+                query(vault,cell,"semantic","initial",source,revision,current,marker,size)
+                if cell=="A": query(vault,cell,"hybrid","initial",source,revision,current,marker,size)
+                old_pins = {leaf:blake_digest(current_path.with_name(leaf)) for leaf in ("revision.md","original.bin","content.md")}
+                reserve(2*size+65536)
+                changed_marker = marker.replace("v000000","v000001")
+                changed = current.replace(marker.encode(),changed_marker.encode(),1)
+                if len(changed)!=len(current) or changed==current: raise ValueError("non-factual/sized refresh fixture")
+                update = root/"changed.md"; update.write_bytes(changed)
+                data, refresh = call(args.binary,vault,["source","refresh",source,"--file",update],"refresh",f"{cell}-refresh")
+                new_revision = data["allocated_ids"]["revision"]
+                if new_revision==revision or data.get("reused") is not False or data.get("status")!="committed":
+                    raise ValueError("factual refresh did not commit immutable revision")
+                if any(blake_digest(current_path.with_name(leaf))!=pin for leaf,pin in old_pins.items()):
+                    raise ValueError("immutable old revision changed")
+                reserve(2*size+65536)
+                checked, _ = call(args.binary,vault,["embeddings","check"],"prepare",f"{cell}-missing-check")
+                if checked["coverage"]["missing_units"] < 1: raise ValueError("changed input did not invalidate coverage")
+                row["after_refresh"] = storage(root)
+                row["changed_driver"] = driver(root,vault,cell,owners,size,"changed",config)
+                query(vault,cell,"semantic","changed",source,new_revision,changed,changed_marker,size)
+                if cell=="A": query(vault,cell,"hybrid","changed",source,new_revision,changed,changed_marker,size)
+                row["exact_driver"] = driver(root,vault,cell,owners,size,"exact",config)
+                row["prepared_storage"] = storage(root)
+                if cell=="A":
+                    backup = root/"backup"
+                    before = hashes(vault)
+                    reserve(inventory(vault)["logical_bytes"])
+                    backup_start = time.monotonic(); shutil.copytree(vault,backup)
+                    if hashes(backup)!=before: raise ValueError("complete backup differs")
+                    row["backup_seconds"] = time.monotonic()-backup_start
+                    row["backup_storage"] = storage(root)
+                    (vault/".wiki/cache").rename(root/"lost-cache")
+                call(args.binary,vault,["index","rebuild","--normalized"],"rebuild",f"{cell}-rebuild")
+                row["rebuild_storage"] = storage(root)
+                query(vault,cell,"semantic","rebuild",source,new_revision,changed,changed_marker,size,missing=cell=="A")
+                if cell=="A":
+                    query(vault,cell,"lexical","reconstruction",source,new_revision,changed,changed_marker,size)
+                    checked, _ = call(args.binary,vault,["check"],"check",f"{cell}-full-check")
+                    if checked.get("error_count") != 0 or checked.get("cache_matches_canonical") is not True:
+                        raise ValueError("reconstructed full check mismatch")
+                    for name in ("embeddings.sqlite3","embeddings.sqlite3-wal","embeddings.sqlite3-shm"):
+                        original = backup/".wiki/cache"/name
+                        if original.exists():
+                            measured(original.stat().st_size)
+                            shutil.copyfile(original,vault/".wiki/cache"/name)
+                            if blake_digest(original)!=blake_digest(vault/".wiki/cache"/name):
+                                raise ValueError("restored compatible vector bytes differ")
+                            measured(2*original.stat().st_size)
+                    call(args.binary,vault,["embeddings","sync"],"prepare",f"{cell}-restore-sync")
+                    query(vault,cell,"semantic","restored",source,new_revision,changed,changed_marker,size)
+                reserve(256*1024*1024)
+                if validate_preseed(args,runner)[1] != corpus_hash:
+                    raise ValueError("closed seed payload/manifest changed")
+                row["final_storage"] = storage(root)
+                row["status"] = "completed-baseline-control"
+            except Exception as error:
+                row.update(status="failed-or-refused",failure=str(error),dependent_phases="unrun")
+                if cell=="A" and "initial_driver" not in row:
+                    report["unrun_cells"] = ["B","C","D"]
+                    break
+            finally:
+                write_json(args.workdir/"summary.json",report)
+        report["status"] = ("completed-baseline-attribution" if len(report["cells"])==4 and
+                            all(row["status"]=="completed-baseline-control" for row in report["cells"]) else "incomplete-with-retained-failures")
+    except Exception as error:
+        report.update(status="failed-or-refused",failure=str(error))
+    finally:
+        signal.setitimer(signal.ITIMER_REAL,0)
+        report["total_seconds"] = time.monotonic()-runner.started
+        write_json(args.workdir/"summary.json",report)
+    print(json.dumps(dict(status=report["status"],summary=str(args.workdir/"summary.json"))))
+    return 0 if report["status"]=="completed-baseline-attribution" else 1
 
 
 def main():
     args = arguments()
+    if args.scale_attribution:
+        return scale_attribution(args)
     args.binary = args.binary.expanduser().resolve(strict=True)
     if args.baseline_binary:
         args.baseline_binary = args.baseline_binary.expanduser().resolve(strict=True)

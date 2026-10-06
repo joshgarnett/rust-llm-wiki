@@ -124,6 +124,7 @@ fn proposals(trace: &[Value]) -> Result<(Vec<Proposal>, Vec<u64>)> {
                 selection_ordinal: row["ordinal"].as_u64().map(|x| x as usize),
                 selection,
                 unit_score: row["unit_score"].as_f64(),
+                unit_origin: None,
                 fallback,
                 unit_clipped: row["unit_clipped"].as_bool().unwrap_or(false),
             },
@@ -1238,6 +1239,7 @@ mod tests {
                 selection_ordinal: Some(i),
                 selection: None,
                 unit_score: Some(100.0 - i as f64),
+                unit_origin: None,
                 fallback: None,
                 unit_clipped: false,
             })
@@ -1257,6 +1259,7 @@ mod tests {
                 hits,
                 graph: None,
                 dependency_fingerprint: hits.dependency_fingerprint.clone(),
+                evidence_sets: None,
             },
         )?;
         match trial {
@@ -1312,6 +1315,7 @@ mod tests {
                     selection_ordinal: Some(i),
                     selection: None,
                     unit_score: Some(10.0 - i as f64),
+                    unit_origin: None,
                     fallback: None,
                     unit_clipped: false,
                 })
@@ -1331,6 +1335,7 @@ mod tests {
                     hits,
                     graph: None,
                     dependency_fingerprint: hits.dependency_fingerprint.clone(),
+                    evidence_sets: None,
                 },
             )?;
             assert_eq!(native.text(), rendered);

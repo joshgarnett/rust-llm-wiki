@@ -26,6 +26,119 @@ const MAX_OWNERS: usize = 4096;
 const MAX_PATH_BYTES: usize = 8 * 1024 * 1024;
 const MAX_BINDING_ENTRIES: usize = 65_536;
 const MAX_BINDING_BYTES: usize = 64 * 1024 * 1024;
+
+/// Test-build scalar attribution only; shipping preparation has no observer.
+#[cfg(test)]
+pub(super) mod attribution {
+    use std::{cell::RefCell, time::Instant};
+
+    #[derive(Default, serde::Serialize)]
+    pub(in crate::app) struct Observation {
+        pub materialize_calls: usize,
+        pub materialize_elapsed_ns: u128,
+        pub recheck_calls: usize,
+        pub recheck_elapsed_ns: u128,
+        pub owner_attempts: usize,
+        pub authenticated_owners: usize,
+        pub rendered_units: usize,
+        pub rendered_bytes: usize,
+        pub cache_rows: usize,
+        pub cache_bytes: usize,
+        pub canonical_bytes: usize,
+        pub canonical_files: usize,
+        pub canonical_entries: usize,
+        pub incomplete_stages: usize,
+        pub unavailable_failed_owner_proof: usize,
+    }
+
+    std::thread_local! {
+        static ACTIVE: RefCell<Option<Observation>> = const { RefCell::new(None) };
+    }
+
+    pub(in crate::app) fn with_observation<T>(run: impl FnOnce() -> T) -> (T, Observation) {
+        ACTIVE.with(|active| {
+            assert!(active.borrow().is_none(), "nested preparation attribution");
+            *active.borrow_mut() = Some(Observation::default());
+        });
+        struct Reset;
+        impl Drop for Reset {
+            fn drop(&mut self) {
+                ACTIVE.with(|active| *active.borrow_mut() = None);
+            }
+        }
+        let reset = Reset;
+        let result = run();
+        let observation = ACTIVE.with(|active| active.borrow_mut().take().unwrap());
+        drop(reset);
+        (result, observation)
+    }
+
+    fn update(run: impl FnOnce(&mut Observation)) {
+        ACTIVE.with(|active| {
+            if let Some(observation) = active.borrow_mut().as_mut() {
+                run(observation);
+            }
+        });
+    }
+
+    pub(super) struct Stage {
+        start: Instant,
+        recheck: bool,
+        pub complete: bool,
+    }
+    impl Stage {
+        pub(super) fn new(recheck: bool) -> Self {
+            Self {
+                start: Instant::now(),
+                recheck,
+                complete: false,
+            }
+        }
+    }
+    impl Drop for Stage {
+        fn drop(&mut self) {
+            update(|observation| {
+                if self.recheck {
+                    observation.recheck_calls += 1;
+                    observation.recheck_elapsed_ns += self.start.elapsed().as_nanos();
+                } else {
+                    observation.materialize_calls += 1;
+                    observation.materialize_elapsed_ns += self.start.elapsed().as_nanos();
+                }
+                observation.incomplete_stages += usize::from(!self.complete);
+            });
+        }
+    }
+
+    pub(super) fn cache(rows: usize, bytes: usize) {
+        update(|o| {
+            o.cache_rows += rows;
+            o.cache_bytes += bytes;
+        });
+    }
+    pub(super) fn owner(units: usize, bytes: usize, proof: Option<(usize, usize, usize)>) {
+        update(|o| {
+            o.owner_attempts += 1;
+            o.rendered_units += units;
+            o.rendered_bytes += bytes;
+            if let Some(work) = proof {
+                o.authenticated_owners += 1;
+                o.canonical_bytes += work.0;
+                o.canonical_files += work.1;
+                o.canonical_entries += work.2;
+            } else {
+                o.unavailable_failed_owner_proof += 1;
+            }
+        });
+    }
+    pub(super) fn proof(work: (usize, usize, usize)) {
+        update(|o| {
+            o.canonical_bytes += work.0;
+            o.canonical_files += work.1;
+            o.canonical_entries += work.2;
+        });
+    }
+}
 fn exhausted(message: &str) -> WikiError {
     WikiError::new(ErrorCode::BudgetExceeded, message)
 }
@@ -147,6 +260,30 @@ pub(super) struct NormalizedEmbeddingInputs {
     failed: bool,
 }
 impl NormalizedEmbeddingInputs {
+    pub(super) fn owner_dependencies(
+        &self,
+    ) -> Result<Vec<(VaultRelativePath, Vec<ReadDependency>)>> {
+        let mut entries = 0usize;
+        let mut bytes = 0usize;
+        let mut out = Vec::new();
+        for owner in &self.owners {
+            let path =
+                owner.proof.documents.keys().next().ok_or_else(|| {
+                    conflict("authenticated embedding owner document disappeared")
+                })?;
+            for (dependency, expected) in owner.proof.read_preconditions_iter() {
+                entries = entries.saturating_add(1);
+                bytes = bytes.saturating_add(guard_bytes(dependency, expected)?);
+                if entries > MAX_BINDING_ENTRIES || bytes > MAX_BINDING_BYTES {
+                    return Err(exhausted(
+                        "owner dependency enrollment exceeds its allowance",
+                    ));
+                }
+            }
+            out.push((path.clone(), owner.read_preconditions()));
+        }
+        Ok(out)
+    }
     fn append_owner(
         &mut self,
         catalog: &Catalog,
@@ -161,14 +298,36 @@ impl NormalizedEmbeddingInputs {
         self.owners
             .try_reserve_exact(1)
             .map_err(|_| exhausted("normalized embedding owner allocation refused"))?;
-        let mut owner = indexed_units::materialize_owner(
+        #[cfg(test)]
+        let (cache_before, units_before) = (self.reader.usage(), units.usage());
+        let owner_result = indexed_units::materialize_owner(
             catalog,
             &self.reader,
             path,
             settings,
             &remaining,
             units,
-        )?;
+        );
+        #[cfg(test)]
+        {
+            let cache_after = self.reader.usage();
+            let units_after = units.usage();
+            attribution::cache(
+                cache_after.rows.saturating_sub(cache_before.rows),
+                cache_after.bytes.saturating_sub(cache_before.bytes),
+            );
+            attribution::owner(
+                units_after.units.saturating_sub(units_before.units),
+                units_after
+                    .render_bytes
+                    .saturating_sub(units_before.render_bytes),
+                owner_result
+                    .as_ref()
+                    .ok()
+                    .map(AuthenticatedDocument::verification_work),
+            );
+        }
+        let mut owner = owner_result?;
         // The helper has already completed its own final reread. Charge all of
         // that actual work immediately; never give another owner the old budget.
         self.allowance.debit(owner.verification_work())?;
@@ -231,6 +390,8 @@ impl NormalizedEmbeddingInputs {
     /// A failed batch cannot be retried with partially consumed proof allowances.
     /// Callers stop on any failure and never emit/commit the retained inputs.
     pub(super) fn recheck(&mut self, catalog: &Catalog) -> Result<()> {
+        #[cfg(test)]
+        let mut observed = attribution::Stage::new(true);
         if self.failed {
             return Err(conflict(
                 "normalized embedding input proof previously failed",
@@ -246,6 +407,12 @@ impl NormalizedEmbeddingInputs {
                 .proof
                 .recheck_with_remaining(catalog, &self.reader, &remaining);
             let after = owner.verification_work();
+            #[cfg(test)]
+            attribution::proof((
+                after.0.saturating_sub(before.0),
+                after.1.saturating_sub(before.1),
+                after.2.saturating_sub(before.2),
+            ));
             // Also debit partial reads on failure. Meter work never decreases.
             self.allowance.debit((
                 after.0.saturating_sub(before.0),
@@ -258,6 +425,10 @@ impl NormalizedEmbeddingInputs {
         self.reader.verify_operations(catalog)?;
         self.allowance.milliseconds()?;
         self.failed = false;
+        #[cfg(test)]
+        {
+            observed.complete = true;
+        }
         Ok(())
     }
 }
@@ -277,6 +448,8 @@ fn materialize_with_query_limits(
     budget: &VerificationBudget,
     mut query_limits: QueryReadLimits,
 ) -> Result<NormalizedEmbeddingInputs> {
+    #[cfg(test)]
+    let mut observed = attribution::Stage::new(false);
     // This deadline starts before settings validation, path admission and reader acquisition.
     let allowance = Allowance::new(budget)?;
     settings.validate()?;
@@ -335,9 +508,18 @@ fn materialize_with_query_limits(
         let mut after = None;
         loop {
             result.allowance.milliseconds()?;
-            let page = result
-                .reader
-                .embedding_document_paths(after.as_ref(), 128)?;
+            #[cfg(test)]
+            let before = result.reader.usage();
+            let page_result = result.reader.embedding_document_paths(after.as_ref(), 128);
+            #[cfg(test)]
+            {
+                let after = result.reader.usage();
+                attribution::cache(
+                    after.rows.saturating_sub(before.rows),
+                    after.bytes.saturating_sub(before.bytes),
+                );
+            }
+            let page = page_result?;
             let last = page.len() < 128;
             after = page.last().cloned();
             for path in &page {
@@ -350,6 +532,10 @@ fn materialize_with_query_limits(
     }
     result.reader.verify_operations(catalog)?;
     result.allowance.milliseconds()?;
+    #[cfg(test)]
+    {
+        observed.complete = true;
+    }
     Ok(result)
 }
 

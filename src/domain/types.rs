@@ -432,7 +432,7 @@ pub struct PublishedEpochBinding {
     pub publication_hash: Blake3Hash,
 }
 impl PublishedEpochBinding {
-    fn validate(&self) -> Result<()> {
+    pub(crate) fn validate(&self) -> Result<()> {
         if self.version != 1
             || self.file_id.len() != 32
             || !self

@@ -6,6 +6,7 @@ use super::{
     render::{self, RenderedUnit},
     selected_documents::{self, SelectedDocuments},
     spaces::EmbeddingSettings,
+    unit_inventory_types::{self, RenderPolicyId, UnitDescriptor},
 };
 use crate::{
     catalog::{
@@ -18,13 +19,14 @@ use crate::{
 };
 use std::{
     cell::Cell,
-    collections::VecDeque,
+    collections::{BTreeSet, VecDeque},
     time::{Duration, Instant},
 };
 
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct UnitLimits {
     pub max_render_bytes: usize,
+    pub max_descriptor_bytes: usize,
     pub max_units: usize,
     pub max_owner_render_bytes: usize,
 }
@@ -32,6 +34,7 @@ impl Default for UnitLimits {
     fn default() -> Self {
         Self {
             max_render_bytes: 64 * 1024 * 1024,
+            max_descriptor_bytes: 64 * 1024 * 1024,
             max_units: 65_536,
             max_owner_render_bytes: 8 * 1024 * 1024,
         }
@@ -41,6 +44,9 @@ impl Default for UnitLimits {
 pub(crate) struct UnitUsage {
     pub units: usize,
     pub render_bytes: usize,
+    /// Compact identities decoded by discovery, without rendered corpus text.
+    pub descriptors: usize,
+    pub descriptor_bytes: usize,
     /// Pinned cache work (including scalar pages), never canonical proof work.
     pub source_rows: usize,
     pub source_bytes: usize,
@@ -65,6 +71,8 @@ impl UnitBudget {
         let ceiling = UnitLimits::default();
         if limits.max_render_bytes == 0
             || limits.max_render_bytes > ceiling.max_render_bytes
+            || limits.max_descriptor_bytes == 0
+            || limits.max_descriptor_bytes > ceiling.max_descriptor_bytes
             || limits.max_units == 0
             || limits.max_units > ceiling.max_units
             || limits.max_owner_render_bytes == 0
@@ -125,10 +133,10 @@ impl UnitBudget {
             .render_bytes
             .checked_add(bytes)
             .filter(|n| *n <= self.limits.max_render_bytes);
-        let units = usage
-            .units
-            .checked_add(1)
-            .filter(|n| *n <= self.limits.max_units);
+        let units = usage.units.checked_add(1).filter(|n| {
+            n.checked_add(usage.descriptors)
+                .is_some_and(|n| n <= self.limits.max_units)
+        });
         if owner.is_none() || total.is_none() || units.is_none() {
             return Err(budget_error(
                 "document render byte/unit reservation exhausted",
@@ -137,6 +145,41 @@ impl UnitBudget {
         *owner_bytes = owner.unwrap();
         usage.render_bytes = total.unwrap();
         usage.units = units.unwrap();
+        self.usage.set(usage);
+        Ok(())
+    }
+    fn reserve_descriptor(&self, descriptor: &UnitDescriptor) -> Result<()> {
+        self.check()?;
+        // Logical compact-field bytes, including fixed discriminants and span
+        // endpoints. QuerySnapshot separately meters borrowed SQL row bytes
+        // before decoding; neither counter represents physical I/O.
+        let bytes = descriptor.policy.as_str().len()
+            + descriptor.owner.as_str().len()
+            + descriptor
+                .target_id
+                .as_ref()
+                .map_or(0, |id| id.as_str().len())
+            + descriptor.source_hash.as_str().len()
+            + descriptor.unit_id.as_str().len()
+            + descriptor.input_hash.as_str().len()
+            + 3
+            + descriptor.source_span.map_or(0, |_| 16);
+        let mut usage = self.usage.get();
+        let total = usage
+            .descriptor_bytes
+            .checked_add(bytes)
+            .filter(|n| *n <= self.limits.max_descriptor_bytes);
+        let count = usage.descriptors.checked_add(1).filter(|n| {
+            n.checked_add(usage.units)
+                .is_some_and(|n| n <= self.limits.max_units)
+        });
+        if total.is_none() || count.is_none() {
+            return Err(budget_error(
+                "document descriptor byte/unit reservation exhausted",
+            ));
+        }
+        usage.descriptor_bytes = total.unwrap();
+        usage.descriptors = count.unwrap();
         self.usage.set(usage);
         Ok(())
     }
@@ -173,7 +216,229 @@ pub(crate) fn render_owner(
     Ok(units)
 }
 
-/// Replay factory bound to one reader; it cannot authenticate corpus membership.
+fn inventory_error(message: &str) -> WikiError {
+    WikiError::new(ErrorCode::IndexCorrupt, message)
+}
+
+/// Compact identities from a completed policy inventory in one pinned reader.
+/// No whole-document reads or rendering occur in either discovery pass.
+pub(crate) struct InventoryDocumentUnits<'a> {
+    reader: &'a QuerySnapshot,
+    policy: RenderPolicyId,
+    incarnation: Blake3Hash,
+    unit_count: usize,
+}
+impl<'a> InventoryDocumentUnits<'a> {
+    pub(crate) fn new(
+        reader: &'a QuerySnapshot,
+        settings: &EmbeddingSettings,
+        budget: &UnitBudget,
+    ) -> Result<Self> {
+        budget.check()?;
+        let policy = RenderPolicyId::for_settings(&reader.snapshot().parser_fingerprint, settings)?;
+        let before = reader.usage();
+        let result = reader.unit_inventory_state(&policy);
+        budget.source_work(before, reader.usage());
+        let state = result?.ok_or_else(|| {
+            WikiError::new(
+                ErrorCode::OfflineUnavailable,
+                "document unit inventory is absent; run embeddings preparation for these settings",
+            )
+        })?;
+        if state.policy != policy {
+            return Err(inventory_error("document unit inventory policy mismatch"));
+        }
+        if !state.complete {
+            return Err(WikiError::new(
+                ErrorCode::OfflineUnavailable,
+                "document unit inventory is incomplete; resume embeddings preparation",
+            ));
+        }
+        let incarnation =
+            unit_inventory_types::catalog_incarnation(reader.vault_id(), reader.snapshot())?;
+        budget.check()?;
+        Ok(Self {
+            reader,
+            policy,
+            incarnation,
+            unit_count: state.unit_count,
+        })
+    }
+    pub(crate) fn replay<'b>(&'b self, budget: &'b UnitBudget) -> Result<InventoryUnitIter<'b>> {
+        budget.check()?;
+        Ok(InventoryUnitIter {
+            inventory: self,
+            budget,
+            page: Vec::new().into_iter(),
+            after: None,
+            last_page: false,
+            failed: false,
+            descriptors: 0,
+        })
+    }
+    fn validate(&self, descriptor: &UnitDescriptor) -> Result<()> {
+        if descriptor.policy != self.policy
+            || descriptor.target != render::TargetKind::Document
+            || descriptor.source_span.is_none()
+        {
+            return Err(inventory_error(
+                "document unit inventory descriptor identity invalid",
+            ));
+        }
+        Ok(())
+    }
+    /// Recover extra passages by owner index, never replaying the corpus.
+    pub(crate) fn selected_owners(
+        &self,
+        paths: &[VaultRelativePath],
+        budget: &UnitBudget,
+    ) -> Result<Vec<UnitDescriptor>> {
+        let mut selected = Vec::new();
+        let mut seen = BTreeSet::new();
+        for path in paths {
+            budget.check()?;
+            if !seen.insert(path) {
+                return Err(inventory_error("duplicate selected inventory owner"));
+            }
+            let before = self.reader.usage();
+            let result = self.reader.unit_owner_binding(&self.policy, path);
+            budget.source_work(before, self.reader.usage());
+            let binding = result?
+                .ok_or_else(|| inventory_error("selected inventory owner binding missing"))?;
+            if binding.incarnation != self.incarnation
+                || binding.policy != self.policy
+                || binding.owner != *path
+                || binding.tombstone
+            {
+                return Err(inventory_error("selected inventory owner binding invalid"));
+            }
+            if binding.unit_count > 4096
+                || binding
+                    .unit_count
+                    .checked_add(budget.usage().descriptors)
+                    .and_then(|n| n.checked_add(budget.usage().units))
+                    .is_none_or(|n| n > budget.limits.max_units)
+            {
+                return Err(budget_error(
+                    "selected owner descriptor reservation exhausted",
+                ));
+            }
+            let before = self.reader.usage();
+            let result = self
+                .reader
+                .unit_descriptors_for_owner(&self.policy, path, 4096);
+            budget.source_work(before, self.reader.usage());
+            let descriptors = result?;
+            if descriptors.len() != binding.unit_count {
+                return Err(inventory_error(
+                    "selected inventory owner descriptor count mismatch",
+                ));
+            }
+            let mut previous = None;
+            for descriptor in descriptors {
+                self.validate(&descriptor)?;
+                if descriptor.owner != *path
+                    || previous
+                        .as_ref()
+                        .is_some_and(|id| id >= &descriptor.unit_id)
+                {
+                    return Err(inventory_error(
+                        "selected owner descriptors are not strictly ordered",
+                    ));
+                }
+                budget.reserve_descriptor(&descriptor)?;
+                previous = Some(descriptor.unit_id.clone());
+                selected.push(descriptor);
+            }
+        }
+        budget.check()?;
+        Ok(selected)
+    }
+}
+
+pub(crate) struct InventoryUnitIter<'a> {
+    inventory: &'a InventoryDocumentUnits<'a>,
+    budget: &'a UnitBudget,
+    page: std::vec::IntoIter<UnitDescriptor>,
+    after: Option<Blake3Hash>,
+    last_page: bool,
+    failed: bool,
+    descriptors: usize,
+}
+impl InventoryUnitIter<'_> {
+    fn next_unit(&mut self) -> Result<Option<UnitDescriptor>> {
+        self.budget.check()?;
+        if let Some(descriptor) = self.page.next() {
+            return Ok(Some(descriptor));
+        }
+        self.page = Vec::new().into_iter();
+        if self.last_page {
+            return Ok(None);
+        }
+        let before = self.inventory.reader.usage();
+        let result = self.inventory.reader.unit_descriptors_page(
+            &self.inventory.policy,
+            self.after.as_ref(),
+            128,
+        );
+        self.budget
+            .source_work(before, self.inventory.reader.usage());
+        let page = result?;
+        if page.len() > 128 {
+            return Err(inventory_error(
+                "document unit inventory page exceeds its bound",
+            ));
+        }
+        let mut previous = self.after.as_ref();
+        for descriptor in &page {
+            self.inventory.validate(descriptor)?;
+            if previous.is_some_and(|id| id >= &descriptor.unit_id) {
+                return Err(inventory_error(
+                    "document unit inventory page is not strictly ordered",
+                ));
+            }
+            self.budget.reserve_descriptor(descriptor)?;
+            previous = Some(&descriptor.unit_id);
+        }
+        self.last_page = page.len() < 128;
+        self.descriptors = self
+            .descriptors
+            .checked_add(page.len())
+            .ok_or_else(|| inventory_error("inventory descriptor count overflow"))?;
+        if self.descriptors > self.inventory.unit_count
+            || (self.last_page && self.descriptors != self.inventory.unit_count)
+        {
+            return Err(inventory_error(
+                "completed inventory descriptor count differs from its retained total",
+            ));
+        }
+        self.after = page.last().map(|descriptor| descriptor.unit_id.clone());
+        self.page = page.into_iter();
+        self.budget.check()?;
+        Ok(self.page.next())
+    }
+}
+impl Iterator for InventoryUnitIter<'_> {
+    type Item = Result<UnitDescriptor>;
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.failed {
+            return None;
+        }
+        match self.next_unit() {
+            Ok(Some(descriptor)) => Some(Ok(descriptor)),
+            Ok(None) => {
+                self.failed = true;
+                None
+            }
+            Err(error) => {
+                self.failed = true;
+                Some(Err(error))
+            }
+        }
+    }
+}
+
+/// Legacy diagnostic replay factory; it cannot authenticate corpus membership.
 pub(crate) struct CachedDocumentUnits<'a> {
     reader: &'a QuerySnapshot,
     settings: &'a EmbeddingSettings,
@@ -459,6 +724,68 @@ mod tests {
     }
     fn budget() -> UnitBudget {
         UnitBudget::new(UnitLimits::default()).unwrap()
+    }
+    fn descriptor() -> UnitDescriptor {
+        UnitDescriptor {
+            policy: RenderPolicyId::for_settings(&Blake3Hash::digest("parser"), &settings())
+                .unwrap(),
+            owner: path("unicode-café.md"),
+            target: render::TargetKind::Document,
+            target_id: Some(RecordId::new("page_descriptor").unwrap()),
+            source_hash: Blake3Hash::digest("source"),
+            source_span: Some(ByteSpan::new(0, 17).unwrap()),
+            unit_id: Blake3Hash::digest("unit"),
+            input_hash: Blake3Hash::digest("input"),
+        }
+    }
+    #[test]
+    fn compact_discovery_does_not_consume_render_bytes_but_shares_unit_cap() {
+        let budget = UnitBudget::new(UnitLimits {
+            max_units: 2,
+            ..Default::default()
+        })
+        .unwrap();
+        budget.reserve_descriptor(&descriptor()).unwrap();
+        assert_eq!(budget.usage().render_bytes, 0);
+        assert_eq!(budget.usage().units, 0);
+        assert_eq!(budget.usage().descriptors, 1);
+        assert!(budget.usage().descriptor_bytes > 0);
+        let mut owner_bytes = 0;
+        budget.reserve_unit(17, &mut owner_bytes).unwrap();
+        let before = budget.usage();
+        assert_eq!(
+            code(budget.reserve_descriptor(&descriptor())),
+            ErrorCode::BudgetExceeded
+        );
+        assert_eq!(budget.usage(), before);
+        assert_eq!(
+            code(budget.reserve_unit(1, &mut owner_bytes)),
+            ErrorCode::BudgetExceeded
+        );
+        assert_eq!(budget.usage(), before);
+    }
+    #[test]
+    fn descriptor_byte_limit_is_cumulative_and_independent_of_utf8_limit() {
+        let descriptor = descriptor();
+        let probe = budget();
+        probe.reserve_descriptor(&descriptor).unwrap();
+        let bytes = probe.usage().descriptor_bytes;
+        let budget = UnitBudget::new(UnitLimits {
+            max_descriptor_bytes: bytes,
+            max_render_bytes: 1,
+            ..Default::default()
+        })
+        .unwrap();
+        budget.reserve_descriptor(&descriptor).unwrap();
+        assert_eq!(budget.usage().render_bytes, 0);
+        let before = budget.usage();
+        assert_eq!(
+            code(budget.reserve_descriptor(&descriptor)),
+            ErrorCode::BudgetExceeded
+        );
+        assert_eq!(budget.usage(), before);
+        budget.reserve_unit(1, &mut 0).unwrap();
+        assert_eq!(budget.usage().render_bytes, 1);
     }
     fn owner(
         catalog: &Catalog,
