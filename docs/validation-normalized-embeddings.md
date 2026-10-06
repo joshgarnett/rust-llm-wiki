@@ -585,8 +585,25 @@ or workflow score. The control exceeds its small logical-read reservation by
 against the remaining whole-workflow allowance. Its standalone resource quote
 does not pass, and these valid filter observations do not require a replay.
 
-Next complete the corrected all-task baseline and the maintained brief's guarded
-edit, refresh, withdrawal and cache-loss reconstruction at 64 documents before
-growth. Keep the draft Page outside `sources/`, count fresh vector acquisition
-after cache loss, and score native evidence separately from assisted answers.
-The complete workflow, representative 25K capacity and unseen HIGH remain open.
+The corrected all-task baseline completes 72 commands in 13.378 owning-process
+seconds, with no command errors, unrun commands or provider calls. Independent
+assessment finds all 12 expected source-owner positions across the ten answerable
+tasks, but only **9/28 required facts and 2/10 complete positive tasks** in lexical
+context. All 52 checked lexical citations match the captured and original byte
+ranges, identities and quote hashes. Accurate citations and owner retrieval do
+not establish sufficient evidence. Mock semantic/hybrid relevance is unscored.
+
+The separately declared assisted trial stops after its first two tasks return
+partial answers. Each uses one additional offline public command. D09 consumes
+47,594 evidence bytes and still lacks three required facts; D01 consumes 45,309
+bytes and lacks the profile qualification. Both stay within the 48 KiB evidence
+and 6,000-byte answer limits. Model token usage, cost and inference time are
+unavailable. The remaining ten tasks are explicitly unrun. This is a failed
+completeness trial, not a complete twelve-task comparison or a workflow pass.
+
+Publication, refresh, withdrawal, reconstruction and growth are not executed for
+this failed trial. A fresh architecture review examines fact selection and the
+bounded reading workflow before another intervention. Keep any eventual draft
+outside `sources/`, count reacquisition after cache loss, and score native evidence
+separately from assisted answers. The complete workflow, representative 25K
+capacity and unseen HIGH remain open.
