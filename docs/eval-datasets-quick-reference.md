@@ -14,6 +14,7 @@ Use [the context protocol](evaluating-context.md), [dataset acquisition/adaptati
 | [ConditionalQA v1_0](#conditionalqa-v1_0) | Scenarios, applicability conditions, exceptions and absence | 652 upstream documents / 2,338 train questions; sample 24 documents / 24 tasks | Acquired, supported v2 adapter, paired offline development; 6/16 exhaustive-gold-complete, semantics ungraded |
 | [WixQA ExpertWritten](#wixqa-expertwritten) | Real multi-article support/instructions | 6,221 articles / 200 expert questions; sample 42 articles / 22 questions | Original research sample acquired; separate unused-family host pilot independently labeled and evaluated, with a failed complete-workflow gate |
 | [New-family host-reading pilot](#new-family-host-reading-pilot) | Unused public support articles plus independently authored museum logistics; distant conditions, several sources, distractors, current/archived editions and saved cited drafts | 13 historical WixQA articles / 76,037 rendered bytes + eight fictional museum files / 36,335 bytes; 21 files / 112,372 bytes; six exceed 8 KiB; 24 tasks (20 positive + four absent) | [Evaluated](validation-new-family-host-workflow.md): native38/58 facts,9/20 tasks; host51/58,18/20 semantic;15/20 strict cited Pages,6.83/10, FAILED. Two dispatch zeros and four broken links retained. Separate from native HIGH/default quality, semantic and capacity gates |
+| [Support-discrimination development probe](#support-discrimination-development-probe) | Tiny fictional support/conditions fixture; public-boundary evidence census and exact model-input admission | Nine Sources / 6,294 UTF-8 bytes / 31 blocks; eight development tasks (six positive + two absent) | [Closed diagnostic](validation-new-family-host-workflow.md#separate-support-discrimination-diagnostic-failed-to-reproduce): historical loss failed to reproduce; all 18 facts survive four observed stages. All eight exact P inputs exceed fixed 24 KiB cap; zero host model decisions. No improvement or unseen acceptance |
 | [ContractNLI](#contractnli) | Entailment, contradiction and NotMentioned; long exceptions | 607 NDAs upstream; 12 train contracts / 204 tasks locally | Acquired, supported adapter, offline development; 57/122 exhaustive-gold-complete, classification ungraded |
 | [MuSiQue-Full v1.0](#musique-full-v10) | Two-to-four-hop chains and paired missing bridges | Proposed 12 pairs per hop count; archive size/hash unverified | Metadata only; archive acquisition, adapter and evaluation pending |
 | [Cargo 0.84.0 / 0.85.0](#cargo-release-documentation) | CLI/configuration, cross-file facts and revision controls | Five documents per release, ten total / 310,993 source bytes | Acquired; new QA authoring pending. Two 0.85 documents used as public operational overlay |
@@ -70,6 +71,32 @@ Acceptance: at least 18/20 complete positives; exact≥7/9, paraphrase≥5/6, mu
 One author-note-preserving Page reconciliation and one substantive Source-fact refresh are separately frozen follow-up observations on the same saved draft. They ran only after initial assessment was sealed, each a new job capped at 240 observed UTC seconds/12 native attempts/49,152 raw bytes. Both pass semantic maintenance but fail the full gate (0/2) through the inherited broken source link; author/identity/current support and all old revision files are preserved. They do not replace failed initial tasks.
 
 After assessment, exposed questions become development data. Preserve original errors and scores. Native initial evidence support, final host support, Page task completion, citation correctness, absent controls, resource costs and 25K admission remain separate outcomes.
+
+### Support-discrimination development probe
+
+This separately frozen, independently assessed fictional development fixture contains
+nine Sources/6,294 UTF-8 bytes/31 blocks and eight tasks (six positive, two absent).
+Protocol SHA256 `60e0f6919c4ed3d50624000acdc934d80242e9bc2356aa8dfa11eb1e8daddb86`.
+The [curated diagnostic](validation-new-family-host-workflow.md#separate-support-discrimination-diagnostic-failed-to-reproduce)
+records all 18 required propositions surviving raw source, discovered verified owners,
+actual public candidate packet and native final context. Absence/current-version
+restrictions survive both negative controls; evidence sufficiency is separate from
+generated-answer completion or abstention. This tiny corpus **failed to reproduce** the
+historical native loss and establishes no improvement or unseen acceptance.
+
+All tasks use actual defaults: ten owners/80 candidates/1,024-byte excerpts/12,000
+rendered bytes/3,000 estimated tokens/two-second proof. All eight exact P inputs are
+31,543–34,357 bytes before the 742-byte guide, above the fixed 24,576-byte arm cap.
+The model probe stopped with zero host decisions; no cropping, cap increase or new score.
+Forty native attempts retain one illegal group-size-nine preparation failure (maximum
+eight), with 39 successes. The root cryptographic/current/span/ownership audit passes
+149 emitted SourceRef occurrences/20 unique. Child owning monotonic time sums to
+4.587232455 seconds; the separate complete-sequence observed UTC interval is 47.888148
+seconds, mislabeled as owning time in the sealed critic Markdown. No build, provider
+call or source-code candidate resulted. Historical default 9/28 facts and 2/10 tasks
+and all open quality/capacity gates remain unchanged. Optional local evidence is under
+`.artifacts/support-discrimination-001/`; this reference requires no private labels or
+raw run reports.
 
 ### ContractNLI
 

@@ -295,3 +295,13 @@ and all four absent controls passing. The guide now explains Page-relative citat
 original results remain failed. Both supplementary maintenance observations pass semantic reconciliation but fail
 full completion through the inherited broken source link (0/2).
 No native quality, 25K or full-release qualification follows from this pilot.
+
+
+The separate [support-discrimination development diagnostic](validation-new-family-host-workflow.md#separate-support-discrimination-diagnostic-failed-to-reproduce)
+closed without reproducing the prior evidence loss: all 18 required facts survive
+four observed public stages on nine tiny fictional Sources. Every exact candidate
+packet exceeds the fixed host-input cap, so no model-selection job ran. All 149
+emitted citation occurrences authenticate; this diagnostic supplies no native
+quality gain or unseen acceptance. The next integrated implementation milestone
+is typed Source citations on Page publication, addressing the pilot's broken
+navigation; executable/runtime acceptance is still pending.

@@ -143,13 +143,57 @@ against 8 MiB,with report/temporary artifacts below their 256 KiB/512 KiB caps. 
 encrypted-message audit limitation remains. Supplementary JSON SHA256
 `a1961c971532f95840f6f77c68212b98124fc8544abb2c6466ec2dc13e0323c8`.
 
+## Separate support-discrimination diagnostic: failed to reproduce
+
+The closed `support-discrimination-001` development probe **did not reproduce the
+historical native evidence loss**. Its nine fictional Sources total 6,294 UTF-8 bytes
+and 31 blocks; eight development tasks comprise six positives and two absent controls.
+Under fixed protocol SHA256
+`60e0f6919c4ed3d50624000acdc934d80242e9bc2356aa8dfa11eb1e8daddb86`,
+all 18 required propositions survive raw source → discovered verified owners → actual
+public candidate packet → native final context. All six positives have sufficient final
+native evidence. Both absent controls retain absence/current-version restrictions;
+quoted restrictions do not establish generated-answer abstention. This tiny fixture is
+a separate diagnostic, not an improvement, unseen acceptance or a replacement score.
+
+The unchanged CLI used its actual defaults for all eight tasks: ten owners, 80
+candidates, 1,024-byte excerpts, 12,000 rendered bytes/3,000 estimated tokens and a
+two-second proof deadline. Forty native attempts include 39 successes and one retained
+preparation `USAGE` failure: group size nine exceeded the legal maximum eight. The
+pre-observation continuation used legal groups without replaying successful commands.
+The public-boundary census does not instrument internal representation cuts or prove
+general distractor rejection, generated-answer completion or larger-corpus relevance.
+
+Every exact P-arm model input is 31,543–34,357 bytes **before** its 742-byte guide,
+exceeding the frozen 24,576-byte arm ceiling. There were **zero host model decisions**;
+paired P/L selection results are unavailable. The model probe stopped without cropping,
+raising the cap, retuning, reauthoring or assigning a new score. Native HIGH, semantic
+and capacity gates remain open; historical native 9/28 facts and 2/10 tasks are unchanged.
+No Rust build, provider call or source-code candidate resulted from this diagnostic.
+
+A separate root audit authenticates all 149 emitted SourceRef occurrences (20 unique)
+against current revisions, exact spans, ownership and cryptographic quote hashes. This
+extends the released critic's narrower byte/span audit without changing its sealed
+artifact. Full raw native output totals 714,990 bytes. The actual sum of child-process
+owning monotonic intervals is **4.587232455 seconds**; **47.888148 seconds** is the
+complete native sequence's observed UTC interval. The released critic Markdown
+mislabeled the latter as summed owning time. These clocks describe different intervals;
+neither is model inference time or a capacity qualification.
+
+Optional local evidence: `.artifacts/support-discrimination-001/critic/native-stage-assessment.{md,json}`
+and `root/native-citation-audit.json` in that same artifact directory. Private labels,
+construction history and raw traces remain local. The [context protocol](evaluating-context.md)
+and [critic workflow](testing-usability.md) remain the maintained fresh-checkout guides.
+
 ## Next decision and reproduction scope
 
 A fresh Astra architecture review rejects another lexical weight/cap/allocator loop. A
 cheaper topical distractor already dominates required writer-injection support on lexical
-features. The next bounded development experiment first measures raw source → discovered
-owner → public candidate packet → final context, then tests task-conditioned support
-selection over matched same-owner representations. Structural preservation is justified
+features. The review recommended a bounded development experiment measuring raw source →
+discovered owner → public candidate packet → final context, then testing task-conditioned
+support selection over matched same-owner representations. The separate diagnostic above
+found no required-fact loss on its tiny fixture and stopped before model selection.
+Structural preservation is justified
 only by demonstrated representation loss; model-assisted selection earns separate credit.
 No new product agent engine, database, local model or native quality gain is selected by
 this failed pilot.
