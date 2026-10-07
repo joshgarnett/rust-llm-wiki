@@ -607,6 +607,8 @@ impl OfflineApp {
                 });
             }
         }
+        destination_bytes =
+            super::page_citations::rebase_source_citation_links(&destination_bytes, &from, &to)?;
         operations.push(ExpectedWrite {
             target: to.clone(),
             expected: ExpectedState::Absent,

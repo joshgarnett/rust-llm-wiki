@@ -107,21 +107,22 @@ within the declared task limits.
 
 Produce concise prose answering supported conditions and an explicit gaps section.
 Label it as a draft derived from the observed revision snapshot, including the
-verification scope/generation. Preserve every exact SourceRef used for claims
-(`kind`, Source/Revision IDs, span and quote hash) in a readable provenance appendix,
-alongside human-readable Source and immutable revision links. Returned locators
-are relative to the vault root; Markdown links are relative to the saved Page's
-directory. Derive each link from the actual Page path and returned target path.
-For a Page at `pages/brief.md` and target
-`sources/SOURCE/revisions/REVISION/content.md`, the link is
-`../sources/SOURCE/revisions/REVISION/content.md`. Using `sources/...` would
-point inside `pages/`; using `../../sources/...` would leave the vault. Substitute
-actual returned identifiers, and check that every resolved target exists inside
-the vault. A valid JSON SourceRef does not verify a Markdown link. Authored `note_text`
-is not a Source citation. Do not add raw Source IDs to `wiki_depends_on_ids`, which
-names accepted assertions, or promote this synthesis into accepted graph evidence.
+verification scope/generation. Keep the exact `kind: source` CitationRefs used for claims from returned context
+or `data.source_citation.citation` on a verified read. Save a JSON request outside
+the vault with `schema_version` equal to `"1"` and `citations` containing those
+unchanged objects. Inspect `schema page-source-refs`; the request permits at most
+16 references and 64 KiB. Authored `note_text` is not a Source citation. Do not add
+raw Source IDs to `wiki_depends_on_ids`, which names accepted assertions, or
+promote the synthesis into accepted graph evidence.
 
-Save the body outside the vault, then `page init --file BODY.md --title TITLE`.
+Save the prose body outside the vault, then run
+`page init --file BODY.md --title TITLE --source-refs REFS.json`. The command
+uses its actual allocated Page path to generate Source, immutable Revision and
+captured-content links, plus the exact machine-readable refs. No source-path
+arithmetic is needed in the prose. Source states describe verification during
+that guarded Page write; valid links do not certify prose support, completeness
+or continuing freshness. Inspect the successful result and saved provenance.
+
 This creates a draft envelope. Obtain its allocated ID/path from the actual result;
 read that Page and retain `data.path`, `data.record`, `data.body` and `data.hash`.
 Search the title with lexical `--status draft` (and `--verify-selected` on normalized
@@ -135,7 +136,20 @@ all fields in returned `data.record` and combining that envelope with the reconc
 body. `read.body` excludes front matter; `data.hash` guards the complete author file.
 A whole nontruncated read is required to avoid dropping unread author text. Body
 ranges differ from authored context spans, which address the full canonical file.
-Use `page put --file FULL-PROPOSAL.md --path RETURNED_PATH --if-match RETURNED_HASH`.
+Use `page put --file FULL-PROPOSAL.md --path RETURNED_PATH --if-match RETURNED_HASH
+--source-refs REFS.json` with the desired exact refs. The command replaces only
+its generated provenance block and preserves all other proposed bytes. Keep
+that block's ownership markers intact; duplicate, malformed or fenced example
+markers refuse. An explicit empty `citations` array removes the generated block;
+omitting `--source-refs` retains ordinary Page authoring behavior. Source refresh
+or withdrawal can leave immutable links useful while old refs become historical
+or withdrawn; regenerate the block when reconciling evidence. Deliberately
+reconcile old hand-written citation links as author text; this command does not
+repair arbitrary Markdown. Page rename rebases generated links to the new path.
+
+A dry-run only parses the refs and previews the Page proposal; its
+`source_citations.verification_performed` and `links_rendered` are false. Source
+paths, spans, hashes and states remain unchecked until staging or applying.
 
 On `CONTENT_CONFLICT`, preserve the author file and the refusal. For an intended
 external author edit, count and run one `index sync` within the remaining bounds

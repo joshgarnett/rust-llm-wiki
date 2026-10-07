@@ -87,6 +87,7 @@ pub const SCHEMAS: &[&str] = &[
     "record",
     "page",
     "page-batch",
+    "page-source-refs",
     "stream",
     "extraction",
     "extraction-packet",
@@ -200,7 +201,7 @@ fn execute_inner(args: &Arguments) -> Result<Envelope> {
         Command::Capabilities => {
             return Ok(Envelope::success(
                 command,
-                json!({"version":env!("CARGO_PKG_VERSION"),"commands":COMMANDS,"schemas":SCHEMAS,"network":true,"search_modes":["literal","lexical","semantic","hybrid"],"selected_search":{"flag":"--verify-selected","layout":"normalized","modes":["literal","lexical","semantic","hybrid"],"no_sync_compatible":true,"scope":"displayed document dependencies","global_membership_verified":false,"dry_run":"request validation only","budget":{"max_bytes":67108864,"max_files":4096,"max_entries":16384,"max_elapsed_ms":2000}},"selected_neighbors":{"command":"graph neighbors","layout":"normalized","root_kind":"entity","default_verification":true,"explicit_verification_flag":"--verify-selected","no_sync":"cached_uncited","scope":"selected_graph_neighbors","global_membership_verified":false,"current_only":true,"navigation":false,"cursor":false,"dry_run":"request validation only","limits":{"depth":2,"incident_per_seed":16,"assertions":128,"candidates":80,"hits":50,"support":2,"contrary":1},"budget":{"max_bytes":67108864,"max_files":4096,"max_entries":16384,"max_elapsed_ms":2000}},"graph_seed_modes":["lexical","semantic"],"extraction_executors":["agent","api"],"research_executor":"agent-handoff","jsonl_commands":["index sync","index rebuild","recover","changes apply","source add","source refresh","research run","research resume","research import","doctor --probe"]}),
+                json!({"version":env!("CARGO_PKG_VERSION"),"commands":COMMANDS,"schemas":SCHEMAS,"network":true,"page_source_refs":{"commands":["page init","page put"],"flag":"--source-refs","schema":"page-source-refs","max_input_bytes":65536,"max_references":16,"citation_kinds":["source"],"links":"relative_to_resolved_page_path","prose_support_verified":false,"dry_run":"request_validation_only"},"search_modes":["literal","lexical","semantic","hybrid"],"selected_search":{"flag":"--verify-selected","layout":"normalized","modes":["literal","lexical","semantic","hybrid"],"no_sync_compatible":true,"scope":"displayed document dependencies","global_membership_verified":false,"dry_run":"request validation only","budget":{"max_bytes":67108864,"max_files":4096,"max_entries":16384,"max_elapsed_ms":2000}},"selected_neighbors":{"command":"graph neighbors","layout":"normalized","root_kind":"entity","default_verification":true,"explicit_verification_flag":"--verify-selected","no_sync":"cached_uncited","scope":"selected_graph_neighbors","global_membership_verified":false,"current_only":true,"navigation":false,"cursor":false,"dry_run":"request validation only","limits":{"depth":2,"incident_per_seed":16,"assertions":128,"candidates":80,"hits":50,"support":2,"contrary":1},"budget":{"max_bytes":67108864,"max_files":4096,"max_entries":16384,"max_elapsed_ms":2000}},"graph_seed_modes":["lexical","semantic"],"extraction_executors":["agent","api"],"research_executor":"agent-handoff","jsonl_commands":["index sync","index rebuild","recover","changes apply","source add","source refresh","research run","research resume","research import","doctor --probe"]}),
             ));
         }
         Command::Schema { name } => {
@@ -211,6 +212,7 @@ fn execute_inner(args: &Arguments) -> Result<Envelope> {
                 "research-submission" => include_str!("../../schemas/research-submission-v1.json"),
                 "record" | "page" => include_str!("../../schemas/record-v1.json"),
                 "page-batch" => include_str!("../../schemas/page-batch-v1.json"),
+                "page-source-refs" => include_str!("../../schemas/page-source-refs-v1.json"),
                 "stream" => include_str!("../../schemas/stream-v1.json"),
                 "extraction" => include_str!("../../schemas/extraction-v1.json"),
                 "extraction-packet" => include_str!("../../schemas/extraction-packet-v1.json"),
@@ -430,18 +432,29 @@ fn execute_inner(args: &Arguments) -> Result<Envelope> {
             command:
                 PageCommand::Init {
                     file,
+                    source_refs,
                     title,
                     id,
                     path,
                 },
         } => {
+            let refs = source_refs_input(source_refs.as_deref(), file)?;
+            let count = refs.as_ref().map(PageSourceRefs::len);
             let body =
                 String::from_utf8(input(file)?).map_err(|_| usage("page body must be UTF-8"))?;
-            page_mutation(
-                &mut envelope,
-                &app,
-                app.page_initialize(path.clone(), id.clone(), title.clone(), body)?,
-            )?;
+            let outcome = if let Some(refs) = refs {
+                app.page_initialize_with_source_refs(
+                    path.clone(),
+                    id.clone(),
+                    title.clone(),
+                    body,
+                    refs,
+                )?
+            } else {
+                app.page_initialize(path.clone(), id.clone(), title.clone(), body)?
+            };
+            page_mutation(&mut envelope, &app, outcome)?;
+            source_refs_metadata(&mut envelope, count, args.dry_run);
         }
         Command::Page {
             command: PageCommand::Batch { file },
@@ -464,10 +477,13 @@ fn execute_inner(args: &Arguments) -> Result<Envelope> {
             command:
                 PageCommand::Put {
                     file,
+                    source_refs,
                     path,
                     if_match,
                 },
         } => {
+            let refs = source_refs_input(source_refs.as_deref(), file)?;
+            let count = refs.as_ref().map(PageSourceRefs::len);
             let bytes = input(file)?;
             let normalized_preview = args.dry_run
                 && path.is_none()
@@ -500,12 +516,14 @@ fn execute_inner(args: &Arguments) -> Result<Envelope> {
                         .ok_or_else(|| crate::app::offline::page_envelope_error(&note))?;
                     app.default_page_path(record.id())?
                 };
-                page_mutation(
-                    &mut envelope,
-                    &app,
-                    app.page_put(target, bytes, if_match.clone())?,
-                )?;
+                let outcome = if let Some(refs) = refs {
+                    app.page_put_with_source_refs(target, bytes, if_match.clone(), refs)?
+                } else {
+                    app.page_put(target, bytes, if_match.clone())?
+                };
+                page_mutation(&mut envelope, &app, outcome)?;
             }
+            source_refs_metadata(&mut envelope, count, args.dry_run);
         }
         Command::Page {
             command: PageCommand::Rename { id, to, if_match },
@@ -1775,23 +1793,54 @@ fn authenticated_read_citation(
     }))
 }
 fn input(path: &Path) -> Result<Vec<u8>> {
+    input_bounded(path, MAX_INPUT_BYTES, "input exceeds 16 MiB")
+}
+fn input_bounded(path: &Path, max_bytes: usize, message: &str) -> Result<Vec<u8>> {
     let mut bytes = Vec::new();
     if path == Path::new("-") {
         io::stdin()
             .lock()
-            .take(MAX_INPUT_BYTES as u64 + 1)
+            .take(max_bytes as u64 + 1)
             .read_to_end(&mut bytes)
     } else {
         File::open(path)
             .map_err(|e| input_error(path, e))?
-            .take(MAX_INPUT_BYTES as u64 + 1)
+            .take(max_bytes as u64 + 1)
             .read_to_end(&mut bytes)
     }
     .map_err(|e| input_error(path, e))?;
-    if bytes.len() > MAX_INPUT_BYTES {
-        return Err(usage("input exceeds 16 MiB"));
+    if bytes.len() > max_bytes {
+        return Err(usage(message));
     }
     Ok(bytes)
+}
+fn source_refs_input(path: Option<&Path>, body: &Path) -> Result<Option<PageSourceRefs>> {
+    let Some(path) = path else { return Ok(None) };
+    if path == Path::new("-") && body == Path::new("-") {
+        return Err(usage(
+            "Page body and SourceRefs cannot both use standard input",
+        ));
+    }
+    let bytes = input_bounded(
+        path,
+        crate::app::page_citations::MAX_SOURCE_REFS_INPUT_BYTES,
+        "Page SourceRefs input exceeds 64 KiB",
+    )?;
+    PageSourceRefs::from_json_slice(&bytes).map(Some)
+}
+fn source_refs_metadata(envelope: &mut Envelope, count: Option<usize>, dry_run: bool) {
+    if let Some(count) = count {
+        envelope.data["source_citations"] = json!({
+            "reference_count":count,
+            "verification_performed":!dry_run,
+            "links_rendered":!dry_run,
+            "state_scope":"verified_for_guarded_page_proposal",
+            "prose_support_verified":false
+        });
+        if dry_run {
+            envelope.warnings.push("Source citation preview parses the request only; Source/Revision paths, quote hashes, eligibility and generated links are unverified. Staging or applying performs verification.".into());
+        }
+    }
 }
 fn input_error(path: &Path, error: io::Error) -> WikiError {
     let mut failure = WikiError::new(

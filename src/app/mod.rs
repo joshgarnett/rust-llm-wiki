@@ -29,8 +29,12 @@ mod refresh_fixture_export;
 #[cfg(test)]
 mod refresh_path_profile;
 
+pub(crate) mod page_citations;
 mod page_rename;
 mod pages;
+pub use page_citations::PageSourceRefs;
+#[cfg(test)]
+mod page_citations_tests;
 pub mod probe;
 pub use pages::{PageBatchRequest, PageUpdate};
 

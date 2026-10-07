@@ -54,6 +54,44 @@ Commands appear in `capabilities` only when implemented. The following is the im
 
 `--file -` reads bounded stdin. Body text, bulk payloads, and secrets are not interpolated into shell strings. No command depends on an editor, pager, `jq`, or `rg`. Editor launching can follow after the deterministic file/stdin write path exists. No default destructive purge command or automatic Git commit is needed for v1.
 
+## Source citations on draft Pages
+
+This optional interface is implemented in the typed-citation checkpoint; its
+executable and public-workflow acceptance are still pending. Earlier trial
+archives do not advertise it.
+
+`page init` and `page put` accept `--source-refs FILE`, or bounded stdin when the
+Page body is not also stdin. `schema page-source-refs` describes the strict
+version-1 request: `schema_version: "1"` and a `citations` array of exact
+`kind: "source"` references returned by verified context/read. The input ceiling
+is 64 KiB and 16 submitted references before stable exact deduplication. Paths,
+quote text, eligibility and assertion references are not accepted authority.
+
+Normal staging/application authenticates source ownership, immutable revision
+payloads, nonempty UTF-8 spans and quote hashes. It renders actual Source,
+Revision and captured-content links relative to the final Page destination,
+with exact JSON references and a state explicitly observed during that guarded
+write. Those observations participate in publication read guards; they do not
+prove prose support or continuing freshness. Normalized verification touches
+selected dependencies. Legacy verification retains its bounded SourceView scan;
+its initial scan and selected-payload allowance are separate 64 MiB limits.
+
+Only the standalone comment-delimited `lwiki:source-citations:v1` block is owned.
+Explicit references replace it without changing other proposed bytes; an empty
+array removes it. Duplicate, malformed, fenced or embedded HTML markers refuse,
+as does a rendered block swallowed by an unclosed authored fence/comment.
+Omitting the flag retains ordinary Page authoring. Existing whole-file
+`--if-match` guards and the 16 MiB final Page limit remain. Ordinary Page rename
+rebases generated hrefs while preserving exact SourceRef JSON and immutable
+targets; arbitrary authored citation links are not automatically repaired.
+
+Dry-run parses/bounds references and previews the ordinary Page request without
+source proof or generated links. Its `source_citations.verification_performed`
+and `links_rendered` fields are false, and source-dependent paths/spans/states
+remain unchecked. Normal metadata explicitly declines prose-support verification.
+The [cited-draft recipe](../../skills/llm-wiki/references/cited-page.md) describes
+retrieval, saving and guarded reconciliation together.
+
 ## Search and evidence controls
 
 `search --mode literal|lexical|semantic|hybrid` uses lexical by default. Literal v1 is a case-sensitive exact UTF-8 substring scan, including straight versus typographic quotes; use lexical search for names with punctuation variants. Regex is deferred. `graph query --strategy entity|relationship|combined --seed lexical|semantic` defaults to combined plus lexical. `search --mode hybrid --graph entities` enables the included entity/assertion candidate path. Entity extraction and LLM query expansion never run implicitly during these commands.
