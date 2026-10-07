@@ -582,8 +582,29 @@ pub(crate) fn rebase_source_citation_links(
     to: &VaultRelativePath,
 ) -> Result<Vec<u8>> {
     let text = std::str::from_utf8(bytes).map_err(|_| WikiError::invalid("Page is not UTF-8"))?;
-    let Some(range) = owned_block(text)? else {
-        return Ok(bytes.to_vec());
+    let range = match owned_block(text) {
+        Ok(Some(range)) => range,
+        Ok(None) => return Ok(bytes.to_vec()),
+        Err(error) => {
+            // Ordinary uncited authoring may contain literal examples. Only
+            // actual standalone reserved HTML comments opt a move into owned
+            // citation semantics; examples inside code/raw HTML remain author text.
+            let has_owned_marker =
+                pulldown_cmark::Parser::new(text)
+                    .into_offset_iter()
+                    .any(|(event, range)| {
+                        matches!(
+                            event,
+                            pulldown_cmark::Event::Start(pulldown_cmark::Tag::HtmlBlock)
+                        ) && text[range]
+                            .trim_end_matches(['\r', '\n'])
+                            .starts_with(RESERVED)
+                    });
+            if has_owned_marker {
+                return Err(error);
+            }
+            return Ok(bytes.to_vec());
+        }
     };
     let block = &text[range.clone()];
     let mut edits = Vec::new();

@@ -234,13 +234,16 @@ fn citation_markers_inside_author_code_or_html_never_grant_ownership() {
     for normalized in [false, true] {
         let f = Fixture::new(normalized);
         let (_, citation, _) = f.add("Marker ownership control.\n");
-        for body in [
+        for (index, body) in [
             format!("# Example\n```text\n{BEGIN}\nAuthor's literal example.\n{END}\n```\n"),
             format!("# Example\n<pre>\n{BEGIN}\nAuthor's literal example.\n{END}\n</pre>\n"),
             format!("# Example\n<div>\n{BEGIN}\nAuthor's literal example.\n{END}\n</div>\n"),
             "# Example\n```text\nAn unclosed authored example.\n".into(),
             "# Example\n<!-- An unclosed authored HTML comment.\n".into(),
-        ] {
+        ]
+        .into_iter()
+        .enumerate()
+        {
             let target = path("pages/literal-markers.md");
             assert!(
                 f.app
@@ -248,12 +251,29 @@ fn citation_markers_inside_author_code_or_html_never_grant_ownership() {
                         Some(target.clone()),
                         None,
                         "Literal markers".into(),
-                        body,
+                        body.clone(),
                         refs(&[citation.clone()]),
                     )
                     .is_err()
             );
             assert!(!f.root.join(target.as_str()).exists());
+            // The opt-in typed refusal must not change ordinary uncited Pages.
+            let created = f
+                .app
+                .page_initialize(
+                    Some(target.clone()),
+                    None,
+                    "Ordinary literal example".into(),
+                    body,
+                )
+                .unwrap();
+            let id = created.allocated_ids.get(target.as_str()).unwrap().clone();
+            let before = f.bytes(&target);
+            let moved = path(&format!("pages/examples/moved-{index}.md"));
+            f.app
+                .page_rename(id, moved.clone(), Blake3Hash::digest(&before))
+                .unwrap();
+            assert_eq!(f.bytes(&moved), before);
         }
     }
 }
