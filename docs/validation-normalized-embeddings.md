@@ -810,3 +810,84 @@ architecture review must address task scope and final evidence allocation togeth
 before another implementation. Native HIGH, layout parity and practical 25K
 capacity remain open; the accepted assisted lifecycle and candidate013 remain
 separate useful milestones.
+
+## Scope and complete-evidence feasibility diagnostic
+
+The accepted automatic command still supplies **9/28 facts and 2/10 complete
+positive tasks** on the exposed twelve-question development collection. One
+subsequent diagnostic compares question-only manual scope restrictions with
+evaluator-informed exact-span witnesses. Neither arm changes product defaults
+or earns automatic, blind or unseen acceptance.
+
+Under the unchanged allocator and packet budgets, effective manual restrictions
+recover all six approved/current facts in two tasks. Independent review scores
+the restricted packets at **21/28 facts and 7/10 complete positives**. The guide
+and linked-procedure controls remain unrestricted where their scope is unknown;
+those cases cannot establish the cause of their omissions. An original-baseline
+restore-volume regression remains. All 68 persisted restricted-packet SourceRefs
+authenticate against exact captured bytes and the sixteen current owner records.
+
+All ten positive witnesses fit within the existing 6,000-byte/1,500-estimated-token
+budget and pass the owning renderer and proof. A separate semantic reviewer finds
+their requested current facts complete, checking 28 actual quote occurrences
+against original UTF-8 ranges. These nominations used exposed development
+expectations and are a feasibility result, not an automatic selection method.
+All nominated supporting subspans survive both actual native and restricted
+passage/fallback pools; source-hit rates alone did not establish this.
+
+The experiment as a whole **fails**: known helper logical reads reach 542,274,469
+bytes, exceeding its 512 MiB cap by 5,403,557 bytes on the last absent-information
+task. Eleven cases complete; the twelfth records an error and receives no safety
+or completeness credit. No retry or cap increase erases that failure. Supervisor
+turnaround is 1.674 seconds including child emission; this is an internal
+diagnostic, not a shipping CLI latency or capacity qualification. Physical I/O,
+model inference time and model cost are unavailable.
+
+The resulting implementation hypothesis is one bounded structural change:
+preserve complete original paragraph/list/definition units with their exact
+heading ancestry, and admit their cited spans jointly rather than letting
+overlapping fragments compete independently. Unknown structure retains existing
+fallbacks. Advancement still requires at least 24/28 facts, 8/10 complete positive
+tasks including the mandatory guide and linked-procedure tasks, no loss of an
+original-baseline fact, exact eligible citations and both absent controls. That
+new production candidate remains unaccepted until its separate native and
+cited-Page lifecycle gates pass; feasible witnesses do not lower those gates.
+
+## Complete structural-group production comparison
+
+A separate optimized production candidate preserves complete paragraph, list,
+HTML definition and command units with their original heading ancestry, admits
+member spans jointly, and retains the original fragments as bounded fallbacks.
+It changes only automatic lexical indexed-document selection. The candidate
+remains isolated and is not included in an accepted release build.
+
+On the same frozen twelve-question development collection and unchanged packet
+limits, independent actual-content assessment finds **11/28 supported facts and
+4/10 complete positive tasks**. It fails the advancement gate of 24/28 facts,
+8/10 complete positives including the mandatory guide and linked-procedure tasks,
+no original-baseline fact loss, exact eligible citations and both absent controls.
+Two original-baseline facts regress: the approved restore volume and transfer
+destination. All 74 returned SourceRef occurrences authenticate. Correct quotations still
+mix approved procedures with archived instructions and omit needed complementary
+facts. The two absent-information controls remain bounded and unsupported.
+
+All twelve ordinary production CLI commands finish without operational errors.
+The owning run takes 2.386171 seconds, including emitted output and receipts;
+individual intervals range from 0.073908 to 0.765875 seconds. Known combined
+logical reads are 498,854,851 bytes within the prospectively frozen 1 GiB limit.
+Original and copied canonical files and idle operation authority remain unchanged.
+These are 64-source development observations, not unseen, HIGH or 25K acceptance.
+Physical I/O, peak storage and RSS remain unavailable.
+
+Grouped correctness evidence contains 219 distinct passing affected tests. Earlier
+sandbox, compilation and trace-instrumentation failures remain recorded; two
+avoidable compile retries do not disappear from the evidence. Only changed checks
+and the failed host-ordering test were repeated. Cumulative build/test checkpoint
+time is 348.689078 seconds within the declared 1,200-second aggregate bound.
+
+The result rejects grouping alone as a completeness solution. The accepted native
+default remains **9/28 facts and 2/10 complete positives**. Further parameter or
+fragment tuning is deferred in favor of a whole-workflow review of task scope and
+complementary evidence selection, alongside the measured import and storage costs
+that constrain practical 25K use. The useful normalized literal workflow and its
+local 0.2.0 artifact remain separately accepted.
