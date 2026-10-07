@@ -311,6 +311,16 @@ closed without reproducing the prior evidence loss: all 18 required facts surviv
 four observed public stages on nine tiny fictional Sources. Every exact candidate
 packet exceeds the fixed host-input cap, so no model-selection job ran. All 149
 emitted citation occurrences authenticate; this diagnostic supplies no native
-quality gain or unseen acceptance. The next integrated implementation milestone
-is typed Source citations on Page publication, addressing the pilot's broken
-navigation; executable/runtime acceptance is still pending.
+quality gain or unseen acceptance. The later [typed Source-citation milestone](validation-cited-page-workflow.md)
+has now passed its scoped functional gate at 10/10 across both layouts, with
+86 affected native checks passing. It fixes navigation for new publications;
+the earlier host pilot remains failed and default completeness remains unchanged.
+
+The new [public 1K to 10K lineage](validation-capacity-workflow.md#public-1k-to-10k-lineage-and-sync-diagnosis)
+captured all 10,000 documents, but failed the frozen five-second no-change sync
+gate. A preserved disposable copy passes complete canonical/cache checking;
+separate verified search and exact cited read also work. An optimized diagnostic
+sync takes 29.516 seconds, with parsing only 1.48% of its residence, so deferred
+parsing was rejected as the proposed solution. Repeated path resolution remains
+a hypothesis requiring attribution. The 10K lifecycle, default retrieval quality,
+25K capacity and full release are still unqualified.

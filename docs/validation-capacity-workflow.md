@@ -402,3 +402,78 @@ a complete approved current procedure. Current citation eligibility does not
 establish procedural approval. The original native fact/task gate remains failed.
 This scoped lifecycle adds no unseen HIGH, semantic readiness, practical
 25K/~2.5GB, live-provider, HTML extraction or complete-release acceptance.
+
+## Public 1K to 10K lineage and sync diagnosis
+
+The October 7, 2026 public Markdown run uses the accepted `e82cab472ce39a3fb6f2cca58dc7c360a0fed7e8`
+source and the pinned local 0.2.0 CLI (`ec1478bdd0a14f3bfc1a9d89c0eeb2c8b0f130515d2068153d81cd8739ede146`).
+Its native aarch64 build uses optimization level 3 and no debug information.
+Inputs combine two licensed Cargo documentation files with 9,998 prospectively
+generated synthetic documents of approximately 80–120 KB each. Labels stay out
+of indexed content. The vault also retains a fixed 1,000-Page authored overlay.
+No provider calls occur.
+
+The original attempt failed during an operator backup-inventory naming collision.
+A separately reviewed continuation preserves that failure and executes only the
+remaining work. Across these discontinuous attempts, the 1K operational tier
+completes its checks, rebuild comparison, negative controls, immutable-history
+refresh/withdrawal and external-editor Page deletion/restoration. Independent
+review authenticates the returned citations and comparisons. Its five mechanics
+questions still supply seven of eight facts and complete four of five tasks;
+the two-source task remains incomplete. This is scoped operational evidence,
+without a new quality score or a continuous-run claim.
+
+Growth admits all 9,000 additional documents in 2,250 four-item groups. Public
+status reports complete, with no pending group or Change. The resulting vault
+has **10,000 current captures / 1,004,348,092 content bytes**, 10,002 retained
+Sources and 10,013 revisions. The planned interrupted import recovers and resumes;
+four selected captured identities retain their original mapping.
+
+The next ordinary `index sync` fails the prospectively frozen **five-second
+no-change limit**. The owner sends SIGKILL after 5.016 seconds; there is no output,
+RSS violation or observer error. This is a censored runtime exceeding five seconds,
+not a completed-sync measurement or corruption finding. Consequently the 10K
+initial quality questions, churn/update measurements, rebuild comparison and
+25K growth never run. Both original attempts remain failed.
+
+A faithful disposable copy subsequently passes the unchanged CLI's full canonical
+and cache check in **173.575 seconds**, with zero errors, revision-owner history
+checked, cache agreement and approximately 759 MiB native process peak RSS.
+Every original byte, path, mode and timestamp is preserved. Qualification covers
+this diagnostic seed; it does not repair the earlier timing failure. Complete
+normalized dependency/row equality and unused-retained-payload qualification have
+their existing explicit limits.
+
+One separately frozen, test-instrumented native observation calls the ordinary
+no-change service and returns the exact prior snapshot with `reused:true` and no
+build. Its service interval is **29.516 seconds**; launch-to-reap is 29.743 seconds.
+The diagnostic uses a 200 ms lock timeout instead of the CLI's 5,000 ms default,
+and excludes CLI parsing. It cannot substitute for the public five-second gate.
+
+| Disjoint service phase | Seconds |
+| --- | ---: |
+| Initial and final membership census | 1.679 |
+| Initial note read/hash | 4.055 |
+| Parsing/materialization | 0.438 |
+| Dependency SQL and asset read/hash | 9.960 |
+| Final note, asset and layout recheck | 13.270 |
+
+Logical I/O reconciles to two passes over 14,908,260 note bytes and 2,011,229,140
+asset bytes, plus 1,294,530 layout bytes: **4,053,569,330 bytes**. The reported
+logical-I/O ledger accounts for these two bulk-payload passes; no third pass
+appears in that ledger. Parsing contributes only 1.48%; removing it would leave
+29.079 seconds. It fails the predeclared materiality/headroom screen, so deferred
+parsing is rejected as this workflow's solution. Read-bearing phases do not yet
+separate pathname resolution, binding checks, streaming/hash and SQL costs.
+Repeated prefix canonicalization is the next testable hypothesis, not an established
+cause or justification for bypassing fresh byte, membership or authority checks.
+
+Afterward, an ordinary selected verified search takes 0.539 seconds and an exact
+cited read takes 0.020 seconds; returned bytes match the canonical range. These
+two development commands supply neither a latency distribution nor answer-quality
+credit. Full preservation finds only expected writer-lock ownership changes and
+SQLite shared-memory timestamps on the copy, with canonical/history/catalog bytes
+unchanged. Native process RSS is observed; exact tree RSS and transient allocation
+remain unqualified. Default completeness remains 9/28 facts and 2/10 positive
+tasks. Native HIGH, semantic readiness, the remaining 10K lifecycle, practical
+25K capacity and full release remain open.
