@@ -123,3 +123,10 @@ A manifest freezes its extraction policy. Resuming a previously prepared HTML
 manifest with `unsupported` policy preserves that policy. An old original-only
 HTML revision remains original-only; `source refresh` under the new filename
 policy creates a new complete revision without adding content to old history.
+
+For selected updates after a completed import, follow the
+[individual maintenance recipe](source-import-maintenance.md): join the original
+manifest with the documented results artifact, inspect the intended identities,
+stage and review exact refresh payloads, then explicitly reconcile a cited Page.
+Missing inputs and withdrawn Sources are reported and skipped. The recipe
+accepts reviewed captured snapshots; an earlier preview is not a staging guard.

@@ -275,3 +275,13 @@ earns no completeness credit. Default completeness remains 9/28 facts and 2/10
 tasks. Native HIGH, HTML-scale/25K qualification and full release remain open.
 The next bounded experiment assesses original import mappings through guarded
 individual refresh and cited Page reconciliation before adding any new API.
+
+That [existing public maintenance route](validation-import-maintenance.md)
+now completes all 66 frozen commands on twelve tiny inputs, with scoped review
+at 9.4/10, all five mandatory groups and zero observed blockers. Twelve citation
+occurrences authenticate, reviewed refresh snapshots and authored Page notes
+are preserved, and no production mapping feature is justified. The
+[maintained recipe](source-import-maintenance.md) distinguishes canonical mapping
+consistency from uncertified acknowledged-prefix authority and reviewed snapshots
+from an earlier-preview guarantee. Procedural review misses remain separate;
+default retrieval completeness and large-vault gates are unchanged.
