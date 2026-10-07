@@ -132,3 +132,26 @@ the existing public route with a small mapping experiment. Add only the missing
 user-facing step established by that experiment; no collection mirror, automatic
 withdrawal, general repair subsystem or renewed retrieval parameter loop is
 authorized by this milestone.
+
+## Local 0.2.0 trial artifact
+
+Candidate `015-normalized-html-001` packages the same tested CLI without another
+Rust build. Production source is commit
+`99a8da8b089cb749d400a92a34a45e488c2e726d`. All 596 frozen files were compared
+with the accepted index: 593 matched, with only three maintained documentation
+differences. The new validation document is also documentation-only. All frozen
+production source, build inputs and embedded skill assets matched; unfinished
+main-working-tree experiments were preserved and excluded from the build.
+
+The local archive is `lwiki-0.2.0-aarch64-apple-darwin.tar.gz`, 11,152,318 bytes,
+SHA-256 `8a7bafe4409d426b7e3186f36b7b8df29180b0069282ac8955d034ed52582d1e`.
+It requires macOS 26.5 or newer on Apple Silicon. The copied executable's hash,
+version/capabilities, seven-file Codex skill export, five embedded guides and all
+four regular archive members passed their artifact checks. These checks used
+three offline commands; no workflow or unchanged Rust test was replayed.
+
+Packaging took 2.737 owning monotonic seconds including its receipt, with
+105,068,114 known content/decoded bytes, 43,012,096 allocated output bytes and
+35,178,192,896 free bytes at the terminal observation. This is a local trial;
+there is no tag, publication, six-platform qualification or new completeness
+or capacity credit.
