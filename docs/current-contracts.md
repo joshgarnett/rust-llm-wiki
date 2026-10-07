@@ -285,3 +285,13 @@ are preserved, and no production mapping feature is justified. The
 consistency from uncertified acknowledged-prefix authority and reviewed snapshots
 from an earlier-preview guarantee. Procedural review misses remain separate;
 default retrieval completeness and large-vault gates are unchanged.
+
+The separate [new-family host reading/Page pilot](validation-new-family-host-workflow.md)
+failed its complete-workflow gate at 6.83/10: native initial evidence 38/58 facts and
+9/20 positive tasks; final host support 51/58 and 18/20 semantic answers, but only
+15/20 complete cited Pages. Two uncreated jobs remain zero, and four broken local
+source links across three Pages block usable attribution despite 37 exact SourceRefs
+and all four absent controls passing. The guide now explains Page-relative citation paths;
+original results remain failed. Both supplementary maintenance observations pass semantic reconciliation but fail
+full completion through the inherited broken source link (0/2).
+No native quality, 25K or full-release qualification follows from this pilot.

@@ -109,8 +109,15 @@ Produce concise prose answering supported conditions and an explicit gaps sectio
 Label it as a draft derived from the observed revision snapshot, including the
 verification scope/generation. Preserve every exact SourceRef used for claims
 (`kind`, Source/Revision IDs, span and quote hash) in a readable provenance appendix,
-alongside human-readable Source and immutable revision links. Resolve link paths
-from returned locators or records rather than inventing them. Authored `note_text`
+alongside human-readable Source and immutable revision links. Returned locators
+are relative to the vault root; Markdown links are relative to the saved Page's
+directory. Derive each link from the actual Page path and returned target path.
+For a Page at `pages/brief.md` and target
+`sources/SOURCE/revisions/REVISION/content.md`, the link is
+`../sources/SOURCE/revisions/REVISION/content.md`. Using `sources/...` would
+point inside `pages/`; using `../../sources/...` would leave the vault. Substitute
+actual returned identifiers, and check that every resolved target exists inside
+the vault. A valid JSON SourceRef does not verify a Markdown link. Authored `note_text`
 is not a Source citation. Do not add raw Source IDs to `wiki_depends_on_ids`, which
 names accepted assertions, or promote this synthesis into accepted graph evidence.
 
