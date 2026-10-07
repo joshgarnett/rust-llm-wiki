@@ -248,3 +248,14 @@ rejects further path-validation tuning: its measured share is 10–12%, below th
 but two operator failures leave five public search/read checks unrun; preservation
 passes separately. Storage attribution and admission headroom precede another
 large-tier run. No capacity, lifecycle or retrieval-quality acceptance is added.
+
+The separate [4,096-current Markdown lifecycle](validation-capacity-workflow.md#separate-native-4096-current-markdown-lifecycle)
+reuses the accepted literal-workflow binary and completes all 45 public commands:
+import/resume, immediate cited discovery/read, a meaningful guarded Page edit,
+individual Source refresh/withdrawal and complete-cache-loss reconstruction.
+Scoped actual review scores 9.2/10 with all seven mandatory tasks and zero observed
+correctness blockers; its reporting deadline is separately failed and retained.
+Queries stay below 1.315 seconds, refresh takes 0.627 seconds or less and both
+full checks pass. Default D01/D09 completeness, native HIGH, HTML extraction,
+semantic readiness and practical 25K remain open; no new build or provider call
+was needed for this scale checkpoint.

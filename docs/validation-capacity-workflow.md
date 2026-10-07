@@ -327,3 +327,78 @@ Preserving all history at 25K needs a separately admitted disk envelope. Applyin
 8.70 times to 2.5 GB gives a rough 21.75 GB additional-vault scenario, not measured
 capacity or a universal bound. Neither the earlier cleanup result nor the present
 rejected hypotheses authorize deleting retained evidence to make that tier fit.
+
+## Separate native 4,096-current Markdown lifecycle
+
+A new public workflow on 2026-10-07 reused the accepted 0.2.0 native macOS ARM64
+CLI, SHA-256 `93074e694692fd731f708b5d257298fce5d4fd70137963a234dd1225ff9d9873`,
+compiled from `8efb1cd971e1db6df706b3497b6653cf15310561` with release optimization
+level 3. No Rust rebuild, provider call or production vault was involved.
+
+The complete starting copy contains 1,023 current and 1,026 retained Sources,
+including three withdrawn Sources and 1,029 immutable revisions. Importing
+**3,073 distinct synthetic Markdown originals totaling 308,661,338 bytes** reaches
+**4,096 current Sources**, 4,099 retained Sources and 4,102 revisions. Existing
+licensed Cargo originals, content, notices and history remain byte-exact. An
+optional HTML preparation was rejected before execution: ordinary named `.html`
+inputs currently retain unsupported originals without searchable extracted text.
+The original Markdown inputs were selected prospectively; the rejected pins,
+single preflight and preparation evidence were retained. This is Markdown-only
+qualification, not HTML import support.
+
+All **45 declared public commands complete**, with no unexpected errors or unrun
+steps. The stale-author-hash refusal is expected. Thirteen four-item-group windows
+commit 769 groups under one resume key. Public status confirms a clean acknowledged
+pause, and verified literal discovery plus an exact cited read work immediately.
+This tests group-boundary continuation; it does not add a crash-safety claim.
+
+The workflow performs D01/D09 lexical search/context, appends one freshness note
+to the existing cited draft, refuses its genuinely obsolete author hash and checks
+the occupied vault. Refresh of one newly imported Source creates a new immutable
+revision; old/current ranges retain their respective eligibility. Withdrawal
+leaves **4,095 current / 4,099 retained / four withdrawn Sources / 4,103 revisions**,
+and current scoped search excludes that Source. Complete cache relocation,
+normalized reconstruction and a second full check preserve same-tier context
+passages, the exact edited draft and the earlier cited range. The old cache remains
+retained. Original-vault and peer/history hash assertions all pass; every new
+original/content pair matches its frozen input.
+
+| Operation | Observed owning elapsed time |
+| --- | ---: |
+| All import windows, including supervision | 1,180.199 seconds |
+| Maximum actual search/context command | 1.314 seconds |
+| Individual Source refresh / withdrawal | 0.626 / 0.327 seconds |
+| Complete-cache-loss normalized rebuild | 33.602 seconds |
+| Full occupied / rebuilt check | 49.229 / 43.533 seconds |
+| Whole operator, including summary | 1,443.650 seconds |
+
+The new stage totals 1,456.450 known owning seconds including preparation,
+preflight and sealing, below its 2,400-second envelope. Separate process intervals
+are summed; nested wrapper time is not added again. Import stays below its
+1,800-second aggregate acceptance threshold, which is checked after calls rather
+than serving as a separate preemption timer. No latency distribution or 25K
+extrapolation is qualified by these individual observations.
+
+Across 217 samples, maximum owned allocation is **5,312,458,752 bytes** against
+7 GiB, with 61,812 entries. Minimum sampled free space is **38,134,980,608 bytes**,
+above the prospectively declared 32 GiB floor. Previous 40 GiB experiment limits
+and failures are unchanged. Known operator inspection is 23,386,788,060 bytes
+against 64 GiB; streams total 232,649 bytes. These exclude unobserved runtime work;
+physical I/O, RSS and instantaneous allocation peaks remain unavailable.
+
+Independent actual-content review scores the declared lifecycle **9.2/10**, with
+all seven mandatory tasks and no observed correctness blocker. It authenticates
+107 citation occurrences and 35 exact-text rechecks across eleven Source/revision
+pairs, with zero quote/hash errors. Complete preservation relies on the pinned
+operator's full-file assertions, supplemented by independent selected payload and
+Page checks; the reviewer did not repeat a full-corpus rehash. Its initial report
+exceeded the separate 300-second reporting envelope by **7.555 seconds**, with
+final accounting disclosure following later. That procedural failure is retained
+and prevents an unqualified all-review-gates claim.
+
+Default answer completeness remains insufficient: D01 omits required
+`--offline`/`--locked` semantics, while D09 includes archived distractors and lacks
+a complete approved current procedure. Current citation eligibility does not
+establish procedural approval. The original native fact/task gate remains failed.
+This scoped lifecycle adds no unseen HIGH, semantic readiness, practical
+25K/~2.5GB, live-provider, HTML extraction or complete-release acceptance.
