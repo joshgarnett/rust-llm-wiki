@@ -321,6 +321,10 @@ captured all 10,000 documents, but failed the frozen five-second no-change sync
 gate. A preserved disposable copy passes complete canonical/cache checking;
 separate verified search and exact cited read also work. An optimized diagnostic
 sync takes 29.516 seconds, with parsing only 1.48% of its residence, so deferred
-parsing was rejected as the proposed solution. Repeated path resolution remains
-a hypothesis requiring attribution. The 10K lifecycle, default retrieval quality,
-25K capacity and full release are still unqualified.
+parsing was rejected as the proposed solution. A reviewed refinement also rejects
+the directory-reader proposal: canonicalization is 18.02%, leaving 24.792 seconds
+even if free. Linked BLAKE3 Rust is optimized; streaming costs remain unseparated.
+A small exposed development audit finds required Q061 evidence in prepared cards
+but absent from default context; its operator-failed replay leaves complete legal
+avoidability unproved. No native quality improvement follows. The 10K lifecycle,
+default retrieval quality, 25K capacity and full release are still unqualified.

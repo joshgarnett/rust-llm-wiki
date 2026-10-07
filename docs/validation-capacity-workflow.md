@@ -465,8 +465,9 @@ appears in that ledger. Parsing contributes only 1.48%; removing it would leave
 29.079 seconds. It fails the predeclared materiality/headroom screen, so deferred
 parsing is rejected as this workflow's solution. Read-bearing phases do not yet
 separate pathname resolution, binding checks, streaming/hash and SQL costs.
-Repeated prefix canonicalization is the next testable hypothesis, not an established
-cause or justification for bypassing fresh byte, membership or authority checks.
+The subsequent canonicalization screen, below, also rejects its proposed reader
+change. Neither observation justifies bypassing fresh byte, membership or
+authority checks.
 
 Afterward, an ordinary selected verified search takes 0.539 seconds and an exact
 cited read takes 0.020 seconds; returned bytes match the canonical range. These
@@ -477,3 +478,63 @@ unchanged. Native process RSS is observed; exact tree RSS and transient allocati
 remain unqualified. Default completeness remains 9/28 facts and 2/10 positive
 tasks. Native HIGH, semantic readiness, the remaining 10K lifecycle, practical
 25K capacity and full release remain open.
+
+### Reader attribution and closed optimization hypotheses
+
+A separately frozen refinement returns the same unchanged snapshot and logical
+usage in **30.241 seconds**. Independent review reconciles the nested timers,
+returned bytes and publication. Its disjoint reader categories are:
+
+| Reader category | Seconds |
+| --- | ---: |
+| Path resolver, including canonicalization | 6.801 |
+| Fresh leaf checks and opening | 2.026 |
+| Streaming, hashing and allocation | 18.333 |
+| After-read binding checks | 0.274 |
+| Enclosing reader residual | 0.516 |
+
+Canonicalization is a child of the resolver, not an additional disjoint phase.
+Eligible calls account for **5.449 seconds / 18.02%** of the whole service;
+raw-layout calls are excluded. Even free canonicalization would leave **24.792
+seconds**, failing both predeclared conditions: at least 30% removable residence
+and at most four seconds remaining. The directory-reader proposal is rejected
+as the next solution to the five-second gate. No retry or combined-removal claim
+follows. Streaming/hash/allocation remains internally unattributed.
+
+The actual linked BLAKE3 Rust compiler response confirms optimization level 3,
+no debug information and native aarch64 targeting. Unoptimized BLAKE3 Rust is
+therefore rejected as a cause; every other dependency and native build-script
+object is not separately qualified. The refinement is 2.46% slower than the first
+observation, an overhead sanity check confounded by cache/order variation, not a
+calibrated observer-cost measurement. All original bytes, paths, modes and
+timestamps remain unchanged; the copy again differs only in expected lock
+ownership and shared-memory timestamps.
+
+Normalized ordinary lexical search and omitted-scope context use the published
+catalog directly. Global sync is explicit maintenance and external-edit
+discovery, while acknowledged CLI-managed writes publish their selected changes.
+Legacy ordinary search has different verification behavior. Fast selected
+observations neither make strict sync pass nor establish global freshness.
+
+### Exposed native evidence-boundary audit
+
+A bounded development audit reuses two exposed incomplete tasks and one complete
+control at the restored 10K publication. Actual shipping defaults are unchanged:
+ten owners, 80 candidates, 1,024-byte excerpts, 12,000 rendered bytes and 3,000
+estimated tokens, with no additional scope or filters. Six ordinary/prepared
+responses retain the exact publication. Independent review authenticates all
+27 default citation occurrences across 22 distinct ranges and active heads.
+
+The three-condition Q041 failure is not reproduced; Q001 remains complete.
+Q061 still omits a requested condition even though its support appears in the
+prepared cards from an owner already returned in the default packet. This
+establishes availability at the exposed selection interface, not a complete
+legal alternative packet or the internal cause of omission.
+
+The planned oracle replay fails during operator preparation: its reply file is
+absent, and the CLI refuses before inspecting a valid reply. The eighth and final
+native attempt is retained without a retry. Complete same-budget avoidability
+remains **unproved**; standalone card lengths are insufficient. No native
+optimizer, weight/cap change or quality gain is justified by this audit. A
+subsequent assisted workflow must use only the task and public evidence, account
+for its additional work, and remain separate from native-default acceptance.
