@@ -240,3 +240,11 @@ regressions, despite 74 correct citations and twelve successful production comma
 The candidate remains unpromoted. Grouping development stops; the next milestone
 must address task-conditioned evidence selection or a separately measured practical
 workflow bottleneck. Accepted default completeness remains 9/28 and 2/10.
+
+The subsequent [fixed-input import history comparison](validation-capacity-workflow.md#fixed-input-import-history-comparison)
+rejects further path-validation tuning: its measured share is 10–12%, below the
+20% attribution gate, and eight-item groups give no material improvement. Each
+26 MB batch adds about 228 MB of logical vault storage. The three imports complete,
+but two operator failures leave five public search/read checks unrun; preservation
+passes separately. Storage attribution and admission headroom precede another
+large-tier run. No capacity, lifecycle or retrieval-quality acceptance is added.

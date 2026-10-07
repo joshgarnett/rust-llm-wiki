@@ -248,3 +248,82 @@ during `index sync` after ten seconds; its subsequent check was unrun. That
 diagnostic does not prove the remedy or qualify larger-vault sync latency.
 No additional cleanup trials or storage subsystem were added to pursue the
 failed benefit threshold.
+
+## Fixed-input import history comparison
+
+On 2026-10-07, one optimized diagnostic imported the same 256 distinct synthetic
+100 KiB Markdown files into three disposable copies. It reused the accepted
+literal-workflow CLI (`93074e69…`), unchanged production code, release optimization
+level 3 and the native ARM64 compiler settings. Test-only instrumentation measured
+the outer portable-path validation interval without adding overlapping timers.
+No provider calls occurred. This is a mechanism experiment, not representative
+25K capacity or a new retrieval-quality assessment.
+
+| Accepted fixture stage / group size | Import seconds | Portable validation share | Added logical vault bytes |
+| --- | ---: | ---: | ---: |
+| 256 / 4 | 100.266 | 10.36% | 228,197,896 |
+| 1,024 / 4 | 98.560 | 11.59% | 228,193,817 |
+| 1,024 / 8 | 98.316 | 10.41% | 227,962,242 |
+
+All three import calls completed their 256 mappings, with one publication per
+group: 64, 64 and 32 publications respectively. Portable validation remained
+below the prospective **20% attribution gate**. Eight-item grouping produced no
+material observed improvement. Path-validation optimization stops here; these
+observations do not justify changing ordinary allocation or portability rules.
+
+The whole operator failed. Its first invocation placed logs in the required empty
+report directory and stopped before any import. One explicitly admitted
+continuation preserved that failure and all original limits. After completing the
+three import measurements, its literal-search probe used `historyprobe255` while
+the input contained `Historyprobe255`. The search correctly returned no hits;
+the supervisor then indexed the empty result. **Five of six planned public
+search/read checks were unrun.** Neither invocation establishes an accepted
+import-to-discovery/read workflow, and no further retry was made.
+
+A separate read-only preservation audit found every original fixture file
+unchanged, all pre-existing immutable files in the copies unchanged, and all
+1,536 newly captured original/content files exactly matching their frozen inputs.
+Total new owned logical size was 2,969,367,434 bytes, within the 4 GiB limit;
+terminal free space was 43,487,334,400 bytes, above the 40 GiB floor. Peak storage,
+RSS and physical I/O remain unavailable. Known supervisor and audit reads totaled
+13,205,479,277 bytes, below the 16 GiB known-read limit; this excludes unobserved
+product runtime reads.
+
+Each 26,214,400-byte input batch added approximately **8.70 times its input size**
+to the vault. This measures logical file lengths, including operational history
+and cache growth, rather than allocated disk blocks. It does not establish a
+linear 25K storage law. Storage representation and realistic admission headroom
+now warrant investigation before another large-tier run. The accepted default
+retrieval gate remains 9/28 facts and 2/10 complete positive tasks.
+
+The subsequent bounded source and file-metadata study attributes the new growth:
+
+| Representation | Added logical bytes, occupied four-item arm |
+| --- | ---: |
+| Canonical immutable original and Markdown content | 52,428,800 |
+| Retained Change original assets and Markdown postimages | 52,779,238 |
+| Retained indexed-delta JSON | 56,369,036 |
+| Cache, including SQLite/WAL/SHM and pointers | 62,504,904 |
+| Change journals | 690,304 |
+
+The remainder is Source/Revision headers, Change metadata and import state.
+Database internals were not opened, so the cache figure does not establish
+table-level duplication or reclaimable space. Current allocated-block observations
+exclude directory allocation and cannot establish exclusive APFS consumption;
+the baseline lacks block counts, so allocated growth is unavailable.
+
+Independent architecture review **rejected a new compact-delta format before
+implementation**. `captured_content_document` stores normalized Markdown body
+text separately from raw text. Heading-rich inputs therefore cannot share those
+two whole strings by exact equality. Referencing raw content alone plausibly
+removes about one input copy, roughly 12% of this increment, below the proposed
+20% whole-import benefit gate. The 56 MB delta bucket is not all removable text.
+No codec, reference format, historical rewrite or new storage subsystem was added.
+The existing external-content FTS mechanism also already avoids an additional
+FTS content table; changing to it would add no benefit here. See the
+[SQLite external-content contract](https://www.sqlite.org/fts5.html#external_content_tables).
+
+Preserving all history at 25K needs a separately admitted disk envelope. Applying
+8.70 times to 2.5 GB gives a rough 21.75 GB additional-vault scenario, not measured
+capacity or a universal bound. Neither the earlier cleanup result nor the present
+rejected hypotheses authorize deleting retained evidence to make that tier fit.
