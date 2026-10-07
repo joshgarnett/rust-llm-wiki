@@ -337,3 +337,12 @@ A small exposed development audit finds required Q061 evidence in prepared cards
 but absent from default context; its operator-failed replay leaves complete legal
 avoidability unproved. No native quality improvement follows. The 10K lifecycle,
 default retrieval quality, 25K capacity and full release are still unqualified.
+
+The [native phrase-locality comparison](validation-native-phrase-locality.md)
+also fails its frozen gate: 11/28 facts versus 9/28 for the accepted baseline,
+the same 2/10 complete positives, and four baseline-supported fact regressions.
+All 105 citations and both absent controls pass; 87 affected native checks pass.
+The candidate is not promoted, and accepted retrieval remains unchanged. A fresh
+whole-workflow review precedes another implementation; no pair-weight or density
+retry follows. Maintained export references now match the accepted SourceRef
+capabilities and guide, without promoting the rejected binary.
