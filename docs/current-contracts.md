@@ -116,6 +116,15 @@ Current, historical or withdrawn state; the separate development reading recipe
 completed 5/5 positives on both baseline and candidate. Automatic HIGH and
 representative capacity remain open.
 
+The [typed cited-Page workflow](validation-cited-page-workflow.md) passes scoped
+functional acceptance at 10/10, all five groups and required tasks on both layouts,
+with zero demonstrated correctness blockers. Verified reads supply exact SourceRefs;
+`page init/put --source-refs` authenticate them and derive links from actual allocated
+paths. Ordinary moves preserve refs and rebase generated links. Eighty-six affected
+native checks pass with unchanged cases reused. Earlier failed/incomplete public
+runs and harness/protocol deviations remain preserved; this is functional coverage,
+not original timing-protocol compliance. Native completeness and 25K remain open.
+
 This is the current capability router for the cleanup of 0.1.2. It records implemented surfaces and the checks that can establish local correctness; local cleanup is accepted by [the exact-source aggregate evidence](execution/reports/CLEANUP-VALIDATION.md). Historical milestone plans and research designs are preserved as history. Use the running binary's `capabilities`, `schema NAME`, and command help for exact syntax.
 
 | Area | Current contract | Local evidence and limit |

@@ -81,33 +81,44 @@ impl OfflineApp {
         title: String,
         body: String,
     ) -> Result<MutationOutcome> {
-        if title.trim().is_empty() || title.len() > 4096 {
-            return Err(WikiError::new(
-                ErrorCode::Usage,
-                "page title must contain 1–4096 bytes",
-            ));
-        }
-        let id = id
-            .map(Ok)
-            .unwrap_or_else(|| RecordId::generate(RecordKind::Page))?;
-        let record = CanonicalRecord::from_value(
-            serde_json::json!({"wiki_schema":"1","wiki_id":id,"wiki_kind":"page","title":title,"wiki_status":"draft"}),
-        )?;
-        let mut markdown = String::from("---\n");
-        for (key, value) in record.fields() {
-            markdown.push_str(key);
-            markdown.push_str(": ");
-            markdown.push_str(
-                &serde_json::to_string(value)
-                    .map_err(|_| WikiError::invalid("page envelope encoding"))?,
-            );
-            markdown.push('\n');
-        }
-        markdown.push_str("---\n");
-        markdown.push_str(&body);
-        let path = path.unwrap_or(VaultRelativePath::new(format!("pages/{id}.md"))?);
-        let mut outcome = self.page_put(path.clone(), markdown.into_bytes(), None)?;
+        let (path, id, markdown) = page_initial_proposal(path, id, title, body)?;
+        let mut outcome = self.page_put(path.clone(), markdown, None)?;
         outcome.allocated_ids.insert(path.to_string(), id);
         Ok(outcome)
     }
+}
+
+/// Shared envelope assembly fixes the allocated destination before rendering citations.
+pub(crate) fn page_initial_proposal(
+    path: Option<VaultRelativePath>,
+    id: Option<RecordId>,
+    title: String,
+    body: String,
+) -> Result<(VaultRelativePath, RecordId, Vec<u8>)> {
+    if title.trim().is_empty() || title.len() > 4096 {
+        return Err(WikiError::new(
+            ErrorCode::Usage,
+            "page title must contain 1–4096 bytes",
+        ));
+    }
+    let id = id
+        .map(Ok)
+        .unwrap_or_else(|| RecordId::generate(RecordKind::Page))?;
+    let record = CanonicalRecord::from_value(
+        serde_json::json!({"wiki_schema":"1","wiki_id":id,"wiki_kind":"page","title":title,"wiki_status":"draft"}),
+    )?;
+    let mut markdown = String::from("---\n");
+    for (key, value) in record.fields() {
+        markdown.push_str(key);
+        markdown.push_str(": ");
+        markdown.push_str(
+            &serde_json::to_string(value)
+                .map_err(|_| WikiError::invalid("page envelope encoding"))?,
+        );
+        markdown.push('\n');
+    }
+    markdown.push_str("---\n");
+    markdown.push_str(&body);
+    let path = path.unwrap_or(VaultRelativePath::new(format!("pages/{id}.md"))?);
+    Ok((path, id, markdown.into_bytes()))
 }

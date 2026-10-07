@@ -204,6 +204,9 @@ pub enum PageCommand {
         /// Plain UTF-8 Markdown body; use - for bounded standard input.
         #[arg(long)]
         file: PathBuf,
+        /// Versioned exact SourceRefs; generate verified Page-relative provenance links.
+        #[arg(long, value_name = "FILE")]
+        source_refs: Option<PathBuf>,
         /// Human-readable title for the new draft page.
         #[arg(long)]
         title: String,
@@ -225,6 +228,9 @@ pub enum PageCommand {
         /// Markdown page file with a valid page envelope; use - for stdin.
         #[arg(long)]
         file: PathBuf,
+        /// Replace the generated provenance block using exact SourceRefs (empty removes it).
+        #[arg(long, value_name = "FILE")]
+        source_refs: Option<PathBuf>,
         /// Destination path; existing IDs preserve their indexed path. Omit in
         /// dry-run to leave destination and author-guard checks unresolved.
         #[arg(long)]

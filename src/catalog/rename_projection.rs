@@ -226,6 +226,8 @@ pub(crate) fn project_page_rename(
     let destination_bytes = rewrites
         .remove(&from)
         .unwrap_or_else(|| work.captured[&from].bytes.clone());
+    let destination_bytes =
+        crate::app::page_citations::rebase_source_citation_links(&destination_bytes, &from, &to)?;
     work.charge(destination_bytes.len())?;
     moved.hash = Blake3Hash::digest(&destination_bytes);
     moved.record = parse_note(&destination_bytes)

@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:lwiki:page-source-refs:1",
+  "title": "Verified Source references for Page provenance",
+  "description": "Optional page init/put --source-refs input, at most 64 KiB. Exact returned Source citations only; links are derived after resolving the actual Page destination. Valid links and references do not certify prose support or answer completeness.",
+  "type": "object",
+  "properties": {
+    "schema_version": {"const": "1"},
+    "citations": {
+      "type": "array",
+      "maxItems": 16,
+      "items": {
+        "type": "object",
+        "properties": {
+          "kind": {"const": "source"},
+          "reference": {
+            "type": "object",
+            "properties": {
+              "source_id": {"type": "string", "pattern": "^[A-Za-z0-9_-]{1,128}$"},
+              "source_revision": {"type": "string", "pattern": "^[A-Za-z0-9_-]{1,128}$"},
+              "span": {
+                "type": "object",
+                "properties": {
+                  "start": {"type": "integer", "minimum": 0},
+                  "end": {"type": "integer", "minimum": 1}
+                },
+                "required": ["start", "end"],
+                "additionalProperties": false
+              },
+              "quote_hash": {"type": "string", "pattern": "^blake3:[0-9a-f]{64}$"}
+            },
+            "required": ["source_id", "source_revision", "span", "quote_hash"],
+            "additionalProperties": false
+          }
+        },
+        "required": ["kind", "reference"],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": ["schema_version", "citations"],
+  "additionalProperties": false
+}
