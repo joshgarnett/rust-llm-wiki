@@ -19,4 +19,5 @@ pub mod storage;
 #[cfg(test)]
 #[path = "../test_support/paths.rs"]
 mod test_paths;
+mod text_projection;
 pub mod vault;

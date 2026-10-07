@@ -1,6 +1,6 @@
 //! Original-byte excerpt mapping; FTS snippets are never citation spans.
 use crate::domain::{ErrorCode, Result, WikiError};
-use pulldown_cmark::{Event, Parser, TagEnd};
+use crate::text_projection::{TextEvent, visit};
 use rusqlite::{Connection, ffi};
 use std::{ffi::c_void, ops::Range, ptr};
 
@@ -223,38 +223,24 @@ impl SourceMap {
             text: String::new(),
             segments: vec![],
         };
-        for (event, range) in Parser::new(&raw[body_offset..]).into_offset_iter() {
-            match event {
-                Event::Text(value) | Event::Code(value) => {
-                    let original = range.start + body_offset..range.end + body_offset;
-                    let exact = raw.get(original.clone()) == Some(value.as_ref());
-                    let original = if exact {
-                        original
-                    } else if let Some(relative) = raw
-                        .get(original.clone())
-                        .and_then(|slice| slice.find(value.as_ref()))
-                    {
-                        original.start + relative..original.start + relative + value.len()
-                    } else {
-                        original
-                    };
-                    let exact = raw.get(original.clone()) == Some(value.as_ref());
-                    let start = map.text.len();
-                    map.text.push_str(&value);
-                    map.segments.push(Segment {
-                        normalized: start..map.text.len(),
-                        original,
-                        exact,
-                    });
-                }
-                Event::SoftBreak
-                | Event::HardBreak
-                | Event::End(
-                    TagEnd::Heading(_) | TagEnd::Paragraph | TagEnd::CodeBlock | TagEnd::Item,
-                ) => map.text.push('\n'),
-                _ => {}
+        visit(&raw[body_offset..], |event| match event {
+            TextEvent::Text {
+                value,
+                original,
+                exact,
+            } => {
+                let original = original.start + body_offset..original.end + body_offset;
+                let start = map.text.len();
+                map.text.push_str(&value);
+                map.segments.push(Segment {
+                    normalized: start..map.text.len(),
+                    original,
+                    exact,
+                });
             }
-        }
+            TextEvent::Break => map.text.push('\n'),
+            TextEvent::HeadingStart | TextEvent::HeadingEnd => {}
+        });
         map
     }
     pub(crate) fn original_span(&self, span: Range<usize>) -> Option<Range<usize>> {

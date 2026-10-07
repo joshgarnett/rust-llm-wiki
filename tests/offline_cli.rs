@@ -737,9 +737,10 @@ fn source_cli_reports_original_only_and_empty_capture() {
     let temp = fixture();
     let root = temp.path();
     for (name, bytes) in [
-        ("page.html", b"<html>HTML-only-token</html>".as_slice()),
+        ("page.xhtml", b"<html>HTML-only-token</html>".as_slice()),
         ("bytes.bin", &[0, 255, 0][..]),
         ("invalid.txt", &[255, 254][..]),
+        ("invalid.HTM", &[255, 254][..]),
     ] {
         let input = root.join(name);
         fs::write(&input, bytes).unwrap();
@@ -791,12 +792,25 @@ fn source_cli_reports_original_only_and_empty_capture() {
     assert_eq!(fs::read(parent.join("original.bin")).unwrap(), b"");
     assert_eq!(fs::read(parent.join("content.md")).unwrap(), b"");
 
-    let supported = root.join("supported.txt");
-    fs::write(&supported, b"Ordinary source text").unwrap();
-    let added = ok(root, &["source", "add", supported.to_str().unwrap()], None);
-    assert_eq!(added["data"]["extraction_status"], "complete");
-    assert_eq!(added["data"]["citable"], true);
-    assert!(added["warnings"].as_array().unwrap().is_empty());
+    for (name, bytes) in [
+        ("supported.txt", b"Ordinary source text".as_slice()),
+        (
+            "supported.HTML",
+            b"<p>Ordinary qualified HTML text.</p>".as_slice(),
+        ),
+    ] {
+        let supported = root.join(name);
+        fs::write(&supported, bytes).unwrap();
+        let added = ok(root, &["source", "add", supported.to_str().unwrap()], None);
+        assert_eq!(added["data"]["extraction_status"], "complete");
+        assert_eq!(added["data"]["citable"], true);
+        assert!(added["warnings"].as_array().unwrap().is_empty());
+        let source = added["data"]["allocated_ids"]["source"].as_str().unwrap();
+        let revision = added["data"]["allocated_ids"]["revision"].as_str().unwrap();
+        let parent = root.join(format!("sources/{source}/revisions/{revision}"));
+        assert_eq!(fs::read(parent.join("original.bin")).unwrap(), bytes);
+        assert_eq!(fs::read(parent.join("content.md")).unwrap(), bytes);
+    }
 }
 #[test]
 fn source_cli_refresh_preserves_title_and_searches_only_current_payload() {

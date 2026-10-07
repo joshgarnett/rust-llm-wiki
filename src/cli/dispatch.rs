@@ -1807,24 +1807,8 @@ fn capture(path: &Path, title: Option<&str>, media_type: Option<String>) -> Resu
         .to_str()
         .ok_or_else(|| usage("source input path must be UTF-8"))?
         .to_owned();
-    let text_type = path == Path::new("-")
-        || path.extension().is_none()
-        || path.extension().and_then(|e| e.to_str()).is_some_and(|e| {
-            matches!(
-                e.to_ascii_lowercase().as_str(),
-                "txt"
-                    | "md"
-                    | "markdown"
-                    | "csv"
-                    | "tsv"
-                    | "json"
-                    | "yaml"
-                    | "yml"
-                    | "rs"
-                    | "toml"
-                    | "log"
-            )
-        });
+    let text_type =
+        path == Path::new("-") || crate::sources::local_text::local_text_candidate(path);
     let extraction = if text_type && std::str::from_utf8(&original).is_ok() {
         ExtractionInput::Utf8Preserve
     } else {

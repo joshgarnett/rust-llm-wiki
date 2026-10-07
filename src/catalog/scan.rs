@@ -1,5 +1,6 @@
 //! Deterministic canonical projection. This module performs no extraction or model calls.
 use super::types::*;
+use crate::text_projection::{TextEvent, visit};
 use crate::{
     changes::{ReadDependency, ScanDocument, ValidationInput},
     domain::{
@@ -13,13 +14,12 @@ use crate::{
     sources::{SourceView, identity::readable_ids, revision::canonical_path},
     vault::{ExpectedState, VaultFs},
 };
-use pulldown_cmark::{Event, Parser, Tag, TagEnd};
 use std::collections::{BTreeMap, BTreeSet};
 
 /// Cache identity binds every semantic adapter, not merely frontmatter parsing.
 pub fn parser_fingerprint() -> Blake3Hash {
     Blake3Hash::digest(format!(
-        "{};catalog-v1;canonical-membership-bytewise-v1;source-original-content-span-quote-fence-structural-v2;typed-id-companion-v1;decisions-explicit-conflict-cycle-v1;mention-complete-artifact-membership-explicit-scope-v1;entity-explicit-exhaustive-remap-receipt-supersession-v1;receipt-relevant-proof-budget-v2;eligibility-full-note-transitive-v1;packet-source-lifecycle-v2;derived-source-lifecycle-v1;opposing-accepted-assertions-v1;evidence-navigation-diagnostics-v1;bookkeeping-kind-v2;markdown-lexical-events-v1;graph-readable-directed-endpoints-v1;unicode61 remove_diacritics 2;no-stemming",
+        "{};catalog-v1;canonical-membership-bytewise-v1;source-original-content-span-quote-fence-structural-v2;typed-id-companion-v1;decisions-explicit-conflict-cycle-v1;mention-complete-artifact-membership-explicit-scope-v1;entity-explicit-exhaustive-remap-receipt-supersession-v1;receipt-relevant-proof-budget-v2;eligibility-full-note-transitive-v1;packet-source-lifecycle-v2;derived-source-lifecycle-v1;opposing-accepted-assertions-v1;evidence-navigation-diagnostics-v1;bookkeeping-kind-v2;markdown-lexical-events-v2-ordinary-html-span-stream-v1;graph-readable-directed-endpoints-v1;unicode61 remove_diacritics 2;no-stemming",
         crate::records::parser_fingerprint()
     ))
 }
@@ -607,26 +607,21 @@ pub(crate) fn normalized_markdown(markdown: &str) -> (String, String) {
     let mut text = String::new();
     let mut headings = Vec::new();
     let mut heading = None;
-    for event in Parser::new(markdown) {
-        match event {
-            Event::Start(Tag::Heading { .. }) => heading = Some(String::new()),
-            Event::End(TagEnd::Heading(_)) => {
-                if let Some(value) = heading.take() {
-                    headings.push(value);
-                }
-                text.push('\n');
+    visit(markdown, |event| match event {
+        TextEvent::HeadingStart => heading = Some(String::new()),
+        TextEvent::HeadingEnd => {
+            if let Some(value) = heading.take() {
+                headings.push(value);
             }
-            Event::Text(value) | Event::Code(value) => {
-                text.push_str(&value);
-                if let Some(heading) = &mut heading {
-                    heading.push_str(&value);
-                }
-            }
-            Event::SoftBreak | Event::HardBreak => text.push('\n'),
-            Event::End(TagEnd::Paragraph | TagEnd::CodeBlock | TagEnd::Item) => text.push('\n'),
-            _ => {}
         }
-    }
+        TextEvent::Text { value, .. } => {
+            text.push_str(&value);
+            if let Some(heading) = &mut heading {
+                heading.push_str(&value);
+            }
+        }
+        TextEvent::Break => text.push('\n'),
+    });
     (headings.join("\n"), text)
 }
 #[cfg(test)]

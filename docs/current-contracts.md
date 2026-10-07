@@ -259,3 +259,19 @@ Queries stay below 1.315 seconds, refresh takes 0.627 seconds or less and both
 full checks pass. Default D01/D09 completeness, native HIGH, HTML extraction,
 semantic readiness and practical 25K remain open; no new build or provider call
 was needed for this scale checkpoint.
+
+The subsequent [ordinary HTML evidence workflow](validation-html-evidence.md)
+adds exact UTF-8 `.html`/`.htm` capture and a shared readable-text/span projection.
+Its 321 affected checks pass, and all 124 public commands complete across both
+physical storage layouts: import/resume, qualified cited evidence, guarded Page
+edits, refresh/withdrawal, old-proof upgrade and complete-cache-loss recovery.
+Scoped actual review passes at 9.3/10, all eight groups and zero observed
+correctness blockers, with 70 authenticated citation appearances. The original
+operator and preparation failures remain retained; a prospectively admitted
+continuation executes only unrun commands. The critic's dispatch-to-report
+handoff separately exceeds its deadline. HTML remains a lexical subset with raw
+byte citations; the constrained repeated-tag query produces no evidence and
+earns no completeness credit. Default completeness remains 9/28 facts and 2/10
+tasks. Native HIGH, HTML-scale/25K qualification and full release remain open.
+The next bounded experiment assesses original import mappings through guarded
+individual refresh and cited Page reconciliation before adding any new API.
