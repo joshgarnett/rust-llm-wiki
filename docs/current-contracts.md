@@ -125,6 +125,15 @@ native checks pass with unchanged cases reused. Earlier failed/incomplete public
 runs and harness/protocol deviations remain preserved; this is functional coverage,
 not original timing-protocol compliance. Native completeness and 25K remain open.
 
+The separate [assisted answer and maintained Page workflow](validation-assisted-answer-pages.md)
+passes every scoped threshold: three complete supported drafts, actual selection
+replay, author-preserving refresh/withdrawal reconciliation and a selected-record
+absence control. The maintained guide retains the original user task beside the
+native selector packet when retrieval uses a keyword query. This documents existing
+runtime functionality; no comparative or native-default quality gain is claimed.
+Candidate016 still embeds the prior guide; packaging the clarification is deferred
+to the next consequential source/build checkpoint.
+
 This is the current capability router for the cleanup of 0.1.2. It records implemented surfaces and the checks that can establish local correctness; local cleanup is accepted by [the exact-source aggregate evidence](execution/reports/CLEANUP-VALIDATION.md). Historical milestone plans and research designs are preserved as history. Use the running binary's `capabilities`, `schema NAME`, and command help for exact syntax.
 
 | Area | Current contract | Local evidence and limit |
