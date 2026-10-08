@@ -1572,7 +1572,7 @@ fn capture_bounds(request: &CaptureRequest) -> Result<()> {
     Ok(())
 }
 
-fn retained_error(mut error: WikiError, change: &PreparedChange) -> WikiError {
+pub(super) fn retained_error(mut error: WikiError, change: &PreparedChange) -> WikiError {
     let reference =
         serde_json::json!({"change_id": change.change_id, "manifest_hash": change.manifest_hash});
     if let Some(details) = error.details.as_object_mut() {

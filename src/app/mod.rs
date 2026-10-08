@@ -39,6 +39,11 @@ pub mod probe;
 pub use pages::{PageBatchRequest, PageUpdate};
 
 mod source_import;
+mod source_refresh_batch;
+mod source_refresh_batch_types;
+pub use source_refresh_batch_types::*;
+#[cfg(test)]
+mod source_refresh_batch_tests;
 mod source_import_state;
 mod source_import_types;
 pub use source_import::{

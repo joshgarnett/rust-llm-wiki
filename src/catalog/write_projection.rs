@@ -78,6 +78,20 @@ pub(super) fn project_policy(work: &mut Work<'_>) -> Result<PolicyDelta> {
     policy_projection::project_policy(work.reader, &before, &overlay, work)
 }
 
+pub(super) fn project_source_refresh_batch_policy(work: &mut Work<'_>) -> Result<PolicyDelta> {
+    let mut before = BTreeMap::new();
+    let mut overlay = BTreeMap::new();
+    for (path, bytes) in &work.overlay {
+        if canonical_path(path) {
+            if let Some(old) = work.captured.get(path) {
+                before.insert(path.clone(), parse_note(&old.bytes));
+            }
+            overlay.insert(path.clone(), parse_note(bytes));
+        }
+    }
+    policy_projection::project_policy_for_refresh_batch(work.reader, &before, &overlay, work)
+}
+
 pub(super) fn project_policy_move(work: &mut Work<'_>) -> Result<PolicyDelta> {
     let mut before = BTreeMap::new();
     let mut overlay = BTreeMap::new();

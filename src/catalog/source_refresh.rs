@@ -345,6 +345,513 @@ fn require_selected_delta_scope(
 }
 
 impl RetainedDelta {
+    fn require_refresh_batch_rows(
+        &self,
+        refreshes: &[crate::changes::indexed_refresh::IndexedRefreshTarget],
+        dependent_sources: &[crate::changes::indexed_refresh::IndexedRefreshSourceDependency],
+        manifest: &crate::changes::ChangeManifest,
+        engine: &ChangeEngine,
+    ) -> Result<()> {
+        use super::{normalized_delta::DocumentMutation, row_projection};
+        use crate::records::parse_note;
+        let sources: BTreeSet<_> = refreshes.iter().map(|target| &target.source_id).collect();
+        let mut expected_paths = BTreeSet::new();
+        let mut expected_documents = BTreeMap::new();
+        let mut allocated = BTreeMap::new();
+        let mut fresh = BTreeSet::new();
+        let mut authenticated_revisions = BTreeSet::new();
+        let remaining = Cell::new(MAX_SELECTED_BYTES);
+        let charge = |bytes: usize| -> Result<()> {
+            remaining.set(remaining.get().checked_sub(bytes).ok_or_else(|| {
+                budget("refresh batch retained verification exceeds byte ceiling")
+            })?);
+            Ok(())
+        };
+        let payload_note = |index: usize, side: &str| -> Result<crate::records::ParsedNote> {
+            let operation = &manifest.operations[index];
+            let (expected, reference) = if side == "before" {
+                (&operation.before, &operation.before_payload)
+            } else {
+                (&operation.after, &operation.after_payload)
+            };
+            let bytes = engine
+                .verify_payload_with_limit(
+                    &manifest.change_id,
+                    index,
+                    side,
+                    &operation.target,
+                    (expected, reference),
+                    remaining.get(),
+                )?
+                .ok_or_else(|| {
+                    recovery("refresh batch lacks its exact Source or revision payload")
+                })?;
+            charge(bytes.len())?;
+            Ok(parse_note(&bytes))
+        };
+        let selected_bytes = |path: &VaultRelativePath| -> Result<Vec<u8>> {
+            let expected = self
+                .after
+                .iter()
+                .find(|dependency| &dependency.path == path)
+                .map(|dependency| &dependency.expected)
+                .ok_or_else(|| recovery("refresh batch payload lacks a selected guard"))?;
+            let bytes = if let Some((index, operation)) = manifest
+                .operations
+                .iter()
+                .enumerate()
+                .find(|(_, operation)| &operation.target == path)
+            {
+                engine.verify_payload_with_limit(
+                    &manifest.change_id,
+                    index,
+                    "proposed",
+                    path,
+                    (&operation.after, &operation.after_payload),
+                    remaining.get(),
+                )?
+            } else {
+                // Existing revision trees are immutable. Completed replay must
+                // never authenticate an unchanged row against today's Source.
+                if !path.as_str().starts_with("sources/") || !path.as_str().contains("/revisions/")
+                {
+                    return Err(recovery(
+                        "refresh batch read leaves its immutable revision trees",
+                    ));
+                }
+                read_bounded(engine.fs(), path, remaining.get().min(MAX_PAYLOAD_BYTES))?
+            }
+            .ok_or_else(|| recovery("refresh batch selected immutable payload is missing"))?;
+            charge(bytes.len())?;
+            if *expected != ExpectedState::Hash(Blake3Hash::digest(&bytes)) {
+                return Err(recovery(
+                    "refresh batch selected immutable payload differs from its guard",
+                ));
+            }
+            Ok(bytes)
+        };
+        for (ordinal, target) in refreshes.iter().enumerate() {
+            let source_path =
+                VaultRelativePath::new(format!("sources/{}/source.md", target.source_id))?;
+            let source = self
+                .rows
+                .records
+                .iter()
+                .find(|row| {
+                    row.record.id() == &target.source_id
+                        && row.record.kind() == RecordKind::Source
+                        && row.path == source_path
+                })
+                .ok_or_else(|| recovery("refresh batch omits a declared Source row"))?;
+            if source.record.string("wiki_status") != Some("active")
+                || source.record.string("wiki_current_revision")
+                    != Some(target.revision_id.as_str())
+                || !scan::list(&source.record, "wiki_revisions")
+                    .contains(&target.revision_id.to_string())
+                || !self.after.iter().any(|dependency| {
+                    dependency.path == source_path
+                        && dependency.expected == ExpectedState::Hash(source.hash.clone())
+                })
+            {
+                return Err(recovery(
+                    "refresh batch Source identity, status, head or selected guard differs",
+                ));
+            }
+            let source_operation = manifest
+                .operations
+                .iter()
+                .position(|operation| operation.target == source_path);
+            if target.no_op {
+                let bytes = target
+                    .unchanged_source
+                    .as_ref()
+                    .ok_or_else(|| recovery("refresh batch no-op lacks retained Source bytes"))?;
+                let note = parse_note(bytes.as_bytes());
+                if source_operation.is_some()
+                    || note.source_hash != source.hash
+                    || note.canonical.as_ref() != Some(&source.record)
+                    || !self.before.iter().any(|dependency| {
+                        dependency.path == source_path
+                            && dependency.expected == ExpectedState::Hash(source.hash.clone())
+                    })
+                {
+                    return Err(recovery(
+                        "refresh batch no-op bytes, row or unchanged guard differs",
+                    ));
+                }
+                charge(bytes.len())?;
+                let inventory = scan::list(&source.record, "wiki_revisions");
+                if inventory.iter().collect::<BTreeSet<_>>().len() != inventory.len() {
+                    return Err(recovery(
+                        "refresh batch no-op revision inventory contains duplicates",
+                    ));
+                }
+                continue;
+            }
+            if target.unchanged_source.is_some() {
+                return Err(recovery(
+                    "changed refresh batch member carries a no-op payload",
+                ));
+            }
+            let source_index = source_operation
+                .ok_or_else(|| recovery("refresh batch omits a declared Source mutation"))?;
+            let operation = &manifest.operations[source_index];
+            let before = payload_note(source_index, "before")?;
+            let after = payload_note(source_index, "proposed")?;
+            let prior = before
+                .canonical
+                .as_ref()
+                .ok_or_else(|| recovery("refresh batch before-Source is not canonical"))?;
+            if prior.id() != &target.source_id
+                || prior.kind() != RecordKind::Source
+                || prior.string("wiki_status") != Some("active")
+                || prior.string("wiki_current_revision")
+                    != Some(target.previous_revision_id.as_str())
+                || operation.before != ExpectedState::Hash(before.source_hash.clone())
+                || operation.after != ExpectedState::Hash(source.hash.clone())
+                || after.source_hash != source.hash
+                || after.canonical.as_ref() != Some(&source.record)
+                || before.body() != after.body()
+            {
+                return Err(recovery(
+                    "refresh batch retained Source before/after bytes differ from its target",
+                ));
+            }
+            let fixed = |name: &&String| {
+                !matches!(
+                    name.as_str(),
+                    "title" | "wiki_current_revision" | "wiki_revision" | "wiki_revisions"
+                )
+            };
+            if prior
+                .fields()
+                .iter()
+                .filter(|(name, _)| fixed(name))
+                .ne(source
+                    .record
+                    .fields()
+                    .iter()
+                    .filter(|(name, _)| fixed(name)))
+            {
+                return Err(recovery("refresh batch changes fixed Source metadata"));
+            }
+            let old_retained = scan::list(prior, "wiki_revisions");
+            if !old_retained.contains(&target.previous_revision_id.to_string()) {
+                return Err(recovery("refresh batch previous head is not retained"));
+            }
+            let mut retained = old_retained.clone();
+            if target.reused {
+                if !retained.contains(&target.revision_id.to_string()) {
+                    return Err(recovery("refresh batch reuses an unretained revision"));
+                }
+            } else {
+                if retained.contains(&target.revision_id.to_string()) {
+                    return Err(recovery(
+                        "refresh batch fresh revision was already retained",
+                    ));
+                }
+                retained.push(target.revision_id.to_string());
+                allocated.insert(format!("revision_{ordinal}"), target.revision_id.clone());
+                fresh.insert((&target.source_id, &target.revision_id));
+            }
+            if scan::list(&source.record, "wiki_revisions") != retained
+                || retained.iter().collect::<BTreeSet<_>>().len() != retained.len()
+            {
+                return Err(recovery(
+                    "refresh batch revision inventory is not exact append or reuse",
+                ));
+            }
+            expected_documents.insert(
+                source_path.clone(),
+                row_projection::canonical_document(&source_path, &after, Some(source)),
+            );
+            expected_paths.insert(source_path);
+            if !target.reused {
+                let root = format!(
+                    "sources/{}/revisions/{}",
+                    target.source_id, target.revision_id
+                );
+                let revision_path = VaultRelativePath::new(format!("{root}/revision.md"))?;
+                let revision_index = manifest
+                    .operations
+                    .iter()
+                    .position(|operation| operation.target == revision_path)
+                    .ok_or_else(|| recovery("refresh batch lacks its declared fresh revision"))?;
+                let revision_note = payload_note(revision_index, "proposed")?;
+                let revision = revision_note
+                    .canonical
+                    .as_ref()
+                    .ok_or_else(|| recovery("refresh batch fresh revision is not canonical"))?;
+                let row = self
+                    .rows
+                    .records
+                    .iter()
+                    .find(|row| {
+                        row.record.id() == &target.revision_id
+                            && row.record.kind() == RecordKind::Revision
+                    })
+                    .ok_or_else(|| recovery("refresh batch lacks fresh revision row"))?;
+                if revision.id() != &target.revision_id
+                    || revision.kind() != RecordKind::Revision
+                    || revision.string("wiki_source_id") != Some(target.source_id.as_str())
+                    || row.path != revision_path
+                    || row.hash != revision_note.source_hash
+                    || row.record != *revision
+                    || !revision_note.body().is_empty()
+                {
+                    return Err(recovery(
+                        "refresh batch fresh revision owner, path or metadata differs",
+                    ));
+                }
+                authenticated_revisions.insert(target.revision_id.clone());
+                expected_documents.insert(
+                    revision_path.clone(),
+                    row_projection::canonical_document(&revision_path, &revision_note, Some(row)),
+                );
+                expected_paths.insert(revision_path);
+                for field in ["wiki_original_path", "wiki_content_path"] {
+                    if let Some(name) = revision.string(field) {
+                        let path = super::source_projection::asset_path(row, name)?;
+                        if path.as_str().rsplit_once('/').map(|(parent, _)| parent)
+                            != Some(root.as_str())
+                        {
+                            return Err(recovery(
+                                "refresh batch payload leaves its exact fresh revision tree",
+                            ));
+                        }
+                        let hash_field = if field == "wiki_original_path" {
+                            "wiki_original_hash"
+                        } else {
+                            "wiki_content_hash"
+                        };
+                        let declared_hash = revision
+                            .string(hash_field)
+                            .map(Blake3Hash::new)
+                            .transpose()?
+                            .ok_or_else(|| {
+                                recovery("refresh batch revision payload hash is missing")
+                            })?;
+                        if !manifest.operations.iter().any(|operation| {
+                            operation.target == path
+                                && operation.after == ExpectedState::Hash(declared_hash.clone())
+                        }) {
+                            return Err(recovery(
+                                "refresh batch revision payload differs from its declared hash",
+                            ));
+                        }
+                        expected_paths.insert(path);
+                    } else if field == "wiki_original_path" {
+                        return Err(recovery(
+                            "refresh batch fresh revision lacks original payload",
+                        ));
+                    }
+                }
+                let identity = self
+                    .rows
+                    .revisions
+                    .iter()
+                    .find(|identity| {
+                        identity.source_id == target.source_id
+                            && identity.revision_id == target.revision_id
+                    })
+                    .ok_or_else(|| recovery("refresh batch omits fresh revision identity"))?;
+                if identity.retained_ordinal != old_retained.len()
+                    || Some(identity.original_hash.as_str())
+                        != revision.string("wiki_original_hash")
+                    || identity.content_hash.as_ref().map(Blake3Hash::as_str)
+                        != revision.string("wiki_content_hash")
+                    || Some(identity.extractor_fingerprint.as_str())
+                        != revision.string("wiki_extractor_fingerprint")
+                    || Some(identity.extraction_status.as_str())
+                        != revision.string("wiki_extraction_status")
+                {
+                    return Err(recovery(
+                        "refresh batch fresh revision identity differs from retained metadata",
+                    ));
+                }
+            }
+            for revision_id in BTreeSet::from([&target.previous_revision_id, &target.revision_id]) {
+                let row = self
+                    .rows
+                    .records
+                    .iter()
+                    .find(|row| row.record.id() == revision_id)
+                    .ok_or_else(|| recovery("refresh batch changed head omits its Revision row"));
+                // Title-only refreshes do not replace the unchanged Revision.
+                let row = match row {
+                    Ok(row) => row,
+                    Err(_) if target.previous_revision_id == target.revision_id => continue,
+                    Err(error) => return Err(error),
+                };
+                let path = VaultRelativePath::new(format!(
+                    "sources/{}/revisions/{revision_id}/revision.md",
+                    target.source_id
+                ))?;
+                let note = if revision_id == &target.revision_id && !target.reused {
+                    // Its exact retained payload was checked above.
+                    None
+                } else {
+                    Some(parse_note(&selected_bytes(&path)?))
+                };
+                if row.path != path
+                    || row.record.kind() != RecordKind::Revision
+                    || row.record.string("wiki_source_id") != Some(target.source_id.as_str())
+                    || note.as_ref().is_some_and(|note| {
+                        note.source_hash != row.hash || note.canonical.as_ref() != Some(&row.record)
+                    })
+                {
+                    return Err(recovery(
+                        "refresh batch retained Revision identity or owner differs from immutable bytes",
+                    ));
+                }
+                authenticated_revisions.insert(revision_id.clone());
+                if revision_id == &target.revision_id
+                    && target.previous_revision_id != target.revision_id
+                    && row.record.string("wiki_extraction_status") == Some("complete")
+                {
+                    let path = super::source_projection::asset_path(
+                        row,
+                        row.record.string("wiki_content_path").ok_or_else(|| {
+                            recovery("refresh batch complete head lacks content path")
+                        })?,
+                    )?;
+                    let bytes = selected_bytes(&path)?;
+                    if Some(Blake3Hash::digest(&bytes).as_str())
+                        != row.record.string("wiki_content_hash")
+                    {
+                        return Err(recovery(
+                            "refresh batch current content hash differs from its Revision",
+                        ));
+                    }
+                    let text = String::from_utf8(bytes)
+                        .map_err(|_| recovery("refresh batch current content is not UTF-8"))?;
+                    expected_documents.insert(
+                        path.clone(),
+                        row_projection::captured_content_document(
+                            path,
+                            target.source_id.clone(),
+                            row,
+                            text,
+                        ),
+                    );
+                }
+            }
+        }
+        for row in self
+            .rows
+            .records
+            .iter()
+            .filter(|row| row.record.kind() == RecordKind::Revision)
+        {
+            if authenticated_revisions.contains(row.record.id()) {
+                continue;
+            }
+            let source_id = row.record.string("wiki_source_id").ok_or_else(|| {
+                recovery("refresh batch immutable Revision lacks its Source owner")
+            })?;
+            let path = VaultRelativePath::new(format!(
+                "sources/{}/revisions/{}/revision.md",
+                source_id,
+                row.record.id()
+            ))?;
+            let note = parse_note(&selected_bytes(&path)?);
+            if row.path != path
+                || note.source_hash != row.hash
+                || note.canonical.as_ref() != Some(&row.record)
+            {
+                return Err(recovery(
+                    "refresh batch unchanged Revision row differs from immutable bytes",
+                ));
+            }
+        }
+        let actual_documents: BTreeMap<_, _> = self
+            .rows
+            .documents
+            .iter()
+            .filter_map(|mutation| {
+                if let DocumentMutation::Put { row } = mutation {
+                    Some((&row.path, row))
+                } else {
+                    None
+                }
+            })
+            .collect();
+        if actual_documents.len() != expected_documents.len()
+            || expected_documents
+                .iter()
+                .any(|(path, expected)| actual_documents.get(path) != Some(&expected))
+        {
+            return Err(recovery(
+                "refresh batch document rows differ from exact retained bytes",
+            ));
+        }
+        let dependent_rows: BTreeMap<_, _> = self
+            .rows
+            .records
+            .iter()
+            .filter(|row| {
+                row.record.kind() == RecordKind::Source && !sources.contains(row.record.id())
+            })
+            .map(|row| (row.record.id(), row))
+            .collect();
+        if dependent_rows.len() != dependent_sources.len() {
+            return Err(recovery(
+                "refresh batch dependent Source witness set differs from its rows",
+            ));
+        }
+        for dependency in dependent_sources {
+            let row = dependent_rows
+                .get(&dependency.source_id)
+                .ok_or_else(|| recovery("refresh batch dependent Source witness lacks its row"))?;
+            let path =
+                VaultRelativePath::new(format!("sources/{}/source.md", dependency.source_id))?;
+            charge(dependency.source_bytes.len())?;
+            let note = parse_note(dependency.source_bytes.as_bytes());
+            let expected = ExpectedState::Hash(note.source_hash.clone());
+            if row.path != path
+                || row.hash != note.source_hash
+                || note.canonical.as_ref() != Some(&row.record)
+                || !self
+                    .before
+                    .iter()
+                    .any(|guard| guard.path == path && guard.expected == expected)
+                || !self
+                    .after
+                    .iter()
+                    .any(|guard| guard.path == path && guard.expected == expected)
+                || manifest
+                    .operations
+                    .iter()
+                    .any(|operation| operation.target == path)
+            {
+                return Err(recovery(
+                    "refresh batch dependent Source bytes, row or unchanged guards differ",
+                ));
+            }
+        }
+        if manifest.allocated_ids != allocated
+            || self.rows.revisions.len() != fresh.len()
+            || self.rows.owners.len() != fresh.len()
+            || self.rows.owners.iter().any(|owner| {
+                !fresh.iter().any(|(source, revision)| {
+                    owner.key.source_component == source.as_str()
+                        && owner.key.revision_component == revision.as_str()
+                })
+            })
+            || manifest.operations.len() != expected_paths.len()
+            || manifest.operations.iter().any(|operation| {
+                !expected_paths.contains(&operation.target)
+                    || (operation.target.as_str().contains("/revisions/")
+                        && operation.before != ExpectedState::Absent)
+            })
+        {
+            return Err(recovery(
+                "refresh batch allocations, owners or write set cross the exact declared boundary",
+            ));
+        }
+        Ok(())
+    }
+
     fn require_operation_rows(
         &self,
         manifest: &crate::changes::ChangeManifest,
@@ -364,6 +871,12 @@ impl RetainedDelta {
             }).ok_or_else(|| recovery("indexed operation identity, kind, or after-image differs from its manifest"))
         };
         match operation {
+            IndexedWriteOperation::SourceRefreshBatch {
+                refreshes,
+                dependent_sources,
+            } => {
+                self.require_refresh_batch_rows(refreshes, dependent_sources, manifest, engine)?;
+            }
             IndexedWriteOperation::SourceWithdraw { source_id } => {
                 let source = written(source_id, RecordKind::Source)?;
                 if manifest.operations.len() != 1
@@ -1026,8 +1539,76 @@ impl<'a> IndexedRefreshSession<'a> {
     fn prepare_parts(
         catalog: &Catalog,
         writer: &'a WriterPermit,
-        mut parts: super::write_projection::ProjectedWriteParts,
+        parts: super::write_projection::ProjectedWriteParts,
     ) -> Result<Self> {
+        Self::prepare_parts_with_encoded_limits(
+            catalog,
+            writer,
+            parts,
+            crate::changes::prepare::MAX_JOURNAL_BYTES,
+            MAX_DELTA_BYTES,
+        )
+    }
+
+    #[cfg(test)]
+    pub(crate) fn prepare_batch_with_encoded_limits(
+        catalog: &Catalog,
+        writer: &'a WriterPermit,
+        parts: super::write_projection::ProjectedWriteParts,
+        proof_maximum: usize,
+        delta_maximum: usize,
+    ) -> Result<Self> {
+        if !matches!(
+            &parts.operation,
+            IndexedWriteOperation::SourceRefreshBatch { .. }
+        ) {
+            return Err(recovery(
+                "encoded admission fixture requires SourceRefreshBatch",
+            ));
+        }
+        Self::prepare_parts_with_encoded_limits(
+            catalog,
+            writer,
+            parts,
+            proof_maximum,
+            delta_maximum,
+        )
+    }
+
+    fn prepare_parts_with_encoded_limits(
+        catalog: &Catalog,
+        writer: &'a WriterPermit,
+        mut parts: super::write_projection::ProjectedWriteParts,
+        proof_maximum: usize,
+        delta_maximum: usize,
+    ) -> Result<Self> {
+        if matches!(
+            &parts.operation,
+            IndexedWriteOperation::SourceRefreshBatch { .. }
+        ) {
+            // These tuples cover all unbounded receipt/delta fields without
+            // allocating their encoded bytes. Remaining proof fields are fixed
+            // bounded IDs/hashes/snapshots (<16 KiB); <=16 fresh owner rows plus
+            // the delta envelope fit the separate conservative 1 MiB reserve.
+            super::normalized_delta::counted(
+                &(&parts.operation, &parts.before, &parts.after, &parts.base),
+                proof_maximum.checked_sub(16 * 1024).ok_or_else(|| {
+                    budget("batch proof byte ceiling is below its fixed-field reserve")
+                })?,
+            )?;
+            super::normalized_delta::counted(
+                &(
+                    &parts.operation,
+                    &parts.before,
+                    &parts.after,
+                    &parts.base,
+                    &parts.delta,
+                ),
+                delta_maximum.checked_sub(1024 * 1024).ok_or_else(|| {
+                    budget("batch delta byte ceiling is below its fixed-field reserve")
+                })?,
+            )?;
+        }
         let engine = Self::admitted_engine(catalog, writer, &parts)?;
         if matches!(&parts.operation, IndexedWriteOperation::JobBatch { .. }) {
             return Err(recovery("JobBatch requires exact frozen named intent"));
@@ -2106,3 +2687,7 @@ mod capture_batch_path_scope_tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "source_refresh_compat_tests.rs"]
+mod compat_tests;

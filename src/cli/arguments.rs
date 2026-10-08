@@ -253,6 +253,12 @@ pub enum PageCommand {
 }
 #[derive(Debug, Subcommand)]
 pub enum SourceCommand {
+    /// Refresh 1–16 guarded existing Sources in one recoverable publication.
+    RefreshBatch {
+        /// JSON request; relative member files resolve from its directory.
+        #[arg(long)]
+        file: PathBuf,
+    },
     /// Prepare, run, resume or inspect an explicit local collection import.
     Import(super::source_import::SourceImportArguments),
     /// Capture a local file as a new source with an immutable revision.
@@ -719,6 +725,9 @@ impl Command {
             Self::Source {
                 command: SourceCommand::Refresh { .. },
             } => "source refresh",
+            Self::Source {
+                command: SourceCommand::RefreshBatch { .. },
+            } => "source refresh-batch",
             Self::Source {
                 command: SourceCommand::Withdraw { .. },
             } => "source withdraw",

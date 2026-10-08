@@ -1346,3 +1346,579 @@ fn normalized_replay_refuses_missing_fact_index_before_canonical_writes() {
     assert!(IndexedRefreshSession::resume(&fixture.catalog, &fixture.writer, proof).is_err());
     assert_eq!(fs::read(source_path).unwrap(), before);
 }
+
+/// Corpus is emitted by the accepted executable, then frozen as test input.
+/// It contains complete canonical/Change evidence, with rebuildable caches omitted.
+fn accepted_old_wire_capsule() -> serde_json::Value {
+    let capsule: serde_json::Value =
+        serde_json::from_slice(include_bytes!("../../tests/fixtures/accepted-old-v3.json"))
+            .unwrap();
+    assert_eq!(
+        capsule["provenance"]["binary_sha256"],
+        "ec1478bdd0a14f3bfc1a9d89c0eeb2c8b0f130515d2068153d81cd8739ede146"
+    );
+    capsule
+}
+
+fn accepted_old_wire_bytes(capsule: &serde_json::Value, path: &str) -> Vec<u8> {
+    let encoded = capsule["entries"][path].as_str().unwrap();
+    assert_eq!(encoded.len() % 2, 0);
+    (0..encoded.len())
+        .step_by(2)
+        .map(|index| u8::from_str_radix(&encoded[index..index + 2], 16).unwrap())
+        .collect()
+}
+
+#[test]
+fn accepted_old_v3_proofs_and_receipts_roundtrip_exact_bytes_and_checksums() {
+    let capsule = accepted_old_wire_capsule();
+    let receipts = capsule["receipts"].as_array().unwrap();
+    assert_eq!(receipts.len(), 3);
+    let mut kinds = std::collections::BTreeSet::new();
+    for item in receipts {
+        kinds.insert(item["operation"].as_str().unwrap());
+        let original = accepted_old_wire_bytes(&capsule, item["validation_path"].as_str().unwrap());
+        let decoded: Receipt = strict_json(&original).unwrap();
+        assert_eq!(decoded.proof.version, 3);
+        assert_eq!(serde_json::to_vec(&decoded).unwrap(), original);
+        let proof_bytes = serde_json::to_vec(&decoded.proof).unwrap();
+        // Extract the literal proof slice from the independent receipt bytes.
+        let prefix = b"{\"proof\":";
+        assert!(original.starts_with(prefix));
+        let suffix = format!(
+            ",\"checksum\":{}}}",
+            serde_json::to_string(&decoded.checksum).unwrap()
+        );
+        assert!(original.ends_with(suffix.as_bytes()));
+        assert_eq!(
+            proof_bytes,
+            original[prefix.len()..original.len() - suffix.len()]
+        );
+        assert_eq!(Blake3Hash::digest(&proof_bytes), decoded.checksum);
+        assert_eq!(
+            Blake3Hash::digest(accepted_old_wire_bytes(
+                &capsule,
+                item["delta_path"].as_str().unwrap()
+            )),
+            decoded.proof.delta_hash
+        );
+    }
+    assert_eq!(
+        kinds,
+        std::collections::BTreeSet::from(["source_capture", "source_refresh", "page_batch"])
+    );
+}
+
+#[test]
+fn accepted_old_v3_ordinary_terminal_replay_without_cache_preserves_exact_evidence() {
+    use crate::catalog::{Catalog, CatalogGraphValidator};
+    let capsule = accepted_old_wire_capsule();
+    let temp = tempfile::tempdir().unwrap();
+    for (relative, _) in capsule["entries"].as_object().unwrap() {
+        let relative_path = VaultRelativePath::new(relative).unwrap();
+        let target = temp.path().join(relative_path.as_str());
+        fs::create_dir_all(target.parent().unwrap()).unwrap();
+        fs::write(target, accepted_old_wire_bytes(&capsule, relative)).unwrap();
+    }
+    let root = VaultRoot::explicit(temp.path()).unwrap();
+    let writer = WriterPermit::acquire(&root, Duration::ZERO).unwrap();
+    let vault_fs = VaultFs::new(root);
+    let engine = ChangeEngine::new(vault_fs.clone()).unwrap();
+    let catalog = Catalog::new(vault_fs, engine.vault_id.clone());
+    for item in capsule["receipts"].as_array().unwrap() {
+        let bytes = accepted_old_wire_bytes(&capsule, item["validation_path"].as_str().unwrap());
+        let receipt: Receipt = strict_json(&bytes).unwrap();
+        let proof = receipt.proof;
+        let (manifest, hash) = engine.load_manifest(&proof.change.change_id).unwrap();
+        assert_eq!(hash, proof.change.manifest_hash);
+        proof.validate_manifest(&manifest).unwrap();
+        assert_eq!(
+            engine.load_indexed_refresh_proof(&proof.change).unwrap(),
+            Some(proof.clone())
+        );
+        // Historical capture/refresh pointers have moved; durable exact outcomes
+        // still replay through ordinary dispatch without rebuilding any SQL cache.
+        let expected = outcome::terminal_report(&engine.fs, &manifest, &hash)
+            .unwrap()
+            .unwrap();
+        assert_eq!(expected.status, ChangeStatus::Committed);
+        for _ in 0..2 {
+            assert_eq!(
+                engine
+                    .apply(&writer, &proof.change, &CatalogGraphValidator, &catalog)
+                    .unwrap(),
+                expected
+            );
+        }
+    }
+    for (relative, _) in capsule["entries"].as_object().unwrap() {
+        assert_eq!(
+            fs::read(temp.path().join(relative)).unwrap(),
+            accepted_old_wire_bytes(&capsule, relative)
+        );
+    }
+}
+
+/// Restore the accepted producer's exact empty acquisition/lease files, omitted
+/// from the immutable byte capsule. These are permanent selector coordination
+/// inodes, not a production repair path (see local coordination provenance).
+fn restore_accepted_old_selector_locks(root: &std::path::Path, capsule: &serde_json::Value) {
+    let current: serde_json::Value = serde_json::from_slice(&accepted_old_wire_bytes(
+        capsule,
+        ".wiki/cache/catalog-current.json",
+    ))
+    .unwrap();
+    let file_id = current["file_id"].as_str().unwrap();
+    assert_eq!(
+        capsule["database_path"],
+        format!(".wiki/cache/catalogs/{file_id}.sqlite")
+    );
+    let lease = format!(".wiki/cache/catalogs/{file_id}.lock");
+    for relative in [".wiki/cache/catalog-acquisition.lock", lease.as_str()] {
+        let path = root.join(VaultRelativePath::new(relative).unwrap().as_str());
+        assert!(
+            !path.exists(),
+            "coordination lock must be new fixture allocation"
+        );
+        fs::write(&path, b"").unwrap();
+        assert_eq!(fs::metadata(path).unwrap().len(), 0);
+    }
+    // The exact checkpointed producer database remains in WAL mode. Its
+    // retained empty WAL and shared-memory image are frozen independently;
+    // omitting them would correctly refuse before the public replay begins.
+    let sidecars: [(&str, &[u8], &str); 2] = [
+        (
+            "-wal",
+            include_bytes!("../../tests/fixtures/accepted-old-v3-base.sqlite-wal"),
+            "blake3:af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262",
+        ),
+        (
+            "-shm",
+            include_bytes!("../../tests/fixtures/accepted-old-v3-base.sqlite-shm"),
+            "blake3:29bf5078fb9d5a3e0d4f3baa659688073bc3748bdda77638608203e606b61ee7",
+        ),
+    ];
+    for (suffix, bytes, expected_hash) in sidecars {
+        assert_eq!(Blake3Hash::digest(bytes).to_string(), expected_hash);
+        let relative = format!("{}{}", capsule["database_path"].as_str().unwrap(), suffix);
+        let target = root.join(VaultRelativePath::new(relative).unwrap().as_str());
+        assert!(!target.exists(), "sidecar must be new fixture allocation");
+        fs::write(&target, bytes).unwrap();
+        assert_eq!(fs::read(target).unwrap(), bytes);
+    }
+}
+
+#[test]
+fn accepted_old_v3_pending_scalar_refresh_public_apply_and_repeat() {
+    use crate::app::{OfflineApp, OperationOptions};
+    let capsule: serde_json::Value = serde_json::from_slice(include_bytes!(
+        "../../tests/fixtures/accepted-old-v3-pending.json"
+    ))
+    .unwrap();
+    assert_eq!(
+        capsule["provenance"]["binary_sha256"],
+        "ec1478bdd0a14f3bfc1a9d89c0eeb2c8b0f130515d2068153d81cd8739ede146"
+    );
+    let temp = tempfile::tempdir().unwrap();
+    for (relative, _) in capsule["entries"].as_object().unwrap() {
+        let relative_path = VaultRelativePath::new(relative).unwrap();
+        let target = temp.path().join(relative_path.as_str());
+        fs::create_dir_all(target.parent().unwrap()).unwrap();
+        fs::write(target, accepted_old_wire_bytes(&capsule, relative)).unwrap();
+    }
+    let database_path = capsule["database_path"].as_str().unwrap();
+    let database = temp
+        .path()
+        .join(VaultRelativePath::new(database_path).unwrap().as_str());
+    fs::create_dir_all(database.parent().unwrap()).unwrap();
+    fs::write(
+        database,
+        include_bytes!("../../tests/fixtures/accepted-old-v3-base.sqlite"),
+    )
+    .unwrap();
+    restore_accepted_old_selector_locks(temp.path(), &capsule);
+    let root = VaultRoot::explicit(temp.path()).unwrap();
+    let writer = WriterPermit::acquire(&root, Duration::ZERO).unwrap();
+    let vault_fs = VaultFs::new(root);
+    let engine = ChangeEngine::new(vault_fs.clone()).unwrap();
+    let catalog = Catalog::new(vault_fs, engine.vault_id.clone());
+    let receipt: Receipt = strict_json(&accepted_old_wire_bytes(
+        &capsule,
+        capsule["validation_path"].as_str().unwrap(),
+    ))
+    .unwrap();
+    let proof = receipt.proof;
+    let IndexedWriteOperation::SourceRefresh { source_id } = proof.operation.as_ref().unwrap()
+    else {
+        panic!("frozen pending fixture is not an old scalar refresh");
+    };
+    assert_eq!(proof.version, 3);
+    assert_eq!(
+        crate::catalog::query_types::QueryCatalog::snapshot(
+            &catalog.query_snapshot(QueryReadLimits::default()).unwrap()
+        ),
+        &proof.base
+    );
+    let (manifest, hash) = engine.load_manifest(&proof.change.change_id).unwrap();
+    assert_eq!(hash, proof.change.manifest_hash);
+    proof.validate_manifest(&manifest).unwrap();
+    assert_eq!(
+        outcome::terminal_report(&engine.fs, &manifest, &hash).unwrap(),
+        None
+    );
+    assert_eq!(
+        engine.load_indexed_refresh_proof(&proof.change).unwrap(),
+        Some(proof.clone())
+    );
+    drop(writer);
+    let app = OfflineApp::new(
+        engine.fs.clone(),
+        OperationOptions {
+            offline: true,
+            lock_timeout_ms: 0,
+            ..OperationOptions::default()
+        },
+    )
+    .unwrap();
+    let report = app.changes_apply(proof.change.change_id.clone()).unwrap();
+    assert_eq!(report.status, Some(ChangeStatus::Committed));
+    assert_eq!(report.change.as_ref(), Some(&proof.change));
+    assert!(!report.reused);
+    assert_eq!(report.snapshot.as_ref(), Some(&proof.intended));
+    let finalized_note_path =
+        crate::changes::prepare::manifest_path(&proof.change.change_id).unwrap();
+    let finalized_note_bytes = fs::read(temp.path().join(finalized_note_path.as_str())).unwrap();
+    let original_note = String::from_utf8(accepted_old_wire_bytes(
+        &capsule,
+        finalized_note_path.as_str(),
+    ))
+    .unwrap();
+    assert_eq!(original_note.matches("wiki_status: prepared\n").count(), 1);
+    assert_eq!(
+        finalized_note_bytes,
+        original_note
+            .replacen("wiki_status: prepared\n", "wiki_status: committed\n", 1)
+            .into_bytes()
+    );
+    let (final_manifest, final_hash) = engine
+        .load_manifest_structure(&proof.change.change_id)
+        .unwrap();
+    assert_eq!(final_manifest, manifest);
+    assert_eq!(final_hash, hash);
+    let terminal = outcome::terminal_report(&engine.fs, &manifest, &hash)
+        .unwrap()
+        .unwrap();
+    assert_eq!(Some(terminal.status), report.status);
+    assert_eq!(Some(&terminal.change), report.change.as_ref());
+    assert_eq!(terminal.snapshot, report.snapshot);
+    let authority = catalog.operation_state().unwrap().unwrap();
+    assert!(authority.active().is_none());
+    assert_eq!(authority.publication().epoch, proof.intended.generation);
+    assert_eq!(
+        authority.publication().file_id,
+        proof.intended.publication().unwrap().file_id
+    );
+    let current = catalog.query_snapshot(QueryReadLimits::default()).unwrap();
+    assert_eq!(
+        crate::catalog::query_types::QueryCatalog::snapshot(&current),
+        &proof.intended
+    );
+    let revision = &manifest.allocated_ids["revision"];
+    let source_path = format!("sources/{source_id}/source.md");
+    let source_bytes = fs::read(temp.path().join(&source_path)).unwrap();
+    let source_note = parse_note(&source_bytes);
+    let source_record = source_note.canonical.as_ref().unwrap();
+    assert_eq!(source_record.id(), source_id);
+    assert_eq!(
+        source_record
+            .field("wiki_current_revision")
+            .unwrap()
+            .as_str(),
+        Some(revision.as_str())
+    );
+    let source_operation = manifest
+        .operations
+        .iter()
+        .find(|op| op.target.as_str() == source_path)
+        .unwrap();
+    assert_eq!(
+        source_operation.after,
+        ExpectedState::Hash(Blake3Hash::digest(&source_bytes))
+    );
+    assert_eq!(
+        &current.record(source_id).unwrap().unwrap().record,
+        source_record
+    );
+    let content_path = format!("sources/{source_id}/revisions/{revision}/content.md");
+    let expected_input = capsule["input_bytes"].as_str().unwrap();
+    let expected_input: Vec<u8> = (0..expected_input.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(&expected_input[i..i + 2], 16).unwrap())
+        .collect();
+    assert_eq!(
+        fs::read(temp.path().join(content_path)).unwrap(),
+        expected_input
+    );
+    drop(current);
+    let repeated = app.changes_apply(proof.change.change_id.clone()).unwrap();
+    assert!(repeated.reused);
+    assert_eq!(
+        fs::read(temp.path().join(&source_path)).unwrap(),
+        source_bytes
+    );
+    assert_eq!(repeated.status, report.status);
+    assert_eq!(repeated.snapshot, report.snapshot);
+    assert_eq!(repeated.change, report.change);
+    assert_eq!(repeated.allocated_ids, report.allocated_ids);
+    assert_eq!(
+        serde_json::to_vec(&repeated.plan).unwrap(),
+        serde_json::to_vec(&report.plan).unwrap()
+    );
+    assert!(
+        catalog
+            .operation_state()
+            .unwrap()
+            .unwrap()
+            .active()
+            .is_none()
+    );
+    assert_eq!(
+        fs::read(temp.path().join(finalized_note_path.as_str())).unwrap(),
+        finalized_note_bytes
+    );
+    assert_eq!(
+        crate::catalog::query_types::QueryCatalog::snapshot(
+            &catalog.query_snapshot(QueryReadLimits::default()).unwrap()
+        ),
+        &proof.intended
+    );
+    // Every old immutable revision, payload, proof and delta stays byte-identical;
+    // source.md, this Change's finalized note and retained journal/authority mutate.
+    for (relative, _) in capsule["entries"].as_object().unwrap() {
+        if relative.starts_with(".wiki/")
+            || relative.ends_with("/source.md")
+            || relative == finalized_note_path.as_str()
+        {
+            continue;
+        }
+        assert_eq!(
+            fs::read(temp.path().join(relative)).unwrap(),
+            accepted_old_wire_bytes(&capsule, relative)
+        );
+    }
+}
+
+// V2 bytes independently specified from deployed pre-v3 structs, not emitted by a v2 CLI.
+#[test]
+fn specified_deployed_v2_full_receipt_public_pending_apply_and_repeat() {
+    use crate::app::{OfflineApp, OperationOptions};
+    let capsule: serde_json::Value = serde_json::from_slice(include_bytes!(
+        "../../tests/fixtures/specified-old-v2-pending.json"
+    ))
+    .unwrap();
+    assert_eq!(
+        capsule["provenance"]["spec_commit"],
+        "60603e231299c206f334bd42b2f742b3ad40511f"
+    );
+    let temp = tempfile::tempdir().unwrap();
+    for (relative, _) in capsule["entries"].as_object().unwrap() {
+        let relative_path = VaultRelativePath::new(relative).unwrap();
+        let target = temp.path().join(relative_path.as_str());
+        fs::create_dir_all(target.parent().unwrap()).unwrap();
+        fs::write(target, accepted_old_wire_bytes(&capsule, relative)).unwrap();
+    }
+    let database_path = capsule["database_path"].as_str().unwrap();
+    let database = temp
+        .path()
+        .join(VaultRelativePath::new(database_path).unwrap().as_str());
+    fs::create_dir_all(database.parent().unwrap()).unwrap();
+    fs::write(
+        database,
+        include_bytes!("../../tests/fixtures/accepted-old-v3-base.sqlite"),
+    )
+    .unwrap();
+    restore_accepted_old_selector_locks(temp.path(), &capsule);
+    let root = VaultRoot::explicit(temp.path()).unwrap();
+    let writer = WriterPermit::acquire(&root, Duration::ZERO).unwrap();
+    let vault_fs = VaultFs::new(root);
+    let engine = ChangeEngine::new(vault_fs.clone()).unwrap();
+    let catalog = Catalog::new(vault_fs, engine.vault_id.clone());
+    let receipt: Receipt = strict_json(&accepted_old_wire_bytes(
+        &capsule,
+        capsule["validation_path"].as_str().unwrap(),
+    ))
+    .unwrap();
+    let original_receipt =
+        accepted_old_wire_bytes(&capsule, capsule["validation_path"].as_str().unwrap());
+    assert_eq!(serde_json::to_vec(&receipt).unwrap(), original_receipt);
+    let proof_bytes = serde_json::to_vec(&receipt.proof).unwrap();
+    assert_eq!(Blake3Hash::digest(&proof_bytes), receipt.checksum);
+    let prefix = b"{\"proof\":";
+    let suffix = format!(
+        ",\"checksum\":{}}}",
+        serde_json::to_string(&receipt.checksum).unwrap()
+    );
+    assert!(original_receipt.starts_with(prefix));
+    assert!(original_receipt.ends_with(suffix.as_bytes()));
+    assert_eq!(
+        proof_bytes,
+        original_receipt[prefix.len()..original_receipt.len() - suffix.len()]
+    );
+    let proof = receipt.proof;
+    assert!(proof.operation.is_none());
+    let source_id = proof.source_id.as_ref().unwrap();
+    assert_eq!(proof.version, 2);
+    assert_eq!(
+        crate::catalog::query_types::QueryCatalog::snapshot(
+            &catalog.query_snapshot(QueryReadLimits::default()).unwrap()
+        ),
+        &proof.base
+    );
+    let (manifest, hash) = engine.load_manifest(&proof.change.change_id).unwrap();
+    assert_eq!(hash, proof.change.manifest_hash);
+    proof.validate_manifest(&manifest).unwrap();
+    assert_eq!(
+        outcome::terminal_report(&engine.fs, &manifest, &hash).unwrap(),
+        None
+    );
+    assert_eq!(
+        engine.load_indexed_refresh_proof(&proof.change).unwrap(),
+        Some(proof.clone())
+    );
+    drop(writer);
+    let app = OfflineApp::new(
+        engine.fs.clone(),
+        OperationOptions {
+            offline: true,
+            lock_timeout_ms: 0,
+            ..OperationOptions::default()
+        },
+    )
+    .unwrap();
+    let report = app.changes_apply(proof.change.change_id.clone()).unwrap();
+    assert_eq!(report.status, Some(ChangeStatus::Committed));
+    assert_eq!(report.change.as_ref(), Some(&proof.change));
+    assert!(!report.reused);
+    assert_eq!(report.snapshot.as_ref(), Some(&proof.intended));
+    let finalized_note_path =
+        crate::changes::prepare::manifest_path(&proof.change.change_id).unwrap();
+    let finalized_note_bytes = fs::read(temp.path().join(finalized_note_path.as_str())).unwrap();
+    let original_note = String::from_utf8(accepted_old_wire_bytes(
+        &capsule,
+        finalized_note_path.as_str(),
+    ))
+    .unwrap();
+    assert_eq!(original_note.matches("wiki_status: prepared\n").count(), 1);
+    assert_eq!(
+        finalized_note_bytes,
+        original_note
+            .replacen("wiki_status: prepared\n", "wiki_status: committed\n", 1)
+            .into_bytes()
+    );
+    let (final_manifest, final_hash) = engine
+        .load_manifest_structure(&proof.change.change_id)
+        .unwrap();
+    assert_eq!(final_manifest, manifest);
+    assert_eq!(final_hash, hash);
+    let terminal = outcome::terminal_report(&engine.fs, &manifest, &hash)
+        .unwrap()
+        .unwrap();
+    assert_eq!(Some(terminal.status), report.status);
+    assert_eq!(Some(&terminal.change), report.change.as_ref());
+    assert_eq!(terminal.snapshot, report.snapshot);
+    let authority = catalog.operation_state().unwrap().unwrap();
+    assert!(authority.active().is_none());
+    assert_eq!(authority.publication().epoch, proof.intended.generation);
+    assert_eq!(
+        authority.publication().file_id,
+        proof.intended.publication().unwrap().file_id
+    );
+    let current = catalog.query_snapshot(QueryReadLimits::default()).unwrap();
+    assert_eq!(
+        crate::catalog::query_types::QueryCatalog::snapshot(&current),
+        &proof.intended
+    );
+    let revision = &manifest.allocated_ids["revision"];
+    let source_path = format!("sources/{source_id}/source.md");
+    let source_bytes = fs::read(temp.path().join(&source_path)).unwrap();
+    let source_note = parse_note(&source_bytes);
+    let source_record = source_note.canonical.as_ref().unwrap();
+    assert_eq!(source_record.id(), source_id);
+    assert_eq!(
+        source_record
+            .field("wiki_current_revision")
+            .unwrap()
+            .as_str(),
+        Some(revision.as_str())
+    );
+    let source_operation = manifest
+        .operations
+        .iter()
+        .find(|op| op.target.as_str() == source_path)
+        .unwrap();
+    assert_eq!(
+        source_operation.after,
+        ExpectedState::Hash(Blake3Hash::digest(&source_bytes))
+    );
+    assert_eq!(
+        &current.record(source_id).unwrap().unwrap().record,
+        source_record
+    );
+    let content_path = format!("sources/{source_id}/revisions/{revision}/content.md");
+    let expected_input = capsule["input_bytes"].as_str().unwrap();
+    let expected_input: Vec<u8> = (0..expected_input.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(&expected_input[i..i + 2], 16).unwrap())
+        .collect();
+    assert_eq!(
+        fs::read(temp.path().join(content_path)).unwrap(),
+        expected_input
+    );
+    drop(current);
+    let repeated = app.changes_apply(proof.change.change_id.clone()).unwrap();
+    assert!(repeated.reused);
+    assert_eq!(
+        fs::read(temp.path().join(&source_path)).unwrap(),
+        source_bytes
+    );
+    assert_eq!(repeated.status, report.status);
+    assert_eq!(repeated.snapshot, report.snapshot);
+    assert_eq!(repeated.change, report.change);
+    assert_eq!(repeated.allocated_ids, report.allocated_ids);
+    assert_eq!(
+        serde_json::to_vec(&repeated.plan).unwrap(),
+        serde_json::to_vec(&report.plan).unwrap()
+    );
+    assert!(
+        catalog
+            .operation_state()
+            .unwrap()
+            .unwrap()
+            .active()
+            .is_none()
+    );
+    assert_eq!(
+        fs::read(temp.path().join(finalized_note_path.as_str())).unwrap(),
+        finalized_note_bytes
+    );
+    assert_eq!(
+        crate::catalog::query_types::QueryCatalog::snapshot(
+            &catalog.query_snapshot(QueryReadLimits::default()).unwrap()
+        ),
+        &proof.intended
+    );
+    // Every old immutable revision, payload, proof and delta stays byte-identical;
+    // source.md, this Change's finalized note and retained journal/authority mutate.
+    for (relative, _) in capsule["entries"].as_object().unwrap() {
+        if relative.starts_with(".wiki/")
+            || relative.ends_with("/source.md")
+            || relative == finalized_note_path.as_str()
+        {
+            continue;
+        }
+        assert_eq!(
+            fs::read(temp.path().join(relative)).unwrap(),
+            accepted_old_wire_bytes(&capsule, relative)
+        );
+    }
+}

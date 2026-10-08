@@ -1,5 +1,10 @@
 # Current contracts and local coverage
 
+The [guarded Source refresh batch](source-refresh-batch.md) now supports 1–16
+existing active Sources in one publication. Its [functional acceptance](validation-source-refresh-batch.md)
+passed at 10/10 across both layouts, exact recovery and cache-loss reconstruction.
+The complete 1,000-update speed comparison, default quality and 25K gates remain open.
+
 The 0.2.0 trial candidate adds [explicit selected search](validation-verified-search.md)
 with scoped acceptance at 9.5/10. Its original [1,000-document collection control](validation-1k-collection.md)
 covering interrupted import, updates, recovery and complete-cache-loss rebuild.

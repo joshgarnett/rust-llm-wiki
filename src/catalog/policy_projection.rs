@@ -33,7 +33,30 @@ pub(super) fn project_policy(
     overlay: &BTreeMap<VaultRelativePath, ParsedNote>,
     access: &mut dyn PolicyInputAccess,
 ) -> Result<PolicyDelta> {
-    project_policy_inner(reader, before, overlay, &BTreeSet::new(), access, false)
+    project_policy_inner(reader, before, overlay, &BTreeSet::new(), access, false, 16)
+}
+
+/// Sixteen existing Sources can each replace their Source note and create one
+/// Revision note. The enclosing batch still owns one byte/row/deadline meter.
+pub(super) fn project_policy_for_refresh_batch(
+    reader: &QuerySnapshot,
+    before: &BTreeMap<VaultRelativePath, ParsedNote>,
+    overlay: &BTreeMap<VaultRelativePath, ParsedNote>,
+    access: &mut dyn PolicyInputAccess,
+) -> Result<PolicyDelta> {
+    if overlay.values().any(|note| {
+        note.canonical.as_ref().is_none_or(|record| {
+            !matches!(
+                record.kind(),
+                crate::domain::RecordKind::Source | crate::domain::RecordKind::Revision
+            )
+        })
+    }) {
+        return Err(corrupt(
+            "refresh batch policy overlay contains an unrelated note kind",
+        ));
+    }
+    project_policy_inner(reader, before, overlay, &BTreeSet::new(), access, false, 32)
 }
 pub(super) fn project_policy_for_move(
     reader: &QuerySnapshot,
@@ -45,7 +68,15 @@ pub(super) fn project_policy_for_move(
     if removed.len() != 1 {
         return Err(corrupt("Page move must retire exactly one policy owner"));
     }
-    project_policy_inner(reader, before, overlay, removed, access, true)
+    project_policy_inner(
+        reader,
+        before,
+        overlay,
+        removed,
+        access,
+        true,
+        super::normalized_delta::MAX_ROWS,
+    )
 }
 fn project_policy_inner(
     reader: &QuerySnapshot,
@@ -54,13 +85,9 @@ fn project_policy_inner(
     removed: &BTreeSet<VaultRelativePath>,
     access: &mut dyn PolicyInputAccess,
     page_move: bool,
+    ceiling: usize,
 ) -> Result<PolicyDelta> {
     reader.require_policy_layout()?;
-    let ceiling = if page_move {
-        super::normalized_delta::MAX_ROWS
-    } else {
-        16
-    };
     if overlay.is_empty()
         || overlay.len().saturating_add(removed.len()) > ceiling
         || !removed.is_disjoint(&overlay.keys().cloned().collect())

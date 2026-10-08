@@ -38,6 +38,7 @@ pub const COMMANDS: &[&str] = &[
     "page rename",
     "source add",
     "source refresh",
+    "source refresh-batch",
     "source withdraw",
     "source import prepare",
     "source import run",
@@ -88,6 +89,7 @@ pub const SCHEMAS: &[&str] = &[
     "page",
     "page-batch",
     "page-source-refs",
+    "source-refresh-batch",
     "stream",
     "extraction",
     "extraction-packet",
@@ -213,6 +215,9 @@ fn execute_inner(args: &Arguments) -> Result<Envelope> {
                 "record" | "page" => include_str!("../../schemas/record-v1.json"),
                 "page-batch" => include_str!("../../schemas/page-batch-v1.json"),
                 "page-source-refs" => include_str!("../../schemas/page-source-refs-v1.json"),
+                "source-refresh-batch" => {
+                    include_str!("../../schemas/source-refresh-batch-v1.json")
+                }
                 "stream" => include_str!("../../schemas/stream-v1.json"),
                 "extraction" => include_str!("../../schemas/extraction-v1.json"),
                 "extraction-packet" => include_str!("../../schemas/extraction-packet-v1.json"),
@@ -585,6 +590,24 @@ fn execute_inner(args: &Arguments) -> Result<Envelope> {
             app.source_withdraw(id.clone(), reason)?,
             json!({"operation":"withdraw", "source_id":id, "reason":reason}),
         )?,
+        Command::Source {
+            command: SourceCommand::RefreshBatch { file },
+        } => {
+            let outcome = app.source_refresh_batch_file(file)?;
+            if outcome.items.iter().any(|item| {
+                item.capture_state == Some(crate::sources::SourceCaptureState::Unsupported)
+            }) {
+                envelope.warnings.push("Some refreshed Sources retain original bytes without extracted text; their result items report unsupported capture_state.".into());
+            }
+            envelope.meta.index_generation = outcome
+                .snapshot
+                .as_ref()
+                .map(|snapshot| snapshot.generation);
+            if outcome.dry_run {
+                envelope.warnings.push("Source batch preview verifies request bounds and external input hashes. Selected Source identities, author hashes, heads, revision reuse and dependent publication remain unresolved.".into());
+            }
+            envelope.data = value(outcome)?;
+        }
         Command::Source {
             command: SourceCommand::Import(arguments),
         } => {

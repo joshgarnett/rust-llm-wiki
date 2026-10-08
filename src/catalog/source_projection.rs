@@ -1,4 +1,4 @@
-//! Semantic admission for one bounded source refresh. This module never invokes
+//! Semantic admission for bounded scalar and joint source refreshes. This module never invokes
 //! a full graph validator over a partial graph and never scans canonical history.
 use super::{
     eligibility::{self, eligible_opposition, opposition_key},
@@ -10,7 +10,7 @@ use super::{
         CatalogDelta, DocumentMutation, OwnedClaims, OwnedDiagnostics, OwnedLinks,
         RevisionIdentityRow,
     },
-    normalized_fact_delta::{FactDelta, OwnedLinkFacts, OwnedRegistryKeys, RecordFactMutation},
+    normalized_fact_delta::{OwnedLinkFacts, OwnedRegistryKeys, RecordFactMutation},
     query::QuerySnapshot,
     query_types::QueryCatalog,
     row_projection, scan,
@@ -660,42 +660,46 @@ impl Work<'_> {
     }
 }
 
-/// None is an authenticated planner no-op; it creates no proposal or SQL epoch.
-pub(crate) fn project_refresh(
-    fs: &VaultFs,
-    reader: &QuerySnapshot,
+struct AdmittedRefresh {
+    source_id: RecordId,
+    old_head: RecordId,
+    new_head: RecordId,
+    old_retained: Vec<String>,
+    is_new: bool,
+    draft: Option<ChangeDraft>,
+    content: Option<Vec<u8>>,
+}
+
+/// Validate a scalar generated envelope without discovering or sealing its
+/// downstream graph. A batch installs every envelope into the same Work first.
+fn admit_refresh(
+    work: &mut Work<'_>,
     plan: IndexedSourceRefreshPlan,
-    limits: &RefreshProjectionLimits,
-) -> Result<Option<ProjectedSourceRefresh>> {
-    let ceiling = RefreshProjectionLimits::default();
-    if limits.max_rows == 0
-        || limits.max_rows > ceiling.max_rows
-        || limits.max_file_bytes == 0
-        || limits.max_file_bytes > ceiling.max_file_bytes
-        || limits.max_canonical_bytes == 0
-        || limits.max_canonical_bytes > ceiling.max_canonical_bytes
-        || limits.max_elapsed.is_zero()
-        || limits.max_elapsed > ceiling.max_elapsed
-    {
-        return Err(budget());
-    }
-    reader.require_fact_layout()?;
-    if QueryCatalog::snapshot(reader) != &plan.base_snapshot
+    deduplicate_captured: bool,
+) -> Result<AdmittedRefresh> {
+    let limits = work.limits;
+    if QueryCatalog::snapshot(work.reader) != &plan.base_snapshot
         || plan.base_snapshot.publication().is_none()
     {
         return Err(conflict("source plan differs from pinned publication"));
     }
-    let mut work = Work::new(fs, reader, limits)?;
     for document in plan.captured {
         work.charge(document.bytes.len())?;
         if document.bytes.len() > limits.max_file_bytes
             || Blake3Hash::digest(&document.bytes) != document.hash
-            || work.captured.contains_key(&document.path)
         {
             return Err(conflict("invalid captured source input"));
         }
+        if let Some(prior) = work.captured.get(&document.path) {
+            if !deduplicate_captured || prior.hash != document.hash || prior.bytes != document.bytes
+            {
+                return Err(conflict("invalid overlapping captured source input"));
+            }
+        }
         work.observe(&document.path, ExpectedState::Hash(document.hash.clone()))?;
-        work.captured.insert(document.path.clone(), document);
+        work.captured
+            .entry(document.path.clone())
+            .or_insert(document);
     }
     for dependency in &plan.plan.dependencies {
         work.capture(&dependency.path, &dependency.expected)?;
@@ -714,12 +718,30 @@ pub(crate) fn project_refresh(
             "source refresh baseline differs from selected head",
         ));
     }
-    let Some(mut draft) = plan.plan.draft else {
+    if deduplicate_captured {
+        let head = &work.now[&old_head];
+        if head.record.kind() != RecordKind::Revision
+            || head.record.string("wiki_source_id") != Some(source_id.as_str())
+            || work.facts[&old_head].baseline.eligibility == Eligibility::Invalid
+        {
+            return Err(conflict(
+                "selected batch baseline head is invalid or foreign",
+            ));
+        }
+    }
+    let Some(draft) = plan.plan.draft else {
         if new_head != old_head || !plan.plan.reused {
             return Err(conflict("invalid source no-op identity"));
         }
-        work.recheck()?;
-        return Ok(None);
+        return Ok(AdmittedRefresh {
+            source_id,
+            old_head,
+            new_head,
+            old_retained: scan::list(&original.record, "wiki_revisions"),
+            is_new: false,
+            draft: None,
+            content: None,
+        });
     };
     if draft.origin.is_some() || draft.inverse_of.is_some() {
         return Err(conflict(
@@ -737,6 +759,7 @@ pub(crate) fn project_refresh(
             || operations
                 .insert(operation.target.clone(), operation)
                 .is_some()
+            || work.overlay.contains_key(&operation.target)
         {
             return Err(conflict("invalid or duplicate refresh operation"));
         }
@@ -796,7 +819,9 @@ pub(crate) fn project_refresh(
         let revision_path = VaultRelativePath::new(format!(
             "sources/{source_id}/revisions/{new_head}/revision.md"
         ))?;
-        if reader.revision_identity_is_reserved(&new_head, &revision_path)?
+        if work
+            .reader
+            .revision_identity_is_reserved(&new_head, &revision_path)?
             || draft.allocated_ids != BTreeMap::from([("revision".into(), new_head.clone())])
         {
             return Err(conflict(
@@ -907,13 +932,25 @@ pub(crate) fn project_refresh(
     {
         return Err(conflict("selected head is invalid or foreign"));
     }
-    // Verify the actual selected/proposed immutable bytes in a closed view, not
-    // a partial graph validator. No unselected historical payload is consulted.
-    let content = work.verify_head(&source_id, &new_head)?;
+    Ok(AdmittedRefresh {
+        source_id,
+        old_head,
+        new_head,
+        old_retained,
+        is_new,
+        draft: Some(draft),
+        content: None,
+    })
+}
+
+fn refresh_seeds(work: &mut Work<'_>, refresh: &AdmittedRefresh) -> Result<BTreeSet<RecordId>> {
+    let source_id = &refresh.source_id;
+    let old_head = &refresh.old_head;
+    let new_head = &refresh.new_head;
     let mut seeds = BTreeSet::from([source_id.clone()]);
     if old_head != new_head {
         seeds.extend([old_head.clone(), new_head.clone()]);
-        for revision in [&old_head, &new_head] {
+        for revision in [old_head, new_head] {
             for edge in work.edges(
                 revision,
                 &[
@@ -954,31 +991,19 @@ pub(crate) fn project_refresh(
             }
         }
     }
-    work.discover(seeds)?;
-    work.recompute()?;
-    let policy = super::write_projection::project_policy(&mut work)?;
-    let mut delta = CatalogDelta {
-        version: 3,
-        records: vec![],
-        documents: vec![],
-        graph: vec![],
-        links: vec![],
-        diagnostics: vec![],
-        claims: vec![],
-        revisions: vec![],
-        dependencies: vec![],
-        owners: vec![],
-        facts: Some(FactDelta {
-            policy: Some(policy),
-            records: vec![],
-            edge_inserts: vec![],
-            edge_deletes: vec![],
-            links: vec![],
-            registry: vec![],
-        }),
-    };
-    if is_new {
-        let head = &work.now[&new_head];
+    Ok(seeds)
+}
+
+fn emit_refresh_identity(
+    work: &mut Work<'_>,
+    refresh: &AdmittedRefresh,
+    delta: &mut CatalogDelta,
+) -> Result<()> {
+    let source_id = &refresh.source_id;
+    let old_head = &refresh.old_head;
+    let new_head = &refresh.new_head;
+    if refresh.is_new {
+        let head = &work.now[new_head];
         let required_hash = |field| {
             Blake3Hash::new(
                 head.record
@@ -989,7 +1014,7 @@ pub(crate) fn project_refresh(
         delta.revisions.push(RevisionIdentityRow {
             source_id: source_id.clone(),
             revision_id: new_head.clone(),
-            retained_ordinal: old_retained.len(),
+            retained_ordinal: refresh.old_retained.len(),
             original_hash: required_hash("wiki_original_hash")?,
             content_hash: head
                 .record
@@ -1002,7 +1027,7 @@ pub(crate) fn project_refresh(
         let facts = delta.facts.as_mut().unwrap();
         facts.records.push(RecordFactMutation {
             record_id: new_head.clone(),
-            fact: work.facts[&new_head].clone(),
+            fact: work.facts[new_head].clone(),
         });
         facts.edge_inserts.extend([
             EligibilityEdge {
@@ -1016,7 +1041,11 @@ pub(crate) fn project_refresh(
                 role: EligibilityRole::SourceInventory,
             },
         ]);
-        for registry in &work.new_registry {
+        for registry in work
+            .new_registry
+            .iter()
+            .filter(|entry| entry.id == *new_head)
+        {
             facts.registry.push(OwnedRegistryKeys {
                 record_id: registry.id.clone(),
                 path: registry.path.clone(),
@@ -1030,7 +1059,7 @@ pub(crate) fn project_refresh(
             target_id: old_head.clone(),
             role: typed("wiki_current_revision"),
         };
-        if work.edges(&source_id, &[typed("wiki_current_revision")], false)?
+        if work.edges(source_id, &[typed("wiki_current_revision")], false)?
             != vec![old_edge.clone()]
         {
             return Err(corrupt("source head relation differs from baseline"));
@@ -1043,24 +1072,27 @@ pub(crate) fn project_refresh(
             role: typed("wiki_current_revision"),
         });
     }
-    let changed: Vec<_> = work
-        .now
-        .iter()
-        .filter(|(id, row)| work.old.get(*id) != Some(*row))
-        .map(|(id, _)| id.clone())
-        .collect();
-    for id in changed {
-        work.emit_record(&id, &mut delta)?;
-    }
+    Ok(())
+}
+
+fn emit_refresh_content(
+    work: &mut Work<'_>,
+    refresh: &AdmittedRefresh,
+    delta: &mut CatalogDelta,
+) -> Result<()> {
+    let source_id = &refresh.source_id;
+    let old_head = &refresh.old_head;
+    let new_head = &refresh.new_head;
     if old_head != new_head {
-        for revision in [&old_head, &new_head] {
+        for revision in [old_head, new_head] {
             let row = work.now[revision].clone();
             if row.record.string("wiki_extraction_status") == Some("complete") {
                 let content_path =
                     asset_path(&row, row.record.string("wiki_content_path").unwrap())?;
-                if revision == &new_head {
+                if revision == new_head {
                     let text = String::from_utf8(
-                        content
+                        refresh
+                            .content
                             .clone()
                             .ok_or_else(|| corrupt("complete head lacks verified content"))?,
                     )
@@ -1079,12 +1111,16 @@ pub(crate) fn project_refresh(
                         &row,
                         None,
                         Some((source_id.clone(), revision.clone())),
-                        &mut delta,
+                        delta,
                     )?;
                 }
             }
         }
     }
+    Ok(())
+}
+
+fn emit_refresh_navigation(work: &mut Work<'_>, delta: &mut CatalogDelta) -> Result<()> {
     let changed_keys: Vec<_> = work
         .new_registry
         .iter()
@@ -1095,30 +1131,64 @@ pub(crate) fn project_refresh(
         .collect::<BTreeSet<_>>()
         .into_iter()
         .collect();
-    let mut link_owners: BTreeSet<_> = operations
+    let mut link_owners: BTreeSet<_> = work
+        .overlay
         .keys()
         .filter(|path| canonical_path(path))
         .cloned()
         .collect();
     if !changed_keys.is_empty() {
-        for (path, _) in reader.affected_links(&changed_keys)? {
+        for (path, _) in work.reader.affected_links(&changed_keys)? {
             link_owners.insert(path);
         }
     }
     for owner in link_owners {
-        work.emit_links(&owner, &mut delta)?;
+        work.emit_links(&owner, delta)?;
     }
     if !changed_keys.is_empty() {
-        for assertion in reader.affected_assertion_navigation(&changed_keys)? {
-            work.emit_assertion_navigation(&assertion, &mut delta)?;
+        for assertion in work.reader.affected_assertion_navigation(&changed_keys)? {
+            work.emit_assertion_navigation(&assertion, delta)?;
         }
     }
+    Ok(())
+}
+
+/// None is an authenticated planner no-op; it creates no proposal or SQL epoch.
+pub(crate) fn project_refresh(
+    fs: &VaultFs,
+    reader: &QuerySnapshot,
+    plan: IndexedSourceRefreshPlan,
+    limits: &RefreshProjectionLimits,
+) -> Result<Option<ProjectedSourceRefresh>> {
+    let base = plan.base_snapshot.clone();
+    let mut work = Work::new(fs, reader, limits)?;
+    let mut refresh = admit_refresh(&mut work, plan, false)?;
+    let Some(mut draft) = refresh.draft.take() else {
+        work.recheck()?;
+        return Ok(None);
+    };
+    refresh.content = work.verify_head(&refresh.source_id, &refresh.new_head)?;
+    let seeds = refresh_seeds(&mut work, &refresh)?;
+    work.discover(seeds)?;
+    work.recompute()?;
+    let policy = super::write_projection::project_policy(&mut work)?;
+    let mut delta = super::write_projection::empty_delta(policy);
+    emit_refresh_identity(&mut work, &refresh, &mut delta)?;
+    let changed: Vec<_> = work
+        .now
+        .iter()
+        .filter(|(id, row)| work.old.get(*id) != Some(*row))
+        .map(|(id, _)| id.clone())
+        .collect();
+    for id in changed {
+        work.emit_record(&id, &mut delta)?;
+    }
+    emit_refresh_content(&mut work, &refresh, &mut delta)?;
+    emit_refresh_navigation(&mut work, &mut delta)?;
     let mut after = work.before.clone();
     for (path, bytes) in &work.overlay {
         after.insert(path.clone(), ExpectedState::Hash(Blake3Hash::digest(bytes)));
     }
-    // Retain every selected boundary in the exact prepared manifest. The common
-    // file executor can then guard it between writes without global reproof.
     draft.read_preconditions = deps(work.before.clone());
     delta.dependencies = deps(after.clone());
     delta.validate()?;
@@ -1126,14 +1196,194 @@ pub(crate) fn project_refresh(
     Ok(Some(ProjectedSourceRefresh {
         parts: ProjectedRefreshParts {
             draft,
-            base: plan.base_snapshot,
-            source_id,
+            base,
+            source_id: refresh.source_id,
             before: deps(work.before),
             after: deps(after),
             delta,
         },
     }))
 }
+
+/// Admit one bounded final overlay, with all selected heads installed before
+/// discovering shared support, opposition, generation and policy dependents.
+pub(crate) fn project_refresh_batch(
+    fs: &VaultFs,
+    reader: &QuerySnapshot,
+    mut plans: Vec<IndexedSourceRefreshPlan>,
+    limits: &RefreshProjectionLimits,
+) -> Result<Option<super::write_projection::ProjectedWrite>> {
+    use super::write_projection::{ProjectedWrite, ProjectedWriteParts};
+    use crate::changes::indexed_refresh::{
+        IndexedRefreshSourceDependency, IndexedRefreshTarget, IndexedWriteOperation,
+    };
+    if plans.is_empty() || plans.len() > 16 {
+        return Err(WikiError::invalid("refresh batch requires 1–16 plans"));
+    }
+    plans.sort_by(|left, right| left.plan.source_id.cmp(&right.plan.source_id));
+    let source_ids: BTreeSet<_> = plans
+        .iter()
+        .map(|plan| plan.plan.source_id.clone())
+        .collect();
+    let mut revision_owners = BTreeMap::new();
+    if source_ids.len() != plans.len() {
+        return Err(conflict("refresh batch repeats a Source identity"));
+    }
+    for plan in &plans {
+        for revision in [&plan.previous_revision, &plan.plan.revision_id] {
+            if source_ids.contains(revision)
+                || revision_owners
+                    .insert(revision.clone(), plan.plan.source_id.clone())
+                    .is_some_and(|owner| owner != plan.plan.source_id)
+            {
+                return Err(conflict(
+                    "refresh batch Source and Revision ownership overlaps",
+                ));
+            }
+        }
+    }
+    let base = QueryCatalog::snapshot(reader).clone();
+    let mut work = Work::new(fs, reader, limits)?;
+    let mut refreshes = Vec::with_capacity(plans.len());
+    for plan in plans {
+        refreshes.push(admit_refresh(&mut work, plan, true)?);
+    }
+    if refreshes.iter().all(|refresh| refresh.draft.is_none()) {
+        work.recheck()?;
+        return Ok(None);
+    }
+    let mut targets = Vec::with_capacity(refreshes.len());
+    for refresh in &refreshes {
+        let unchanged_source = if refresh.draft.is_none() {
+            let path = work.now[&refresh.source_id].path.clone();
+            let length = work.captured[&path].bytes.len();
+            // Historical replay authenticates unchanged canonical membership
+            // from this retained exact before-image, not today's Source bytes.
+            // The retained delta and proof each encode this exact string. JSON
+            // escaping requires at most six bytes per original UTF-8 byte.
+            let encoded = length
+                .checked_mul(6)
+                .and_then(|n| n.checked_add(2))
+                .ok_or_else(budget)?;
+            work.charge(
+                length
+                    .checked_add(encoded.checked_mul(2).ok_or_else(budget)?)
+                    .ok_or_else(budget)?,
+            )?;
+            Some(
+                String::from_utf8(work.captured[&path].bytes.clone())
+                    .map_err(|_| conflict("unchanged Source is not UTF8"))?,
+            )
+        } else {
+            None
+        };
+        targets.push(IndexedRefreshTarget {
+            source_id: refresh.source_id.clone(),
+            previous_revision_id: refresh.old_head.clone(),
+            revision_id: refresh.new_head.clone(),
+            reused: !refresh.is_new,
+            no_op: refresh.draft.is_none(),
+            unchanged_source,
+        });
+    }
+    let mut operation = IndexedWriteOperation::SourceRefreshBatch {
+        refreshes: targets,
+        dependent_sources: Vec::new(),
+    };
+    operation.validate()?;
+    let mut seeds = BTreeSet::new();
+    for refresh in &mut refreshes {
+        refresh.content = work.verify_head_metered(&refresh.source_id, &refresh.new_head)?;
+        seeds.extend(refresh_seeds(&mut work, refresh)?);
+    }
+    work.discover(seeds)?;
+    work.recompute()?;
+    let policy = super::write_projection::project_source_refresh_batch_policy(&mut work)?;
+    let mut delta = super::write_projection::empty_delta(policy);
+    for refresh in &refreshes {
+        emit_refresh_identity(&mut work, refresh, &mut delta)?;
+    }
+    let mut changed: BTreeSet<_> = work
+        .now
+        .iter()
+        .filter(|(id, row)| work.old.get(*id) != Some(*row))
+        .map(|(id, _)| id.clone())
+        .collect();
+    // Unchanged Sources retain explicit canonical rows for exact historical
+    // replay validation, while their immutable dependencies remain guarded.
+    changed.extend(refreshes.iter().map(|refresh| refresh.source_id.clone()));
+    for id in changed {
+        work.emit_record(&id, &mut delta)?;
+    }
+    if let IndexedWriteOperation::SourceRefreshBatch {
+        dependent_sources, ..
+    } = &mut operation
+    {
+        for row in delta.records.iter().filter(|row| {
+            row.record.kind() == RecordKind::Source && !source_ids.contains(row.record.id())
+        }) {
+            let bytes = &work.captured[&row.path].bytes;
+            let encoded = bytes
+                .len()
+                .checked_mul(6)
+                .and_then(|n| n.checked_add(2))
+                .ok_or_else(budget)?;
+            let charge = bytes
+                .len()
+                .checked_add(encoded.checked_mul(2).ok_or_else(budget)?)
+                .ok_or_else(budget)?;
+            work.charge(charge)?;
+            let bytes = String::from_utf8(work.captured[&row.path].bytes.clone())
+                .map_err(|_| conflict("dependent Source is not UTF8"))?;
+            dependent_sources.push(IndexedRefreshSourceDependency {
+                source_id: row.record.id().clone(),
+                source_bytes: bytes,
+            });
+        }
+        dependent_sources.sort_by(|left, right| left.source_id.cmp(&right.source_id));
+    }
+    operation.validate()?;
+    for refresh in &refreshes {
+        // Document construction retains its own verified content copy.
+        if refresh.old_head != refresh.new_head {
+            work.charge(refresh.content.as_ref().map_or(0, Vec::len))?;
+        }
+        emit_refresh_content(&mut work, refresh, &mut delta)?;
+    }
+    emit_refresh_navigation(&mut work, &mut delta)?;
+    let allocated_ids = refreshes
+        .iter()
+        .enumerate()
+        .filter(|(_, refresh)| refresh.is_new)
+        .map(|(index, refresh)| (format!("revision_{index}"), refresh.new_head.clone()))
+        .collect();
+    let mut drafts = refreshes.into_iter().filter_map(|refresh| refresh.draft);
+    let mut draft = drafts
+        .next()
+        .ok_or_else(|| corrupt("changed batch lacks draft"))?;
+    draft.title = format!("Refresh {} sources", source_ids.len());
+    draft.allocated_ids = allocated_ids;
+    for remaining in drafts {
+        draft.operations.extend(remaining.operations);
+    }
+    let mut after = work.before.clone();
+    for (path, bytes) in &work.overlay {
+        after.insert(path.clone(), ExpectedState::Hash(Blake3Hash::digest(bytes)));
+    }
+    draft.read_preconditions = deps(work.before.clone());
+    delta.dependencies = deps(after.clone());
+    delta.validate()?;
+    work.recheck()?;
+    Ok(Some(ProjectedWrite::from_parts(ProjectedWriteParts {
+        operation,
+        draft,
+        base,
+        before: deps(work.before),
+        after: deps(after),
+        delta,
+    })))
+}
+
 pub(super) fn asset_path(row: &RecordRow, name: &str) -> Result<VaultRelativePath> {
     let parent = row
         .path
@@ -1164,6 +1414,21 @@ impl Work<'_> {
         source: &RecordId,
         revision: &RecordId,
     ) -> Result<Option<Vec<u8>>> {
+        self.verify_head_inner(source, revision, false)
+    }
+    fn verify_head_metered(
+        &mut self,
+        source: &RecordId,
+        revision: &RecordId,
+    ) -> Result<Option<Vec<u8>>> {
+        self.verify_head_inner(source, revision, true)
+    }
+    fn verify_head_inner(
+        &mut self,
+        source: &RecordId,
+        revision: &RecordId,
+        metered_copies: bool,
+    ) -> Result<Option<Vec<u8>>> {
         let row = self.now[revision].clone();
         for (path_field, hash_field) in [
             ("wiki_original_path", "wiki_original_hash"),
@@ -1184,6 +1449,45 @@ impl Work<'_> {
                     self.capture(&path, &ExpectedState::Hash(hash))?;
                 }
             }
+        }
+        if metered_copies {
+            // ValidationInput copies the finite selected bytes, and SourceView
+            // retains another copy. Its bounded payload reads return copies too.
+            let selected = self
+                .captured
+                .values()
+                .map(|doc| doc.bytes.len())
+                .chain(self.overlay.values().map(Vec::len))
+                .try_fold(0usize, |total, bytes| {
+                    total.checked_add(bytes).ok_or_else(budget)
+                })?;
+            let payload = ["wiki_original_path", "wiki_content_path"]
+                .into_iter()
+                .filter_map(|field| row.record.string(field))
+                .try_fold(0usize, |total, name| {
+                    let path = asset_path(&row, name)?;
+                    let bytes = self
+                        .overlay
+                        .get(&path)
+                        .map(Vec::len)
+                        .or_else(|| self.captured.get(&path).map(|doc| doc.bytes.len()))
+                        .ok_or_else(|| corrupt("verified payload was not captured"))?;
+                    total.checked_add(bytes).ok_or_else(budget)
+                })?;
+            let canonical_overlay = self
+                .overlay
+                .iter()
+                .filter(|(path, _)| canonical_path(path))
+                .try_fold(0usize, |total, (_, bytes)| {
+                    total.checked_add(bytes.len()).ok_or_else(budget)
+                })?;
+            self.charge(
+                selected
+                    .checked_mul(2)
+                    .and_then(|n| n.checked_add(payload))
+                    .and_then(|n| n.checked_add(canonical_overlay))
+                    .ok_or_else(budget)?,
+            )?;
         }
         let input = ValidationInput {
             vault_id: QueryCatalog::vault_id(self.reader).clone(),
@@ -1631,5 +1935,7 @@ impl Work<'_> {
 }
 
 #[cfg(test)]
-#[path = "source_projection_tests.rs"]
-mod tests;
+mod tests {
+    include!("source_projection_tests.rs");
+    include!("source_refresh_batch_projection_tests.rs");
+}
