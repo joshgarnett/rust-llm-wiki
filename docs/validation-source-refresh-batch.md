@@ -133,11 +133,57 @@ changed target and complete receipts remain preserved without retry or recovery.
 This partial batch result supplies no complete scalar comparison, speedup ratio,
 whole-workflow score, default-quality improvement or 25K qualification.
 
-The next milestone is one narrowly instrumented release invocation on another
-qualified initial state, with the same 16 caller inputs and guards. It will
-attribute selected-proof checks, file/journal durability, SQL changes, checkpoint
-and finalization costs. Code inspection found repeated selected-dependency checks,
-but neither those checks nor the approximately 2.6 GB catalog size establish a
-bottleneck. Optimization remains contingent on measured stage costs and preserved
-freshness, immutable-history and crash-replay invariants. The time and correctness
-gates remain unchanged.
+## Measured update-stage diagnosis
+
+One instrumented native release invocation subsequently completed the same first
+16 changed inputs on a separately qualified 10K copy. Both library and executable
+compiler arguments specified optimization level 3 and debug information level 0.
+The one build took 74.388 seconds; copy qualification took 96.901 seconds and
+matched the protected seed before and after copying.
+
+The original diagnostic controller failed during setup before any native command
+or vault read/write. Its failed receipt remains preserved. Independent review
+prospectively admitted a corrected experiment on the proven unmodified copy;
+the corrected controller exercised its complete preparation path without launching
+the CLI before receiving execution approval. That preparation took 1.895 seconds.
+No additional build or copy occurred.
+
+The corrected invocation exited successfully and returned 16 captures, each
+correlated with its caller input and locally verified against the selected Source
+note and publication authority. Independent Astra review reconciled all 16
+results, exact command, output streams and diagnostic counters. The native
+process's own monotonic interval was 38.193 seconds; the external launch-to-reap
+interval was 38.783 seconds. These are separate measurements, not an overhead or
+speedup estimate.
+
+| Exclusive native stage | Seconds |
+|---|---:|
+| Canonical file application | 27.399 |
+| Preparation and sealing | 9.329 |
+| Final verification and acknowledgement | 0.946 |
+| Joint projection | 0.324 |
+| Selected SQL changes, commit and checkpoint combined | 0.128 |
+| Public input and planning | 0.053 |
+| Startup and dispatch | 0.015 |
+
+File application and preparation consumed 96.16% of this invocation. Nested
+counters recorded 193 dependency-guard passes, 22,967 precondition checks and
+32,457 bounded canonical reads delivering 1,129,794,177 logical bytes. Target
+hashing itself took 0.393 seconds, compared with 16.691 seconds for the enclosing
+target-state checks. Payload retention took 8.253 seconds inclusively; its path,
+layout and durability sub-costs were not isolated. Nested durations and logical
+byte categories overlap and must not be added together. They do not measure
+physical I/O or all SQLite synchronization.
+
+This evidence directs the next experiment toward redundant filesystem/path work,
+while preserving fresh byte guards around every mutation and publication. It
+does not justify an SQL/index rewrite or reducing guard frequency. The first
+candidate is removing redundant per-prefix canonicalization on Unix under the
+existing canonical-root, validated-relative-path and fresh symlink-check
+invariants; its benefit remains to be measured. Other platforms retain their
+existing resolution path pending separate proof.
+
+The diagnostic did not audit all retained payloads, immutable history or unselected
+content, and did not run the complete integrity, retrieval or cited-Page workflow.
+It supplies no paired speedup, 1,000-update acceptance, default-quality improvement,
+25K qualification or full-release credit. All original gates remain unchanged.
