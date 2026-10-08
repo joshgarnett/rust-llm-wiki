@@ -364,3 +364,12 @@ solution and was not promoted. The empty tiny draft-Page context follows existin
 review authority; it does not establish a short-text defect. Further maintenance
 tuning is deferred in favor of default-context completeness, with every original
 capacity and quality gate retained.
+
+The separate [10K evidence-loss audit](validation-native-phrase-locality.md#separate-10k-evidence-loss-audit)
+finds all eight omitted conditions already present in authenticated prepared cards.
+It admits no candidate-generation fix or further lexical allocation tuning. Its
+report deadline fails, and no final-packet feasibility or quality gain is claimed.
+The subsequent [1,000-update scalar measurement](validation-capacity-workflow.md#separate-1000-update-scalar-measurement)
+fails at 272 completed updates in 600 seconds. This admits a bounded existing-Source
+batch candidate subject to correctness and complete paired performance; native
+completeness remains an explicit open blocker.

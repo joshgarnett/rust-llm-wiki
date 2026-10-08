@@ -645,3 +645,37 @@ component checks do not establish a useful large-vault speedup. Further sync
 tuning is deferred while a fresh architectural review returns to default-context
 completeness. The five-second global-sync failure, 1,000 genuine updates, practical
 25K capacity, default-quality advancement and full-release acceptance remain open.
+
+### Separate 1,000-update scalar measurement
+
+The accepted optimized native executable then ran a separately declared
+standalone update experiment on a complete qualified copy of the preserved
+post-churn 10K backup. The starting state retained 9,990 current Sources,
+10,002 Sources, 10,103 immutable revisions and all 1,000 authored Pages.
+Each of 1,000 selected local inputs was verified different from every retained
+revision of its owner; historical reuse and no-ops could not satisfy this gate.
+The whole interval included request construction, input hashing and public calls.
+
+**The 600-second gate failed: 272 updates completed, with attempt 273 interrupted
+at 600.033 seconds.** Independent inspection authenticated all 272 successful
+receipts, their consecutive publications, exact new payloads, current Source
+heads and preserved old revisions, without a prefix correctness error. The
+remaining 727 updates were unrun. This censored result does not establish a
+complete baseline time, a speedup or full-tier acceptance.
+
+The interrupted attempt had installed its four canonical targets and durably
+reached FILES_APPLIED, but had not published or acknowledged its intended epoch.
+A separately bounded ordinary `recover` exceeded 60 seconds without completing.
+The existing exact `changes apply` for that one retained Change subsequently
+completed in 0.708 seconds; exact Source and asset bytes stayed unchanged,
+authority became idle and publication advanced once. The three-call recovery
+observation took 1.296 seconds. This finishes the interrupted intent without
+retrying the Source refresh or rescoring the original throughput failure.
+
+The measured repeated-write cost admits a bounded batch of guarded existing
+Sources: one joint dependency projection, one retained Change and one publication.
+That candidate remains unqualified until correctness and complete paired
+performance pass. Require all 1,000 candidate captures within 600 seconds and
+at least 1.5 times improvement against a complete, prospectively pinned scalar
+arm on the same prestate and inputs. Keep default retrieval quality, external
+sync, whole lifecycle and 25K acceptance separate and open.

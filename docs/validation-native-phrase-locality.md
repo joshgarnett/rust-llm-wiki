@@ -114,3 +114,35 @@ quality, complete 10K/25K lifecycle and whole-release acceptance remain open. Th
 separate [assisted answer/Page workflow](validation-assisted-answer-pages.md)
 demonstrates existing task-aware selection and maintenance, with no comparative
 credit for this native trial.
+
+## Separate 10K evidence-loss audit
+
+A later bounded audit inspects twelve development tasks from the completed
+[10K query continuation](validation-capacity-workflow.md#selected-10k-lifecycle-continuation):
+four incomplete distant-evidence tasks, four incomplete two-Source tasks, two
+complete controls and two scoped absent-information controls. It reuses saved
+initial outputs and prepares cards for only the eight failures, using the accepted
+executable and the exact original publication. No build, copy, model selection
+or repeated control command is involved.
+
+Every required condition survives in the prepared cards. All eight omitted
+conditions therefore reach the public preparation boundary but are absent from
+the ordinary returned packet. **Zero of four failures in either positive stratum
+demonstrates a missing-candidate boundary.** This vetoes another candidate-generation
+fix or lexical allocation adjustment under the existing representation. It does
+not identify a finer internal selection stage or prove that a complete alternative
+packet fits the final budget; no selection replay was performed.
+
+Independent authentication checks 54 saved SourceRef occurrences and 640 prepared
+card spans across 27 retained payloads without a byte mismatch. Eight preparations
+take 1.983 summed owning seconds and emit 526,077 bytes. Inspection remains below
+the declared 16 MiB allowance. The evidence assessment finishes within 300 seconds,
+but report release takes 314.811 seconds, **failing the whole-review deadline**.
+That process failure is retained alongside the bounded evidence findings.
+
+This uses the historical 6,000-byte/1,500-token profile, not a shipping-default
+quality score. It supplies no retrieval-improvement or unseen acceptance credit.
+A future allocator needs a demonstrated support-discrimination mechanism before
+implementation. The audit recommended measuring 1,000 genuine updates; the
+subsequent [scalar measurement](validation-capacity-workflow.md#separate-1000-update-scalar-measurement)
+fails its 600-second gate. Native-quality and every capacity/release gate stay open.
