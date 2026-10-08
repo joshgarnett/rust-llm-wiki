@@ -146,3 +146,48 @@ A future allocator needs a demonstrated support-discrimination mechanism before
 implementation. The audit recommended measuring 1,000 genuine updates; the
 subsequent [scalar measurement](validation-capacity-workflow.md#separate-1000-update-scalar-measurement)
 fails its 600-second gate. Native-quality and every capacity/release gate stay open.
+
+## Separate requirement/witness diagnostic
+
+A subsequent finite requirement/witness recognizer was rejected before any Rust
+implementation. It tried to turn the actual query into separate obligations and
+bind each obligation to a scoped assertion in supplied evidence. Full and
+binding-removed arms shared costs, budgets, owner limits and allocation. A third
+unigram arm was a card-level diagnostic, not the ordinary native baseline.
+
+An independent critic froze 24 matched families, six each for entity/role binding,
+governing versus archived or mention-only rules, negation/exceptions, and multiple
+sources. Every family had two permutations, giving 48 menus. Query features,
+four-card counts, displayed bytes, synthetic costs and budgets were matched;
+identifiers and order could not supply the answer. All families extended beyond
+the earlier deployment/restore templates. Labels remained with the critic.
+
+The full recognizer completed **0/24 families and 0/48 permutations**, with zero
+gain over binding-removed. It extracted no assertions from any of the 192 card
+presentations and selected no evidence. Forty-six menus reported unsupported
+syntax; the other two recognized command obligations without witnesses. The
+unigram and binding-removed arms completed zero families, with respectively two
+and one complete individual permutations. Zero false bindings and stable empty
+selections establish no useful retrieval behavior.
+
+All 144 pure calls succeeded in 8.376 owning-process seconds, with no excluded
+case, schema error, budget error, native command, provider call or build. Synthetic
+spans and costs establish neither native citation correctness nor packing fit.
+This is a coverage failure before ranking; it does not show whether semantic
+binding could discriminate after successful extraction. Do not extend the grammar
+against these now-exposed cases or port this candidate to Rust.
+
+The preceding native feasibility trial stayed failed and incomplete: twelve
+original small-corpus preparations succeeded, then the first 10K oracle selection
+was refused. Its replay adapter omitted an explicit five-second verification
+limit, using the CLI's two-second default instead. That changed the authenticated
+request, so rejection was correct. There was no retry and no native candidate
+score. Replay commands must explicitly preserve every limit in the prepared
+binding; matching the publication and query alone is insufficient.
+
+The original 9/28-fact, 2/10-task native result and quality gates remain unchanged.
+That result uses the historical small-budget profile; shipping-default quality,
+the unseen gate and release qualification remain open. An independent whole
+workflow review must choose the next discriminating experiment. Neither this
+failed diagnostic nor the separate assisted workflow supplies native default
+improvement credit.
