@@ -538,3 +538,110 @@ remains **unproved**; standalone card lengths are insufficient. No native
 optimizer, weight/cap change or quality gain is justified by this audit. A
 subsequent assisted workflow must use only the task and public evidence, account
 for its additional work, and remain separate from native-default acceptance.
+
+### Selected 10K lifecycle continuation
+
+A separately admitted continuation executes the remaining selected lexical
+workflow on a faithful copy of the qualified 10K corpus, using the same accepted
+native release executable. The original failed sync and the first continuation's
+process-observer failure remain failed. This continuation performs **952 commands:
+947 successes, four expected refusals and one timeout**. It completes 700 context
+requests: 100 tasks repeated three times initially and after churn, followed by
+100 requests after complete cache-loss reconstruction. Each phase also includes
+20 search audit tasks and their conditional exact reads.
+
+The frozen profile uses five owners, 80 candidates, 1,024-byte excerpts, 6,000
+rendered bytes and 1,500 estimated tokens. It is a different evaluation profile
+from the shipping context defaults. Independent inspection of returned evidence
+finds:
+
+| Phase | Supported required facts | Complete positive tasks | Safe zero-current-fact controls |
+| --- | ---: | ---: | ---: |
+| Initial | 120/152 | 60/92 | 8/8 |
+| Post-churn | 123/148 | 64/89 | 11/11 |
+| Rebuilt | 123/148 | 64/89 | 11/11 |
+
+Withdrawal changes the denominators; these are different corpus states, not an
+algorithm improvement. The four licensed Cargo tasks complete only one task in
+each state. A refreshed deployment-lead condition regresses, while the 95
+unchanged synthetic fact units lose no previously supported fact. Unfiltered
+absent-target questions can return unrelated evidence; honest evidence labels
+do not demonstrate a generated answer's semantic abstention.
+
+All **3,460 structured citation occurrences / 444 distinct ranges**, 3,216
+rendered passage mirrors and 62 exact reads authenticate with correct currentness.
+All 100 post-churn/rebuilt context pairs, 20 search pairs and 19 conditional read
+pairs match under the frozen exclusions. Dependency-fingerprint and complete
+normalized-row equality remain open. Owning context-request p95 is
+**0.211 / 0.227 / 0.235 seconds**, with maxima below 0.469 seconds.
+
+One hundred Source head changes complete, including 90 new revisions and ten
+historical reactivations. Ten withdrawals leave 9,990 current Sources. True no-op,
+historical/current/withdrawn reads, complete backup, full checks and offline
+cache-loss reconstruction pass; rebuilding takes 121.432 seconds. Dry-run,
+selected tampering, duplicate identity, unselected cache omission and insufficient
+proof controls pass, including restoration. The fixed Source refresh/read/no-op,
+add/withdraw and control-Page initialization also complete.
+
+The ordinary external-editor deletion workflow then **fails its 60-second gate**.
+Sync reaches a censored timeout observation at 60.023 seconds with no output;
+the whole deletion interval reaches 60.025 seconds. Its native exit and completed
+duration are unavailable. A subsequent controller cleanup permission error
+prevents the terminal ledger; a later exact-PID check finds no remaining process.
+Deletion disappearance, restoration, retirement, all 1,000 separate genuine bulk
+updates and final accounting remain **unrun**. The 100 head changes do not satisfy
+the bulk-update gate. No whole-tier score, strict sync pass, 25K qualification,
+native quality gain or release acceptance follows.
+
+### Rejected seeded external-Page sync candidate
+
+A subsequent candidate attempted to reuse the selected catalog's unchanged
+captured text and retained revision ownership while reconstructing the complete
+canonical graph and policy projection. It cloned the SQLite catalog into an
+unpublished candidate; it preserved the full external-input checks and used the
+ordinary full-build fallback for unsupported changes. This was a performance
+experiment, not an accepted change to ordinary sync.
+
+The native macOS ARM64 release build used optimization level 3 and no debug
+information. Candidate executable SHA-256:
+`86c4caf0e3763ed1add13c32d7d33dce6d238c7457dafa428df5884f7a37550b`.
+All **42 affected native tests** passed, including twelve new cases for seeded
+reconstruction, full-build comparison, both layouts, fallbacks, committed WAL,
+copy limits and acknowledgement recovery. Independent small-fixture commands
+demonstrated captured reuse, external edits, deletion/restoration, exact citations
+and agreement with independent unseeded reconstruction on both layouts.
+
+The frozen small-fixture acceptance nevertheless failed. Its tiny authored Page
+was a **draft**, which the existing document-context authority rules exclude;
+exact read and lexical discovery worked, while context remained empty under both
+seeded and unseeded reconstruction. An explicit draft-status filter does not
+override that exclusion. This is a task/contract mismatch, not evidence for a
+short-text retrieval defect. The critic also exceeded its declared inspection
+allowance by repeatedly reading its receipt log. Both original failures remain;
+the gate was not rescored.
+
+One complete, independently qualified copy of the pre-deletion 10K state then
+ran the frozen large-vault experiment. The original 90,658-byte control Page read
+passed. Its external deletion followed by ordinary sync again **failed the
+60-second whole-task limit**, at **60.034 seconds**. The supervisor killed and
+reaped the owned process with exit -9; it emitted no result packet. Natural
+completion time and a speedup against the earlier censored timeout are unknown.
+Observed native and sampled process-tree peak RSS was **803,831,808 bytes**;
+226 process-tree observations had a maximum gap of 0.285 seconds. These are
+observed resource bounds, not exact transient maxima.
+
+The old publication remained selected at epoch 2708. The new unpublished
+candidate contained retained owners and reconstructed metadata, but remained in
+the building state without final commitments. Partial rows demonstrate progress,
+not completed reuse, publication, deletion correctness or the exact bottleneck.
+Deletion absence checks, restoration, same-size/restored-mtime edit, subsequent
+checks and cache-loss comparison were **unrun**. A prior relative-path controller
+launch failed before starting a product process and remains recorded separately.
+
+The candidate was not promoted. Its source, executable and failed evidence remain
+preserved; only its six isolated working-source paths were restored to the
+accepted implementation after checking all 495 frozen build inputs. The passing
+component checks do not establish a useful large-vault speedup. Further sync
+tuning is deferred while a fresh architectural review returns to default-context
+completeness. The five-second global-sync failure, 1,000 genuine updates, practical
+25K capacity, default-quality advancement and full-release acceptance remain open.

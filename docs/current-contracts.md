@@ -346,3 +346,21 @@ The candidate is not promoted, and accepted retrieval remains unchanged. A fresh
 whole-workflow review precedes another implementation; no pair-weight or density
 retry follows. Maintained export references now match the accepted SourceRef
 capabilities and guide, without promoting the rejected binary.
+
+The separate [selected 10K lifecycle continuation](validation-capacity-workflow.md#selected-10k-lifecycle-continuation)
+completes 700 context requests, Source head changes and withdrawals, backup,
+cache-loss reconstruction and corruption controls. All 3,460 citations
+authenticate, and post-churn/rebuilt results agree under the frozen exclusions.
+Initial context completes 60/92 positive tasks; post-churn and rebuilt complete
+64/89 against changed phase expectations. This is no algorithm improvement.
+The external-editor Page deletion then exceeds its 60-second limit; restoration,
+the separate 1,000-update measurement and final accounting remain unrun. The
+original sync failure, default quality, 25K and full release remain open.
+
+The subsequent [seeded external-Page sync experiment](validation-capacity-workflow.md#rejected-seeded-external-page-sync-candidate)
+passes 42 affected native tests and demonstrates small-fixture reuse, but again
+exceeds the frozen 60-second actual10K deletion task. It is rejected as a latency
+solution and was not promoted. The empty tiny draft-Page context follows existing
+review authority; it does not establish a short-text defect. Further maintenance
+tuning is deferred in favor of default-context completeness, with every original
+capacity and quality gate retained.
