@@ -62,7 +62,7 @@ because its verifier expected the batch `capture_state` field in the scalar
 response, which uses `extraction_status`. Its publication comparison also confused
 the snapshot's version/hash authority with the operations record's epoch
 authority. These are benchmark adapter faults, not demonstrated product failures.
-The batch arm and complete speed ratio remain unmeasured; the changed scalar copy
+A complete paired batch arm and speed ratio remain unmeasured; the changed scalar copy
 and all failed receipts are preserved. A new pair must use corrected, independently
 reviewed adapters and fresh qualified initial states. No native quality gain
 follows from this functional milestone; the [retrieval evaluation](validation-native-phrase-locality.md)
@@ -108,3 +108,36 @@ against its own live Python process. It returned positive RSS in 0.031 seconds i
 the escalated context. That qualifies this invocation context only; it does not
 authorize retrying or rescoring the failed benchmark. Future native measurements
 need prospectively admitted fresh state and qualified observer permissions.
+
+## Integrated 10K workflow throughput checkpoint
+
+A later independent review admitted a complete managed-update-to-cited-Page
+workflow on a separate fresh copy of the same 10K post-churn seed. Preparation
+matched all 91,989 files and 32,909 directories and preserved the protected seed;
+it took 97.006 seconds. The accepted release executable and its optimization
+settings remained unchanged. No Rust build or provider call occurred.
+
+The native run **failed the update-throughput gate**. Twenty-five 16-member batch
+commands acknowledged and locally verified 400 fresh captures. Their median
+launch-to-reap time was 20.982 seconds. At 543.607 seconds, the controller refused
+to launch another command because its complete 60-second window plus five-second
+cleanup reserve would exceed the frozen 600-second phase. The remaining 600
+members were unattempted. The native owning interval was 557.794 seconds; summed
+with preparation, the separately measured owning intervals were 654.800 seconds.
+External review and launch gaps are excluded from that sum.
+
+The observer recorded 2,243 samples without resource errors; all children were
+reaped. The final integrity checks, citation controls, retrieval and cited-Page
+steps were unrun: 73 of the 98 planned calls received no acceptance credit. The
+changed target and complete receipts remain preserved without retry or recovery.
+This partial batch result supplies no complete scalar comparison, speedup ratio,
+whole-workflow score, default-quality improvement or 25K qualification.
+
+The next milestone is one narrowly instrumented release invocation on another
+qualified initial state, with the same 16 caller inputs and guards. It will
+attribute selected-proof checks, file/journal durability, SQL changes, checkpoint
+and finalization costs. Code inspection found repeated selected-dependency checks,
+but neither those checks nor the approximately 2.6 GB catalog size establish a
+bottleneck. Optimization remains contingent on measured stage costs and preserved
+freshness, immutable-history and crash-replay invariants. The time and correctness
+gates remain unchanged.
