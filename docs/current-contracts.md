@@ -163,6 +163,14 @@ reconstruction. Complete input comparison and final recheck remain mandatory.
 37.254/28.364 seconds. These scoped gates do not close default retrieval quality,
 the five-second no-op target, representative 25K capacity or full-release gates.
 
+The [public Source occupancy control](validation-public-source-occupancy.md)
+completed all 64 ordinary import/query/refresh/history commands and exact citation
+checks. Default context still failed completeness: 5/10 positive tasks in the
+empty arm, 6/10 with the qualified public 1K corpus, critic 6.5/10. The control
+distinguishes preparation-admission differences from final-selection omissions;
+public preparation does not expose the complete automatic candidate pool.
+No retrieval algorithm changed, and default quality/HIGH/25K remain open.
+
 The [normalized embedding source checkpoint](validation-normalized-embeddings.md)
 adds bounded preparation, cached semantic/hybrid document search and automatic
 cited document context. All 98 distinct affected native checks pass across retained

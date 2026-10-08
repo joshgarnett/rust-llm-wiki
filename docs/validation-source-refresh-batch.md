@@ -233,3 +233,30 @@ justifying another isolated storage patch as a solution to the unchanged
 retrieval-quality experiment, subject to its exact outbound-payload approval,
 and completing the external-editor Page workflow. Default retrieval quality,
 the complete 10K lifecycle, 25K capacity and full-release acceptance remain open.
+
+## Guard-locality architecture review: implementation rejected
+
+A subsequent independent Astra source review reconciled the measured repeated
+checks: 64 canonical operations, three complete guard passes per operation and
+one final pass produce 193 passes; sweeping 119 retained preconditions explains
+all 22,967 checks. This is arithmetic and source inspection, not a new native
+measurement or proof of each traced path's meaning.
+
+The proposed optimization would check each operation's own Source/Revision guards
+around its mutation and check shared semantic/policy guards only at the beginning
+and final publication. The review rejected implementation under the unchanged
+freshness/recovery contract. An ordinary external edit to another selected or
+unchanged member must still be detected at the next existing guard before further
+canonical writes. Final publication refusal cannot restore that earlier refusal
+or prevent the additional partial writes. Distinct identities prevent ownership
+overlap; they do not establish byte freshness for other members or shared policy.
+
+The retained flat read set contains joint semantic authorization, including
+unchanged witnesses. It has no authenticated partition proving which checks can
+be omitted at a checkpoint. A path-prefix heuristic, cached hash or reduced
+guard frequency is not an accepted substitute. A coherent phase redesign would
+require a prospectively reviewed contract and exact compatibility/recovery
+semantics; this review authorizes neither that redesign nor another native run.
+The only admitted next diagnostic is a bounded static public-plan dependency
+matrix, if needed to decide that architecture. The complete 1,000-update gate and
+all correctness thresholds remain unchanged; no storage candidate was promoted.
