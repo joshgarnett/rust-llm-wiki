@@ -67,3 +67,44 @@ and all failed receipts are preserved. A new pair must use corrected, independen
 reviewed adapters and fresh qualified initial states. No native quality gain
 follows from this functional milestone; the [retrieval evaluation](validation-native-phrase-locality.md)
 records the separate budget profiles and their limits.
+
+## Separate single-arm 10K checkpoint
+
+A subsequent, prospectively reviewed experiment qualified one disposable copy of
+the complete post-churn 10K seed. All 91,989 files and 32,909 directories, including
+the root, matched the frozen manifest; source preservation and quiescence checks
+also passed. Qualification took 108.199 seconds. The seed contained 7,981,127,123
+logical file bytes. The system copy allowed opportunistic APFS cloning with a
+funded full-copy fallback; allocated-block counts do not establish exclusive
+physical ownership of shared extents.
+
+The earlier approximately 129 GiB free-space requirement funded an entire scalar
+and batch pair, its floor and margin. It was not the size of one seed copy. The
+single-arm protocol reserved 80 GiB for the complete experiment, plus a 32 GiB free
+floor, 2 GiB margin and 6 GiB competing reservation. This admission does not change
+the original resource gate or qualify 25K capacity.
+
+Independent Astra review admitted exactly 1,000 genuine changes in 63 batch
+commands, followed by one complete integrity check and 21 current, historical,
+withdrawn and authored-Page reads. The 600-second phase included actual input and
+Source-guard hashing, request creation, returned-item validation, output and child
+reaping. Old assets, retained Changes, Pages and caller inputs remained mandatory
+preservation checks; acceptance required at least 9/10 with every gate satisfied.
+
+The attempt **failed at its first command** because the sandbox denied the existing
+process-memory observer. The controller killed and reaped the child; neither the
+product nor verifier acknowledged an update, and both output streams were empty.
+The owning interval was 16.429 seconds, including preflight. All remaining updates,
+reads and the integrity check were unrun. A subsequent bounded control-file read
+found unchanged idle publication authority; it did not prove the entire target
+unchanged. The failed target and receipts are preserved without retry or recovery.
+
+This is an execution-environment failure, not a demonstrated product throughput
+defect. The complete 1,000-update timing, scalar comparison, 10K lifecycle and 25K
+gates remain open. No Rust rebuild or provider call was needed for this checkpoint.
+
+One separately approved, read-only permission probe then ran the unchanged observer
+against its own live Python process. It returned positive RSS in 0.031 seconds in
+the escalated context. That qualifies this invocation context only; it does not
+authorize retrying or rescoring the failed benchmark. Future native measurements
+need prospectively admitted fresh state and qualified observer permissions.
