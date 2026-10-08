@@ -160,8 +160,7 @@ fn project_selected(
     limits: &RefreshProjectionLimits,
 ) -> Result<Option<ProjectedWrite>> {
     reader.require_policy_layout()?;
-    let base = QueryCatalog::snapshot(reader).clone();
-    if base.publication().is_none() {
+    if QueryCatalog::snapshot(reader).publication().is_none() {
         return Err(conflict("Page admission requires a pinned publication"));
     }
     if draft.origin.is_some()
@@ -333,6 +332,19 @@ fn project_selected(
         return Ok(None);
     }
     draft.operations = changed;
+    finish_pages(work, draft, pages, job, false)
+}
+
+fn finish_pages(
+    mut work: Work<'_>,
+    draft: ChangeDraft,
+    mut pages: Vec<IndexedPageTarget>,
+    job: Option<IndexedWriteOperation>,
+    external: bool,
+) -> Result<Option<ProjectedWrite>> {
+    let mut draft = draft;
+    let base = QueryCatalog::snapshot(work.reader).clone();
+    let reader = work.reader;
     pages.sort_by(|a, b| a.path.cmp(&b.path));
     let mut seeds: BTreeSet<_> = pages.iter().map(|page| page.id.clone()).collect();
     let mut changed_keys = BTreeSet::new();
@@ -340,11 +352,16 @@ fn project_selected(
         if let Some(old) = work.old.get(&page.id) {
             changed_keys.extend(link_facts::registry_keys(&entry(old))?);
         }
-        changed_keys.extend(link_facts::registry_keys(&entry(&work.now[&page.id]))?);
+        if let Some(now) = work.now.get(&page.id) {
+            changed_keys.extend(link_facts::registry_keys(&entry(now))?);
+        }
     }
     let changed_keys: Vec<_> = changed_keys.into_iter().collect();
     let affected_links = reader.affected_links(&changed_keys)?;
     for (path, offset) in &affected_links {
+        if work.removed_paths.contains(path) {
+            continue;
+        }
         if reader
             .link_fact(path, *offset)?
             .is_some_and(|fact| fact.typed.is_some())
@@ -359,7 +376,27 @@ fn project_selected(
             seeds.insert(owner);
         }
     }
-    let policy = project_policy(&mut work)?;
+    let policy = if external {
+        let before = pages
+            .iter()
+            .filter_map(|page| {
+                work.captured
+                    .get(&page.path)
+                    .map(|old| (page.path.clone(), parse_note(&old.bytes)))
+            })
+            .collect();
+        let overlay = work
+            .overlay
+            .iter()
+            .map(|(path, bytes)| (path.clone(), parse_note(bytes)))
+            .collect();
+        let removed = work.removed_paths.clone();
+        policy_projection::project_policy_for_external_pages(
+            reader, &before, &overlay, &removed, &mut work,
+        )?
+    } else {
+        project_policy(&mut work)?
+    };
     let mut delta = empty_delta(policy.clone());
     let structural = structural_projection::recompute(&mut work, seeds, &policy, &mut delta)?;
     work.discover(structural.clone())?;
@@ -393,7 +430,8 @@ fn project_selected(
 
     for id in &work.dynamic {
         let row = &work.now[id];
-        if row.eligibility == Eligibility::Invalid
+        if !external
+            && row.eligibility == Eligibility::Invalid
             && (work.overlay.contains_key(&row.path)
                 || work.old.get(id).is_none_or(|old| {
                     old.eligibility != Eligibility::Invalid || old.reasons != row.reasons
@@ -485,7 +523,10 @@ fn project_selected(
         if let Some(old) = work.old.get(&page.id) {
             keys.extend(link_facts::registry_keys(&entry(old))?);
         }
-        let new_keys = link_facts::registry_keys(&entry(&work.now[&page.id]))?;
+        let Some(now) = work.now.get(&page.id) else {
+            continue;
+        };
+        let new_keys = link_facts::registry_keys(&entry(now))?;
         keys.extend(new_keys.clone());
         delta
             .facts
@@ -502,7 +543,40 @@ fn project_selected(
     let mut links: BTreeSet<_> = pages.iter().map(|page| page.path.clone()).collect();
     links.extend(affected_links.into_iter().map(|(path, _)| path));
     for path in links {
-        work.emit_links(&path, &mut delta)?;
+        if work.removed_paths.contains(&path) {
+            delta.links.push(super::normalized_delta::OwnedLinks {
+                path: path.clone(),
+                rows: vec![],
+            });
+            delta.claims.push(super::normalized_delta::OwnedClaims {
+                path: path.clone(),
+                rows: vec![],
+            });
+            delta.diagnostics.push(OwnedDiagnostics {
+                path: path.clone(),
+                rows: vec![],
+            });
+            delta.facts.as_mut().unwrap().links.push(
+                super::normalized_fact_delta::OwnedLinkFacts {
+                    path: path.clone(),
+                    rows: vec![],
+                },
+            );
+            delta
+                .documents
+                .push(super::normalized_delta::DocumentMutation::DeletePage {
+                    path: path.clone(),
+                    expected_hash: work
+                        .old
+                        .values()
+                        .find(|row| row.path == path)
+                        .ok_or_else(|| source_projection::corrupt("retired owner missing"))?
+                        .hash
+                        .clone(),
+                });
+        } else {
+            work.emit_links(&path, &mut delta)?;
+        }
     }
     let mut navigation: BTreeSet<_> = reader
         .affected_assertion_navigation(&keys)?
@@ -521,10 +595,16 @@ fn project_selected(
     for (path, bytes) in &work.overlay {
         after.insert(path.clone(), ExpectedState::Hash(Blake3Hash::digest(bytes)));
     }
+    for path in &work.removed_paths {
+        after.insert(path.clone(), ExpectedState::Absent);
+    }
     draft.read_preconditions = deps(work.before.clone());
     delta.dependencies = deps(after.clone());
     delta.validate()?;
-    work.recheck()?;
+    work.tick()?;
+    if !external {
+        work.recheck()?;
+    }
     Ok(Some(ProjectedWrite {
         parts: ProjectedWriteParts {
             operation: match job {
@@ -550,6 +630,98 @@ fn project_selected(
             delta,
         },
     }))
+}
+
+/// Cache-only projection of a fully classified external Page change set.
+/// This grants no canonical write authority and is applied only to a new sibling.
+pub(super) fn project_external_pages(
+    fs: &VaultFs,
+    reader: &QuerySnapshot,
+    changes: &[(
+        VaultRelativePath,
+        Option<super::DocumentRow>,
+        Option<ParsedNote>,
+    )],
+    limits: &RefreshProjectionLimits,
+) -> Result<CatalogDelta> {
+    let mut work = Work::new(fs, reader, limits)?;
+    let mut pages = Vec::new();
+    for (path, old, new) in changes {
+        let record = new.as_ref().and_then(|n| n.canonical.as_ref());
+        let id = if let Some(record) = record {
+            record.id().clone()
+        } else {
+            old.as_ref()
+                .and_then(|d| d.record_id.clone())
+                .ok_or_else(|| source_projection::corrupt("retired Page has no identity"))?
+        };
+        if let Some(old) = old {
+            work.charge(old.raw_text.len())?;
+            work.captured.insert(
+                path.clone(),
+                crate::changes::ScanDocument {
+                    path: path.clone(),
+                    hash: old.hash.clone(),
+                    bytes: old.raw_text.as_bytes().to_vec(),
+                },
+            );
+            work.observe(path, ExpectedState::Hash(old.hash.clone()))?;
+            if !work.load(&id)? {
+                return Err(source_projection::corrupt("cached Page row absent"));
+            }
+        } else {
+            work.observe(path, ExpectedState::Absent)?;
+        }
+        work.replaced_registry.insert(path.clone());
+        if let Some(note) = new {
+            work.charge(note.raw.len())?;
+            let record = note
+                .canonical
+                .as_ref()
+                .ok_or_else(|| source_projection::corrupt("new Page envelope absent"))?;
+            let row = RecordRow {
+                record: record.clone(),
+                path: path.clone(),
+                hash: note.source_hash.clone(),
+                authored_status: record.string("wiki_status").map(str::to_owned),
+                eligibility: Eligibility::Current,
+                reasons: vec![],
+                identity_eligibility: None,
+                description_eligibility: None,
+                disputed: false,
+                dependencies: vec![],
+            };
+            work.overlay.insert(path.clone(), note.raw.clone());
+            work.new_registry.push(entry(&row));
+            work.now.insert(id.clone(), row);
+            work.facts
+                .entry(id.clone())
+                .or_insert_with(|| EligibilityFact {
+                    baseline: baseline(),
+                    structural: Default::default(),
+                    direct_paths: BTreeSet::from([path.clone()]),
+                });
+        } else {
+            work.removed_paths.insert(path.clone());
+            work.now.remove(&id);
+            work.edge_overrides.insert(id.clone(), BTreeSet::new());
+        }
+        pages.push(IndexedPageTarget {
+            path: path.clone(),
+            id,
+        });
+    }
+    let draft = ChangeDraft {
+        title: "External authored Page reconciliation".into(),
+        origin: None,
+        inverse_of: None,
+        allocated_ids: BTreeMap::new(),
+        read_preconditions: vec![],
+        operations: vec![],
+    };
+    finish_pages(work, draft, pages, None, true)?
+        .map(|projected| projected.into_parts().delta)
+        .ok_or_else(|| source_projection::corrupt("external Page projection unexpectedly empty"))
 }
 
 #[cfg(test)]

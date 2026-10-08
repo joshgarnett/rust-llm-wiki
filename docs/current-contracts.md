@@ -155,6 +155,14 @@ This is the current capability router for the cleanup of 0.1.2. It records imple
 
 The [occupied 10k diagnostic](validation-10k-workflow.md) completed cited evidence and recovery stages but remains failed at its dry-read timeout; generated seed occupancy is not representative public-import qualification. The [large-vault design](large-vault-design.md) defines the next architecture and validation work. The first capacity gate is now 25,000 documents / approximately 2.5 GB at the user’s request; 100,000 / 10 GB is deferred. This is a target, not a capacity established by the current tests. Selected normalized catalogs support plain lexical discovery, selected-dependency verified reads and [mixed authored/captured document context](indexed-context.md), plus explicit cached reads/snapshots and managed source capture, refresh and withdrawal. `index rebuild --normalized` explicitly activates this layout; subsequent `index sync` and `index rebuild` maintain it. `doctor` reports bounded header/operation observations with integrity and freshness checks explicitly unperformed. Explicit normalized `check` reconciles canonical records, retained revision owners and complete search-index contents using private bounded scratch; canonical diagnostics remain separate from cache agreement. Default activation, the remaining query/write modes, native check resource qualification and full scale qualification remain outstanding.
 
+Ordinary [external Page synchronization](external-page-sync.md) now updates
+supported groups of 1–16 authored Pages on normalized catalogs without corpus
+reconstruction. Complete input comparison and final recheck remain mandatory.
+[Independent validation](validation-external-page-sync.md) passed both layouts at
+9.5/10, all 32 native durability cells, and separate 10K delete/restore tasks in
+37.254/28.364 seconds. These scoped gates do not close default retrieval quality,
+the five-second no-op target, representative 25K capacity or full-release gates.
+
 The [normalized embedding source checkpoint](validation-normalized-embeddings.md)
 adds bounded preparation, cached semantic/hybrid document search and automatic
 cited document context. All 98 distinct affected native checks pass across retained

@@ -749,6 +749,8 @@ pub(crate) fn ensure_delta_ready(
     Ok(())
 }
 fn writable(path: &Path) -> Result<Connection> {
+    #[cfg(test)]
+    super::query_diagnostics::access("catalog_open");
     let connection = Connection::open_with_flags(
         path,
         OpenFlags::SQLITE_OPEN_READ_WRITE
@@ -894,6 +896,8 @@ pub(crate) fn open_delta<'a>(
 
 /// A physical-header read has a finite VM, elapsed and row-length ceiling.
 fn maintenance_connection(name: &Path) -> Result<Connection> {
+    #[cfg(test)]
+    super::query_diagnostics::access("catalog_open");
     let connection = Connection::open_with_flags(
         name,
         OpenFlags::SQLITE_OPEN_READ_ONLY
@@ -2753,6 +2757,8 @@ fn rebuild_identity_connection(name: &Path) -> Result<Connection> {
         }
     }
     uri.push_str("?immutable=1");
+    #[cfg(test)]
+    super::query_diagnostics::access("catalog_open");
     let connection = Connection::open_with_flags(
         uri,
         OpenFlags::SQLITE_OPEN_READ_ONLY

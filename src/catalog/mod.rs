@@ -18,6 +18,7 @@ pub(crate) mod link_facts;
 pub(crate) mod maintenance;
 pub(crate) mod maintenance_input;
 pub(crate) mod maintenance_match;
+mod maintenance_page_delta;
 pub(crate) mod maintenance_types;
 pub(crate) mod missing_cache;
 pub(crate) mod navigation_resolution;
@@ -66,3 +67,6 @@ pub(crate) mod unit_inventory;
 pub(crate) mod withdraw_projection;
 pub(crate) mod write_projection;
 pub use types::*;
+
+#[cfg(test)]
+mod external_page_acceptance_tests;

@@ -107,6 +107,8 @@ impl Catalog {
             &self.vault_id,
             Duration::from_millis(timeout),
             |path, selection| {
+                #[cfg(test)]
+                super::query_diagnostics::access("catalog_open");
                 let connection = Connection::open_with_flags(
                     path,
                     OpenFlags::SQLITE_OPEN_READ_ONLY
@@ -176,6 +178,8 @@ impl Catalog {
         }
         // Install limits before configure/header SQL. These are cooperative SQL
         // safeguards, not a hard wall-clock or process-memory guarantee.
+        #[cfg(test)]
+        super::query_diagnostics::access("catalog_open");
         let connection = Connection::open_with_flags(
             &path,
             OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,

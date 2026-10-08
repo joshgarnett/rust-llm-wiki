@@ -522,6 +522,8 @@ impl VaultRoot {
         on_path: &mut dyn FnMut(&VaultRelativePath) -> Result<()>,
         retained: bool,
     ) -> Result<Vec<VaultRelativePath>> {
+        #[cfg(test)]
+        crate::catalog::query_diagnostics::access("canonical_scan");
         let mut out = Vec::new();
         Self::scan_dir(&self.path, "", &mut out, max_files, on_entry, on_path)?;
         if retained {

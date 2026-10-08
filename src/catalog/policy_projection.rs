@@ -78,6 +78,15 @@ pub(super) fn project_policy_for_move(
         super::normalized_delta::MAX_ROWS,
     )
 }
+pub(super) fn project_policy_for_external_pages(
+    reader: &QuerySnapshot,
+    before: &BTreeMap<VaultRelativePath, ParsedNote>,
+    overlay: &BTreeMap<VaultRelativePath, ParsedNote>,
+    removed: &BTreeSet<VaultRelativePath>,
+    access: &mut dyn PolicyInputAccess,
+) -> Result<PolicyDelta> {
+    project_policy_inner(reader, before, overlay, removed, access, true, 16)
+}
 fn project_policy_inner(
     reader: &QuerySnapshot,
     before: &BTreeMap<VaultRelativePath, ParsedNote>,
@@ -88,7 +97,7 @@ fn project_policy_inner(
     ceiling: usize,
 ) -> Result<PolicyDelta> {
     reader.require_policy_layout()?;
-    if overlay.is_empty()
+    if (overlay.is_empty() && removed.is_empty())
         || overlay.len().saturating_add(removed.len()) > ceiling
         || !removed.is_disjoint(&overlay.keys().cloned().collect())
         || removed.iter().any(|p| !before.contains_key(p))

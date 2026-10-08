@@ -277,6 +277,9 @@ fn require_selected_delta_scope(
     }
     for document in &rows.documents {
         match document {
+            DocumentMutation::DeletePage { .. } => {
+                return Err(recovery("Page deletion is maintenance-only"));
+            }
             DocumentMutation::Put { row } => exact(&row.path, &row.hash)?,
             DocumentMutation::MovePage { from, row, .. } => {
                 exact(&row.path, &row.hash)?;
@@ -2447,6 +2450,197 @@ mod tests {
         }
     }
     use crate::vault::{VaultFs, VaultRoot};
+
+    /// Authenticate the real retained SourceRefresh envelope all the way through
+    /// production replay admission. Only the operation-specific Page retirement
+    /// rule should refuse the rebound row plan; hashes/manifest are valid.
+    #[test]
+    fn authenticated_retained_source_refresh_refuses_maintenance_page_retirement() {
+        use crate::{
+            catalog::{source_projection, write_projection},
+            sources::{CaptureRequest, ExtractionInput, SourceOrigin, SourceStore},
+        };
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::write(temp.path().join("WIKI.md"),"---\nwiki_schema: '1'\nwiki_id: vault_retained_delete_guard\nwiki_kind: vault\ntitle: Retained guard\n---\n").unwrap();
+        let page_path = VaultRelativePath::new("control.md").unwrap();
+        let page_bytes=b"---\nwiki_schema: '1'\nwiki_id: page_retained_control\nwiki_kind: page\ntitle: Control\nwiki_status: reviewed\n---\nControl remains authored.\n";
+        std::fs::write(temp.path().join(page_path.as_str()), page_bytes).unwrap();
+        let fs = VaultFs::new(VaultRoot::explicit(temp.path()).unwrap());
+        let writer = WriterPermit::acquire(fs.root(), Duration::ZERO).unwrap();
+        let store = SourceStore::new(fs.clone());
+        let request = || CaptureRequest {
+            title: "Source original title".into(),
+            origin_kind: SourceOrigin::LocalFile,
+            origin: "outside/retained-guard.txt".into(),
+            original: b"retained exact source bytes".to_vec(),
+            extraction: ExtractionInput::Utf8Preserve,
+            media_type: None,
+        };
+        let captured = store.plan_capture(request()).unwrap();
+        for operation in captured.draft.unwrap().operations {
+            let actual = fs.root().resolve(&operation.target).unwrap();
+            std::fs::create_dir_all(actual.parent().unwrap()).unwrap();
+            std::fs::write(actual, operation.proposed.unwrap()).unwrap();
+        }
+        let catalog = Catalog::new(
+            fs.clone(),
+            RecordId::new("vault_retained_delete_guard").unwrap(),
+        );
+        catalog.rebuild_normalized(&writer).unwrap();
+        let reader = catalog.query_snapshot(QueryReadLimits::default()).unwrap();
+        let selected = QueryCatalog::snapshot(&reader).clone();
+        let page = reader.document(&page_path).unwrap().unwrap();
+        let source_before = reader.record(&captured.source_id).unwrap().unwrap();
+        let source_bytes = std::fs::read(fs.root().resolve(&source_before.path).unwrap()).unwrap();
+        let retire = write_projection::project_external_pages(
+            &fs,
+            &reader,
+            &[(page_path.clone(), Some(page.clone()), None)],
+            &source_projection::RefreshProjectionLimits::default(),
+        )
+        .unwrap();
+        retire.validate().unwrap();
+        let plan = store
+            .plan_refresh_indexed(
+                &reader,
+                &captured.source_id,
+                request(),
+                Some("Prepared source title"),
+                &crate::sources::SourceRefreshLimits::default(),
+            )
+            .unwrap();
+        let projected = source_projection::project_refresh(
+            &fs,
+            &reader,
+            plan,
+            &source_projection::RefreshProjectionLimits::default(),
+        )
+        .unwrap()
+        .unwrap();
+        let parts = projected.into_parts();
+        let mut parts = write_projection::ProjectedWriteParts {
+            operation: IndexedWriteOperation::SourceRefresh {
+                source_id: parts.source_id,
+            },
+            draft: parts.draft,
+            base: parts.base,
+            before: parts.before,
+            after: parts.after,
+            delta: parts.delta,
+        };
+        // An additional authenticated unchanged Page witness is legal. Prepare
+        // the actual Source manifest/session before adding forbidden row work.
+        let witness = ReadDependency {
+            path: page_path.clone(),
+            expected: ExpectedState::Hash(page.hash.clone()),
+        };
+        if !parts.before.iter().any(|dep| dep.path == page_path) {
+            parts.before.push(witness.clone());
+        }
+        parts.before.sort_by(|a, b| a.path.cmp(&b.path));
+        if !parts.after.iter().any(|dep| dep.path == page_path) {
+            parts.after.push(witness.clone());
+        }
+        parts.after.sort_by(|a, b| a.path.cmp(&b.path));
+        if !parts
+            .draft
+            .read_preconditions
+            .iter()
+            .any(|dep| dep.path == page_path)
+        {
+            parts.draft.read_preconditions.push(witness.clone());
+        }
+        parts
+            .draft
+            .read_preconditions
+            .sort_by(|a, b| a.path.cmp(&b.path));
+        if !parts
+            .delta
+            .dependencies
+            .iter()
+            .any(|dep| dep.path == page_path)
+        {
+            parts.delta.dependencies.push(witness);
+        }
+        parts.delta.dependencies.sort_by(|a, b| a.path.cmp(&b.path));
+        let session = IndexedRefreshSession::prepare_write(
+            &catalog,
+            &writer,
+            write_projection::ProjectedWrite::from_parts(parts),
+        )
+        .unwrap();
+        let original_proof = session.proof.clone();
+        let mut retained = session.delta.clone();
+        drop(session);
+        retained.rows.documents.extend(retire.documents);
+        retained.rows.claims.extend(retire.claims);
+        retained.rows.diagnostics.extend(retire.diagnostics);
+        retained.rows.links.extend(retire.links);
+        let retired_facts = retire.facts.unwrap();
+        let facts = retained.rows.facts.as_mut().unwrap();
+        facts.links.extend(retired_facts.links);
+        facts
+            .policy
+            .as_mut()
+            .unwrap()
+            .retired_owners
+            .extend(retired_facts.policy.unwrap().retired_owners);
+        // Preserve the legitimate immutable read witness in the retained proof.
+        // The generated maintenance-owned retirement rows are otherwise exact.
+        retained.rows.validate().unwrap();
+        let retained_bytes = serde_json::to_vec(&retained).unwrap();
+        let mut proof = original_proof.clone();
+        proof.delta_hash = Blake3Hash::digest(&retained_bytes);
+        proof.intended = intended(
+            &proof.base,
+            &proof.change,
+            &proof.delta_hash,
+            retained.version,
+        )
+        .unwrap();
+        let engine = ChangeEngine::new(fs.clone()).unwrap();
+        let (manifest, manifest_hash) = engine
+            .load_manifest_structure(&proof.change.change_id)
+            .unwrap();
+        proof.validate_manifest(&manifest).unwrap();
+        assert_eq!(manifest_hash, proof.change.manifest_hash);
+        let path = delta_path(&proof.change).unwrap();
+        let staged = fs.stage(&path, &retained_bytes, &writer).unwrap();
+        journal::require_sync(
+            fs.replace(
+                staged,
+                &ExpectedState::Hash(original_proof.delta_hash),
+                &writer,
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let loaded = load_delta(&catalog, &proof).unwrap();
+        assert_eq!(loaded, retained);
+        let error = match IndexedRefreshSession::resume(&catalog, &writer, proof) {
+            Ok(_) => panic!("managed replay admitted maintenance-only Page deletion"),
+            Err(error) => error,
+        };
+        assert_eq!(error.code, ErrorCode::RecoveryRequired);
+        assert_eq!(error.message, "Page deletion is maintenance-only");
+        assert_eq!(
+            std::fs::read(fs.root().resolve(&page_path).unwrap()).unwrap(),
+            page_bytes
+        );
+        assert_eq!(
+            std::fs::read(fs.root().resolve(&source_before.path).unwrap()).unwrap(),
+            source_bytes
+        );
+        let current = catalog.query_snapshot(QueryReadLimits::default()).unwrap();
+        assert_eq!(QueryCatalog::snapshot(&current), &selected);
+        assert_eq!(current.document(&page_path).unwrap().unwrap(), page);
+        assert_eq!(
+            current.record(&captured.source_id).unwrap().unwrap(),
+            source_before
+        );
+        let authority = catalog.operation_state().unwrap().unwrap();
+        assert!(authority.active().is_none());
+    }
 
     #[test]
     fn published_path_scope_is_root_bound_and_new_components_remain_portable() {

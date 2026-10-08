@@ -16,7 +16,17 @@ use std::{
     time::{Duration, Instant},
 };
 
-pub(crate) fn unchanged(catalog: &Catalog, input: &MaintenanceInput) -> Result<Option<SyncReport>> {
+pub(super) enum Comparison {
+    Unchanged(SyncReport),
+    Changed {
+        base: crate::domain::ReadSnapshot,
+        paths: std::collections::BTreeMap<VaultRelativePath, (ExpectedState, ExpectedState)>,
+        page_only: bool,
+    },
+    Rebuild,
+}
+
+pub(super) fn compare(catalog: &Catalog, input: &MaintenanceInput) -> Result<Comparison> {
     let authority = catalog.operation_state()?.ok_or_else(|| {
         WikiError::new(
             ErrorCode::RecoveryRequired,
@@ -66,7 +76,7 @@ pub(crate) fn unchanged(catalog: &Catalog, input: &MaintenanceInput) -> Result<O
     .ok_or_else(|| WikiError::new(ErrorCode::RecoveryRequired, "sync publication is missing"))?;
     let (connection, header) = selected.value();
     if header.snapshot.parser_fingerprint != scan::parser_fingerprint() {
-        return Ok(None);
+        return Ok(Comparison::Rebuild);
     }
     let (proof, ownership): (i64, i64) = connection.query_row(
         "SELECT proof_layout_version,revision_ownership_version FROM catalog_meta WHERE singleton=1", [],
@@ -79,11 +89,11 @@ pub(crate) fn unchanged(catalog: &Catalog, input: &MaintenanceInput) -> Result<O
         ));
     }
     if proof != 2 || ownership != 1 {
-        return Ok(None);
+        return Ok(Comparison::Rebuild);
     }
     match super::normalized_audit::validate_schema(connection) {
         Ok(()) => {}
-        Err(error) if error.code == ErrorCode::IndexCorrupt => return Ok(None),
+        Err(error) if error.code == ErrorCode::IndexCorrupt => return Ok(Comparison::Rebuild),
         Err(error) => return Err(error),
     }
     // A current-epoch delta updates these rows, whereas the full-build audit
@@ -93,7 +103,9 @@ pub(crate) fn unchanged(catalog: &Catalog, input: &MaintenanceInput) -> Result<O
         .map_err(sql::sql_error)?;
     let mut rows = statement.query([]).map_err(sql::sql_error)?;
     let mut count = 0usize;
-    let mut canonical_count = 0usize;
+    let mut canonical_paths = std::collections::BTreeSet::new();
+    let mut changed = std::collections::BTreeMap::new();
+    let mut page_only = true;
     while let Some(row) = rows.next().map_err(sql::sql_error)? {
         input.require_clean()?;
         count += 1;
@@ -130,23 +142,42 @@ pub(crate) fn unchanged(catalog: &Catalog, input: &MaintenanceInput) -> Result<O
                 ));
             }
         };
-        if canonical_path(&path)
-            && let ExpectedState::Hash(hash) = &expected
-        {
-            if input
+        let actual = if canonical_path(&path) {
+            canonical_paths.insert(path.clone());
+            input
                 .notes()
                 .get(&path)
-                .is_none_or(|note| &note.source_hash != hash)
-            {
-                return Ok(None);
+                .map_or(ExpectedState::Absent, |note| {
+                    ExpectedState::Hash(note.source_hash.clone())
+                })
+        } else {
+            input.state_observed(&path)?
+        };
+        if actual != expected {
+            if !canonical_path(&path) {
+                page_only = false;
             }
-            canonical_count += 1;
-        } else if input.state_observed(&path)? != expected {
-            return Ok(None);
+            changed.insert(path, (expected, actual));
         }
     }
-    if canonical_count != input.notes().len() {
-        return Ok(None);
+    for (path, note) in input.notes().iter() {
+        input.require_clean()?;
+        if !canonical_paths.contains(path) {
+            changed.insert(
+                path.clone(),
+                (
+                    ExpectedState::Absent,
+                    ExpectedState::Hash(note.source_hash.clone()),
+                ),
+            );
+        }
+    }
+    if !changed.is_empty() {
+        return Ok(Comparison::Changed {
+            base: header.snapshot.clone(),
+            paths: changed,
+            page_only,
+        });
     }
     input.final_recheck()?;
     if catalog.operation_state()?.as_ref() != Some(&authority) {
@@ -155,7 +186,7 @@ pub(crate) fn unchanged(catalog: &Catalog, input: &MaintenanceInput) -> Result<O
             "sync publication authority changed",
         ));
     }
-    Ok(Some(SyncReport {
+    Ok(Comparison::Unchanged(SyncReport {
         snapshot: header.snapshot.clone(),
         reused: true,
         vector_cache_lost: header.vector_cache_lost,

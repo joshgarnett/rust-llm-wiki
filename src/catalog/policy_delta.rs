@@ -77,14 +77,14 @@ impl PolicyDelta {
         let moves: Vec<_> = delta
             .documents
             .iter()
-            .filter_map(|d| {
-                if let DocumentMutation::MovePage { from, .. } = d {
-                    Some(from)
-                } else {
-                    None
-                }
+            .filter_map(|d| match d {
+                DocumentMutation::MovePage { from, .. } => Some(from),
+                DocumentMutation::DeletePage { path, .. } => Some(path),
+                _ => None,
             })
             .collect();
+        let mut moves = moves;
+        moves.sort();
         if self.retired_owners.iter().collect::<Vec<_>>() != moves {
             return Err(bad("policy retired owners differ from sealed Page move"));
         }

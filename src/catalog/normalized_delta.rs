@@ -36,6 +36,12 @@ pub(crate) struct CatalogDelta {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
 pub(crate) enum DocumentMutation {
+    /// Maintenance-only retirement in an unpublished sibling. The cached Page
+    /// before-image must match; canonical Source and Revision owners are excluded.
+    DeletePage {
+        path: VaultRelativePath,
+        expected_hash: Blake3Hash,
+    },
     MovePage {
         from: VaultRelativePath,
         from_hash: Blake3Hash,
@@ -152,6 +158,35 @@ impl CatalogDelta {
                             || !row.tags.is_empty())
                     {
                         return Err(invalid("captured document carries canonical metadata"));
+                    }
+                }
+                DocumentMutation::DeletePage { path, .. } => {
+                    unique(&mut paths, path)?;
+                    if self.version != 3
+                        || !crate::sources::revision::canonical_path(path)
+                        || self.records.iter().any(|r| &r.path == path)
+                        || !self
+                            .links
+                            .iter()
+                            .any(|o| &o.path == path && o.rows.is_empty())
+                        || !self
+                            .claims
+                            .iter()
+                            .any(|o| &o.path == path && o.rows.is_empty())
+                        || !self
+                            .diagnostics
+                            .iter()
+                            .any(|o| &o.path == path && o.rows.is_empty())
+                        || !self.facts.as_ref().is_some_and(|f| {
+                            f.links.iter().any(|o| &o.path == path && o.rows.is_empty())
+                                && f.policy
+                                    .as_ref()
+                                    .is_some_and(|policy| policy.retired_owners.contains(path))
+                        })
+                    {
+                        return Err(invalid(
+                            "Page deletion requires a closed retired owner scope",
+                        ));
                     }
                 }
                 DocumentMutation::MovePage { from, row, .. } => {
@@ -354,8 +389,72 @@ impl CatalogDelta {
         operation: Option<&crate::changes::indexed_refresh::IndexedWriteOperation>,
     ) -> Result<()> {
         self.check_page_move(connection, operation)?;
+        self.check_page_deletions(connection, operation)?;
         if let Some(facts) = &self.facts {
             facts.check_before(connection, self, &mut DeltaStats::default(), operation)?;
+        }
+        Ok(())
+    }
+    fn check_page_deletions(
+        &self,
+        c: &Connection,
+        operation: Option<&crate::changes::indexed_refresh::IndexedWriteOperation>,
+    ) -> Result<()> {
+        for action in &self.documents {
+            let DocumentMutation::DeletePage {
+                path,
+                expected_hash,
+            } = action
+            else {
+                continue;
+            };
+            let building: bool = c
+                .query_row(
+                    "SELECT state='building' FROM catalog_meta WHERE singleton=1",
+                    [],
+                    |r| r.get(0),
+                )
+                .map_err(sql::sql_error)?;
+            if operation.is_some() || !building {
+                return Err(invalid(
+                    "Page deletion requires an unpublished maintenance sibling",
+                ));
+            }
+            let valid: bool = c.query_row("SELECT EXISTS(SELECT 1 FROM documents d JOIN records r ON r.id=d.record_id JOIN identity_claims i ON i.record_id=r.id AND i.path=r.path WHERE d.path=?1 AND d.file_hash=?2 AND d.kind='page' AND d.source_id IS NULL AND d.owner_revision IS NULL AND r.path=d.path AND r.hash=d.file_hash AND r.kind='page' AND i.file_hash=r.hash AND i.kind='page') AND (SELECT count(*) FROM identity_claims WHERE record_id=(SELECT record_id FROM documents WHERE path=?1))=1", params![path.as_str(),expected_hash.as_str()],|r|r.get(0)).map_err(sql::sql_error)?;
+            if !valid {
+                return Err(conflict(
+                    "Page deletion before-image identity or ownership changed",
+                ));
+            }
+            let raw: String = c
+                .query_row(
+                    "SELECT raw_text FROM documents WHERE path=?1",
+                    [path.as_str()],
+                    |r| r.get(0),
+                )
+                .map_err(sql::sql_error)?;
+            if raw.len() > MAX_ROW_BYTES || Blake3Hash::digest(raw.as_bytes()) != *expected_hash {
+                return Err(conflict(
+                    "Page deletion cached before-image differs from its commitment",
+                ));
+            }
+            let note = crate::records::parse_note(raw.as_bytes());
+            let id: String = c
+                .query_row(
+                    "SELECT record_id FROM documents WHERE path=?1",
+                    [path.as_str()],
+                    |r| r.get(0),
+                )
+                .map_err(sql::sql_error)?;
+            if note
+                .canonical
+                .as_ref()
+                .is_none_or(|r| r.kind() != RecordKind::Page || r.id().as_str() != id)
+            {
+                return Err(conflict(
+                    "Page deletion cached envelope differs from its owner",
+                ));
+            }
         }
         Ok(())
     }
@@ -476,6 +575,7 @@ impl CatalogDelta {
     ) -> Result<DeltaStats> {
         let mut stats = DeltaStats::default();
         self.check_page_move(c, operation)?;
+        self.check_page_deletions(c, operation)?;
         if let Some(facts) = &self.facts {
             facts.check_before(c, self, &mut stats, operation)?;
         }
@@ -513,6 +613,7 @@ impl CatalogDelta {
         }
         for action in &self.documents {
             match action {
+                DocumentMutation::DeletePage { path, .. } => delete_page(c, path, &mut stats)?,
                 DocumentMutation::Put { row } | DocumentMutation::MovePage { row, .. } => {
                     put_document(c, row, &mut stats)?
                 }
@@ -634,7 +735,12 @@ impl CatalogDelta {
         // rebuildable relation retains an old path only for a surviving actual
         // asset/policy dependency, never merely for an incoming link lookup key.
         for document in &self.documents {
-            if let DocumentMutation::MovePage { from, .. } = document {
+            let retired = match document {
+                DocumentMutation::MovePage { from, .. } => Some(from),
+                DocumentMutation::DeletePage { path, .. } => Some(path),
+                _ => None,
+            };
+            if let Some(from) = retired {
                 let referenced: bool = c.query_row("SELECT EXISTS(SELECT 1 FROM record_direct_paths WHERE path=?1) OR EXISTS(SELECT 1 FROM policy_facts WHERE family='read_path' AND key=?1)", [from.as_str()], |r| r.get(0)).map_err(sql::sql_error)?;
                 if !referenced {
                     admit_owned(
@@ -651,6 +757,85 @@ impl CatalogDelta {
         super::unit_inventory::apply_after(c, self, &affected_units)?;
         Ok(stats)
     }
+}
+
+fn delete_page(c: &Connection, path: &VaultRelativePath, stats: &mut DeltaStats) -> Result<()> {
+    let mut statement=c.prepare("SELECT doc_row,record_id,title,aliases_text,headings,tags_text,body,length(CAST(title AS BLOB)),length(CAST(aliases_text AS BLOB)),length(CAST(headings AS BLOB)),length(CAST(tags_text AS BLOB)),length(CAST(body AS BLOB)) FROM documents WHERE path=?1").map_err(sql::sql_error)?;
+    let mut rows = statement.query([path.as_str()]).map_err(sql::sql_error)?;
+    let row = rows
+        .next()
+        .map_err(sql::sql_error)?
+        .ok_or_else(|| conflict("deleted Page document missing"))?;
+    admit_old(row, 7, 5, stats)?;
+    let doc_row: i64 = row.get(0).map_err(sql::sql_error)?;
+    let id: String = row.get(1).map_err(sql::sql_error)?;
+    c.execute("INSERT INTO documents_fts(documents_fts,rowid,title,aliases,headings,tags,body) VALUES('delete',?1,?2,?3,?4,?5,?6)",params![doc_row,text(row,2)?,text(row,3)?,text(row,4)?,text(row,5)?,text(row,6)?]).map_err(sql::sql_error)?;
+    drop(rows);
+    drop(statement);
+    for (table, column) in [
+        ("record_eligibility_facts", "record_id"),
+        ("record_direct_paths", "owner_id"),
+        ("semantic_edges", "owner_id"),
+        ("registry_match_keys", "record_id"),
+        ("opposition_members", "assertion_id"),
+        ("assertion_navigation_keys", "assertion_id"),
+    ] {
+        let query = format!("SELECT * FROM {table} WHERE {column}=?1 LIMIT 4097");
+        let mut statement = c.prepare(&query).map_err(sql::sql_error)?;
+        let columns = statement.column_count();
+        let mut rows = statement.query([id.as_str()]).map_err(sql::sql_error)?;
+        while let Some(row) = rows.next().map_err(sql::sql_error)? {
+            let mut bytes = 0usize;
+            for column in 0..columns {
+                if let rusqlite::types::ValueRef::Text(text) =
+                    row.get_ref(column).map_err(sql::sql_error)?
+                {
+                    bytes = bytes
+                        .checked_add(text.len())
+                        .ok_or_else(|| budget("Page retirement byte overflow"))?;
+                }
+            }
+            super::normalized_fact_delta::charge_old(bytes, stats)?;
+        }
+        drop(rows);
+        drop(statement);
+        c.execute(
+            &format!("DELETE FROM {table} WHERE {column}=?1"),
+            [id.as_str()],
+        )
+        .map_err(sql::sql_error)?;
+    }
+    let units: bool=c.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='unit_policies')",[],|row|row.get(0)).map_err(sql::sql_error)?;
+    if units {
+        for table in ["unit_owners", "retrieval_units", "unit_owner_dependencies"] {
+            let mut statement = c
+                .prepare(&format!("SELECT * FROM {table} WHERE owner=?1 LIMIT 4097"))
+                .map_err(sql::sql_error)?;
+            let columns = statement.column_count();
+            let mut rows = statement.query([path.as_str()]).map_err(sql::sql_error)?;
+            while let Some(row) = rows.next().map_err(sql::sql_error)? {
+                let mut bytes = 0usize;
+                for column in 0..columns {
+                    if let rusqlite::types::ValueRef::Text(text) =
+                        row.get_ref(column).map_err(sql::sql_error)?
+                    {
+                        bytes = bytes
+                            .checked_add(text.len())
+                            .ok_or_else(|| budget("retired unit row byte overflow"))?;
+                    }
+                }
+                super::normalized_fact_delta::charge_old(bytes, stats)?;
+            }
+        }
+    }
+    c.execute(
+        "DELETE FROM records WHERE id=?1 AND kind='page'",
+        [id.as_str()],
+    )
+    .map_err(sql::sql_error)?;
+    c.execute("DELETE FROM documents WHERE path=?1", [path.as_str()])
+        .map_err(sql::sql_error)?;
+    Ok(())
 }
 
 fn put_document(c: &Connection, row: &DocumentRow, stats: &mut DeltaStats) -> Result<()> {

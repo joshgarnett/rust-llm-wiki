@@ -25,6 +25,15 @@ fn assemble(snapshot: &ReadSnapshot, hits: HitSet, budget: ContextBudget)
 
 Use shared `RecordRef`, `CitationRef`, `Eligibility`, and `DocumentLocator`; paths/headings are presentation. `CitationRef::Source(SourceSpanRef)` cites captured text without invented assertions; `CitationRef::Assertion(EvidenceRef)` additionally binds a proposition. Unadopted/invalid notes retain lexical locators without canonical IDs. Search defaults to lexical. `index sync` never extracts/embeds; semantic/hybrid modes explicitly embed uncached queries. Offline execution permits matching cached vectors and never credential helpers. An unavailable semantic leg requires an error or an explicitly selected, disclosed lexical fallback.
 
+On normalized catalogs, ordinary `index sync` can apply a supported group of
+1–16 external authored-Page changes through a coherent SQLite backup and selected
+projection. Complete input comparison and final byte/membership recheck remain
+required; unsupported inputs use reconstruction. Deletion is maintenance-only,
+with exact prior Page identity/hash and affected policy/navigation closure. The
+[Page sync guide](../external-page-sync.md) and
+[validation checkpoint](../validation-external-page-sync.md) record the implemented
+workflow and measured limits.
+
 Follow storage's per-kind eligibility: reviewed dependency-free pages enter current context as verified note text; drafts remain discovery-only. Entity identity eligibility permits name/alias seeds independently of description eligibility. An unsupported description cannot rank as current description text or reuse its old vector.
 
 ## Lexical pipeline

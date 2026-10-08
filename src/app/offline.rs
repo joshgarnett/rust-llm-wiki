@@ -981,6 +981,7 @@ impl OfflineApp {
             maintenance: Some(serde_json::json!({
                 "layout":"normalized", "resumed":result.resumed,
                 "input":result.input, "build":result.build,
+                "page_sync": result.page_sync,
                 "retirement_deferred":result.retirement_deferred,
                 "cleanup_errors":result.cleanup_errors,
                 "abandoned_rebuild_candidates": result.abandoned_rebuild_candidates,

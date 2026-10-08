@@ -269,6 +269,13 @@ impl Work<'_> {
     }
     pub(super) fn load(&mut self, id: &RecordId) -> Result<bool> {
         self.tick()?;
+        if self
+            .old
+            .get(id)
+            .is_some_and(|row| self.removed_paths.contains(&row.path))
+        {
+            return Ok(false);
+        }
         if self.now.contains_key(id) {
             return Ok(true);
         }
