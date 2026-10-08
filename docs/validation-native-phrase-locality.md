@@ -191,3 +191,45 @@ the unseen gate and release qualification remain open. An independent whole
 workflow review must choose the next discriminating experiment. Neither this
 failed diagnostic nor the separate assisted workflow supplies native default
 improvement credit.
+
+## Current shipping-budget observation
+
+A separate comparison reused the original twelve development questions, the
+same 64-Source publication and the existing optimized executable. Its ordinary
+profile used the shipping limits of ten owners, eighty candidates, 1,024-byte
+excerpts and a 12,000-byte/3,000-token packet. Verification limits were explicit:
+64 MiB, 4,096 files, 16,384 entries and two seconds. No build or embedding-provider
+call occurred.
+
+Independent inspection of the twelve returned packets found **13/28 required
+facts and 3/10 complete positive tasks**, compared with the historical
+6,000-byte/1,500-token result of 9/28 and 2/10. No historical baseline fact was
+lost; both absent controls stayed bounded and unsupported. D10 became complete,
+while required D01 and D09 remained incomplete. The critic authenticated all 107
+returned SourceRef occurrences, including their current revisions and exact
+quote bytes. This establishes an observed budget profile, not a changed algorithm
+or an accepted default-quality improvement.
+
+The whole experiment **failed its operational and accounting requirements**.
+Four preparations succeeded, but three fresh host selectors reported truncated
+tool output and returned no nominations. The complete saved native inputs
+contained no truncation marker. The fourth selector, all selection replays and
+all answer writers remained unattempted; there is no assisted quality score.
+Detailed actor tool transcripts were unavailable to the root, so the transport
+diagnosis retains the actors' reports rather than inventing a trace.
+
+Sixteen native calls succeeded, with unchanged final operation/publication guards.
+The controller ran for 129.647 owning-process seconds, including waits for host
+coordination. Its final canonical-pin audit stopped at the shared inspection
+ceiling, with a 5,011-byte rejected admission debit; the separate root sealing
+reserve also exceeded its allowance. Full-run preservation qualification therefore
+remains incomplete. Failed receipts and partial outputs are retained without a
+retry or enlarged limits. Model token usage, monetary cost and inference-only
+time were unavailable.
+
+The original native gate remains open. The next high-impact milestone is the
+[bulk-update throughput and lifecycle qualification](validation-source-refresh-batch.md),
+followed by the outstanding 10K and first 25K vault gates. A future host trial must
+declare a bounded input-delivery method that reaches the complete prepared task
+before testing selection quality; this failed trial cannot establish whether the
+host route meets its four-task completeness gate.

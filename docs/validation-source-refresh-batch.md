@@ -56,6 +56,14 @@ records immutable inputs, including exact old producer WAL/SHM materialization.
 The next performance gate is 1,000 genuine changed captures within 600 seconds
 and at least 1.5× improvement against a complete, prospectively pinned scalar
 pair. The original scalar run acknowledged 272 updates before its 600-second
-failure; it supplies no complete speed ratio. The paired experiment and its
-resource admission remain unrun. Default native quality remains 9/28 facts and
-2/10 positive tasks; no gain follows from this functional milestone.
+failure; it supplies no complete speed ratio. The first paired experiment passed
+its fresh-copy qualification, then stopped after one successful scalar refresh
+because its verifier expected the batch `capture_state` field in the scalar
+response, which uses `extraction_status`. Its publication comparison also confused
+the snapshot's version/hash authority with the operations record's epoch
+authority. These are benchmark adapter faults, not demonstrated product failures.
+The batch arm and complete speed ratio remain unmeasured; the changed scalar copy
+and all failed receipts are preserved. A new pair must use corrected, independently
+reviewed adapters and fresh qualified initial states. No native quality gain
+follows from this functional milestone; the [retrieval evaluation](validation-native-phrase-locality.md)
+records the separate budget profiles and their limits.
