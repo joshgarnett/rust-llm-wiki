@@ -227,9 +227,61 @@ remains incomplete. Failed receipts and partial outputs are retained without a
 retry or enlarged limits. Model token usage, monetary cost and inference-only
 time were unavailable.
 
-The original native gate remains open. The next high-impact milestone is the
-[bulk-update throughput and lifecycle qualification](validation-source-refresh-batch.md),
-followed by the outstanding 10K and first 25K vault gates. A future host trial must
+The original native gate remains open. The current priority is evidence retention
+and automatic selection; the full bulk-update comparison and further host trials
+are deferred. The outstanding 10K and first 25K lifecycle gates remain required.
+A future host trial must
 declare a bounded input-delivery method that reaches the complete prepared task
 before testing selection quality; this failed trial cannot establish whether the
 host route meets its four-task completeness gate.
+
+## Separate packet-feasibility diagnosis
+
+A bounded independent diagnosis reused the original twelve development tasks,
+their retained outputs and preparations. Historical and shipping budgets stayed
+separate. Private expected facts and nominations remained with their original
+critic; no unseen questions, new retrieval, model stage or Rust build was used.
+
+The historical 80-card menus contain complete support for 23/28 facts and seven
+positive tasks. Three Cargo tasks lack required qualifications in their displayed
+cards, despite retaining the correct owners. Automatic selection uses its pool
+before the displayed-menu cap, so this does not establish loss from that hidden
+pool. The earlier eight-case 10K menu observation cannot be generalized to every
+task. Only four shipping preparations were retained; eight remain explicit gaps.
+
+Six once-only, fact-aware diagnostic selections retained every nominated span
+and supplied every required fact within their original limits. Five historical
+packets used 2,103–4,269 bytes; the shipping packet used 2,612 bytes. All 24 returned
+SourceRefs authenticated. The six calls completed in 0.710 owning-process seconds
+with no error or retry. Their source and publication guards matched before and
+after; a complete canonical-history audit was not repeated.
+
+This establishes avoidable automatic selection loss in those six cases rather
+than insufficient final-packing capacity. It does not establish an automatic
+solution: the nominations used private expected facts. Ordinary quality remains
+9/28 facts and 2/10 tasks historically, and the separately observed shipping
+profile remains 13/28 and 3/10. The original 24/28-fact, 8/10-task gate, required
+D01/D09/D10, zero fact loss, citation/currentness, absence and budget conditions
+remain unchanged; unseen acceptance stays unopened.
+
+The next design must explain how source-bound definitions, qualifications and
+scoped assertions survive preparation, and how a question selects complementary
+support. Existing code already preserves several paragraph/list/code structures;
+more grouping or another lexical weight needs a demonstrated new support signal.
+Increasing the packet budget or adding a packing optimizer does not address the
+six measured losses. No candidate or default change is admitted by this diagnosis.
+
+A fresh architecture review subsequently declined a structure-only selector
+change. Existing code already joins explanatory prose to fitting command/list
+blocks and groups nearby blocks within a heading. Section geometry and lexical
+overlap do not identify which role, qualification or governing instruction answers
+the task. Retaining source scope is useful, but no demonstrated automatic support
+signal currently justifies another production ranking patch. This does not prove
+that deterministic selection is impossible.
+
+Stop further weight, grouping, grammar and packing-optimizer retries on the same
+signals. The next quality decision must name and test a production-available
+support discriminator before implementation. Meanwhile, deliver a clearly limited
+local preview from the accepted SourceBatch executable and maintained guidance;
+exclude the unaccepted Page-sync candidate and retain every quality, performance,
+HIGH and 25K gate. Preview delivery earns no automatic retrieval improvement.
