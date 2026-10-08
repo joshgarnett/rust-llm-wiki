@@ -891,3 +891,50 @@ fragment tuning is deferred in favor of a whole-workflow review of task scope an
 complementary evidence selection, alongside the measured import and storage costs
 that constrain practical 25K use. The useful normalized literal workflow and its
 local 0.2.0 artifact remain separately accepted.
+
+## Fine preparation limits and revised next milestone
+
+A separate synthetic fixture exposes preparation costs before any quality score:
+64 Sources each contain 175 distinct 600-byte paragraphs. At an 8,000-byte input
+limit and 1,000-byte quality target, it produces 11,200 unique inputs. Eagerly
+repeating complete owner guards requires 67,200 inventory entries, exceeding the
+existing 65,536-entry limit. An isolated, unaccepted representation candidate
+retains 22,720 logical entries and materializes the fixture in about 0.23 seconds.
+These are fixture preparation observations, not a shipping speed or quality gain.
+
+Full paid preparation then exposes the existing bounded RunSpec encoding. The
+candidate preflights exact task prefixes against those limits while retaining
+guards and prior accounting. However, the native harness timed out after
+600 seconds during full fine sync; its owning 120-second acceptance result was
+unavailable. The candidate is not integrated or included in the accepted preview.
+
+Seven subsequently run provider-allowance checks pass on a release test executable
+with optimization level 3. A cross-partition recovery fixture reaches complete
+coverage and 13 requests without resending its Received response, then fails an
+assertion expecting its spool to survive verified settlement. Established cleanup
+removes that spool; the failed test and its unfinished final audit/reuse tail stay
+recorded. Component evidence does not establish full workflow acceptance.
+
+One prospective width-attribution pair closed before measurement: its first arm's
+read-only materialization refused a copied WAL catalog with missing SHM. No mock
+or live request occurred, and the second arm was unrun. There is no measured
+history/binding bottleneck or batching speedup from this diagnostic. Static source
+traces identify repeated pending-task binding and history replay as hypotheses
+only. Further harness retries, width tuning and a general freshness/cache rewrite
+are deferred.
+
+SQLite's [WAL documentation](https://sqlite.org/wal.html#read_only_databases)
+explains the persistent WAL and read-only coordination requirements. Here the
+repository additionally requires an exclusive writer lease to reconstruct SHM;
+copying durable files alone does not establish read-only catalog readiness.
+
+The next quality milestone is one separately frozen trial using the accepted
+binary's existing 12,000-byte coarse geometry, without a quality-target flag:
+complete preparation, all twelve original queries, 24 matched offline
+lexical/semantic contexts, exact cited reads and cache reuse. A coherent disposable
+copy must first pass ordinary writer readiness while preserving canonical bytes;
+the scheduled local embedding check remains its first read-only proof. Update
+mechanics are a separate sequel. The original fact/task, no-regression, citation,
+currentness, absence and resource gates remain unchanged. Successful preparation
+alone earns no quality credit; lexical defaults, HIGH, fine-sync, 25K and full
+release acceptance remain open.
