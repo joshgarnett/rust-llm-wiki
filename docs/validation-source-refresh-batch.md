@@ -178,12 +178,58 @@ physical I/O or all SQLite synchronization.
 This evidence directs the next experiment toward redundant filesystem/path work,
 while preserving fresh byte guards around every mutation and publication. It
 does not justify an SQL/index rewrite or reducing guard frequency. The first
-candidate is removing redundant per-prefix canonicalization on Unix under the
+candidate tested removing redundant per-prefix canonicalization on Unix under the
 existing canonical-root, validated-relative-path and fresh symlink-check
-invariants; its benefit remains to be measured. Other platforms retain their
-existing resolution path pending separate proof.
+invariants. Its paired result is recorded below. Other platforms retained their
+existing resolution path in that isolated candidate.
 
 The diagnostic did not audit all retained payloads, immutable history or unselected
 content, and did not run the complete integrity, retrieval or cited-Page workflow.
 It supplies no paired speedup, 1,000-update acceptance, default-quality improvement,
 25K qualification or full-release credit. All original gates remain unchanged.
+
+## Unix path-resolution candidate: paired gate failed
+
+The isolated candidate replaced repeated child-prefix canonicalization on Unix
+with fresh root inspection and canonicalization before each resolution. It kept
+fresh child symlink checks, nested-vault checks, byte guards and durability order.
+Both compiled artifacts used native Darwin arm64 release settings with
+optimization level 3 and debug information level 0.
+
+The comparison used two newly qualified copies of the same unchanged 10K seed,
+identical 16 caller inputs and guards, and a fixed baseline-first order. Each arm
+received one ordinary offline `source refresh-batch` invocation with the same
+60-second command limit. Acceptance required a candidate launch-to-reap interval
+at most 80% of baseline, no regression in the Rust owning interval, reductions in
+file application and preparation, and unchanged correctness and resource gates.
+
+| Measurement | Baseline seconds | Candidate seconds |
+|---|---:|---:|
+| External native launch to reap | 37.564 | 36.496 |
+| Rust owning interval | 37.525 | 35.880 |
+| Exclusive canonical file application | 26.892 | 25.529 |
+| Exclusive preparation and sealing | 9.167 | 8.992 |
+
+Both commands acknowledged and locally verified 16 updates, retained 193
+dependency-guard passes and 64 canonical operations, and produced valid traces
+without overflow or invalid stage events. Independent Astra review reconciled
+the actual commands, returned captures, traces and cumulative accounting. The
+external ratio was 0.97157: an
+observed 2.84% reduction, below the frozen 20% threshold. This single pair supplies
+no statistical speedup claim. The candidate remains isolated and is not promoted
+as a performance improvement.
+
+Seventy focused correctness checks completed successfully. The original complete
+37-test recovery invocation timed out during its crash matrix and remains
+incomplete; later targeted checks do not turn that suite into a pass. Two earlier
+controller setup failures were preserved, each before native execution; independent
+review admitted the bounded remaining preparation and pair without rebuilding,
+recopying or changing the threshold.
+
+The complete 1,000-update-to-search-to-cited-Page gate was not launched after this
+failed mechanism screen. A fresh Astra architecture review found no evidence
+justifying another isolated storage patch as a solution to the unchanged
+600-second workflow. The selected next priorities are the separately frozen
+retrieval-quality experiment, subject to its exact outbound-payload approval,
+and completing the external-editor Page workflow. Default retrieval quality,
+the complete 10K lifecycle, 25K capacity and full-release acceptance remain open.
