@@ -171,6 +171,14 @@ distinguishes preparation-admission differences from final-selection omissions;
 public preparation does not expose the complete automatic candidate pool.
 No retrieval algorithm changed, and default quality/HIGH/25K remain open.
 
+The separate [Graph update feasibility experiment](validation-graph-update-feasibility.md)
+rules out expanding the current normalized Graph proposal: a real full-sized update
+with active Merge history exceeds its frozen processing allowance even with one
+shared Review carrier. Precise receipt membership removes false invalidation in
+ordinary-binding controls, but does not pass the complete workflow. The prototype
+remains separate; Graph activation/replay, default quality, capacity and release
+gates remain open.
+
 The [normalized embedding source checkpoint](validation-normalized-embeddings.md)
 adds bounded preparation, cached semantic/hybrid document search and automatic
 cited document context. All 98 distinct affected native checks pass across retained
