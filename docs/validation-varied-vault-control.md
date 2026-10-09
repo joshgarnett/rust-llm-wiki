@@ -165,6 +165,42 @@ The experimental source is preserved at commit
 `5d60c722f6ca33a39767703af13a96d791bf4c91553f19fa01434443c9f4b91a`.
 The checkpoint is not an accepted release or a change to production defaults.
 
+## Source refresh and cited Page control
+
+The accepted preview subsequently completed a separately frozen 24-command
+workflow in this same 1K vault. It staged a novel 100,000-byte Source revision,
+reviewed every proposed payload before applying it, retrieved the new fact through
+search, context and exact read, then reconciled a cited draft Page using its
+actual author hash. Independent review scored this declared subset **10/10**,
+with all six mandatory outcomes passing and no correctness blocker.
+
+All 3,000 pre-existing immutable files and 999 non-target Source headers remained
+byte-identical. Source identity and origin remained stable. The old exact
+quotation retained its Source, Revision, span and hashes while becoming historical.
+The Page kept its identity, draft status and every author byte outside the
+generated citation block, including its note. Its final citations and navigation
+pointed to the old and new revisions. Twelve inspected citation occurrences
+authenticated against the immutable bytes.
+
+| Observation | Seconds |
+|---|---:|
+| Whole workflow, including inventories and audits | 21.786 |
+| Source refresh stage / apply | 0.207 / 0.335 |
+| Identical-input Source refresh | 0.019 |
+| Explicit unchanged index sync | 2.029 |
+
+Publications advanced from 251 to 254 through Page creation, Source refresh and
+Page reconciliation. Repeated refresh reused the current Revision without a new
+Change, and index sync reused the complete final publication. The index no-op
+still inspected 4,007 files and reported 403,232,838 input-I/O bytes; this warmed
+observation does not establish constant work or larger-vault throughput. Context
+reported its budget omissions while returning the requested fact completely.
+
+This passes one Source/history/Page workflow, using two revisions of one Source.
+It does not exercise two independent Sources, stale-guard refusal, withdrawal,
+reactivation, interruption recovery, backup or larger-tier acceptance, and does
+not change the retrieval candidate's failed completeness gate.
+
 ## Validation limits
 
 Ten affected preparation controls pass across the initial checkpoint and the
@@ -181,7 +217,7 @@ Page filter, preserving malformed-hit refusal and authority checks. This is
 content review, rather than these component checks, establishes the failed quality
 gate above. No rebuild followed the unchanged passing replay.
 
-Full retrieval acceptance, individual updates, cited Page author preservation,
+Full retrieval acceptance, additional management workflows,
 interruption recovery and larger tiers require separate actual-command acceptance. The
 previous failed 1,000-change/600-second gate remains mandatory for full capacity.
 Default retrieval quality, semantic acceptance and full release qualification

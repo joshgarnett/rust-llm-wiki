@@ -185,6 +185,15 @@ score does not pass the all-task gate, and the candidate remains unpromoted.
 Historical default quality remains failed at 6.5/10. Updates, recovery and
 larger-tier acceptance remain separate.
 
+A subsequent [Source/history/cited-Page control](validation-varied-vault-control.md#source-refresh-and-cited-page-control)
+passes its declared 24-command subset at 10/10. A genuine 100 KB refresh preserves
+Source identity and immutable history, returns current evidence, and keeps the
+old exact citation historical. Guarded Page reconciliation preserves unrelated
+author bytes and the note; identical-input refresh and unchanged index sync reuse
+their existing revision/publication. The warmed 1K run took 21.786 seconds,
+including audits. Index sync still inspects the current inputs, so this result
+does not establish larger-vault throughput or close retrieval, recovery or 25K gates.
+
 The separate [Graph update feasibility experiment](validation-graph-update-feasibility.md)
 rules out expanding the current normalized Graph proposal: a real full-sized update
 with active Merge history exceeds its frozen processing allowance even with one
