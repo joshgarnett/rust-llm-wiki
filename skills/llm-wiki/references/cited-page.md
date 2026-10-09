@@ -69,6 +69,43 @@ entailment. Current eligibility alone does not make archived or draft instructio
 approved. An empty result or missing condition does not prove global absence. If all
 requested conditions have support, answer directly and skip selection/gap reads.
 
+## Read small discovered Sources completely
+
+When short excerpts leave requested defaults, exceptions or conditions unsupported,
+a complete read of a small discovered Source can supply the missing explanation.
+Choose this route when it fits the predeclared evidence and call allowances.
+Keep the original question and Source/path restrictions. Use verified discovery,
+then follow only actual returned primary captured-payload paths with nonempty
+current Source citations. Deduplicate Source identities in returned order; metadata
+and authored-note hits do not add captured evidence owners.
+
+For each such owner, read once from the beginning without an end:
+
+```sh
+lwiki --offline --json --wiki '/path/to/my wiki' read \
+  --path 'RETURNED PAYLOAD PATH' --start 0 --max-bytes 131072
+```
+
+Use a smaller cap when your limits require it. Charge the complete raw response,
+wrappers and stderr alongside all earlier context/discovery input. The native body
+cap is not an additional task allowance. Inspect the actual range, body,
+`truncated`, `continuation`, current eligibility and the read's own
+`data.source_citation.citation`. Complete-source support requires start0, EOF and
+no truncation/continuation; the search preview's citation covers only its preview.
+Keep earlier supported context and check every requested condition against the
+new returned text before answering.
+
+If the response exceeds your allowance or is truncated, retain the gap. Continue
+only through a separately budgeted section/continuation route; do not label a
+partial body complete or widen the original scope. Empty search and missing
+support do not prove global absence. If all conditions are supported, proceed to
+[answering](#answer-then-save-only-when-authorized).
+
+One fixed development control completed all five tasks/all14 required facts using
+eight reads and at most116,137 raw input bytes per task under a128KiB allowance.
+It measures evidence recovery on two small discovered Sources, not final-answer,
+unseen, native-default or large-vault qualification.
+
 ## Complete missing conditions with one ID selection
 
 For a missing condition on the supported lexical route, add `--prepare-selection`

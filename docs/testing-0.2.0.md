@@ -59,7 +59,13 @@ Context verifies selected evidence against the published discovery generation.
 Neither proves global freshness or that every requested fact was returned. Check
 both requested facts, omissions and qualifications before drafting.
 
-If a fact is missing, follow the [bounded gap-reading recipe](../skills/llm-wiki/references/cited-page.md#read-remaining-gaps).
+If a fact is missing, a
+[complete read of a small discovered Source](../skills/llm-wiki/references/cited-page.md#read-small-discovered-sources-completely)
+can supply later definitions or conditions within your predeclared allowance.
+The [independent development control](validation-whole-source-reading.md) completes
+5/5 evidence tasks, while native context remains3/5; no final-answer or release
+qualification follows. For larger Sources, use the
+[bounded gap-reading recipe](../skills/llm-wiki/references/cited-page.md#read-remaining-gaps).
 Use the captured `locator.path` actually returned by discovery, rather than
 inventing a payload path or reading a Revision metadata record as source text:
 

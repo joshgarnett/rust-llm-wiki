@@ -1,5 +1,13 @@
 # Current contracts and local coverage
 
+The [whole-Source reading control](validation-whole-source-reading.md) passes its
+fixed development evidence gate at10/10: ordinary context plus complete reads of
+small discovered Sources completes5/5 tasks and all14 required facts. Native
+context remains3/5 and11/14. The maintained recipe now offers this bounded route
+before optional selection/section reading. No final-answer actor was dispatched
+because independent child tool-delivery transcripts were unavailable; that gate,
+unseen/HIGH/semantic, global-sync speed,25K and full release remain open.
+
 The [guarded Source refresh batch](source-refresh-batch.md) now supports 1–16
 existing active Sources in one publication. Its [functional acceptance](validation-source-refresh-batch.md)
 passed at 10/10 across both layouts, exact recovery and cache-loss reconstruction.
