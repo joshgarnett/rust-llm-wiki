@@ -509,3 +509,29 @@ the final user reading workflow before more implementation. Choose one coherent
 high-impact milestone and a controlled cause experiment; do not tune weights,
 raise budgets or add filter/harness infrastructure to retry the same questions.
 Keep representative 25K, unseen/HIGH, semantic and maintenance acceptance open.
+
+## 2026-10-09 — Reject section tuning and integrate original-source selection
+
+The section-preserving candidate passes its 224-test release checkpoint but loses
+known facts and half of the qualifications on a new scoped Current task. Its
+quality gate fails before a later unrestricted baseline SQLite budget failure.
+Preserve the candidate and all unrun observations; do not promote it, rerun the
+same gate or change weights, headings or caps to recover its score. The
+[maintained summary](../validation-host-assisted-context.md#rejected-section-preserving-context-candidate-october-9-2026)
+separates completeness regressions from the unidentified SQL failure stage.
+
+Fresh Astra review chooses one product integration using previously accepted
+complete-original reading and typed Page publication. Add an explicitly separate
+bounded original-source packet and exact-range reply/replay to host context
+selection, with selected-source authentication, request/revision/hash/eligibility
+binding, current-only defaults and unchanged automatic/card routes. Preparation
+must consume discovered captured locators directly rather than repeat broad
+natural-question discovery. Avoid a redundant hand-built assisted pilot, a
+provider stage, canonical migration or general repair/accounting framework.
+
+Freeze new independent tasks and finite actor/input/output limits before
+implementation. Require complete question-to-cited-context-to-Page behavior,
+stale replay rejection and fresh reconciliation after a Source update, every
+mandatory fact and at least 9/10 without blockers. Assisted workflow acceptance
+cannot establish automatic native improvement. Broad-query cost, native
+completeness, semantic/HIGH, representative 25K and full release remain open.

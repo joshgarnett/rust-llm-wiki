@@ -14,6 +14,14 @@ passes safety checks and completes one historical feature task, but fails its
 six-task completeness gate at 4/6 tasks and 11/15 facts (8.4/10). Both mixed
 questions find their Sources and lose required qualifications in the returned
 packet. It remains unpromoted; Current outputs are unchanged.
+The subsequent [section-preserving candidate](validation-host-assisted-context.md#rejected-section-preserving-context-candidate-october-9-2026)
+passes 224 related tests but regresses the known comparison to 3/6 tasks and
+9/15 facts, and a new scoped task from six supported requirements to three.
+Its unrestricted baseline query also exhausts the SQLite allowance; later
+mandatory tasks and controls are unrun. The candidate is rejected, with no
+promotion or default-quality gain. A fresh review selects explicit authenticated
+complete-original preparation and exact-range replay as the next integrated
+host-assisted product milestone; that workflow still needs its own acceptance.
 The separate save/reopen/draft-discovery boundary passes at 10/10: both required
 facts, two exact SourceRefs and six valid generated links, with unchanged Source
 history and the previous Page. No inferred answer or remote call was used.

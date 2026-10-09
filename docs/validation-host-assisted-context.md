@@ -139,3 +139,51 @@ The immutable release executable uses native ARM64 Rust 1.98, opt-level3 and
 debug0. All 17 unfinished main files and the selected publication remained
 unchanged. This failed development gate adds no default-current quality,
 unseen/HIGH, representative 25K, semantic or full-release acceptance.
+
+## Rejected section-preserving context candidate, October 9, 2026
+
+The subsequent isolated candidate at source commit
+`208e547eb64cce229a732123ae1d3ce51b3b811e` prioritizes complete Markdown sections
+and admits continuation passages only after their section's nominee fits the
+exact rendered budget. Its single grouped release checkpoint passes 224
+retrieval tests, including bounded intermediate work, outside-section text and
+admission-order regressions. It is pushed on
+`impl/section-preserving-context-20261009-001` and remains **rejected and
+unpromoted**.
+
+The independently frozen development comparison requires all scoped and
+unrestricted arms, preserved baseline facts, exact citations, controls and at
+least 9/10. Known scoped questions regress from the historical candidate's
+4/6 complete tasks and 11/15 facts to **3/6 and 9/15**. Known unrestricted
+candidate output also completes 3/6 and 9/15. One newly authored Current task's
+scoped baseline supports all six requirements; the candidate supports only
+three. The section hypothesis therefore fails independently of the later
+operational failure.
+
+Fifteen native commands execute. The unrestricted baseline request for that new
+task then returns `BUDGET_EXCEEDED: SQLite catalog: interrupted`; the remaining
+sixteen mandatory commands and controls are unrun. The error does not identify
+which SQL stage exhausted the cumulative VM or elapsed-time allowance. No retry,
+larger cap or subsequent rescore occurs. A preceding zero-command collector
+failure is retained separately; its prospectively admitted continuation charges
+all consumed resources and changes only an exact in-memory vault-marker
+projection.
+
+Completed outputs fit the unchanged 12,000-byte / 3,000-estimated-token budget.
+No citation or eligibility error is observed in the reviewed prefix, but unrun
+controls mean the full correctness gate is incomplete. Citation correctness does
+not compensate for lost qualifications. The independent assessment SHA256 is
+`f8666685d31afddc20594ee840deb1e57403b32374166624aca444946f6e6a58`;
+the terminal result is
+`7ab416cbae5748acae326d4108a2bc6640bb50bd11f0c451216985f352b79326`.
+Both pinned executables use native ARM64 release optimization; all 17 unfinished
+main files and the selected publication remain unchanged.
+
+A fresh Astra review rejects further section, weight or cap tuning. The next
+product milestone integrates the already demonstrated complete-original reading
+mechanism into explicit bounded context preparation and exact-range replay,
+followed by typed Page publication and Source-update reconciliation. It needs a
+separate prospective workflow gate without analyst-supplied Source IDs or paths.
+Assisted success will remain separate from automatic native completeness and
+broad-query performance. Unseen/HIGH, semantic, representative 25K, maintenance
+throughput and full-release qualification remain open.
