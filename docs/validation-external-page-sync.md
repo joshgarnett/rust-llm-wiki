@@ -105,3 +105,56 @@ Independent actual acceptance SHA256:
 No paired speedup, 90KB-at-10K, worst-case closure, default retrieval gain or 25K
 capacity follows. Further performance work should address measured comparison and
 recheck cost before adding isolated storage machinery.
+
+## Rejected resolver speed candidate, 2026-10-09
+
+A later experiment replaced repeated macOS destination canonicalization with an
+all-component no-follow, metadata-only lookup at the same inspection boundary.
+Object identity checks and the original canonicalization fallback remained;
+payload authentication, nested-vault checks and final input rechecks were unchanged.
+The candidate is **unpromoted**. It passed its scoped correctness checks but failed
+the prospectively declared performance gate.
+
+Both binaries were native ARM64 release builds with optimization level 3 and debug
+information disabled. They alternated on the same occupied 10K vault, unchanged
+generation and cache. All three no-op pairs are retained:
+
+| Pair | Accepted binary seconds | Candidate seconds | Improvement |
+| --- | ---: | ---: | ---: |
+| 1 | 27.903 | 26.898 | 3.60% |
+| 2 | 27.839 | 26.773 | 3.83% |
+| 3 | 28.439 | 28.413 | 0.09% |
+
+The median improvement was **3.60%, failing the required 20%**. Both binaries
+failed the five-second no-op target. These are three supervised observations,
+not a p95 distribution; supervisor activity remains included. A prior sample's
+39.9% canonicalization occupancy did not establish that removing that operation
+would yield a comparable elapsed-time gain. The complete scan's logical work
+remained unchanged.
+
+All ten offline commands passed their correctness checks. A 177-byte external
+Page edit preserved its size and restored its timestamp; synchronization,
+selected search and the actual returned-path read completed in **53.711 seconds**,
+passing the 60-second limit. The old marker disappeared. Complete initial and
+final audits preserved all 92,514 original canonical files; membership was exactly
+those files plus the single edited Page. The grouped native checkpoint passed
+79 tests in three parent harnesses, with one additional subprocess helper. It
+covered shared maintenance and read workflows, containment races, nonblocking
+special-file replacement and namespace parity; it was not a full repository suite.
+
+Candidate executable SHA256:
+`feae3e3a951dd7f1c7d39de1c4da5d78c191234596df21c0b5553fcbb39a6a91`.
+Collector result SHA256:
+`93bcbe84124422a2a37b7289a0c53f96c2adfc294e49fbb6dce165f00f7fe69f`.
+Root seal SHA256:
+`3a703d1dd43ca70f2e1726b951ad7827aab782b91da0cb5925a364732b0e4141`.
+Detailed failed attempts and the candidate remain preserved locally. Default
+retrieval quality, representative 25K capacity and full release remain open.
+
+Independent Astra review accepted these scoped correctness receipts and rejected
+speed promotion. The next milestone uses the accepted executable and supported
+import group size eight in one bounded 25K workflow attempt. A separate group-size
+benchmark and further resolver tuning are deferred. This configuration changes no
+default and earns no speedup claim. Import/read/update/recovery progress will be
+reported separately from full capacity acceptance, which still requires the
+[corpus, quality and operational gates](testing-large-vaults.md).

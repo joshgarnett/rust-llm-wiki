@@ -179,6 +179,11 @@ reconstruction. Complete input comparison and final recheck remain mandatory.
 37.254/28.364 seconds. These scoped gates do not close default retrieval quality,
 the five-second no-op target, representative 25K capacity or full-release gates.
 
+The later [paired macOS resolver experiment](validation-external-page-sync.md#rejected-resolver-speed-candidate-2026-10-09)
+passed scoped correctness and external-edit preservation but improved no-op time
+by only 3.60%, failing its 20% progress gate. The candidate remains unpromoted;
+complete-scan speed and the five-second target remain unresolved.
+
 The [public Source occupancy control](validation-public-source-occupancy.md)
 completed all 64 ordinary import/query/refresh/history commands and exact citation
 checks. Default context still failed completeness: 5/10 positive tasks in the
