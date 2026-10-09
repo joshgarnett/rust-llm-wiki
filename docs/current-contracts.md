@@ -6,8 +6,14 @@ public commands, complete immutable-byte reconciliation and exact indexed
 membership. The owning import interval is 147.46 minutes. These mostly synthetic
 development inputs do not qualify representative retrieval or shipping capacity;
 the eleven-task lifecycle, default quality, global-sync speed and full release
-gates remain open. The next step evaluates complete-source reading on this same
-frozen vault before update and recovery tests change its source revisions.
+gates remain open. The same-vault 29-command update/history/cited-Page/edit/move
+sequence passes scoped operational mechanics, but first-eight task quality fails:
+7/9 facts, with the distant station lookup reading the wrong first-ranked Source.
+All checked citations authenticate. A separate complete-source reading experiment
+also fails its owning deadline with the final question unrun; no native default
+quality improvement is claimed. External-edit/recovery/backup tasks remain unrun
+after prospective timing refusal. The next quality milestone addresses selection
+from already-discovered candidates under fixed regression and resource gates.
 
 The [whole-Source reading control](validation-whole-source-reading.md) passes its
 fixed development evidence gate at10/10: ordinary context plus complete reads of

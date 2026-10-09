@@ -51,6 +51,63 @@ Final emission and process-exit tails were not separately owner-timed. Allocatio
 and free-space samples are sequential observations, not continuous or atomic peak
 proofs. These measurements establish neither unsupervised speed nor logical scaling.
 
+## Same-vault discovery, updates and cited Pages
+
+The next fixed 29-command sequence completed on the same vault and executable.
+Independent review accepted its scoped operational mechanics, including a new
+Source revision, immediate current discovery, immutable historical reads and
+historical search, a Page with three typed SourceRefs, a meaningful guarded edit,
+stale-write rejection and a move that preserved identity and relative source links.
+All prior inputs and captures remained byte-exact; the final index contained
+25,000 Current captures, the reviewed predecessor marked historical and one
+unique moved Page at publication generation 3,130.
+
+**First-eight task-quality acceptance failed.** The first three retrieval tasks
+supplied all seven required facts, but the fourth supplied neither of its two
+distant facts. For `station 10015`, the first hit described a different station
+in activity 010015; the next excerpt visibly mentioned the requested station.
+The fixed first-hit rule read the wrong Source completely. Relevant discovery
+and exact citations therefore did not establish task completion. The negative
+lookup passed only its declared lexical absence scope.
+
+Every checked citation authenticated: 18 search excerpts, seven captured reads
+and nine embedded Page-reference occurrences. None of the critic's additional
+local citation checks counted as retrieved task evidence. The failure remains
+preserved, with no retry, known-owner substitution or changed query.
+
+The operation owning interval was 471.638118 seconds, with 354.227295 seconds
+of separate preservation audits. Native process intervals summed to 4.333593
+seconds and stayed below 0.771 seconds each; these are different intervals, not
+an end-to-end answer latency. Full boundary account inventories remained charged,
+their individual durations were unavailable, and residual overhead was not
+attributed. Root closure separately took 22.858973 seconds before report emission.
+Final allocation was 25,337,417,728 bytes, with 49,403,334,656 bytes free after
+remaining reserves. Report/emission/exit tails were not separately timed.
+
+This establishes a useful 0.2.0 operational checkpoint while leaving reliable
+evidence selection open. The next quality milestone addresses selection from
+already-discovered candidates, with fixed regression tasks and budgets agreed
+before implementation. It does not reopen a general context-allocation tuning loop.
+
+## Complete-source reading experiment and lifecycle limits
+
+A separate five-question development experiment on this same initial publication
+compared ordinary context with complete reads of discovered small Sources. Eight
+of ten mandatory cases completed: each candidate arm supplied 11/14 required facts
+and completed 4/5 tasks, versus its baseline's 8/14 facts and 2/5 tasks. The final
+question was unrun in both arms, counted as zero. The owning interval exceeded
+the unchanged 300-second limit at 300.739228 seconds, so the complete experiment
+**failed**. All 18 executed commands passed and all 142 citation occurrences
+authenticated; these component successes did not pass the missing-task gate.
+No native default or automatic reading profile was implemented or promoted.
+
+External-editor synchronization, interrupted-apply recovery and complete backup
+with cache-loss reconstruction remain unrun at this tier. Prospective review
+refused the unchanged external-edit collection because its three native calls
+and six full account inventories threatened the fixed 60-second task limit.
+This is an admission risk, not a measured 25K synchronization failure. No limit
+was widened and no new measurement was run merely to confirm that risk.
+
 ## Acceptance boundary and remaining work
 
 The failed five-second global-sync gate remains **FAILED**. Full eleven-task
