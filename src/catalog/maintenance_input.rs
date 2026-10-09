@@ -8,7 +8,147 @@ use crate::{
     storage::layout::ValidatedLayout,
     vault::{ExpectedState, VaultFs},
 };
-use std::{cell::RefCell, collections::BTreeMap, fs, io::Read, time::Instant};
+use std::{
+    cell::RefCell,
+    collections::BTreeMap,
+    fs,
+    io::Read,
+    path::PathBuf,
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+        mpsc::{self, Receiver, SyncSender},
+    },
+    time::Instant,
+};
+
+const RECHECK_WORKERS: usize = 4;
+
+struct OpenedRead {
+    file: fs::File,
+    absolute: PathBuf,
+    metadata: fs::Metadata,
+}
+struct HashJob {
+    file: fs::File,
+    ceiling: usize,
+    length: u64,
+    started: Instant,
+    elapsed: std::time::Duration,
+    consumed: Arc<AtomicU64>,
+    #[cfg(test)]
+    path: VaultRelativePath,
+    #[cfg(test)]
+    hook: Option<ReadHook>,
+}
+struct HashResult {
+    file: fs::File,
+    observation: Result<Observation>,
+}
+struct PendingHash {
+    path: VaultRelativePath,
+    absolute: PathBuf,
+    metadata: fs::Metadata,
+    reservation: u64,
+    consumed: Arc<AtomicU64>,
+}
+#[cfg(test)]
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ReadBoundary {
+    BeforeOpen,
+    Admitted,
+    BeforeChunk,
+    AfterChunk,
+    Completed,
+}
+#[cfg(test)]
+type ReadHook = Arc<dyn Fn(&VaultRelativePath, ReadBoundary) + Send + Sync>;
+
+// A worker owns only an admitted descriptor and a fixed streaming buffer. The
+// owner retains all path checks, mutable accounting, and observation acceptance.
+fn hash_admitted(job: &mut HashJob) -> Result<Observation> {
+    let mut hash = blake3::Hasher::new();
+    let mut length = 0u64;
+    let mut buffer = [0u8; 64 * 1024];
+    loop {
+        #[cfg(test)]
+        if let Some(hook) = &job.hook {
+            hook(&job.path, ReadBoundary::BeforeChunk);
+        }
+        if job.started.elapsed() >= job.elapsed {
+            return Err(budget("maintenance input deadline exhausted"));
+        }
+        // One extra byte detects growth; no worker can consume its neighbours'
+        // reservation. Any growth already invalidates the captured length.
+        let cap = (job.length + 1 - length).min(buffer.len() as u64) as usize;
+        let count = job.file.read(&mut buffer[..cap]).map_err(io)?;
+        if count == 0 {
+            break;
+        }
+        job.consumed.fetch_add(count as u64, Ordering::AcqRel);
+        length += count as u64;
+        #[cfg(test)]
+        if let Some(hook) = &job.hook {
+            hook(&job.path, ReadBoundary::AfterChunk);
+        }
+        if length > job.length {
+            return Err(if length > job.ceiling as u64 {
+                budget("maintenance file grew beyond byte allowance")
+            } else {
+                conflict("maintenance file length changed while reading")
+            });
+        }
+        hash.update(&buffer[..count]);
+    }
+    Ok(Observation {
+        expected: ExpectedState::Hash(Blake3Hash::new(format!(
+            "blake3:{}",
+            hash.finalize().to_hex()
+        ))?),
+        bytes: length,
+    })
+}
+fn hash_worker(jobs: Receiver<HashJob>, results: SyncSender<HashResult>) {
+    while let Ok(mut job) = jobs.recv() {
+        // Even a failed/panicking stream reports its consumed-byte receipt. A
+        // channel failure is also reconciled from that receipt by the owner.
+        let observation =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| hash_admitted(&mut job)))
+                .unwrap_or_else(|_| {
+                    Err(WikiError::new(
+                        ErrorCode::Internal,
+                        "maintenance hash worker panicked",
+                    ))
+                });
+        #[cfg(test)]
+        let observation = if let Some(hook) = &job.hook {
+            // Test callbacks also stay inside the worker's panic boundary.
+            if std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                hook(&job.path, ReadBoundary::Completed)
+            }))
+            .is_err()
+            {
+                Err(WikiError::new(
+                    ErrorCode::Internal,
+                    "maintenance hash worker panicked",
+                ))
+            } else {
+                observation
+            }
+        } else {
+            observation
+        };
+        if results
+            .send(HashResult {
+                file: job.file,
+                observation,
+            })
+            .is_err()
+        {
+            break;
+        }
+    }
+}
 
 #[derive(Clone)]
 struct Observation {
@@ -31,6 +171,8 @@ pub(crate) struct MaintenanceInput {
     started: Instant,
     layout: Option<ValidatedLayout>,
     mutable: RefCell<Mutable>,
+    #[cfg(test)]
+    read_hook: Option<ReadHook>,
 }
 fn budget(message: &str) -> WikiError {
     WikiError::new(ErrorCode::BudgetExceeded, message)
@@ -76,6 +218,8 @@ impl MaintenanceInput {
             started,
             layout: None,
             mutable: RefCell::new(Mutable::default()),
+            #[cfg(test)]
+            read_hook: None,
         };
         input.layout = Some(ValidatedLayout::capture_with_reader_budgeted(
             input.fs.root(),
@@ -169,11 +313,16 @@ impl MaintenanceInput {
         state.fatal.get_or_insert(error).clone()
     }
     pub(crate) fn require_clean(&self) -> Result<()> {
+        self.check_clean().map_err(|error| self.latch(error))
+    }
+    // Parallel admission must not latch a later-path error before earlier
+    // admitted reads have been drained and accepted in traversal order.
+    fn check_clean(&self) -> Result<()> {
         if let Some(error) = self.mutable.borrow().fatal.clone() {
             return Err(error);
         }
         if self.started.elapsed() >= self.limits.max_elapsed {
-            return Err(self.latch(budget("maintenance input deadline exhausted")));
+            return Err(budget("maintenance input deadline exhausted"));
         }
         Ok(())
     }
@@ -182,7 +331,7 @@ impl MaintenanceInput {
         run().map_err(|error| self.latch(error))
     }
     fn path_step(&self) -> Result<()> {
-        self.require_clean()?;
+        self.check_clean()?;
         let mut state = self.mutable.borrow_mut();
         state.usage.path_steps = state
             .usage
@@ -247,14 +396,13 @@ impl MaintenanceInput {
         }
         Ok(())
     }
-    fn read_file(
+    fn open_read(
         &self,
         path: &VaultRelativePath,
-        retain: bool,
         ceiling: usize,
         raw: bool,
-    ) -> Result<(Observation, Option<Vec<u8>>)> {
-        self.require_clean()?;
+    ) -> Result<Option<OpenedRead>> {
+        self.check_clean()?;
         let physical = if raw {
             path.clone()
         } else {
@@ -270,13 +418,7 @@ impl MaintenanceInput {
         let before = match fs::symlink_metadata(&absolute) {
             Ok(meta) => meta,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                return Ok((
-                    Observation {
-                        expected: ExpectedState::Absent,
-                        bytes: 0,
-                    },
-                    None,
-                ));
+                return Ok(None);
             }
             Err(error) => return Err(io(error)),
         };
@@ -288,17 +430,21 @@ impl MaintenanceInput {
                 "maintenance input exceeds byte allowance before allocation",
             ));
         }
+        #[cfg(test)]
+        if let Some(hook) = &self.read_hook {
+            hook(path, ReadBoundary::BeforeOpen);
+        }
         #[cfg(unix)]
-        let mut file = {
+        let file = {
             use std::os::unix::fs::OpenOptionsExt;
             fs::OpenOptions::new()
                 .read(true)
-                .custom_flags(libc::O_NOFOLLOW)
+                .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
                 .open(&absolute)
                 .map_err(io)?
         };
         #[cfg(not(unix))]
-        let mut file = fs::File::open(&absolute).map_err(io)?;
+        let file = fs::File::open(&absolute).map_err(io)?;
         let opened = file.metadata().map_err(io)?;
         Self::same_file(&before, &opened)?;
         if opened.len() > ceiling as u64 || opened.len() > self.remaining_io() {
@@ -306,6 +452,46 @@ impl MaintenanceInput {
                 "maintenance opened input exceeds byte allowance before allocation",
             ));
         }
+        #[cfg(test)]
+        if let Some(hook) = &self.read_hook {
+            hook(path, ReadBoundary::Admitted);
+        }
+        Ok(Some(OpenedRead {
+            file,
+            absolute,
+            metadata: opened,
+        }))
+    }
+    fn read_file(
+        &self,
+        path: &VaultRelativePath,
+        retain: bool,
+        ceiling: usize,
+        raw: bool,
+    ) -> Result<(Observation, Option<Vec<u8>>)> {
+        let Some(opened) = self.open_read(path, ceiling, raw)? else {
+            return Ok((
+                Observation {
+                    expected: ExpectedState::Absent,
+                    bytes: 0,
+                },
+                None,
+            ));
+        };
+        self.read_opened(opened, retain, ceiling, raw)
+    }
+    fn read_opened(
+        &self,
+        input: OpenedRead,
+        retain: bool,
+        ceiling: usize,
+        raw: bool,
+    ) -> Result<(Observation, Option<Vec<u8>>)> {
+        let OpenedRead {
+            mut file,
+            absolute,
+            metadata: opened,
+        } = input;
         let mut output = retain.then(Vec::new);
         if let Some(bytes) = &mut output {
             bytes
@@ -439,38 +625,205 @@ impl MaintenanceInput {
             Ok(bytes)
         })
     }
+    fn next_recheck_path(
+        &self,
+        canonical: &mut impl Iterator<Item = VaultRelativePath>,
+        previous: &mut Option<VaultRelativePath>,
+    ) -> Option<VaultRelativePath> {
+        if let Some(path) = canonical.next() {
+            return Some(path);
+        }
+        // Keep one auxiliary key, never another complete manifest.
+        let state = self.mutable.borrow();
+        let next = match previous.as_ref() {
+            Some(path) => state
+                .observed
+                .range::<VaultRelativePath, _>((
+                    std::ops::Bound::Excluded(path),
+                    std::ops::Bound::Unbounded,
+                ))
+                .next(),
+            None => state.observed.iter().next(),
+        }
+        .map(|(path, _)| path.clone());
+        *previous = next.clone().or_else(|| previous.clone());
+        next
+    }
+    fn expected_recheck(&self, path: &VaultRelativePath) -> Observation {
+        self.scanned
+            .get(path)
+            .map(|file| Observation {
+                expected: ExpectedState::Hash(file.hash.clone()),
+                bytes: file.bytes,
+            })
+            .unwrap_or_else(|| self.mutable.borrow().observed[path].clone())
+    }
+    fn accept_recheck(&self, path: &VaultRelativePath, actual: Observation) -> Result<()> {
+        let expected = self.expected_recheck(path);
+        if actual.expected != expected.expected || actual.bytes != expected.bytes {
+            return Err(conflict(&format!(
+                "maintenance observed input changed: {path}"
+            )));
+        }
+        Ok(())
+    }
+    fn drain_hashes(
+        &self,
+        pending: &mut Vec<PendingHash>,
+        workers: &[(SyncSender<HashJob>, Receiver<HashResult>)],
+        reserved: &mut u64,
+    ) -> Result<()> {
+        let mut first = None;
+        for (slot, pending) in pending.drain(..).enumerate() {
+            let result = workers[slot].1.recv();
+            let consumed = pending.consumed.load(Ordering::Acquire);
+            *reserved -= pending.reservation;
+            // Charge every successful or failed read exactly once, even when an
+            // earlier result already failed. Reservations are never actual IO.
+            let charged = self.charge_io(consumed as usize, false);
+            let accepted = charged.and_then(|()| {
+                let result = result.map_err(|_| {
+                    WikiError::new(ErrorCode::Internal, "maintenance hash worker disconnected")
+                })?;
+                let observation = result.observation?;
+                let after = result.file.metadata().map_err(io)?;
+                Self::same_file(&pending.metadata, &after)?;
+                let named = fs::symlink_metadata(&pending.absolute).map_err(io)?;
+                Self::same_file(&pending.metadata, &named)?;
+                if after.len() != observation.bytes || pending.metadata.len() != observation.bytes {
+                    return Err(conflict("maintenance file length changed while reading"));
+                }
+                self.accept_recheck(&pending.path, observation)?;
+                self.check_clean()
+            });
+            if let Err(mut error) = accepted {
+                if first.is_none() {
+                    error.message = format!("{} [{}]", error.message, pending.path);
+                    first = Some(error);
+                }
+            }
+        }
+        first.map_or(Ok(()), Err)
+    }
+    fn recheck_hashes(&self, paths: Vec<VaultRelativePath>, parallel: bool) -> Result<()> {
+        std::thread::scope(|scope| {
+            let mut workers = Vec::new();
+            let mut handles = Vec::new();
+            if parallel {
+                for slot in 0..RECHECK_WORKERS {
+                    let (jobs, receiver) = mpsc::sync_channel(1);
+                    let (sender, results) = mpsc::sync_channel(1);
+                    match std::thread::Builder::new()
+                        .name(format!("maintenance-hash-{slot}"))
+                        .spawn_scoped(scope, move || hash_worker(receiver, sender))
+                    {
+                        Ok(handle) => {
+                            handles.push(handle);
+                            workers.push((jobs, results));
+                        }
+                        // No jobs have been admitted yet. A partial pool is safe;
+                        // if none could start, preserve the internal serial path.
+                        Err(_) => break,
+                    }
+                }
+            }
+            let mut serial = workers.is_empty();
+            let mut pending = Vec::with_capacity(RECHECK_WORKERS);
+            let mut reserved = 0u64;
+            let mut canonical = paths.into_iter();
+            let mut previous = None;
+            let run = (|| {
+                while let Some(path) = self.next_recheck_path(&mut canonical, &mut previous) {
+                    if serial {
+                        self.observe(&path, false, self.limits.max_file_bytes)?;
+                        continue;
+                    }
+                    let Some(opened) = self.open_read(&path, self.limits.max_file_bytes, false)?
+                    else {
+                        self.accept_recheck(
+                            &path,
+                            Observation {
+                                expected: ExpectedState::Absent,
+                                bytes: 0,
+                            },
+                        )?;
+                        continue;
+                    };
+                    let reservation = opened.metadata.len() + 1;
+                    if reservation > self.remaining_io().saturating_sub(reserved) {
+                        // Conservative growth-byte reservations must not reject
+                        // an input admissible by the original serial reader.
+                        self.drain_hashes(&mut pending, &workers, &mut reserved)?;
+                        let (actual, _) =
+                            self.read_opened(opened, false, self.limits.max_file_bytes, false)?;
+                        self.accept_recheck(&path, actual)?;
+                        serial = true;
+                        continue;
+                    }
+                    let consumed = Arc::new(AtomicU64::new(0));
+                    let slot = pending.len();
+                    let job = HashJob {
+                        file: opened.file,
+                        ceiling: self.limits.max_file_bytes,
+                        length: opened.metadata.len(),
+                        started: self.started,
+                        elapsed: self.limits.max_elapsed,
+                        consumed: consumed.clone(),
+                        #[cfg(test)]
+                        path: path.clone(),
+                        #[cfg(test)]
+                        hook: self.read_hook.clone(),
+                    };
+                    // Record the reservation before the descriptor can reach a
+                    // worker. A failed send returns an unread job to the owner.
+                    reserved += reservation;
+                    if workers[slot].0.send(job).is_err() {
+                        reserved -= reservation;
+                        return Err(WikiError::new(
+                            ErrorCode::Internal,
+                            "maintenance hash worker disconnected before dispatch",
+                        ));
+                    }
+                    pending.push(PendingHash {
+                        path,
+                        absolute: opened.absolute,
+                        metadata: opened.metadata,
+                        reservation,
+                        consumed,
+                    });
+                    if pending.len() == workers.len() {
+                        self.drain_hashes(&mut pending, &workers, &mut reserved)?;
+                    }
+                }
+                Ok(())
+            })();
+            // Earlier admitted paths take precedence over a later admission
+            // failure. Drain before latching, and never detach an active reader.
+            let drained = self.drain_hashes(&mut pending, &workers, &mut reserved);
+            drop(workers);
+            let mut joined = Ok(());
+            for handle in handles {
+                if handle.join().is_err() {
+                    joined = Err(WikiError::new(
+                        ErrorCode::Internal,
+                        "maintenance hash worker panicked",
+                    ));
+                }
+            }
+            drained.and(run).and(joined)
+        })
+    }
     pub(crate) fn final_recheck(&self) -> Result<()> {
+        self.final_recheck_mode(true)
+    }
+    // Retained internally for exact stable-input comparisons and safe fallback.
+    fn final_recheck_mode(&self, parallel: bool) -> Result<()> {
         self.guarded(|| {
             let paths = self.census(false)?;
             if paths.len() != self.scanned.len() || !paths.iter().eq(self.scanned.keys()) {
                 return Err(conflict("maintenance scanned membership changed"));
             }
-            for path in paths {
-                self.observe(&path, false, self.limits.max_file_bytes)?;
-            }
-            // Keep only one next key; don't allocate a second auxiliary manifest.
-            let mut previous: Option<VaultRelativePath> = None;
-            loop {
-                let next = {
-                    let state = self.mutable.borrow();
-                    match previous.as_ref() {
-                        Some(path) => state
-                            .observed
-                            .range::<VaultRelativePath, _>((
-                                std::ops::Bound::Excluded(path),
-                                std::ops::Bound::Unbounded,
-                            ))
-                            .next(),
-                        None => state.observed.iter().next(),
-                    }
-                    .map(|(path, _)| path.clone())
-                };
-                let Some(path) = next else {
-                    break;
-                };
-                self.observe(&path, false, self.limits.max_file_bytes)?;
-                previous = Some(path);
-            }
+            self.recheck_hashes(paths, parallel)?;
             // These few raw authority files are separate from mapped canonical
             // paths. Rehash the original migration receipt once, not per note.
             let paths: Vec<_> = self

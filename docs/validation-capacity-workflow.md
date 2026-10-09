@@ -679,3 +679,31 @@ performance pass. Require all 1,000 candidate captures within 600 seconds and
 at least 1.5 times improvement against a complete, prospectively pinned scalar
 arm on the same prestate and inputs. Keep default retrieval quality, external
 sync, whole lifecycle and 25K acceptance separate and open.
+# Unpromoted parallel final maintenance recheck
+
+This experimental branch bounds the final full-content recheck to four scoped
+hashing workers and four pending results. Initial capture, dependency observation,
+path resolution, descriptor admission, mutable accounting, parsing, SQL and
+publication remain serial. The single cumulative byte allowance and original
+deadline apply to all workers; tight budgets drain pending work and fall back to
+serial reads. Stable-file identity, complete hashes, ordered errors, failed-read
+byte charges and the final serial layout check remain required. Catalog formats
+and public commands do not change.
+
+Independent source review and the native release checkpoint pass **79 tests**,
+with one authentic historical-fixture test intentionally ignored. These checks
+cover serial/parallel accounting parity, exact-budget fallback, file growth and
+replacement, restored-mtime changes, worker panic/error order, Page publication,
+predecessor preservation, recovery and complete-cache-loss reconstruction. The
+initial CLI launch failed before application execution because its pinned binary
+environment variable was absent. Supplying that executable and completing an
+omitted maintenance test module required no code changes or repeated passing
+groups. Compilation used native macOS ARM64, Rust 1.98 and release optimization
+level 3 with debug information disabled.
+
+**Performance is unmeasured and this candidate is not promoted.** Existing timing
+evidence does not justify launching the 25K external-edit-to-verified-read task
+under its unchanged 60-second limit, including required account inventories and
+monitoring. External-edit, interrupted recovery and complete backup/rebuild at
+25K remain open. This checkpoint establishes bounded mechanics; it supplies no
+25K qualification, default-context improvement or full-release acceptance.
