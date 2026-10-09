@@ -1,7 +1,7 @@
 //! Safe literal/lexical document discovery. No cache opens, sync, or model calls.
 use super::{
     cursor,
-    excerpts::{SourceMap, Tokenizer},
+    excerpts::{SourceMap, Token, Tokenizer},
     filters,
     literal::literal_matches,
     types::*,
@@ -88,6 +88,7 @@ struct Candidate {
     reasons: Vec<RetrievalReason>,
     ranks: Vec<RankContribution>,
     identity: bool,
+    complete_body_witness: bool,
 }
 fn compare(a: &Candidate, b: &Candidate) -> Ordering {
     a.tier
@@ -114,6 +115,28 @@ fn compare(a: &Candidate, b: &Candidate) -> Ordering {
 
 pub fn search(reader: &ReaderSnapshot, query: &str, plan: &QueryPlan) -> Result<HitSet> {
     search_catalog(reader, query, plan)
+}
+/// Ordinary lexical discovery prefers complete body witnesses within the
+/// existing capped candidates. Context and embedding callers retain `search`.
+pub fn search_ordinary_lexical(
+    reader: &ReaderSnapshot,
+    query: &str,
+    plan: &QueryPlan,
+) -> Result<HitSet> {
+    search_ordinary_lexical_catalog(reader, query, plan)
+}
+pub(crate) fn search_ordinary_lexical_catalog(
+    reader: &dyn QueryCatalog,
+    query: &str,
+    plan: &QueryPlan,
+) -> Result<HitSet> {
+    if plan.mode != SearchMode::Lexical {
+        return Err(WikiError::new(
+            ErrorCode::Usage,
+            "ordinary lexical discovery requires lexical mode",
+        ));
+    }
+    search_inner_with_discovery(reader, query, plan, None, false, true)
 }
 pub(crate) fn search_catalog(
     reader: &dyn QueryCatalog,
@@ -163,6 +186,17 @@ fn search_inner(
     context_scope: Option<bool>,
     source_only: bool,
 ) -> Result<HitSet> {
+    search_inner_with_discovery(reader, query, plan, context_scope, source_only, false)
+}
+
+fn search_inner_with_discovery(
+    reader: &dyn QueryCatalog,
+    query: &str,
+    plan: &QueryPlan,
+    context_scope: Option<bool>,
+    source_only: bool,
+    ordinary_discovery: bool,
+) -> Result<HitSet> {
     if !matches!(plan.mode, SearchMode::Literal | SearchMode::Lexical) {
         return Err(WikiError::new(
             ErrorCode::Usage,
@@ -171,6 +205,14 @@ fn search_inner(
     }
     let plan = validate_plan(query, plan)?;
     let base_fingerprint = cursor::fingerprint(query, &plan)?;
+    let base_fingerprint = if ordinary_discovery {
+        Blake3Hash::digest(
+            serde_json::to_vec(&("lwiki-ordinary-complete-query-v1", base_fingerprint))
+                .map_err(|error| WikiError::new(ErrorCode::Internal, error.to_string()))?,
+        )
+    } else {
+        base_fingerprint
+    };
     let base_fingerprint = if reader.query_scope() == "strict_catalog" {
         base_fingerprint
     } else {
@@ -374,6 +416,7 @@ fn search_inner(
                     reasons: vec![reason],
                     ranks: vec![contribution.clone()],
                     identity,
+                    complete_body_witness: false,
                 };
                 if let Some(existing) = candidates.get_mut(&document.path) {
                     if !existing.reasons.contains(&reason) {
@@ -427,6 +470,7 @@ fn search_inner(
                             score: None,
                         }],
                         identity: false,
+                        complete_body_witness: false,
                     },
                 );
             }
@@ -439,6 +483,13 @@ fn search_inner(
         .saturating_sub(plan.limits.candidates)
         .max(usize::from(overflow));
     candidates.truncate(plan.limits.candidates);
+    let preference_limited = ordinary_discovery
+        && !prefer_complete_body_witnesses(
+            reader,
+            tokenizer.as_ref().expect("ordinary lexical tokenizer"),
+            query,
+            &mut candidates,
+        )?;
     let end = (offset + plan.limits.hits).min(candidates.len());
     let mut hits = Vec::new();
     for candidate in candidates
@@ -513,6 +564,10 @@ fn search_inner(
         None
     };
     let mut warnings = Vec::new();
+    if preference_limited {
+        warnings
+            .push("complete_query_preference_work_limit; retained baseline lexical order".into());
+    }
     if omitted_candidates > 0 {
         warnings.push("candidate_cap_reached; omitted_candidates is a lower bound".into());
     }
@@ -876,6 +931,7 @@ fn normalized_literal_candidates(
                     score: None,
                 }],
                 identity: false,
+                complete_body_witness: false,
             },
         );
     }
@@ -976,6 +1032,7 @@ fn normalized_candidates(
                 reasons: vec![reason],
                 ranks: vec![contribution.clone()],
                 identity,
+                complete_body_witness: false,
             };
             if let Some(existing) = candidates.get_mut(&candidate.document.path) {
                 if !existing.reasons.contains(&reason) {
@@ -1297,6 +1354,7 @@ fn source_candidates(
                 reasons: vec![reason],
                 ranks: vec![contribution.clone()],
                 identity: false,
+                complete_body_witness: false,
             };
             if let Some(existing) = candidates.get_mut(&candidate.document.path) {
                 if !existing.reasons.contains(&reason) {
@@ -1400,6 +1458,81 @@ fn record_for(
         .map(Option::flatten)
 }
 
+const COMPLETE_QUERY_BODY_BYTES: usize = 1024 * 1024;
+const COMPLETE_QUERY_TOTAL_BYTES: usize = 16 * 1024 * 1024;
+
+fn body_offset(document: &DocumentRow) -> usize {
+    if document.owner_revision.is_some() {
+        0
+    } else {
+        let note = parse_note(document.raw_text.as_bytes());
+        note.raw.len() - note.body().len()
+    }
+}
+
+/// Return false before changing order when the complete preference pass cannot
+/// fit its body envelope. Catalog deadline errors retain their existing failure.
+fn prefer_complete_body_witnesses(
+    reader: &dyn QueryCatalog,
+    tokenizer: &Tokenizer<'_>,
+    query: &str,
+    candidates: &mut [Candidate],
+) -> Result<bool> {
+    let phrase = tokenizer.tokens(query)?;
+    if phrase.len() < 2 {
+        return Ok(true);
+    }
+    if candidates.len() > 80 {
+        return Ok(false);
+    }
+    let mut bodies = Vec::new();
+    let mut total = 0usize;
+    for (index, candidate) in candidates.iter().enumerate() {
+        if candidate.tier != 2 || candidate.identity {
+            continue;
+        }
+        let offset = body_offset(&candidate.document);
+        let bytes = candidate.document.raw_text.len() - offset;
+        total = total.saturating_add(bytes);
+        if bytes > COMPLETE_QUERY_BODY_BYTES || total > COMPLETE_QUERY_TOTAL_BYTES {
+            return Ok(false);
+        }
+        bodies.push((index, offset));
+    }
+    let mut witnesses = vec![false; candidates.len()];
+    for (index, offset) in bodies {
+        reader.check_query_budget()?;
+        let raw = &candidates[index].document.raw_text;
+        let map = SourceMap::markdown(raw, offset);
+        let tokens = tokenizer.tokens(&map.text)?;
+        witnesses[index] = complete_query_spans(&map, raw, &tokens, &phrase)
+            .next()
+            .is_some();
+        reader.check_query_budget()?;
+    }
+    for (candidate, witness) in candidates.iter_mut().zip(witnesses) {
+        candidate.complete_body_witness = witness;
+    }
+    candidates.sort_by_key(|candidate| (candidate.tier, !candidate.complete_body_witness));
+    Ok(true)
+}
+
+fn complete_query_spans<'a>(
+    map: &'a SourceMap,
+    raw: &'a str,
+    tokens: &'a [Token],
+    phrase: &'a [Token],
+) -> impl Iterator<Item = Range<usize>> + 'a {
+    tokens.windows(phrase.len()).filter_map(move |window| {
+        if !window.iter().zip(phrase).all(|(a, b)| a.text == b.text) {
+            return None;
+        }
+        let normalized = window[0].span.start..window[window.len() - 1].span.end;
+        let original = map.original_span(normalized.clone())?;
+        (raw.get(original.clone()) == map.text.get(normalized)).then_some(original)
+    })
+}
+
 fn match_ranges(
     tokenizer: Option<&Tokenizer<'_>>,
     document: &DocumentRow,
@@ -1416,12 +1549,7 @@ fn match_ranges(
     }
     let tokenizer = tokenizer
         .ok_or_else(|| WikiError::new(ErrorCode::Internal, "lexical tokenizer missing"))?;
-    let offset = if document.owner_revision.is_some() {
-        0
-    } else {
-        let note = parse_note(document.raw_text.as_bytes());
-        note.raw.len() - note.body().len()
-    };
+    let offset = body_offset(document);
     query_matches(
         tokenizer,
         &document.raw_text,
@@ -1446,20 +1574,10 @@ fn query_matches(
     // named section even when an earlier query word occurs many times.
     let phrase = tokenizer.tokens(query)?;
     if phrase.len() > 1 {
-        for window in tokens.windows(phrase.len()) {
-            if window.iter().zip(&phrase).all(|(a, b)| a.text == b.text) {
-                let normalized = window[0].span.start..window[window.len() - 1].span.end;
-                if let Some(original) = map.original_span(normalized.clone())
-                    && original.len() <= excerpt_bytes.saturating_mul(2) / 3
-                    && raw.get(original.clone()) == map.text.get(normalized)
-                {
-                    matches.push(original);
-                    if matches.len() == 64 {
-                        break;
-                    }
-                }
-            }
-        }
+        matches = complete_query_spans(&map, raw, &tokens, &phrase)
+            .filter(|original| original.len() <= excerpt_bytes.saturating_mul(2) / 3)
+            .take(64)
+            .collect();
         if !matches.is_empty() {
             return Ok(matches);
         }
@@ -1468,7 +1586,7 @@ fn query_matches(
     // to consume the match cap. Distinct normalized query tokens vote once
     // per window, weighted by inverse frequency in this document. This is
     // language independent and keeps repeated common words from overwhelming
-    // late identifiers. Document ranking remains the FTS ranking above.
+    // late identifiers. Window scoring does not change discovery order.
     let mut terms = BTreeMap::new();
     for token in &phrase {
         let next = terms.len();
@@ -2436,6 +2554,469 @@ mod indexed_source_tests {
 #[cfg(test)]
 #[path = "general_lexical_tests.rs"]
 mod general_lexical_tests;
+
+#[cfg(test)]
+mod ordinary_discovery_tests {
+    use super::*;
+    use crate::{
+        catalog::{
+            Catalog,
+            file_types::{BuildIdentity, CatalogSelection},
+            normalized_build::{BuildLimits, NormalizedBuilder},
+            query_types::QueryReadLimits,
+            scan, selector,
+        },
+        sources::{CaptureRequest, ExtractionInput, SourceOrigin, SourceStore},
+        vault::{VaultFs, VaultRoot, WriterPermit},
+    };
+    use std::{fs, path::Path, time::Duration};
+
+    struct Fixture {
+        _temp: tempfile::TempDir,
+        catalog: Catalog,
+        legacy: ReaderSnapshot,
+        sources: Vec<RecordId>,
+    }
+    fn write(root: &Path, path: &str, bytes: &[u8]) {
+        let target = root.join(path);
+        fs::create_dir_all(target.parent().unwrap()).unwrap();
+        fs::write(target, bytes).unwrap();
+    }
+    impl Fixture {
+        fn new(sources: &[(&str, &str)], pages: &[(&str, &str, &[&str], &str)]) -> Self {
+            let temp = tempfile::tempdir().unwrap();
+            write(
+                temp.path(),
+                "WIKI.md",
+                b"---\nwiki_schema: \"1\"\nwiki_id: vault_ordinary_discovery\nwiki_kind: vault\ntitle: Discovery\n---\n",
+            );
+            for (id, title, aliases, body) in pages {
+                let text = format!(
+                    "---\nwiki_schema: \"1\"\nwiki_id: {id}\nwiki_kind: page\nwiki_status: reviewed\ntitle: {}\naliases: {}\n---\n{body}",
+                    serde_json::to_string(title).unwrap(),
+                    serde_json::to_string(aliases).unwrap(),
+                );
+                write(temp.path(), &format!("{id}.md"), text.as_bytes());
+            }
+            let fs_handle = VaultFs::new(VaultRoot::explicit(temp.path()).unwrap());
+            let vault_id = RecordId::new("vault_ordinary_discovery").unwrap();
+            let catalog = Catalog::new(fs_handle.clone(), vault_id.clone());
+            let store = SourceStore::new(fs_handle.clone());
+            let mut source_ids = Vec::new();
+            for (index, (title, body)) in sources.iter().enumerate() {
+                let captured = store
+                    .plan_capture(CaptureRequest {
+                        title: (*title).into(),
+                        origin_kind: SourceOrigin::LocalFile,
+                        origin: format!("discovery-{index}.md"),
+                        original: body.as_bytes().to_vec(),
+                        extraction: ExtractionInput::Utf8Preserve,
+                        media_type: Some("text/markdown".into()),
+                    })
+                    .unwrap();
+                for operation in captured.draft.unwrap().operations {
+                    write(
+                        temp.path(),
+                        operation.target.as_str(),
+                        &operation.proposed.unwrap(),
+                    );
+                }
+                source_ids.push(captured.source_id);
+            }
+            let writer = WriterPermit::acquire(fs_handle.root(), Duration::ZERO).unwrap();
+            catalog.sync(&writer).unwrap();
+            let legacy = catalog.index_snapshot().unwrap();
+            let identity = BuildIdentity {
+                selection: CatalogSelection::new(vault_id.clone(), 2).unwrap(),
+                origin: None,
+                vector_cache_lost: false,
+                vector_loss_unknown: false,
+            };
+            selector::prepare(&fs_handle, &writer, &identity.selection).unwrap();
+            let mut builder =
+                NormalizedBuilder::begin(&fs_handle, &writer, identity, BuildLimits::default())
+                    .unwrap();
+            let input = scan::scan_input(&fs_handle, &vault_id).unwrap();
+            let projection =
+                scan::project_normalized_with_sink(&fs_handle, &input, false, &mut builder)
+                    .unwrap();
+            let completed = builder.finish_normalized(&projection).unwrap();
+            selector::publish(
+                &fs_handle,
+                &writer,
+                &completed.identity.selection,
+                Duration::ZERO,
+            )
+            .unwrap();
+            Self {
+                _temp: temp,
+                catalog,
+                legacy,
+                sources: source_ids,
+            }
+        }
+        fn normalized(&self) -> crate::catalog::query::QuerySnapshot {
+            self.catalog
+                .cached_query_snapshot(QueryReadLimits::default())
+                .unwrap()
+        }
+    }
+    fn captured(hits: &HitSet) -> Vec<&SearchHit> {
+        hits.hits
+            .iter()
+            .filter(|hit| hit.owner_revision.is_some())
+            .collect()
+    }
+    fn paths(hits: &HitSet) -> Vec<&VaultRelativePath> {
+        hits.hits.iter().map(|hit| &hit.locator.path).collect()
+    }
+
+    #[test]
+    fn complete_body_witness_corrects_contradictory_title_and_scattered_terms() {
+        let target = format!(
+            "# Dispatch record\n\nStation 10015 has the completed route.\n{}",
+            "Historical reading and background observations.\n".repeat(80)
+        );
+        let f = Fixture::new(
+            &[
+                (
+                    "station 10015 station 10015 station 10015",
+                    "Station 10032 is assigned activity 10015.\n",
+                ),
+                ("Dispatch record", &target),
+                (
+                    "station 10015 scattered terms",
+                    "station. Unrelated activity 10015.\n",
+                ),
+            ],
+            &[],
+        );
+        let normalized = f.normalized();
+        for reader in [&f.legacy as &dyn QueryCatalog, &normalized] {
+            let plan = QueryPlan::default();
+            let old = search_catalog(reader, "station 10015", &plan).unwrap();
+            assert_ne!(captured(&old)[0].source_id, Some(f.sources[1].clone()));
+            let new = search_ordinary_lexical_catalog(reader, "station 10015", &plan).unwrap();
+            assert_eq!(captured(&new)[0].source_id, Some(f.sources[1].clone()));
+            assert!(new.hits[0].excerpt.text.contains("Station 10015"));
+            assert_eq!(
+                new.hits[0].excerpt.span.slice(&target).unwrap(),
+                new.hits[0].excerpt.text
+            );
+            assert_eq!(new.candidate_count, old.candidate_count);
+            assert_eq!(new.omitted_candidates, old.omitted_candidates);
+            for hit in &new.hits {
+                let prior = old
+                    .hits
+                    .iter()
+                    .find(|prior| prior.locator == hit.locator)
+                    .unwrap();
+                assert_eq!(hit.rank_contributions, prior.rank_contributions);
+                assert_eq!(hit.excerpt, prior.excerpt);
+            }
+            let mut capped = plan.clone();
+            capped.limits.candidates = 1;
+            capped.limits.hits = 1;
+            assert_eq!(
+                search_ordinary_lexical_catalog(reader, "station 10015", &capped)
+                    .unwrap()
+                    .hits,
+                search_catalog(reader, "station 10015", &capped)
+                    .unwrap()
+                    .hits,
+                "preference must not recover an owner outside the original cap"
+            );
+        }
+    }
+
+    #[test]
+    fn exact_id_title_and_alias_remain_ahead_of_complete_body_witness() {
+        let f = Fixture::new(
+            &[(
+                "Body witness",
+                "page_station_10015\nExact station 10015\nAlias station 10015\n",
+            )],
+            &[
+                (
+                    "page_station_10015",
+                    "Exact station 10015",
+                    &[],
+                    "Unrelated body.\n",
+                ),
+                (
+                    "page_alias",
+                    "Alias owner",
+                    &["Alias station 10015"],
+                    "Unrelated body.\n",
+                ),
+            ],
+        );
+        let normalized = f.normalized();
+        for reader in [&f.legacy as &dyn QueryCatalog, &normalized] {
+            for (query, reason) in [
+                ("page_station_10015", RetrievalReason::ExactId),
+                ("Exact station 10015", RetrievalReason::ExactTitle),
+                ("Alias station 10015", RetrievalReason::ExactAlias),
+            ] {
+                let hits =
+                    search_ordinary_lexical_catalog(reader, query, &QueryPlan::default()).unwrap();
+                assert!(hits.hits[0].reasons.contains(&reason), "{query}");
+                assert!(hits.hits[0].owner_revision.is_none());
+                assert!(
+                    captured(&hits)
+                        .iter()
+                        .any(|hit| hit.source_id == Some(f.sources[0].clone()))
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn witness_respects_token_boundaries_and_original_markup_continuity() {
+        let f = Fixture::new(
+            &[
+                (
+                    "station 10015 station 10015",
+                    "station 100150 has a different identifier.\n",
+                ),
+                (
+                    "station 10015 markup",
+                    "station **10015** appears across markup.\n",
+                ),
+                (
+                    "Plain station record",
+                    "STATION 10015 has the direct witness.\n",
+                ),
+            ],
+            &[],
+        );
+        let normalized = f.normalized();
+        for reader in [&f.legacy as &dyn QueryCatalog, &normalized] {
+            let hits =
+                search_ordinary_lexical_catalog(reader, "station 10015", &QueryPlan::default())
+                    .unwrap();
+            assert_eq!(captured(&hits)[0].source_id, Some(f.sources[2].clone()));
+            let old = search_catalog(reader, "station 10015", &QueryPlan::default()).unwrap();
+            let remaining = captured(&hits)
+                .into_iter()
+                .filter(|hit| hit.source_id != Some(f.sources[2].clone()))
+                .map(|hit| &hit.locator)
+                .collect::<Vec<_>>();
+            let prior = captured(&old)
+                .into_iter()
+                .filter(|hit| hit.source_id != Some(f.sources[2].clone()))
+                .map(|hit| &hit.locator)
+                .collect::<Vec<_>>();
+            assert_eq!(
+                remaining, prior,
+                "boundary and markup distractors retain baseline order"
+            );
+        }
+    }
+
+    #[test]
+    fn no_witness_single_term_and_literal_keep_baseline_order() {
+        let f = Fixture::new(
+            &[
+                (
+                    "station 10015 station",
+                    "station. Separate activity 10015.\n",
+                ),
+                ("Other dispatch", "station 10032 has activity 10015.\n"),
+            ],
+            &[],
+        );
+        let normalized = f.normalized();
+        for reader in [&f.legacy as &dyn QueryCatalog, &normalized] {
+            for query in ["station 10015", "station"] {
+                assert_eq!(
+                    search_ordinary_lexical_catalog(reader, query, &QueryPlan::default())
+                        .unwrap()
+                        .hits,
+                    search_catalog(reader, query, &QueryPlan::default())
+                        .unwrap()
+                        .hits
+                );
+            }
+            let literal = QueryPlan {
+                mode: SearchMode::Literal,
+                ..Default::default()
+            };
+            assert_eq!(
+                search_ordinary_lexical_catalog(reader, "station", &literal)
+                    .unwrap_err()
+                    .code,
+                ErrorCode::Usage
+            );
+            assert!(
+                captured(&search_catalog(reader, "station 10015", &literal).unwrap()).is_empty()
+            );
+            for mode in [SearchMode::Semantic, SearchMode::Hybrid] {
+                let plan = QueryPlan {
+                    mode,
+                    ..Default::default()
+                };
+                assert_eq!(
+                    search_ordinary_lexical_catalog(reader, "station", &plan)
+                        .unwrap_err()
+                        .code,
+                    ErrorCode::Usage
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn ordinary_cursor_is_policy_bound_and_pages_the_same_frozen_order() {
+        let f = Fixture::new(
+            &[
+                (
+                    "station 10015 station 10015",
+                    "station 10032 runs activity 10015.\n",
+                ),
+                ("Dispatch", "station 10015 has the complete body witness.\n"),
+            ],
+            &[],
+        );
+        let normalized = f.normalized();
+        for reader in [&f.legacy as &dyn QueryCatalog, &normalized] {
+            let mut plan = QueryPlan::default();
+            plan.limits.hits = 1;
+            let first = search_ordinary_lexical_catalog(reader, "station 10015", &plan).unwrap();
+            let old = search_catalog(reader, "station 10015", &plan).unwrap();
+            assert_ne!(first.next_cursor, old.next_cursor);
+            plan.cursor = first.next_cursor.clone();
+            assert_eq!(
+                search_catalog(reader, "station 10015", &plan)
+                    .unwrap_err()
+                    .code,
+                ErrorCode::CursorStale
+            );
+            let second = search_ordinary_lexical_catalog(reader, "station 10015", &plan).unwrap();
+            assert_ne!(paths(&first), paths(&second));
+            plan.cursor = old.next_cursor;
+            assert_eq!(
+                search_ordinary_lexical_catalog(reader, "station 10015", &plan)
+                    .unwrap_err()
+                    .code,
+                ErrorCode::CursorStale
+            );
+            assert!(search_catalog(reader, "station 10015", &plan).is_ok());
+            let mut whole = plan;
+            whole.cursor = None;
+            whole.limits.hits = 10;
+            let all = search_ordinary_lexical_catalog(reader, "station 10015", &whole).unwrap();
+            assert_eq!(first.hits[0], all.hits[0]);
+            assert_eq!(second.hits[0], all.hits[1]);
+            let baseline = search_catalog(reader, "station 10015", &whole).unwrap();
+            let context = search_context_catalog(reader, "station 10015", &whole, false).unwrap();
+            assert_eq!(
+                captured(&context)
+                    .iter()
+                    .map(|hit| &hit.locator)
+                    .collect::<Vec<_>>(),
+                captured(&baseline)
+                    .iter()
+                    .map(|hit| &hit.locator)
+                    .collect::<Vec<_>>()
+            );
+            assert_ne!(captured(&context)[0].source_id, captured(&all)[0].source_id);
+        }
+    }
+
+    #[test]
+    fn oversized_body_keeps_the_entire_baseline_order_with_warning() {
+        let oversized = format!(
+            "station. {} 10015",
+            "Background observation.\n".repeat(50_000)
+        );
+        let f = Fixture::new(
+            &[
+                ("station 10015 station 10015", &oversized),
+                ("Dispatch", "station 10015 has the complete body witness.\n"),
+            ],
+            &[],
+        );
+        let normalized = f.normalized();
+        for reader in [&f.legacy as &dyn QueryCatalog, &normalized] {
+            let old = search_catalog(reader, "station 10015", &QueryPlan::default()).unwrap();
+            let new =
+                search_ordinary_lexical_catalog(reader, "station 10015", &QueryPlan::default())
+                    .unwrap();
+            assert_eq!(new.hits, old.hits);
+            assert!(
+                new.warnings
+                    .iter()
+                    .any(|warning| warning.contains("complete_query_preference_work_limit"))
+            );
+        }
+    }
+
+    #[test]
+    fn aggregate_body_limit_keeps_baseline_order_for_individually_admitted_bodies() {
+        let body = format!(
+            "station 10015\n{}",
+            "Background observation.\n".repeat(43_000)
+        );
+        assert!(body.len() < 1024 * 1024);
+        assert!(body.len() * 18 > 16 * 1024 * 1024);
+        let titles = (0..18)
+            .map(|index| format!("Aggregate observation {index}"))
+            .collect::<Vec<_>>();
+        let sources = titles
+            .iter()
+            .map(|title| (title.as_str(), body.as_str()))
+            .collect::<Vec<_>>();
+        let f = Fixture::new(&sources, &[]);
+        let normalized = f.normalized();
+        for reader in [&f.legacy as &dyn QueryCatalog, &normalized] {
+            let old = search_catalog(reader, "station 10015", &QueryPlan::default()).unwrap();
+            let new =
+                search_ordinary_lexical_catalog(reader, "station 10015", &QueryPlan::default())
+                    .unwrap();
+            assert_eq!(old.candidate_count, 18);
+            assert_eq!(new.candidate_count, old.candidate_count);
+            assert_eq!(new.omitted_candidates, old.omitted_candidates);
+            assert_eq!(new.hits, old.hits);
+            assert!(
+                new.warnings
+                    .iter()
+                    .any(|warning| warning.contains("complete_query_preference_work_limit"))
+            );
+        }
+    }
+
+    #[test]
+    fn normalized_hard_row_budget_fails_without_successful_preference_fallback() {
+        let f = Fixture::new(
+            &[
+                (
+                    "First dispatch",
+                    "station 10015 has the first observation.\n",
+                ),
+                (
+                    "Second dispatch",
+                    "station 10015 has the second observation.\n",
+                ),
+            ],
+            &[],
+        );
+        let reader = f
+            .catalog
+            .cached_query_snapshot(QueryReadLimits {
+                max_rows: 1,
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(
+            search_ordinary_lexical_catalog(&reader, "station 10015", &QueryPlan::default())
+                .unwrap_err()
+                .code,
+            ErrorCode::BudgetExceeded
+        );
+        assert_eq!(reader.usage().rows, 1);
+    }
+}
 
 #[cfg(test)]
 #[path = "candidate_metadata_tests.rs"]

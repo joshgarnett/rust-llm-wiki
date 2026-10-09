@@ -163,7 +163,39 @@ pub fn search(
     }
     #[cfg(not(test))]
     {
-        coordinate(catalog, query, plan, budget)
+        coordinate(catalog, query, plan, budget, false)
+    }
+}
+
+/// Ordinary CLI lexical discovery retains the same selected-page proof.
+/// Context, hybrid and explicit lexical fallback keep the baseline entry above.
+pub fn search_ordinary_lexical(
+    catalog: &Catalog,
+    query: &str,
+    plan: &QueryPlan,
+    budget: &VerificationBudget,
+) -> Result<HitSet> {
+    if plan.mode != SearchMode::Lexical {
+        return Err(WikiError::new(
+            ErrorCode::Usage,
+            "ordinary selected lexical discovery requires lexical mode",
+        ));
+    }
+    #[cfg(test)]
+    {
+        coordinate(
+            catalog,
+            query,
+            plan,
+            budget,
+            true,
+            || Ok(()),
+            &mut Stats::default(),
+        )
+    }
+    #[cfg(not(test))]
+    {
+        coordinate(catalog, query, plan, budget, true)
     }
 }
 
@@ -177,7 +209,15 @@ pub(super) fn measured_search<F: FnOnce() -> Result<()>>(
 ) -> (Result<HitSet>, Stats) {
     let start = Instant::now();
     let mut stats = Stats::default();
-    let result = coordinate(catalog, query, plan, budget, before_final, &mut stats);
+    let result = coordinate(
+        catalog,
+        query,
+        plan,
+        budget,
+        false,
+        before_final,
+        &mut stats,
+    );
     stats.elapsed_ns = start.elapsed().as_nanos();
     (result, stats)
 }
@@ -187,6 +227,7 @@ fn coordinate(
     query: &str,
     plan: &QueryPlan,
     budget: &VerificationBudget,
+    ordinary_discovery: bool,
     #[cfg(test)] before_final: impl FnOnce() -> Result<()>,
     #[cfg(test)] stats: &mut Stats,
 ) -> Result<HitSet> {
@@ -209,7 +250,11 @@ fn coordinate(
             ..Default::default()
         })?;
         let result = (|| {
-            let mut hits = lexical::search_catalog(&reader, query, &plan)?;
+            let mut hits = if ordinary_discovery {
+                lexical::search_ordinary_lexical_catalog(&reader, query, &plan)?
+            } else {
+                lexical::search_catalog(&reader, query, &plan)?
+            };
             meter.check()?;
             let paths = hits
                 .hits

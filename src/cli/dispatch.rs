@@ -736,7 +736,10 @@ fn execute_inner(args: &Arguments) -> Result<Envelope> {
                             fault: None,
                         },
                     );
-                    let hits = if matches!(plan.mode, retrieval::SearchMode::Literal | retrieval::SearchMode::Lexical) {
+                    let hits = if plan.mode == retrieval::SearchMode::Lexical {
+                        retrieval::selected_search::search_ordinary_lexical(&catalog, &search.query, &plan,
+                            &retrieval::VerificationBudget::default())
+                    } else if plan.mode == retrieval::SearchMode::Literal {
                         retrieval::selected_search::search(&catalog, &search.query, &plan,
                             &retrieval::VerificationBudget::default())
                     } else {
@@ -799,7 +802,15 @@ fn execute_inner(args: &Arguments) -> Result<Envelope> {
                             "normalized search selected another catalog layout",
                         ));
                     }
-                    let hits = retrieval::lexical::search_catalog(&reader, &search.query, &plan)?;
+                    let hits = if plan.mode == retrieval::SearchMode::Lexical {
+                        retrieval::lexical::search_ordinary_lexical_catalog(
+                            &reader,
+                            &search.query,
+                            &plan,
+                        )?
+                    } else {
+                        retrieval::lexical::search_catalog(&reader, &search.query, &plan)?
+                    };
                     reader.verify_operations(&catalog)?;
                     hits
                 } else {
@@ -867,7 +878,11 @@ fn execute_inner(args: &Arguments) -> Result<Envelope> {
                         return Err(usage("--graph requires hybrid search"));
                     }
                     let (_writer, reader) = reader(&app, search.no_sync)?;
-                    retrieval::search(&reader, &search.query, &plan)?
+                    if plan.mode == retrieval::SearchMode::Lexical {
+                        retrieval::lexical::search_ordinary_lexical(&reader, &search.query, &plan)?
+                    } else {
+                        retrieval::search(&reader, &search.query, &plan)?
+                    }
                 };
                 require_legacy_query_still_selected(&catalog)?;
                 result_metadata(&mut envelope.meta, &hits.snapshot, &hits.verification);
