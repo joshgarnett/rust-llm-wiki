@@ -275,6 +275,69 @@ This is actual 10K import evidence for the varied synthetic/public-reference
 profile. It does not establish ordinary retrieval or update performance, natural
 corpus quality, 25K capacity, bulk updates, recovery or full release acceptance.
 
+## 10K ordinary search and Source refresh control
+
+The same accepted native preview completed a frozen offline workflow on the
+imported 10K vault: 42 query calls, four reads of actually returned citation
+spans, and ten management calls. All 56 native commands succeeded; final
+preservation passed. The useful Source refresh workflow completed, but explicit
+global index no-op sync **failed its five-second target**. Independent review
+accepted finite workflow mechanics and authenticated all 58 citation occurrences,
+with 19 unique references and no integrity errors. All-gates acceptance failed
+because the sync target remained unmet.
+
+Three development tasks ran twice through seven search/context profiles.
+All twelve declared pairs were substantively equal after excluding four
+observation fields: two verification timestamps and decoded catalog byte/row
+counts. Both Source-identity query repetitions returned no SourceRef, so their
+optional exact reads were retained as `MISSING_OR_NA` rather than replaced by
+an expected-owner lookup.
+
+Ordinary search returned at most ten 240-byte previews as uncited cache evidence;
+`--verify-selected` supplied checked SourceRefs. Default context used twelve KB,
+3,000 estimated tokens and ten results. The historical profile used six KB,
+1,500 tokens and five results, with zero instruction/output reserves; search
+previews were 1,024 bytes. Several parameters changed together, so differences
+cannot be attributed solely to packet budget.
+
+For the Cargo task, both context profiles returned the same four passages and
+all three required facts, using 5,619 bytes and 1,405 estimated tokens. Both
+preview profiles and exact preview reads supplied none of those three facts.
+The Source-identity searches found the correct metadata record, while their
+contexts contained no captured passages. These observations separate useful
+navigation, citation correctness and answer completeness; the larger default
+budget did not rescue this Cargo answer.
+
+The collector reviewed the staged payloads before applying a new Source revision.
+Current search and context returned its new fact; the original citation remained
+readable and became historical. Old immutable files and non-target Source headers
+were preserved. The original and replacement inputs were 80,013 and 100,000 bytes;
+these refresh timings are not a comparison of equal-size inputs.
+
+| Observation | Seconds |
+|---|---:|
+| Identical-input Source refresh | 0.020274417 |
+| Explicit unchanged global index sync | 29.191770708 |
+| New Source refresh stage / apply | 0.264134625 / 0.491503458 |
+| Current search / context | 0.325472167 / 0.156657833 |
+| Historical exact read | 0.023846916 |
+| Whole replay supervisor interval | 392.826697042 |
+
+The whole interval used an owning-process monotonic sample before final output
+writing. Peak native RSS was 211,238,912 bytes; final runtime allocation was
+10,184,560,640 bytes. Warm, nonexclusive measurements include monitoring overhead
+and cooperative guards can overshoot.
+
+The first attempt remains a failure: sandbox denial of `/bin/ps` killed its
+first command before output, with return code -9 after 0.006209625 seconds;
+its whole interval was 40.441806167 seconds and preservation passed. The replay
+changed only execution environment and output location, retaining scripts, tasks
+and caps. Across both attempts, 57 calls and 433.268503209 seconds are aggregate
+accounting; the latter sums separate owning-process durations, not one continuous
+interval. Retrieval completeness awaits a separate five-task development quality
+assessment. This control supplies no user-quality score, credible p95, full
+capacity, 25K, recovery, provider or new-binary qualification.
+
 ## Validation limits
 
 Ten affected preparation controls pass across the initial checkpoint and the

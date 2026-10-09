@@ -206,6 +206,15 @@ membership. Its runtime account used 10.16 GB of allocated disk and native peak
 RSS was 42.52 MB. Ordinary retrieval, source updates and all 25K gates remain
 separate; this finite import does not establish full capacity or release acceptance.
 
+The [10K ordinary search and Source refresh control](validation-varied-vault-control.md#10k-ordinary-search-and-source-refresh-control)
+also passes independent finite mechanics review: 56 commands, exact citations,
+reviewed refresh, current new facts and retained historical reads. Source refresh
+applied in 0.492 seconds; full unchanged index sync took 29.192 seconds and failed
+its five-second target, so all-gates acceptance failed. Cargo context was complete
+in both tested profiles, while previews and exact preview reads remained
+incomplete. A separate bounded continued-reading diagnostic addresses that gap;
+it does not recredit default quality or qualify 25K.
+
 The separate [Graph update feasibility experiment](validation-graph-update-feasibility.md)
 rules out expanding the current normalized Graph proposal: a real full-sized update
 with active Merge history exceeds its frozen processing allowance even with one
