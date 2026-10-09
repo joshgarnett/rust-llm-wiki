@@ -1,4 +1,4 @@
-# Varied 1K import control
+# Varied 1K import and retrieval control
 
 On 2026-10-09, the existing native macOS 0.2.0 preview imported 1,000 distinct
 documents totaling exactly 100,000,000 current-content bytes into a new
@@ -69,6 +69,102 @@ it does not establish global filesystem freshness. An attempted `index status`
 command returned `USAGE` because that command does not exist; the failed attempt
 was retained, and publication identity was read from the quiescent catalog.
 
+## Retrieval control and first loss
+
+A frozen, offline pilot executed 20 tasks in three interleaved repetitions at
+publication epoch 251. Every command used the same 1,000 immutable Source
+revisions. Search retained at most 80 candidates and five hits with 1,024-byte
+previews; context used a 6,000-byte/1,500-token packet. The companion read arm
+read only the exact preview spans of the first two returned captured-source
+hits. No query rewriting, expected-source lookup or model calls were allowed.
+
+| Observation | Result |
+|---|---:|
+| Actual search / context / exact-read calls | 60 / 60 / 87 |
+| Command or independent citation-audit errors | 0 |
+| Complete positive tasks, context | 17 / 18 |
+| Complete positive tasks, search plus fixed reads | 15 / 18 |
+| Correct scoped absent-information tasks | 2 / 2 |
+| Independently checked citation occurrences / distinct citations | 450 / 69 |
+| Warm repetitions 2–3 p95 search / context / read | 97.840 / 79.295 / 30.938 ms |
+| Whole supervised interval, including source-pin audits | 134.096 seconds |
+| Largest native CLI peak RSS | 47,267,840 bytes |
+
+All task outcomes were stable across the three repetitions. Source heads,
+revision ownership, quote hashes, selected-document proof scope, filters and
+final frozen input pins passed independent review. These are warm measurements
+on a nonexclusive host, not an OS-cold or 25K performance qualification.
+
+The scoped critic score was 9.5/10, but acceptance **failed** the mandatory
+all-positive-task gate. One synthetic distant-dispatch task found the wrong
+station; two Cargo search previews omitted required setting conditions even
+though context contained them. A separately frozen three-call development
+diagnostic paged the original 80 candidates and found the required station at
+rank 68, with both needed facts already in its preview. Literal phrase lookup
+returned it first. This isolates that failure to owner ranking before the
+five-hit boundary; the Cargo failures occur at preview selection.
+
+Pilot questions used to guide a fix are development data. The three public Cargo
+cases do not establish natural-corpus or unseen acceptance, and the synthetic
+templates have limited semantic diversity.
+
+## Paired ranking and preview experiment
+
+A candidate added a generated, escaped whole-query phrase leg on the existing
+positional FTS index, retained broad-term discovery, and reused the structural
+passage proposal pool for ordinary search previews. Exact identity/title tiers,
+filters, the 80-owner cap and selected citation checks remained in place. The
+candidate also invalidated old lexical/hybrid cursors because ranking changed.
+It introduced no storage service, index migration or model calls.
+
+The source and native release executable were frozen before opening twenty new
+independently authored task strings. Both binaries then ran all twenty development
+tasks and twenty new tasks in three interleaved repetitions on the same unchanged
+Source revisions and publication. The new tasks included paraphrases, distractors,
+separated and multiple-source facts, identity, filters and absent information.
+Their public Cargo family and synthetic templates limit generalization.
+
+| Observation | Baseline | Candidate |
+|---|---:|---:|
+| Complete positive tasks, raw context | 30 / 34 | 32 / 34 |
+| Complete positive tasks, fixed first-two reads | 25 / 34 | 29 / 34 |
+| Complete positive tasks in both arms | 25 / 34 | 29 / 34 |
+| Required owner occurrences in top five | 40 / 42 | 42 / 42 |
+| Correct scoped absence/filter tasks | 6 / 6 | 6 / 6 |
+| Warm search p95 | 70.062 ms | 78.409 ms |
+| Warm context p95 | 87.111 ms | 81.373 ms |
+| Warm read p95 | 25.517 ms | 22.522 ms |
+
+Every task outcome was stable across repetitions, with zero observed required-fact
+regressions. The 822 actual commands completed without errors, and independent
+review authenticated all 1,740 captured citation occurrences, 212 distinct
+SourceRefs across 53 Sources. Final source, executable and protocol pins matched.
+The whole supervised interval was 543.612 seconds; the largest native CLI RSS
+was 49,741,824 bytes. Resources passed their declared limits. These are warm,
+nonexclusive 1K observations; repeated decoded bytes are not physical disk growth.
+
+The previously missed dispatch owner moved to rank one with complete evidence.
+Three new tasks also gained complete evidence. However, **acceptance failed**:
+the candidate completed the old context/read gates at 18/18 and 16/18, and the new
+gates at 14/16 and 13/16. Five mandatory workflows remained incomplete. Two old
+Cargo reads returned only a 127-byte settings metadata block; other failures lost
+documented defaults, feature-combination behavior or an override condition after
+finding the right owners. Context and reads were assessed separately.
+
+The independent score was 9.5/10, but it cannot override the prospectively required
+all-task gate. **The candidate remains experimental and is not promoted.** A pool
+of structural passage proposals does not guarantee its first item is a complete
+explanation. This result measures a gain in this paired slice; historical default
+quality remains failed at 6.5/10, with natural/default, HIGH, semantic, 25K and full
+release gates open. Any new question used to guide the next fix becomes development
+data and needs replacement for another unseen claim.
+
+The experimental source is preserved at commit
+`6d160b7c9d7c22e999fc3545f98fa390ea300d52`, on
+`impl/retrieval-workflow-20261009-001`. Its frozen executable SHA256 is
+`5d60c722f6ca33a39767703af13a96d791bf4c91553f19fa01434443c9f4b91a`.
+The checkpoint is not an accepted release or a change to production defaults.
+
 ## Validation limits
 
 Ten affected preparation controls pass across the initial checkpoint and the
@@ -77,8 +173,16 @@ error; the unchanged passes were reused. Four import-supervisor tests cover
 completion, journal coverage, final pin drift and deadline failures with a fake
 Runner. These checks do not demonstrate live-provider compatibility or recovery.
 
-Retrieval, individual updates, cited Page author preservation, interruption
-recovery and larger tiers require separate actual-command acceptance. The
+The candidate's focused native release checks retain 200 passing retrieval tests
+from the initial checkpoint and four passes after grouped test-fixture repairs,
+with six ignored tests. The repairs changed mock schemas and the explicit eligible
+Page filter, preserving malformed-hit refusal and authority checks. This is
+204 distinct passes across two checkpoints, not a full green suite. Actual paired
+content review, rather than these component checks, establishes the failed quality
+gate above. No rebuild followed the unchanged passing replay.
+
+Full retrieval acceptance, individual updates, cited Page author preservation,
+interruption recovery and larger tiers require separate actual-command acceptance. The
 previous failed 1,000-change/600-second gate remains mandatory for full capacity.
 Default retrieval quality, semantic acceptance and full release qualification
 remain open.

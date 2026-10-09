@@ -174,8 +174,16 @@ No retrieval algorithm changed, and default quality/HIGH/25K remain open.
 The [varied 1K import control](validation-varied-vault-control.md) imported exactly
 100 MB of distinct structured inputs through public commands in 318.552 seconds,
 with all 1,000 original/content pairs matching and current indexed ownership
-verified. This is a bounded preparation/import observation; retrieval, updates,
-recovery and larger-tier acceptance remain separate.
+verified. Its frozen 20-task retrieval pilot verified all 450 citation occurrences,
+but failed completeness: context 17/18 and search plus fixed reads 15/18 positive
+tasks. A three-call diagnostic isolated the missed station to rank 68 before the
+top-five boundary; two Cargo previews lost conditions after finding the owners.
+Its subsequent frozen paired experiment improves complete context-and-read tasks
+from 25/34 to 29/34 with no required-fact regressions and 1,740 authentic citation
+occurrences. Five mandatory explanatory workflows still fail. The 9.5/10 scoped
+score does not pass the all-task gate, and the candidate remains unpromoted.
+Historical default quality remains failed at 6.5/10. Updates, recovery and
+larger-tier acceptance remain separate.
 
 The separate [Graph update feasibility experiment](validation-graph-update-feasibility.md)
 rules out expanding the current normalized Graph proposal: a real full-sized update
