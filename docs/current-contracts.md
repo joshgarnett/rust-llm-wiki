@@ -1,5 +1,14 @@
 # Current contracts and local coverage
 
+The [25K Source import](validation-25k-import.md) now passes independent initial
+mechanics review: 25,000 distinct Sources and 2.5 billion input bytes, all 53
+public commands, complete immutable-byte reconciliation and exact indexed
+membership. The owning import interval is 147.46 minutes. These mostly synthetic
+development inputs do not qualify representative retrieval or shipping capacity;
+the eleven-task lifecycle, default quality, global-sync speed and full release
+gates remain open. The next step evaluates complete-source reading on this same
+frozen vault before update and recovery tests change its source revisions.
+
 The [whole-Source reading control](validation-whole-source-reading.md) passes its
 fixed development evidence gate at10/10: ordinary context plus complete reads of
 small discovered Sources completes5/5 tasks and all14 required facts. Native
