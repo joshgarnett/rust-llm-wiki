@@ -11,6 +11,41 @@ pub use super::types::{DEFAULT_READ_BYTES, MAX_INPUT_BYTES};
 fn usage(message: &str) -> WikiError {
     WikiError::new(ErrorCode::Usage, message)
 }
+/// Resolve a read only after selecting its body; explicit endpoints stay strict.
+pub(crate) fn requested_read_range(
+    body: &str,
+    range: Option<ByteSpan>,
+    from: Option<u64>,
+) -> Result<ByteSpan> {
+    if range.is_some() && from.is_some() {
+        return Err(usage("read-from cannot also specify an exact byte range"));
+    }
+    let body_end =
+        u64::try_from(body.len()).map_err(|_| usage("body length exceeds byte range limit"))?;
+    let requested = match (range, from) {
+        (Some(range), None) => range,
+        (None, Some(start)) => {
+            if start > body_end {
+                return Err(usage(
+                    "byte range must use valid UTF-8 boundaries within body",
+                ));
+            }
+            ByteSpan::new(start, body_end)?
+        }
+        (None, None) => ByteSpan::new(0, body_end)?,
+        (Some(_), Some(_)) => unreachable!("conflicting read bounds rejected above"),
+    };
+    let start = usize::try_from(requested.start())
+        .map_err(|_| usage("byte range exceeds platform limit"))?;
+    let end =
+        usize::try_from(requested.end()).map_err(|_| usage("byte range exceeds platform limit"))?;
+    if end > body.len() || !body.is_char_boundary(start) || !body.is_char_boundary(end) {
+        return Err(usage(
+            "byte range must use valid UTF-8 boundaries within body",
+        ));
+    }
+    Ok(requested)
+}
 pub(crate) fn bounded_utf8_end(
     text: &str,
     start: usize,
@@ -220,6 +255,17 @@ impl OfflineApp {
         }
     }
     pub fn read(&self, request: ReadRequest) -> Result<ReadOutcome> {
+        self.read_selected(request, None)
+    }
+    /// Read forward from a body byte offset to its EOF under the same byte cap.
+    /// The request must not also contain an exact range.
+    pub fn read_from(&self, request: ReadRequest, start: u64) -> Result<ReadOutcome> {
+        if request.range.is_some() {
+            return Err(usage("read-from cannot also specify an exact byte range"));
+        }
+        self.read_selected(request, Some(start))
+    }
+    fn read_selected(&self, request: ReadRequest, from: Option<u64>) -> Result<ReadOutcome> {
         if request.max_bytes == 0 || request.max_bytes > MAX_INPUT_BYTES {
             return Err(usage("read limit must be 1..=16 MiB"));
         }
@@ -247,21 +293,11 @@ impl OfflineApp {
         };
         let text = std::str::from_utf8(body)
             .map_err(|_| WikiError::invalid("requested body is not UTF-8"))?;
-        let requested = request
-            .range
-            .unwrap_or(ByteSpan::new(0, body.len() as u64)?);
+        let requested = requested_read_range(text, request.range, from)?;
         let start = usize::try_from(requested.start())
             .map_err(|_| usage("byte range exceeds platform limit"))?;
         let wanted_end = usize::try_from(requested.end())
             .map_err(|_| usage("byte range exceeds platform limit"))?;
-        if wanted_end > text.len()
-            || !text.is_char_boundary(start)
-            || !text.is_char_boundary(wanted_end)
-        {
-            return Err(usage(
-                "byte range must use valid UTF-8 boundaries within body",
-            ));
-        }
         let end = bounded_utf8_end(text, start, wanted_end, request.max_bytes)?;
         let record = if canonical {
             p.records

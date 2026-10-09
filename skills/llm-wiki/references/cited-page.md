@@ -101,6 +101,21 @@ declared task limits. The older 48 KiB example above grants no additional budget
 
 ## Read remaining gaps
 
+To read forward from a discovered captured-source match, use the actual returned
+payload path and primary span's start without supplying an end:
+
+```sh
+lwiki --offline --json --wiki '/path/to/my wiki' read --path 'RETURNED PAYLOAD PATH' \
+  --start START --max-bytes 8192
+```
+
+Charge the call and returned text to the remaining task allowances. The read
+resolves EOF internally; when truncated, follow its actual `continuation.start`
+and `continuation.end` on the next bounded read. Each new range needs its own
+returned citation. Missing or exhausted evidence remains a gap. Authored-note
+match coordinates are different from body coordinates; this direct use of a
+search span applies to captured payloads.
+
 For a remaining condition in a discovered source, search within the captured
 payload path actually returned by verified discovery, then read its returned span,
 anchor or bounded continuation range within the remaining limits:

@@ -203,7 +203,7 @@ fn execute_inner(args: &Arguments) -> Result<Envelope> {
         Command::Capabilities => {
             return Ok(Envelope::success(
                 command,
-                json!({"version":env!("CARGO_PKG_VERSION"),"commands":COMMANDS,"schemas":SCHEMAS,"network":true,"page_source_refs":{"commands":["page init","page put"],"flag":"--source-refs","schema":"page-source-refs","max_input_bytes":65536,"max_references":16,"citation_kinds":["source"],"links":"relative_to_resolved_page_path","prose_support_verified":false,"dry_run":"request_validation_only"},"search_modes":["literal","lexical","semantic","hybrid"],"selected_search":{"flag":"--verify-selected","layout":"normalized","modes":["literal","lexical","semantic","hybrid"],"no_sync_compatible":true,"scope":"displayed document dependencies","global_membership_verified":false,"dry_run":"request validation only","budget":{"max_bytes":67108864,"max_files":4096,"max_entries":16384,"max_elapsed_ms":2000}},"selected_neighbors":{"command":"graph neighbors","layout":"normalized","root_kind":"entity","default_verification":true,"explicit_verification_flag":"--verify-selected","no_sync":"cached_uncited","scope":"selected_graph_neighbors","global_membership_verified":false,"current_only":true,"navigation":false,"cursor":false,"dry_run":"request validation only","limits":{"depth":2,"incident_per_seed":16,"assertions":128,"candidates":80,"hits":50,"support":2,"contrary":1},"budget":{"max_bytes":67108864,"max_files":4096,"max_entries":16384,"max_elapsed_ms":2000}},"graph_seed_modes":["lexical","semantic"],"extraction_executors":["agent","api"],"research_executor":"agent-handoff","jsonl_commands":["index sync","index rebuild","recover","changes apply","source add","source refresh","research run","research resume","research import","doctor --probe"]}),
+                json!({"version":env!("CARGO_PKG_VERSION"),"commands":COMMANDS,"schemas":SCHEMAS,"network":true,"read":{"start_without_end":true,"omitted_end":"body_eof","coordinates":"utf8_body_bytes","explicit_ranges":"strict","byte_limit":"returned_text","dry_run":"unresolved_request_only"},"page_source_refs":{"commands":["page init","page put"],"flag":"--source-refs","schema":"page-source-refs","max_input_bytes":65536,"max_references":16,"citation_kinds":["source"],"links":"relative_to_resolved_page_path","prose_support_verified":false,"dry_run":"request_validation_only"},"search_modes":["literal","lexical","semantic","hybrid"],"selected_search":{"flag":"--verify-selected","layout":"normalized","modes":["literal","lexical","semantic","hybrid"],"no_sync_compatible":true,"scope":"displayed document dependencies","global_membership_verified":false,"dry_run":"request validation only","budget":{"max_bytes":67108864,"max_files":4096,"max_entries":16384,"max_elapsed_ms":2000}},"selected_neighbors":{"command":"graph neighbors","layout":"normalized","root_kind":"entity","default_verification":true,"explicit_verification_flag":"--verify-selected","no_sync":"cached_uncited","scope":"selected_graph_neighbors","global_membership_verified":false,"current_only":true,"navigation":false,"cursor":false,"dry_run":"request validation only","limits":{"depth":2,"incident_per_seed":16,"assertions":128,"candidates":80,"hits":50,"support":2,"contrary":1},"budget":{"max_bytes":67108864,"max_files":4096,"max_entries":16384,"max_elapsed_ms":2000}},"graph_seed_modes":["lexical","semantic"],"extraction_executors":["agent","api"],"research_executor":"agent-handoff","jsonl_commands":["index sync","index rebuild","recover","changes apply","source add","source refresh","research run","research resume","research import","doctor --probe"]}),
             ));
         }
         Command::Schema { name } => {
@@ -318,12 +318,14 @@ fn execute_inner(args: &Arguments) -> Result<Envelope> {
             no_sync,
             ..
         } => {
-            let range = match (start, end) {
-                (Some(start), Some(end)) => {
-                    Some(ByteSpan::new(*start, *end).map_err(|e| usage(e.message))?)
-                }
-                (None, None) => None,
-                _ => return Err(usage("--start and --end must be supplied together")),
+            let (range, from) = match (start, end) {
+                (Some(start), Some(end)) => (
+                    Some(ByteSpan::new(*start, *end).map_err(|e| usage(e.message))?),
+                    None,
+                ),
+                (Some(start), None) => (None, Some(*start)),
+                (None, None) => (None, None),
+                (None, Some(_)) => return Err(usage("--end requires --start")),
             };
             let request = ReadRequest {
                 selector: selector.record_selector()?,
@@ -334,7 +336,10 @@ fn execute_inner(args: &Arguments) -> Result<Envelope> {
                 envelope.data = json!({
                     "dry_run": true,
                     "selector": {"id": selector.id, "path": selector.path},
-                    "requested_range": request.range,
+                    "requested_range": match from {
+                        Some(start) => json!({"start": start, "end": null}),
+                        None => value(&request.range)?,
+                    },
                     "max_bytes": request.max_bytes,
                     "mode": if *no_sync { "cached" } else { "verified" },
                     "body": null,
@@ -363,7 +368,7 @@ fn execute_inner(args: &Arguments) -> Result<Envelope> {
                         "normalized read selected another catalog layout",
                     ));
                 }
-                let mut outcome = cached_query_read(&reader, request)?;
+                let mut outcome = cached_query_read(&reader, request, from)?;
                 if !*no_sync {
                     let read_proof_error = |mut error: WikiError| {
                         if error.code == ErrorCode::BudgetExceeded {
@@ -400,9 +405,12 @@ fn execute_inner(args: &Arguments) -> Result<Envelope> {
                 let (_writer, reader) = reader(&app, *no_sync)?;
                 snapshot_metadata(&mut envelope.meta, &reader);
                 if *no_sync {
-                    cached_legacy_read(&catalog, &reader, request)?
+                    cached_legacy_read(&catalog, &reader, request, from)?
                 } else {
-                    let mut outcome = app.read(request)?;
+                    let mut outcome = match from {
+                        Some(start) => app.read_from(request, start)?,
+                        None => app.read(request)?,
+                    };
                     let document = reader
                         .projection()
                         .documents
@@ -1548,8 +1556,9 @@ fn cached_legacy_read(
     catalog: &Catalog,
     reader: &ReaderSnapshot,
     request: ReadRequest,
+    from: Option<u64>,
 ) -> Result<ReadOutcome> {
-    let outcome = cached_read(reader, request)?;
+    let outcome = cached_read(reader, request, from)?;
     require_legacy_query_still_selected(catalog)?;
     Ok(outcome)
 }
@@ -1562,7 +1571,11 @@ fn require_legacy_query_still_selected(catalog: &Catalog) -> Result<()> {
     }
     Ok(())
 }
-fn cached_read(reader: &ReaderSnapshot, request: ReadRequest) -> Result<ReadOutcome> {
+fn cached_read(
+    reader: &ReaderSnapshot,
+    request: ReadRequest,
+    from: Option<u64>,
+) -> Result<ReadOutcome> {
     let projection = reader.projection();
     let path = match &request.selector {
         RecordSelector::Path(path) => path.clone(),
@@ -1630,12 +1643,17 @@ fn cached_read(reader: &ReaderSnapshot, request: ReadRequest) -> Result<ReadOutc
             .cloned()
             .collect(),
         request,
+        from,
     )
 }
 
 /// Reads one published cached document. No claim about current canonical bytes
 /// or corpus-wide freshness follows from this explicitly no-sync operation.
-fn cached_query_read(reader: &QuerySnapshot, request: ReadRequest) -> Result<ReadOutcome> {
+fn cached_query_read(
+    reader: &QuerySnapshot,
+    request: ReadRequest,
+    from: Option<u64>,
+) -> Result<ReadOutcome> {
     let corrupt = |message| WikiError::new(ErrorCode::IndexCorrupt, message);
     let claim = match &request.selector {
         RecordSelector::Id(id) => {
@@ -1741,7 +1759,7 @@ fn cached_query_read(reader: &QuerySnapshot, request: ReadRequest) -> Result<Rea
         }
         None
     };
-    format_cached_read(&document, record, diagnostics, request)
+    format_cached_read(&document, record, diagnostics, request, from)
 }
 
 fn format_cached_read(
@@ -1749,6 +1767,7 @@ fn format_cached_read(
     record: Option<CanonicalRecord>,
     diagnostics: Vec<CatalogDiagnostic>,
     request: ReadRequest,
+    from: Option<u64>,
 ) -> Result<ReadOutcome> {
     let note = parse_note(document.raw_text.as_bytes());
     let canonical = document.owner_revision.is_none();
@@ -1758,10 +1777,7 @@ fn format_cached_read(
     } else {
         &document.raw_text
     };
-    let range = request
-        .range
-        .unwrap_or(ByteSpan::new(0, body.len() as u64)?);
-    range.slice(body).map_err(|e| usage(e.message))?;
+    let range = crate::app::offline::requested_read_range(body, request.range, from)?;
     let start = range.start() as usize;
     let wanted_end = range.end() as usize;
     let end = crate::app::offline::bounded_utf8_end(body, start, wanted_end, request.max_bytes)?;
@@ -2089,12 +2105,20 @@ fn present_inner(
                 envelope.data["max_bytes"]
             )?;
             if !envelope.data["requested_range"].is_null() {
-                writeln!(
-                    output,
-                    "Requested byte range: {}..{}.",
-                    envelope.data["requested_range"]["start"],
-                    envelope.data["requested_range"]["end"]
-                )?;
+                let range = &envelope.data["requested_range"];
+                if range["end"].is_null() {
+                    writeln!(
+                        output,
+                        "Requested byte range: {}..EOF (unresolved).",
+                        range["start"]
+                    )?;
+                } else {
+                    writeln!(
+                        output,
+                        "Requested byte range: {}..{}.",
+                        range["start"], range["end"]
+                    )?;
+                }
             }
             writeln!(output, "Body and freshness are unknown during dry-run.")
         }
@@ -2496,7 +2520,9 @@ mod cached_read_tests {
             max_bytes: 1024,
         };
         assert_eq!(
-            cached_legacy_read(&catalog, &held, request()).unwrap().body,
+            cached_legacy_read(&catalog, &held, request(), None)
+                .unwrap()
+                .body,
             "Before activation"
         );
         // Authority becomes visible before selection publication during activation.
@@ -2513,7 +2539,7 @@ mod cached_read_tests {
         )
         .unwrap();
         assert_eq!(
-            cached_legacy_read(&catalog, &held, request())
+            cached_legacy_read(&catalog, &held, request(), None)
                 .unwrap_err()
                 .code,
             ErrorCode::RecoveryRequired

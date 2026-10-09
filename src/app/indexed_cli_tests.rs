@@ -845,6 +845,34 @@ fn indexed_cli_dry_read_plans_selectors_modes_and_ranges_without_catalog_access(
         }
     }
 
+    for cached in [false, true] {
+        let mut args = vec![
+            "--dry-run",
+            "read",
+            "--path",
+            "pages/missing.md",
+            "--start",
+            "1",
+        ];
+        if cached {
+            args.push("--no-sync");
+        }
+        let before = tree(&fixture.root);
+        let root_modified = fs::metadata(&fixture.root).unwrap().modified().unwrap();
+        let preview = fixture.cli(&args);
+        assert_eq!(
+            preview["data"]["requested_range"],
+            serde_json::json!({"start": 1, "end": null})
+        );
+        assert_eq!(preview["data"]["target_resolution_performed"], false);
+        assert_eq!(preview["data"]["body"], Value::Null);
+        assert_eq!(tree(&fixture.root), before);
+        assert_eq!(
+            fs::metadata(&fixture.root).unwrap().modified().unwrap(),
+            root_modified
+        );
+    }
+
     // Argument-parser failures and validated-request failures both leave every
     // directory, lock, WAL and SHM unchanged. None may produce a successful plan.
     let invalid: &[&[&str]] = &[
@@ -860,15 +888,6 @@ fn indexed_cli_dry_read_plans_selectors_modes_and_ranges_without_catalog_access(
         ],
         &["--json", "--dry-run", "read", "--path", "../escape.md"],
         &["--json", "--dry-run", "read", "--id", "bad/id"],
-        &[
-            "--json",
-            "--dry-run",
-            "read",
-            "--path",
-            "pages/missing.md",
-            "--start",
-            "1",
-        ],
         &[
             "--json",
             "--dry-run",

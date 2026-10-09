@@ -354,6 +354,24 @@ format: Source ID, immutable Revision ID, returned span and quote hash.
 `data.source_citation.eligibility` distinguishes Current, historical and withdrawn
 evidence. Reading an older revision does not make it Current again.
 
+To investigate forward from a verified captured-source match, use its actual
+payload path and primary span's start, with a byte allowance:
+
+```sh
+lwiki --offline --json --wiki '/path/to/my wiki' read \
+  --path 'RETURNED PAYLOAD PATH' --start START --max-bytes 8192
+```
+
+Omitting `--end` requests the selected body from `START` to EOF. The command
+resolves EOF internally and returns at most the byte allowance, with an exact
+citation for the bytes returned. Start at EOF returns an empty result without a
+source citation; an invalid UTF-8 boundary or start beyond EOF is an error.
+Explicit `--start START --end END` keeps strict bounds and never clamps an invalid
+end. Captured-source match offsets address the payload; authored-note match
+offsets must still be converted to body coordinates as described above.
+`capabilities` advertises this input as `read.start_without_end`; earlier
+executables may require both explicit endpoints.
+
 If the read is truncated, pass its returned `continuation.start` and
 `continuation.end` as `--start` and `--end` on the next read. These are UTF-8 byte
 coordinates in the captured payload, and the next range has its own citation.

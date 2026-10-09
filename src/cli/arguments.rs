@@ -111,10 +111,10 @@ pub enum Command {
         /// Maximum UTF-8 bytes to return.
         #[arg(long)]
         max_bytes: Option<usize>,
-        /// Start of the zero-based, half-open UTF-8 byte range.
-        #[arg(long, requires = "end")]
+        /// Start of the zero-based UTF-8 body byte range; omit --end to read toward EOF.
+        #[arg(long)]
         start: Option<u64>,
-        /// End of the zero-based, half-open UTF-8 byte range.
+        /// Exclusive end of the UTF-8 body byte range; requires --start.
         #[arg(long, requires = "start")]
         end: Option<u64>,
         /// Read the existing index snapshot without syncing; freshness is not verified. Dry-run only plans this mode.
