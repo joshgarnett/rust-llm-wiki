@@ -212,6 +212,79 @@ fn exact_marker_budgeted(path: &Path, on_entry: &mut dyn FnMut() -> Result<()>) 
     }
     Ok(false)
 }
+
+fn canonical_containment(root: &Path, path: &Path) -> Result<()> {
+    let canonical =
+        fs::canonicalize(path).map_err(|e| io_error("check destination containment", e))?;
+    if !canonical.starts_with(root) {
+        return Err(WikiError::invalid("managed path escapes canonical vault"));
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn nofollow_containment_handle(path: &Path, original: &fs::Metadata) -> Option<fs::File> {
+    use std::os::unix::fs::OpenOptionsExt;
+
+    // Do not open observed special files. A regular file/directory can become
+    // a FIFO before open, so explicitly bound that lookup with O_NONBLOCK.
+    // O_EVTONLY asks for metadata authority; File owns and closes the handle.
+    if !original.is_file() && !original.is_dir() {
+        return None;
+    }
+    fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_EVTONLY | libc::O_CLOEXEC | libc::O_NOFOLLOW_ANY | libc::O_NONBLOCK)
+        .open(path)
+        .ok()
+}
+
+#[cfg(target_os = "macos")]
+fn nofollow_contained(root: &Path, path: &Path, original: &fs::Metadata) -> bool {
+    use std::os::unix::fs::MetadataExt;
+
+    // VaultRoot binds an absolute canonical root once. The caller appends only
+    // validated VaultRelativePath components (no empty, dot or parent parts).
+    // Do not infer containment for arbitrary aliases supplied to this helper.
+    let Ok(relative) = path.strip_prefix(root) else {
+        return false;
+    };
+    if !root.is_absolute()
+        || relative.as_os_str().is_empty()
+        || !relative
+            .components()
+            .all(|part| matches!(part, std::path::Component::Normal(_)))
+    {
+        return false;
+    }
+    let Some(handle) = nofollow_containment_handle(path, original) else {
+        return false;
+    };
+    let Ok(opened) = handle.metadata() else {
+        return false;
+    };
+    // The kernel lookup followed no symlink anywhere, and still names the
+    // object observed by this prefix's lstat. Later path-use races retain the
+    // existing contract; neither this check nor realpath locks ancestry.
+    let type_mask = libc::S_IFMT as u32;
+    opened.dev() == original.dev()
+        && opened.ino() == original.ino()
+        && opened.mode() & type_mask == original.mode() & type_mask
+}
+
+fn destination_containment(root: &Path, path: &Path, original: &fs::Metadata) -> Result<()> {
+    #[cfg(target_os = "macos")]
+    if nofollow_contained(root, path, original) {
+        return Ok(());
+    }
+    #[cfg(not(target_os = "macos"))]
+    let _ = original;
+    // Unsupported flags, lookup/fstat errors, identity changes and special
+    // types all retain the original check, error and inspection placement.
+    // The fast helper's File has already dropped before this fallback.
+    canonical_containment(root, path)
+}
+
 impl VaultRoot {
     /// Reject a symlink supplied as the root itself; canonicalize ancestor aliases once.
     pub fn for_initialization(path: impl AsRef<Path>) -> Result<Self> {
@@ -290,11 +363,7 @@ impl VaultRoot {
                     return Err(WikiError::invalid("managed path has a symlink component"));
                 }
                 Ok(meta) => {
-                    let canonical = fs::canonicalize(&path)
-                        .map_err(|e| io_error("check destination containment", e))?;
-                    if !canonical.starts_with(&self.path) {
-                        return Err(WikiError::invalid("managed path escapes canonical vault"));
-                    }
+                    destination_containment(&self.path, &path, &meta)?;
                     if meta.is_dir() && exact_marker_budgeted(&path, on_entry)? {
                         return Err(WikiError::invalid(
                             "managed path crosses a nested vault boundary",
@@ -600,6 +669,192 @@ impl VaultRoot {
             }
         }
         Ok(())
+    }
+}
+
+#[cfg(all(test, target_os = "macos"))]
+mod containment_tests {
+    use super::*;
+    use std::os::{
+        fd::AsRawFd,
+        unix::{ffi::OsStrExt, fs::symlink},
+    };
+
+    fn fixture() -> (tempfile::TempDir, VaultRoot, PathBuf) {
+        let temp = tempfile::tempdir().unwrap();
+        fs::create_dir(temp.path().join("root")).unwrap();
+        fs::create_dir(temp.path().join("outside")).unwrap();
+        let root = VaultRoot::for_initialization(temp.path().join("root")).unwrap();
+        let outside = fs::canonicalize(temp.path().join("outside")).unwrap();
+        (temp, root, outside)
+    }
+
+    fn parity(root: &VaultRoot, path: &Path, before: &fs::Metadata) -> Result<()> {
+        let old = canonical_containment(root.path(), path);
+        let new = destination_containment(root.path(), path, before);
+        assert_eq!(
+            old.as_ref().err().map(|e| (&e.code, &e.message)),
+            new.as_ref().err().map(|e| (&e.code, &e.message))
+        );
+        new
+    }
+
+    #[test]
+    fn matched_leaf_and_ancestor_replacement_refuse_before_marker_probe() {
+        for ancestor in [false, true] {
+            let (_temp, root, outside) = fixture();
+            let parent = root.path().join("a");
+            let leaf = if ancestor {
+                parent.join("b")
+            } else {
+                parent.clone()
+            };
+            fs::create_dir_all(&leaf).unwrap();
+            // Freeze the same observation boundary as the production loop:
+            // lstat has succeeded; mutation precedes the guard's lookup.
+            let before = fs::symlink_metadata(&leaf).unwrap();
+            if ancestor {
+                fs::rename(&parent, outside.join("moved")).unwrap();
+                symlink(outside.join("moved"), &parent).unwrap();
+                fs::write(outside.join("moved/b/WIKI.md"), b"outside").unwrap();
+            } else {
+                fs::remove_dir(&leaf).unwrap();
+                symlink(&outside, &leaf).unwrap();
+                fs::write(outside.join("WIKI.md"), b"outside").unwrap();
+            }
+            assert!(!nofollow_contained(root.path(), &leaf, &before));
+            let mut marker_calls = 0;
+            let error = parity(&root, &leaf, &before)
+                .and_then(|()| {
+                    exact_marker_budgeted(&leaf, &mut || {
+                        marker_calls += 1;
+                        Ok(())
+                    })
+                })
+                .unwrap_err();
+            assert_eq!(error.code, ErrorCode::RecordInvalid);
+            assert!(error.message.contains("escapes canonical vault"));
+            assert_eq!(marker_calls, 0);
+        }
+    }
+
+    #[test]
+    fn introduced_inside_symlink_identity_change_and_disappearance_use_legacy() {
+        let (_temp, root, _outside) = fixture();
+        let path = root.path().join("prefix");
+        let target = root.path().join("target");
+        fs::create_dir(&path).unwrap();
+        fs::create_dir(&target).unwrap();
+        let before = fs::symlink_metadata(&path).unwrap();
+        fs::remove_dir(&path).unwrap();
+        symlink(&target, &path).unwrap();
+        assert!(!nofollow_contained(root.path(), &path, &before));
+        parity(&root, &path, &before).unwrap();
+        fs::remove_file(&path).unwrap();
+        let error = parity(&root, &path, &before).unwrap_err();
+        assert_eq!(error.code, ErrorCode::Internal);
+        assert!(error.message.starts_with("check destination containment:"));
+
+        fs::write(&path, b"first").unwrap();
+        let before = fs::symlink_metadata(&path).unwrap();
+        // Keep the old object alive, preventing accidental inode reuse.
+        fs::rename(&path, root.path().join("old-object")).unwrap();
+        fs::write(&path, b"replacement").unwrap();
+        assert!(!nofollow_contained(root.path(), &path, &before));
+        parity(&root, &path, &before).unwrap();
+    }
+
+    #[test]
+    fn stale_regular_or_directory_metadata_cannot_block_on_fifo_replacement() {
+        for directory in [false, true] {
+            let (_temp, root, _outside) = fixture();
+            let path = root.path().join("prefix");
+            if directory {
+                fs::create_dir(&path).unwrap();
+            } else {
+                fs::write(&path, b"original").unwrap();
+            }
+            let before = fs::symlink_metadata(&path).unwrap();
+            // Hold the observed object at another name to prevent inode reuse.
+            fs::rename(&path, root.path().join("held-original")).unwrap();
+            let name = std::ffi::CString::new(path.as_os_str().as_bytes()).unwrap();
+            // SAFETY: a NUL-terminated owned fixture path and valid mode bits.
+            assert_eq!(unsafe { libc::mkfifo(name.as_ptr(), 0o600) }, 0);
+            let handle = nofollow_containment_handle(&path, &before).unwrap();
+            // SAFETY: borrow a live File-owned descriptor, with no pointer arg.
+            let flags = unsafe { libc::fcntl(handle.as_raw_fd(), libc::F_GETFL) };
+            assert!(flags >= 0 && flags & libc::O_NONBLOCK != 0);
+            drop(handle);
+            assert!(!nofollow_contained(root.path(), &path, &before));
+            parity(&root, &path, &before).unwrap();
+        }
+    }
+
+    #[test]
+    fn replaced_stored_canonical_root_refuses_before_marker_probe() {
+        use std::os::unix::fs::MetadataExt;
+        let (_temp, root, outside) = fixture();
+        let path = root.path().join("prefix");
+        fs::create_dir(&path).unwrap();
+        let before = fs::symlink_metadata(&path).unwrap();
+        let moved = outside.join("moved-root");
+        fs::rename(root.path(), &moved).unwrap();
+        symlink(&moved, root.path()).unwrap();
+        fs::write(moved.join("prefix/WIKI.md"), b"outside").unwrap();
+        // The leaf still has identical identity: ancestor no-follow, rather
+        // than leaf fstat identity alone, must reject this root transition.
+        let named = fs::symlink_metadata(&path).unwrap();
+        assert_eq!((before.dev(), before.ino()), (named.dev(), named.ino()));
+        assert!(!nofollow_contained(root.path(), &path, &before));
+        let mut marker_calls = 0;
+        let error = parity(&root, &path, &before)
+            .and_then(|()| {
+                exact_marker_budgeted(&path, &mut || {
+                    marker_calls += 1;
+                    Ok(())
+                })
+            })
+            .unwrap_err();
+        assert_eq!(error.code, ErrorCode::RecordInvalid);
+        assert!(error.message.contains("escapes canonical vault"));
+        assert_eq!(marker_calls, 0);
+    }
+
+    #[test]
+    fn metadata_handles_are_cloexec_owned_and_special_types_skip_open() {
+        let (_temp, root, _outside) = fixture();
+        let file = root.path().join("file");
+        fs::write(&file, b"data").unwrap();
+        fs::hard_link(&file, root.path().join("hard-alias")).unwrap();
+        let meta = fs::symlink_metadata(&file).unwrap();
+        let handle = nofollow_containment_handle(&file, &meta).unwrap();
+        // SAFETY: this borrows a live File-owned descriptor and passes no pointer.
+        let flags = unsafe { libc::fcntl(handle.as_raw_fd(), libc::F_GETFD) };
+        assert!(flags >= 0 && flags & libc::FD_CLOEXEC != 0);
+        // SAFETY: the same live owned descriptor, with no pointer argument.
+        let status = unsafe { libc::fcntl(handle.as_raw_fd(), libc::F_GETFL) };
+        assert!(status >= 0 && status & libc::O_NONBLOCK != 0);
+        drop(handle); // File Drop closes ownership; no racy fd-number reuse oracle.
+        assert!(nofollow_contained(root.path(), &file, &meta));
+
+        let socket = root.path().join("socket");
+        let _socket = std::os::unix::net::UnixListener::bind(&socket).unwrap();
+        let meta = fs::symlink_metadata(&socket).unwrap();
+        assert!(nofollow_containment_handle(&socket, &meta).is_none());
+        parity(&root, &socket, &meta).unwrap();
+    }
+
+    #[test]
+    fn firmlink_namespace_uses_legacy_oracle_and_noncanonical_alias_fallback() {
+        let (_temp, root, _outside) = fixture();
+        let path = root.path().join("file");
+        fs::write(&path, b"own fixture").unwrap();
+        let physical = Path::new("/System/Volumes/Data").join(path.strip_prefix("/").unwrap());
+        let meta = fs::symlink_metadata(&physical).unwrap();
+        assert!(!nofollow_contained(root.path(), &physical, &meta));
+        // Some macOS namespaces retain the physical volume prefix. Neither
+        // ALLOW nor REFUSE is hardcoded: preserve the actual legacy oracle.
+        let _ = parity(&root, &physical, &meta);
     }
 }
 

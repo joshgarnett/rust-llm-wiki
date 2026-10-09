@@ -835,3 +835,90 @@ fn fresh_marker_probe_preserves_case_nonregular_policy_and_positive_scan_budget(
     fs::write(directory.join("WIKI.md"), b"nested again").unwrap();
     assert!(root.resolve(&rel("child/page.md")).is_err());
 }
+
+#[test]
+fn containment_preserves_ordinary_creation_errors_and_component_budgets() {
+    use lwiki::domain::WikiError;
+    let (_temp, root) = fixture();
+    fs::create_dir_all(root.path().join("dir/deep")).unwrap();
+    fs::write(root.path().join("dir/deep/file.md"), b"own file").unwrap();
+    let mut calls = 0;
+    assert_eq!(
+        root.resolve_budgeted(&rel("dir/deep/file.md"), &mut || {
+            calls += 1;
+            Ok(())
+        })
+        .unwrap(),
+        root.path().join("dir/deep/file.md")
+    );
+    assert_eq!(calls, 5); // three components and two negative marker probes
+    calls = 0;
+    assert_eq!(
+        root.resolve_budgeted(&rel("absent/parents/new.md"), &mut || {
+            calls += 1;
+            Ok(())
+        })
+        .unwrap(),
+        root.path().join("absent/parents/new.md")
+    );
+    assert_eq!(calls, 3);
+    let error = root.resolve(&rel("dir/deep/file.md/child")).unwrap_err();
+    assert_eq!(error.code, ErrorCode::Internal);
+    assert!(error.message.starts_with("inspect managed path:"));
+    calls = 0;
+    let error = root
+        .resolve_budgeted(&rel("dir/deep/file.md"), &mut || {
+            calls += 1;
+            if calls == 3 {
+                Err(WikiError::new(ErrorCode::BudgetExceeded, "prefix budget"))
+            } else {
+                Ok(())
+            }
+        })
+        .unwrap_err();
+    assert_eq!(error.code, ErrorCode::BudgetExceeded);
+    assert_eq!(calls, 3);
+}
+
+#[test]
+fn containment_preserves_actual_case_unicode_and_bound_root_aliases() {
+    let (_temp, root) = fixture();
+    fs::write(root.path().join("CaseName.md"), b"case").unwrap();
+    fs::write(root.path().join("Caf\u{e9}.md"), b"unicode").unwrap();
+    for name in [
+        "CaseName.md",
+        "casename.md",
+        "Caf\u{e9}.md",
+        "Cafe\u{301}.md",
+    ] {
+        let lexical = root.path().join(name);
+        // The real filesystem determines spelling aliases. A missing spelling
+        // remains a valid creation destination rather than an assumed alias.
+        match fs::canonicalize(&lexical) {
+            Ok(canonical) => assert!(canonical.starts_with(root.path())),
+            Err(error) => assert_eq!(error.kind(), io::ErrorKind::NotFound),
+        }
+        assert_eq!(root.resolve(&rel(name)).unwrap(), lexical);
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::{PermissionsExt, symlink};
+        let alias_parent = tempfile::tempdir().unwrap();
+        let alias = alias_parent.path().join("ancestor");
+        symlink(root.path().parent().unwrap(), &alias).unwrap();
+        let rebound = VaultRoot::explicit(alias.join(root.path().file_name().unwrap())).unwrap();
+        assert_eq!(rebound, root);
+        assert_eq!(
+            rebound.resolve(&rel("CaseName.md")).unwrap(),
+            root.path().join("CaseName.md")
+        );
+        let directory = root.path().join("readonly");
+        fs::create_dir(&directory).unwrap();
+        fs::write(directory.join("file.md"), b"readonly").unwrap();
+        fs::set_permissions(directory.join("file.md"), fs::Permissions::from_mode(0o444)).unwrap();
+        fs::set_permissions(&directory, fs::Permissions::from_mode(0o555)).unwrap();
+        let resolved = root.resolve(&rel("readonly/file.md"));
+        fs::set_permissions(&directory, fs::Permissions::from_mode(0o755)).unwrap();
+        assert_eq!(resolved.unwrap(), directory.join("file.md"));
+    }
+}
