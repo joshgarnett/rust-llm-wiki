@@ -874,6 +874,16 @@ fn build_draft(view: &SourceView<'_>, v: &ValidatedEntityDecisions) -> Result<Ch
     })
 }
 
+/// Construct an actual identity-remap history for disposable DEVELOPMENT probes.
+/// The caller installs exact before-image checked bytes; no publication authority.
+#[cfg(test)]
+pub(crate) fn build_draft_for_remap_probe(
+    view: &SourceView<'_>,
+    v: &ValidatedEntityDecisions,
+) -> Result<ChangeDraft> {
+    build_draft(view, v)
+}
+
 fn retained_proposal(
     engine: &ChangeEngine,
     v: &ValidatedEntityDecisions,

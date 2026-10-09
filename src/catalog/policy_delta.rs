@@ -1,8 +1,9 @@
 //! Bounded policy relation replacement in the caller's publication transaction.
+#[cfg(test)]
+use super::normalized_delta::MAX_ROWS;
 use super::{
     normalized_delta::{
-        CatalogDelta, DeltaStats, DocumentMutation, MAX_DELTA_BYTES, MAX_ROW_BYTES, MAX_ROWS,
-        counted,
+        CatalogDelta, DeltaStats, DocumentMutation, MAX_DELTA_BYTES, MAX_ROW_BYTES, counted,
     },
     normalized_fact_delta::charge_old,
     policy_facts::{POLICY_LAYOUT, PolicyKind, PolicyRow, PolicyState},
@@ -46,10 +47,10 @@ fn budget() -> WikiError {
         "policy delta exceeds cumulative allowance",
     )
 }
-fn admit<T: Serialize>(row: &T, count: &mut usize) -> Result<()> {
+fn admit<T: Serialize>(row: &T, count: &mut usize, max_rows: usize) -> Result<()> {
     *count = count
         .checked_add(1)
-        .filter(|n| *n <= MAX_ROWS)
+        .filter(|n| *n <= max_rows)
         .ok_or_else(budget)?;
     counted(row, MAX_ROW_BYTES)?;
     Ok(())
@@ -72,7 +73,12 @@ fn family_groups(rows: &[PolicyRow]) -> Result<()> {
     Ok(())
 }
 impl PolicyDelta {
-    pub(super) fn validate(&self, delta: &CatalogDelta, count: &mut usize) -> Result<()> {
+    pub(super) fn validate_with_row_limit(
+        &self,
+        delta: &CatalogDelta,
+        count: &mut usize,
+        max_rows: usize,
+    ) -> Result<()> {
         counted(self, MAX_DELTA_BYTES)?;
         let moves: Vec<_> = delta
             .documents
@@ -89,14 +95,14 @@ impl PolicyDelta {
             return Err(bad("policy retired owners differ from sealed Page move"));
         }
         for retired in &self.retired_owners {
-            admit(retired, count)?;
+            admit(retired, count, max_rows)?;
         }
         let mut owners = BTreeSet::new();
         for update in &self.memberships {
             if !owners.insert(&update.path) {
                 return Err(bad("duplicate policy membership owner"));
             }
-            admit(update, count)?; // An empty owner clear still consumes bounded work.
+            admit(update, count, max_rows)?; // An empty owner clear still consumes bounded work.
             let record = delta
                 .records
                 .iter()
@@ -165,6 +171,7 @@ impl PolicyDelta {
                     }
                     .columns()?,
                     count,
+                    max_rows,
                 )?;
             }
         }
@@ -173,7 +180,7 @@ impl PolicyDelta {
             if !kinds.insert(replacement.kind) {
                 return Err(bad("duplicate policy replacement kind"));
             }
-            admit(&replacement.kind, count)?;
+            admit(&replacement.kind, count, max_rows)?;
             let mut keys = BTreeSet::new();
             let mut state = None;
             let mut successful = false;
@@ -200,7 +207,7 @@ impl PolicyDelta {
                 {
                     return Err(bad("duplicate or noncanonical policy replacement row"));
                 }
-                admit(&columns, count)?;
+                admit(&columns, count, max_rows)?;
             }
             match state {
                 None => return Err(bad("policy replacement lacks mandatory state")),

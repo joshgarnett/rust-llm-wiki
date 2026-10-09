@@ -124,6 +124,20 @@ pub(crate) fn attempt_review_policy_metered(
     )
 }
 
+/// Selected normalized inputs obtain this identity from their pinned publication
+/// and authenticated WIKI note, rather than from a receipt's own origin.
+pub(crate) fn attempt_review_policy_metered_for_vault(
+    notes: &BTreeMap<VaultRelativePath, ParsedNote>,
+    certificates: &BTreeSet<PolicyInputKey>,
+    vault_id: &RecordId,
+    meter: &mut dyn FnMut(PolicyWork) -> Result<()>,
+) -> Result<PolicyAttempt<Option<review::VerifiedReviewPolicy>>> {
+    attempt_metered(notes, Some(certificates), Some(meter), |notes, budget| {
+        budget.bind_vault(vault_id)?;
+        review::verify_review_policy_scoped(notes, budget)
+    })
+}
+
 /// Pure conservative prefilters. Broad keys retain errors encountered before
 /// endpoint/output matching; no eligibility or fence decoder is consulted.
 pub(crate) fn policy_membership_keys(
@@ -132,6 +146,18 @@ pub(crate) fn policy_membership_keys(
 ) -> Result<BTreeSet<PolicyInputKey>> {
     use PolicyInputKey::*;
     let mut keys = BTreeSet::new();
+    #[cfg(test)]
+    let precise_remap =
+        super::remap_input_probe::mode() == super::remap_input_probe::RemapInputProbeMode::Precise;
+    #[cfg(not(test))]
+    let precise_remap = false;
+    #[cfg(test)]
+    if precise_remap
+        && super::remap_input_probe::classify(note)
+            != super::remap_input_probe::RemapInputWitness::Excluded
+    {
+        keys.insert(RemapReceiptCandidates);
+    }
     if review::has_fence(note) {
         keys.insert(ReviewReceiptCandidates);
     }
@@ -166,10 +192,12 @@ pub(crate) fn policy_membership_keys(
             keys.insert(AssertionCandidates);
         }
         if r.kind() == RecordKind::Decision {
-            if matches!(
-                r.string("wiki_action"),
-                Some("merge" | "split" | "add_alias" | "bind_mention")
-            ) {
+            if !precise_remap
+                && matches!(
+                    r.string("wiki_action"),
+                    Some("merge" | "split" | "add_alias" | "bind_mention")
+                )
+            {
                 keys.insert(RemapReceiptCandidates);
             }
             if r.string("wiki_status") == Some("active") {
@@ -191,6 +219,20 @@ pub(crate) fn policy_membership_keys(
         }
     }
     Ok(keys)
+}
+
+/// Actual extra syntactic work introduced by the DEVELOPMENT classifier.
+/// Callers that own an operation meter charge before enumerating membership.
+#[cfg(test)]
+pub(crate) fn remap_probe_membership_bytes(note: &ParsedNote) -> Result<usize> {
+    if super::remap_input_probe::mode() == super::remap_input_probe::RemapInputProbeMode::Precise {
+        note.raw
+            .len()
+            .checked_mul(2)
+            .ok_or_else(|| WikiError::invalid("membership byte overflow"))
+    } else {
+        Ok(0)
+    }
 }
 #[cfg(test)]
 mod tests {

@@ -24,5 +24,10 @@ pub mod api_extract;
 pub mod generation_cache;
 pub mod review;
 
+pub(crate) mod normalized_input;
+pub(crate) mod normalized_meter;
+pub(crate) mod normalized_types;
 pub(crate) mod policy_inputs;
 pub(crate) mod receipt_budget;
+#[cfg(test)]
+pub(crate) mod remap_input_probe;

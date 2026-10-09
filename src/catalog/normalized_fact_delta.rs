@@ -3,9 +3,7 @@
 use super::{
     eligibility_facts::{EligibilityEdge, EligibilityFact},
     link_facts::{MatchKey, MatchKeyKind, OwnedLinkFact},
-    normalized_delta::{
-        CatalogDelta, DeltaStats, MAX_DELTA_BYTES, MAX_ROW_BYTES, MAX_ROWS, counted,
-    },
+    normalized_delta::{CatalogDelta, DeltaStats, MAX_DELTA_BYTES, MAX_ROW_BYTES, counted},
     sql,
     types::RecordRow,
 };
@@ -74,19 +72,24 @@ pub(super) fn key_name(kind: MatchKeyKind) -> &'static str {
         MatchKeyKind::Alias => "alias",
     }
 }
-fn admit_new<T: Serialize>(v: &T, count: &mut usize) -> Result<()> {
+fn admit_new<T: Serialize>(v: &T, count: &mut usize, max_rows: usize) -> Result<()> {
     *count = count
         .checked_add(1)
-        .filter(|n| *n <= MAX_ROWS)
+        .filter(|n| *n <= max_rows)
         .ok_or_else(budget)?;
     counted(v, MAX_ROW_BYTES)?;
     Ok(())
 }
 
 impl FactDelta {
-    pub(super) fn validate(&self, delta: &CatalogDelta, count: &mut usize) -> Result<()> {
+    pub(super) fn validate_with_row_limit(
+        &self,
+        delta: &CatalogDelta,
+        count: &mut usize,
+        max_rows: usize,
+    ) -> Result<()> {
         if let Some(policy) = &self.policy {
-            policy.validate(delta, count)?;
+            policy.validate_with_row_limit(delta, count, max_rows)?;
             if delta.version == 3 {
                 let written: BTreeSet<_> = delta
                     .documents
@@ -127,21 +130,22 @@ impl FactDelta {
             admit_new(
                 &(&row.record_id, &row.fact.baseline, &row.fact.structural),
                 count,
+                max_rows,
             )?;
             for path in &row.fact.direct_paths {
-                admit_new(&(&row.record_id, path), count)?;
+                admit_new(&(&row.record_id, path), count, max_rows)?;
             }
         }
         let mut edges = BTreeSet::new();
         for edge in self.edge_inserts.iter().chain(&self.edge_deletes) {
             unique(&mut edges, edge)?;
-            admit_new(edge, count)?;
+            admit_new(edge, count, max_rows)?;
         }
         let mut paths = BTreeSet::new();
         for owned in &self.links {
             unique(&mut paths, &owned.path)?;
             // Empty owner replacement is still bounded work.
-            admit_new(&owned.path, count)?;
+            admit_new(&owned.path, count, max_rows)?;
             let links = delta
                 .links
                 .iter()
@@ -153,7 +157,7 @@ impl FactDelta {
                 if fact.from_path != owned.path {
                     return Err(invalid("cross-owned raw link fact"));
                 }
-                admit_new(fact, count)?;
+                admit_new(fact, count, max_rows)?;
                 let link = links
                     .rows
                     .iter()
@@ -206,7 +210,7 @@ impl FactDelta {
                     ));
                 }
                 for key in &fact.keys {
-                    admit_new(&(&owned.path, fact.byte_start, key), count)?;
+                    admit_new(&(&owned.path, fact.byte_start, key), count, max_rows)?;
                 }
             }
             if offsets.len() != links.rows.len() {
@@ -219,11 +223,11 @@ impl FactDelta {
         owners.clear();
         for row in &self.registry {
             unique(&mut owners, &row.record_id)?;
-            admit_new(&(&row.record_id, &row.path), count)?;
+            admit_new(&(&row.record_id, &row.path), count, max_rows)?;
             let mut keys = BTreeSet::new();
             for key in &row.keys {
                 unique(&mut keys, key)?;
-                admit_new(&(&row.record_id, &row.path, key), count)?;
+                admit_new(&(&row.record_id, &row.path, key), count, max_rows)?;
             }
         }
         Ok(())
@@ -602,7 +606,7 @@ pub(super) fn charge_old(bytes: usize, stats: &mut DeltaStats) -> Result<()> {
     stats.old_rows = stats
         .old_rows
         .checked_add(1)
-        .filter(|n| *n <= MAX_ROWS)
+        .filter(|n| *n <= stats.old_row_limit)
         .ok_or_else(budget)?;
     Ok(())
 }

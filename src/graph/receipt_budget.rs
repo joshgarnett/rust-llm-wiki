@@ -15,6 +15,9 @@ pub(crate) struct ReceiptBudget<'a> {
     trace: PolicyInputTrace,
     tracing: bool,
     meter: Option<&'a mut dyn FnMut(PolicyWork) -> Result<()>>,
+    vault_id: Option<RecordId>,
+    #[cfg(test)]
+    remap_input_probe_mode: super::remap_input_probe::RemapInputProbeMode,
 }
 impl Default for ReceiptBudget<'_> {
     fn default() -> Self {
@@ -28,6 +31,9 @@ impl Default for ReceiptBudget<'_> {
             trace: PolicyInputTrace::default(),
             tracing: false,
             meter: None,
+            vault_id: None,
+            #[cfg(test)]
+            remap_input_probe_mode: super::remap_input_probe::mode(),
         }
     }
 }
@@ -42,6 +48,31 @@ impl<'a> ReceiptBudget<'a> {
     pub(crate) fn with_meter(mut self, meter: &'a mut dyn FnMut(PolicyWork) -> Result<()>) -> Self {
         self.meter = Some(meter);
         self
+    }
+    pub(crate) fn bind_vault(&mut self, vault_id: &RecordId) -> Result<()> {
+        if self.vault_id.as_ref().is_some_and(|old| old != vault_id) {
+            return Err(super::remap::bad("receipt evaluator vault binding changed"));
+        }
+        self.vault_id = Some(vault_id.clone());
+        Ok(())
+    }
+    pub(crate) fn vault_id(&self) -> Option<&RecordId> {
+        self.vault_id.as_ref()
+    }
+    #[cfg(test)]
+    pub(crate) fn remap_input_probe_mode(&self) -> super::remap_input_probe::RemapInputProbeMode {
+        self.remap_input_probe_mode
+    }
+    /// Classification can inspect UTF8 and a lossy Markdown representation.
+    /// Charge both potential byte passes; this never changes production budgets.
+    #[cfg(test)]
+    pub(crate) fn remap_probe_classification(&mut self, bytes: usize) -> Result<()> {
+        self.step()?;
+        let bytes = bytes.checked_mul(2).ok_or_else(exhausted)?;
+        if let Some(meter) = self.meter.as_mut() {
+            meter(PolicyWork { steps: 0, bytes })?;
+        }
+        Ok(())
     }
     pub(crate) fn step(&mut self) -> Result<()> {
         if let Some(meter) = self.meter.as_mut() {

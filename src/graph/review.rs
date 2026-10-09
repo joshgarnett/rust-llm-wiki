@@ -16,6 +16,10 @@ use pulldown_cmark::{CodeBlockKind, Event, Parser, Tag};
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
 
+#[path = "review_receipt_v2.rs"]
+pub(crate) mod receipt_v2;
+pub(crate) use receipt_v2::{collect_review_receipts_v2, render_decisions_v2};
+
 fn bad(s: impl Into<String>) -> WikiError {
     WikiError::invalid(s)
 }
@@ -673,7 +677,7 @@ fn receipt(n: &ParsedNote) -> Result<ReviewReceiptV1> {
     )
 }
 pub(crate) fn has_fence(n: &ParsedNote) -> bool {
-    std::str::from_utf8(n.body()).is_ok_and(|s|Parser::new(s).any(|e|matches!(e,Event::Start(Tag::CodeBlock(CodeBlockKind::Fenced(info))) if info.as_ref()==GRAPH_REVIEW_FENCE)))
+    receipt_v2::witness_count(n) != 0
 }
 pub fn relevant_decision_ids(
     notes: &BTreeMap<VaultRelativePath, ParsedNote>,
@@ -699,36 +703,7 @@ fn receipts_scoped(
     notes: &BTreeMap<VaultRelativePath, ParsedNote>,
     scope: &mut ReceiptBudget,
 ) -> Result<BTreeMap<RecordId, ReviewReceiptV1>> {
-    scope.require(super::policy_inputs::PolicyInputKey::ReviewReceiptCandidates)?;
-    let mut all = BTreeMap::new();
-    for (path, n) in notes {
-        scope.step()?;
-        if !has_fence(n) {
-            continue;
-        }
-        scope.admit(path, n)?;
-        if n.raw.len() > MAX_REVIEW_RECEIPT_BYTES + 262144 {
-            return Err(super::receipt_budget::exhausted());
-        }
-        let r = record(n)?;
-        if r.kind() != RecordKind::Decision
-            || !matches!(r.string("wiki_action"), Some("accept" | "reject"))
-        {
-            return Err(bad("relevant review receipt in wrong record/action"));
-        }
-        let proof = receipt(n)?;
-        shape(&proof)?;
-        if !proof.allocations.decisions.values().any(|id| id == r.id()) {
-            return Err(bad("review receipt unallocated enclosing Decision"));
-        }
-        if all
-            .insert(proof.task_id.clone(), proof.clone())
-            .is_some_and(|old| old != proof)
-        {
-            return Err(bad("review receipt copies disagree"));
-        }
-    }
-    Ok(all)
+    Ok(collect_review_receipts_v2(notes, scope)?.receipts)
 }
 fn allocation_map(a: &ReviewAllocations) -> BTreeMap<String, RecordId> {
     a.decisions
@@ -828,6 +803,15 @@ fn successor_bytes(r: &ReviewReceiptV1, p: &ReviewEvidenceProof) -> Result<Vec<u
     }
 }
 fn decision_bytes(r: &ReviewReceiptV1, d: &AssertionReview) -> Result<Vec<u8>> {
+    decision_with_proof(
+        r,
+        d,
+        &packet::render_fence(r, GRAPH_REVIEW_FENCE, MAX_REVIEW_RECEIPT_BYTES)?,
+    )
+}
+// The v1 envelope/body is shared verbatim with v2. Only the final proof fence
+// differs; status remains mutable and is deliberately outside its commitment.
+fn decision_with_proof(r: &ReviewReceiptV1, d: &AssertionReview, proof: &[u8]) -> Result<Vec<u8>> {
     let id = &r.allocations.decisions[&d.assertion_id];
     let mut f = common(
         id,
@@ -859,11 +843,7 @@ fn decision_bytes(r: &ReviewReceiptV1, d: &AssertionReview) -> Result<Vec<u8>> {
         d.reason, r.record_paths[&d.assertion_id]
     )
     .into_bytes();
-    b.extend(packet::render_fence(
-        r,
-        GRAPH_REVIEW_FENCE,
-        MAX_REVIEW_RECEIPT_BYTES,
-    )?);
+    b.extend_from_slice(proof);
     record_bytes(CanonicalRecord::new(f)?, &b)
 }
 fn edges(r: &ReviewReceiptV1) -> BTreeSet<(RecordId, RecordId)> {
@@ -1115,8 +1095,15 @@ fn acyclic_scoped(edges: &BTreeSet<(RecordId, RecordId)>, scope: &mut ReceiptBud
     }
     Ok(())
 }
-fn semantic_decision(r: &ReviewReceiptV1, d: &AssertionReview, n: &ParsedNote) -> Result<()> {
-    let expected = parse_note(&decision_bytes(r, d)?);
+fn semantic_decision(
+    r: &ReviewReceiptV1,
+    d: &AssertionReview,
+    n: &ParsedNote,
+    v2: bool,
+) -> Result<()> {
+    // V2's complete family has already been authenticated once by the collector.
+    // Do not serialize or clone the full carrier for each reference's envelope.
+    let expected = parse_note(&decision_with_proof(r, d, &[])?);
     let got = record(n)?;
     let wanted = record(&expected)?;
     if got.kind() != RecordKind::Decision
@@ -1126,7 +1113,7 @@ fn semantic_decision(r: &ReviewReceiptV1, d: &AssertionReview, n: &ParsedNote) -
         || got.field("wiki_output_ids") != wanted.field("wiki_output_ids")
         || got.field("wiki_created_at") != wanted.field("wiki_created_at")
         || got.field("wiki_supersedes_id") != wanted.field("wiki_supersedes_id")
-        || receipt(n)? != *r
+        || (!v2 && receipt(n)? != *r)
     {
         return Err(bad("review Decision immutable envelope/proof differs"));
     }
@@ -1137,11 +1124,34 @@ pub fn verify_review_policy(
 ) -> Result<Option<VerifiedReviewPolicy>> {
     verify_review_policy_scoped(notes, &mut ReceiptBudget::default())
 }
+pub(crate) fn verify_review_policy_for_vault(
+    notes: &BTreeMap<VaultRelativePath, ParsedNote>,
+    vault_id: &RecordId,
+) -> Result<Option<VerifiedReviewPolicy>> {
+    let mut scope = ReceiptBudget::default();
+    scope.bind_vault(vault_id)?;
+    verify_review_policy_scoped(notes, &mut scope)
+}
 pub(crate) fn verify_review_policy_scoped(
     notes: &BTreeMap<VaultRelativePath, ParsedNote>,
     scope: &mut ReceiptBudget,
 ) -> Result<Option<VerifiedReviewPolicy>> {
-    let all = receipts_scoped(notes, scope)?;
+    let collected = collect_review_receipts_v2(notes, scope)?;
+    if !collected.origins.is_empty() {
+        let canonical_vault = notes
+            .get(&VaultRelativePath::new("WIKI.md")?)
+            .and_then(|note| note.canonical.as_ref())
+            .filter(|record| record.kind() == RecordKind::Vault)
+            .map(|record| record.id());
+        if let Some(vault_id) = canonical_vault {
+            scope.bind_vault(vault_id)?;
+        }
+        let actual_vault = scope
+            .vault_id()
+            .ok_or_else(|| bad("v2 review policy requires an authenticated vault identity"))?;
+        collected.bind_vault(actual_vault)?;
+    }
+    let all = collected.receipts;
     if all.is_empty() {
         return Ok(None);
     }
@@ -1155,7 +1165,7 @@ pub(crate) fn verify_review_policy_scoped(
         for d in &r.request.decisions {
             scope.step()?;
             let (_, n) = scope.find(notes, &r.allocations.decisions[&d.assertion_id])?;
-            semantic_decision(r, d, n)?;
+            semantic_decision(r, d, n, collected.origins.contains_key(&r.task_id))?;
             if status(n)? == "active" {
                 let (_, an) = scope.find(notes, &d.assertion_id)?;
                 if status(an)? != d.decision.assertion_status() {
@@ -1261,6 +1271,23 @@ fn expected_writes(
     view: &SourceView<'_>,
     r: &ReviewReceiptV1,
 ) -> Result<BTreeMap<VaultRelativePath, ExpectedWrite>> {
+    expected_writes_versioned(view, r, None)
+}
+pub(crate) fn expected_writes_v2(
+    view: &SourceView<'_>,
+    r: &ReviewReceiptV1,
+    origin: &super::normalized_types::CanonicalGraphOriginV2,
+) -> Result<BTreeMap<VaultRelativePath, ExpectedWrite>> {
+    if origin.vault_id != packet::vault_id(view)? {
+        return Err(bad("review origin belongs to another vault"));
+    }
+    expected_writes_versioned(view, r, Some(origin))
+}
+fn expected_writes_versioned(
+    view: &SourceView<'_>,
+    r: &ReviewReceiptV1,
+    origin: Option<&super::normalized_types::CanonicalGraphOriginV2>,
+) -> Result<BTreeMap<VaultRelativePath, ExpectedWrite>> {
     shape(r)?;
     let mut writes = BTreeMap::new();
     let mut add = |id: &RecordId, n: Option<&ParsedNote>, bytes: Vec<u8>| -> Result<()> {
@@ -1349,11 +1376,21 @@ fn expected_writes(
         }
         add(&p.decision_id, Some(dn), set_status(dn, "superseded")?)?;
     }
+    let mut v2_decisions = origin
+        .map(|origin| render_decisions_v2(r, origin))
+        .transpose()?;
     for d in &r.request.decisions {
+        let id = &r.allocations.decisions[&d.assertion_id];
         add(
-            &r.allocations.decisions[&d.assertion_id],
+            id,
             None,
-            decision_bytes(r, d)?,
+            if let Some(rendered) = &mut v2_decisions {
+                rendered
+                    .remove(id)
+                    .ok_or_else(|| bad("review rendered allocation missing"))?
+            } else {
+                decision_bytes(r, d)?
+            },
         )?;
     }
     let nondecision = writes
@@ -1407,7 +1444,8 @@ pub fn verify_review_overlay(
         return Ok(None);
     }
     let proposed = SourceView::from_closed_input(fs, input)?;
-    let all = match receipts(&proposed.notes) {
+    let collected = match collect_review_receipts_v2(&proposed.notes, &mut ReceiptBudget::default())
+    {
         Ok(r) => r,
         Err(e) => {
             if e.code == ErrorCode::BudgetExceeded {
@@ -1426,6 +1464,8 @@ pub fn verify_review_overlay(
             return Err(e);
         }
     };
+    collected.bind_vault(&input.vault_id)?;
+    let all = &collected.receipts;
     let mut matched = vec![];
     for r in all.values() {
         if let Some(w) = witness {
@@ -1476,7 +1516,7 @@ pub fn verify_review_overlay(
             ));
         }
     }
-    let expected = expected_writes(&before, r)?;
+    let expected = expected_writes_versioned(&before, r, collected.origins.get(&r.task_id))?;
     let overlays = input
         .overlay
         .iter()
@@ -1799,6 +1839,29 @@ pub fn plan_review(v: &ValidatedReview) -> Result<ReviewPlan> {
     })
 }
 fn build_draft(view: &SourceView<'_>, v: &ValidatedReview) -> Result<ChangeDraft> {
+    Ok(build_draft_versioned(view, v, false)?.0)
+}
+/// Construct semantic writes from complete selected members. The sealed
+/// selected projector owns graph closure/publication validation; a partial
+/// selected view must never be sent to the legacy whole-graph validator.
+pub(crate) fn build_draft_v2(
+    view: &SourceView<'_>,
+    v: &ValidatedReview,
+) -> Result<(ChangeDraft, super::normalized_types::ReviewCarrierV2)> {
+    let (draft, carrier) = build_draft_versioned(view, v, true)?;
+    Ok((
+        draft,
+        carrier.ok_or_else(|| bad("review v2 carrier missing"))?,
+    ))
+}
+fn build_draft_versioned(
+    view: &SourceView<'_>,
+    v: &ValidatedReview,
+    v2: bool,
+) -> Result<(
+    ChangeDraft,
+    Option<super::normalized_types::ReviewCarrierV2>,
+)> {
     let (evidence_proofs, _) = verify_fresh(view, &v.request)?;
     let predecessors = predecessors(&view.notes, &v.request)?;
     let mut receipt = ReviewReceiptV1 {
@@ -1959,6 +2022,21 @@ fn build_draft(view: &SourceView<'_>, v: &ValidatedReview) -> Result<ChangeDraft
             },
         );
     }
+    let carrier = if v2 {
+        let origin = super::normalized_types::CanonicalGraphOriginV2::for_task(
+            packet::vault_id(view)?,
+            super::normalized_types::GraphOperationFamily::AssertionReview,
+            &receipt.task_id,
+            Blake3Hash::digest(packet::canonical_json(&receipt)?),
+        )?;
+        Some(receipt_v2::carrier(&receipt, &origin)?)
+    } else {
+        None
+    };
+    let mut rendered_v2 = carrier
+        .as_ref()
+        .map(receipt_v2::render_carrier_decisions)
+        .transpose()?;
     for d in &receipt.request.decisions {
         let target = receipt.record_paths[&receipt.allocations.decisions[&d.assertion_id]].clone();
         writes.insert(
@@ -1966,40 +2044,52 @@ fn build_draft(view: &SourceView<'_>, v: &ValidatedReview) -> Result<ChangeDraft
             ExpectedWrite {
                 target,
                 expected: ExpectedState::Absent,
-                proposed: Some(decision_bytes(&receipt, d)?),
+                proposed: Some(if let Some(rendered) = &mut rendered_v2 {
+                    rendered
+                        .remove(&receipt.allocations.decisions[&d.assertion_id])
+                        .ok_or_else(|| bad("review rendered allocation missing"))?
+                } else {
+                    decision_bytes(&receipt, d)?
+                }),
                 apply_after: vec![],
             },
         );
     }
-    let input = ValidationInput {
-        vault_id: v.input.vault_id.clone(),
-        documents: v.input.documents.clone(),
-        overlay: writes
-            .values()
-            .map(|w| ProposedTarget {
-                path: w.target.clone(),
-                bytes: w.proposed.clone(),
-            })
-            .collect(),
-    };
-    bounded(&input)?;
-    verify_review_overlay(view.fs, &input, None)?
-        .ok_or_else(|| bad("review draft lacks exact authority"))?;
-    crate::catalog::CatalogGraphValidator.validate_closed(view.fs, &input)?;
-    Ok(ChangeDraft {
-        title: "Explicit complete evidence review".into(),
-        origin: None,
-        inverse_of: None,
-        allocated_ids: allocation_map(&receipt.allocations),
-        read_preconditions: v.dependencies.clone(),
-        operations: writes.into_values().collect(),
-    })
+    if !v2 {
+        let input = ValidationInput {
+            vault_id: v.input.vault_id.clone(),
+            documents: v.input.documents.clone(),
+            overlay: writes
+                .values()
+                .map(|w| ProposedTarget {
+                    path: w.target.clone(),
+                    bytes: w.proposed.clone(),
+                })
+                .collect(),
+        };
+        bounded(&input)?;
+        verify_review_overlay(view.fs, &input, None)?
+            .ok_or_else(|| bad("review draft lacks exact authority"))?;
+        crate::catalog::CatalogGraphValidator.validate_closed(view.fs, &input)?;
+    }
+    Ok((
+        ChangeDraft {
+            title: "Explicit complete evidence review".into(),
+            origin: None,
+            inverse_of: None,
+            allocated_ids: allocation_map(&receipt.allocations),
+            read_preconditions: v.dependencies.clone(),
+            operations: writes.into_values().collect(),
+        },
+        carrier,
+    ))
 }
 fn evidence_semantics(
     view: &SourceView<'_>,
     r: &ReviewReceiptV1,
     p: &ReviewEvidenceProof,
     deps: &mut BTreeMap<VaultRelativePath, ExpectedState>,
+    all: &BTreeMap<RecordId, ReviewReceiptV1>,
 ) -> Result<()> {
     let (_, n) = view.resolve(&p.evidence_id, RecordKind::Evidence, None)?;
     let rec = record(n)?;
@@ -2012,7 +2102,7 @@ fn evidence_semantics(
     if status(n)? != e_status(p.after_status)
         && (p.after_status != ReviewedEvidenceStatus::Active
             || status(n)? != "retracted"
-            || !receipts(&view.notes)?.values().any(|next| {
+            || !all.values().any(|next| {
                 next.task_id != r.task_id
                     && next.evidence_proofs.iter().any(|np| {
                         np.evidence_id == p.evidence_id
@@ -2038,7 +2128,7 @@ fn evidence_semantics(
             return Err(bad("review successor immutable quotation/stance differs"));
         }
         if status(sn)? != "active"
-            && !receipts(&view.notes)?.values().any(|next| {
+            && !all.values().any(|next| {
                 next.task_id != r.task_id
                     && next.evidence_proofs.iter().any(|np| {
                         np.evidence_id == *id
@@ -2058,6 +2148,26 @@ pub fn verify_review_evolution(
     assertion_id: &RecordId,
     r: &ReviewReceiptV1,
 ) -> Result<Vec<ReadDependency>> {
+    let collected = collect_review_receipts_v2(&view.notes, &mut ReceiptBudget::default())?;
+    if !collected.origins.is_empty() {
+        collected.bind_vault(&packet::vault_id(view)?)?;
+    }
+    verify_review_evolution_collected(view, assertion_id, r, &collected.receipts)?;
+    Ok(view
+        .notes
+        .iter()
+        .map(|(p, n)| ReadDependency {
+            path: p.clone(),
+            expected: ExpectedState::Hash(n.source_hash.clone()),
+        })
+        .collect())
+}
+fn verify_review_evolution_collected(
+    view: &SourceView<'_>,
+    assertion_id: &RecordId,
+    r: &ReviewReceiptV1,
+    all: &BTreeMap<RecordId, ReviewReceiptV1>,
+) -> Result<()> {
     let p = r
         .assertion_proofs
         .iter()
@@ -2069,7 +2179,6 @@ pub fn verify_review_evolution(
     if proposition(current)? != p.proposition {
         remap::verify_proposition_evolution(view, assertion_id, &old, current)?;
     }
-    let all = receipts(&view.notes)?;
     let decision = &r.allocations.decisions[assertion_id];
     let (_, dn) = view.resolve(decision, RecordKind::Decision, None)?;
     if status(dn)? == "active" {
@@ -2196,20 +2305,17 @@ pub fn verify_review_evolution(
             ));
         }
     }
-    Ok(view
-        .notes
-        .iter()
-        .map(|(p, n)| ReadDependency {
-            path: p.clone(),
-            expected: ExpectedState::Hash(n.source_hash.clone()),
-        })
-        .collect())
+    Ok(())
 }
 pub fn load_review_receipt(
     view: &SourceView<'_>,
     task_id: &RecordId,
 ) -> Result<Option<VerifiedReviewReceipt>> {
-    let all = receipts(&view.notes)?;
+    let collected = collect_review_receipts_v2(&view.notes, &mut ReceiptBudget::default())?;
+    if !collected.origins.is_empty() {
+        collected.bind_vault(&packet::vault_id(view)?)?;
+    }
+    let all = &collected.receipts;
     let Some(r) = all.get(task_id) else {
         return Ok(None);
     };
@@ -2221,7 +2327,7 @@ pub fn load_review_receipt(
         .collect::<BTreeMap<_, _>>();
     let mut decision_locators = vec![];
     for d in &r.request.decisions {
-        verify_review_evolution(view, &d.assertion_id, r)?;
+        verify_review_evolution_collected(view, &d.assertion_id, r, all)?;
         let (p, n) = view.resolve(
             &r.allocations.decisions[&d.assertion_id],
             RecordKind::Decision,
@@ -2230,7 +2336,7 @@ pub fn load_review_receipt(
         decision_locators.push(packet::locator(view, p, n)?);
     }
     for p in &r.evidence_proofs {
-        evidence_semantics(view, r, p, &mut deps)?;
+        evidence_semantics(view, r, p, &mut deps, all)?;
     }
     Ok(Some(VerifiedReviewReceipt {
         receipt: r.clone(),
@@ -2312,17 +2418,24 @@ fn retained_receipt(
     };
     bounded(&proposal)?;
     let view = SourceView::from_closed_input(engine.fs(), &proposal)?;
+    let collected = collect_review_receipts_v2(&view.notes, &mut ReceiptBudget::default())?;
+    collected.bind_vault(&proposal.vault_id)?;
     let proof = if let Some(r) = known {
         // Actual canonical descendant was fully validated separately. Authenticate
         // old receipt copies from exact retained proposed Decision bytes without
         // injecting old active authority into today's later reviewed graph.
-        for id in r.allocations.decisions.values() {
-            let (_, n) = view.resolve(id, RecordKind::Decision, None)?;
-            if receipt(n)? != *r {
-                return Err(bad(
-                    "retained original receipt differs from canonical immutable allocation/proof maps",
-                ));
-            }
+        if collected.receipts.get(&r.task_id) != Some(r) {
+            return Err(bad(
+                "retained original receipt differs from canonical immutable allocation/proof maps",
+            ));
+        }
+        for d in &r.request.decisions {
+            let (_, n) = view.resolve(
+                &r.allocations.decisions[&d.assertion_id],
+                RecordKind::Decision,
+                None,
+            )?;
+            semantic_decision(r, d, n, collected.origins.contains_key(&r.task_id))?;
         }
         VerifiedReviewReceipt {
             receipt: r.clone(),
@@ -2349,7 +2462,11 @@ fn retained_receipt(
         ));
     }
     let before = SourceView::from_closed_input(engine.fs(), &before_input)?;
-    let expected = expected_writes(&before, &proof.receipt)?;
+    let expected = expected_writes_versioned(
+        &before,
+        &proof.receipt,
+        collected.origins.get(&proof.receipt.task_id),
+    )?;
     if c.manifest.operations.len() != expected.len() {
         return Err(bad("retained review exact Decision/write count differs"));
     }
@@ -2453,35 +2570,56 @@ impl VerifiedReviewInverse {
         &self.accepted
     }
 }
-fn anchor_receipt(w: &RetainedGraphInverseInput) -> Result<ReviewReceiptV1> {
-    let anchor = w.anchor();
+/// Authenticate the original allocated carrier/reference family from retained
+/// proposed bytes. This does not replace exact write-set/publication validation
+/// by the committed-anchor verifier or the selected sealed projector.
+pub(crate) fn retained_review_family(
+    anchor: &RetainedGraphInput,
+    actual_vault: &RecordId,
+) -> Result<(
+    ReviewReceiptV1,
+    Option<super::normalized_types::CanonicalGraphOriginV2>,
+)> {
     if anchor.origin().operation != OriginOperation::GraphReview {
         return Err(bad("review inverse anchor origin differs"));
     }
-    let mut found = None;
+    let mut notes = BTreeMap::new();
     for op in anchor.operations() {
         if op.before() == &ExpectedState::Absent
             && let Some(b) = op.after_bytes()
         {
             let n = parse_note(b);
             if has_fence(&n) {
-                let r = receipt(&n)?;
-                shape(&r)?;
-                if found.as_ref().is_some_and(|old| old != &r) {
-                    return Err(bad("review inverse anchor receipt copies differ"));
+                if notes.insert(op.path().clone(), n).is_some() {
+                    return Err(bad("review inverse anchor duplicate proof path"));
                 }
-                found = Some(r);
             }
         }
     }
-    let r = found.ok_or_else(|| bad("review inverse committed anchor receipt missing"))?;
+    let mut collected = collect_review_receipts_v2(&notes, &mut ReceiptBudget::default())?;
+    if collected.receipts.len() != 1 {
+        return Err(bad(
+            "review inverse committed anchor receipt missing/ambiguous",
+        ));
+    }
+    let r = collected
+        .receipts
+        .remove(&anchor.origin().packet_id)
+        .ok_or_else(|| bad("review inverse committed anchor receipt missing"))?;
+    let origin = collected.origins.remove(&r.task_id);
+    if origin
+        .as_ref()
+        .is_some_and(|origin| &origin.vault_id != actual_vault)
+    {
+        return Err(bad("review anchor origin belongs to another vault"));
+    }
     if r.task_id != anchor.origin().packet_id
         || r.request_hash != anchor.origin().response_hash
         || allocation_map(&r.allocations) != *anchor.allocated_ids()
     {
         return Err(bad("review inverse anchor allocation/origin differs"));
     }
-    Ok(r)
+    Ok((r, origin))
 }
 // Authenticated committed seal only; no untrusted historical mode is exposed.
 pub(crate) fn verify_review_committed_anchor(
@@ -2489,10 +2627,10 @@ pub(crate) fn verify_review_committed_anchor(
     input: &ValidationInput,
     w: &RetainedGraphInverseInput,
 ) -> Result<ReviewReceiptV1> {
-    let r = anchor_receipt(w)?;
+    let (r, origin) = retained_review_family(w.anchor(), &input.vault_id)?;
     let logical = logical_input(input, Some(w.anchor()))?;
     let old = SourceView::from_closed_input(fs, &logical)?;
-    let expected = expected_writes(&old, &r)?;
+    let expected = expected_writes_versioned(&old, &r, origin.as_ref())?;
     if expected.len() != w.anchor().operations().len() {
         return Err(bad("review committed anchor exact write set differs"));
     }

@@ -13,6 +13,9 @@ pub(crate) mod full_check;
 pub(crate) mod full_check_rows;
 pub(crate) mod full_check_scratch;
 pub(crate) mod full_check_types;
+mod graph_row_preflight;
+#[cfg(test)]
+mod graph_row_preflight_tests;
 mod integrity;
 pub(crate) mod link_facts;
 pub(crate) mod maintenance;
@@ -34,6 +37,8 @@ pub(crate) mod normalized_fact_delta;
 mod normalized_fact_delta_tests;
 #[cfg(test)]
 mod normalized_fact_tests;
+#[cfg(test)]
+mod normalized_graph_feasibility_tests;
 pub(crate) mod normalized_metadata;
 pub(crate) mod normalized_read;
 pub(crate) mod normalized_schema;

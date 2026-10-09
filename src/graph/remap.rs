@@ -845,6 +845,36 @@ fn receipts_scoped(
     let mut result = BTreeMap::new();
     for (path, note) in notes {
         budget.step()?;
+        #[cfg(test)]
+        if budget.remap_input_probe_mode() == super::remap_input_probe::RemapInputProbeMode::Precise
+        {
+            use super::remap_input_probe::{RemapInputWitness, classify};
+            budget.remap_probe_classification(note.raw.len())?;
+            match classify(note) {
+                RemapInputWitness::Excluded => continue,
+                RemapInputWitness::LegacySyntaxError => {
+                    budget.observe(path, note)?;
+                    fence_present(note)?;
+                    return Err(bad("internal remap probe syntax witness differs"));
+                }
+                RemapInputWitness::Fence => {}
+            }
+            budget.observe(path, note)?;
+            // Strict UTF8 precedes size admission, as in the current collector.
+            fence_present(note)?;
+            budget.admit(path, note)?;
+            if note.raw.len() > MAX_ENTITY_DECISION_RECEIPT_BYTES + 262144 {
+                return Err(super::receipt_budget::exhausted());
+            }
+            let r = receipt(note)?;
+            shape(&r)?;
+            verify_probe_receipt_witness(note, &r)?;
+            if result.get(&r.task_id).is_some_and(|old| old != &r) {
+                return Err(bad("contradictory canonical entity receipts"));
+            }
+            result.insert(r.task_id.clone(), r);
+            continue;
+        }
         if note.canonical.as_ref().is_some_and(|r| {
             r.kind() == RecordKind::Decision
                 && matches!(
@@ -869,6 +899,40 @@ fn receipts_scoped(
         }
     }
     Ok(result)
+}
+/// Probe-only strengthening: every raw receipt witness belongs to its declared
+/// allocated family. Current locations remain governed by exact-write authority.
+#[cfg(test)]
+fn verify_probe_receipt_witness(note: &ParsedNote, r: &EntityDecisionReceiptV1) -> Result<()> {
+    let rec = note
+        .canonical
+        .as_ref()
+        .filter(|rec| rec.kind() == RecordKind::Decision)
+        .ok_or_else(|| bad("entity receipt witness is not a canonical Decision"))?;
+    let expected = r
+        .request
+        .decisions
+        .iter()
+        .zip(&r.allocations)
+        .find_map(|(op, a)| {
+            if &a.decision_id == rec.id() {
+                Some(action(op))
+            } else if a
+                .mention_decisions
+                .iter()
+                .any(|m| &m.decision_id == rec.id())
+            {
+                Some("bind_mention")
+            } else {
+                None
+            }
+        });
+    if expected.is_none() || rec.string("wiki_action") != expected {
+        return Err(bad(
+            "entity receipt witness action/allocated identity differs",
+        ));
+    }
+    Ok(())
 }
 fn binding_chain(
     receipts: &BTreeMap<RecordId, EntityDecisionReceiptV1>,

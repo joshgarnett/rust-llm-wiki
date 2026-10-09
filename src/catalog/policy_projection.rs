@@ -4,6 +4,7 @@ use super::{
     policy_delta::{PolicyDelta, PolicyMembershipUpdate, PolicyReplacement},
     policy_facts::PolicyKind,
     query::QuerySnapshot,
+    query_types::QueryCatalog,
 };
 use crate::{
     domain::{Blake3Hash, ErrorCode, Result, VaultRelativePath, WikiError},
@@ -34,6 +35,28 @@ pub(super) fn project_policy(
     access: &mut dyn PolicyInputAccess,
 ) -> Result<PolicyDelta> {
     project_policy_inner(reader, before, overlay, &BTreeSet::new(), access, false, 16)
+}
+
+/// A development experiment can falsify graph feasibility with the real policy
+/// closure before the typed projector exists. It grants no write capability.
+/// Reuse the existing many-owner exclusion query; the probe overlay itself is
+/// bounded by MAX_OPS, and cumulative query rows/bytes/VM remain unchanged.
+#[cfg(test)]
+pub(super) fn project_graph_policy_probe(
+    reader: &QuerySnapshot,
+    before: &BTreeMap<VaultRelativePath, ParsedNote>,
+    overlay: &BTreeMap<VaultRelativePath, ParsedNote>,
+    access: &mut dyn PolicyInputAccess,
+) -> Result<PolicyDelta> {
+    project_policy_inner(
+        reader,
+        before,
+        overlay,
+        &BTreeSet::new(),
+        access,
+        true,
+        crate::changes::prepare::MAX_OPS,
+    )
 }
 
 /// Sixteen existing Sources can each replace their Source note and create one
@@ -116,6 +139,11 @@ fn project_policy_inner(
     let mut changed = BTreeSet::new();
     for (path, note) in before.iter().chain(overlay) {
         access.work(PolicyWork { steps: 1, bytes: 0 })?;
+        #[cfg(test)]
+        access.work(PolicyWork {
+            steps: 0,
+            bytes: policy_inputs::remap_probe_membership_bytes(note)?,
+        })?;
         changed.extend(policy_inputs::policy_membership_keys(path, note)?);
     }
     let mut delta = PolicyDelta {
@@ -124,6 +152,11 @@ fn project_policy_inner(
         replacements: Vec::new(),
     };
     for (path, note) in overlay {
+        #[cfg(test)]
+        access.work(PolicyWork {
+            steps: 0,
+            bytes: policy_inputs::remap_probe_membership_bytes(note)?,
+        })?;
         delta.memberships.push(PolicyMembershipUpdate {
             path: path.clone(),
             hash: note.source_hash.clone(),
@@ -160,9 +193,10 @@ fn project_policy_inner(
                 }
                 PolicyKind::Review => {
                     let mut meter = |work| access.work(work);
-                    match policy_inputs::attempt_review_policy_metered(
+                    match policy_inputs::attempt_review_policy_metered_for_vault(
                         &notes,
                         &certificates,
+                        QueryCatalog::vault_id(reader),
                         &mut meter,
                     )? {
                         PolicyAttempt::Need(key) => key,

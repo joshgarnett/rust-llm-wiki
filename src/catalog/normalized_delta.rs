@@ -14,6 +14,30 @@ use serde::{Deserialize, Serialize};
 use std::{collections::BTreeSet, io::Write};
 
 pub(crate) const MAX_ROWS: usize = 4096;
+pub(super) const GRAPH_V2_MAX_ROWS: usize = 32768;
+
+/// Not serialized. Only the authenticated GraphV2 producer/replay route may
+/// select the larger envelope; version numbers in a raw delta grant no budget.
+#[derive(Debug, Clone, Copy)]
+pub(super) struct DeltaWriteAllowance {
+    max_rows: usize,
+    combined_old_new: bool,
+}
+impl DeltaWriteAllowance {
+    pub(super) const fn standard() -> Self {
+        Self {
+            max_rows: MAX_ROWS,
+            combined_old_new: false,
+        }
+    }
+    // This internal constructor is wired only after GraphV2 semantic admission.
+    pub(super) const fn authenticated_graph_v2() -> Self {
+        Self {
+            max_rows: GRAPH_V2_MAX_ROWS,
+            combined_old_new: true,
+        }
+    }
+}
 pub(super) const MAX_ROW_BYTES: usize = 8 * 1024 * 1024;
 pub(super) const MAX_DELTA_BYTES: usize = 256 * 1024 * 1024;
 
@@ -85,7 +109,7 @@ pub(crate) struct RevisionIdentityRow {
     pub extractor_fingerprint: Blake3Hash,
     pub extraction_status: String,
 }
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct DeltaStats {
     pub records: usize,
     pub documents: usize,
@@ -100,10 +124,58 @@ pub(crate) struct DeltaStats {
     pub old_fts_bytes: usize,
     pub old_fact_bytes: usize,
     pub fact_rows: usize,
+    #[serde(skip, default = "standard_old_row_limit")]
+    pub(super) old_row_limit: usize,
+}
+
+fn standard_old_row_limit() -> usize {
+    MAX_ROWS
+}
+impl Default for DeltaStats {
+    fn default() -> Self {
+        Self {
+            records: 0,
+            documents: 0,
+            graph_rows: 0,
+            links: 0,
+            diagnostics: 0,
+            claims: 0,
+            revisions: 0,
+            dependencies: 0,
+            owners: 0,
+            old_rows: 0,
+            old_fts_bytes: 0,
+            old_fact_bytes: 0,
+            fact_rows: 0,
+            old_row_limit: MAX_ROWS,
+        }
+    }
+}
+impl DeltaStats {
+    fn for_delta(new_rows: usize, allowance: DeltaWriteAllowance) -> Self {
+        Self {
+            old_row_limit: if allowance.combined_old_new {
+                allowance.max_rows.saturating_sub(new_rows)
+            } else {
+                allowance.max_rows
+            },
+            ..Self::default()
+        }
+    }
 }
 
 impl CatalogDelta {
     pub fn validate(&self) -> Result<()> {
+        self.validate_with_allowance(DeltaWriteAllowance::standard())
+            .map(|_| ())
+    }
+
+    pub(super) fn validate_with_allowance(&self, allowance: DeltaWriteAllowance) -> Result<usize> {
+        if allowance.combined_old_new && self.version != 3 {
+            return Err(invalid(
+                "GraphV2 write allowance requires complete version-three facts and policy",
+            ));
+        }
         if !matches!(
             (self.version, self.facts.is_some()),
             (1, false) | (2 | 3, true)
@@ -130,7 +202,7 @@ impl CatalogDelta {
         let mut admit = |value: &dyn SizedJson| -> Result<()> {
             count = count
                 .checked_add(1)
-                .filter(|n| *n <= MAX_ROWS)
+                .filter(|n| *n <= allowance.max_rows)
                 .ok_or_else(|| budget("catalog delta exceeds row ceiling"))?;
             value.count(MAX_ROW_BYTES)?;
             Ok(())
@@ -323,10 +395,10 @@ impl CatalogDelta {
             }
         }
         if let Some(facts) = &self.facts {
-            facts.validate(self, &mut count)?;
+            facts.validate_with_row_limit(self, &mut count, allowance.max_rows)?;
         }
         counted(self, MAX_DELTA_BYTES)?;
-        Ok(())
+        Ok(count)
     }
 
     /// Check the exact fact layout and access paths before canonical mutation,
@@ -388,10 +460,25 @@ impl CatalogDelta {
         connection: &Connection,
         operation: Option<&crate::changes::indexed_refresh::IndexedWriteOperation>,
     ) -> Result<()> {
+        self.check_before_with_allowance(connection, operation, DeltaWriteAllowance::standard())
+    }
+
+    pub(super) fn check_before_with_allowance(
+        &self,
+        connection: &Connection,
+        operation: Option<&crate::changes::indexed_refresh::IndexedWriteOperation>,
+        allowance: DeltaWriteAllowance,
+    ) -> Result<()> {
+        let new_rows = self.validate_with_allowance(allowance)?;
         self.check_page_move(connection, operation)?;
         self.check_page_deletions(connection, operation)?;
         if let Some(facts) = &self.facts {
-            facts.check_before(connection, self, &mut DeltaStats::default(), operation)?;
+            facts.check_before(
+                connection,
+                self,
+                &mut DeltaStats::for_delta(new_rows, allowance),
+                operation,
+            )?;
         }
         Ok(())
     }
@@ -534,7 +621,16 @@ impl CatalogDelta {
         connection: &Connection,
         operation: Option<&crate::changes::indexed_refresh::IndexedWriteOperation>,
     ) -> Result<DeltaStats> {
-        self.validate()?;
+        self.apply_with_allowance(connection, operation, DeltaWriteAllowance::standard())
+    }
+
+    pub(super) fn apply_with_allowance(
+        &self,
+        connection: &Connection,
+        operation: Option<&crate::changes::indexed_refresh::IndexedWriteOperation>,
+        allowance: DeltaWriteAllowance,
+    ) -> Result<DeltaStats> {
+        let new_rows = self.validate_with_allowance(allowance)?;
         self.require_layout(connection)?;
         if connection.is_autocommit() {
             return Err(invalid("catalog delta requires a publication transaction"));
@@ -542,7 +638,12 @@ impl CatalogDelta {
         connection
             .execute_batch("SAVEPOINT lwiki_catalog_delta")
             .map_err(sql::sql_error)?;
-        let result = self.apply_rows(connection, operation);
+        let result = self.apply_rows(
+            connection,
+            operation,
+            DeltaStats::for_delta(new_rows, allowance),
+            allowance,
+        );
         match result {
             Ok(stats) => {
                 connection
@@ -572,8 +673,9 @@ impl CatalogDelta {
         &self,
         c: &Connection,
         operation: Option<&crate::changes::indexed_refresh::IndexedWriteOperation>,
+        mut stats: DeltaStats,
+        allowance: DeltaWriteAllowance,
     ) -> Result<DeltaStats> {
-        let mut stats = DeltaStats::default();
         self.check_page_move(c, operation)?;
         self.check_page_deletions(c, operation)?;
         if let Some(facts) = &self.facts {
@@ -642,7 +744,11 @@ impl CatalogDelta {
         for owned in &self.links {
             admit_owned(
                 c,
-                "SELECT link_row FROM links WHERE from_path=?1 LIMIT 4097",
+                if allowance.combined_old_new {
+                    "SELECT link_row FROM links WHERE from_path=?1"
+                } else {
+                    "SELECT link_row FROM links WHERE from_path=?1 LIMIT 4097"
+                },
                 owned.path.as_str(),
                 &mut stats,
             )?;
@@ -659,7 +765,11 @@ impl CatalogDelta {
         for owned in &self.diagnostics {
             admit_owned(
                 c,
-                "SELECT diagnostic_row FROM diagnostics WHERE path=?1 LIMIT 4097",
+                if allowance.combined_old_new {
+                    "SELECT diagnostic_row FROM diagnostics WHERE path=?1"
+                } else {
+                    "SELECT diagnostic_row FROM diagnostics WHERE path=?1 LIMIT 4097"
+                },
                 owned.path.as_str(),
                 &mut stats,
             )?;
@@ -685,7 +795,11 @@ impl CatalogDelta {
         for owned in &self.claims {
             admit_owned(
                 c,
-                "SELECT record_id FROM identity_claims INDEXED BY identity_claim_paths WHERE path=?1 LIMIT 4097",
+                if allowance.combined_old_new {
+                    "SELECT record_id FROM identity_claims INDEXED BY identity_claim_paths WHERE path=?1"
+                } else {
+                    "SELECT record_id FROM identity_claims INDEXED BY identity_claim_paths WHERE path=?1 LIMIT 4097"
+                },
                 owned.path.as_str(),
                 &mut stats,
             )?;
@@ -923,7 +1037,7 @@ fn admit_old(
     stats.old_rows = stats
         .old_rows
         .checked_add(1)
-        .filter(|n| *n <= MAX_ROWS)
+        .filter(|n| *n <= stats.old_row_limit)
         .ok_or_else(|| budget("old rows exceed count ceiling"))?;
     Ok(())
 }
@@ -940,7 +1054,7 @@ fn admit_owned(c: &Connection, query: &str, path: &str, stats: &mut DeltaStats) 
         stats.old_rows = stats
             .old_rows
             .checked_add(1)
-            .filter(|n| *n <= MAX_ROWS)
+            .filter(|n| *n <= stats.old_row_limit)
             .ok_or_else(|| budget("owned old rows exceed ceiling"))?;
     }
     Ok(())

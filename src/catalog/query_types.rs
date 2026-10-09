@@ -57,6 +57,19 @@ pub(crate) struct QueryReadUsage {
     pub bytes: usize,
 }
 
+/// Exact immutable ownership tuple. Its ordinal must also agree with the
+/// selected Source manifest; a catalog lookup does not establish freshness.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct SourceRevisionTuple {
+    pub source_id: RecordId,
+    pub revision_id: RecordId,
+    pub retained_ordinal: usize,
+    pub original_hash: Blake3Hash,
+    pub content_hash: Option<Blake3Hash>,
+    pub extractor_fingerprint: Blake3Hash,
+    pub extraction_status: String,
+}
+
 /// Returning owned rows keeps bounded reads fallible instead of hiding a full
 /// projection behind a borrowed reference. The interface makes no freshness claim.
 pub(crate) trait QueryCatalog {

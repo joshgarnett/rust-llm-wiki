@@ -303,6 +303,64 @@ fn header_hash(row: &Row<'_>, column: usize) -> Result<Blake3Hash> {
 }
 
 impl QuerySnapshot {
+    /// Exhaust one exact source/revision key under this reader's cumulative
+    /// budget. Signature matching's first result cannot certify this tuple.
+    pub(crate) fn source_revision_tuple(
+        &self,
+        source: &RecordId,
+        revision: &RecordId,
+    ) -> Result<Option<super::query_types::SourceRevisionTuple>> {
+        self.require_refresh_publication()?;
+        self.reserve_fact_input(
+            source
+                .as_str()
+                .len()
+                .checked_add(revision.as_str().len())
+                .ok_or_else(|| corrupt("revision tuple input size overflow"))?,
+        )?;
+        let mut statement = self.connection.prepare(
+            "SELECT source_id,revision_id,retained_ordinal,original_hash,content_hash,extractor_fingerprint,extraction_status FROM source_revision_identity INDEXED BY sqlite_autoindex_source_revision_identity_1 WHERE source_id=?1 AND revision_id=?2"
+        ).map_err(sql::sql_error)?;
+        let mut rows = statement
+            .query(params![source.as_str(), revision.as_str()])
+            .map_err(sql::sql_error)?;
+        let mut result = None;
+        while let Some(row) = rows.next().map_err(sql::sql_error)? {
+            self.reserve_refresh_row(row, 7)?;
+            if result.is_some()
+                || utf8(text_bytes(row, 0)?)? != source.as_str()
+                || utf8(text_bytes(row, 1)?)? != revision.as_str()
+            {
+                return Err(corrupt(
+                    "exact revision tuple is duplicated or differs from its key",
+                ));
+            }
+            let hash = |column| -> Result<Blake3Hash> {
+                Blake3Hash::new(utf8(text_bytes(row, column)?)?)
+                    .map_err(|error| corrupt(error.message))
+            };
+            let content_hash = match row.get_ref(4).map_err(sql::sql_error)? {
+                ValueRef::Null => None,
+                ValueRef::Text(bytes) => {
+                    Some(Blake3Hash::new(utf8(bytes)?).map_err(|error| corrupt(error.message))?)
+                }
+                _ => return Err(corrupt("revision tuple content hash has invalid SQL type")),
+            };
+            result = Some(super::query_types::SourceRevisionTuple {
+                source_id: source.clone(),
+                revision_id: revision.clone(),
+                retained_ordinal: usize::try_from(row.get::<_, i64>(2).map_err(sql::sql_error)?)
+                    .map_err(|_| corrupt("revision tuple retained ordinal is invalid"))?,
+                original_hash: hash(3)?,
+                content_hash,
+                extractor_fingerprint: hash(5)?,
+                extraction_status: utf8(text_bytes(row, 6)?)?.to_owned(),
+            });
+        }
+        QueryCatalog::check_query_budget(self)?;
+        Ok(result)
+    }
+
     pub(crate) fn verify_operations(&self, catalog: &Catalog) -> Result<()> {
         if let Some(captured) = &self.operation_authority {
             catalog.operation_state()?.ok_or_else(|| {

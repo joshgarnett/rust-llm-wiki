@@ -289,7 +289,19 @@ fn guarded_projection<'a>(
     // Capture only proven inputs under the payload ceiling, then close all fallback reads.
     for dep in deps {
         if !notes.contains_key(&dep.path) {
-            let bytes = crate::changes::prepare::read_bounded(view.fs, &dep.path, SOURCE_CAP)?;
+            let bytes = if view.closed {
+                if view.expected_state(&dep.path)? != dep.expected {
+                    return Err(conflict("closed resolution dependency differs"));
+                }
+                match dep.expected {
+                    ExpectedState::Hash(_) => {
+                        Some(view.read_bounded(&dep.path, &mut BTreeMap::new(), SOURCE_CAP)?)
+                    }
+                    ExpectedState::Absent => None,
+                }
+            } else {
+                crate::changes::prepare::read_bounded(view.fs, &dep.path, SOURCE_CAP)?
+            };
             let state = bytes.as_ref().map_or(ExpectedState::Absent, |b| {
                 ExpectedState::Hash(Blake3Hash::digest(b))
             });
@@ -611,6 +623,25 @@ fn capture_record_paths(
     Ok(paths)
 }
 fn build_draft(view: &SourceView<'_>, validated: &ValidatedResolution) -> Result<ChangeDraft> {
+    build_draft_inner(view, validated, true)
+}
+
+/// Internal diagnostic only: preserves the semantic constructor and its exact
+/// proposed bytes, but cannot grant whole-vault or publication authority to a
+/// selected input. The experiment must inspect the actual policy closure next.
+#[cfg(test)]
+pub(crate) fn build_draft_for_selected_probe(
+    view: &SourceView<'_>,
+    validated: &ValidatedResolution,
+) -> Result<ChangeDraft> {
+    build_draft_inner(view, validated, false)
+}
+
+fn build_draft_inner(
+    view: &SourceView<'_>,
+    validated: &ValidatedResolution,
+    validate_whole_graph: bool,
+) -> Result<ChangeDraft> {
     let before = &validated.extraction.artifact;
     let planned = summary(validated);
     let materialized_evidence: usize = validated
@@ -784,7 +815,9 @@ fn build_draft(view: &SourceView<'_>, validated: &ValidatedResolution) -> Result
             })
             .collect(),
     };
-    crate::catalog::CatalogGraphValidator.validate_closed(view.fs, &input)?;
+    if validate_whole_graph {
+        crate::catalog::CatalogGraphValidator.validate_closed(view.fs, &input)?;
+    }
     Ok(ChangeDraft {
         title: "Resolve explicit source-local mentions".into(),
         origin: None,

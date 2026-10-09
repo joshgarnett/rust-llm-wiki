@@ -51,7 +51,7 @@ pub(crate) fn unrelated(notes: &mut BTreeMap<VaultRelativePath, ParsedNote>) {
         );
     }
 }
-fn receipt_note(receipt: &EntityDecisionReceiptV1) -> ParsedNote {
+pub(crate) fn receipt_note(receipt: &EntityDecisionReceiptV1) -> ParsedNote {
     note(
         "decision",
         "decision_alias",
@@ -64,7 +64,7 @@ fn receipt_note(receipt: &EntityDecisionReceiptV1) -> ParsedNote {
         .unwrap(),
     )
 }
-fn fixture() -> (
+pub(crate) fn fixture() -> (
     BTreeMap<VaultRelativePath, ParsedNote>,
     EntityDecisionReceiptV1,
 ) {
