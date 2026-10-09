@@ -144,6 +144,29 @@ Each unit maps to one canonical structural parent: bounded paragraphs, lists wit
 
 Lexical-only selection uses SQLite tokenization, conservative English suffix normalization and grammatical-word exclusion while preserving negation, restrictions and marked identifiers. It proposes at most32 windows per owner under bounded source scans, including two discovery anchors, and packs by owner rank, local relevance, query-term coverage and actual rendered cost. These heuristics affect neither FTS indexing nor embedding inputs.
 
+Automatic lexical `indexed-documents` requests for document context preserve
+Markdown sections identified by owner and retained heading byte offset. A direct
+section ends at the next retained heading; ancestor headings describe its
+location without duplicating evidence or relevance votes. A fitting section stays
+whole. Longer sections use consecutive bounded children, preserving fitting
+structural groups and disclosing oversized-group clipping. The existing parser
+can retain a nested list and its headings as one structural group; this path does
+not reinterpret headings inside that group. HTML and unstructured content retain
+the preceding window selection behavior.
+
+One fixed representative per relevant section enters the unchanged per-owner
+candidate pool before continuation children. Construction shares a 4,096-attempt
+ceiling across owners, checks the query deadline cooperatively and reports
+`context_source_section_child_cap` when incomplete. Packing uses section relevance
+to rank an unrepresented section, but only an admitted representative unlocks
+its other children. Rejected representatives leave those children omitted as
+`section_representative_not_admitted`. Query coverage counts only actual admitted
+bytes. Every child still undergoes exact rendering, citation, freshness, excerpt
+and four-passages-per-owner checks. Host preparation/replay and other scopes or
+retrieval modes retain their preceding selection behavior. This mechanism does
+not establish complete answers; paired task and citation evaluation remains
+required.
+
 Every admission checks the actual rendered byte/token budget, including metadata and reservations. Source-aware context allows at most four passages per owner, each within the requested excerpt bound; overlapping merges must respect that bound too. Literal mode and graph evidence selection retain their existing contracts. Retrieval order and a fitting structural parent do not establish answer completeness.
 
 Overlapping direct-source quotes consolidate citations to one exact merged span/hash per source revision. Mirrored revisions retain separate references. Assertion-bound evidence and contributing stances are preserved. The final coordinator independently verifies exact bytes, current/historical eligibility and citation dependencies before sealing output. Snapshot-only context remains explicitly unverified and citation-free. The [evaluation protocol](../evaluating-context.md) measures source hits and evidence coverage separately from independently assessed answer completeness.

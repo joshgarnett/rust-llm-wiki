@@ -37,6 +37,20 @@ pub(crate) struct SelectionCandidate {
     pub clipped: bool,
     /// Coarse cached-unit affinity, not a passage embedding or confidence.
     pub semantic_affinity: Option<f64>,
+    /// Request-local structure; never a citation, canonical identity or coverage claim.
+    pub section: Option<SectionSelection>,
+}
+#[derive(Clone, Debug)]
+pub(crate) struct SectionSelection {
+    pub heading_span: ByteSpan,
+    pub section_span: ByteSpan,
+    pub ancestors: Vec<ByteSpan>,
+    pub child_ordinal: usize,
+    pub representative_ordinal: usize,
+    /// Direct-section location features, separate from the cited child's terms.
+    pub covered_terms: Vec<usize>,
+    pub local_relevance: u64,
+    pub seed_overlap: bool,
 }
 pub(crate) struct SelectionOmission {
     pub owner_index: usize,
@@ -69,11 +83,48 @@ struct Block {
     kind: BlockKind,
     terms: Vec<usize>,
     clipped: bool,
+    heading_level: Option<u8>,
 }
 struct OwnerBlocks<'a> {
     parent: &'a Parent<'a>,
     blocks: Vec<Block>,
     fallback_windows: Vec<(Range<usize>, Vec<usize>)>,
+    structural_end: usize,
+}
+
+pub(crate) fn select_section_candidates(
+    reader: &dyn QueryCatalog,
+    query: &str,
+    documents: &[SelectionDocument<'_>],
+    max_excerpt_bytes: usize,
+) -> Result<SelectionResult> {
+    reader.check_query_budget()?;
+    let parents = documents
+        .iter()
+        .map(|input| Parent {
+            owner: input.owner_index,
+            raw: input.document.raw_text.as_str(),
+            body: if input.document.owner_revision.is_some() {
+                0
+            } else {
+                note_body_start(&input.document.raw_text)
+            },
+            anchors: input.seed_spans,
+            semantic: vec![],
+        })
+        .collect::<Vec<_>>();
+    let tokenizer = Tokenizer::new(reader.connection())?;
+    let check = || reader.check_query_budget();
+    let result = select_with_sections_checked(
+        &tokenizer,
+        query,
+        &parents,
+        max_excerpt_bytes,
+        true,
+        Some(&check),
+    )?;
+    reader.check_query_budget()?;
+    Ok(result)
 }
 
 pub(crate) fn select_candidates_with_semantics(
@@ -399,16 +450,16 @@ fn structural_blocks(
     end: usize,
     limit: usize,
 ) -> (Vec<Block>, bool, usize) {
-    let mut spans = BTreeMap::<(usize, usize), BlockKind>::new();
+    let mut spans = BTreeMap::<(usize, usize), (BlockKind, Option<u8>)>::new();
     let mut limited = false;
     let mut scanned = 0;
     for (event, range) in Parser::new(&raw[start..end]).into_offset_iter() {
-        let kind = match event {
-            Event::Start(Tag::Heading { .. }) => BlockKind::Heading,
-            Event::Start(Tag::Paragraph) => BlockKind::Prose,
-            Event::Start(Tag::CodeBlock(_)) => BlockKind::Code,
-            Event::Start(Tag::List(_)) => BlockKind::List,
-            Event::Start(Tag::Item) => BlockKind::Other,
+        let (kind, heading_level) = match event {
+            Event::Start(Tag::Heading { level, .. }) => (BlockKind::Heading, Some(level as u8)),
+            Event::Start(Tag::Paragraph) => (BlockKind::Prose, None),
+            Event::Start(Tag::CodeBlock(_)) => (BlockKind::Code, None),
+            Event::Start(Tag::List(_)) => (BlockKind::List, None),
+            Event::Start(Tag::Item) => (BlockKind::Other, None),
             _ => continue,
         };
         let range = range.start + start..range.end + start;
@@ -420,7 +471,9 @@ fn structural_blocks(
             break;
         }
         scanned += 1;
-        spans.entry((range.start, range.end)).or_insert(kind);
+        spans
+            .entry((range.start, range.end))
+            .or_insert((kind, heading_level));
     }
     let mut blocks = Vec::<Block>::new();
     let mut spans = spans.into_iter().collect::<Vec<_>>();
@@ -429,7 +482,7 @@ fn structural_blocks(
     spans.sort_by(|((a_start, a_end), _), ((b_start, b_end), _)| {
         a_start.cmp(b_start).then(b_end.cmp(a_end))
     });
-    for ((begin, finish), kind) in spans {
+    for ((begin, finish), (kind, heading_level)) in spans {
         // A list/item already contains its nested paragraphs and commands.
         if blocks
             .last()
@@ -442,6 +495,7 @@ fn structural_blocks(
             kind,
             terms: vec![],
             clipped: finish == end && end < raw.len(),
+            heading_level,
         });
     }
     if blocks.is_empty() && start < end && limit > 0 {
@@ -450,6 +504,7 @@ fn structural_blocks(
             kind: BlockKind::Prose,
             terms: vec![],
             clipped: end < raw.len(),
+            heading_level: None,
         });
     }
     (blocks, limited, scanned)
@@ -469,6 +524,7 @@ fn teaching_blocks(mut blocks: Vec<Block>, bytes: usize) -> Vec<Block> {
                 kind: BlockKind::Other,
                 terms: vec![],
                 clipped: false,
+                heading_level: None,
             },
         );
         let follows_teaching = block.kind == BlockKind::Prose
@@ -612,6 +668,372 @@ fn select(
     parents: &[Parent<'_>],
     bytes: usize,
 ) -> Result<SelectionResult> {
+    select_with_sections(tokenizer, query, parents, bytes, false)
+}
+
+// Partition once, rather than manufacturing overlapping windows around each
+// occurrence. A fitting teaching group is indivisible; only oversized groups
+// may continue into adjacent clipped children.
+fn section_ranges(
+    raw: &str,
+    blocks: &[Block],
+    section: Range<usize>,
+    bytes: usize,
+    constructed: &mut usize,
+    check: Option<&dyn Fn() -> Result<()>>,
+) -> Result<(Vec<(Range<usize>, bool)>, bool, bool)> {
+    check_selection_budget(check)?;
+    if section.len() <= bytes {
+        if !reserve_section_child(constructed, check)? {
+            return Ok((vec![], false, true));
+        }
+        return Ok((
+            vec![(section, blocks.iter().any(|block| block.clipped))],
+            false,
+            false,
+        ));
+    }
+    let mut ranges = Vec::new();
+    let mut pending: Option<(Range<usize>, bool)> = None;
+    let mut unrepresentable = false;
+    for (index, block) in blocks.iter().enumerate() {
+        if index % 64 == 0 {
+            check_selection_budget(check)?;
+        }
+        if block.range.len() > bytes {
+            if let Some(previous) = pending.take() {
+                if !reserve_section_child(constructed, check)? {
+                    return Ok((ranges, unrepresentable, true));
+                }
+                ranges.push(previous);
+            }
+            let mut start = block.range.start;
+            while start < block.range.end {
+                if !reserve_section_child(constructed, check)? {
+                    return Ok((ranges, unrepresentable, true));
+                }
+                let maximum =
+                    boundary_before(raw, start.saturating_add(bytes).min(block.range.end));
+                if maximum == start {
+                    // An excerpt smaller than one UTF-8 scalar cannot cite it.
+                    // Advance without inventing bytes or exceeding the cap.
+                    start += raw[start..]
+                        .chars()
+                        .next()
+                        .expect("within block")
+                        .len_utf8();
+                    unrepresentable = true;
+                    continue;
+                }
+                let end = if maximum < block.range.end {
+                    raw[start..maximum]
+                        .rfind('\n')
+                        .map_or(maximum, |line| start + line + 1)
+                } else {
+                    maximum
+                };
+                ranges.push((start..end, true));
+                start = end;
+            }
+            continue;
+        }
+        if let Some((range, clipped)) = pending.as_mut()
+            && block.range.end - range.start <= bytes
+        {
+            range.end = block.range.end;
+            *clipped |= block.clipped;
+        } else {
+            if let Some(previous) = pending.take() {
+                if !reserve_section_child(constructed, check)? {
+                    return Ok((ranges, unrepresentable, true));
+                }
+                ranges.push(previous);
+            }
+            pending = Some((block.range.clone(), block.clipped));
+        }
+    }
+    if let Some(previous) = pending {
+        if !reserve_section_child(constructed, check)? {
+            return Ok((ranges, unrepresentable, true));
+        }
+        ranges.push(previous);
+    }
+    Ok((ranges, unrepresentable, false))
+}
+
+fn check_selection_budget(check: Option<&dyn Fn() -> Result<()>>) -> Result<()> {
+    if let Some(check) = check {
+        check()?;
+    }
+    Ok(())
+}
+
+fn reserve_section_child(
+    constructed: &mut usize,
+    check: Option<&dyn Fn() -> Result<()>>,
+) -> Result<bool> {
+    if *constructed % 64 == 0 {
+        check_selection_budget(check)?;
+    }
+    if *constructed == MAX_BLOCKS {
+        return Ok(false);
+    }
+    *constructed += 1;
+    Ok(true)
+}
+
+fn section_children(
+    tokenizer: &Tokenizer<'_>,
+    owner: &OwnerBlocks<'_>,
+    terms: &BTreeMap<String, usize>,
+    weights: &[u64],
+    bytes: usize,
+    constructed: &mut usize,
+    check: Option<&dyn Fn() -> Result<()>>,
+) -> Result<(Vec<SelectionCandidate>, bool, bool)> {
+    let parent = owner.parent;
+    let headings = owner
+        .blocks
+        .iter()
+        .enumerate()
+        .filter(|(_, block)| block.kind == BlockKind::Heading)
+        .map(|(index, _)| index)
+        .collect::<Vec<_>>();
+    let mut ancestors = Vec::<(u8, ByteSpan)>::new();
+    let mut candidates = Vec::new();
+    let mut unrepresentable = false;
+    let mut construction_limited = false;
+    for (position, &index) in headings.iter().enumerate() {
+        check_selection_budget(check)?;
+        let heading = &owner.blocks[index];
+        let level = heading.heading_level.expect("heading level recorded");
+        ancestors.retain(|(ancestor_level, _)| *ancestor_level < level);
+        let heading_span = ByteSpan::new(heading.range.start as u64, heading.range.end as u64)?;
+        ancestors.push((level, heading_span));
+        let next = headings
+            .get(position + 1)
+            .copied()
+            .unwrap_or(owner.blocks.len());
+        let end = headings
+            .get(position + 1)
+            .map_or(owner.structural_end, |&next| owner.blocks[next].range.start);
+        let section_span = ByteSpan::new(heading.range.start as u64, end as u64)?;
+        let blocks = &owner.blocks[index..next];
+        let covered_terms = blocks
+            .iter()
+            .flat_map(|block| block.terms.iter().copied())
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect::<Vec<_>>();
+        let local_relevance: u64 = covered_terms.iter().map(|&term| weights[term]).sum();
+        let seed_overlap = parent.anchors.iter().any(|anchor| {
+            anchor.start() < section_span.end() && section_span.start() < anchor.end()
+        });
+        if local_relevance == 0 && !seed_overlap {
+            continue;
+        }
+        let (ranges, missing, limited) = section_ranges(
+            parent.raw,
+            blocks,
+            heading.range.start..end,
+            bytes,
+            constructed,
+            check,
+        )?;
+        unrepresentable |= missing;
+        construction_limited |= limited;
+        let mut children = Vec::new();
+        for (child_ordinal, (range, clipped)) in ranges.into_iter().enumerate() {
+            if child_ordinal % 64 == 0 {
+                check_selection_budget(check)?;
+            }
+            // Markup alone cannot spend a passage slot, including a child
+            // produced by splitting a very small excerpt allowance.
+            if SourceMap::markdown(&parent.raw[..range.end], range.start)
+                .text
+                .trim()
+                .is_empty()
+            {
+                continue;
+            }
+            let span = ByteSpan::new(range.start as u64, range.end as u64)?;
+            let actual_terms = matched_terms(tokenizer, parent.raw, range, terms)?;
+            children.push(SelectionCandidate {
+                owner_index: parent.owner,
+                span,
+                local_relevance: actual_terms.iter().map(|&term| weights[term]).sum(),
+                covered_terms: actual_terms,
+                seed_overlap: parent
+                    .anchors
+                    .iter()
+                    .any(|anchor| anchor.start() < span.end() && span.start() < anchor.end()),
+                clipped,
+                semantic_affinity: None,
+                section: Some(SectionSelection {
+                    heading_span,
+                    section_span,
+                    ancestors: ancestors.iter().map(|&(_, span)| span).collect(),
+                    child_ordinal,
+                    representative_ordinal: 0,
+                    covered_terms: covered_terms.clone(),
+                    local_relevance,
+                    seed_overlap,
+                }),
+            });
+        }
+        let representative = children.iter().max_by(|a, b| {
+            a.local_relevance
+                .cmp(&b.local_relevance)
+                .then(b.clipped.cmp(&a.clipped))
+                .then(b.span.start().cmp(&a.span.start()))
+                .then(b.span.end().cmp(&a.span.end()))
+        });
+        if let Some(representative) = representative {
+            let ordinal = representative
+                .section
+                .as_ref()
+                .expect("section child")
+                .child_ordinal;
+            for child in &mut children {
+                child
+                    .section
+                    .as_mut()
+                    .expect("section child")
+                    .representative_ordinal = ordinal;
+            }
+        }
+        candidates.extend(children);
+        if limited {
+            break;
+        }
+    }
+    check_selection_budget(check)?;
+    Ok((candidates, unrepresentable, construction_limited))
+}
+
+fn section_pool(
+    candidates: Vec<SelectionCandidate>,
+    weights: &[u64],
+    check: Option<&dyn Fn() -> Result<()>>,
+) -> Result<(Vec<SelectionCandidate>, bool)> {
+    let mut representatives = Vec::new();
+    let mut continuations = Vec::new();
+    for (index, candidate) in candidates.into_iter().enumerate() {
+        if index % 64 == 0 {
+            check_selection_budget(check)?;
+        }
+        if candidate
+            .section
+            .as_ref()
+            .is_none_or(|section| section.child_ordinal == section.representative_ordinal)
+        {
+            representatives.push(candidate);
+        } else {
+            continuations.push(candidate);
+        }
+    }
+    let relevance = |candidate: &SelectionCandidate| {
+        candidate
+            .section
+            .as_ref()
+            .map_or(candidate.local_relevance, |section| section.local_relevance)
+    };
+    let seed = |candidate: &SelectionCandidate| {
+        candidate
+            .section
+            .as_ref()
+            .map_or(candidate.seed_overlap, |section| section.seed_overlap)
+    };
+    let position = |candidate: &SelectionCandidate| {
+        candidate
+            .section
+            .as_ref()
+            .map_or(candidate.span.start(), |section| {
+                section.heading_span.start()
+            })
+    };
+    representatives.sort_by(|a, b| {
+        relevance(b)
+            .cmp(&relevance(a))
+            .then(seed(b).cmp(&seed(a)))
+            .then(position(a).cmp(&position(b)))
+            .then(a.span.end().cmp(&b.span.end()))
+    });
+    check_selection_budget(check)?;
+    let total = representatives.len() + continuations.len();
+    representatives.truncate(MAX_CANDIDATES);
+    let admitted = representatives
+        .iter()
+        .filter_map(|candidate| {
+            candidate
+                .section
+                .as_ref()
+                .map(|section| section.heading_span.start())
+        })
+        .collect::<BTreeSet<_>>();
+    // Never retain a continuation whose sole nominee was excluded by the cap.
+    continuations.retain(|candidate| {
+        admitted.contains(
+            &candidate
+                .section
+                .as_ref()
+                .expect("continuation section")
+                .heading_span
+                .start(),
+        )
+    });
+    let mut covered = representatives
+        .iter()
+        .flat_map(|candidate| candidate.covered_terms.iter().copied())
+        .collect::<BTreeSet<_>>();
+    while representatives.len() < MAX_CANDIDATES && !continuations.is_empty() {
+        check_selection_budget(check)?;
+        let gain = |candidate: &SelectionCandidate| {
+            candidate
+                .covered_terms
+                .iter()
+                .filter(|term| !covered.contains(*term))
+                .map(|&term| weights[term])
+                .sum::<u64>()
+        };
+        let best = (0..continuations.len())
+            .max_by(|&a, &b| {
+                let a = &continuations[a];
+                let b = &continuations[b];
+                gain(a)
+                    .cmp(&gain(b))
+                    .then(relevance(a).cmp(&relevance(b)))
+                    .then(b.clipped.cmp(&a.clipped))
+                    .then(b.span.start().cmp(&a.span.start()))
+                    .then(b.span.end().cmp(&a.span.end()))
+            })
+            .expect("nonempty continuations");
+        let candidate = continuations.remove(best);
+        covered.extend(candidate.covered_terms.iter().copied());
+        representatives.push(candidate);
+    }
+    Ok((representatives, total > MAX_CANDIDATES))
+}
+
+fn select_with_sections(
+    tokenizer: &Tokenizer<'_>,
+    query: &str,
+    parents: &[Parent<'_>],
+    bytes: usize,
+    preserve_sections: bool,
+) -> Result<SelectionResult> {
+    select_with_sections_checked(tokenizer, query, parents, bytes, preserve_sections, None)
+}
+
+fn select_with_sections_checked(
+    tokenizer: &Tokenizer<'_>,
+    query: &str,
+    parents: &[Parent<'_>],
+    bytes: usize,
+    preserve_sections: bool,
+    check: Option<&dyn Fn() -> Result<()>>,
+) -> Result<SelectionResult> {
+    check_selection_budget(check)?;
     if bytes == 0 || bytes > 2048 {
         return Err(WikiError::invalid(
             "context selection excerpt bound must be 1..=2048 bytes",
@@ -628,6 +1050,7 @@ fn select(
     let mut owners = Vec::new();
     let mut frequencies = vec![0usize; terms.len()];
     for parent in parents {
+        check_selection_budget(check)?;
         if parent.body > parent.raw.len() || !parent.raw.is_char_boundary(parent.body) {
             return Err(WikiError::invalid(
                 "context selection body boundary invalid",
@@ -667,8 +1090,16 @@ fn select(
                 reason: "context_source_scan_block_cap",
             });
         }
+        let structural_end = if block_limit {
+            blocks.last().map_or(parent.body, |block| block.range.end)
+        } else {
+            end
+        };
         let mut blocks = teaching_blocks(blocks, bytes);
-        for block in &mut blocks {
+        for (index, block) in blocks.iter_mut().enumerate() {
+            if index % 64 == 0 {
+                check_selection_budget(check)?;
+            }
             block.terms = matched_terms(tokenizer, parent.raw, block.range.clone(), &terms)?;
             for &term in &block.terms {
                 frequencies[term] += 1;
@@ -705,6 +1136,7 @@ fn select(
             parent,
             blocks,
             fallback_windows,
+            structural_end,
         });
     }
     let total_blocks: usize = owners.iter().map(|owner| owner.blocks.len()).sum();
@@ -719,8 +1151,19 @@ fn select(
             }
         })
         .collect();
+    let mut constructed = 0;
     for owner in owners {
+        check_selection_budget(check)?;
         let parent = owner.parent;
+        let first_heading = preserve_sections
+            .then(|| {
+                owner
+                    .blocks
+                    .iter()
+                    .find(|block| block.kind == BlockKind::Heading)
+            })
+            .flatten()
+            .map(|block| block.range.start);
         let mut proposals = BTreeMap::<(usize, usize), SelectionCandidate>::new();
         let mut propose =
             |range: Range<usize>, covered_terms: Vec<usize>, clipped: bool| -> Result<()> {
@@ -754,6 +1197,7 @@ fn select(
                     seed_overlap,
                     clipped,
                     semantic_affinity: affinity(span, &parent.semantic),
+                    section: None,
                 };
                 proposals
                     .entry((range.start, range.end))
@@ -762,6 +1206,12 @@ fn select(
                 Ok(())
             };
         for (index, block) in owner.blocks.iter().enumerate() {
+            if index % 64 == 0 {
+                check_selection_budget(check)?;
+            }
+            if first_heading.is_some_and(|start| block.range.start >= start) {
+                continue;
+            }
             if block.range.len() > bytes {
                 let map = SourceMap::markdown(&parent.raw[..block.range.end], block.range.start);
                 let mut anchors = tokenizer
@@ -839,8 +1289,59 @@ fn select(
         }
         // Preserve semantic discovery when the query is a paraphrase, when its
         // terms are absent, or when bounded source scanning misses an anchor.
-        for (range, matched) in owner.fallback_windows {
-            propose(range, matched, true)?;
+        for (range, matched) in &owner.fallback_windows {
+            if let Some(start) = first_heading
+                && range.start < owner.structural_end
+                && range.end > start
+            {
+                // Only the in-section piece is already represented. Preserve
+                // exact outside pieces inside this already charged byte window.
+                for outside in [
+                    range.start..range.end.min(start),
+                    range.start.max(owner.structural_end)..range.end,
+                ] {
+                    if !outside.is_empty() {
+                        check_selection_budget(check)?;
+                        let matched =
+                            matched_terms(tokenizer, parent.raw, outside.clone(), &terms)?;
+                        propose(outside, matched, true)?;
+                    }
+                }
+                continue;
+            }
+            propose(range.clone(), matched.clone(), true)?;
+        }
+        if first_heading.is_some() {
+            let (section_candidates, unrepresentable, construction_limited) = section_children(
+                tokenizer,
+                &owner,
+                &terms,
+                &result.term_weights,
+                bytes,
+                &mut constructed,
+                check,
+            )?;
+            if unrepresentable {
+                result.omissions.push(SelectionOmission {
+                    owner_index: parent.owner,
+                    reason: "context_source_excerpt_byte_cap",
+                });
+            }
+            if construction_limited {
+                result.omissions.push(SelectionOmission {
+                    owner_index: parent.owner,
+                    reason: "context_source_section_child_cap",
+                });
+            }
+            for candidate in section_candidates {
+                proposals.insert(
+                    (
+                        candidate.span.start() as usize,
+                        candidate.span.end() as usize,
+                    ),
+                    candidate,
+                );
+            }
         }
         let mut candidates = proposals
             .into_values()
@@ -848,8 +1349,23 @@ fn select(
                 candidate.local_relevance > 0
                     || candidate.seed_overlap
                     || candidate.semantic_affinity.is_some()
+                    || candidate
+                        .section
+                        .as_ref()
+                        .is_some_and(|section| section.local_relevance > 0 || section.seed_overlap)
             })
             .collect::<Vec<_>>();
+        if first_heading.is_some() {
+            let (kept, capped) = section_pool(candidates, &result.term_weights, check)?;
+            if capped {
+                result.omissions.push(SelectionOmission {
+                    owner_index: parent.owner,
+                    reason: "context_source_candidate_cap",
+                });
+            }
+            result.candidates.extend(kept);
+            continue;
+        }
         candidates.sort_by(|a, b| {
             semantic_strength(b).total_cmp(&semantic_strength(a)).then(
                 b.local_relevance
@@ -934,6 +1450,10 @@ fn select(
     }
     Ok(result)
 }
+
+#[cfg(test)]
+#[path = "section_context_selection_tests.rs"]
+mod section_context_selection_tests;
 
 #[cfg(test)]
 mod tests {

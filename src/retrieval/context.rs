@@ -1265,13 +1265,26 @@ fn assemble_inner_with_evidence(
             )
             .collect::<Vec<_>>();
         if signals.semantic.is_empty() || !signals.semantic_complete {
-            let selection = super::context_selection::select_candidates_with_semantics(
-                reader,
-                query.expect("source-aware query"),
-                &documents,
-                request.documents.limits.excerpt_bytes,
-                &[],
-            )?;
+            let selection = if request.scope == ContextScope::IndexedDocuments
+                && request.target == ContextTarget::Documents
+                && request.documents.mode == SearchMode::Lexical
+                && matches!(selection_action, SelectionAction::Automatic)
+            {
+                super::context_selection::select_section_candidates(
+                    reader,
+                    query.expect("source-aware query"),
+                    &documents,
+                    request.documents.limits.excerpt_bytes,
+                )?
+            } else {
+                super::context_selection::select_candidates_with_semantics(
+                    reader,
+                    query.expect("source-aware query"),
+                    &documents,
+                    request.documents.limits.excerpt_bytes,
+                    &[],
+                )?
+            };
             term_weights = selection.term_weights;
             for omission in selection.omissions {
                 let hit = &hits.hits[omission.owner_index];
@@ -1683,6 +1696,7 @@ pub(super) struct PackingInput<'a> {
 }
 
 /// Existing adaptive packet priority, shared with the bounded diagnostic.
+#[cfg(test)]
 pub(super) fn packet_utility(
     packet: &Packet,
     covered_terms: &[bool],
@@ -1691,20 +1705,51 @@ pub(super) fn packet_utility(
     rendered_cost: usize,
     best_affinity: f64,
 ) -> f64 {
+    packet_utility_for_section(
+        packet,
+        covered_terms,
+        term_weights,
+        total_weight,
+        rendered_cost,
+        best_affinity,
+        false,
+    )
+}
+
+fn packet_utility_for_section(
+    packet: &Packet,
+    covered_terms: &[bool],
+    term_weights: &[u64],
+    total_weight: f64,
+    rendered_cost: usize,
+    best_affinity: f64,
+    section_unseen: bool,
+) -> f64 {
     if let Some(score) = packet.unit_score {
         return score;
     }
     let Some(candidate) = &packet.selection else {
         return packet.score;
     };
-    let novel = candidate
-        .covered_terms
+    // Section relevance locates governing material; only admitted child terms
+    // establish coverage. The original utility remains unchanged otherwise.
+    let section = candidate.section.as_ref().filter(|_| section_unseen);
+    let ranking_terms = section
+        .map(|section| section.covered_terms.as_slice())
+        .unwrap_or(&candidate.covered_terms);
+    let local_relevance = section
+        .map(|section| section.local_relevance)
+        .unwrap_or(candidate.local_relevance);
+    let seed_overlap = section
+        .map(|section| section.seed_overlap)
+        .unwrap_or(candidate.seed_overlap);
+    let novel = ranking_terms
         .iter()
         .filter(|&&t| !covered_terms[t])
         .map(|&t| term_weights[t])
         .sum::<u64>() as f64
         / total_weight;
-    let local = candidate.local_relevance as f64 / total_weight;
+    let local = local_relevance as f64 / total_weight;
     // Include the actual standalone reference/header cost. Tiny
     // fragments must not gain priority merely by being short. Final
     // admission still measures the fully coalesced rendered result.
@@ -1720,7 +1765,7 @@ pub(super) fn packet_utility(
         };
         (0.05 + relative.powi(4)) * (1.0 + 0.25 * novel + 0.5 * local)
     } else {
-        (0.25 + 2.0 * novel + 0.5 * local + if candidate.seed_overlap { 0.05 } else { 0.0 })
+        (0.25 + 2.0 * novel + 0.5 * local + if seed_overlap { 0.05 } else { 0.0 })
             * if best_affinity > 0.0 { 0.15 } else { 1.0 }
     };
     packet.score * relevance * density * if candidate.clipped { 0.7 } else { 1.0 }
@@ -1975,24 +2020,66 @@ pub(super) fn pack(
                 .and_then(|candidate| candidate.semantic_affinity)
         })
         .fold(0.0f64, f64::max);
+    let mut represented_sections = BTreeSet::<(usize, u64)>::new();
     while !packets.is_empty() {
+        let section_identity = |packet: &Packet| {
+            packet.selection.as_ref().and_then(|candidate| {
+                candidate
+                    .section
+                    .as_ref()
+                    .map(|section| (candidate.owner_index, section.heading_span.start()))
+            })
+        };
         let utility = |packet: &Packet| {
-            packet_utility(
+            packet_utility_for_section(
                 packet,
                 &covered_terms,
                 &term_weights,
                 total_weight,
                 rendered_costs.get(&packet.key).copied().unwrap_or(1),
                 best_affinity,
+                section_identity(packet)
+                    .is_some_and(|identity| !represented_sections.contains(&identity)),
             )
         };
         let best = (0..packets.len())
+            .filter(|&index| {
+                let packet = &packets[index];
+                packet.selection.as_ref().is_none_or(|candidate| {
+                    candidate.section.as_ref().is_none_or(|section| {
+                        section.child_ordinal == section.representative_ordinal
+                            || represented_sections
+                                .contains(&(candidate.owner_index, section.heading_span.start()))
+                    })
+                })
+            })
             .max_by(|&a, &b| {
                 utility(&packets[a])
                     .total_cmp(&utility(&packets[b]))
                     .then_with(|| packets[b].key.cmp(&packets[a].key))
-            })
-            .expect("nonempty packets");
+            });
+        let Some(best) = best else {
+            // A refused representative cannot be bypassed by an unrelated,
+            // cheaper child that inherited the section's relevance.
+            omissions.extend(packets.drain(..).map(|packet| {
+                ContextOmission {
+                    record_id: packet.passages.first().and_then(|passage| {
+                        passage
+                            .locator
+                            .record
+                            .as_ref()
+                            .map(|record| record.record_id.clone())
+                    }),
+                    path: packet
+                        .passages
+                        .first()
+                        .map(|passage| passage.locator.path.clone()),
+                    reason: "section_representative_not_admitted".into(),
+                    count: 1,
+                }
+            }));
+            break;
+        };
         let mut packet = packets.remove(best);
         #[cfg(test)]
         let lineage_identity = packet_lineage_identity(&packet);
@@ -2203,6 +2290,9 @@ pub(super) fn pack(
             continue;
         }
         if let Some(candidate) = &packet.selection {
+            if let Some(section) = &candidate.section {
+                represented_sections.insert((candidate.owner_index, section.heading_span.start()));
+            }
             for &term in &candidate.covered_terms {
                 covered_terms[term] = true;
             }

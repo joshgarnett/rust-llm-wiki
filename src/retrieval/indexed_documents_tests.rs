@@ -562,6 +562,7 @@ impl TraceCandidate {
             seed_overlap: self.seed_overlap,
             clipped: self.clipped,
             semantic_affinity: self.semantic_affinity,
+            section: None,
         }
     }
 }
@@ -1653,6 +1654,7 @@ fn coverage_relevance_uses_frozen_weights_and_exact_coordinate_identity() {
         seed_overlap: true,
         clipped: true,
         semantic_affinity: None,
+        section: None,
     };
     assert!((coverage_relevance(0.2, &candidate, &[2, 3]) - 0.182).abs() < 1e-12);
     let fixture = Fixture::new();

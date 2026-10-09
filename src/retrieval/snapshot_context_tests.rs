@@ -742,3 +742,177 @@ fn normalized_snapshot_refuses_changed_vault_identity_before_cache_read() {
             .contains("vault identity changed")
     );
 }
+
+#[test]
+fn refused_section_representative_cannot_be_bypassed_by_a_cheaper_child() {
+    // Authentic native cards provide exact captured passages and citations.
+    // Inject an internal section plan to challenge allocation under a budget
+    // where its representative cannot fit but a smaller child could.
+    let fixture = Fixture::new();
+    let query = "operationsprobe blue maintenance background";
+    let mut prepared_request = ContextRequest::default();
+    prepared_request.documents.filters.source_ids = vec![fixture.sources[0].clone()];
+    prepared_request.documents.limits.excerpt_bytes = 512;
+    prepared_request.verification_budget.max_elapsed_ms = 30_000;
+    let prepared = verification::context_with_options(
+        &fixture.catalog,
+        None,
+        query,
+        &prepared_request,
+        &ContextOptions {
+            selection: SelectionAction::Prepare,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    fixture.publish();
+    let reader = fixture
+        .catalog
+        .cached_query_snapshot(QueryReadLimits::default())
+        .unwrap();
+    let cards = &prepared.selection_packet().unwrap().cards;
+    let first = cards
+        .iter()
+        .find(|card| card.passage.label == ExcerptLabel::CapturedSource)
+        .unwrap();
+    let document = reader
+        .document(&first.passage.locator.path)
+        .unwrap()
+        .unwrap();
+    let section_end = document.raw_text.find("# Retry").unwrap() as u64;
+    let same_section = cards
+        .iter()
+        .filter(|card| {
+            card.passage.locator.path == first.passage.locator.path
+                && card.passage.span.end() <= section_end
+        })
+        .collect::<Vec<_>>();
+    let large = &same_section
+        .iter()
+        .max_by_key(|card| card.passage.text.len())
+        .unwrap()
+        .passage;
+    let small = &same_section
+        .iter()
+        .min_by_key(|card| card.passage.text.len())
+        .unwrap()
+        .passage;
+    let large_cost = render(
+        &reader,
+        ContextScope::IndexedDocuments,
+        std::slice::from_ref(large),
+        &[],
+        &[],
+    )
+    .unwrap()
+    .0
+    .len();
+    let small_cost = render(
+        &reader,
+        ContextScope::IndexedDocuments,
+        std::slice::from_ref(small),
+        &[],
+        &[],
+    )
+    .unwrap()
+    .0
+    .len();
+    assert!(large_cost > small_cost);
+    let mut request = prepared_request;
+    request.scope = ContextScope::IndexedDocuments;
+    request.target = ContextTarget::Documents;
+    let hits = crate::retrieval::lexical::search_context_catalog(
+        &reader,
+        query,
+        &request.documents,
+        false,
+    )
+    .unwrap();
+    let signals = ContextSelectionSignals::default();
+    let section = |ordinal| super::super::context_selection::SectionSelection {
+        heading_span: ByteSpan::new(0, "# Operations\n".len() as u64).unwrap(),
+        section_span: ByteSpan::new(0, section_end).unwrap(),
+        ancestors: vec![ByteSpan::new(0, "# Operations\n".len() as u64).unwrap()],
+        child_ordinal: ordinal,
+        representative_ordinal: 0,
+        covered_terms: vec![0],
+        local_relevance: 1,
+        seed_overlap: false,
+    };
+    let packet = |passage: &ContextPassage, ordinal| Packet {
+        passages: vec![passage.clone()],
+        bundle: None,
+        navigation: None,
+        key: format!("section-test-{ordinal}"),
+        score: 1.0,
+        selection_ordinal: None,
+        selection: Some(super::super::context_selection::SelectionCandidate {
+            owner_index: 0,
+            span: passage.span,
+            covered_terms: vec![0],
+            local_relevance: 1,
+            seed_overlap: false,
+            clipped: false,
+            semantic_affinity: None,
+            section: Some(section(ordinal)),
+        }),
+        unit_score: None,
+        unit_origin: None,
+        fallback: None,
+        unit_clipped: false,
+    };
+    let run = |request: &ContextRequest, packets| {
+        pack(
+            &reader,
+            request,
+            PackingInput {
+                packets,
+                omissions: vec![],
+                term_weights: vec![1],
+                selection_warnings: vec![],
+                source_aware: true,
+                query: Some(query),
+                signals: &signals,
+                selection_action: &SelectionAction::Automatic,
+                hits: &hits,
+                graph: None,
+                dependency_fingerprint: prepared.dependency_fingerprint().clone(),
+                evidence_sets: None,
+            },
+        )
+        .unwrap()
+    };
+    request.budget.max_bytes = small_cost;
+    request.budget.max_tokens = small_cost.div_ceil(4);
+    let refused = run(&request, vec![packet(small, 1), packet(large, 0)]);
+    assert!(refused.passages.is_empty());
+    assert!(
+        refused
+            .omissions
+            .iter()
+            .any(|omission| omission.reason == "section_representative_not_admitted")
+    );
+    // An ordinary unstructured packet with the same exact smaller passage fits,
+    // proving the refusal came from the section entry invariant, not the budget.
+    let mut ordinary = packet(small, 1);
+    ordinary.selection.as_mut().unwrap().section = None;
+    let ordinary = run(&request, vec![ordinary]);
+    assert_eq!(ordinary.passages, vec![small.clone()]);
+    assert_eq!(ordinary.passages[0].citations, small.citations);
+    request.budget.max_bytes = 12_000;
+    request.budget.max_tokens = 3_000;
+    let accepted = run(&request, vec![packet(small, 1), packet(large, 0)]);
+    assert!(
+        accepted
+            .passages
+            .iter()
+            .any(|passage| passage.span.start() <= large.span.start()
+                && passage.span.end() >= large.span.end())
+    );
+    assert!(
+        !accepted
+            .omissions
+            .iter()
+            .any(|omission| omission.reason == "section_representative_not_admitted")
+    );
+}
