@@ -46,6 +46,19 @@ Plain lexical queries split on Unicode whitespace; double embedded `"`, quote ea
 
 Constrain every FTS query to the read generation and apply kind/path/status filters before limits. Rank by `bm25(documents_fts, 8, 6, 3, 2, 1, 0, 0)` ascending, then canonical ID or locator path; final columns are unindexed generation/document keys. Exact ID lookup precedes FTS; exact title/alias lookup supplies a separate ranking without asserting identity. Derive excerpts only for selected documents using tokenizer/parser source maps; FTS snippets are not validated source spans. Publish both FTS rowsets atomically with the generation pointer. Store only the published generation in these virtual tables so retained history cannot distort BM25 statistics; existing readers retain their SQLite snapshot.
 
+Ordinary lexical `search`, including `--verify-selected`, then stably prefers a
+complete consecutive-token body match within the existing final candidate set.
+Require at least two normalized `unicode61` query tokens and one contiguous
+original-byte witness equal to the projected match. Exact identity/title/alias
+tiers remain first; BM25 and deterministic ties remain ordered within each
+preference group. Inspect at most 80 final candidates, with raw-body allowances
+of 1 MiB each and 16 MiB total. If the complete pass cannot fit, retain the whole
+baseline order and warn `complete_query_preference_work_limit`; hard catalog
+errors propagate. Candidate limits do not bound discovery scans. The cursor
+fingerprint includes this policy. Literal, semantic, hybrid and native context
+retain existing selection. See the [development comparison](../validation-source-subject-search.md)
+for actual owner-reading gains and the remaining context-quality boundary.
+
 ## Representations and segmentation
 
 `render-v1` produces UTF-8 with LF separators and fixed field order:

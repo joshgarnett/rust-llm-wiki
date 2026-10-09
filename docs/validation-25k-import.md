@@ -84,10 +84,11 @@ attributed. Root closure separately took 22.858973 seconds before report emissio
 Final allocation was 25,337,417,728 bytes, with 49,403,334,656 bytes free after
 remaining reserves. Report/emission/exit tails were not separately timed.
 
-This establishes a useful 0.2.0 operational checkpoint while leaving reliable
-evidence selection open. The next quality milestone addresses selection from
-already-discovered candidates, with fixed regression tasks and budgets agreed
-before implementation. It does not reopen a general context-allocation tuning loop.
+This establishes a useful 0.2.0 operational checkpoint. The subsequent
+[complete-subject search/read comparison](validation-source-subject-search.md)
+passes its separate development gate at 19/19 tasks and 31/31 facts, then saves,
+reopens and discovers a two-fact cited draft. It improves first-owner selection
+without rescoring the original failed task or changing native context selection.
 
 ## Complete-source reading experiment and lifecycle limits
 

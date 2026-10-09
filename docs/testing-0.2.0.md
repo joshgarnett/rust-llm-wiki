@@ -9,6 +9,29 @@ evidence, a draft Page, Source refresh and guarded Page reconciliation. Capacity
 default answer completeness and full release qualification remain open; historical
 candidate artifacts and validation results are retained below.
 
+## Current local preview: 2026-10-09
+
+The macOS ARM64 preview `local-preview-20261009-004` reuses the tested optimized
+0.2.0 executable from source `bbaba416e6471426bc739b8ccdb188ba84761a7c`. Its SHA256 is
+`34eecb756d9590d2d38edaf54366f5534da1175384d40f8b568f52154125f74b`.
+Set `LWIKI` to the supplied executable's absolute path; the walkthrough below
+uses a new disposable vault.
+
+This preview adds [complete-subject lexical preference](validation-source-subject-search.md).
+When a query has at least two tokens, an existing candidate containing the full
+body phrase is preferred ahead of isolated-word distractors. The fixed 25K
+development search/read comparison completes 19/19 tasks and 31/31 facts, versus
+16/19 and 26/31 in baseline complete reads. Every checked citation authenticates,
+and a separate two-fact draft-save/read/discovery boundary passes at 10/10.
+The [25K import and update/history/Page mechanics](validation-25k-import.md) remain
+scoped operational evidence rather than representative capacity qualification.
+
+Ordinary `context` retains its existing evidence selection. Check whether it
+contains every requested fact; a bounded complete read of a small discovered
+Source remains useful when it does not. This preview improves the search/read
+route, with no claim of faster search, unseen quality, automatic complete answers
+or full release acceptance.
+
 ## Import two files and inspect completion
 
 Keep inputs and draft work files outside the vault. `init` creates a vault that
@@ -264,7 +287,7 @@ information after churn. The new explicit `search --verify-selected` workflow se
 with no observed correctness blocker; it preserves search contents and does not
 fix those missing facts. This is a local trial with those limits visible.
 
-The current candidate is a native macOS ARM64 release build, compiled with Rust
+The historical candidate described above is a native macOS ARM64 release build, compiled with Rust
 optimization level 3 on macOS 26.5.2, with minimum macOS deployment target 26.5.
 Other native platforms require their own qualification. Windows vault writes
 remain unsupported. Set `LWIKI` to the supplied executable's absolute path.

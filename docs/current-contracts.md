@@ -1,5 +1,18 @@
 # Current contracts and local coverage
 
+The [complete-subject search and reading comparison](validation-source-subject-search.md)
+passes its fixed development gate: 19/19 tasks and 31/31 required facts, versus
+16/19 tasks and 26/31 facts in prescribed baseline reads (27/31 across all returned
+baseline evidence). Ordinary lexical search now prefers a complete body match
+within existing candidates, fixing three first-owner reading failures while
+preserving every baseline fact. All 130 search/read citation occurrences
+authenticate. This is known-data development evidence on the 25K fixture, without
+a speedup, unseen or representative claim. **Default native context completeness
+remains unchanged**; complete reads and final-answer quality are separate gates.
+The separate save/reopen/draft-discovery boundary passes at 10/10: both required
+facts, two exact SourceRefs and six valid generated links, with unchanged Source
+history and the previous Page. No inferred answer or remote call was used.
+
 The [25K Source import](validation-25k-import.md) now passes independent initial
 mechanics review: 25,000 distinct Sources and 2.5 billion input bytes, all 53
 public commands, complete immutable-byte reconciliation and exact indexed
@@ -12,8 +25,8 @@ sequence passes scoped operational mechanics, but first-eight task quality fails
 All checked citations authenticate. A separate complete-source reading experiment
 also fails its owning deadline with the final question unrun; no native default
 quality improvement is claimed. External-edit/recovery/backup tasks remain unrun
-after prospective timing refusal. The next quality milestone addresses selection
-from already-discovered candidates under fixed regression and resource gates.
+after prospective timing refusal. The later paired search/read comparison above
+passes a separate protocol; it does not rescore the failed original tasks.
 
 The [whole-Source reading control](validation-whole-source-reading.md) passes its
 fixed development evidence gate at10/10: ordinary context plus complete reads of
