@@ -1,5 +1,6 @@
 //! Safe literal/lexical document discovery. No cache opens, sync, or model calls.
 use super::{
+    context_selection::{SelectionDocument, select_candidates_with_semantics},
     cursor,
     excerpts::{SourceMap, Tokenizer},
     filters,
@@ -223,15 +224,25 @@ fn search_inner(
     } else {
         None
     };
+    // A generated phrase is data, never user FTS grammar. Token-count gating
+    // avoids a redundant MATCH leg for punctuation or a single tokenizer token.
+    let phrase = if let Some(tokenizer) = &tokenizer {
+        (tokenizer.tokens(query)?.len() >= 2).then(|| format!("\"{}\"", query.replace('"', "\"\"")))
+    } else {
+        None
+    };
     let mut candidates: BTreeMap<VaultRelativePath, Candidate> = BTreeMap::new();
     let mut overflow = false;
     let mut literal_count = 0usize;
+    let mut phrase_work = PhraseWork::default();
     if source_only {
         (candidates, overflow) = source_candidates(
             reader,
             query,
             expression.as_deref().expect("indexed lexical expression"),
             &plan,
+            phrase.as_deref(),
+            &mut phrase_work,
         )?;
     } else if reader.normalized_layout() && plan.mode == SearchMode::Literal {
         (candidates, literal_count) =
@@ -246,6 +257,8 @@ fn search_inner(
                 .expect("normalized lexical expression"),
             &plan,
             &context_policy,
+            phrase.as_deref(),
+            &mut phrase_work,
         )?;
     } else if let Some(expression) = &expression {
         for (tier, condition, reason, channel, fts, identity) in [
@@ -274,7 +287,7 @@ fn search_inner(
                 false,
             ),
             (
-                2,
+                3,
                 "documents_fts MATCH ?1",
                 RetrievalReason::Lexical,
                 "lexical",
@@ -282,14 +295,30 @@ fn search_inner(
                 false,
             ),
             (
-                2,
+                3,
                 "documents_fts MATCH ?1",
                 RetrievalReason::Lexical,
                 "identity_lexical",
                 true,
                 true,
             ),
-        ] {
+        ]
+        .into_iter()
+        .chain(phrase.as_ref().map(|_| {
+            (
+                2,
+                "documents_fts MATCH ?1",
+                RetrievalReason::Lexical,
+                "lexical_phrase",
+                true,
+                false,
+            )
+        })) {
+            let expression = if channel == "lexical_phrase" {
+                phrase.as_ref().expect("phrase leg")
+            } else {
+                expression
+            };
             let text = if fts {
                 if identity {
                     format!("{{title aliases}} : ({expression})")
@@ -349,6 +378,9 @@ fn search_inner(
                     break;
                 }
                 let document = reader.decode_document(row, 0)?;
+                if channel == "lexical_phrase" {
+                    phrase_work.decoded(&document)?;
+                }
                 let score: Option<f64> = row.get(1).map_err(sql_error)?;
                 if score.is_some_and(|score| !score.is_finite()) {
                     return Err(WikiError::new(
@@ -507,12 +539,25 @@ fn search_inner(
             owner_revision: document.owner_revision.clone(),
         });
     }
+    let mut warnings = if plan.mode == SearchMode::Lexical && context_scope.is_none() {
+        structural_previews(
+            reader,
+            query,
+            &candidates[offset.min(end)..end],
+            &mut hits,
+            plan.limits.excerpt_bytes,
+        )?
+    } else {
+        Vec::new()
+    };
     let next_cursor = if end < candidates.len() {
         Some(cursor::encode(reader, fingerprint, end)?)
     } else {
         None
     };
-    let mut warnings = Vec::new();
+    if phrase.is_some() {
+        warnings.push(format!("lexical_phrase_candidate_rows={}, lexical_phrase_decoded_payload_bytes={}; excludes envelopes/derivatives; additional SQL posting work unavailable", phrase_work.rows, phrase_work.bytes));
+    }
     if omitted_candidates > 0 {
         warnings.push("candidate_cap_reached; omitted_candidates is a lower bound".into());
     }
@@ -570,6 +615,108 @@ fn search_inner(
         dependency_fingerprint,
         warnings,
     })
+}
+/// Share one metered selection across the displayed page, never the discovery
+/// pool. Context keeps its existing seeds and runs its own selector later.
+fn structural_previews(
+    reader: &dyn QueryCatalog,
+    query: &str,
+    page: &[Candidate],
+    hits: &mut [SearchHit],
+    bytes: usize,
+) -> Result<Vec<String>> {
+    let seeds = hits
+        .iter()
+        .map(|hit| [hit.excerpt.span])
+        .collect::<Vec<_>>();
+    let documents = page
+        .iter()
+        .enumerate()
+        .filter(|(_, candidate)| {
+            !candidate.identity
+                && matches!(
+                    candidate.document.eligibility,
+                    Eligibility::Current | Eligibility::Historical | Eligibility::Withdrawn
+                )
+        })
+        .map(|(owner_index, candidate)| SelectionDocument {
+            owner_index,
+            document: &candidate.document,
+            seed_spans: &seeds[owner_index],
+        })
+        .collect::<Vec<_>>();
+    if documents.is_empty() {
+        return Ok(Vec::new());
+    }
+    reader.check_query_budget()?;
+    let selected = select_candidates_with_semantics(reader, query, &documents, bytes, &[])?;
+    reader.check_query_budget()?;
+    let tokenizer = Tokenizer::new(reader.connection())?;
+    let phrase = tokenizer.tokens(query)?;
+    for (index, hit) in hits.iter_mut().enumerate() {
+        let document = &page[index].document;
+        // Protect an already returned complete token phrase. A structural
+        // replacement may broaden its explanation, but may not discard it.
+        let mut anchor = None;
+        if phrase.len() >= 2 {
+            for span in &hit.excerpt.matched_spans {
+                let tokens = tokenizer.tokens(span.slice(&document.raw_text)?)?;
+                if tokens.len() == phrase.len()
+                    && tokens.iter().zip(&phrase).all(|(a, b)| a.text == b.text)
+                {
+                    anchor = Some(*span);
+                    break;
+                }
+            }
+        }
+        if let Some(candidate) = selected.candidates.iter().find(|candidate| {
+            candidate.owner_index == index
+                && candidate.local_relevance > 0
+                && anchor.is_none_or(|span| {
+                    candidate.span.start() <= span.start() && candidate.span.end() >= span.end()
+                })
+        }) {
+            let range = candidate.span.start() as usize..candidate.span.end() as usize;
+            let text = candidate.span.slice(&document.raw_text)?;
+            let matches = query_matches(&tokenizer, text, 0..text.len(), query, bytes)?
+                .into_iter()
+                .map(|span| span.start + range.start..span.end + range.start)
+                .collect::<Vec<_>>();
+            hit.excerpt = build_excerpt(reader, document, range, &matches)?;
+        }
+    }
+    let mut warnings = vec![format!(
+        "lexical_preview_scanned_bytes={}, lexical_preview_scanned_blocks={}",
+        selected.scanned_bytes, selected.scanned_blocks
+    )];
+    for omission in selected.omissions {
+        warnings.push(format!(
+            "search_preview_omission: {} ({})",
+            page[omission.owner_index].document.path, omission.reason
+        ));
+    }
+    reader.check_query_budget()?;
+    Ok(warnings)
+}
+
+#[derive(Default)]
+struct PhraseWork {
+    rows: usize,
+    bytes: usize,
+}
+impl PhraseWork {
+    fn decoded(&mut self, document: &DocumentRow) -> Result<()> {
+        self.rows += 1;
+        // User-content bytes actually decoded by the added leg. Physical row
+        // envelopes/derivative copies differ by layout and are not included.
+        self.bytes = self
+            .bytes
+            .checked_add(document.raw_text.len())
+            .ok_or_else(|| {
+                WikiError::new(ErrorCode::BudgetExceeded, "phrase byte accounting overflow")
+            })?;
+        Ok(())
+    }
 }
 const SOURCE_PREDICATE: &str =
     "owner_revision IS NOT NULL AND source_id IS NOT NULL AND eligibility='current'";
@@ -895,6 +1042,8 @@ fn normalized_candidates(
     expression: &str,
     plan: &QueryPlan,
     context_policy: &str,
+    phrase: Option<&str>,
+    phrase_work: &mut PhraseWork,
 ) -> Result<(BTreeMap<VaultRelativePath, Candidate>, bool)> {
     let mut candidates: BTreeMap<VaultRelativePath, Candidate> = BTreeMap::new();
     let mut overflow = false;
@@ -902,12 +1051,18 @@ fn normalized_candidates(
         (0, RetrievalReason::ExactId, "exact_id"),
         (1, RetrievalReason::ExactTitle, "exact_title"),
         (1, RetrievalReason::ExactAlias, "exact_alias"),
-        (2, RetrievalReason::Lexical, "lexical"),
-        (2, RetrievalReason::Lexical, "identity_lexical"),
+        (3, RetrievalReason::Lexical, "lexical"),
+        (3, RetrievalReason::Lexical, "identity_lexical"),
     ]
     .into_iter()
     .enumerate()
+    .chain(phrase.map(|_| (5, (2, RetrievalReason::Lexical, "lexical_phrase"))))
     {
+        let expression = if leg == 5 {
+            phrase.expect("phrase leg")
+        } else {
+            expression
+        };
         let (sql, values) =
             normalized_candidate_query(query, expression, plan, context_policy, leg);
         let mut statement = reader.connection().prepare(&sql).map_err(sql_error)?;
@@ -921,6 +1076,9 @@ fn normalized_candidates(
                 break;
             }
             let document = reader.decode_document(row, 0)?;
+            if leg == 5 {
+                phrase_work.decoded(&document)?;
+            }
             validate_general_document(reader, row, &document, leg >= 3)?;
             if leg == 2 && !document.aliases.iter().any(|alias| alias == query) {
                 return Err(WikiError::new(
@@ -1224,6 +1382,8 @@ fn source_candidates(
     query: &str,
     expression: &str,
     plan: &QueryPlan,
+    phrase: Option<&str>,
+    phrase_work: &mut PhraseWork,
 ) -> Result<(BTreeMap<VaultRelativePath, Candidate>, bool)> {
     let generation = i64::try_from(reader.snapshot().generation)
         .map_err(|_| WikiError::new(ErrorCode::IndexCorrupt, "generation outside SQL range"))?;
@@ -1251,8 +1411,16 @@ fn source_candidates(
             RetrievalReason::ExactTitle,
             "exact_title",
         ),
-        (2, "", None, RetrievalReason::Lexical, "lexical"),
-    ] {
+        (3, "", None, RetrievalReason::Lexical, "lexical"),
+    ]
+    .into_iter()
+    .chain(phrase.map(|_| (2, "", None, RetrievalReason::Lexical, "lexical_phrase")))
+    {
+        let expression = if channel == "lexical_phrase" {
+            phrase.expect("phrase leg")
+        } else {
+            expression
+        };
         let fts = index.is_none();
         let (sql, values) = source_candidate_query(
             reader.normalized_layout(),
@@ -1274,6 +1442,9 @@ fn source_candidates(
                 break;
             }
             let document = reader.decode_document(row, 0)?;
+            if channel == "lexical_phrase" {
+                phrase_work.decoded(&document)?;
+            }
             validate_source_document(row, &document, fts, reader.normalized_layout())?;
             let score: Option<f64> = row
                 .get(if reader.normalized_layout() { 14 } else { 1 })
@@ -1738,8 +1909,27 @@ mod indexed_source_tests {
             decoded: Cell::new(0),
         }
     }
+    // General/context SQL joins adopted records even when the selected rows
+    // are captured payloads. Source-only tests intentionally omit that table.
+    fn general_source_reader() -> Reader {
+        let reader = reader();
+        reader.connection.execute_batch(
+            "CREATE TABLE records(gen INTEGER,id TEXT,row_json TEXT,authored_status TEXT,kind TEXT,eligibility TEXT);"
+        ).unwrap();
+        reader
+    }
+
     fn source(reader: &Reader, name: &str, title: &str) -> DocumentRow {
-        let raw_text = "# Evidence\n\nA captured needle café fact.\n".to_owned();
+        source_body(
+            reader,
+            name,
+            title,
+            "# Evidence\n\nA captured needle café fact.\n",
+        )
+    }
+
+    fn source_body(reader: &Reader, name: &str, title: &str, raw: &str) -> DocumentRow {
+        let raw_text = raw.to_owned();
         let document = DocumentRow {
             path: VaultRelativePath::new(format!("sources/{name}/content.md")).unwrap(),
             hash: Blake3Hash::digest(raw_text.as_bytes()),
@@ -1749,7 +1939,7 @@ mod indexed_source_tests {
             aliases: vec![],
             headings: "Evidence".into(),
             tags: vec![],
-            body: "A captured needle café fact.".into(),
+            body: SourceMap::markdown(raw, 0).text,
             raw_text,
             source_id: Some(RecordId::new(format!("source_{name}")).unwrap()),
             owner_revision: Some(RecordId::new(format!("revision_{name}")).unwrap()),
@@ -1770,6 +1960,14 @@ mod indexed_source_tests {
     fn publish_normalized_sources(
         catalog: &crate::catalog::Catalog,
         documents: &[DocumentRow],
+    ) -> crate::catalog::normalized_build::CompletedCatalog {
+        publish_sources_with_proof(catalog, documents, false)
+    }
+
+    fn publish_sources_with_proof(
+        catalog: &crate::catalog::Catalog,
+        documents: &[DocumentRow],
+        proof_layout2: bool,
     ) -> crate::catalog::normalized_build::CompletedCatalog {
         use crate::{
             catalog::{
@@ -1797,11 +1995,22 @@ mod indexed_source_tests {
             NormalizedBuilder::begin(&catalog.fs, &writer, identity, BuildLimits::default())
                 .unwrap();
         let input = scan::scan_input(&catalog.fs, &catalog.vault_id).unwrap();
-        let projection = scan::project_with_sink(&catalog.fs, &input, false, &mut builder).unwrap();
-        for document in documents {
-            builder.document(document.clone()).unwrap();
-        }
-        let completed = builder.finish(&projection).unwrap();
+        let completed = if proof_layout2 {
+            let projection =
+                scan::project_normalized_with_sink(&catalog.fs, &input, false, &mut builder)
+                    .unwrap();
+            for document in documents {
+                builder.document(document.clone()).unwrap();
+            }
+            builder.finish_normalized(&projection).unwrap()
+        } else {
+            let projection =
+                scan::project_with_sink(&catalog.fs, &input, false, &mut builder).unwrap();
+            for document in documents {
+                builder.document(document.clone()).unwrap();
+            }
+            builder.finish(&projection).unwrap()
+        };
         selector::publish(
             &catalog.fs,
             &writer,
@@ -1828,6 +2037,485 @@ mod indexed_source_tests {
         );
         let completed = publish_normalized_sources(&catalog, documents);
         (temp, catalog, completed)
+    }
+
+    fn paired_readers(documents: &[DocumentRow]) -> (tempfile::TempDir, crate::catalog::Catalog) {
+        let (temp, catalog, _) = normalized_fixture(documents);
+        publish_sources_with_proof(&catalog, documents, true);
+        (temp, catalog)
+    }
+
+    #[test]
+    fn whole_query_phrase_precedes_small_or_cap_and_context_page() {
+        let legacy = general_source_reader();
+        let mut documents = Vec::new();
+        for n in 0..12 {
+            documents.push(source_body(
+                &legacy,
+                &format!("a{n:02}"),
+                "Distant dispatch station",
+                &"17 station dispatch distant ".repeat(20),
+            ));
+        }
+        let raw = format!(
+            "{}\n\nDistant dispatch: station 17 follows violet route after review 271. Café.\n",
+            "Ordinary unrelated ledger prose. ".repeat(500)
+        );
+        let target = source_body(&legacy, "zz", "Route ledger", &raw);
+        documents.push(target.clone());
+        let (_temp, catalog) = paired_readers(&documents);
+        let normalized = catalog
+            .query_snapshot(crate::catalog::query_types::QueryReadLimits::default())
+            .unwrap();
+        let plan = QueryPlan {
+            limits: SearchLimits {
+                candidates: 3,
+                hits: 3,
+                excerpt_bytes: 256,
+            },
+            ..Default::default()
+        };
+        let (ordinary, _) = source_candidates(
+            &legacy,
+            "Distant dispatch station 17",
+            &lexical_expression("Distant dispatch station 17").unwrap(),
+            &plan,
+            None,
+            &mut PhraseWork::default(),
+        )
+        .unwrap();
+        assert!(
+            !ordinary.contains_key(&target.path),
+            "fixture must expose pre-cap loss"
+        );
+        for reader in [&legacy as &dyn QueryCatalog, &normalized] {
+            let indexed =
+                search_indexed_sources(reader, "Distant dispatch station 17", &plan).unwrap();
+            assert_eq!(indexed.hits[0].locator.path, target.path);
+            assert!(
+                indexed.hits[0]
+                    .excerpt
+                    .text
+                    .contains("violet route after review 271")
+            );
+            assert!(
+                indexed.hits[0]
+                    .rank_contributions
+                    .iter()
+                    .any(|r| r.channel == "lexical_phrase")
+            );
+            assert_eq!(indexed.hits.len(), 3);
+            assert!(indexed.omitted_candidates > 0 && indexed.truncated);
+            let context =
+                search_context_catalog(reader, "Distant dispatch station 17", &plan, false)
+                    .unwrap();
+            assert_eq!(context.hits[0].locator.path, target.path);
+            assert!(
+                context.hits[0]
+                    .excerpt
+                    .text
+                    .contains("violet route after review 271")
+            );
+            let search = search_catalog(reader, "Distant dispatch station 17", &plan).unwrap();
+            assert_eq!(search.hits[0].locator.path, target.path);
+            assert!(
+                search.hits[0]
+                    .excerpt
+                    .text
+                    .contains("Distant dispatch: station 17")
+            );
+            assert!(
+                search.hits[0]
+                    .excerpt
+                    .text
+                    .contains("violet route after review 271")
+            );
+            assert_eq!(
+                search.hits[0].excerpt.span.slice(&raw).unwrap(),
+                search.hits[0].excerpt.text
+            );
+        }
+    }
+
+    #[test]
+    fn phrase_pool_pagination_filters_identity_and_soft_displacement() {
+        let legacy = reader();
+        let mut documents = Vec::new();
+        for n in 0..7 {
+            documents.push(source_body(
+                &legacy,
+                &format!("phrase{n}"),
+                "Boilerplate",
+                "Orchard release notes say nothing about the requested operational facts.\n",
+            ));
+        }
+        let title = source_body(
+            &legacy,
+            "title",
+            "Orchard release",
+            "Actual release date is Tuesday.\n",
+        );
+        let left = source_body(
+            &legacy,
+            "left",
+            "Schedule",
+            "Orchard picking date is Monday.\n",
+        );
+        let right = source_body(
+            &legacy,
+            "right",
+            "Release",
+            "Release shipping route is azure.\n",
+        );
+        documents.extend([title.clone(), left.clone(), right.clone()]);
+        let (_temp, catalog) = paired_readers(&documents);
+        let normalized = catalog
+            .query_snapshot(crate::catalog::query_types::QueryReadLimits::default())
+            .unwrap();
+        for reader in [&legacy as &dyn QueryCatalog, &normalized] {
+            let mut plan = QueryPlan {
+                limits: SearchLimits {
+                    candidates: 4,
+                    hits: 2,
+                    excerpt_bytes: 128,
+                },
+                ..Default::default()
+            };
+            let first = search_indexed_sources(reader, "Orchard release", &plan).unwrap();
+            assert_eq!(
+                first.hits[0].locator.path, title.path,
+                "exact title precedes phrase"
+            );
+            assert!(first.hits[1].excerpt.text.contains("nothing about"));
+            plan.cursor = first.next_cursor.clone();
+            let second = search_indexed_sources(reader, "Orchard release", &plan).unwrap();
+            let paths = first
+                .hits
+                .iter()
+                .chain(&second.hits)
+                .map(|h| h.locator.path.clone())
+                .collect::<BTreeSet<_>>();
+            assert_eq!(paths.len(), 4);
+            assert!(second.next_cursor.is_none());
+            assert!(
+                !paths.contains(&left.path) && !paths.contains(&right.path),
+                "known phrase-boilerplate displacement risk stays visible"
+            );
+            plan.cursor = None;
+            plan.filters.source_ids = vec![
+                left.source_id.clone().unwrap(),
+                right.source_id.clone().unwrap(),
+            ];
+            let filtered = search_indexed_sources(reader, "Orchard release", &plan).unwrap();
+            assert_eq!(filtered.hits.len(), 2);
+            assert!(
+                filtered
+                    .hits
+                    .iter()
+                    .all(|h| [left.path.clone(), right.path.clone()].contains(&h.locator.path))
+            );
+            assert!(
+                filtered
+                    .hits
+                    .iter()
+                    .any(|h| h.excerpt.text.contains("Monday"))
+            );
+            assert!(
+                filtered
+                    .hits
+                    .iter()
+                    .any(|h| h.excerpt.text.contains("azure"))
+            );
+            assert!(filtered.hits.iter().all(|h| {
+                !h.rank_contributions
+                    .iter()
+                    .any(|r| r.channel == "lexical_phrase")
+            }));
+            plan.filters.path_prefix = Some("sources/right/".into());
+            assert_eq!(
+                search_indexed_sources(reader, "Orchard release", &plan)
+                    .unwrap()
+                    .hits[0]
+                    .locator
+                    .path,
+                right.path
+            );
+            plan.filters = SearchFilters::default();
+            assert_eq!(
+                search_indexed_sources(reader, title.source_id.as_ref().unwrap().as_str(), &plan)
+                    .unwrap()
+                    .hits[0]
+                    .locator
+                    .path,
+                title.path
+            );
+        }
+    }
+
+    #[test]
+    fn structural_search_previews_explain_settings_and_preserve_exact_utf8() {
+        let legacy = general_source_reader();
+        let raw = format!(
+            "# Configuration summary\n\n```toml\nCARGO_INCREMENTAL = \"compiler setting\"\nbuild.incremental = true\n{}\n```\n\n# Incremental compilation\n\nThe `CARGO_INCREMENTAL` environment variable sets incremental compilation: `1` enables it and `0` disables it. This environment variable overrides the `build.incremental` configuration setting. Café 東京.\n",
+            "target-options = \"miscellaneous compiler options\"\n".repeat(16)
+        );
+        let config = source_body(&legacy, "config", "Configuration reference", &raw);
+        let features = source_body(
+            &legacy,
+            "features",
+            "Feature reference",
+            "# Command line\n\nUse `--no-default-features` to disable default features.\n",
+        );
+        let documents = [config.clone(), features.clone()];
+        let (_temp, catalog) = paired_readers(&documents);
+        let normalized = catalog
+            .query_snapshot(crate::catalog::query_types::QueryReadLimits::default())
+            .unwrap();
+        for reader in [&legacy as &dyn QueryCatalog, &normalized] {
+            for query in [
+                "CARGO_INCREMENTAL build.incremental",
+                "CARGO_INCREMENTAL no-default-features",
+            ] {
+                let mut plan = QueryPlan::default();
+                plan.limits.excerpt_bytes = 512;
+                let hits = search_catalog(reader, query, &plan).unwrap();
+                let preview = &hits
+                    .hits
+                    .iter()
+                    .find(|h| h.locator.path == config.path)
+                    .unwrap()
+                    .excerpt;
+                assert!(
+                    preview.text.contains("`1` enables")
+                        && preview.text.contains("`0` disables")
+                        && preview.text.contains("overrides"),
+                    "{query}: {}",
+                    preview.text
+                );
+                assert_eq!(preview.span.slice(&raw).unwrap(), preview.text);
+                for span in &preview.matched_spans {
+                    assert!(
+                        span.start() >= preview.span.start() && span.end() <= preview.span.end()
+                    );
+                    span.slice(&raw).unwrap();
+                }
+                assert!(
+                    hits.warnings
+                        .iter()
+                        .any(|w| w.starts_with("lexical_preview_scanned_bytes="))
+                );
+                if query.contains("no-default") {
+                    assert!(
+                        hits.hits
+                            .iter()
+                            .any(|h| h.excerpt.text.contains("disable default features"))
+                    );
+                }
+                for bytes in [1, 2, 7] {
+                    plan.limits.excerpt_bytes = bytes;
+                    for hit in search_catalog(reader, query, &plan).unwrap().hits {
+                        let document = documents
+                            .iter()
+                            .find(|d| d.path == hit.locator.path)
+                            .unwrap();
+                        assert_eq!(
+                            hit.excerpt.span.slice(&document.raw_text).unwrap(),
+                            hit.excerpt.text
+                        );
+                        assert!(hit.excerpt.text.len() <= bytes);
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn phrase_eligibility_precedes_caps_and_history_remains_explicit() {
+        let legacy = general_source_reader();
+        let current = source_body(
+            &legacy,
+            "current",
+            "Current ledger",
+            "Orchard notes describe the release date as Tuesday.\n",
+        );
+        let mut historical = source_body(
+            &legacy,
+            "old",
+            "Old ledger",
+            "Orchard release obsolete instruction.\n",
+        );
+        historical.eligibility = Eligibility::Historical;
+        legacy
+            .connection
+            .execute(
+                "UPDATE documents SET eligibility='historical', row_json=?1 WHERE path=?2",
+                params![
+                    serde_json::to_string(&historical).unwrap(),
+                    historical.path.as_str()
+                ],
+            )
+            .unwrap();
+        let (_temp, catalog) = paired_readers(&[current.clone(), historical.clone()]);
+        let normalized = catalog
+            .query_snapshot(crate::catalog::query_types::QueryReadLimits::default())
+            .unwrap();
+        let mut plan = QueryPlan {
+            limits: SearchLimits {
+                candidates: 1,
+                hits: 1,
+                excerpt_bytes: 128,
+            },
+            ..Default::default()
+        };
+        for reader in [&legacy as &dyn QueryCatalog, &normalized] {
+            let hits = search_context_catalog(reader, "Orchard release", &plan, false).unwrap();
+            assert_eq!(hits.hits[0].locator.path, current.path);
+            assert!(
+                !hits.hits[0]
+                    .rank_contributions
+                    .iter()
+                    .any(|r| r.channel == "lexical_phrase")
+            );
+            assert_eq!(
+                search_indexed_sources(reader, "Orchard release", &plan)
+                    .unwrap()
+                    .hits[0]
+                    .locator
+                    .path,
+                current.path
+            );
+            plan.filters.include_historical = true;
+            assert_eq!(
+                search_context_catalog(reader, "Orchard release", &plan, true)
+                    .unwrap()
+                    .hits[0]
+                    .locator
+                    .path,
+                historical.path
+            );
+            plan.filters.include_historical = false;
+        }
+    }
+
+    #[test]
+    fn structural_preview_shared_scan_ceiling_keeps_late_phrase_fallback() {
+        let reader = reader();
+        let raw = format!(
+            "{}\n\nOrchard release late exact anchor. Café.\n",
+            "Unrelated prose. ".repeat(70_000)
+        );
+        let document = source_body(&reader, "large", "Long reference", &raw);
+        let tokenizer = Tokenizer::new(&reader.connection).unwrap();
+        let matches = match_ranges(
+            Some(&tokenizer),
+            &document,
+            "Orchard release",
+            SearchMode::Lexical,
+            false,
+            128,
+        )
+        .unwrap();
+        let original = excerpt(
+            &reader,
+            &document,
+            &matches,
+            128,
+            SearchMode::Lexical,
+            false,
+        )
+        .unwrap();
+        let mut page = Vec::new();
+        let mut hits = Vec::new();
+        for n in 0..5 {
+            let mut document = document.clone();
+            document.path = VaultRelativePath::new(format!("sources/large{n}/content.md")).unwrap();
+            page.push(Candidate {
+                document: document.clone(),
+                tier: 2,
+                score: None,
+                reasons: vec![RetrievalReason::Lexical],
+                ranks: vec![],
+                identity: false,
+            });
+            hits.push(SearchHit {
+                locator: DocumentLocator {
+                    record: None,
+                    path: document.path,
+                    observed_hash: document.hash,
+                },
+                title: document.title,
+                kind: None,
+                authored_status: None,
+                eligibility: Eligibility::Current,
+                identity_eligibility: None,
+                excerpt: original.clone(),
+                secondary_excerpts: vec![],
+                reasons: vec![RetrievalReason::Lexical],
+                rank_contributions: vec![],
+                source_id: document.source_id,
+                owner_revision: document.owner_revision,
+            });
+        }
+        let warnings =
+            structural_previews(&reader, "Orchard release", &page, &mut hits, 128).unwrap();
+        let fields = warnings[0]
+            .split(", ")
+            .map(|part| part.split_once('=').unwrap().1.parse::<usize>().unwrap())
+            .collect::<Vec<_>>();
+        assert!(fields[0] <= 4 * 1024 * 1024 && fields[1] <= 4096);
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.contains("context_source_scan_byte_cap"))
+        );
+        for hit in hits {
+            assert!(
+                hit.excerpt
+                    .text
+                    .contains("Orchard release late exact anchor")
+            );
+            assert_eq!(hit.excerpt.span.slice(&raw).unwrap(), hit.excerpt.text);
+        }
+    }
+
+    #[test]
+    fn phrase_quotes_operators_and_single_token_are_data() {
+        let legacy = reader();
+        let document = source_body(
+            &legacy,
+            "syntax",
+            "Syntax reference",
+            "Café AND NEAR 東京 are literal words, not query operators.\n",
+        );
+        let (_temp, catalog) = paired_readers(&[document.clone()]);
+        let normalized = catalog
+            .query_snapshot(crate::catalog::query_types::QueryReadLimits::default())
+            .unwrap();
+        for reader in [&legacy as &dyn QueryCatalog, &normalized] {
+            for query in ["Café AND NEAR 東京", "\"Café\" AND NEAR 東京"] {
+                let hits = search_indexed_sources(reader, query, &QueryPlan::default()).unwrap();
+                assert_eq!(hits.hits[0].locator.path, document.path);
+                assert!(
+                    hits.hits[0]
+                        .rank_contributions
+                        .iter()
+                        .any(|r| r.channel == "lexical_phrase")
+                );
+            }
+            let hits = search_indexed_sources(reader, "Café", &QueryPlan::default()).unwrap();
+            assert!(
+                hits.hits[0]
+                    .rank_contributions
+                    .iter()
+                    .all(|r| r.channel != "lexical_phrase")
+            );
+            assert_eq!(
+                search_indexed_sources(reader, "!!!", &QueryPlan::default())
+                    .unwrap_err()
+                    .code,
+                ErrorCode::Usage
+            );
+        }
     }
 
     #[test]
@@ -2291,8 +2979,14 @@ mod indexed_source_tests {
             .connection
             .progress_handler(1, Some(|| true))
             .unwrap();
-        let error = match source_candidates(&reader, "needle", "\"needle\"", &QueryPlan::default())
-        {
+        let error = match source_candidates(
+            &reader,
+            "needle",
+            "\"needle\"",
+            &QueryPlan::default(),
+            None,
+            &mut PhraseWork::default(),
+        ) {
             Ok(_) => panic!("interrupted source candidate query unexpectedly completed"),
             Err(error) => error,
         };

@@ -2456,3 +2456,107 @@ fn coverage_development_pilot(deck_cost: bool) {
         "all twelve arms recorded before reporting archived-control mismatch: {comparison_failures:?}"
     );
 }
+
+#[test]
+fn structural_search_preview_and_indexed_context_share_real_source_evidence() {
+    let fixture = Fixture::new();
+    let config = format!(
+        "# Summary\n\n```toml\nCARGO_INCREMENTAL = \"compiler setting\"\n{}\n```\n\n# Incremental compilation\n\nThe `CARGO_INCREMENTAL` environment variable sets incremental compilation: `1` enables it and `0` disables it. The environment variable overrides the `build.incremental` configuration setting. Café 東京.\n",
+        "target-options = \"miscellaneous compiler options\"\n".repeat(16)
+    );
+    let features = "# Feature flags\n\nUse `--no-default-features` to disable default features.\n";
+    let store = SourceStore::new(fixture.catalog.fs().clone());
+    let mut source_ids = Vec::new();
+    for (title, body) in [
+        ("Configuration reference", config.as_str()),
+        ("Feature reference", features),
+    ] {
+        let mut request = capture(body.as_bytes());
+        request.title = title.into();
+        request.origin = format!("{title}.md");
+        let plan = store.plan_capture(request).unwrap();
+        source_ids.push(plan.source_id.clone());
+        Fixture::seed(fixture.catalog.fs(), plan.draft.unwrap());
+    }
+    let writer =
+        WriterPermit::acquire(fixture.catalog.fs().root(), Duration::from_secs(1)).unwrap();
+    fixture.catalog.rebuild_normalized(&writer).unwrap();
+    drop(writer);
+    let mut plan = crate::retrieval::QueryPlan::default();
+    plan.filters.source_ids = source_ids.clone();
+    plan.limits.excerpt_bytes = 512;
+    let query = "CARGO_INCREMENTAL no-default-features";
+    let hits = crate::retrieval::selected_search::search(
+        &fixture.catalog,
+        query,
+        &plan,
+        &VerificationBudget::default(),
+    )
+    .unwrap();
+    assert_eq!(hits.hits.len(), 2);
+    let config_hit = hits
+        .hits
+        .iter()
+        .find(|hit| hit.source_id.as_ref() == Some(&source_ids[0]))
+        .unwrap();
+    assert!(
+        config_hit.excerpt.text.contains("`1` enables")
+            && config_hit.excerpt.text.contains("`0` disables")
+            && config_hit.excerpt.text.contains("overrides")
+    );
+    assert!(
+        hits.hits
+            .iter()
+            .any(|hit| hit.excerpt.text.contains("disable default features"))
+    );
+    for hit in &hits.hits {
+        let bytes = fs::read(
+            fixture
+                .catalog
+                .fs()
+                .root()
+                .path()
+                .join(hit.locator.path.as_str()),
+        )
+        .unwrap();
+        let raw = std::str::from_utf8(&bytes).unwrap();
+        assert_eq!(hit.excerpt.span.slice(raw).unwrap(), hit.excerpt.text);
+        match hit.excerpt.citation.as_ref().unwrap() {
+            CitationRef::Source(reference) => {
+                assert_eq!(&reference.source_id, hit.source_id.as_ref().unwrap());
+                assert_eq!(
+                    &reference.source_revision,
+                    hit.owner_revision.as_ref().unwrap()
+                );
+                assert_eq!(reference.span, hit.excerpt.span);
+                assert_eq!(
+                    reference.quote_hash,
+                    Blake3Hash::digest(hit.excerpt.text.as_bytes())
+                );
+            }
+            _ => panic!("captured source quote"),
+        }
+    }
+    let mut request = request();
+    request.documents = plan;
+    let result = context(
+        &fixture.catalog,
+        query,
+        &request,
+        &ContextOptions::default(),
+    )
+    .unwrap();
+    assert!(
+        result.text().contains("`1` enables")
+            && result.text().contains("`0` disables")
+            && result.text().contains("overrides")
+    );
+    assert!(result.text().contains("disable default features"));
+    assert!(matches!(
+        result.verification(),
+        SnapshotVerification::IndexedEvidence {
+            global_membership_verified: false,
+            ..
+        }
+    ));
+}

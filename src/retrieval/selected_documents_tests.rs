@@ -343,3 +343,73 @@ fn missing_proof_rows_and_forged_selected_document_metadata_refuse() {
         );
     }
 }
+
+#[test]
+fn phrase_structural_selected_search_keeps_scoped_proof_and_final_recheck() {
+    let (temp, catalog) = fixture();
+    let mut plan = crate::retrieval::QueryPlan::default();
+    // OR discovery also finds the fixture's deliberately malformed prose.
+    // It must retain its uncited discovery status, not gain selected authority.
+    let reader = catalog.query_snapshot(QueryReadLimits::default()).unwrap();
+    let discovery =
+        crate::retrieval::lexical::search_catalog(&reader, "Selected exact prose", &plan).unwrap();
+    assert!(
+        discovery
+            .hits
+            .iter()
+            .any(|hit| hit.locator.path == path("malformed.md")
+                && hit.eligibility == Eligibility::Invalid)
+    );
+    assert_eq!(
+        crate::retrieval::selected_search::search(
+            &catalog,
+            "Selected exact prose",
+            &plan,
+            &VerificationBudget::default()
+        )
+        .unwrap_err()
+        .code,
+        ErrorCode::CapabilityUnavailable
+    );
+    drop(reader);
+    // This workflow verifies the reviewed authored page and its dependency
+    // closure. Limit the public input to that eligible owner before discovery.
+    plan.filters.path_prefix = Some("page.md".into());
+    let hits = crate::retrieval::selected_search::search(
+        &catalog,
+        "Selected exact prose",
+        &plan,
+        &VerificationBudget::default(),
+    )
+    .unwrap();
+    assert_eq!(hits.hits[0].locator.path, path("page.md"));
+    assert!(hits.hits[0].excerpt.text.contains("Selected exact prose."));
+    assert!(matches!(
+        hits.verification,
+        crate::catalog::SnapshotVerification::IndexedEvidence {
+            global_membership_verified: false,
+            ..
+        }
+    ));
+    let raw = fs::read_to_string(temp.path().join("page.md")).unwrap();
+    assert_eq!(
+        hits.hits[0].excerpt.span.slice(&raw).unwrap(),
+        hits.hits[0].excerpt.text
+    );
+    let (result, _) = crate::retrieval::selected_search::measured_search(
+        &catalog,
+        "Selected exact prose",
+        &plan,
+        &VerificationBudget::default(),
+        || {
+            let support = fs::read_to_string(temp.path().join("support.md")).unwrap();
+            fs::write(
+                temp.path().join("support.md"),
+                support.replace("Support exact prose.", "Support other prose."),
+            )
+            .unwrap();
+            Ok(())
+        },
+    );
+    assert_eq!(result.unwrap_err().code, ErrorCode::FreshnessConflict);
+}

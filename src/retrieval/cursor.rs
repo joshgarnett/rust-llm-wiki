@@ -14,15 +14,16 @@ struct Cursor {
     publication: Option<String>,
 }
 pub(crate) fn fingerprint(query: &str, plan: &QueryPlan) -> Result<Blake3Hash> {
-    serde_json::to_vec(&(
-        "lwiki-query-v1",
-        query,
-        plan.mode,
-        &plan.filters,
-        &plan.limits,
-    ))
-    .map(Blake3Hash::digest)
-    .map_err(|e| WikiError::new(ErrorCode::Internal, e.to_string()))
+    // Ordering is part of pagination: old lexical cursors must not resume
+    // a pool ranked under the positional phrase policy. Unchanged modes keep
+    // their existing fingerprint contract.
+    let policy = match plan.mode {
+        SearchMode::Lexical | SearchMode::Hybrid => "lwiki-query-lexical-phrase-v2",
+        SearchMode::Literal | SearchMode::Semantic => "lwiki-query-v1",
+    };
+    serde_json::to_vec(&(policy, query, plan.mode, &plan.filters, &plan.limits))
+        .map(Blake3Hash::digest)
+        .map_err(|e| WikiError::new(ErrorCode::Internal, e.to_string()))
 }
 pub(crate) fn offset(
     reader: &dyn QueryCatalog,
@@ -91,4 +92,41 @@ fn digit(value: u8) -> Result<u8> {
 }
 fn stale(message: &str) -> WikiError {
     WikiError::new(ErrorCode::CursorStale, message)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn changed_lexical_order_invalidates_previous_query_fingerprints() {
+        for mode in [
+            SearchMode::Literal,
+            SearchMode::Lexical,
+            SearchMode::Semantic,
+            SearchMode::Hybrid,
+        ] {
+            let plan = QueryPlan {
+                mode,
+                ..QueryPlan::default()
+            };
+            // Reproduce the previous executable's wire contract, rather than
+            // issuing a second cursor under the current ranking policy.
+            let previous = Blake3Hash::digest(
+                serde_json::to_vec(&(
+                    "lwiki-query-v1",
+                    "alpha beta",
+                    mode,
+                    &plan.filters,
+                    &plan.limits,
+                ))
+                .unwrap(),
+            );
+            let current = fingerprint("alpha beta", &plan).unwrap();
+            match mode {
+                SearchMode::Lexical | SearchMode::Hybrid => assert_ne!(current, previous),
+                SearchMode::Literal | SearchMode::Semantic => assert_eq!(current, previous),
+            }
+        }
+    }
 }
