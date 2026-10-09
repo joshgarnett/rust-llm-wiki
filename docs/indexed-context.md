@@ -97,6 +97,28 @@ record/path/hash locators and no fabricated source citations; captured passages
 retain exact source revision/span/hash citations. Kind, tag, status, source and
 path filters use the existing document filtering rules.
 
+To include earlier revisions, explicitly request historical material in lexical
+or literal indexed-document context:
+
+```sh
+lwiki --wiki /path/to/wiki --offline context 'What changed between the earlier and current policy?' \
+  --scope indexed-documents --mode lexical --include-historical
+```
+
+This includes eligible current and historical material together. Captured
+passages and citations retain their Current, Historical or Withdrawn labels and
+exact revision identities. Omit the flag for current-only context. Historical
+semantic/hybrid context and historical host selection remain unavailable; strict
+`--scope historical` retains its separate contract.
+
+Repeat `--source-id` to restrict a mixed question to several Sources. The single
+`--path-prefix` restricts their shared namespace; it cannot select a list of exact
+revision paths. Historical inclusion can therefore discover several revisions of
+those Sources. All selected dependencies undergo the same authentication, final
+recheck and shared context/proof budgets. More returned revisions can compete for
+the existing candidate and passage limits; inclusion does not certify that the
+result contains every requested fact.
+
 `--kind source` selects canonical Source records, whose notes can be empty. It
 does not select captured payloads: those document rows have Source/Revision
 ownership but no record kind. `--kind revision` also excludes the payloads.

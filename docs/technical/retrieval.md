@@ -127,6 +127,17 @@ Use `rrf(x) = Σ weight/(60 + one_based_rank(x))`; absent candidates contribute 
 
 Nonliteral document context uses the query and authenticated, eligible source owners to propose additional passages from their pinned original bytes. Discovery ranks remain unchanged. This separates finding a source from finding all useful passages within that source; it does not assert that query overlap proves a complete answer.
 
+Normalized indexed-document context defaults to current eligible owners.
+Explicit `--include-historical` is supported for native literal/lexical requests:
+normalization preserves the flag, catalog context policy applies it before
+candidate limits, and authenticated owner admission uses the same eligibility
+policy. Current and historical revisions share one rendered budget and retain
+distinct exact citations; withdrawn state remains visible. Proposed requests,
+historical semantic/hybrid requests and historical host-selection preparation or
+replay are refused. Selected dependency authentication and final byte/authority
+rechecks remain mandatory. This does not change strict historical scope or claim
+global membership verification.
+
 With complete cached-unit coverage, semantic and hybrid context retain exact eligible embedding-unit locations for each discovered owner. Hybrid discovery still combines lexical and dense owner candidates. Evidence selection orders retained units by dense cosine, with conventional unit-body BM25 only for equal-cosine ties, followed by deterministic path/span order. Diagnostic dense/BM25 ranks remain visible separately from the final selection rank; they do not add duplicate selection votes. Missing/corrupt vectors are unavailable rather than zero similarity. Incomplete owner/unit coverage falls back to bounded lexical passage selection for the whole retrieved owner set and emits a warning. No new embedding request is made by passage selection.
 
 Each unit maps to one canonical structural parent: bounded paragraphs, lists with introductions, and code/explanation groups. Identical parents retain their strongest child without extra votes, before the global candidate cap. Packing attempts the parent first and its associated exact child if the parent does not fit. A unit larger than the requested excerpt uses a bounded query-focused child and discloses clipping. Managed-note metadata is excluded; captured content remains payload. Structural, lexical-unit and coarse-focus scans are separately bounded to1MiB per owner/4MiB total each; structural starts and units are capped at4096, distinct tokenized query terms at256. Cached-vector reads reserve at most64MiB. Limits and omitted regions are disclosed.

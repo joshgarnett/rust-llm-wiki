@@ -111,7 +111,12 @@ pub(crate) fn context(
         max_elapsed_ms: meter.remaining_ms(),
         ..QueryReadLimits::default()
     })?;
-    let mut hits = lexical::search_context_catalog(&reader, query, &request.documents, false)?;
+    let mut hits = lexical::search_context_catalog(
+        &reader,
+        query,
+        &request.documents,
+        request.documents.filters.include_historical,
+    )?;
     meter.check()?;
     let paths = hits
         .hits

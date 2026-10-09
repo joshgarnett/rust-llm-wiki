@@ -5,8 +5,11 @@ use super::*;
 use crate::{
     changes::ChangeDraft,
     records::{edit_note, parse_note},
-    retrieval::context_selection_packet::{
-        SelectionAction, SelectionCard, SelectionPacket, SelectionReply,
+    retrieval::{
+        SearchMode,
+        context_selection_packet::{
+            SelectionAction, SelectionCard, SelectionPacket, SelectionReply,
+        },
     },
     sources::{CaptureRequest, ExtractionInput, SourceOrigin, SourceStore, revision::record_bytes},
     vault::{VaultFs, VaultRoot, WriterPermit},
@@ -2455,4 +2458,284 @@ fn coverage_development_pilot(deck_cost: bool) {
         comparison_failures.is_empty(),
         "all twelve arms recorded before reporting archived-control mismatch: {comparison_failures:?}"
     );
+}
+
+// Disposable lifecycle fixtures exercise native automatic historical context.
+fn historical_fixture() -> Fixture {
+    let fixture = Fixture::new();
+    let plan = SourceStore::new(fixture.catalog.fs().clone())
+        .plan_refresh(
+            &fixture.source,
+            capture("selectionprobe: Café 東京 current permit is amber.\n".as_bytes()),
+        )
+        .unwrap();
+    Fixture::seed(fixture.catalog.fs(), plan.draft.unwrap());
+    fixture.republish();
+    fixture
+}
+fn historical_request(mode: SearchMode) -> ContextRequest {
+    let mut request = request();
+    request.documents.mode = mode;
+    request.documents.filters.include_historical = true;
+    request
+}
+#[test]
+fn historical_native_context_separates_revisions_and_exact_utf8_citations() {
+    for mode in [SearchMode::Lexical, SearchMode::Literal] {
+        let fixture = historical_fixture();
+        let mut current = request();
+        current.documents.mode = mode;
+        current.documents.filters.source_ids = vec![fixture.source.clone()];
+        let current = context(
+            &fixture.catalog,
+            QUERY,
+            &current,
+            &ContextOptions::default(),
+        )
+        .unwrap();
+        assert!(!current.text().contains("violet permit"));
+        assert!(current.text().contains("amber"));
+        let mut history = historical_request(mode);
+        let mixed = context(
+            &fixture.catalog,
+            QUERY,
+            &history,
+            &ContextOptions::default(),
+        )
+        .unwrap();
+        assert!(
+            mixed
+                .passages()
+                .iter()
+                .any(|passage| passage.locator.path == path("page.md"))
+        );
+        assert!(mixed.text().contains("violet permit"));
+        assert!(mixed.text().contains("amber"));
+        assert!(mixed.usage().rendered_bytes <= history.budget.max_bytes);
+        assert!(mixed.usage().estimated_tokens <= history.budget.max_tokens);
+        history.documents.filters.source_ids = vec![fixture.source.clone()];
+        let result = context(
+            &fixture.catalog,
+            QUERY,
+            &history,
+            &ContextOptions::default(),
+        )
+        .unwrap();
+        assert!(result.text().contains("violet permit"));
+        assert!(result.text().contains("amber"));
+        assert!(result.text().contains("Citation (Historical)"));
+        assert!(result.text().contains("Citation (Current)"));
+        let mut revisions = BTreeSet::new();
+        for passage in result.passages() {
+            let original = fs::read(
+                fixture
+                    .catalog
+                    .fs()
+                    .root()
+                    .path()
+                    .join(passage.locator.path.as_str()),
+            )
+            .unwrap();
+            assert_eq!(
+                passage.text.as_bytes(),
+                &original[passage.span.start() as usize..passage.span.end() as usize]
+            );
+            for citation in &passage.citations {
+                let CitationRef::Source(reference) = citation else {
+                    panic!("direct source citation")
+                };
+                assert_eq!(reference.source_id, fixture.source);
+                assert_eq!(reference.span, passage.span);
+                assert_eq!(
+                    reference.quote_hash,
+                    Blake3Hash::digest(passage.text.as_bytes())
+                );
+                revisions.insert(reference.source_revision.clone());
+            }
+        }
+        assert_eq!(revisions.len(), 2);
+        assert!(result.usage().rendered_bytes <= history.budget.max_bytes);
+        assert!(result.usage().estimated_tokens <= history.budget.max_tokens);
+    }
+}
+#[test]
+fn historical_native_context_withdrawal_remains_authenticated_and_labeled() {
+    let fixture = historical_fixture();
+    let withdrawal = SourceStore::new(fixture.catalog.fs().clone())
+        .plan_withdraw(&fixture.source, "Disposable historical fixture")
+        .unwrap();
+    Fixture::seed(fixture.catalog.fs(), withdrawal.draft.unwrap());
+    fixture.republish();
+    let mut request = historical_request(SearchMode::Lexical);
+    request.documents.filters.source_ids = vec![fixture.source.clone()];
+    let result = context(
+        &fixture.catalog,
+        QUERY,
+        &request,
+        &ContextOptions::default(),
+    )
+    .unwrap();
+    assert!(result.text().contains("violet permit"));
+    assert!(result.text().contains("Citation (Withdrawn)"));
+    assert!(!result.text().contains("Citation (Current)"));
+    request.documents.filters.include_historical = false;
+    assert!(
+        context(
+            &fixture.catalog,
+            QUERY,
+            &request,
+            &ContextOptions::default()
+        )
+        .unwrap()
+        .passages()
+        .is_empty()
+    );
+}
+#[test]
+fn historical_native_context_rejects_stale_dependencies_and_exhausted_proof() {
+    for target in ["body", "source"] {
+        let fixture = historical_fixture();
+        let target = if target == "body" {
+            fixture.content.clone()
+        } else {
+            path(&format!("sources/{}/source.md", fixture.source))
+        };
+        let full = fixture.catalog.fs().root().path().join(target.as_str());
+        let mut bytes = fs::read(&full).unwrap();
+        bytes.extend(b"External mutation retained.\n");
+        let options = ContextOptions {
+            fault: Some(Arc::new(EditBeforeEmission {
+                path: full.clone(),
+                bytes: bytes.clone(),
+            })),
+            ..Default::default()
+        };
+        assert_eq!(
+            context(
+                &fixture.catalog,
+                QUERY,
+                &historical_request(SearchMode::Lexical),
+                &options
+            )
+            .unwrap_err()
+            .code,
+            ErrorCode::FreshnessConflict
+        );
+        assert_eq!(fs::read(full).unwrap(), bytes);
+    }
+    let fixture = historical_fixture();
+    let mut request = historical_request(SearchMode::Lexical);
+    request.verification_budget.max_files = 1;
+    assert_eq!(
+        context(
+            &fixture.catalog,
+            QUERY,
+            &request,
+            &ContextOptions::default()
+        )
+        .unwrap_err()
+        .code,
+        ErrorCode::BudgetExceeded
+    );
+}
+#[test]
+fn historical_native_context_rejects_vectors_host_selection_and_proposed() {
+    for mode in [SearchMode::Semantic, SearchMode::Hybrid] {
+        assert_eq!(
+            context::validate_request(QUERY, &historical_request(mode))
+                .unwrap_err()
+                .code,
+            ErrorCode::Usage
+        );
+    }
+    let fixture = Fixture::new();
+    let reply = Fixture::reply(&fixture.prepare());
+    for selection in [SelectionAction::Prepare, SelectionAction::Apply(reply)] {
+        assert_eq!(
+            context(
+                &fixture.catalog,
+                QUERY,
+                &historical_request(SearchMode::Lexical),
+                &ContextOptions {
+                    selection,
+                    ..Default::default()
+                }
+            )
+            .unwrap_err()
+            .code,
+            ErrorCode::Usage
+        );
+    }
+    let mut request = historical_request(SearchMode::Lexical);
+    request.documents.filters.include_proposed = true;
+    assert_eq!(
+        context::validate_request(QUERY, &request).unwrap_err().code,
+        ErrorCode::Usage
+    );
+}
+
+#[test]
+fn historical_native_context_filters_ineligible_owners_before_candidate_cap() {
+    let fixture = historical_fixture();
+    // These discovery matches must not consume the single context owner slot.
+    for (file, kind, name, fields) in [
+        (
+            "draft-history.md",
+            "page",
+            "page_history_draft",
+            json!({"wiki_status":"draft"}),
+        ),
+        (
+            "invalid-history.md",
+            "page",
+            "page_history_invalid",
+            json!({"wiki_status":"reviewed","wiki_depends_on_ids":["missing_history_dependency"]}),
+        ),
+        (
+            "operational-history.md",
+            "decision",
+            "decision_history_noise",
+            json!({"wiki_status":"active","wiki_action":"accept","wiki_created_at":"2026-10-04T00:00:00Z","wiki_input_ids":["assertion_host"],"wiki_output_ids":["assertion_host"]}),
+        ),
+        (
+            "proposed-history.md",
+            "assertion",
+            "assertion_history_proposed",
+            json!({"wiki_status":"proposed","wiki_subject_id":"entity_host","wiki_object_id":"entity_host","wiki_predicate":"uses"}),
+        ),
+    ] {
+        fs::write(
+            fixture.catalog.fs().root().path().join(file),
+            note(
+                kind,
+                name,
+                fields,
+                b"historycapneedle historycapneedle historycapneedle\n",
+            ),
+        )
+        .unwrap();
+    }
+    let plan = SourceStore::new(fixture.catalog.fs().clone())
+        .plan_refresh(
+            &fixture.source,
+            capture(b"historycapneedle: eligible captured current answer.\n"),
+        )
+        .unwrap();
+    Fixture::seed(fixture.catalog.fs(), plan.draft.unwrap());
+    fixture.republish();
+    for mode in [SearchMode::Literal, SearchMode::Lexical] {
+        let mut request = historical_request(mode);
+        request.documents.limits.candidates = 1;
+        request.documents.limits.hits = 1;
+        let result = context(
+            &fixture.catalog,
+            "historycapneedle",
+            &request,
+            &ContextOptions::default(),
+        )
+        .unwrap();
+        assert!(result.text().contains("eligible captured current answer"));
+        assert_eq!(result.passages().len(), 1);
+        assert!(!result.passages()[0].citations.is_empty());
+    }
 }

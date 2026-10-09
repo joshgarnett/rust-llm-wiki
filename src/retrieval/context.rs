@@ -66,7 +66,8 @@ pub fn validate_selection_action(request: &ContextRequest, action: &SelectionAct
         ) || request.target != ContextTarget::Documents
             || request.documents.mode == SearchMode::Literal
             || (request.scope == ContextScope::IndexedDocuments
-                && request.documents.mode != SearchMode::Lexical))
+                && (request.documents.mode != SearchMode::Lexical
+                    || request.documents.filters.include_historical)))
     {
         return Err(WikiError::new(
             ErrorCode::Usage,
@@ -86,12 +87,16 @@ fn normalize_request(request: &ContextRequest) -> Result<ContextRequest> {
                     | SearchMode::Semantic
                     | SearchMode::Hybrid
             )
-            || request.documents.filters.include_historical
+            || (request.documents.filters.include_historical
+                && !matches!(
+                    request.documents.mode,
+                    SearchMode::Literal | SearchMode::Lexical
+                ))
             || request.documents.filters.include_proposed)
     {
         return Err(WikiError::new(
             ErrorCode::Usage,
-            "indexed-documents supports current eligible document context without graph expansion",
+            "indexed-documents supports eligible document context without graph expansion; historical inclusion requires literal or lexical mode",
         ));
     }
     if request.scope == ContextScope::IndexedEvidence
@@ -149,7 +154,9 @@ fn normalize_request(request: &ContextRequest) -> Result<ContextRequest> {
     normalized.documents.filters.include_historical = matches!(
         request.scope,
         ContextScope::Historical | ContextScope::Snapshot
-    );
+    ) || (request.scope
+        == ContextScope::IndexedDocuments
+        && request.documents.filters.include_historical);
     normalized.documents.filters.include_proposed = false;
     if let Some(g) = &mut normalized.graph {
         g.filters.include_historical = matches!(
@@ -259,10 +266,9 @@ fn document_owner(
         .map(|id| reader.record(id))
         .transpose()?
         .flatten();
-    let current = matches!(
-        request.scope,
-        ContextScope::Current | ContextScope::IndexedDocuments
-    );
+    let current = request.scope == ContextScope::Current
+        || (request.scope == ContextScope::IndexedDocuments
+            && !request.documents.filters.include_historical);
     let allowed = if d.owner_revision.is_some() {
         d.eligibility != Eligibility::Invalid && (!current || d.eligibility == Eligibility::Current)
     } else {
