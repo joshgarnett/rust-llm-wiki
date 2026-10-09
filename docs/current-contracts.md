@@ -199,10 +199,12 @@ their existing revision/publication. The warmed 1K run took 21.786 seconds,
 including audits. Index sync still inspects the current inputs, so this result
 does not establish larger-vault throughput or close retrieval, recovery or 25K gates.
 
-Separately admitted [10K input preparation](validation-varied-vault-control.md#10k-input-preparation)
-has produced and verified exactly 1 GB of distinct source text within its frozen
-limits. The generator's explicit preparation admission does not launch import;
-10K runtime behavior and all 25K gates still require actual-command evidence.
+The subsequent [10K public import control](validation-varied-vault-control.md#10k-public-import-control)
+passes its independently reviewed import gate: 44 offline commands imported
+exactly 1 GB of distinct input, preserving all 10,000 Sources and current indexed
+membership. Its runtime account used 10.16 GB of allocated disk and native peak
+RSS was 42.52 MB. Ordinary retrieval, source updates and all 25K gates remain
+separate; this finite import does not establish full capacity or release acceptance.
 
 The separate [Graph update feasibility experiment](validation-graph-update-feasibility.md)
 rules out expanding the current normalized Graph proposal: a real full-sized update

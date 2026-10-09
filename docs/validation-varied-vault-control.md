@@ -1,4 +1,4 @@
-# Varied 1K import and retrieval control
+# Varied 1K and 10K import and retrieval controls
 
 On 2026-10-09, the existing native macOS 0.2.0 preview imported 1,000 distinct
 documents totaling exactly 100,000,000 current-content bytes into a new
@@ -233,6 +233,47 @@ This verifies source-only preparation under its 2 GiB/30-minute limits. It does
 not establish 10K import, query or management behavior, or 25K capacity. The
 accepted native preview was reused for its binary pin; no Rust build or provider
 call ran during preparation.
+
+## 10K public import control
+
+The separately frozen native control then imported all 10,000 documents through
+44 offline public commands: initialization, explicit normalized activation,
+manifest preparation, 40 bounded run/resume invocations, and final status. The
+2,500 groups retained every input ordinal once, with distinct Source and Revision
+identities. Original and extracted bytes matched all inputs; Source identity,
+title, origin, current head, history and Revision ownership, extraction and hashes
+passed the supervisor's checks. All 10,000 current captured index rows matched
+at publication generation 2,501.
+
+| Observation | Result |
+|---|---:|
+| Active import commands, including final status | 3,625.065 seconds |
+| Whole supervisor interval, including audits and initial report | 3,673.926 seconds |
+| Largest native CLI peak RSS | 42,516,480 bytes |
+| Supervisor peak RSS | 71,581,696 bytes |
+| Final allocated runtime account | 10,155,622,400 bytes |
+| Final logical runtime account | 9,854,650,588 bytes |
+| Final runtime files | 107,654 |
+| Free space after import | 136,654,028,800 bytes |
+| Byte-exact Sources / current captured index rows | 10,000 / 10,000 |
+
+All 44 commands passed. The runtime audited its 10,023 pins completely without
+drift. Its pin set includes the public freeze and omits six auxiliary preparation
+files from the public freeze's 10,028 entries. Independent review verified the
+complete 10,029-path union without drift, all 40,000 canonical files and current
+indexed membership. The finite 10K import gate passed with zero independent audit
+errors. This acceptance is separate from retrieval, update and capacity gates.
+
+The resource envelope was 16 GiB for this runtime account, a separate 1 GiB
+external allowance, separately charged retained 1K allocation, and at least
+32 GiB free. The same optimized native preview was reused. Measurements include
+resource-monitor overhead on a warm, nonexclusive host. The whole interval was
+sampled after verification, initial report writing and a resource census; its
+final emission tail is excluded. Cooperative guards can overshoot.
+
+This is actual 10K import evidence for the varied synthetic/public-reference
+profile. It does not establish ordinary retrieval or update performance, natural
+corpus quality, 25K capacity, bulk updates, recovery or full release acceptance.
 
 ## Validation limits
 
