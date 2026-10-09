@@ -170,6 +170,8 @@ test_suite(
         ":catalog_scan_eligibility_test",
         ":context_cli_test",
         ":normalized_document_workflow_test",
+        ":read_from_match_test",
+        ":page_move_identity_test",
         ":context_freshness_test",
         ":graph_queries_test",
         ":provider_dispatch_test",

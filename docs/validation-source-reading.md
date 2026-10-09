@@ -77,3 +77,53 @@ model answers, private HIGH evaluation, live vault or other-platform qualificati
 were involved. Detailed pinned inputs/outputs are local execution evidence;
 a fresh checkout can run the public read tests but does not include historical
 private questions or raw receipts. See [the candidate guide](testing-0.2.0.md).
+
+## Actual 10k development comparison
+
+The bounded match-to-read workflow now accepts `read --start N` without an end:
+the selected authenticated body supplies EOF, and the byte cap and returned
+continuation still limit each read. Explicit ranges remain strict. This fixes
+a real copied-command failure; it does not change retrieval ranking.
+
+On an actual 10,000-Source vault, five exposed development questions compared
+historical context (H), ordinary context (D), ordinary verified search (S), and
+the first two returned captured owners followed by bounded forward reads (S+R).
+R retained the original filters, started at returned locations and followed only
+actual continuations. All five questions and every requested fact were mandatory.
+
+| Task | H facts | D facts | S facts | S+R facts |
+| --- | --- | --- | --- | --- |
+| Incremental compilation and config override (P08) | 3/3 | 3/3 | 0/3 | 3/3 |
+| Incremental values and disabling default features (P16) | 3/3 | 3/3 | 0/3 | 1/3 |
+| HTTP timeout controls and feature-syntax support (R13) | 1/3 | 1/3 | 1/3 | 3/3 |
+| Network retry default and shared features (R14) | 1/2 | 1/2 | 0/2 | 1/2 |
+| Scoped offline behavior and override (R16) | 3/3 | 3/3 | 1/3 | 3/3 |
+
+H, D and S+R each completed **3/5 tasks and 11/14 facts**, with different tasks
+passing; S completed none. Every arm failed the complete-answer gate. The larger
+D packet added no required fact over H. Forward reading recovered R13 but missed
+earlier P16 evidence already in D and left R14 incomplete. Later reads should
+augment existing support; exact citations alone do not establish completeness.
+
+The final collection used 35 commands (15 discovery and 20 reads), 142,313 read
+body bytes and 239.219 seconds in its owning monotonic interval. Summed native
+command intervals were 1.038 seconds; collection/proof overhead is included only
+in the former. Independent audit authenticated all 81 SourceRef occurrences
+(56 unique), actual read ranges, continuations and publication, with no citation
+or operational blockers. Input/revision preservation passed. Ten unused read
+slots were not reassigned. The original four-command missing-end failure remains
+part of the record; the two attempts total 39 commands, not a paired baseline.
+
+Native read checks passed after narrowly correcting launcher/test assumptions.
+That broader checkpoint also reproduced an independent Page-move defect; its
+failure was retained for a separate correctness milestone. This comparison used
+a pinned native ARM64 release executable with opt-level 3 and debug information
+disabled. It did not run an answer model, provider or unseen acceptance questions.
+Historical default 6.5, HIGH, semantic and actual 25k capacity remain open.
+
+A separately declared zero-new-call control retained ordinary context alongside
+the same successful search/read envelopes. It completed **4/5 tasks and 13/14
+facts** within 128 KiB of full raw stdout per task, without deduplication or
+trimming. All 60 citation occurrences passed; R14's retry-default support still
+remained missing. This supports preserving acquired evidence, while native D
+remains 3/5. No answer model or unseen acceptance stage ran in that control.

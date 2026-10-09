@@ -808,7 +808,7 @@ fn external_page_missing_durability_child() {
     });
     let retire_io = Arc::new(PageRetireIo {
         native: crate::vault::NativeIo,
-        old_database: root.join(format!(
+        old_database: native_fs.root().path().join(format!(
             ".wiki/cache/catalogs/{}.sqlite",
             previous_selection.file_id
         )),

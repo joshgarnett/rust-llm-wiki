@@ -704,6 +704,49 @@ impl PublicationFault for SqlCut {
     }
 }
 #[test]
+fn page_move_proposed_identity_survives_old_path_retirement_but_deletion_stays_absent() {
+    let original = page("page_guide", "Guide.");
+    let fixture = Fixture::new(&[("pages/guide.md", original.clone())]);
+    let reader = fixture
+        .catalog
+        .query_snapshot(QueryReadLimits::default())
+        .unwrap();
+    let page_id = id("page_guide");
+    let from = path("pages/guide.md");
+    let to = path("handbook/Guide.md");
+    let limits = RefreshProjectionLimits::default();
+    let mut work = Work::new(&fixture.fs, &reader, &limits).unwrap();
+    work.require(&page_id).unwrap();
+    let old = work.now[&page_id].clone();
+    let mut moved = old.clone();
+    moved.path = to.clone();
+    work.now.insert(page_id.clone(), moved);
+    work.removed_paths.insert(from.clone());
+    work.overlay.insert(to.clone(), original);
+    let paths = &mut work.facts.get_mut(&page_id).unwrap().direct_paths;
+    assert!(paths.remove(&from));
+    assert!(paths.insert(to.clone()));
+    assert!(work.load(&page_id).unwrap());
+    assert_eq!(work.now[&page_id].path, to);
+    assert_eq!(work.note(&to).unwrap().body(), b"Guide.");
+    assert_eq!(reader.record(&page_id).unwrap().unwrap().path, from);
+
+    // The pinned old row remains available, but a real deletion must never
+    // reload it after the proposed identity has been removed.
+    work.now.remove(&page_id);
+    assert!(!work.load(&page_id).unwrap());
+    assert!(!work.now.contains_key(&page_id));
+    assert_eq!(reader.record(&page_id).unwrap().unwrap().path, from);
+
+    // A surviving row at a path explicitly removed is contradictory, not a
+    // deleted identity to silently resurrect or a valid move to accept.
+    work.now.insert(page_id.clone(), old);
+    assert_eq!(
+        work.load(&page_id).unwrap_err().code,
+        ErrorCode::IndexCorrupt
+    );
+}
+#[test]
 fn page_move_sql_cut_recovery_preserves_old_reader_and_one_identity() {
     for cut in [
         PublicationCheckpoint::AfterPointer,
@@ -734,15 +777,19 @@ fn page_move_sql_cut_recovery_preserves_old_reader_and_one_identity() {
             IndexedRefreshSession::prepare_write(&faulty, &fixture.writer, projected).unwrap();
         let proof = session.proof().clone();
         let engine = ChangeEngine::new(fixture.fs.clone()).unwrap();
+        let error = engine
+            .apply_indexed_refresh(&fixture.writer, &mut session)
+            .unwrap_err();
         assert_eq!(
-            engine
-                .apply_indexed_refresh(&fixture.writer, &mut session)
-                .err()
-                .unwrap()
-                .code,
-            ErrorCode::RecoveryRequired
+            error.code,
+            ErrorCode::RecoveryRequired,
+            "{cut:?}: {error:?}"
         );
-        assert!(fault.fired.load(Ordering::SeqCst));
+        assert_eq!(error.message, "Page move SQL cut", "{cut:?}");
+        assert!(
+            fault.fired.load(Ordering::SeqCst),
+            "{cut:?}: fault must actually fire"
+        );
         assert_eq!(
             old.record(&id("page_guide")).unwrap().unwrap().path,
             path("pages/guide.md")
@@ -764,18 +811,42 @@ fn page_move_sql_cut_recovery_preserves_old_reader_and_one_identity() {
             ChangeStatus::Committed
         );
         drop(recovered);
-        drop(old);
         assert_eq!(
-            fixture
-                .catalog
-                .query_snapshot(QueryReadLimits::default())
-                .unwrap()
-                .record(&id("page_guide"))
+            old.record(&id("page_guide")).unwrap().unwrap().path,
+            path("pages/guide.md")
+        );
+        let fresh = fixture
+            .catalog
+            .query_snapshot(QueryReadLimits::default())
+            .unwrap();
+        assert_eq!(
+            fresh.record(&id("page_guide")).unwrap().unwrap().path,
+            path("handbook/Guide.md")
+        );
+        assert_eq!(
+            fresh
+                .unique_identity_claim(&id("page_guide"))
                 .unwrap()
                 .unwrap()
                 .path,
             path("handbook/Guide.md")
         );
+        assert!(fresh.document(&path("pages/guide.md")).unwrap().is_none());
+        assert_eq!(
+            fresh
+                .document(&path("handbook/Guide.md"))
+                .unwrap()
+                .unwrap()
+                .raw_text
+                .as_bytes(),
+            page("page_guide", "Guide.")
+        );
+        assert_eq!(
+            fs::read(fixture.fs.root().path().join("incoming.md")).unwrap(),
+            b"[[handbook/Guide.md]]"
+        );
+        drop(fresh);
+        drop(old);
         fixture.oracle();
     }
 }

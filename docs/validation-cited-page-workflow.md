@@ -63,3 +63,39 @@ context completeness remains 9/28 facts and 2/10 positive tasks; the newer pilot
 different dataset/workflow. Native HIGH, semantic acceptance, practical 25K and
 full 0.2.0 release qualification remain open. A local trial package is separate
 from tagging, publishing and full release acceptance.
+
+## Move identity, deletion and restoration
+
+A later sole-Page fixture exposed a move losing its surviving identity while
+structural dependencies were recomputed. The shared loader now checks the
+proposed row before the retired old path. True deletion still blocks fallback
+to the old catalog row; contradictory surviving-at-removed-path state refuses.
+The change adds no repair subsystem or additional filesystem reads.
+
+The integrated native checkpoint and targeted failure correction establish
+150 distinct passing cases, with five intentional helper exclusions. Both
+injected SQL cuts must actually fire and recover, preserving a held old reader
+and one current identity. Shared Source projection and external Page deletion
+regressions pass. Two new public CLI groups preserve exact author bytes,
+incoming references, three citation links and immutable Source files, including
+typed-dependent diagnostics across external deletion and exact restoration.
+One existing retirement-cut test initially failed because its fault matcher used
+an uncanonical macOS temporary path. Binding it to the vault's canonical root
+fixed the matcher while retaining real unlink, fault and recovery assertions;
+only that failed matrix and the two previously unrun CLI groups were rerun.
+
+A separately frozen independent public trace passed **10/10**, all mandatory
+checks and zero blockers, on a pinned native ARM64 release build with opt-level 3
+and debug information disabled. Its 20 commands comprised 16 successes and four
+expected nonzero refusals. Wrong-author, occupied-destination and no-op guards,
+one-ID move, current search, old-path refusal, external deletion without
+resurrection, exact restore and both complete canonical/cache checks passed.
+Exact author regions and citation JSON survived; only the three relative link
+destinations and two supported incoming destinations changed. All four Source
+files and unrelated notes remained unchanged.
+
+The owning interval was 3.905 seconds, with 1.694 seconds of summed native command
+intervals; post-report runtime allocation was 991,232 bytes. This small fixture
+does not establish large-vault performance, answer completeness or full-suite
+acceptance. The failed native receipt and unlaunched interpreter admission remain
+preserved. Retrieval, semantic/HIGH, actual 25k and full-release gates stay open.

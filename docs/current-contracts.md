@@ -120,6 +120,10 @@ Verified source reads now return exact reusable range citations with explicit
 Current, historical or withdrawn state; the separate development reading recipe
 completed 5/5 positives on both baseline and candidate. Automatic HIGH and
 representative capacity remain open.
+Its subsequent actual 10k development comparison completed only 3/5 tasks for
+ordinary context and 3/5 for bounded forward reading, despite authenticated
+citations. The reading contract now supports starting at a verified match
+without knowing EOF; retrieval completeness remains unqualified.
 
 The [typed cited-Page workflow](validation-cited-page-workflow.md) passes scoped
 functional acceptance at 10/10, all five groups and required tasks on both layouts,
@@ -129,6 +133,10 @@ paths. Ordinary moves preserve refs and rebase generated links. Eighty-six affec
 native checks pass with unchanged cases reused. Earlier failed/incomplete public
 runs and harness/protocol deviations remain preserved; this is functional coverage,
 not original timing-protocol compliance. Native completeness and 25K remain open.
+The later sole-Page move/deletion slice separately passes a frozen 20-command
+trace at 10/10, with 150 distinct native cases passing across its checkpoints.
+Surviving identity, exact author/provenance, true deletion and restoration are
+covered; failed fault-matcher and interpreter attempts remain disclosed.
 
 The separate [assisted answer and maintained Page workflow](validation-assisted-answer-pages.md)
 passes every scoped threshold: three complete supported drafts, actual selection

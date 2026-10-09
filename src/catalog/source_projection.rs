@@ -269,15 +269,21 @@ impl Work<'_> {
     }
     pub(super) fn load(&mut self, id: &RecordId) -> Result<bool> {
         self.tick()?;
+        // A move retires the old path while preserving the proposed identity.
+        // Deletion removes the proposed row, so its old-path tombstone still
+        // prevents reloading that identity from the pinned catalog below.
+        if let Some(row) = self.now.get(id) {
+            if self.removed_paths.contains(&row.path) {
+                return Err(corrupt("surviving proposed record has a removed path"));
+            }
+            return Ok(true);
+        }
         if self
             .old
             .get(id)
             .is_some_and(|row| self.removed_paths.contains(&row.path))
         {
             return Ok(false);
-        }
-        if self.now.contains_key(id) {
-            return Ok(true);
         }
         if self.now.len() >= self.limits.max_rows {
             return Err(budget());
