@@ -39,7 +39,9 @@ original bytes without citable extracted text. No extractor is run.
 
 ## Run, inspect and resume
 
-Activate the normalized catalog explicitly before importing a collection:
+`init` creates a vault that uses the legacy layout until normalized activation.
+For the collection workflow, initialize a new vault if needed, then activate the
+normalized catalog explicitly before import:
 
 ```sh
 "$LWIKI" --wiki "$WIKI" --offline index rebuild --normalized
@@ -88,6 +90,15 @@ Use the returned Source ID with ordinary commands:
 
 Refresh and withdrawal operate on individual sources. Guarded rollback of a shared
 import Change operates on that entire group.
+
+On this normalized layout, ordinary search uses published discovery without a
+whole-vault sync and returns uncited excerpts. Add `--verify-selected` to
+authenticate displayed dependencies and obtain citations for captured text.
+Ordinary context and verified reads authenticate selected evidence; they do not
+prove global freshness or answer completeness. Managed imports and refreshes
+publish their changes. Run `index sync` after intended external wiki-file edits
+to make them discoverable; `check` is a separate complete audit. Follow
+[indexed context](indexed-context.md) for proof limits and exact citation reads.
 
 ## Interrupted runs and backups
 

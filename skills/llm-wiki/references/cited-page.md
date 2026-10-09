@@ -33,8 +33,11 @@ mode/scope for one the user requested. The optional ID-only selection route uses
 lexical mode on normalized vaults.
 Direct semantic/hybrid document context is available with compatible prepared
 vectors and an exact cached query for offline use; it does not support ID-only
-selection. Normalized strict current/historical and literal context remain
-unavailable. Do not activate normalized layout to follow this recipe; `index rebuild --normalized` is an explicit choice.
+selection. Normalized literal document context is available for exact UTF-8
+substrings; it scans filtered cached text and should use narrow source/path
+filters on large collections. Normalized strict current/historical context
+remains unavailable. Do not activate normalized layout to follow this recipe;
+`index rebuild --normalized` is an explicit choice.
 Plain normalized search is cached discovery; `search QUERY --mode lexical
 --verify-selected` verifies displayed dependencies when citations are needed.
 

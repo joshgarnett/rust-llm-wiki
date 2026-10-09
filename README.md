@@ -35,12 +35,17 @@ EOF
 "$LWIKI" --wiki "$WIKI" --offline check
 ```
 
-Search should show the deployment note and its `atlas_migrate` command. Context should return the note with source/revision IDs, byte ranges and citation hashes; it retrieves text rather than generating an answer. `check` should report zero errors. `init` requires a directory that does not exist, so initialize the `wiki` child of the temporary directory. Search automatically syncs the local index.
+Search should show the deployment note and its `atlas_migrate` command. Context should return the note with source/revision IDs, byte ranges and citation hashes; it retrieves text rather than generating an answer. `check` should report zero errors. `init` requires a directory that does not exist, so initialize the `wiki` child of the temporary directory. These commands use the default legacy catalog, where search automatically syncs the local index.
 
 Continue with [getting started](docs/getting-started.md) to add an authored page, refresh a source, inspect citations and export an agent workflow. The [maintained workflows](skills/llm-wiki/references/workflows.md) cover guarded edits, packet extraction, explicit resolution and review.
 
 For a local collection, [resumable source imports](docs/source-imports.md) prepare
 an explicit file manifest, commit bounded groups and retain Source/Revision mappings.
+That workflow explicitly activates a normalized catalog. Its ordinary search uses
+published discovery, while context verifies selected evidence; run `index sync`
+to discover external file edits. Use `search --verify-selected` when search
+excerpts need source citations. See [indexed context](docs/indexed-context.md)
+for the freshness and completeness boundaries.
 
 ## Providers and research
 

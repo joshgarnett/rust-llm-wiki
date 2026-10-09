@@ -1,4 +1,178 @@
-# Try the 0.2.0 candidate
+# Try the 0.2.0 collection workflow
+
+Use a supplied 0.2.0 trial executable with a new disposable vault. Set `LWIKI` to
+its absolute path and confirm that `capabilities` includes `page_source_refs`
+and `schema page-source-refs` is available before the cited-Page steps. Historical
+0.2.0 artifacts below may predate that capability. This walkthrough uses offline local files and explicit
+normalized activation; no provider setup is needed. It connects import, cited
+evidence, a draft Page, Source refresh and guarded Page reconciliation. Capacity,
+default answer completeness and full release qualification remain open; historical
+candidate artifacts and validation results are retained below.
+
+## Import two files and inspect completion
+
+Keep inputs and draft work files outside the vault. `init` creates a vault that
+uses the legacy layout until `index rebuild --normalized` explicitly activates
+the normalized catalog:
+
+```sh
+"$LWIKI" --version
+"$LWIKI" --offline --json capabilities
+DEMO=$(mktemp -d)
+printf 'Atlas shipment contains 17 amber crates.\n' > "$DEMO/shipment.txt"
+printf 'Atlas inspection begins at 06:40.\n' > "$DEMO/inspection.txt"
+printf '%s\n' '{"path":"shipment.txt"}' '{"path":"inspection.txt"}' > "$DEMO/inputs.jsonl"
+"$LWIKI" --offline init "$DEMO/wiki" --title '0.2.0 walkthrough'
+"$LWIKI" --wiki "$DEMO/wiki" --offline index rebuild --normalized
+"$LWIKI" --offline --json source import prepare \
+  --input-list "$DEMO/inputs.jsonl" --output "$DEMO/import.jsonl"
+"$LWIKI" --wiki "$DEMO/wiki" --offline --json source import run \
+  --manifest "$DEMO/import.jsonl" --key atlas --group-size 4
+"$LWIKI" --wiki "$DEMO/wiki" --offline --json source import status --key atlas
+```
+
+Require `completed: true` and inspect the returned mapping. These two inputs have
+separate Source IDs and immutable Revision histories, with one shared committed
+Change. If incomplete, inspect the reported state and use `source import resume
+--key atlas` for this same import; another key creates fresh identities. Keep the
+manifest and returned `results_path` journal. The [import guide](source-imports.md#run-inspect-and-resume)
+explains interruption hints and how to recover mappings across multiple groups.
+
+## Obtain cited support, then save a draft Page
+
+Ask for both facts and inspect the actual returned evidence:
+
+```sh
+"$LWIKI" --wiki "$DEMO/wiki" --offline --json context \
+  'Atlas shipment crates and inspection time' > "$DEMO/context.json"
+"$LWIKI" --wiki "$DEMO/wiki" --offline --json search \
+  'Atlas shipment' --verify-selected > "$DEMO/search.json"
+```
+
+These ordinary commands use lexical document retrieval. Normalized context
+resolves to `indexed-documents`, with `--limit 10`, a 12,000-byte context
+ceiling and a 3,000 estimated-token ceiling; plain search defaults to 10 hits
+with 240-byte excerpts.
+Plain search supplies uncited cached discovery; `--verify-selected` authenticates
+displayed dependencies and supplies exact citations for nonempty captured text.
+Context verifies selected evidence against the published discovery generation.
+Neither proves global freshness or that every requested fact was returned. Check
+both requested facts, omissions and qualifications before drafting.
+
+If a fact is missing, follow the [bounded gap-reading recipe](../skills/llm-wiki/references/cited-page.md#read-remaining-gaps).
+Use the captured `locator.path` actually returned by discovery, rather than
+inventing a payload path or reading a Revision metadata record as source text:
+
+```sh
+# Set PAYLOAD_PATH from an actual returned captured-text locator.
+"$LWIKI" --wiki "$DEMO/wiki" --offline --json read \
+  --path "$PAYLOAD_PATH" --max-bytes 4096
+```
+
+Inspect the returned text, `data.source_citation.citation` and eligibility. Follow
+`data.continuation` with its returned `--start`/`--end` if truncated, within your
+chosen evidence allowance. Each returned range has its own citation. Dry-run
+previews return no text or evidence, and cached `read --no-sync` is uncited. See
+[exact read and continuation](indexed-context.md#continuing-a-captured-source-read).
+
+Follow [answer and save](../skills/llm-wiki/references/cited-page.md#answer-then-save-only-when-authorized)
+to write `$DEMO/answer.md` and `$DEMO/refs.json` outside the vault. The body should
+answer only supported conditions, with explicit gaps. The refs request uses
+`schema_version: "1"` and `citations` containing the unchanged returned
+`kind: source` CitationRefs, including their actual Source/Revision/span/hash;
+inspect `schema page-source-refs` for the schema. Then save:
+
+```sh
+"$LWIKI" --wiki "$DEMO/wiki" --offline --json page init \
+  --file "$DEMO/answer.md" --title 'Atlas shipment draft' \
+  --source-refs "$DEMO/refs.json"
+```
+
+Inspect the allocated Page ID/path and read the saved Page. The command generates
+links for its actual Page path; do not calculate citation links by hand. A draft
+may be absent from ordinary current search; use `search 'Atlas shipment draft'
+--kind page --status draft --verify-selected` to discover it explicitly. Valid
+citations establish the referenced bytes, not the truth or completeness of prose.
+
+## Refresh one Source and reconcile the Page
+
+Use the shipment Source ID from the actual import mapping; read that Source and
+its returned current Revision first. Follow the [maintenance recipe](source-import-maintenance.md#recover-the-original-mapping)
+when identifying items from a larger completed import. Prepare a replacement,
+then stage, inspect and apply:
+
+```sh
+printf 'Atlas shipment contains 19 amber crates.\n' > "$DEMO/shipment.txt"
+# Set SOURCE_ID from the shipment item in the actual import mapping.
+"$LWIKI" --wiki "$DEMO/wiki" --offline --json read --id "$SOURCE_ID"
+"$LWIKI" --wiki "$DEMO/wiki" --offline --json --stage source refresh \
+  "$SOURCE_ID" --file "$DEMO/shipment.txt"
+# Set CHANGE_ID from this staged result.
+"$LWIKI" --wiki "$DEMO/wiki" --offline changes show "$CHANGE_ID"
+"$LWIKI" --wiki "$DEMO/wiki" --offline --json changes apply "$CHANGE_ID"
+```
+
+Before applying, inspect the complete proposed original payload and expected
+Source before-state, as described in [stage, review, then apply](source-import-maintenance.md#stage-review-then-apply).
+Staging accepts a snapshot; later edits to the external input do not change it.
+Managed import, Source refresh and Page writes appear through catalog publication.
+They do not require a global sync after each write. Source refresh does not
+rewrite the Page's prose or citations.
+
+Retrieve the new evidence, reassess both facts, and keep the newly returned refs.
+Read the whole, nontruncated Page using its actual allocated ID/path. Retain its
+record metadata, all author text and notes, and its returned `data.hash`. Follow
+[guard and reconcile an edit](../skills/llm-wiki/references/cited-page.md#guard-and-reconcile-an-edit)
+to form `$DEMO/revised-page.md` as a full Markdown proposal and
+`$DEMO/revised-refs.json` from current returned citations:
+
+```sh
+"$LWIKI" --wiki "$DEMO/wiki" --offline --json read --id "$PAGE_ID"
+# Set PAGE_PATH and AUTHOR_HASH from that whole Page read.
+"$LWIKI" --wiki "$DEMO/wiki" --offline --json page put \
+  --file "$DEMO/revised-page.md" --path "$PAGE_PATH" --if-match "$AUTHOR_HASH" \
+  --source-refs "$DEMO/revised-refs.json"
+"$LWIKI" --wiki "$DEMO/wiki" --offline --json read --id "$PAGE_ID"
+```
+
+Verify stable Page identity, draft status, revised facts, citations and preserved
+notes. A stale author hash refuses; reread and reconcile the actual author file.
+For intended external wiki-file edits, run `index sync` before verified rereading
+or discovery; [external Page synchronization](external-page-sync.md) explains
+that boundary. Updating the input file outside the vault requires the Source
+refresh above to capture it; sync alone does not import it.
+
+The old SourceRef remains bound to its old immutable Revision and bytes, and
+becomes Historical after refresh. An ordinary read of its retained captured path
+and range can inspect that history with the returned eligibility; do not relabel
+it Current. [Page reconciliation](source-import-maintenance.md#reconcile-the-cited-page)
+keeps useful history explicit while updating current claims.
+
+## Keep history and recover safely
+
+Quiesce writes and back up the entire vault, including `.wiki/state` and
+`.wiki/retained`, as described in [interrupted runs and backups](source-imports.md#interrupted-runs-and-backups).
+Import progress, retained snapshots and naming commitments are operational state,
+not rebuildable cache. Preserve unresolved operations and inspect their reported
+Change IDs; use the documented same-key import continuation or ordinary recovery
+rather than deleting state. Run `check` when you need a separate complete audit:
+
+```sh
+"$LWIKI" --wiki "$DEMO/wiki" --offline check
+```
+
+For query capabilities and proof boundaries, see [indexed context](indexed-context.md#mixed-document-context-on-normalized-indexes).
+Normalized document retrieval supports lexical and literal queries; semantic and
+hybrid routes require compatible prepared vectors, including cached query vectors
+for offline use. Strict current/historical context and general graph expansion
+remain unavailable on normalized catalogs. This local walkthrough adds no new
+performance, capacity or answer-quality qualification.
+
+## Historical candidate artifacts and validation
+
+The following records describe their identified historical builds and fixtures.
+They are retained as evidence; an existing packaged executable does not acquire
+later Markdown changes from this checkout.
 
 This build adds [selected search citations](validation-verified-search.md), normalized Page authoring, individual source capture/refresh/
 withdrawal, bounded catalog reconstruction, context-selection replay and a
@@ -88,43 +262,6 @@ The current candidate is a native macOS ARM64 release build, compiled with Rust
 optimization level 3 on macOS 26.5.2, with minimum macOS deployment target 26.5.
 Other native platforms require their own qualification. Windows vault writes
 remain unsupported. Set `LWIKI` to the supplied executable's absolute path.
-
-## Disposable collection walkthrough
-
-Run this against a new fixture, then inspect the returned Source/Revision IDs:
-
-```sh
-"$LWIKI" --version
-"$LWIKI" --offline --json capabilities
-DEMO=$(mktemp -d)
-printf 'Atlas shipment contains 17 amber crates.\n' > "$DEMO/shipment.txt"
-printf 'Atlas inspection begins at 06:40.\n' > "$DEMO/inspection.txt"
-printf '%s\n' '{"path":"shipment.txt"}' '{"path":"inspection.txt"}' > "$DEMO/inputs.jsonl"
-"$LWIKI" --offline init "$DEMO/wiki" --title '0.2.0 walkthrough'
-"$LWIKI" --wiki "$DEMO/wiki" --offline index rebuild --normalized
-"$LWIKI" --offline --json source import prepare \
-  --input-list "$DEMO/inputs.jsonl" --output "$DEMO/import.jsonl"
-"$LWIKI" --wiki "$DEMO/wiki" --offline --json source import run \
-  --manifest "$DEMO/import.jsonl" --key atlas --group-size 4
-"$LWIKI" --wiki "$DEMO/wiki" --offline --json source import status --key atlas
-"$LWIKI" --wiki "$DEMO/wiki" --offline search 'Atlas shipment' --verify-selected
-"$LWIKI" --wiki "$DEMO/wiki" --offline context 'Atlas shipment' \
-  --max-bytes 6000 --max-tokens 1500
-# Copy a captured payload path from search's locator.path before reading it:
-# --dry-run previews only the request; it returns no text.
-# "$LWIKI" --wiki "$DEMO/wiki" --offline --dry-run --json read --path "$PAYLOAD_PATH" --max-bytes 16
-# "$LWIKI" --wiki "$DEMO/wiki" --offline --json read --path "$PAYLOAD_PATH" --max-bytes 16
-# Follow data.continuation with --start/--end; copy data.source_citation.citation.
-
-"$LWIKI" --wiki "$DEMO/wiki" --offline check
-```
-
-The two originals retain separate immutable histories and share one committed
-Change. Repeating `source import resume --key atlas` returns the existing
-mapping. Use the [import guide](source-imports.md) for updates, interrupted runs
-and backups, and [indexed context](indexed-context.md) for supported query modes
-and verification boundaries. Normalized catalogs currently support plain
-lexical discovery and document context; other modes can refuse explicitly.
 
 ## Validation boundary
 
