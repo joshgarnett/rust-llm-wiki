@@ -38,3 +38,54 @@ The CLI was an optimized native macOS ARM64 build, Rust2024/opt-level3, SHA256 `
 Use a disposable initialized normalized vault, capture the chosen immutable corpus through ordinary commands, then follow the preparation/replay interface in [indexed context](indexed-context.md). Freeze task expectations, executable, corpus hashes, budgets and the actor's complete inputs before opening candidate outputs. Compare automatic and assisted context against the same publication; inspect returned evidence rather than source-hit rates. Count each inference request and observed usage separately from native work. Any questions used to guide a future fix are development data; a new solution needs separate acceptance questions.
 
 This bounded trial is closed as **failed mandatory completeness**. It supports investigating host selection, but does not qualify it as complete or establish a new deterministic retrieval solution. Native HIGH, full normalized query parity and representative 25k / approximately 2.5 GB qualification remain open.
+
+## Original-source reading diagnostic, October 9, 2026
+
+A separate frozen development trial used the accepted 0.2.0 local preview,
+source commit `bbaba416e6471426bc739b8ccdb188ba84761a7c`. Six full questions
+concerned two real Cargo captures in the 25K fixture: current configuration and
+historical features, totaling 73,297 original bytes. Source IDs and exact revision
+paths were supplied publicly, so this diagnostic removes owner discovery as a
+variable. The surrounding fixture is mostly synthetic and does not establish
+representative 25K retrieval quality.
+
+Independent expectations were frozen before outputs. Three questions used
+ordinary current indexed-document context. Historical context is unsupported in
+that interface, so the other three used historical or mixed verified-search
+excerpt unions. The assisted route gave each fresh selector only its full
+question, authenticated complete originals and byte offsets. Each nominated at
+most three 1,024-byte ranges, then ordinary verified reads produced compact
+evidence. No answers, retries, range repairs or new Rust build were involved.
+
+| Route | Complete positive tasks | Supported required facts |
+|---|---:|---:|
+| Native current context | 3/3 | 7/7 |
+| Historical/mixed verified search | 0/3 | 2/8 |
+| Assisted original-source reading | 6/6 | 15/15 |
+
+The assisted gate passed **10/10**, both scope controls and zero correctness
+blockers or baseline fact losses. All 29 native citation occurrences and ten
+final citations matched original bytes, revisions and eligibility. Current
+native context already completed its three tasks: this trial demonstrates no
+native task-completion improvement. Historical search omitted requested
+qualifications; complete originals retained them and compact selection recovered
+them. This does not diagnose the prepared-card pool, which was not evaluated.
+
+There were 22 native calls and six fresh host jobs. Task inputs including their
+actual delivery messages totaled 401,570 bytes; final assisted packets totaled
+9,780 bytes, with each packet 622–3,410 bytes under the unchanged 12,000-byte /
+3,000 estimated-token limits. The collector owned 640.418 monotonic seconds,
+including account censuses and 259.238 seconds of observed host turnaround.
+Native intervals summed to 5.503 seconds. These intervals do not establish model
+inference latency or shipping performance; usage and monetary cost were
+unavailable. The terminal audit preserved the selected publication and all 17
+unfinished main-worktree files.
+
+The independent assessment SHA256 is
+`bb0c8f3c713eeb8e359a343171e5eaea5ba8599bfd574c3a54a6d34cb1113179`;
+the terminal result is
+`f0e195a49e3770185101036c092f3bdf64bce736457f5de9a91f31a3b5068359`.
+This scoped result does not replace the October 5 failed gate, qualify unseen or
+HIGH acceptance, improve deterministic defaults, or demonstrate larger-source
+capacity. It motivates evaluating a practical historical/mixed context workflow
+before adding more ranking or model infrastructure.

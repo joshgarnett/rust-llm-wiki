@@ -464,3 +464,31 @@ green run. Close actual independent public-result review, commit this batch and
 package the same tested binary as a local 0.2.0 candidate. Return immediately to
 cited-answer completeness, affordable collection behavior and practical 25K
 qualification; this batch adds no broad quality score or capacity claim.
+
+## 2026-10-09 — Try native historical context before expanding host selection
+
+A frozen source-scoped diagnostic recovered all 15 required facts across six
+questions through authenticated whole-source reading and compact range selection.
+Current native context already completed its three full-question tasks; the three
+historical/mixed search comparisons did not complete their tasks. The distinction
+is maintained in [the validation summary](../validation-host-assisted-context.md).
+This does not establish unrestricted discovery or representative 25K quality.
+
+Fresh Astra architecture review chooses an isolated native candidate allowing
+explicit historical inclusion in lexical/literal indexed-document context.
+Existing selected-document authentication and bounded passage packing provide
+the simpler experiment. The implementation must align request normalization,
+pre-cap catalog policy and authenticated owner eligibility; removing the request
+rejection alone is insufficient. Preserve current-only defaults, exact revision
+citations and Historical/Withdrawn labels. Keep proposed content excluded and
+historical semantic/hybrid and host selection unavailable until separately
+qualified. No storage migration or model engine is part of this batch.
+
+Before promotion, require meaningful disposable-fixture safety checks and one
+grouped native release checkpoint. Freeze the candidate before evaluating the
+same six development questions as native context, with one shared output budget
+per mixed question. Require all six complete tasks, all fifteen facts, preserved
+baseline facts, exact citations/eligibility, current-only exclusion and independent
+at least 9/10 without blockers. Preserve the different original comparator
+denominators and prior failures. If this route loses needed information, trace
+the failing stage and revisit architecture before another tuning iteration.
