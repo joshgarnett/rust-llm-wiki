@@ -21,6 +21,7 @@ SEED = "lwiki-25k-functional-v1"
 COUNTS = {"smoke": 10, "1000": 1000, "10000": 10000, "25000": 25000}
 GIB = 1024 ** 3
 INPUT_CAP = 256 * 1024 ** 2
+TENK_INPUT_CAP = 2 * GIB
 FREE_FLOOR = 32 * GIB
 UNAVAILABLE = "UNAVAILABLE"
 
@@ -34,6 +35,7 @@ class PreparationGuard:
     """One cooperative interval for this childless input-preparation process."""
     def __init__(self):
         self.started = time.monotonic()
+        self.input_cap = INPUT_CAP
         self.output = self.account = None
         self.last_sample = self.started
         self.observed = {"whole_elapsed_seconds": 0, "self_native_peak_rss_bytes": 0,
@@ -69,7 +71,7 @@ class PreparationGuard:
         self.observed["account_peak_allocated_bytes_observed"] = max(owned, self.observed["account_peak_allocated_bytes_observed"])
         self.observed["input_peak_allocated_bytes_observed"] = max(inputs, self.observed["input_peak_allocated_bytes_observed"])
         require(free >= FREE_FLOOR, "host free floor exceeded")
-        require(inputs <= INPUT_CAP, "finite input allocated-byte limit exceeded")
+        require(inputs <= self.input_cap, "finite input allocated-byte limit exceeded")
         require(owned <= 100 * GIB, "100 GiB physical account limit exceeded")
         self.quick()
 
@@ -348,11 +350,60 @@ def packet_at(path, guard=None):
     return path, packet
 
 
-def generation_admission(packet, explicit, free, existing):
+def tenk_admission(args, guard):
+    """Authenticate one root-frozen 10K scope before widening input accounting."""
+    path = getattr(args, "tenk_admission", None)
+    pin = getattr(args, "tenk_admission_sha256", None)
+    require(bool(path) == bool(pin), "10K admission path and SHA256 must be supplied together")
+    if path is None:
+        return False
+    admission_path = regular(Path(path).absolute())
+    require(digest(admission_path, guard) == pin, "10K admission SHA256 mismatch")
+    admission = load_json(admission_path, guard)
+    output = Path(args.packet).absolute()
+    require(output.resolve(strict=True) == output, "10K packet path alias refused")
+    saved = load_json(regular(output / "packet.json"), guard)
+    account = Path(saved["account_root"])
+    require(account.resolve(strict=True) == account and output.is_relative_to(account) and output != account,
+            "10K account/output ownership mismatch")
+    paths = {"generator": str(Path(__file__).resolve()), "packet": str(output / "packet.json"),
+             "command_plan": str(output / "command-plan.json"), "account_root": str(account), "output": str(output)}
+    limits = {"input_allocated_bytes": TENK_INPUT_CAP, "account_allocated_bytes": 100 * GIB,
+              "self_rss_bytes": GIB, "deadline_seconds": 1800, "free_floor_bytes": FREE_FLOOR}
+    fields = {"schema", "scope", "root_admitted", "paths", "tier", "count", "content_bytes",
+              "limits", "prerequisites", "evidence", "pins"}
+    require(set(admission) == fields and admission["schema"] == 1 and
+            admission["scope"] == "finite-10k-input-preparation" and admission["root_admitted"] is True,
+            "explicit root 10K preparation admission required")
+    require(admission["paths"] == paths and admission["limits"] == limits and
+            admission["tier"] == saved["tier"] == "10000" and
+            admission["count"] == saved["count"] == 10000 and
+            admission["content_bytes"] == saved["content_bytes"] == 1000000000,
+            "10K admission exact path/count/bytes/envelope mismatch")
+    require(admission["prerequisites"] == {"prior_1k": "VERIFIED", "critic": "GO"},
+            "10K requires verified prior 1K evidence and critic GO")
+    required = {"prior_1k_preparation_result", "prior_1k_import_result", "prior_1k_lifecycle_acceptance", "critic_review"}
+    require(set(admission["evidence"]) == required, "10K admission prerequisite evidence inventory mismatch")
+    references = [paths[name] for name in ("generator", "packet", "command_plan")]
+    references += list(admission["evidence"].values())
+    require(set(admission["pins"]) == set(references), "10K admission pin inventory mismatch")
+    for reference in references:
+        evidence = regular(Path(reference))
+        require(evidence.resolve(strict=True) == evidence and digest(evidence, guard) == admission["pins"][reference],
+                "10K admission evidence pin mismatch")
+    guard.input_cap = TENK_INPUT_CAP
+    guard.observed["limits"]["input_allocated_bytes"] = TENK_INPUT_CAP
+    guard.observed["tenk_admission_sha256"] = pin
+    return True
+
+
+def generation_admission(packet, explicit, free, existing, tenk=False):
     require(explicit, "generation requires --admit-input-generation; CLI import remains refused")
-    require(packet["count"] <= 1000, "generation refused: " + ", ".join(packet["input_generation"]["large_tier_missing"]))
+    require(packet["count"] <= 1000 or (tenk and packet["tier"] == "10000" and packet["count"] == 10000 and
+            packet["content_bytes"] == 1000000000),
+            "generation refused: " + ", ".join(packet["input_generation"]["large_tier_missing"]))
     projection = packet["content_bytes"] + packet["count"] * 16384 + 8 * 1024 ** 2
-    require(projection <= INPUT_CAP, "finite input allocated-byte bound exceeded")
+    require(projection <= (TENK_INPUT_CAP if tenk else INPUT_CAP), "finite input allocated-byte bound exceeded")
     require(free - projection >= FREE_FLOOR, "32 GiB free floor including preparation reserve unavailable")
     require(existing + projection <= 100 * GIB, "100 GiB physical account admission exceeded")
     return projection
@@ -360,10 +411,11 @@ def generation_admission(packet, explicit, free, existing):
 
 def generate(args):
     guard = args._preparation_guard = PreparationGuard()
+    tenk = tenk_admission(args, guard)
     output, packet = packet_at(args.packet, guard)
     account = Path(packet["account_root"])
     require(set(p.name for p in output.iterdir()) == {"packet.json", "command-plan.json"}, "generation never overwrites or resumes partial input files")
-    generation_admission(packet, args.admit_input_generation, shutil.disk_usage(account).free, allocation(account, guard.quick))
+    generation_admission(packet, args.admit_input_generation, shutil.disk_usage(account).free, allocation(account, guard.quick), tenk)
     guard.check(force=True)
     sources = output / "sources"
     sources.mkdir()
@@ -398,7 +450,10 @@ def generate(args):
 def verify(args, guard=None):
     if guard is None:
         guard = args._preparation_guard = PreparationGuard()
+        tenk_admission(args, guard)
     output, packet = packet_at(args.packet, guard)
+    require(packet["count"] <= 1000 or (packet["tier"] == "10000" and guard.input_cap == TENK_INPUT_CAP),
+            "large input verification requires exact root 10K admission")
     require(set(p.name for p in output.iterdir()) == {"packet.json", "command-plan.json", "sources", "inputs.jsonl", "inventory.jsonl"}, "unexpected packet members (labels/answers forbidden)")
     bases, targets, q, r = sizes(packet["count"], sum(e["bytes"] for e in packet["overlay"]))
     require((q, r) == (packet["size_policy"]["adjustment_q"], packet["size_policy"]["adjustment_r"]), "size policy mismatch")
@@ -450,6 +505,8 @@ def main():
     for name in ["generate", "verify"]:
         p = sub.add_parser(name)
         p.add_argument("--packet", required=True)
+        p.add_argument("--tenk-admission")
+        p.add_argument("--tenk-admission-sha256")
         if name == "generate":
             p.add_argument("--admit-input-generation", action="store_true")
     args = parser.parse_args()

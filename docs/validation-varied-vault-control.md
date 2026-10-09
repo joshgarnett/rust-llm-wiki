@@ -23,9 +23,12 @@ do not represent a natural corpus or establish semantic retrieval quality.
 source-only inputs without running the wiki CLI, acquiring a corpus, or adding
 questions or expected answers to the indexed content. Its `plan` command writes
 a proposed packet and symbolic command arguments. `generate` requires explicit
-input-generation admission and refuses counts above 1,000; `verify` checks exact
+input-generation admission and ordinarily refuses counts above 1,000; `verify` checks exact
 membership, deterministic hashes, UTF-8, sizes and notices. Partial outputs are
-preserved rather than overwritten. Planning a 10K or 25K tier does not admit it.
+preserved rather than overwritten. A separate SHA256-pinned root admission can
+enable exactly 10K input preparation after verified 1K evidence and independent
+review; it freezes paths, inputs and a 2 GiB preparation ceiling. Counts of 25K
+remain refused. Planning either tier does not admit it or launch the wiki CLI.
 
 This historical experiment deliberately pins executable SHA256
 `398229c96b305cc166f84cd80fb379719fbfbbfd1036bb4acafddfb114404679`, from production
@@ -165,6 +168,16 @@ The experimental source is preserved at commit
 `5d60c722f6ca33a39767703af13a96d791bf4c91553f19fa01434443c9f4b91a`.
 The checkpoint is not an accepted release or a change to production defaults.
 
+A single follow-up development probe ranked bounded paragraphs, lists and code
+using SQLite FTS5's default BM25 with heading ancestry as scoring text. It kept
+the captured owner order, source revisions and output limits. Across 15 fixed
+development tasks, it repaired none of the five remaining failures in both arms
+and preserved only four of eight positive controls; both negative controls passed.
+Context completion fell from 11/13 to 10/13 and fixed-read completion from 8/13
+to 4/13. All 133 inspected citations and the byte/render bounds remained correct.
+This artifact probe was rejected; it ran no native commands and justified no
+further sparse-selector implementation or parameter tuning in this batch.
+
 ## Source refresh and cited Page control
 
 The accepted preview subsequently completed a separately frozen 24-command
@@ -200,6 +213,26 @@ This passes one Source/history/Page workflow, using two revisions of one Source.
 It does not exercise two independent Sources, stale-guard refusal, withdrawal,
 reactivation, interruption recovery, backup or larger-tier acceptance, and does
 not change the retrieval candidate's failed completeness gate.
+
+## 10K input preparation
+
+The separately admitted preparation produced and deterministically verified
+10,000 distinct UTF-8 documents totaling exactly 1,000,000,000 bytes: the same
+two complete Cargo references and 9,998 synthetic documents. The base histogram
+is 1,999 / 6,000 / 1,999 at 80 / 100 / 120 KB, with small exact-size adjustments.
+No input labels or expected answers were added.
+
+The preparation child recorded 41.985 seconds before output emission and
+36,061,184 bytes peak RSS. Its parent measured 42.179 seconds through child exit
+and final static-pin checks, before writing its terminal record. Observed input
+allocation peaked at 1,027,870,720 bytes, with at least 145,835,147,264 bytes free.
+All 23 static pins remained unchanged. Cooperative sampling can overshoot;
+the largest recorded allocation sample gap was 1.274 seconds.
+
+This verifies source-only preparation under its 2 GiB/30-minute limits. It does
+not establish 10K import, query or management behavior, or 25K capacity. The
+accepted native preview was reused for its binary pin; no Rust build or provider
+call ran during preparation.
 
 ## Validation limits
 

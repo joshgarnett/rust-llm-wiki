@@ -185,6 +185,11 @@ score does not pass the all-task gate, and the candidate remains unpromoted.
 Historical default quality remains failed at 6.5/10. Updates, recovery and
 larger-tier acceptance remain separate.
 
+One fixed passage-BM25 development probe subsequently failed: none of the five
+remaining failures became complete in both arms, and four positive controls
+regressed despite authentic citations. That selector is rejected; no native
+implementation or further sparse tuning follows from this batch.
+
 A subsequent [Source/history/cited-Page control](validation-varied-vault-control.md#source-refresh-and-cited-page-control)
 passes its declared 24-command subset at 10/10. A genuine 100 KB refresh preserves
 Source identity and immutable history, returns current evidence, and keeps the
@@ -193,6 +198,11 @@ author bytes and the note; identical-input refresh and unchanged index sync reus
 their existing revision/publication. The warmed 1K run took 21.786 seconds,
 including audits. Index sync still inspects the current inputs, so this result
 does not establish larger-vault throughput or close retrieval, recovery or 25K gates.
+
+Separately admitted [10K input preparation](validation-varied-vault-control.md#10k-input-preparation)
+has produced and verified exactly 1 GB of distinct source text within its frozen
+limits. The generator's explicit preparation admission does not launch import;
+10K runtime behavior and all 25K gates still require actual-command evidence.
 
 The separate [Graph update feasibility experiment](validation-graph-update-feasibility.md)
 rules out expanding the current normalized Graph proposal: a real full-sized update

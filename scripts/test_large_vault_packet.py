@@ -136,6 +136,83 @@ class PacketTests(unittest.TestCase):
         for flag, value in {"--scope": "indexed-documents", "--mode": "lexical", "--candidates": "80", "--excerpt-bytes": "1024", "--max-bytes": "6000", "--max-tokens": "1500", "--verification-max-bytes": "67108864", "--verification-max-files": "4096", "--verification-max-entries": "16384", "--verification-max-elapsed-ms": "2000"}.items():
             self.assertEqual(argv["context"][argv["context"].index(flag) + 1], value)
 
+    def tenk_record(self):
+        packet.plan(self.args(tier="10000"))
+        output = self.root / "planned"
+        paths = {"generator": str(Path(packet.__file__).resolve()), "packet": str(output / "packet.json"),
+                 "command_plan": str(output / "command-plan.json"), "account_root": str(self.root), "output": str(output)}
+        evidence = {}
+        for name in ["prior_1k_preparation_result", "prior_1k_import_result", "prior_1k_lifecycle_acceptance", "critic_review"]:
+            path = self.root / (name + ".json")
+            path.write_text('{"unit_fixture":true}\n', encoding="utf-8")
+            evidence[name] = str(path)
+        record = {"schema": 1, "scope": "finite-10k-input-preparation", "root_admitted": True,
+                  "paths": paths, "tier": "10000", "count": 10000, "content_bytes": 1000000000,
+                  "limits": {"input_allocated_bytes": packet.TENK_INPUT_CAP, "account_allocated_bytes": 100 * packet.GIB,
+                             "self_rss_bytes": packet.GIB, "deadline_seconds": 1800, "free_floor_bytes": packet.FREE_FLOOR},
+                  "prerequisites": {"prior_1k": "VERIFIED", "critic": "GO"}, "evidence": evidence,
+                  "pins": {path: packet.digest(Path(path)) for path in
+                           [paths[name] for name in ["generator", "packet", "command_plan"]] + list(evidence.values())}}
+        admission = self.root / "admission.json"
+        packet.write_json(admission, record)
+        args = argparse.Namespace(packet=str(output), tenk_admission=str(admission), tenk_admission_sha256=packet.digest(admission))
+        return args, record
+
+    def test_tenk_exact_admission_and_existing_limits(self):
+        args, _ = self.tenk_record()
+        guard = packet.PreparationGuard()
+        self.assertTrue(packet.tenk_admission(args, guard))
+        self.assertEqual(guard.input_cap, 2 * packet.GIB)
+        _, saved = packet.packet_at(args.packet, guard)
+        projection = packet.generation_admission(saved, True, 40 * packet.GIB, 0, tenk=True)
+        self.assertGreater(projection, packet.INPUT_CAP)
+        self.assertLess(projection, packet.TENK_INPUT_CAP)
+        for explicit, free, existing in [(False, 40 * packet.GIB, 0), (True, 32 * packet.GIB, 0), (True, 40 * packet.GIB, 100 * packet.GIB)]:
+            with self.assertRaises(ValueError):
+                packet.generation_admission(saved, explicit, free, existing, tenk=True)
+        with self.assertRaises(ValueError):
+            packet.generation_admission(saved, True, 100 * packet.GIB, 0)
+        saved.update(tier="25000", count=25000, content_bytes=2500000000)
+        with self.assertRaises(ValueError):
+            packet.generation_admission(saved, True, 100 * packet.GIB, 0, tenk=True)
+
+    def test_tenk_admission_pin_scope_and_evidence_refusals(self):
+        args, record = self.tenk_record()
+        path = Path(args.tenk_admission)
+        for key, value in [("count", 25000), ("content_bytes", 1000000001), ("root_admitted", False),
+                           ("scope", "finite-public-import-control"), ("tier", "25000"),
+                           ("prerequisites", {"prior_1k": "VERIFIED", "critic": "PENDING"}),
+                           ("limits", dict(record["limits"], input_allocated_bytes=4 * packet.GIB)),
+                           ("paths", dict(record["paths"], output=str(self.root / "other"))), ("evidence", {})]:
+            altered = dict(record, **{key: value})
+            path.write_text(json.dumps(altered), encoding="utf-8")
+            args.tenk_admission_sha256 = packet.digest(path)
+            guard = packet.PreparationGuard()
+            with self.assertRaises(ValueError):
+                packet.tenk_admission(args, guard)
+            self.assertEqual(guard.input_cap, packet.INPUT_CAP)
+        path.write_text(json.dumps(record), encoding="utf-8")
+        args.tenk_admission_sha256 = "0" * 64
+        with self.assertRaisesRegex(ValueError, "SHA256 mismatch"):
+            packet.tenk_admission(args, packet.PreparationGuard())
+        args.tenk_admission_sha256 = packet.digest(path)
+        Path(record["evidence"]["critic_review"]).write_text("drift", encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, "evidence pin"):
+            packet.tenk_admission(args, packet.PreparationGuard())
+
+    def test_tenk_admission_requires_complete_interface_and_guard_ceiling(self):
+        self.assertFalse(packet.tenk_admission(argparse.Namespace(packet="unused"), packet.PreparationGuard()))
+        for args in [argparse.Namespace(tenk_admission="unused"), argparse.Namespace(tenk_admission_sha256="0" * 64)]:
+            with self.assertRaisesRegex(ValueError, "supplied together"):
+                packet.tenk_admission(args, packet.PreparationGuard())
+        args, _ = self.tenk_record()
+        guard = packet.PreparationGuard()
+        packet.tenk_admission(args, guard)
+        guard.output, guard.account = self.root / "planned", self.root
+        with patch.object(packet, "allocation", return_value=packet.TENK_INPUT_CAP + 1), patch.object(packet.shutil, "disk_usage", return_value=type("Disk", (), {"free": 40 * packet.GIB})()):
+            with self.assertRaisesRegex(ValueError, "input allocated"):
+                guard.check(force=True)
+
     def test_real_adjusted_payload_samples_in_memory(self):
         bases, targets, _, _ = packet.sizes(1000, 73091)
         for ordinal in [0, 198, 199, 798, 799, 997]:
