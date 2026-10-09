@@ -260,3 +260,24 @@ semantics; this review authorizes neither that redesign nor another native run.
 The only admitted next diagnostic is a bounded static public-plan dependency
 matrix, if needed to decide that architecture. The complete 1,000-update gate and
 all correctness thresholds remain unchanged; no storage candidate was promoted.
+
+## Static dependency matrix: closed without another optimization run
+
+On 2026-10-09, the bounded matrix and independent Astra review confirmed that
+the public plan retains the same 64 operations and 193 full guard sweeps. A
+prepared operation program preserving their existing order and refusal boundaries
+does not remove that dominant work. Two duplicate computations were identified
+within individual evaluations, but their exclusive costs were unavailable; the
+inclusive phase timings do not establish enough savings for the 600-second gate.
+No duplicate-calculation patch, new instrumentation or further resolver tuning
+was admitted. This conclusion uses source inspection and the existing measurements,
+with no new native performance claim.
+
+The 1,000-change threshold remains mandatory for full capacity. Its failed 10K
+observation does not prohibit a separately frozen 25K interactive functional
+attempt after profile-matched 1K/10K controls and safe resource admission. Such
+an attempt must retain every applicable import, query, individual-update,
+citation and recovery threshold, and report unfinished bulk/churn/rebuild and
+release gates separately. Passing a subset cannot qualify full capacity or
+default retrieval quality. The [large-vault protocol](testing-large-vaults.md)
+continues to define those gates.

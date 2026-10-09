@@ -171,6 +171,12 @@ distinguishes preparation-admission differences from final-selection omissions;
 public preparation does not expose the complete automatic candidate pool.
 No retrieval algorithm changed, and default quality/HIGH/25K remain open.
 
+The [varied 1K import control](validation-varied-vault-control.md) imported exactly
+100 MB of distinct structured inputs through public commands in 318.552 seconds,
+with all 1,000 original/content pairs matching and current indexed ownership
+verified. This is a bounded preparation/import observation; retrieval, updates,
+recovery and larger-tier acceptance remain separate.
+
 The separate [Graph update feasibility experiment](validation-graph-update-feasibility.md)
 rules out expanding the current normalized Graph proposal: a real full-sized update
 with active Merge history exceeds its frozen processing allowance even with one
