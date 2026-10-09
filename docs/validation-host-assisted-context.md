@@ -89,3 +89,53 @@ This scoped result does not replace the October 5 failed gate, qualify unseen or
 HIGH acceptance, improve deterministic defaults, or demonstrate larger-source
 capacity. It motivates evaluating a practical historical/mixed context workflow
 before adding more ranking or model infrastructure.
+
+## Native historical-context follow-up, October 9, 2026
+
+An isolated native candidate at source commit
+`7b349708639c5c45f9bed4a5516340b1d1096ae7` enables explicit historical inclusion
+for lexical/literal indexed-document context. Its grouped release checkpoint
+passes 208 retrieval tests, including five new history, freshness, proof-budget
+and exclusion checks. Default Current behavior and the passage assembler are
+unchanged; historical semantic/hybrid and host-selection requests still refuse.
+This candidate is pushed on `impl/indexed-historical-context-20261009-001` and
+has **not been promoted to the accepted preview**.
+
+The frozen follow-up ran the same six development questions as native context,
+with one 12,000-byte / 3,000-estimated-token budget per question, no model jobs
+and three operational controls. Mixed questions admitted the three known
+revisions of the two Sources through repeated Source IDs and a common path
+prefix. That differs from the earlier exact-revision search filters; this is
+not an isolated paired revision-filter comparison.
+
+| Native route | Complete tasks | Fully supported required facts |
+|---|---:|---:|
+| Current context | 3/3 | 7/7 |
+| Historical-inclusive context | 1/3 | 4/8 |
+| All six candidate contexts | 4/6 | 11/15 |
+
+Independent acceptance is **8.4/10; mandatory completeness failed**. Historical
+feature opt-out now includes the qualification that another dependency can
+re-enable defaults, completing one previously failed task. Current outputs are
+byte-identical to the original current-context comparison. Both mixed questions
+find the intended originals, but omit required facts: the governing offline
+defaults and cached-data behavior, the negative implication about feature
+opt-out and networking, resolver2's non-unification mechanism, and `build.jobs`.
+An `offline = true` example does not establish the default setting.
+
+All nine commands, three controls and 32 exact SourceRef occurrences pass, with
+no baseline fact loss or integrity blocker. Both mixed packets contain eight
+passages and approach the output ceiling. They disclose several omission
+reasons, but those reasons do not identify the stage that lost each fact.
+Consequently, this result does not justify another weight or cap adjustment.
+A fresh architecture review must distinguish location selection from final
+packing before choosing the next complete workflow.
+
+The independent assessment SHA256 is
+`181914cef06d820f820211b68b4a0b3c1beed72caad98eee09c949cc716aa878`;
+the terminal result is
+`37623b632f22fd511696a0c9deeea2a111f24df0af8540e97b9dbe82b1410eef`.
+The immutable release executable uses native ARM64 Rust 1.98, opt-level3 and
+debug0. All 17 unfinished main files and the selected publication remained
+unchanged. This failed development gate adds no default-current quality,
+unseen/HIGH, representative 25K, semantic or full-release acceptance.

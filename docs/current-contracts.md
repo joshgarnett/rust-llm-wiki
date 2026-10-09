@@ -9,6 +9,11 @@ preserving every baseline fact. All 130 search/read citation occurrences
 authenticate. This is known-data development evidence on the 25K fixture, without
 a speedup, unseen or representative claim. **Default native context completeness
 remains unchanged**; complete reads and final-answer quality are separate gates.
+The isolated [native historical-context follow-up](validation-host-assisted-context.md#native-historical-context-follow-up-october-9-2026)
+passes safety checks and completes one historical feature task, but fails its
+six-task completeness gate at 4/6 tasks and 11/15 facts (8.4/10). Both mixed
+questions find their Sources and lose required qualifications in the returned
+packet. It remains unpromoted; Current outputs are unchanged.
 The separate save/reopen/draft-discovery boundary passes at 10/10: both required
 facts, two exact SourceRefs and six valid generated links, with unchanged Source
 history and the previous Page. No inferred answer or remote call was used.

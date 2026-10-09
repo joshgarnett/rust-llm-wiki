@@ -492,3 +492,20 @@ baseline facts, exact citations/eligibility, current-only exclusion and independ
 at least 9/10 without blockers. Preserve the different original comparator
 denominators and prior failures. If this route loses needed information, trace
 the failing stage and revisit architecture before another tuning iteration.
+
+## 2026-10-09 — Preserve the failed native mixed-context gate and reassess
+
+The historical-inclusion candidate passes 208 related tests, nine public commands,
+all three controls and all 32 citations. It closes the historical feature task,
+but completes only four of six questions and eleven of fifteen required facts,
+scoring 8.4/10. Current output is unchanged. The tested feature branch is pushed;
+the candidate is not promoted as quality-accepted or packaged over the accepted
+preview. Preserve the failed gate in [the maintained summary](../validation-host-assisted-context.md#native-historical-context-follow-up-october-9-2026).
+
+Both mixed packets admit their intended originals, yet omit governing facts.
+Generic omission reasons do not establish where each fact was discarded. Request
+a fresh Astra review of discovery, location selection, evidence allocation and
+the final user reading workflow before more implementation. Choose one coherent
+high-impact milestone and a controlled cause experiment; do not tune weights,
+raise budgets or add filter/harness infrastructure to retry the same questions.
+Keep representative 25K, unseen/HIGH, semantic and maintenance acceptance open.
