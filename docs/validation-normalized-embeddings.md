@@ -5,8 +5,50 @@ document search and cited document context on an explicitly activated normalized
 catalog. The affected native correctness checks pass, and a frozen public
 real-vector run demonstrates offline reuse and restoration. Multi-source evidence
 completeness failed; full public acceptance and 25K capacity remain open.
-This checkpoint is newer than the packaged 0.2.0 candidate010; that archive does
-not contain these changes.
+The current 0.2.0 local preview contains this workflow; its release qualification
+remains separate from the scoped correctness and development observations here.
+
+## Current retrieval-signal decision, 2026-10-10
+
+The representative development baseline remains **13/32 complete tasks and
+79/129 required facts** across 994 public WixQA/ConditionalQA/QASPER Sources.
+Packing, lexical-unit and question-reformulation candidates failed their declared
+gates. Further local tuning is closed. An independent architecture review selected
+one prospective comparison of the existing hybrid route with matched lexical
+retrieval: all forty original development questions, one context per arm, with
+alternating arm order. No candidate result or quality improvement is claimed.
+
+Complete corpus preparation and all forty query embeddings must precede both
+scored arms. Freeze the binary, source revisions, catalog publication, compatible
+vector/query caches and configuration after acquisition. Require the lexical arm
+to reproduce the baseline. Hybrid must complete at least **17/32 positives**,
+preserve each of the 79 baseline facts, pass all eight absent controls and exact
+citation checks, and have no correctness blocker. Both arms retain ten owners,
+80 candidates, 1,024-byte excerpts, 12,000 rendered bytes, 3,000 estimated tokens
+and the existing proof limits; offline p95 must be at most five seconds and every
+command at most fifteen seconds. No fallback, additional evidence reads, rewritten
+queries, retries or parameter sweep can supply credit. The holdout stays sealed;
+even a passing development result would not qualify defaults, HIGH or 25K.
+
+Embedding geometry is fixed at an 8,000-byte input limit, empty prefixes and no
+quality target. Exact input/request counts and complete coverage within the
+prospective USD2/296-attempt ceiling remain unknown. CLI embedding dry-run returns
+unknown coverage before materialization; it does not forecast batches or cost.
+The accepted adapter reserves 8,192 input units per item. At the currently listed
+USD0.02 per million input tokens, 8,192 such items would reserve USD1.34217728
+in input cost, exceeding the proposed USD1 corpus partition. This arithmetic is
+not a complete-coverage forecast or executable rate card. Native limits must
+preserve refusals and unknown accounting holds.
+[Official model price](https://developers.openai.com/api/docs/models/text-embedding-3-small),
+[embedding request limits](https://developers.openai.com/api/reference/resources/embeddings/methods/create).
+
+The existing route already passes cosine cues to passage selection. This trial
+tests complete returned evidence; it does not isolate discovery from allocation.
+At 25K documents, even one 1,536-dimensional float32 vector per document requires
+153,600,000 scan bytes, exceeding the current 64 MiB vector-read limit before
+selected-owner reads. Smaller dimensions and a different discovery architecture
+remain separate, unqualified decisions. Live acquisition has not started and
+still requires the pending explicit outbound-data consent.
 
 ## Implemented workflow
 
@@ -892,7 +934,7 @@ complementary evidence selection, alongside the measured import and storage cost
 that constrain practical 25K use. The useful normalized literal workflow and its
 local 0.2.0 artifact remain separately accepted.
 
-## Fine preparation limits and revised next milestone
+## Fine preparation limits and prior coarse-trial proposal
 
 A separate synthetic fixture exposes preparation costs before any quality score:
 64 Sources each contain 175 distinct 600-byte paragraphs. At an 8,000-byte input
@@ -928,7 +970,7 @@ explains the persistent WAL and read-only coordination requirements. Here the
 repository additionally requires an exclusive writer lease to reconstruct SHM;
 copying durable files alone does not establish read-only catalog readiness.
 
-The next quality milestone is one separately frozen trial using the accepted
+The prior quality proposal was one separately frozen trial using the accepted
 binary's existing 12,000-byte coarse geometry, without a quality-target flag:
 complete preparation, all twelve original queries, 24 matched offline
 lexical/semantic contexts, exact cited reads and cache reuse. A coherent disposable
@@ -937,4 +979,5 @@ the scheduled local embedding check remains its first read-only proof. Update
 mechanics are a separate sequel. The original fact/task, no-regression, citation,
 currentness, absence and resource gates remain unchanged. Successful preparation
 alone earns no quality credit; lexical defaults, HIGH, fine-sync, 25K and full
-release acceptance remain open.
+release acceptance remain open. The forty-question hybrid comparison above
+supersedes that twelve-question proposal; its original evidence is retained.

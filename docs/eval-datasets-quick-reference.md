@@ -247,6 +247,11 @@ records baseline 13/32 complete and 79/129 facts, with rejected candidates and
 bounded diagnosis. The separate [model-query experiment](validation-task-only-query-signals.md)
 reaches 16/32 and 97/129 but loses three baseline facts; it supplies no native
 default or unseen acceptance credit.
+The next [retrieval-signal comparison](validation-normalized-embeddings.md#current-retrieval-signal-decision-2026-10-10)
+prospectively pairs the same forty original questions in lexical and hybrid
+contexts after complete real-vector acquisition and a shared cache/publication
+freeze. It is unrun; its gate is at least 17/32 complete positives with every
+baseline fact preserved, all eight absent controls and exact citations passing.
 
 The proposed capacity extension selects 24,006 unique whole articles from official
 [Wikimedia Wikipedia](https://huggingface.co/datasets/wikimedia/wikipedia), English
