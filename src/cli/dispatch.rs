@@ -83,6 +83,8 @@ pub const COMMANDS: &[&str] = &[
     "migrate",
 ];
 pub const SCHEMAS: &[&str] = &[
+    "context-original-selection",
+    "context-original-selection-auto",
     "context-selection",
     "output",
     "record",
@@ -203,11 +205,13 @@ fn execute_inner(args: &Arguments) -> Result<Envelope> {
         Command::Capabilities => {
             return Ok(Envelope::success(
                 command,
-                json!({"version":env!("CARGO_PKG_VERSION"),"commands":COMMANDS,"schemas":SCHEMAS,"network":true,"read":{"start_without_end":true,"omitted_end":"body_eof","coordinates":"utf8_body_bytes","explicit_ranges":"strict","byte_limit":"returned_text","dry_run":"unresolved_request_only"},"page_source_refs":{"commands":["page init","page put"],"flag":"--source-refs","schema":"page-source-refs","max_input_bytes":65536,"max_references":16,"citation_kinds":["source"],"links":"relative_to_resolved_page_path","prose_support_verified":false,"dry_run":"request_validation_only"},"search_modes":["literal","lexical","semantic","hybrid"],"selected_search":{"flag":"--verify-selected","layout":"normalized","modes":["literal","lexical","semantic","hybrid"],"no_sync_compatible":true,"scope":"displayed document dependencies","global_membership_verified":false,"dry_run":"request validation only","budget":{"max_bytes":67108864,"max_files":4096,"max_entries":16384,"max_elapsed_ms":2000}},"selected_neighbors":{"command":"graph neighbors","layout":"normalized","root_kind":"entity","default_verification":true,"explicit_verification_flag":"--verify-selected","no_sync":"cached_uncited","scope":"selected_graph_neighbors","global_membership_verified":false,"current_only":true,"navigation":false,"cursor":false,"dry_run":"request validation only","limits":{"depth":2,"incident_per_seed":16,"assertions":128,"candidates":80,"hits":50,"support":2,"contrary":1},"budget":{"max_bytes":67108864,"max_files":4096,"max_entries":16384,"max_elapsed_ms":2000}},"graph_seed_modes":["lexical","semantic"],"extraction_executors":["agent","api"],"research_executor":"agent-handoff","jsonl_commands":["index sync","index rebuild","recover","changes apply","source add","source refresh","research run","research resume","research import","doctor --probe"]}),
+                json!({"version":env!("CARGO_PKG_VERSION"),"commands":COMMANDS,"schemas":SCHEMAS,"network":true,"original_source_selection":{"prepare_flag":"--prepare-original-selection","path_flag":"--selection-original-path","reply_flag":"--selection","schema":"context-original-selection","version":"lwiki.context-original-selection.v1","discovery":{"flag":"--discover-originals","schema":"context-original-selection-auto","version":"lwiki.context-original-selection.v2","max_candidates":80,"max_hits":10,"admission":"whole_authenticated_originals_with_explicit_omissions","replay":"repeat_same_discovery_flags"},"layout":"normalized","mode":"lexical","scope":"indexed-documents","historical":"explicit_include_historical","max_paths":16,"max_raw_bytes":98304,"max_indexed_payload_bytes":524288,"max_selector_input_bytes":130048,"transport_reserved_bytes":1024,"max_reply_bytes":4096,"max_ranges":16,"max_ranges_per_owner":4,"global_membership_verified":false,"model_called":false},"read":{"start_without_end":true,"omitted_end":"body_eof","coordinates":"utf8_body_bytes","explicit_ranges":"strict","byte_limit":"returned_text","dry_run":"unresolved_request_only"},"page_source_refs":{"commands":["page init","page put"],"flag":"--source-refs","schema":"page-source-refs","max_input_bytes":65536,"max_references":16,"citation_kinds":["source"],"links":"relative_to_resolved_page_path","prose_support_verified":false,"dry_run":"request_validation_only"},"search_modes":["literal","lexical","semantic","hybrid"],"selected_search":{"flag":"--verify-selected","layout":"normalized","modes":["literal","lexical","semantic","hybrid"],"no_sync_compatible":true,"scope":"displayed document dependencies","global_membership_verified":false,"dry_run":"request validation only","budget":{"max_bytes":67108864,"max_files":4096,"max_entries":16384,"max_elapsed_ms":2000}},"selected_neighbors":{"command":"graph neighbors","layout":"normalized","root_kind":"entity","default_verification":true,"explicit_verification_flag":"--verify-selected","no_sync":"cached_uncited","scope":"selected_graph_neighbors","global_membership_verified":false,"current_only":true,"navigation":false,"cursor":false,"dry_run":"request validation only","limits":{"depth":2,"incident_per_seed":16,"assertions":128,"candidates":80,"hits":50,"support":2,"contrary":1},"budget":{"max_bytes":67108864,"max_files":4096,"max_entries":16384,"max_elapsed_ms":2000}},"graph_seed_modes":["lexical","semantic"],"extraction_executors":["agent","api"],"research_executor":"agent-handoff","jsonl_commands":["index sync","index rebuild","recover","changes apply","source add","source refresh","research run","research resume","research import","doctor --probe"]}),
             ));
         }
         Command::Schema { name } => {
             let schema = match name.as_str() {
+                "context-original-selection" => include_str!("../../schemas/context-original-selection-v1.json"),
+                "context-original-selection-auto" => include_str!("../../schemas/context-original-selection-v2.json"),
                 "context-selection" => include_str!("../../schemas/context-selection-v1.json"),
                 "output" => include_str!("../../schemas/output-v1.json"),
                 "research-packet" => include_str!("../../schemas/research-packet-v1.json"),
@@ -1089,7 +1093,7 @@ fn execute_inner(args: &Arguments) -> Result<Envelope> {
             }
             let request = retrieval::context::validate_request(&context.search.query, &request)?;
             if request.scope == retrieval::ContextScope::IndexedEvidence
-                && (context.prepare_selection || context.selection.is_some())
+                && (context.prepare_selection || context.prepare_original_selection || context.selection.is_some())
             {
                 return Err(usage(
                     "indexed-evidence does not support host selection; use lexical indexed-documents",

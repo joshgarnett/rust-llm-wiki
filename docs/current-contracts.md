@@ -1,5 +1,14 @@
 # Current contracts and local coverage
 
+The [integrated original-source workflow](validation-original-source-selection.md#integrated-native-discovery-candidate-october-10-2026)
+now supports native bounded lexical discovery, complete-original preparation and
+versioned exact-range replay alongside explicit path requests. Its 354 affected
+checks pass. A 35-command composite demonstrates cited Page creation, guarded
+author preservation, Source refresh, stale-evidence refusal, reconciliation,
+immutable history and offline rebuild. The original verifier failure and the
+separately timed continuation remain explicit. This is native workflow mechanics;
+it earns no retrieval-quality or full release acceptance.
+
 The [compact Change review](validation-change-summary.md) now passes its separate
 functional gate at 10/10: all 120 public commands and 30 focused checks meet their
 expected outcomes. `changes show --summary` lists operations and guards without
@@ -424,6 +433,13 @@ Explicit `search --verify-selected` authenticates displayed dependencies and add
 exact captured-source citations, with fixed proof bounds and planning-only dry-run.
 Authored/empty excerpts remain uncited; global membership and unselected freshness
 remain unverified. The search-only flag does not change context arguments. Plain `read` verifies selected dependencies and returns exact range citations for captured source bytes, with explicit eligibility; `read --no-sync` returns uncited cached bytes. CLI dry-run read returns a request-only plan before catalog/target access, with null body/citation and explicit unperformed checks; its [separate preview/read tail](validation-dry-read-preview.md) passed scoped acceptance at 10.0/10. Omitted context scope resolves to `indexed-documents`, while explicit `current` retains its strict meaning and remains unavailable on this layout. Lexical document requests support `--prepare-selection` and fingerprint-bound `--selection` replay with the same closed selected-dependency verification; the [frozen host-assisted development trial](validation-host-assisted-context.md) observed actual token usage and improved strict evidence completion from 3/12 to 11/12, but failed mandatory completeness. Monetary cost, inference time and generated-answer quality remain unverified. `page init`, `page put` and `page batch` publish their selected structural, policy and navigation dependencies together; unchanged proposals retain read guards. New write receipts use version 3 while retained version-2 source refreshes remain replayable. Source addition reserves a fresh Source/Revision pair and immutable tree; withdrawal updates one guarded Source envelope and its complete selected dependent closure without rewriting history. Authored Page rename now uses selected admission, complete affected navigation and guarded path transition; other rename target kinds and the remaining retrieval modes still need normalized adapters. Unsupported modes refuse explicitly. An explicit unchanged sync checks current input commitments and retains the exact publication. External input changes or an older supported capability layout trigger reconstruction. Interrupted acknowledged rebuilds resume their exact candidate before checking current inputs. Explicit complete-cache-loss reconstruction requires intact idle outside authority and a bounded pre-creation reservation; retries preserve bounded unclassified artifacts and never reuse an unacknowledged SQLite identity. Loss of cache together with its operation authority is outside this repair contract. Maintenance reports distinguish reuse, resumed publication, build work and deferred predecessor retirement. Dry-run performs no canonical scan or cache writes on the supported normalized mutation and maintenance paths. These guarantees have local fixture coverage; they do not establish large-vault maintenance throughput.
+
+Native literal/lexical indexed-document context accepts explicit
+`--include-historical`, applying eligibility before discovery caps and preserving
+Current/Historical/Withdrawn revision citations through selected authentication
+and final rechecks. Omitted history remains current-only. Historical vector modes,
+proposed content and historical host selection remain unavailable. See
+[indexed context](indexed-context.md) for source/path filtering and budget limits.
 
 For the complete local gate and external qualification boundary, see [testing-cleanup.md](testing-cleanup.md), [CLEANUP.md](execution/CLEANUP.md), and the [execution playbook](execution/README.md). Old [architecture](architecture.md) and [implementation plan](implementation-plan.md) material is historical where it describes CLI-owned research acquisition; the host-agent handoff above is authoritative for the current product.
 

@@ -1,6 +1,7 @@
 //! Deterministic discovery and exact-byte excerpts.
 pub mod bundles;
 pub mod context;
+pub(crate) mod context_original_selection;
 pub(crate) mod context_evidence;
 pub(crate) mod context_selection;
 pub mod context_selection_packet;

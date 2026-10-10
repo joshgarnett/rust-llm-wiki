@@ -59,6 +59,43 @@ pub fn validate_request(query: &str, request: &ContextRequest) -> Result<Context
     normalize_request(request)
 }
 pub fn validate_selection_action(request: &ContextRequest, action: &SelectionAction) -> Result<()> {
+    if matches!(
+        action,
+        SelectionAction::PrepareOriginals(_)
+            | SelectionAction::ApplyOriginals { .. }
+            | SelectionAction::PrepareOriginalsAuto { .. }
+            | SelectionAction::ApplyOriginalsAuto { .. }
+    ) {
+        let filters = &request.documents.filters;
+        if request.scope != ContextScope::IndexedDocuments
+            || request.target != ContextTarget::Documents
+            || request.graph.is_some()
+            || request.documents.mode != SearchMode::Lexical
+            || !filters.kinds.is_empty()
+            || !filters.tags.is_empty()
+            || !filters.authored_statuses.is_empty()
+            || filters.include_proposed
+            || request.documents.cursor.is_some()
+        {
+            return Err(WikiError::new(
+                ErrorCode::Usage,
+                "original selection requires lexical indexed-documents with source/path filters only",
+            ));
+        }
+        return match action {
+            SelectionAction::PrepareOriginals(originals)
+            | SelectionAction::ApplyOriginals {
+                request: originals, ..
+            } => super::context_original_selection::validate_original_request(originals),
+            SelectionAction::PrepareOriginalsAuto { max_input_bytes }
+            | SelectionAction::ApplyOriginalsAuto {
+                max_input_bytes, ..
+            } => {
+                super::context_original_selection::validate_auto_original_request(*max_input_bytes)
+            }
+            _ => unreachable!("original action matched"),
+        };
+    }
     if !matches!(action, SelectionAction::Automatic)
         && (!matches!(
             request.scope,
@@ -66,7 +103,8 @@ pub fn validate_selection_action(request: &ContextRequest, action: &SelectionAct
         ) || request.target != ContextTarget::Documents
             || request.documents.mode == SearchMode::Literal
             || (request.scope == ContextScope::IndexedDocuments
-                && request.documents.mode != SearchMode::Lexical))
+                && (request.documents.mode != SearchMode::Lexical
+                    || request.documents.filters.include_historical)))
     {
         return Err(WikiError::new(
             ErrorCode::Usage,
@@ -86,12 +124,16 @@ fn normalize_request(request: &ContextRequest) -> Result<ContextRequest> {
                     | SearchMode::Semantic
                     | SearchMode::Hybrid
             )
-            || request.documents.filters.include_historical
+            || (request.documents.filters.include_historical
+                && !matches!(
+                    request.documents.mode,
+                    SearchMode::Literal | SearchMode::Lexical
+                ))
             || request.documents.filters.include_proposed)
     {
         return Err(WikiError::new(
             ErrorCode::Usage,
-            "indexed-documents supports current eligible document context without graph expansion",
+            "indexed-documents supports eligible document context without graph expansion; historical inclusion requires literal or lexical mode",
         ));
     }
     if request.scope == ContextScope::IndexedEvidence
@@ -149,7 +191,9 @@ fn normalize_request(request: &ContextRequest) -> Result<ContextRequest> {
     normalized.documents.filters.include_historical = matches!(
         request.scope,
         ContextScope::Historical | ContextScope::Snapshot
-    );
+    ) || (request.scope
+        == ContextScope::IndexedDocuments
+        && request.documents.filters.include_historical);
     normalized.documents.filters.include_proposed = false;
     if let Some(g) = &mut normalized.graph {
         g.filters.include_historical = matches!(
@@ -161,10 +205,10 @@ fn normalize_request(request: &ContextRequest) -> Result<ContextRequest> {
     Ok(normalized)
 }
 // One fallible lookup per admitted owner, reused by every selected window.
-struct DocumentOwner {
+pub(super) struct DocumentOwner {
     document: DocumentRow,
     canonical: Option<RecordRow>,
-    allowed: bool,
+    pub(super) allowed: bool,
 }
 /// Packing can merge several windows from one selected owner. Reuse its
 /// authenticated cached bytes rather than charging another SQL body decode for
@@ -229,7 +273,7 @@ impl QueryCatalog for OwnerCatalog<'_> {
         self.reader.decode_document(row, column)
     }
 }
-fn document_owner(
+pub(super) fn document_owner(
     reader: &dyn QueryCatalog,
     hit: &SearchHit,
     request: &ContextRequest,
@@ -259,10 +303,9 @@ fn document_owner(
         .map(|id| reader.record(id))
         .transpose()?
         .flatten();
-    let current = matches!(
-        request.scope,
-        ContextScope::Current | ContextScope::IndexedDocuments
-    );
+    let current = request.scope == ContextScope::Current
+        || (request.scope == ContextScope::IndexedDocuments
+            && !request.documents.filters.include_historical);
     let allowed = if d.owner_revision.is_some() {
         d.eligibility != Eligibility::Invalid && (!current || d.eligibility == Eligibility::Current)
     } else {
@@ -291,7 +334,7 @@ fn document_owner(
         allowed: allowed && filters_match && source_matches,
     })
 }
-fn document_passage(
+pub(super) fn document_passage(
     reader: &dyn QueryCatalog,
     owner: &DocumentOwner,
     hit: &SearchHit,
@@ -1778,7 +1821,10 @@ pub(super) fn pack(
             "scope label does not fit reserved context budget",
         ));
     }
-    if !matches!(selection_action, SelectionAction::Automatic) {
+    if matches!(
+        selection_action,
+        SelectionAction::Prepare | SelectionAction::Apply(_)
+    ) {
         let cards = packets
             .iter()
             .enumerate()

@@ -1,6 +1,6 @@
 # Original-source selection and cited Page workflow
 
-The 0.2.0 candidate at `3e2d2b4cf3b3b4319189062231f6ef9f5968bf2b`
+The original isolated 0.2.0 candidate at `3e2d2b4cf3b3b4319189062231f6ef9f5968bf2b`
 adds an explicit assisted route from discovered captured Sources to compact,
 authenticated evidence. Ordinary automatic context selection is unchanged.
 The branch is `impl/original-source-selection-20261009-001`.
@@ -93,3 +93,109 @@ Native automatic completeness, semantic retrieval, representative 25K / roughly
 2.5 GB behavior, HIGH and full release acceptance remain open. The overall goal
 is active. Next work should measure representative default tasks and operational
 readiness rather than repeat this assisted fixture or tune its exposed questions.
+
+
+## Full development workflow attempt, October 10, 2026
+
+A separately frozen forty-question campaign stopped after its first verified
+lexical discovery. The first question was to complete a cited Page, controlled
+Source refresh, author-preserving reconciliation, history and offline rebuild
+before the remaining questions. None of those later stages ran. This campaign
+is **NO_GO**, with no answer-quality score or native completeness gain.
+
+The native search succeeded offline in 0.247 seconds and returned ten verified
+hits from eighty candidates. Its complete 30,854-byte JSON response matched the
+retained actor delivery byte-for-byte; all ten source spans and quote hashes
+authenticated. The relevant Source ranked first. Its excerpt did not contain the
+requested checklist, so subsequent original-source reading was still necessary.
+
+The operator's instruction to stop on any truncation conflated bounded candidate
+coverage (`candidate_cap_reached`, `truncated=true`) with incomplete tool delivery.
+The actor reasonably stopped before preparation. This does not demonstrate a
+native search or transport failure, successful source selection, or an answer.
+The terminal recorder also lacked a transition for an actor-declared failure
+after a successful command; its later phase refusal is secondary to the sealed
+actor's original reason. No retry or prompt variant rescored the attempt.
+
+One host invocation and one native call consumed 39,046 known delivered bytes,
+including an 8,192-byte instruction reservation. A single owning monotonic clock
+observed 121.316 seconds for the campaign and 59.039 seconds for the host interval;
+these include orchestration and observation, not just model inference. Underlying
+inference calls, tokens and cost are unavailable. An initial dotted-task-ID schema
+refusal was corrected before question exposure, with its receipt and original
+clock retained. Thirty-nine original questions and the lifecycle follow-up remain
+unrun; the first question is incomplete.
+
+Bounded discovery needs an explicit usable-state contract distinct from delivery
+failure. Complete evidence selection, supported answers and maintained Pages
+still require an integrated acceptance result. The native baseline remains
+13/32 complete positives and 79/129 facts; semantic/HIGH, unseen, representative
+25K and full release gates remain open. No Rust build was needed for this trial.
+
+A subsequent static capability audit found an additional integration gap: the
+trial's pinned shipping binary did not contain the original-source selection API
+from the isolated preview. The trial stopped before invoking that API, so this is
+a source/capability finding, not an observed second command failure. The next
+coherent batch integrates explicit original selection and native bounded lexical
+discovery into the shipping branch before further assisted acceptance.
+
+## Integrated native discovery candidate, October 10, 2026
+
+The practical-release branch integrates the historical and explicit-original
+preview with the current embedding-proof coordinator. `--discover-originals`
+now prepares a V2 task directly from the existing lexical order, eliminating
+the separate host step that copied Source paths into preparation. Explicit-path
+V1 requests remain compatible. This changes the assisted workflow, not native
+ranking or deterministic answer completeness.
+
+Automatic admission examines at most ten hits from eighty candidates, deduplicates
+Source/revision identity, and admits complete captures under the existing raw,
+indexed and serialized-task limits. It reports ineligible, empty, oversized and
+serialized-size omissions without refilling the ranked page. Identical content
+from distinct Sources retains distinct provenance. One pinned query/proof budget
+covers discovery and authentication, including work for an owner subsequently
+omitted by serialized size. Replay binds the admission decisions, request and
+publication; candidate omissions are distinct from incomplete task delivery.
+
+Both release compile phases passed with stable phase inputs. The artifact
+controller then stopped because the test build unified transitive development
+features and produced a different CLI hash. The failed assertion and both
+artifacts remain retained. No rebuild or source change was needed: all CLI
+subprocess checks and the public trace use the separately pinned ordinary
+release-build executable. Library tests exercise their test-feature build.
+The only declared between-phase input updates were the generated skill command
+reference and manifest.
+
+The integrated checkpoint passed **354 affected tests**, with seven existing
+ignores and no test failures. These include explicit V1 compatibility, automatic
+V2 admission/replay and public CLI update/history/rebuild checks. They do not
+constitute the full release suite. The shipping executable SHA256 is
+`7d7ef4d356a8f71f3de7622d106d5d61d31afab062682bd10c8d41007a837034`.
+
+A separate, independently authored three-Source fixture exercised actual public
+commands with two complementary Willow workshop Sources and a Cedar distractor.
+The initial verifier stopped after eight successful native commands because it
+expected a duplicate `originals` field outside the serialized task. The API
+intentionally omits that duplicate. The failed attempt remains failed. An
+independently reviewed continuation authenticated and reused those eight saved
+responses without rerunning their commands, corrected only that assertion, and
+completed the remaining 27 commands.
+
+The resulting composite covers complete task preparation and exact replay, cited
+Page creation, guarded author edits and stale-author refusal, a successful fresh
+control before Source refresh, stale-evidence refusal, Page reconciliation that
+preserves every authored byte except the declared deposit update, immutable
+historical/current reads, verified discovery and offline rebuild. No distractor
+rule enters the Page. The first interval was 1.968 seconds; the separate suffix
+was 2.743 seconds. These are separate controller intervals on a tiny fixture,
+not one uninterrupted passing trial or a capacity claim. No host, provider call
+or answer-quality credit is involved. Development, unseen, semantic/HIGH,
+representative scale and full release gates remain open.
+
+Independent review of the actual envelopes and saved Page accepts these composite
+native mechanics with no observed blocker. It authenticated all 18 returned
+SourceRef occurrences and both final Page references, the three prepared tasks,
+and every declared author/freshness/history/rebuild invariant. This clears the
+native capability prerequisite for a separately frozen full development
+workflow evaluation; it does not turn the original failed verifier run into a
+passing trial or establish the required overall quality score.

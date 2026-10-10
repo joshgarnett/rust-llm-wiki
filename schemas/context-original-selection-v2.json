@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "lwiki.context-original-selection.v2",
+  "title": "Bounded exact-range discovered-original selection reply",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "packet_fingerprint", "ordered_ranges"],
+  "properties": {
+    "version": {"const": "lwiki.context-original-selection.v2"},
+    "packet_fingerprint": {"type": "string", "pattern": "^blake3:[0-9a-f]{64}$"},
+    "ordered_ranges": {
+      "type": "array",
+      "maxItems": 16,
+      "uniqueItems": true,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["original_id", "span"],
+        "properties": {
+          "original_id": {"type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[A-Za-z0-9_-]+$"},
+          "span": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["start", "end"],
+            "properties": {
+              "start": {"type": "integer", "minimum": 0},
+              "end": {"type": "integer", "minimum": 1}
+            }
+          }
+        }
+      }
+    }
+  },
+  "$comment": "Native admission also checks a 4096-byte raw reply ceiling, duplicate keys, exact version/packet binding, supplied original IDs, nonempty UTF-8 ranges, overlap, four ranges per canonical owner, excerpt and exact rendered output bounds. No host text becomes evidence."
+}

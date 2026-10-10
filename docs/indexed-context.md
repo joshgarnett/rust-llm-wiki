@@ -97,6 +97,29 @@ record/path/hash locators and no fabricated source citations; captured passages
 retain exact source revision/span/hash citations. Kind, tag, status, source and
 path filters use the existing document filtering rules.
 
+To include earlier revisions, explicitly request historical material in lexical
+or literal indexed-document context:
+
+```sh
+lwiki --wiki /path/to/wiki --offline context 'What changed between the earlier and current policy?' \
+  --scope indexed-documents --mode lexical --include-historical
+```
+
+This includes eligible current and historical material together. Captured
+passages and citations retain their Current, Historical or Withdrawn labels and
+exact revision identities. Omit the flag for current-only context. Historical
+semantic/hybrid context and historical card selection remain unavailable; explicit
+original-source selection can include historical captures. Strict
+`--scope historical` retains its separate contract.
+
+Repeat `--source-id` to restrict a mixed question to several Sources. The single
+`--path-prefix` restricts their shared namespace; it cannot select a list of exact
+revision paths. Historical inclusion can therefore discover several revisions of
+those Sources. All selected dependencies undergo the same authentication, final
+recheck and shared context/proof budgets. More returned revisions can compete for
+the existing candidate and passage limits; inclusion does not certify that the
+result contains every requested fact.
+
 `--kind source` selects canonical Source records, whose notes can be empty. It
 does not select captured payloads: those document rows have Source/Revision
 ownership but no record kind. `--kind revision` also excludes the payloads.
@@ -243,6 +266,18 @@ the old reply. The host cannot supply replacement quotation text. Candidate orde
 retains the passage selector's complementary-evidence priority before the card
 cap; automatic context keeps its existing selection policy. Neither route proves
 answer completeness. The CLI makes no model call and cannot observe host usage.
+
+## Complete-original selection
+
+An explicitly separate complete-original host route is described in
+[the cited-Page recipe](../skills/llm-wiki/references/cited-page.md#select-exact-ranges-after-reading-complete-captured-text).
+Use `context QUESTION --prepare-original-selection --selection-original-path PATH`
+for exact captured paths returned by discovery, then replay a versioned range
+reply with `--selection FILE` and identical paths/request. Preparation authenticates
+selected originals directly and does not repeat broad discovery. Current-only is
+the default; explicit `--include-historical` supports historical/mixed captured
+text on this route. Original and card replies are distinct. Larger intermediate
+host inputs have their own bounds; final rendered context budgets remain unchanged.
 
 ## Editing Pages on normalized indexes
 
@@ -448,3 +483,43 @@ strict evidence completion from 3/12 automatic to 11/12 assisted tasks. It score
 9.5/10 but failed mandatory completeness because the actor omitted an available
 required paragraph. Citation and lifecycle checks passed. Its questions are
 development data; it establishes neither native HIGH nor generated-answer quality.
+
+
+## Prepare complete originals directly from discovery
+
+On a normalized vault, one native command can discover and authenticate complete
+captured Sources for a host reader:
+
+```sh
+lwiki --wiki /path/to/wiki --offline --json context 'ORIGINAL QUESTION' \
+  --prepare-original-selection --discover-originals > prepared.json
+```
+
+Deliver the exact `data.selection_packet.selector_input` to the reader. It returns
+only the versioned fingerprint and exact original-ID/byte-range nominations. Then
+repeat the same query, filters and limits with the unchanged reply:
+
+```sh
+lwiki --wiki /path/to/wiki --offline --json context 'ORIGINAL QUESTION' \
+  --discover-originals --selection reply.json > replayed.json
+```
+
+This route uses lexical discovery, at most 80 candidates and ten hits, and whole
+Sources admitted in that order. Lower requested limits apply. Authored hits and
+Sources outside eligibility or input limits are omitted explicitly. Source text
+is never clipped and presented as a complete original. Preparation retains the
+96 KiB original-text, 512 KiB indexed-payload and 130048-byte serialized-input
+ceilings; it uses the same pinned publication and cumulative verification limits.
+A host is still responsible for selecting applicable evidence and answering from
+the successful replay. The CLI makes no model call.
+
+The discovery route uses `lwiki.context-original-selection.v2`; inspect
+`schema context-original-selection-auto` and the actual executable's
+`capabilities`. The explicit `--selection-original-path` route retains V1. Modes
+and fingerprints cannot be interchanged. A changed publication or selected source
+refuses replay rather than rebinding the reply.
+
+Bounded candidate coverage and admitted-input omissions are different from a
+truncated tool response. A complete preparation can be usable while leaving
+requested facts unresolved. Neither an empty task nor a supported selected fact
+proves global absence or answer completeness. Retain those limits in the answer.

@@ -21,10 +21,22 @@ pub enum Target {
 pub struct ContextArguments {
     #[command(flatten)]
     pub search: SearchArguments,
-    /// Prepare a bounded candidate packet for one host-agent selection; current context or lexical indexed-documents.
-    #[arg(long, conflicts_with = "selection")]
+    /// Prepare a bounded candidate packet for current-only document context; lexical on normalized indexes.
+    #[arg(long, conflicts_with_all = ["selection", "prepare_original_selection", "selection_original_paths", "selection_input_max_bytes", "discover_originals"])]
     pub prepare_selection: bool,
-    /// Apply an ID-only host reply to its exact candidate packet (file or - for stdin).
+    /// Prepare complete authenticated captured text from exact discovered paths for one host selection.
+    #[arg(long, conflicts_with = "selection")]
+    pub prepare_original_selection: bool,
+    /// Discover and admit complete captured originals in native lexical order; use identically for preparation and replay.
+    #[arg(long, conflicts_with = "selection_original_paths")]
+    pub discover_originals: bool,
+    /// Captured payload path discovered through search; repeat in the same order for preparation and replay.
+    #[arg(long = "selection-original-path", value_name = "PATH")]
+    pub selection_original_paths: Vec<String>,
+    /// Complete serialized original-selector task ceiling; hard maximum 130048 bytes, plus 1024 transport bytes.
+    #[arg(long, value_name = "BYTES")]
+    pub selection_input_max_bytes: Option<usize>,
+    /// Apply a host reply to its exact card/original packet (file or - for stdin).
     #[arg(long, value_name = "FILE")]
     pub selection: Option<std::path::PathBuf>,
     /// Evidence scope. Defaults to indexed-documents on normalized vaults, current otherwise.
@@ -93,10 +105,73 @@ impl ContextArguments {
         use crate::domain::{ErrorCode, WikiError};
         use context_selection_packet::{SelectionAction, parse_reply};
         use std::io::Read;
+        if self.discover_originals && !self.selection_original_paths.is_empty() {
+            return Err(WikiError::new(
+                ErrorCode::Usage,
+                "--discover-originals conflicts with explicit original paths",
+            ));
+        }
+        if self.selection_input_max_bytes.is_some()
+            && self.selection_original_paths.is_empty()
+            && !self.discover_originals
+        {
+            return Err(WikiError::new(
+                ErrorCode::Usage,
+                "--selection-input-max-bytes requires original paths or --discover-originals",
+            ));
+        }
         if self.prepare_selection {
             return Ok(SelectionAction::Prepare);
         }
+        let original_input_limit = self
+            .selection_input_max_bytes
+            .unwrap_or(context_selection_packet::MAX_ORIGINAL_INPUT_BYTES);
+        if self.discover_originals {
+            crate::retrieval::context_original_selection::validate_auto_original_request(
+                original_input_limit,
+            )?;
+        }
+        let original_request = if self.selection_original_paths.is_empty() {
+            None
+        } else {
+            let request = context_selection_packet::OriginalSelectionRequest {
+                paths: self
+                    .selection_original_paths
+                    .iter()
+                    .map(|path| crate::domain::VaultRelativePath::new(path.clone()))
+                    .collect::<crate::domain::Result<Vec<_>>>()?,
+                max_input_bytes: self
+                    .selection_input_max_bytes
+                    .unwrap_or(context_selection_packet::MAX_ORIGINAL_INPUT_BYTES),
+            };
+            crate::retrieval::context_original_selection::validate_original_request(&request)?;
+            Some(request)
+        };
+        if self.prepare_original_selection {
+            if self.discover_originals {
+                return Ok(SelectionAction::PrepareOriginalsAuto {
+                    max_input_bytes: original_input_limit,
+                });
+            }
+            return Ok(SelectionAction::PrepareOriginals(
+                original_request.ok_or_else(|| {
+                    WikiError::new(
+                        ErrorCode::Usage,
+                        "original preparation requires captured paths or --discover-originals",
+                    )
+                })?,
+            ));
+        }
         let Some(path) = &self.selection else {
+            if original_request.is_some()
+                || self.selection_input_max_bytes.is_some()
+                || self.discover_originals
+            {
+                return Err(WikiError::new(
+                    ErrorCode::Usage,
+                    "original paths or discovery require --prepare-original-selection or --selection",
+                ));
+            }
             return Ok(SelectionAction::Automatic);
         };
         let mut bytes = Vec::new();
@@ -137,6 +212,18 @@ impl ContextArguments {
             file.take(4097).read_to_end(&mut bytes)
         };
         read.map_err(|_| WikiError::new(ErrorCode::Usage, "cannot read context selection reply"))?;
+        if self.discover_originals {
+            return Ok(SelectionAction::ApplyOriginalsAuto {
+                max_input_bytes: original_input_limit,
+                reply: crate::retrieval::context_original_selection::parse_reply(&bytes)?,
+            });
+        }
+        if let Some(request) = original_request {
+            return Ok(SelectionAction::ApplyOriginals {
+                request,
+                reply: crate::retrieval::context_original_selection::parse_reply(&bytes)?,
+            });
+        }
         Ok(SelectionAction::Apply(parse_reply(&bytes)?))
     }
     pub fn request(&self) -> ContextRequest {

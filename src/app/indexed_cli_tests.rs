@@ -2225,6 +2225,330 @@ fn indexed_cli_selection_staged_source_is_current_until_apply_and_withdrawal_rej
     );
 }
 
+#[test]
+fn indexed_cli_original_selection_routes_exact_ranges_and_rejects_crossed_or_stale_replies() {
+    let fixture = Fixture::new();
+    let path = format!(
+        "sources/{}/revisions/{}/content.md",
+        fixture.source, fixture.first
+    );
+    let question = "Explain the vessel's token count and Unicode text";
+    let before = canonical_tree(&fixture.root);
+    let prepared = fixture.cli(&[
+        "context",
+        question,
+        "--prepare-original-selection",
+        "--selection-original-path",
+        &path,
+    ]);
+    assert_eq!(canonical_tree(&fixture.root), before);
+    assert_eq!(prepared["data"]["text"], "");
+    let task: Value = serde_json::from_str(
+        prepared["data"]["selection_packet"]["selector_input"]
+            .as_str()
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(task["payload"]["originals"][0]["text"], FIRST);
+    assert_eq!(task["payload"]["binding"]["query"], question);
+    let reply = serde_json::json!({
+        "version": "lwiki.context-original-selection.v1",
+        "packet_fingerprint": prepared["data"]["selection_packet"]["fingerprint"],
+        "ordered_ranges": [{
+            "original_id": task["payload"]["originals"][0]["id"],
+            "span": {"start": 0, "end": FIRST.len()},
+        }],
+    });
+    let reply_path = fixture.outside.join("original reply.json");
+    fs::write(&reply_path, serde_json::to_vec(&reply).unwrap()).unwrap();
+    let replay = [
+        "context",
+        question,
+        "--selection",
+        reply_path.to_str().unwrap(),
+        "--selection-original-path",
+        &path,
+    ];
+    let selected = fixture.cli(&replay);
+    let passage = &selected["data"]["passages"][0];
+    assert_eq!(passage["text"], FIRST);
+    let citation: CitationRef = serde_json::from_value(passage["citations"][0].clone()).unwrap();
+    let CitationRef::Source(reference) = citation else {
+        panic!("missing exact SourceRef")
+    };
+    assert_eq!(reference.source_id.as_str(), fixture.source);
+    assert_eq!(reference.source_revision.as_str(), fixture.first);
+    assert_eq!(reference.span.slice(FIRST).unwrap(), FIRST);
+    assert_eq!(reference.quote_hash, Blake3Hash::digest(FIRST));
+    assert_eq!(canonical_tree(&fixture.root), before);
+
+    fixture.cli_error(
+        &[
+            "context",
+            "A different question",
+            "--selection",
+            reply_path.to_str().unwrap(),
+            "--selection-original-path",
+            &path,
+        ],
+        "FRESHNESS_CONFLICT",
+    );
+    fixture.cli_error(
+        &[
+            "context",
+            question,
+            "--selection",
+            reply_path.to_str().unwrap(),
+        ],
+        "USAGE",
+    );
+    fixture.cli_error(
+        &[
+            "context",
+            question,
+            "--prepare-original-selection",
+            "--selection-original-path",
+            &path,
+            "--tag",
+            "unused",
+        ],
+        "USAGE",
+    );
+    let source = fixture
+        .root
+        .join(format!("sources/{}/source.md", fixture.source));
+    let original = fs::read(&source).unwrap();
+    fs::write(
+        &source,
+        String::from_utf8(original.clone())
+            .unwrap()
+            .replace("Original source title", "External title"),
+    )
+    .unwrap();
+    fixture.cli_error(&replay, "FRESHNESS_CONFLICT");
+    fs::write(source, original).unwrap();
+
+    let schema = fixture.cli(&["schema", "context-original-selection"]);
+    assert_eq!(
+        schema["data"]["properties"]["version"]["const"],
+        "lwiki.context-original-selection.v1"
+    );
+    let capabilities = fixture.cli(&["capabilities"]);
+    assert_eq!(
+        capabilities["data"]["original_source_selection"]["model_called"],
+        false
+    );
+}
+
+/// One executable must support discovery, exact replay, maintained cited Pages,
+/// immutable history and cache reconstruction together. This is fixture mechanics,
+/// not model-answer completeness or representative capacity acceptance.
+#[test]
+fn indexed_cli_discovered_originals_maintain_cited_page_through_refresh_and_rebuild() {
+    let fixture = Fixture::new();
+    let question = "IndexedSignal vessel tokens";
+    let reply_path = fixture.outside.join("discovered reply.json");
+    let refs_path = fixture.outside.join("exact refs.json");
+    let page_input = fixture.outside.join("draft body.md");
+    let proposal_path = fixture.outside.join("whole page proposal.md");
+    let page_path = "pages/discovered-originals.md";
+    let sentinel = "\n<!-- author note: preserve café 東京 exactly -->\n";
+    let prepare = [
+        "context",
+        question,
+        "--prepare-original-selection",
+        "--discover-originals",
+    ];
+    let replay = [
+        "context",
+        question,
+        "--selection",
+        reply_path.to_str().unwrap(),
+        "--discover-originals",
+    ];
+    let select = |prepared: &Value, expected: &str| {
+        let packet = &prepared["data"]["selection_packet"];
+        let task: Value = serde_json::from_str(packet["selector_input"].as_str().unwrap()).unwrap();
+        assert_eq!(
+            task["payload"]["version"],
+            "lwiki.context-original-selection.v2"
+        );
+        let originals = task["payload"]["originals"].as_array().unwrap();
+        assert_eq!(originals.len(), 1, "{task}");
+        assert_eq!(originals[0]["text"], expected);
+        fs::write(
+            &reply_path,
+            serde_json::to_vec(&serde_json::json!({
+                "version": task["payload"]["version"],
+                "packet_fingerprint": packet["fingerprint"],
+                "ordered_ranges": [{"original_id": originals[0]["id"],
+                    "span": {"start": 0, "end": expected.len()}}],
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+    };
+    let write_refs = |selected: &Value, expected: &str, revision: &str| {
+        let passages = selected["data"]["passages"].as_array().unwrap();
+        assert_eq!(passages.len(), 1, "{selected}");
+        assert_eq!(passages[0]["text"], expected);
+        let cite = passages[0]["citations"][0].clone();
+        let typed: CitationRef = serde_json::from_value(cite.clone()).unwrap();
+        let CitationRef::Source(reference) = typed else {
+            panic!("expected exact SourceRef")
+        };
+        assert_eq!(reference.source_id.as_str(), fixture.source);
+        assert_eq!(reference.source_revision.as_str(), revision);
+        assert_eq!(reference.span.slice(expected).unwrap(), expected);
+        assert_eq!(reference.quote_hash, Blake3Hash::digest(expected));
+        fs::write(
+            &refs_path,
+            serde_json::to_vec(&serde_json::json!({
+                "schema_version":"1", "citations":[cite],
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+    };
+    let capabilities = fixture.cli(&["capabilities"]);
+    assert_eq!(
+        capabilities["data"]["original_source_selection"]["discovery"]["flag"],
+        "--discover-originals"
+    );
+    let schema = fixture.cli(&["schema", "context-original-selection-auto"]);
+    assert_eq!(
+        schema["data"]["properties"]["version"]["const"],
+        "lwiki.context-original-selection.v2"
+    );
+    let old_path = format!(
+        "sources/{}/revisions/{}/content.md",
+        fixture.source, fixture.first
+    );
+    let old_bytes = fs::read(fixture.root.join(&old_path)).unwrap();
+    select(&fixture.cli(&prepare), FIRST);
+    write_refs(&fixture.cli(&replay), FIRST, &fixture.first);
+    fs::write(
+        &page_input,
+        format!("# Token brief\n\nIndexedSignal stores 17 amber tokens.\n{sentinel}"),
+    )
+    .unwrap();
+    fixture.cli(&[
+        "page",
+        "init",
+        "--file",
+        page_input.to_str().unwrap(),
+        "--title",
+        "Token brief",
+        "--path",
+        page_path,
+        "--source-refs",
+        refs_path.to_str().unwrap(),
+    ]);
+    let page_before = fixture.cli(&["read", "--path", page_path]);
+    let old_page_hash = page_before["data"]["hash"].as_str().unwrap().to_owned();
+    let mut authored = fs::read_to_string(fixture.root.join(page_path)).unwrap();
+    authored.push_str("\nAuthor clarification: retain both revisions.\n");
+    fs::write(&proposal_path, &authored).unwrap();
+    fixture.cli(&[
+        "page",
+        "put",
+        "--file",
+        proposal_path.to_str().unwrap(),
+        "--path",
+        page_path,
+        "--if-match",
+        &old_page_hash,
+    ]);
+    let page_author = fixture.cli(&["read", "--path", page_path]);
+    let author_hash = page_author["data"]["hash"].as_str().unwrap().to_owned();
+    fixture.cli_error(
+        &[
+            "page",
+            "put",
+            "--file",
+            proposal_path.to_str().unwrap(),
+            "--path",
+            page_path,
+            "--if-match",
+            &old_page_hash,
+        ],
+        "CONTENT_CONFLICT",
+    );
+    // Bind a successful control after the Page publication, so the subsequent
+    // refusal demonstrates Source refresh rather than prior Page drift.
+    select(&fixture.cli(&prepare), FIRST);
+    fixture.cli(&replay);
+    let refreshed = fixture.refresh(SECOND, Some(TITLE), None);
+    let revision = refreshed["data"]["allocated_ids"]["revision"]
+        .as_str()
+        .unwrap();
+    fixture.cli_error(&replay, "FRESHNESS_CONFLICT");
+    select(&fixture.cli(&prepare), SECOND);
+    let current = fixture.cli(&replay);
+    write_refs(&current, SECOND, revision);
+    let current_path = current["data"]["passages"][0]["locator"]["path"]
+        .as_str()
+        .unwrap();
+    fs::write(&proposal_path, authored.replace("17 amber", "29 violet")).unwrap();
+    fixture.cli(&[
+        "page",
+        "put",
+        "--file",
+        proposal_path.to_str().unwrap(),
+        "--path",
+        page_path,
+        "--if-match",
+        &author_hash,
+        "--source-refs",
+        refs_path.to_str().unwrap(),
+    ]);
+    let saved = fixture.cli(&["read", "--path", page_path]);
+    let body = saved["data"]["body"].as_str().unwrap();
+    assert!(body.contains("29 violet") && !body.contains("17 amber"));
+    assert_eq!(body.matches(sentinel).count(), 1);
+    assert!(body.contains("Author clarification: retain both revisions."));
+    assert_eq!(fs::read(fixture.root.join(&old_path)).unwrap(), old_bytes);
+    for rebuild in [false, true] {
+        if rebuild {
+            fixture.cli(&["index", "rebuild", "--normalized"]);
+        }
+        let old = fixture.cli(&["read", "--path", &old_path]);
+        exact_read_source_citation(
+            &fixture,
+            &old,
+            &fixture.first,
+            FIRST,
+            "historical",
+            CitationScope::Historical,
+        );
+        let new = fixture.cli(&["read", "--path", current_path]);
+        exact_read_source_citation(
+            &fixture,
+            &new,
+            revision,
+            SECOND,
+            "current",
+            CitationScope::Current,
+        );
+        let page = fixture.cli(&["read", "--path", page_path]);
+        assert_eq!(page["data"]["body"], saved["data"]["body"]);
+        let discovery = fixture.cli(&[
+            "search",
+            "IndexedSignal",
+            "--mode",
+            "lexical",
+            "--verify-selected",
+        ]);
+        assert!(
+            discovery["data"]["hits"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|hit| hit["locator"]["path"].as_str() == Some(current_path))
+        );
+    }
+}
+
 /// Independent canonical verification checks the citation emitted by the public
 /// read command, including its exact returned range rather than a search hit.
 fn exact_read_source_citation(

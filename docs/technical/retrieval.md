@@ -127,6 +127,17 @@ Use `rrf(x) = Σ weight/(60 + one_based_rank(x))`; absent candidates contribute 
 
 Nonliteral document context uses the query and authenticated, eligible source owners to propose additional passages from their pinned original bytes. Discovery ranks remain unchanged. This separates finding a source from finding all useful passages within that source; it does not assert that query overlap proves a complete answer.
 
+Normalized indexed-document context defaults to current eligible owners.
+Explicit `--include-historical` is supported for native literal/lexical requests:
+normalization preserves the flag, catalog context policy applies it before
+candidate limits, and authenticated owner admission uses the same eligibility
+policy. Current and historical revisions share one rendered budget and retain
+distinct exact citations; withdrawn state remains visible. Proposed requests,
+historical semantic/hybrid requests and historical card-selection preparation or
+replay are refused. Selected dependency authentication and final byte/authority
+rechecks remain mandatory. This does not change strict historical scope or claim
+global membership verification.
+
 With complete cached-unit coverage, semantic and hybrid context retain exact eligible embedding-unit locations for each discovered owner. Hybrid discovery still combines lexical and dense owner candidates. Evidence selection orders retained units by dense cosine, with conventional unit-body BM25 only for equal-cosine ties, followed by deterministic path/span order. Diagnostic dense/BM25 ranks remain visible separately from the final selection rank; they do not add duplicate selection votes. Missing/corrupt vectors are unavailable rather than zero similarity. Incomplete owner/unit coverage falls back to bounded lexical passage selection for the whole retrieved owner set and emits a warning. No new embedding request is made by passage selection.
 
 Each unit maps to one canonical structural parent: bounded paragraphs, lists with introductions, and code/explanation groups. Identical parents retain their strongest child without extra votes, before the global candidate cap. Packing attempts the parent first and its associated exact child if the parent does not fit. A unit larger than the requested excerpt uses a bounded query-focused child and discloses clipping. Managed-note metadata is excluded; captured content remains payload. Structural, lexical-unit and coarse-focus scans are separately bounded to1MiB per owner/4MiB total each; structural starts and units are capped at4096, distinct tokenized query terms at256. Cached-vector reads reserve at most64MiB. Limits and omitted regions are disclosed.
@@ -142,6 +153,62 @@ Rank incident assertions by direct assertion-seed rank first, then parent-seed r
 Pack verified context greedily in ranked order within both byte and token budgets. Graph-only queries can use the full context budget. Count exact tokens only with the configured tokenizer; otherwise label estimates and enforce bytes. Reserve caller-specified instruction/output space before retrieval. Graph bundles must include original support; if the required support/contradiction cannot fit, omit that bundle and record why. Evidence caps expose omitted support/contradiction counts; they never imply exhaustiveness. Navigation expansion consumes the same budgets.
 
 `SearchHit`/`EvidenceBundle` carry locators, eligibility, rank contributions, seed/directed paths, predicates/qualifiers, `CitationRef`s, excerpts, generation, dependency fingerprint, and verification time. Final ties use kind/record ID/unit ID; cursors bind query/filters/generation. Plain notes are labeled note text. Return omissions/coverage/truncation; unit IDs alone are never factual citations. Before emission, storage checks the control manifest and dependency bytes, detecting new decisions/duplicate IDs and changed files. Mismatch requires refresh/retry or explicit unverified output. Edits after verification remain outside the snapshot guarantee.
+
+### Explicit complete-original host context selection
+
+Lexical normalized indexed-document requests can prepare exact discovered captured
+payload paths with `--prepare-original-selection` and repeated
+`--selection-original-path`. This distinct `lwiki.context-original-selection.v1`
+task/reply route retains Current-only defaults and permits explicit
+`--include-historical` for accurately labeled Current/Historical/Withdrawn input.
+Authored and unsupported/invalid input refuses. Source and path filters remain
+effective; kind/tag/status/cursor and graph/other modes refuse. No broad lexical
+discovery is repeated once exact paths are supplied, and no provider is called.
+
+Admission bounds 1–16 distinct paths, 96 KiB aggregate raw captured text, 512 KiB
+aggregate indexed payload and 130,048 complete escaped task bytes plus 1,024
+reserved transport bytes. Scalar cached payload sizes and canonical lengths are
+checked before document decoding; exact per-path read bounds remain active during
+selected authentication and final recheck. Complete text is never silently dropped
+or truncated. The task includes the full question, complete original UTF-8 text,
+byte line coordinates, observed locators/revisions/hash/eligibility and policy.
+
+The fingerprint binds that exact authority, ordered paths, normalized request,
+input/output/proof limits, publication and selected dependency fingerprint. Replay
+reconstructs authenticated authority and accepts only a strictly versioned reply
+with fingerprint and at most 16 exact ranges. Unknown or duplicate fields/IDs,
+overlaps, empty/invalid UTF-8 spans, more than four ranges per canonical owner,
+excerpt-limit violations or a reply above 4,096 bytes refuse without repair.
+An empty list is valid for unsupported questions. Native passage construction
+supplies exact SourceRefs; ordinary rendered packing retains nominated priority,
+shared output reservations and truthful omissions. Successful selection is not
+proof of completeness. Refreshed heads/dependencies or changed request invalidate
+the old task, while retained immutable citations remain readable.
+
+The [host recipe](../../skills/llm-wiki/references/cited-page.md#select-exact-ranges-after-reading-complete-captured-text)
+joins this route to typed Page publication and guarded reconciliation. Host
+inputs/calls/latency/cost remain separately observed; no automatic native quality
+or capacity claim follows. Existing Automatic and card routes retain their contracts.
+
+### Discovered complete-original selection
+
+`--discover-originals` with original preparation/replay selects the distinct V2
+route without caller-provided payload paths. The coordinator uses the existing
+lexical ordering within 80 candidates and ten hits on the same QuerySnapshot,
+honors lower requested limits, and deduplicates Source/Revision identity. It
+admits whole eligible captured originals under the existing raw/indexed/input
+limits and authenticates the bounded tentative set in one combined proof. Exact
+serialized-input admission never truncates original text. Fingerprinted discovery
+policy, admitted order and omissions distinguish discovered coverage, authenticated
+work and delivered originals. Discovery, proof and final recheck retain cumulative
+row/byte/file/entry/time limits. This is selected proof, never global membership.
+
+Explicit V1 requests and serialized packets retain their existing contract. V2
+replay requires the discovery discriminator and unchanged query/filter/limit
+policy; cross-mode versions and stale fingerprints refuse. Empty eligible input
+can yield a bounded empty task, with no global-absence assertion. The public
+capability and reply schema are exported from the same executable. No provider,
+implicit retry, query reformulation or model invocation is introduced.
 
 ## Bounded extraction and import
 

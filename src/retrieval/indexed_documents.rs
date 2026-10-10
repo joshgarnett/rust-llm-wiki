@@ -89,7 +89,7 @@ pub(crate) fn context(
     request: &ContextRequest,
     options: &ContextOptions,
 ) -> Result<ContextResult> {
-    let meter = Meter::new(&request.verification_budget);
+    let mut meter = Meter::new(&request.verification_budget);
     let request = context::validate_request(query, request)?;
     context::validate_selection_action(&request, &options.selection)?;
     if request.scope != ContextScope::IndexedDocuments
@@ -111,7 +111,23 @@ pub(crate) fn context(
         max_elapsed_ms: meter.remaining_ms(),
         ..QueryReadLimits::default()
     })?;
-    let mut hits = lexical::search_context_catalog(&reader, query, &request.documents, false)?;
+    if matches!(
+        options.selection,
+        super::context_selection_packet::SelectionAction::PrepareOriginals(_)
+            | super::context_selection_packet::SelectionAction::ApplyOriginals { .. }
+            | super::context_selection_packet::SelectionAction::PrepareOriginalsAuto { .. }
+            | super::context_selection_packet::SelectionAction::ApplyOriginalsAuto { .. }
+    ) {
+        return super::context_original_selection::context(
+            catalog, &reader, &mut meter, query, &request, options,
+        );
+    }
+    let mut hits = lexical::search_context_catalog(
+        &reader,
+        query,
+        &request.documents,
+        request.documents.filters.include_historical,
+    )?;
     meter.check()?;
     let paths = hits
         .hits

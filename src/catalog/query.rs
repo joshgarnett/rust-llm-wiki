@@ -799,6 +799,41 @@ impl QuerySnapshot {
         }
         Ok(result)
     }
+    /// Scalar byte reservations for explicit complete-original input, without
+    /// decoding cached document text or metadata into owned host values.
+    pub(crate) fn original_document_sizes(
+        &self,
+        path: &VaultRelativePath,
+    ) -> Result<Option<(usize, usize)>> {
+        self.require_fact_layout()?;
+        let payload_bytes = normalized_schema::DOCUMENT_COLUMNS
+            .split(',')
+            .map(|column| format!("coalesce(length(CAST({column} AS BLOB)),0)"))
+            .collect::<Vec<_>>()
+            .join("+");
+        let mut statement = self.connection.prepare(&format!(
+            "SELECT typeof(raw_text),length(CAST(raw_text AS BLOB)),{payload_bytes} FROM documents INDEXED BY sqlite_autoindex_documents_1 WHERE path=?1"
+        )).map_err(sql::sql_error)?;
+        let mut rows = statement.query([path.as_str()]).map_err(sql::sql_error)?;
+        let Some(row) = rows.next().map_err(sql::sql_error)? else {
+            return Ok(None);
+        };
+        self.reserve_refresh_row(row, 3)?;
+        if utf8(text_bytes(row, 0)?)? != "text" {
+            return Err(corrupt("original input raw text is not SQLite TEXT"));
+        }
+        let size = |column| -> Result<usize> {
+            usize::try_from(row.get::<_, i64>(column).map_err(sql::sql_error)?)
+                .map_err(|_| corrupt("original input has invalid indexed byte length"))
+        };
+        let raw = size(1)?;
+        let payload = size(2)?;
+        if payload < raw {
+            return Err(corrupt("original input payload length is smaller than raw text"));
+        }
+        Ok(Some((raw, payload)))
+    }
+
     pub(crate) fn document_metadata(
         &self,
         path: &VaultRelativePath,

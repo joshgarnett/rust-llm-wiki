@@ -235,10 +235,10 @@ Options:
           Emit JSON Lines events for supported streaming commands
 
       --start <START>
-          Start of the zero-based, half-open UTF-8 byte range
+          Start of the zero-based UTF-8 body byte range; omit --end to read toward EOF
 
       --end <END>
-          End of the zero-based, half-open UTF-8 byte range
+          Exclusive end of the UTF-8 body byte range; requires --start
 
       --offline
           Prevent provider requests and credential helper calls; local operations remain available
@@ -572,6 +572,54 @@ Options:
 
       --media-type <MEDIA_TYPE>
           Explicit media type for the captured input
+
+      --jsonl
+          Emit JSON Lines events for supported streaming commands
+
+      --offline
+          Prevent provider requests and credential helper calls; local operations remain available
+
+      --dry-run
+          Preview without writes, provider requests or credential resolution
+
+      --stage
+          Retain a guarded preparation for a later explicit changes apply
+
+      --preferences <PREFERENCES>
+          Explicit trusted local JSON preferences; never read ambient credentials
+
+      --profile <PROFILE>
+          Trusted provider profile name from the private provider configuration
+
+      --lock-timeout-ms <LOCK_TIMEOUT_MS>
+          Maximum writer-lock wait in milliseconds (default: 5000; preferences may override)
+
+  -h, --help
+          Print help
+
+```
+
+## source refresh-batch
+
+```text
+Refresh 1–16 guarded existing Sources in one recoverable publication
+
+Usage: lwiki source refresh-batch [OPTIONS] --file <FILE>
+
+Options:
+      --file <FILE>
+          JSON request; relative member files resolve from its directory
+
+      --wiki <WIKI>
+          Wiki root containing WIKI.md; defaults to discovery from the current directory
+
+      --format <FORMAT>
+          Output format: human-readable text, a JSON envelope or JSON Lines events
+
+          [possible values: human, json, jsonl]
+
+      --json
+          Emit one structured JSON envelope
 
       --jsonl
           Emit JSON Lines events for supported streaming commands
@@ -1534,10 +1582,22 @@ Options:
           Use published discovery without synchronization; context scope determines evidence verification
 
       --prepare-selection
-          Prepare a bounded candidate packet for one host-agent selection; current context or lexical indexed-documents
+          Prepare a bounded candidate packet for current-only document context; lexical on normalized indexes
+
+      --prepare-original-selection
+          Prepare complete authenticated captured text from exact discovered paths for one host selection
+
+      --discover-originals
+          Discover and admit complete captured originals in native lexical order; use identically for preparation and replay
+
+      --selection-original-path <PATH>
+          Captured payload path discovered through search; repeat in the same order for preparation and replay
+
+      --selection-input-max-bytes <BYTES>
+          Complete serialized original-selector task ceiling; hard maximum 130048 bytes, plus 1024 transport bytes
 
       --selection <FILE>
-          Apply an ID-only host reply to its exact candidate packet (file or - for stdin)
+          Apply a host reply to its exact card/original packet (file or - for stdin)
 
       --scope <SCOPE>
           Evidence scope. Defaults to indexed-documents on normalized vaults, current otherwise. Indexed-documents verifies selected authored/captured dependencies; indexed-evidence is captured-only
@@ -3115,6 +3175,9 @@ Options:
 
           [possible values: human, json, jsonl]
 
+      --summary
+          Review authenticated metadata without reading payloads or checking current targets
+
       --json
           Emit one structured JSON envelope
 
@@ -3716,12 +3779,15 @@ Options:
 
 ## Implemented schemas
 
+- `lwiki --json schema context-original-selection`
+- `lwiki --json schema context-original-selection-auto`
 - `lwiki --json schema context-selection`
 - `lwiki --json schema output`
 - `lwiki --json schema record`
 - `lwiki --json schema page`
 - `lwiki --json schema page-batch`
 - `lwiki --json schema page-source-refs`
+- `lwiki --json schema source-refresh-batch`
 - `lwiki --json schema stream`
 - `lwiki --json schema extraction`
 - `lwiki --json schema extraction-packet`
