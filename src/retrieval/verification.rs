@@ -364,6 +364,12 @@ pub fn context_with_options(
     request: &ContextRequest,
     options: &ContextOptions,
 ) -> Result<ContextResult> {
+    if options.experimental_hybrid_lexical_evidence {
+        return Err(WikiError::new(
+            ErrorCode::Usage,
+            "experimental hybrid lexical evidence requires the indexed semantic coordinator",
+        ));
+    }
     if request.scope == ContextScope::IndexedEvidence {
         return super::indexed_context::context(catalog, query, request, options);
     }
@@ -462,6 +468,12 @@ where
 {
     // The caller's held-writer acquisition is outside this function. The deadline
     // starts before validation, reader opens, operational guards and maintenance.
+    if options.experimental_hybrid_lexical_evidence {
+        return Err(WikiError::new(
+            ErrorCode::Usage,
+            "experimental hybrid lexical evidence requires the indexed semantic coordinator",
+        ));
+    }
     let mut meter = Meter::new(&request.verification_budget);
     let request = context::validate_request(query, request)?;
     context::validate_selection_action(&request, &options.selection)?;

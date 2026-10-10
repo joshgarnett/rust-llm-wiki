@@ -271,7 +271,7 @@ fn normalized_evidence_set_final_proof_rejects_changed_selected_source() {
     // The private coordinator is the same route used by ordinary app dispatch.
     // Each arm gets an independent disposable vault; no paid/live evidence is
     // changed and the fault runs only after allocation, before final proof.
-    for arm in ["L", "F0", "F1"] {
+    for arm in ["L", "F0", "F1", "hybrid-lexical"] {
         let fixture = normalized();
         let (source, revision) = add(&fixture, TITLE, "allocation-proof.txt", FIRST);
         let responses = Arc::new(Responses::new());
@@ -294,24 +294,36 @@ fn normalized_evidence_set_final_proof_rejects_changed_selected_source() {
         });
         let options = ContextOptions {
             fault: Some(fault.clone()),
+            experimental_hybrid_lexical_evidence: arm == "hybrid-lexical",
             ..Default::default()
         };
         let request = ContextRequest {
             scope: ContextScope::IndexedDocuments,
-            documents: plan(SearchMode::Semantic, vec![source], 8),
+            documents: plan(
+                if arm == "hybrid-lexical" {
+                    SearchMode::Hybrid
+                } else {
+                    SearchMode::Semantic
+                },
+                vec![source],
+                8,
+            ),
             ..Default::default()
         };
         let catalog = Catalog::new(fixture.fs.clone(), fixture.app.vault_id().clone());
-        let result = context_evidence::with_policy_for_test(arm, || {
-            indexed_semantic::context(
-                &catalog,
-                "Signalneedle",
-                &request,
-                &options,
-                &state,
-                &[1.0, 0.0],
-            )
-        });
+        let result = context_evidence::with_policy_for_test(
+            if arm == "hybrid-lexical" { "B" } else { arm },
+            || {
+                indexed_semantic::context(
+                    &catalog,
+                    "Signalneedle",
+                    &request,
+                    &options,
+                    &state,
+                    &[1.0, 0.0],
+                )
+            },
+        );
         assert_eq!(
             result.unwrap_err().code,
             ErrorCode::FreshnessConflict,
@@ -2308,3 +2320,126 @@ mod scale_attribution {
 
 #[path = "indexed_embedding_inventory_tests.rs"]
 mod inventory;
+
+#[test]
+fn experimental_hybrid_lexical_evidence_keeps_exact_discovery_and_semantic_work() {
+    use crate::retrieval::{
+        ContextOptions, ContextRequest, ContextScope, context, indexed_semantic,
+    };
+    let fixture = normalized();
+    add(&fixture, TITLE, "experimental-first.txt", FIRST);
+    add(&fixture, TITLE, "experimental-second.txt", SECOND);
+    let responses = Arc::new(Responses::new());
+    let dispatch = dispatcher(&fixture.fs, responses.clone());
+    let runtime = runtime(&fixture.service, &dispatch);
+    let synced = fixture
+        .app
+        .embeddings_sync(&EmbeddingSettings::default(), &runtime)
+        .unwrap();
+    complete(&synced, 2);
+    let store = VectorStore::open(&fixture.fs, None).unwrap();
+    let state = store.active().unwrap().unwrap();
+    let catalog = Catalog::new(fixture.fs.clone(), fixture.app.vault_id().clone());
+    let mut request = ContextRequest {
+        scope: ContextScope::IndexedDocuments,
+        documents: plan(SearchMode::Hybrid, vec![], 80),
+        ..Default::default()
+    };
+    request.documents.limits.hits = 10;
+    request.documents.limits.excerpt_bytes = 1024;
+    let run = |enabled| {
+        context::with_candidate_ordering_trace(|| {
+            indexed_semantic::context(
+                &catalog,
+                "Signalneedle",
+                &request,
+                &ContextOptions {
+                    experimental_hybrid_lexical_evidence: enabled,
+                    ..Default::default()
+                },
+                &state,
+                &[1.0, 0.0],
+            )
+            .unwrap()
+        })
+    };
+    let (control, control_trace) = run(false);
+    let (candidate, candidate_trace) = run(true);
+    let rows = |trace: &[serde_json::Value], stage: &str| {
+        trace.iter().find(|event| event["stage"] == stage).unwrap()["rows"].clone()
+    };
+    let discovered = rows(&control_trace, "evidence_input_owners");
+    assert_eq!(discovered.as_array().unwrap().len(), 2);
+    assert_eq!(
+        discovered,
+        rows(&candidate_trace, "evidence_input_owners"),
+        "same full hits, order and anchors before evidence assembly"
+    );
+    assert_eq!(
+        rows(&control_trace, "scored_units"),
+        rows(&candidate_trace, "scored_units")
+    );
+    assert_eq!(
+        rows(&control_trace, "normalized_read_work"),
+        rows(&candidate_trace, "normalized_read_work")
+    );
+    let control_pool = rows(&control_trace, "candidate_pool");
+    let candidate_pool = rows(&candidate_trace, "candidate_pool");
+    assert!(!control_pool["proposals"].as_array().unwrap().is_empty());
+    assert!(!candidate_pool["proposals"].as_array().unwrap().is_empty());
+    assert!(
+        candidate_pool["proposals"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|packet| {
+                packet["unit_score"].is_null()
+                    && packet["lexical_candidate"]["semantic_affinity"].is_null()
+            })
+    );
+    assert!(
+        control_pool["proposals"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|packet| packet["key"].as_str().unwrap().starts_with("unit:"))
+    );
+    assert!(
+        candidate_pool["proposals"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|packet| packet["key"].as_str().unwrap().starts_with("document:"))
+    );
+    assert!(
+        !control
+            .warnings()
+            .iter()
+            .any(|warning| warning.contains("experimental evidence strategy"))
+    );
+    assert!(candidate.warnings().iter().any(|warning| {
+        warning.contains("experimental evidence strategy hybrid_owner_lexical_evidence")
+    }));
+    assert!(!control.network_used && !candidate.network_used);
+    assert_eq!(control.snapshot(), candidate.snapshot());
+    assert_eq!(
+        control.dependency_fingerprint(),
+        candidate.dependency_fingerprint()
+    );
+    assert!(!candidate.passages().is_empty());
+    for passage in candidate.passages() {
+        assert!(passage.text.len() <= 1024);
+        for citation in &passage.citations {
+            let CitationRef::Source(reference) = citation else {
+                panic!("source citation required")
+            };
+            assert_eq!(reference.span, passage.span);
+            assert_eq!(
+                reference.quote_hash,
+                Blake3Hash::digest(passage.text.as_bytes())
+            );
+        }
+    }
+    assert!(candidate.usage().rendered_bytes <= 12000);
+    assert!(candidate.usage().estimated_tokens <= 3000);
+}

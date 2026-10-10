@@ -3307,18 +3307,54 @@ impl OfflineApp {
         fallback: bool,
         selection: &retrieval::context_selection_packet::SelectionAction,
     ) -> Result<ContextResult> {
+        self.semantic_context_with_options(
+            text,
+            request,
+            runtime,
+            no_sync,
+            fallback,
+            &ContextOptions {
+                selection: selection.clone(),
+                ..Default::default()
+            },
+        )
+    }
+
+    pub fn semantic_context_with_options(
+        &self,
+        text: &str,
+        request: &ContextRequest,
+        runtime: Option<&EmbeddingRuntime<'_>>,
+        no_sync: bool,
+        fallback: bool,
+        options: &ContextOptions,
+    ) -> Result<ContextResult> {
+        retrieval::context::validate_experimental_evidence(
+            request,
+            &options.selection,
+            options.experimental_hybrid_lexical_evidence,
+        )?;
+        if options.experimental_hybrid_lexical_evidence && fallback {
+            return Err(fail(
+                ErrorCode::Usage,
+                "experimental hybrid lexical evidence cannot use lexical discovery fallback",
+            ));
+        }
         let scoped_runtime = runtime
             .map(EmbeddingRuntime::scoped_for_operation)
             .transpose()?;
         let runtime = scoped_runtime.as_ref();
+        let selection = &options.selection;
         retrieval::context::validate_request(text, request)?;
         retrieval::context::validate_selection_action(request, selection)?;
-        let options = ContextOptions {
-            selection: selection.clone(),
-            ..Default::default()
-        };
         let catalog = Catalog::new(self.fs.clone(), self.vault_id.clone());
         let normalized = catalog.operation_state()?.is_some();
+        if options.experimental_hybrid_lexical_evidence && !normalized {
+            return Err(fail(
+                ErrorCode::CapabilityUnavailable,
+                "experimental hybrid lexical evidence requires a normalized selected catalog",
+            ));
+        }
         if normalized
             && (request.scope != ContextScope::IndexedDocuments
                 || request.target != ContextTarget::Documents
@@ -3364,7 +3400,7 @@ impl OfflineApp {
                     writer.as_ref(),
                     text,
                     &lexical,
-                    &options,
+                    options,
                 )?;
                 context
                     .warnings
@@ -3375,7 +3411,7 @@ impl OfflineApp {
         };
         if normalized {
             let mut result = retrieval::indexed_semantic::context(
-                &catalog, text, request, &options, &state, &query,
+                &catalog, text, request, options, &state, &query,
             )?;
             result.network_used = network;
             if network {
@@ -3396,7 +3432,7 @@ impl OfflineApp {
             writer.as_ref(),
             text,
             request,
-            &options,
+            options,
             |reader, normalized| {
                 let hits = if matches!(
                     normalized.documents.mode,

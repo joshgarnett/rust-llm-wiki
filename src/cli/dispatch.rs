@@ -1119,6 +1119,16 @@ fn execute_inner(args: &Arguments) -> Result<Envelope> {
             }
             let selection = context.selection_action()?;
             retrieval::context::validate_selection_action(&request, &selection)?;
+            retrieval::context::validate_experimental_evidence(
+                &request,
+                &selection,
+                context.experimental_hybrid_lexical_evidence,
+            )?;
+            if context.experimental_hybrid_lexical_evidence && context.search.lexical_fallback {
+                return Err(usage(
+                    "experimental hybrid lexical evidence cannot use lexical discovery fallback",
+                ));
+            }
             if matches!(
                 request.documents.mode,
                 retrieval::SearchMode::Semantic | retrieval::SearchMode::Hybrid
@@ -1184,13 +1194,18 @@ fn execute_inner(args: &Arguments) -> Result<Envelope> {
                         &context.search.remote,
                         context.search.lexical_fallback,
                         |runtime, fallback| {
-                            app.semantic_context_with_selection(
+                            app.semantic_context_with_options(
                                 &context.search.query,
                                 &request,
                                 runtime,
                                 context.search.no_sync,
                                 fallback,
-                                &selection,
+                                &retrieval::ContextOptions {
+                                    selection: selection.clone(),
+                                    experimental_hybrid_lexical_evidence: context
+                                        .experimental_hybrid_lexical_evidence,
+                                    ..Default::default()
+                                },
                             )
                         },
                     )?
@@ -1219,6 +1234,10 @@ fn execute_inner(args: &Arguments) -> Result<Envelope> {
                         },
                     )?
                 };
+                if context.experimental_hybrid_lexical_evidence {
+                    envelope.meta.evidence_strategy =
+                        Some("experimental_hybrid_owner_lexical_evidence".into());
+                }
                 envelope.meta.network_used = result.network_used;
                 envelope.meta.index_generation = Some(result.snapshot().generation);
                 match result.verification() {

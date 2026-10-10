@@ -1171,6 +1171,7 @@ mod tests {
                             .path()
                             .join(fixture.paths[0].as_str()),
                     })),
+                    ..Default::default()
                 },
             )
             .unwrap_err();

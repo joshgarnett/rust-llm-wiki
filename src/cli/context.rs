@@ -21,6 +21,9 @@ pub enum Target {
 pub struct ContextArguments {
     #[command(flatten)]
     pub search: SearchArguments,
+    /// Experimental hybrid owner discovery with accepted lexical evidence assembly.
+    #[arg(long, hide = true, conflicts_with_all = ["prepare_selection", "prepare_original_selection", "selection", "selection_original_paths", "selection_input_max_bytes", "discover_originals"])]
+    pub experimental_hybrid_lexical_evidence: bool,
     /// Prepare a bounded candidate packet for current-only document context; lexical on normalized indexes.
     #[arg(long, conflicts_with_all = ["selection", "prepare_original_selection", "selection_original_paths", "selection_input_max_bytes", "discover_originals"])]
     pub prepare_selection: bool,

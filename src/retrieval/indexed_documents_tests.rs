@@ -365,6 +365,7 @@ fn final_selected_proof_recheck_covers_prepare_and_apply_dependencies() {
                 path: target.clone(),
                 bytes: changed.clone(),
             })),
+            ..Default::default()
         };
         assert_eq!(
             context(&fixture.catalog, QUERY, &request(), &options)
@@ -1757,6 +1758,7 @@ fn coverage_all_arms_recheck_selected_dependencies_before_emission() {
                 path: target.clone(),
                 bytes: changed.clone(),
             })),
+            ..Default::default()
         };
         let error = coverage_context(
             &fixture.catalog,

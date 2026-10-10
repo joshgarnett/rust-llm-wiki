@@ -14,9 +14,10 @@ The representative development baseline remains **13/32 complete tasks and
 79/129 required facts** across 994 public WixQA/ConditionalQA/QASPER Sources.
 Packing, lexical-unit and question-reformulation candidates failed their declared
 gates. Further local tuning is closed. An independent architecture review selected
-one prospective comparison of the existing hybrid route with matched lexical
+one comparison of the existing hybrid route with matched lexical
 retrieval: all forty original development questions, one context per arm, with
-alternating arm order. No candidate result or quality improvement is claimed.
+alternating arm order. That comparison failed; subsequent diagnostic results
+are recorded below. No default quality improvement is claimed.
 
 Complete corpus preparation and all forty query embeddings must precede both
 scored arms. Freeze the binary, source revisions, catalog publication, compatible
@@ -108,6 +109,37 @@ remains **13/32 complete and 79/129 facts**. A fresh whole-workflow architecture
 review must precede the next quality intervention. Complete preparation, live
 cache reuse and correct citations do not establish useful answer completeness,
 HIGH, representative 25K capacity or release acceptance.
+
+A subsequent independent loss-stage audit found that 41 of 49 undisputed lexical
+misses already had an applicable owner in the discovery set; all 27 observed
+hybrid fact losses occurred within admitted owners. This does not establish
+whether construction or allocation discarded the needed evidence.
+
+One explicitly experimental route now combines unchanged hybrid owner discovery
+with the existing lexical structural evidence constructor and allocator. It is
+hidden behind `--experimental-hybrid-lexical-evidence`; default behavior is
+unchanged. The flag requires automatic normalized indexed-document hybrid
+context, refuses fallback and reports its evidence strategy. It retains the
+public evidence/proof budgets. Its internal proposal pool follows the existing
+lexical bound of 32 proposals per owner, rather than the semantic route's total
+80-proposal bound; the internal pools are not equivalent.
+
+The frozen six-task development diagnostic completed all twelve offline calls
+without errors or new provider requests. Independent assessment found **4/6
+complete tasks and 22/33 facts**, compared with **1/6 and 12/33** for the reproduced
+hybrid control and **2/6 and 17/33** for the original lexical subset. All 17 lexical
+facts survived, but two hybrid-supported paternity facts were lost: only **20/22
+frozen union facts** survived. All 94 returned citation occurrences verified
+exactly. The diagnostic therefore **fails its preservation gate**, and does not
+authorize the full forty-question comparison or promotion of the route.
+
+The release-profile candidate passes 65 affected correctness tests. The replay
+owner measured 7.506 seconds for twelve calls, with individual calls between
+0.193 and 0.830 seconds. Every call retained the frozen source, publication and
+complete corpus/query cache identities. These are six-task diagnostic results,
+not default, HIGH, absence-control, unseen holdout or 25K acceptance. The next
+architecture review must explain the applicable evidence loss before another
+quality intervention; further local parameter tuning remains closed.
 
 ## Implemented workflow
 

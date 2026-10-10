@@ -49,6 +49,9 @@
         "network_used": {
           "type": "boolean"
         },
+        "evidence_strategy": {
+          "const": "experimental_hybrid_owner_lexical_evidence"
+        },
         "maintenance": {
           "type": "object",
           "description": "Optional joined maintenance metrics. Worker service intervals can overlap and are not command elapsed time.",

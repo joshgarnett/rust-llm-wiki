@@ -22,6 +22,7 @@ pub(crate) struct ContextSemanticCue {
 pub(crate) struct ContextSelectionSignals {
     pub semantic: Vec<ContextSemanticCue>,
     pub semantic_complete: bool,
+    pub experimental_hybrid_lexical_evidence: bool,
     pub warnings: Vec<String>,
 }
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -207,6 +208,8 @@ impl ContextResult {
 }
 #[derive(Clone, Default)]
 pub struct ContextOptions {
+    /// Explicit experimental evidence route; discovery and semantic checks stay unchanged.
+    pub experimental_hybrid_lexical_evidence: bool,
     pub fault: Option<std::sync::Arc<dyn ContextFault>>,
     pub selection: super::context_selection_packet::SelectionAction,
 }

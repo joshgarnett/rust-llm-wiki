@@ -113,6 +113,28 @@ pub fn validate_selection_action(request: &ContextRequest, action: &SelectionAct
     }
     Ok(())
 }
+/// Restrict the experiment before any provider or discovery work. The switch
+/// affects only evidence assembly after authenticated hybrid owner discovery.
+pub fn validate_experimental_evidence(
+    request: &ContextRequest,
+    selection: &SelectionAction,
+    enabled: bool,
+) -> Result<()> {
+    if enabled
+        && (request.scope != ContextScope::IndexedDocuments
+            || request.target != ContextTarget::Documents
+            || request.documents.mode != SearchMode::Hybrid
+            || request.graph.is_some()
+            || !matches!(selection, SelectionAction::Automatic))
+    {
+        return Err(WikiError::new(
+            ErrorCode::Usage,
+            "experimental hybrid lexical evidence requires automatic hybrid indexed-documents context",
+        ));
+    }
+    Ok(())
+}
+
 fn normalize_request(request: &ContextRequest) -> Result<ContextRequest> {
     if request.scope == ContextScope::IndexedDocuments
         && (request.target != ContextTarget::Documents
@@ -1223,6 +1245,11 @@ fn assemble_inner_with_evidence(
     }
     let request = &request;
     validate_selection_action(request, selection_action)?;
+    validate_experimental_evidence(
+        request,
+        selection_action,
+        signals.experimental_hybrid_lexical_evidence,
+    )?;
     if hits.hits.len() > request.documents.limits.hits
         || graph.is_some_and(|g| {
             g.assertions.len() + g.navigation.len()
@@ -1301,7 +1328,10 @@ fn assemble_inner_with_evidence(
                 },
             )
             .collect::<Vec<_>>();
-        if signals.semantic.is_empty() || !signals.semantic_complete {
+        if signals.experimental_hybrid_lexical_evidence
+            || signals.semantic.is_empty()
+            || !signals.semantic_complete
+        {
             let selection = super::context_selection::select_candidates_with_semantics(
                 reader,
                 query.expect("source-aware query"),
@@ -1309,6 +1339,13 @@ fn assemble_inner_with_evidence(
                 request.documents.limits.excerpt_bytes,
                 &[],
             )?;
+            if signals.experimental_hybrid_lexical_evidence {
+                selection_warnings.push(format!(
+                    "experimental evidence strategy hybrid_owner_lexical_evidence: {} admitted owners, {} retained structural proposals, {} scanned source bytes, {} scanned blocks; existing lexical cap 32 per owner (up to 320 for ten owners), distinct from semantic-unit total cap {}; semantic completeness reporting and all discovery/proof/render limits unchanged",
+                    documents.len(), selection.candidates.len(), selection.scanned_bytes,
+                    selection.scanned_blocks, request.documents.limits.candidates,
+                ));
+            }
             term_weights = selection.term_weights;
             for omission in selection.omissions {
                 let hit = &hits.hits[omission.owner_index];
@@ -1499,6 +1536,12 @@ fn assemble_inner_with_evidence(
                 }
             }
         }
+    }
+    if signals.experimental_hybrid_lexical_evidence {
+        selection_warnings.push(format!(
+            "experimental hybrid_owner_lexical_evidence authenticated {} structural packets before automatic allocation; no semantic passage-affinity cues used",
+            packets.len(),
+        ));
     }
     if request.target != ContextTarget::Documents
         && let Some(graph) = graph
@@ -2343,3 +2386,56 @@ fn aggregate_omissions(omissions: Vec<ContextOmission>) -> Vec<ContextOmission> 
 #[cfg(test)]
 #[path = "snapshot_context_tests.rs"]
 mod snapshot_context_tests;
+
+#[cfg(test)]
+mod hybrid_lexical_evidence_experiment_tests {
+    use super::*;
+
+    #[test]
+    fn experimental_route_rejects_incompatible_contexts_and_keeps_default_validation() {
+        let mut request = ContextRequest::default();
+        assert!(
+            validate_experimental_evidence(&request, &SelectionAction::Automatic, false).is_ok()
+        );
+        assert_eq!(
+            validate_experimental_evidence(&request, &SelectionAction::Automatic, true)
+                .unwrap_err()
+                .code,
+            ErrorCode::Usage
+        );
+        request.scope = ContextScope::IndexedDocuments;
+        request.documents.mode = SearchMode::Hybrid;
+        assert!(
+            validate_experimental_evidence(&request, &SelectionAction::Automatic, true).is_ok()
+        );
+        assert_eq!(
+            validate_experimental_evidence(&request, &SelectionAction::Prepare, true)
+                .unwrap_err()
+                .code,
+            ErrorCode::Usage
+        );
+        for mode in [
+            SearchMode::Literal,
+            SearchMode::Lexical,
+            SearchMode::Semantic,
+        ] {
+            request.documents.mode = mode;
+            assert_eq!(
+                validate_experimental_evidence(&request, &SelectionAction::Automatic, true)
+                    .unwrap_err()
+                    .code,
+                ErrorCode::Usage
+            );
+        }
+        request.documents.mode = SearchMode::Hybrid;
+        for target in [ContextTarget::Graph, ContextTarget::Combined] {
+            request.target = target;
+            assert_eq!(
+                validate_experimental_evidence(&request, &SelectionAction::Automatic, true)
+                    .unwrap_err()
+                    .code,
+                ErrorCode::Usage
+            );
+        }
+    }
+}

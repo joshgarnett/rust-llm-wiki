@@ -459,6 +459,11 @@ pub(crate) fn context(
     query: &[f32],
 ) -> Result<ContextResult> {
     let request = context::validate_request(text, request)?;
+    context::validate_experimental_evidence(
+        &request,
+        &options.selection,
+        options.experimental_hybrid_lexical_evidence,
+    )?;
     if request.scope != ContextScope::IndexedDocuments
         || !matches!(options.selection, SelectionAction::Automatic)
     {
@@ -578,6 +583,13 @@ pub(crate) fn context(
     if !signals.semantic_complete {
         signals.warnings.push("Selected owners lack complete compatible semantic cues or reached the existing scoring reservation; unchanged local passage allocation remains in use for unscored evidence.".into());
     }
+    // The opt-in is consulted only after unchanged discovery, authentication
+    // and selected-owner semantic scoring have completed.
+    signals.experimental_hybrid_lexical_evidence = options.experimental_hybrid_lexical_evidence;
+    #[cfg(test)]
+    context::record_candidate_ordering_trace("evidence_input_owners", || {
+        serde_json::json!(discovery.hits.hits)
+    });
     let mut draft = context::assemble_bounded_documents_with_evidence(
         &selected,
         &request,
