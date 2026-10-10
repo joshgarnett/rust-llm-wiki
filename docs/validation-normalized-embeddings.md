@@ -71,7 +71,43 @@ zero-attempt Run, explicitly amended only its deadline, acquired the one origina
 query with one mock request, and completed offline hybrid context in 0.235 seconds.
 Fresh query preparation uses a 120-second Run deadline with unchanged attempt,
 request and financial limits. No task/fact gain or release acceptance follows from
-these preparation checks; the live paired comparison remains outstanding.
+these preparation checks.
+
+The authorized live acquisition then reached its 120-second preparation deadline:
+121.427 seconds observed, 1,110/1,429 units acknowledged, no active publication.
+That single-invocation trial remains failed. Its seven completed Runs retained
+1,297 ready vectors from 60 requests, with USD0.022013700 known cost and no unknown
+liabilities. A separately reviewed ordinary continuation used only the residual
+corpus allowance, finished in 15.375 seconds, reused 187 paid vectors and acquired
+132 new inputs. Full publication and an offline canonical/vector check now cover
+all 1,429 units; the check took 5.800 seconds. Across both invocations, 67 requests
+paid for exactly 1,429 distinct inputs without duplicate acquisition.
+
+All forty original query embeddings subsequently completed in 79.910 seconds.
+Total acquisition is **107 requests and USD0.024330860 known cost**, with no unknown
+or outstanding liabilities in the recorded native accounting. Credentials were
+used only by native provider authentication. These are live preparation and
+continuation observations. Post-acquisition verification authenticated all actual
+inputs, compatible vectors, source revisions and accounting, then froze catalog
+generation 281 and both database identities before the unchanged offline adapter.
+
+The paired comparison is **NO_GO**. It stopped at invocation 58/80 when hybrid
+context for the first QASPER question exhausted the selected SQL-row budget;
+22 invocations remained unrun. The same question's lexical command succeeded.
+All source and cache/publication identities remained unchanged after the replay.
+Across the 28 completed pairs only, independent diagnostic assessment found
+lexical **13/28 complete tasks and 74/115 facts**, versus hybrid **6/28 and 60/115**.
+Hybrid lost 27 baseline facts and gained 13. These are incomplete-trial diagnostic
+counts, not a full forty-question score. All eight absent controls were unrun.
+All 438 citation occurrences in the 57 successful contexts authenticated.
+
+The known fact losses independently violate the fixed no-regression gate; fixing
+only the row-budget refusal cannot qualify this route. Do not promote hybrid or
+repeat packing, prompt or parameter variants. The native development baseline
+remains **13/32 complete and 79/129 facts**. A fresh whole-workflow architecture
+review must precede the next quality intervention. Complete preparation, live
+cache reuse and correct citations do not establish useful answer completeness,
+HIGH, representative 25K capacity or release acceptance.
 
 ## Implemented workflow
 
