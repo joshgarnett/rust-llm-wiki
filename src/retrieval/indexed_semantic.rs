@@ -499,6 +499,37 @@ pub(crate) fn context(
     let mut budget = request.verification_budget.clone();
     budget.max_elapsed_ms = meter.remaining_ms();
     let mut proof = selected_documents::authenticate(catalog, &reader, &paths, &budget)?;
+    #[cfg(test)]
+    if context::representation025::is_active() {
+        discovery.hits.dependency_fingerprint = proof.fingerprint.clone();
+        let selected = SelectedCatalog {
+            reader: &reader,
+            proof: &proof,
+        };
+        let mut draft = context::representation025::assemble(
+            &reader,
+            &selected,
+            &request,
+            &discovery.hits,
+            text,
+        )?;
+        draft.warnings.extend(discovery.hits.warnings);
+        if let Some(fault) = &options.fault {
+            fault.check(ContextCheckpoint::BeforeFinalVerification { attempt: 0 })?;
+        }
+        proof.recheck(catalog, &reader)?;
+        require_space(&VectorStore::open_bounded(catalog.fs(), &vectors)?, state)?;
+        reader.check_query_budget()?;
+        meter.check()?;
+        let usage = vectors.usage();
+        draft.warnings.push(format!("025 unchanged hybrid discovery: {} vector reads, {} vector bytes, {} metadata bytes, {} SQL VM steps; final selected-source proof retained",
+            usage.vector_reads, usage.vector_bytes_scanned, usage.metadata_bytes_decoded + usage.space_bytes_decoded, usage.sql_vm_steps));
+        return Ok(seal(
+            draft,
+            indexed_documents::verification(&reader)?,
+            proof.meter(),
+        ));
+    }
     let rendered = selected_units(&proof, &discovery, state, &units)?;
     discovery.hits.dependency_fingerprint = proof.fingerprint.clone();
     let selected = SelectedCatalog {

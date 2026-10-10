@@ -150,6 +150,26 @@ retrieval intervention. The owning wrapper took 0.799 seconds, including a
 shipping latency measurements. No provider request occurred. The failed
 observation remains inconclusive, with no cap increase or trace retry authorized.
 
+A separately frozen test-only control retained query-independent Markdown
+structure: exact source spans, heading ancestry, adjacent list introductions and
+mandatory support closures. Discovery remained unchanged, and query evidence and
+proof budgets remained fixed. All six discovery passes completed, but preparation
+stopped at the complete per-owner 128-record limit. No candidate context was
+returned; all six query replays remained unrun. The partial preparation counters
+(18 attempted owners, 606 attempted records, 101,376 serialized bytes) do not
+establish complete coverage or retrieval quality. Independent inspection found
+17 complete sidecars with 477 records; the eighteenth owner failed at record 129,
+and 39 of the 57 distinct discovered owners were unstarted. The failing document
+is about 22 KB, so this fixed limit does not support an ordinary document.
+
+Eight distinct focused correctness checks pass; an initial expected-newline test
+failure and its passing one-literal correction remain separately recorded. The
+failed campaign took 2.099 seconds in its native owner and 2.745 seconds under
+outer supervision, with zero provider or model calls. This result establishes a
+preparation-capacity failure, not whether structural ranking improves answers.
+The control is closed without a cap increase, resplitting or serialization retry.
+The development baseline and all release acceptance requirements remain unchanged.
+
 ## Implemented workflow
 
 Preparation uses exact authenticated Current Page, unmanaged-note and captured

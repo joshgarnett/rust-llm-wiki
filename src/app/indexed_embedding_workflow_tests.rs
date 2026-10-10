@@ -2479,10 +2479,10 @@ mod retrieval_lineage022 {
     const TRACE_MAX: usize = 2 * 1024 * 1024;
     #[derive(Deserialize)]
     #[serde(deny_unknown_fields)]
-    struct Pin {
-        path: PathBuf,
-        bytes: u64,
-        hash: Blake3Hash,
+    pub(super) struct Pin {
+        pub(super) path: PathBuf,
+        pub(super) bytes: u64,
+        pub(super) hash: Blake3Hash,
     }
     #[derive(Deserialize)]
     #[serde(deny_unknown_fields)]
@@ -2495,7 +2495,7 @@ mod retrieval_lineage022 {
         output: PathBuf,
     }
 
-    fn pinned(pin: &Pin) -> Result<()> {
+    pub(super) fn pinned(pin: &Pin) -> Result<()> {
         let metadata =
             fs::symlink_metadata(&pin.path).map_err(|e| WikiError::invalid(e.to_string()))?;
         if !pin.path.is_absolute()
@@ -2527,7 +2527,7 @@ mod retrieval_lineage022 {
         }
         Ok(())
     }
-    fn json_pin(pin: &Pin) -> Result<Value> {
+    pub(super) fn json_pin(pin: &Pin) -> Result<Value> {
         pinned(pin)?;
         if pin.bytes > 1024 * 1024 {
             return Err(WikiError::invalid("lineage JSON input ceiling"));
@@ -2535,7 +2535,7 @@ mod retrieval_lineage022 {
         serde_json::from_slice(&fs::read(&pin.path).map_err(|e| WikiError::invalid(e.to_string()))?)
             .map_err(|e| WikiError::invalid(e.to_string()))
     }
-    fn write_new(path: &Path, bytes: &[u8]) -> Result<()> {
+    pub(super) fn write_new(path: &Path, bytes: &[u8]) -> Result<()> {
         fs::OpenOptions::new()
             .write(true)
             .create_new(true)
@@ -2765,3 +2765,6 @@ mod retrieval_lineage022 {
         );
     }
 }
+
+#[path = "representation_control025.rs"]
+mod representation_control025;
