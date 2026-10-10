@@ -4,6 +4,10 @@ pub mod context;
 pub(crate) mod context_original_selection;
 pub(crate) mod context_evidence;
 pub(crate) mod context_selection;
+mod context_lexical_unit_packing;
+#[cfg(test)]
+mod context_lexical_unit_diagnostic;
+#[cfg(test)]
 mod context_set_packing;
 pub mod context_selection_packet;
 pub mod context_types;

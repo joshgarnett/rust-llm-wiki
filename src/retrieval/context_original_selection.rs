@@ -509,6 +509,7 @@ pub(super) fn context(
                 term_weights: Vec::new(),
                 selection_warnings: warnings,
                 source_aware: true,
+                native_lexical_units: false,
                 query: Some(query),
                 signals: &ContextSelectionSignals::default(),
                 selection_action: &options.selection,

@@ -13,7 +13,7 @@ pub(super) const MAX_POOL: usize = 320;
 const ADDITION_TRIALS: usize = 3072;
 const EXCHANGE_TRIALS: usize = 1024;
 
-#[derive(Default, Debug)]
+#[derive(Default, Debug, serde::Serialize)]
 pub(super) struct Statistics {
     pub additions: usize,
     pub exchanges: usize,
@@ -184,6 +184,10 @@ fn select<T>(
             bytes = trial.bytes;
             result.state = Some(trial.state);
             coverage = representation.coverage(&result.members);
+            super::context_lexical_unit_diagnostic::record_commit(
+                &result.members,
+                representation.value(&coverage),
+            );
         } else {
             break;
         }
@@ -240,6 +244,10 @@ fn select<T>(
             bytes = trial.bytes;
             result.state = Some(trial.state);
             coverage = representation.coverage(&result.members);
+            super::context_lexical_unit_diagnostic::record_commit(
+                &result.members,
+                representation.value(&coverage),
+            );
         }
     }
     result.statistics.objective = representation.value(&coverage);
@@ -252,6 +260,22 @@ pub(super) fn allocate(
     request: &ContextRequest,
     packets: &[Packet],
     initial_bytes: usize,
+) -> Result<Option<Selection<DocumentTrial>>> {
+    allocate_with_caps(
+        reader,
+        request,
+        packets,
+        initial_bytes,
+        (ADDITION_TRIALS, EXCHANGE_TRIALS),
+    )
+}
+
+pub(super) fn allocate_with_caps(
+    reader: &dyn QueryCatalog,
+    request: &ContextRequest,
+    packets: &[Packet],
+    initial_bytes: usize,
+    caps: (usize, usize),
 ) -> Result<Option<Selection<DocumentTrial>>> {
     if packets.len() > MAX_POOL {
         return Ok(None);
@@ -279,11 +303,16 @@ pub(super) fn allocate(
         )?);
         relevance.push(packet.score * candidate.local_relevance as f64);
     }
+    super::context_lexical_unit_diagnostic::record_tokens(&tokens);
     if relevance.iter().any(|r| !r.is_finite() || *r < 0.0) || relevance.iter().all(|r| *r == 0.0) {
         return Ok(None);
     }
     let representation =
         Representation::from_tokens(&tokens, &relevance, || reader.check_query_budget())?;
+    super::context_lexical_unit_diagnostic::record_representation(
+        &representation.weights,
+        &representation.similarities,
+    );
     let keys = packets
         .iter()
         .map(|packet| packet.key.as_str())
@@ -292,14 +321,23 @@ pub(super) fn allocate(
         &keys,
         &representation,
         initial_bytes,
-        (ADDITION_TRIALS, EXCHANGE_TRIALS),
-        || reader.check_query_budget(),
+        caps,
+        || {
+            super::context_lexical_unit_diagnostic::check_limits()?;
+            reader.check_query_budget().inspect_err(|error| {
+                super::context_lexical_unit_diagnostic::record_error("query_budget", error)
+            })
+        },
         |members| {
             let original = members
                 .iter()
                 .flat_map(|&i| packets[i].passages.iter().cloned())
                 .collect::<Vec<_>>();
-            let trial = document_trial(reader, request, &[], &original)?;
+            super::context_lexical_unit_diagnostic::before_realization()?;
+            let trial = document_trial(reader, request, &[], &original).inspect_err(|error| {
+                super::context_lexical_unit_diagnostic::record_trial_error(members, error)
+            })?;
+            super::context_lexical_unit_diagnostic::record_trial(members, &trial);
             Ok(trial.reason.is_none().then(|| Realization {
                 bytes: trial.text.len(),
                 state: trial,
@@ -311,4 +349,4 @@ pub(super) fn allocate(
 
 #[cfg(test)]
 #[path = "context_set_packing_tests.rs"]
-mod tests;
+pub(super) mod tests;

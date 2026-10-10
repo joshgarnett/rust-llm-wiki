@@ -16,15 +16,15 @@ use crate::{
 };
 use std::cell::Cell;
 
-struct Fixture {
+pub(crate) struct Fixture {
     _temp: tempfile::TempDir,
-    catalog: Catalog,
-    reader: QuerySnapshot,
-    proof: SelectedDocuments,
-    document: DocumentRow,
+    pub(crate) catalog: Catalog,
+    pub(crate) reader: QuerySnapshot,
+    pub(crate) proof: SelectedDocuments,
+    pub(crate) document: DocumentRow,
 }
 impl Fixture {
-    fn new(raw: &str) -> Self {
+    pub(crate) fn new(raw: &str) -> Self {
         let temp = tempfile::tempdir().unwrap();
         let root = temp.path().join("vault");
         offline::init(&root, "Native set fixture", OperationOptions::default()).unwrap();
@@ -73,13 +73,13 @@ impl Fixture {
             document,
         }
     }
-    fn selected(&self) -> SelectedCatalog<'_> {
+    pub(crate) fn selected(&self) -> SelectedCatalog<'_> {
         SelectedCatalog {
             reader: &self.reader,
             proof: &self.proof,
         }
     }
-    fn passage(&self, span: ByteSpan) -> ContextPassage {
+    pub(crate) fn passage(&self, span: ByteSpan) -> ContextPassage {
         let text = span.slice(&self.document.raw_text).unwrap().to_owned();
         ContextPassage {
             locator: DocumentLocator {
@@ -106,7 +106,7 @@ impl Fixture {
             support_group: Some(self.document.hash.clone()),
         }
     }
-    fn packet(&self, key: &str, candidate: SelectionCandidate) -> Packet {
+    pub(crate) fn packet(&self, key: &str, candidate: SelectionCandidate) -> Packet {
         Packet {
             passages: vec![self.passage(candidate.span)],
             bundle: None,
@@ -121,7 +121,7 @@ impl Fixture {
             unit_clipped: false,
         }
     }
-    fn assert_quote(&self, passage: &ContextPassage) {
+    pub(crate) fn assert_quote(&self, passage: &ContextPassage) {
         assert_eq!(
             passage.text,
             passage.span.slice(&self.document.raw_text).unwrap()
@@ -143,7 +143,7 @@ impl Fixture {
 fn span(start: usize, end: usize) -> ByteSpan {
     ByteSpan::new(start as u64, end as u64).unwrap()
 }
-fn request() -> ContextRequest {
+pub(crate) fn request() -> ContextRequest {
     let mut r = ContextRequest::default();
     r.scope = ContextScope::IndexedDocuments;
     r.documents.limits.excerpt_bytes = 128;
@@ -607,7 +607,7 @@ fn complete_teaching_procedure_stays_indivisible_in_native_allocation() {
     }
 }
 
-fn candidate(span: ByteSpan, local_relevance: u64) -> SelectionCandidate {
+pub(crate) fn candidate(span: ByteSpan, local_relevance: u64) -> SelectionCandidate {
     SelectionCandidate {
         owner_index: 0,
         span,
@@ -645,7 +645,7 @@ fn raw_local_relevance_has_no_base_seed_or_clipping_bonus_and_zero_pool_falls_ba
 }
 
 #[test]
-fn default_pack_reports_membership_omissions_and_larger_pool_fallback_without_truncation() {
+fn unmarked_legacy_packets_do_not_activate_failed_facility_in_production_packing() {
     use crate::retrieval::{
         HitSet,
         context::{PackingInput, pack},
@@ -681,7 +681,8 @@ fn default_pack_reports_membership_omissions_and_larger_pool_fallback_without_tr
                 omissions: vec![],
                 term_weights: vec![1],
                 selection_warnings: vec![],
-                source_aware: true,
+                source_aware: false,
+                native_lexical_units: false,
                 query: Some("alpha"),
                 signals: &signals,
                 selection_action: &action,
@@ -695,21 +696,13 @@ fn default_pack_reports_membership_omissions_and_larger_pool_fallback_without_tr
     };
     let native = run(3);
     assert_eq!(native.passages.len(), 1);
-    assert!(native.truncated);
-    assert_eq!(
-        native
-            .omissions
-            .iter()
-            .find(|o| o.reason == "not_selected_by_native_lexical_set")
-            .unwrap()
-            .count,
-        2
-    );
+    assert!(!native.truncated);
+    assert!(native.omissions.is_empty());
     assert!(
-        native
+        !native
             .warnings
             .iter()
-            .any(|w| w.contains("1 of 3 unchanged proposals"))
+            .any(|w| w.contains("native lexical set assembly"))
     );
     fixture.assert_quote(&native.passages[0]);
     let fallback = run(MAX_POOL + 1);
@@ -717,11 +710,105 @@ fn default_pack_reports_membership_omissions_and_larger_pool_fallback_without_tr
     assert!(!fallback.truncated);
     assert!(fallback.omissions.is_empty());
     assert!(
-        fallback
+        !fallback
             .warnings
             .iter()
-            .any(|w| w.contains("321 proposals use existing greedy allocation without truncation"))
+            .any(|w| w.contains("native lexical set assembly"))
     );
+}
+
+#[test]
+fn public_mixed_owner_with_zero_authored_proposals_retains_prior_automatic_path() {
+    let fixture = Fixture::new("alpha captured condition and exception.\n");
+    let app = OfflineApp::new(fixture.catalog.fs().clone(), OperationOptions::default()).unwrap();
+    let path = VaultRelativePath::new("pages/empty_authored.md").unwrap();
+    let note = CanonicalRecord::from_value(serde_json::json!({
+        "wiki_schema":"1","wiki_id":"page_empty_authored","wiki_kind":"page",
+        "title":"alpha","wiki_status":"reviewed"
+    }))
+    .unwrap();
+    // Title discovery admits this authored owner with a nonempty excerpt,
+    // while markup-only body windows produce no readable old-builder proposal.
+    let bytes = crate::sources::revision::record_bytes(
+        note,
+        b"<!-- authored owner has no readable content -->\n",
+    )
+    .unwrap();
+    app.page_put(path.clone(), bytes, None).unwrap();
+    let r = request();
+    let reader = fixture
+        .catalog
+        .cached_query_snapshot(Default::default())
+        .unwrap();
+    let hits =
+        crate::retrieval::lexical::search_context_catalog(&reader, "alpha", &r.documents, false)
+            .unwrap();
+    let authored = hits
+        .hits
+        .iter()
+        .position(|h| h.locator.path == path)
+        .unwrap();
+    assert!(!hits.hits[authored].excerpt.span.is_empty());
+    let paths = hits
+        .hits
+        .iter()
+        .map(|h| h.locator.path.clone())
+        .collect::<Vec<_>>();
+    let proof = authenticate(&fixture.catalog, &reader, &paths, &r.verification_budget).unwrap();
+    assert!(proof.documents[&path].owner_revision.is_none());
+    assert!(proof.documents.values().any(|d| d.owner_revision.is_some()));
+    let selected = SelectedCatalog {
+        reader: &reader,
+        proof: &proof,
+    };
+    let anchors = hits
+        .hits
+        .iter()
+        .map(|h| vec![h.excerpt.span])
+        .collect::<Vec<_>>();
+    let documents = hits
+        .hits
+        .iter()
+        .enumerate()
+        .map(|(owner_index, h)| SelectionDocument {
+            owner_index,
+            document: &proof.documents[&h.locator.path],
+            seed_spans: &anchors[owner_index],
+        })
+        .collect::<Vec<_>>();
+    let proposals = select_candidates_with_semantics(
+        &selected,
+        "alpha",
+        &documents,
+        r.documents.limits.excerpt_bytes,
+        &[],
+    )
+    .unwrap();
+    assert!(!proposals.candidates.is_empty());
+    assert!(
+        proposals
+            .candidates
+            .iter()
+            .all(|c| c.owner_index != authored)
+    );
+    let result =
+        crate::retrieval::verification::context(&fixture.catalog, None, "alpha", &r).unwrap();
+    assert!(result.text().contains("captured condition"));
+    assert!(result.passages().iter().all(|p| p.locator.path != path));
+    assert!(result.passages().iter().all(|p| {
+        p.rank_contributions
+            .iter()
+            .all(|rank| rank.channel != crate::retrieval::context_lexical_unit_packing::CHANNEL)
+    }));
+    assert!(
+        !result
+            .warnings()
+            .iter()
+            .any(|w| w.starts_with("query-ranked lexical units:"))
+    );
+    for passage in result.passages() {
+        fixture.assert_quote(passage);
+    }
 }
 
 #[test]
@@ -741,7 +828,7 @@ fn public_automatic_context_seals_complete_procedure_with_current_citations_and_
         result
             .warnings()
             .iter()
-            .any(|w| w.starts_with("native lexical set assembly:"))
+            .any(|w| w.starts_with("query-ranked lexical units:"))
     );
     assert!(result.text().contains("runner test --ignored"));
     assert!(result.text().contains("runner test --include-ignored"));

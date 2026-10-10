@@ -246,6 +246,7 @@ fn term_key(term: &str) -> String {
 
 /// Selection-only features over one complete retained candidate. Repetition
 /// within a candidate contributes once; source bytes and proposals are intact.
+#[cfg(test)]
 pub(super) fn normalized_lexical_tokens(
     tokenizer: &Tokenizer<'_>,
     text: &str,
@@ -596,6 +597,262 @@ fn query_terms(tokenizer: &Tokenizer<'_>, query: &str) -> Result<(BTreeMap<Strin
         terms.insert(key, terms.len());
     }
     Ok((terms, term_cap))
+}
+
+pub(super) struct LexicalUnitSelection {
+    pub selection: SelectionResult,
+    /// Parallel to retained candidates; raw BM25 is never owner-fused.
+    pub ranks: Vec<super::types::RankContribution>,
+}
+
+struct LexicalUnit {
+    candidate: SelectionCandidate,
+    terms: BTreeMap<String, usize>,
+    length: usize,
+    score: f64,
+}
+
+/// Complete lexical structural parents are query-ranked before retention.
+/// The historical proposal builder below remains unchanged for other routes.
+pub(super) fn select_lexical_units(
+    reader: &dyn QueryCatalog,
+    query: &str,
+    documents: &[SelectionDocument<'_>],
+    bytes: usize,
+) -> Result<LexicalUnitSelection> {
+    if bytes == 0 || bytes > 2048 || documents.len() > 10 {
+        return Err(WikiError::invalid(
+            "lexical unit selection requires <=10 owners and 1..=2048 excerpt bytes",
+        ));
+    }
+    let tokenizer = Tokenizer::new(reader.connection())?;
+    let (query_terms, term_cap) = query_terms(&tokenizer, query)?;
+    let mut result = SelectionResult {
+        candidates: vec![],
+        term_weights: vec![1; query_terms.len()],
+        omissions: vec![],
+        scanned_bytes: 0,
+        scanned_blocks: 0,
+    };
+    let mut units = Vec::<LexicalUnit>::new();
+    let mut seen = BTreeSet::new();
+    for input in documents {
+        reader.check_query_budget()?;
+        let raw = input.document.raw_text.as_str();
+        let body = if input.document.owner_revision.is_some() {
+            0
+        } else {
+            note_body_start(raw)
+        };
+        for span in input.seed_spans {
+            span.slice(raw)?;
+        }
+        if term_cap {
+            result.omissions.push(SelectionOmission {
+                owner_index: input.owner_index,
+                reason: "context_query_term_cap",
+            });
+        }
+        let capacity = OWNER_SCAN_BYTES.min(TOTAL_SCAN_BYTES.saturating_sub(result.scanned_bytes));
+        let reserved = input
+            .seed_spans
+            .len()
+            .min(2)
+            .saturating_mul(bytes)
+            .min(capacity);
+        let end = boundary_before(raw, body.saturating_add(capacity - reserved));
+        let remaining = MAX_BLOCKS.saturating_sub(result.scanned_blocks);
+        let (blocks, block_limit, starts) = structural_blocks(raw, body, end, remaining);
+        result.scanned_bytes += end - body;
+        result.scanned_blocks += starts;
+        if end < raw.len() {
+            result.omissions.push(SelectionOmission {
+                owner_index: input.owner_index,
+                reason: "context_source_scan_byte_cap",
+            });
+        }
+        if block_limit || remaining == 0 {
+            result.omissions.push(SelectionOmission {
+                owner_index: input.owner_index,
+                reason: "context_source_scan_block_cap",
+            });
+        }
+        let blocks = teaching_blocks(blocks, bytes);
+        let fitting = blocks
+            .iter()
+            .filter(|b| !b.clipped && b.kind != BlockKind::Heading && b.range.len() <= bytes)
+            .map(|b| b.range.clone())
+            .collect::<Vec<_>>();
+        let mut proposals = BTreeMap::<(usize, usize), bool>::new();
+        for block in &blocks {
+            reader.check_query_budget()?;
+            if block.kind == BlockKind::Heading {
+                continue;
+            }
+            if block.range.len() <= bytes {
+                proposals.insert((block.range.start, block.range.end), block.clipped);
+            } else {
+                let map = SourceMap::markdown(&raw[..block.range.end], block.range.start);
+                let mut anchors = tokenizer
+                    .tokens(&map.text)?
+                    .into_iter()
+                    .filter(|token| query_terms.contains_key(&term_key(&token.text)))
+                    .filter_map(|token| map.original_span(token.span).map(|span| span.start))
+                    .take(64)
+                    .collect::<Vec<_>>();
+                anchors.extend(
+                    input
+                        .seed_spans
+                        .iter()
+                        .filter(|a| {
+                            a.start() < block.range.end as u64 && a.end() > block.range.start as u64
+                        })
+                        .map(|a| (a.start() as usize).max(block.range.start)),
+                );
+                for anchor in anchors {
+                    let range = bounded_window(raw, block.range.clone(), anchor, bytes);
+                    proposals.entry((range.start, range.end)).or_insert(true);
+                }
+            }
+        }
+        let mut owner_usage = end - body;
+        if input.seed_spans.len() > 2 {
+            result.omissions.push(SelectionOmission {
+                owner_index: input.owner_index,
+                reason: "context_source_anchor_cap",
+            });
+        }
+        for anchor in input.seed_spans.iter().take(2) {
+            if anchor.is_empty() {
+                continue;
+            }
+            let allowance = (capacity - owner_usage).min(bytes);
+            if allowance == 0 {
+                continue;
+            }
+            let range = bounded_window(raw, body..raw.len(), anchor.start() as usize, allowance);
+            owner_usage += range.len();
+            result.scanned_bytes += range.len();
+            // A discovery fragment cannot compete with a fitting complete
+            // parent; that parent receives the same seed-overlap eligibility.
+            if fitting
+                .iter()
+                .any(|p| p.start < range.end && range.start < p.end)
+            {
+                continue;
+            }
+            proposals.entry((range.start, range.end)).or_insert(true);
+        }
+        for ((start, end), clipped) in proposals {
+            reader.check_query_budget()?;
+            if start == end {
+                continue;
+            }
+            let map = SourceMap::markdown(&raw[..end], start);
+            if map.text.trim().is_empty() {
+                continue;
+            }
+            let readable = tokenizer.tokens(&map.text)?;
+            let length = readable.len();
+            let mut terms = BTreeMap::<String, usize>::new();
+            for token in readable {
+                *terms.entry(term_key(&token.text)).or_default() += 1;
+            }
+            let covered_terms = query_terms
+                .iter()
+                .filter_map(|(term, &index)| terms.contains_key(term).then_some(index))
+                .collect::<Vec<_>>();
+            let span = ByteSpan::new(start as u64, end as u64)?;
+            if !seen.insert((input.owner_index, span.start(), span.end())) {
+                continue;
+            }
+            let seed_overlap = input
+                .seed_spans
+                .iter()
+                .any(|a| a.start() < span.end() && span.start() < a.end());
+            units.push(LexicalUnit {
+                candidate: SelectionCandidate {
+                    owner_index: input.owner_index,
+                    span,
+                    local_relevance: covered_terms.len() as u64,
+                    covered_terms,
+                    seed_overlap,
+                    clipped,
+                    semantic_affinity: None,
+                },
+                terms,
+                length,
+                score: 0.0,
+            });
+        }
+    }
+    // Match context_units::rank_units exactly: unit DF and all readable tokens
+    // in length/average, including constructed units with no query overlap.
+    let measured = units.len();
+    if measured > 0 {
+        let average = units.iter().map(|unit| unit.length).sum::<usize>() as f64 / measured as f64;
+        let frequencies = query_terms
+            .keys()
+            .map(|term| units.iter().filter(|u| u.terms.contains_key(term)).count())
+            .collect::<Vec<_>>();
+        for unit in &mut units {
+            reader.check_query_budget()?;
+            for (term, &df) in query_terms.keys().zip(&frequencies) {
+                let Some(&tf) = unit.terms.get(term) else {
+                    continue;
+                };
+                let tf = tf as f64;
+                let idf = (1.0 + (measured as f64 - df as f64 + 0.5) / (df as f64 + 0.5)).ln();
+                let norm = if average > 0.0 {
+                    unit.length as f64 / average
+                } else {
+                    0.0
+                };
+                unit.score += idf * tf * 2.2 / (tf + 1.2 * (0.25 + 0.75 * norm));
+            }
+        }
+    }
+    units.sort_by(|a, b| {
+        b.score
+            .total_cmp(&a.score)
+            .then(a.candidate.owner_index.cmp(&b.candidate.owner_index))
+            .then(a.candidate.span.start().cmp(&b.candidate.span.start()))
+            .then(a.candidate.span.end().cmp(&b.candidate.span.end()))
+    });
+    let mut retained = BTreeMap::<usize, usize>::new();
+    let mut ranks = Vec::new();
+    let mut rank = 0;
+    for unit in units {
+        if unit.score <= 0.0 && !unit.candidate.seed_overlap {
+            continue;
+        }
+        rank += 1;
+        let count = retained.entry(unit.candidate.owner_index).or_default();
+        if *count == MAX_CANDIDATES {
+            if !result.omissions.iter().any(|o| {
+                o.owner_index == unit.candidate.owner_index
+                    && o.reason == "context_source_candidate_cap"
+            }) {
+                result.omissions.push(SelectionOmission {
+                    owner_index: unit.candidate.owner_index,
+                    reason: "context_source_candidate_cap",
+                });
+            }
+            continue;
+        }
+        *count += 1;
+        ranks.push(super::types::RankContribution {
+            channel: "context_lexical_unit_bm25".into(),
+            rank,
+            score: Some(unit.score),
+        });
+        result.candidates.push(unit.candidate);
+    }
+    reader.check_query_budget()?;
+    Ok(LexicalUnitSelection {
+        selection: result,
+        ranks,
+    })
 }
 
 #[cfg(test)]

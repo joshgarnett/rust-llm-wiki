@@ -587,6 +587,7 @@ pub(super) fn context(
             term_weights: selection.term_weights,
             selection_warnings: warnings,
             source_aware: true,
+            native_lexical_units: false,
             query: Some(query),
             signals: &signals,
             selection_action: &options.selection,

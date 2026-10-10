@@ -1246,6 +1246,7 @@ fn assemble_inner_with_evidence(
     let mut graph_ranks: BTreeMap<String, usize> = BTreeMap::new();
     let source_aware = query.is_some() && request.documents.mode != SearchMode::Literal;
     let mut term_weights = Vec::new();
+    let mut native_lexical_units = false;
     let mut selection_warnings = signals.warnings.clone();
     if request.target != ContextTarget::Graph && source_aware {
         let mut owners = Vec::new();
@@ -1288,13 +1289,45 @@ fn assemble_inner_with_evidence(
             )
             .collect::<Vec<_>>();
         if signals.semantic.is_empty() || !signals.semantic_complete {
-            let selection = super::context_selection::select_candidates_with_semantics(
-                reader,
-                query.expect("source-aware query"),
-                &documents,
-                request.documents.limits.excerpt_bytes,
-                &[],
-            )?;
+            #[cfg(test)]
+            let diagnostic = super::context_lexical_unit_diagnostic::active();
+            #[cfg(not(test))]
+            let diagnostic = false;
+            let native_units = !diagnostic
+                && evidence_sets.is_none()
+                && matches!(selection_action, SelectionAction::Automatic)
+                && request.documents.mode == SearchMode::Lexical
+                && request.scope == ContextScope::IndexedDocuments
+                && request.target == ContextTarget::Documents
+                && request.graph.is_none()
+                && request.documents.limits.hits <= 10
+                && hits.hits.len() <= 10
+                && documents
+                    .iter()
+                    .all(|d| d.document.owner_revision.is_some());
+            native_lexical_units = native_units;
+            let (selection, lexical_ranks) = if native_units {
+                let units = super::context_selection::select_lexical_units(
+                    reader,
+                    query.expect("source-aware query"),
+                    &documents,
+                    request.documents.limits.excerpt_bytes,
+                )?;
+                (
+                    units.selection,
+                    units.ranks.into_iter().map(Some).collect::<Vec<_>>(),
+                )
+            } else {
+                let selection = super::context_selection::select_candidates_with_semantics(
+                    reader,
+                    query.expect("source-aware query"),
+                    &documents,
+                    request.documents.limits.excerpt_bytes,
+                    &[],
+                )?;
+                let ranks = vec![None; selection.candidates.len()];
+                (selection, ranks)
+            };
             term_weights = selection.term_weights;
             for omission in selection.omissions {
                 let hit = &hits.hits[omission.owner_index];
@@ -1309,7 +1342,12 @@ fn assemble_inner_with_evidence(
             "source-aware context inspected {} bytes in {} blocks; query overlap guides passage selection, not answer completeness",
             selection.scanned_bytes, selection.scanned_blocks,
         ));
-            for (selection_ordinal, candidate) in selection.candidates.into_iter().enumerate() {
+            for (selection_ordinal, (candidate, lexical_rank)) in selection
+                .candidates
+                .into_iter()
+                .zip(lexical_ranks)
+                .enumerate()
+            {
                 let hit = &hits.hits[candidate.owner_index];
                 let excerpt = SearchExcerpt {
                     text: String::new(),
@@ -1318,7 +1356,7 @@ fn assemble_inner_with_evidence(
                     label: hit.excerpt.label,
                     citation: None,
                 };
-                if let Some(p) = document_passage(
+                if let Some(mut p) = document_passage(
                     reader,
                     &document_owners[candidate.owner_index],
                     hit,
@@ -1326,6 +1364,9 @@ fn assemble_inner_with_evidence(
                     request,
                     candidate.owner_index + 1,
                 )? {
+                    if let Some(rank) = lexical_rank {
+                        p.rank_contributions.push(rank);
+                    }
                     direct
                         .entry(bundles::owner(&p))
                         .and_modify(|r| *r = (*r).min(candidate.owner_index + 1))
@@ -1660,7 +1701,14 @@ fn assemble_inner_with_evidence(
                     }
                 }
             } else {
-                p.rank_contributions = ranks;
+                if native_lexical_units {
+                    p.rank_contributions.retain(|rank| {
+                        rank.channel == super::context_lexical_unit_packing::CHANNEL
+                    });
+                    p.rank_contributions.extend(ranks);
+                } else {
+                    p.rank_contributions = ranks;
+                }
             }
         }
         if let Some(bundle) = &mut packet.bundle {
@@ -1679,6 +1727,7 @@ fn assemble_inner_with_evidence(
             term_weights,
             selection_warnings,
             source_aware,
+            native_lexical_units,
             query,
             signals,
             selection_action,
@@ -1696,6 +1745,8 @@ pub(super) struct PackingInput<'a> {
     pub term_weights: Vec<u64>,
     pub selection_warnings: Vec<String>,
     pub source_aware: bool,
+    /// Construction's admitted-owner scope decision, never inferred from output.
+    pub native_lexical_units: bool,
     pub query: Option<&'a str>,
     pub signals: &'a ContextSelectionSignals,
     pub selection_action: &'a SelectionAction,
@@ -1760,6 +1811,7 @@ pub(super) fn pack(
         term_weights,
         mut selection_warnings,
         source_aware,
+        native_lexical_units,
         query,
         signals,
         selection_action,
@@ -1937,6 +1989,17 @@ pub(super) fn pack(
         && request.graph.is_none()
         && !packets.is_empty()
         && packets.iter().all(|packet| {
+            packet.unit_score.is_none()
+                && packet.unit_origin.is_none()
+                && packet.fallback.is_none()
+                && packet.bundle.is_none()
+                && packet.navigation.is_none()
+                && packet
+                    .selection
+                    .as_ref()
+                    .is_some_and(|candidate| candidate.semantic_affinity.is_none())
+        })
+        && packets.iter().all(|packet| {
             packet.passages.iter().all(|passage| {
                 passage.label == ExcerptLabel::CapturedSource
                     && passage.contributors.is_empty()
@@ -2001,72 +2064,68 @@ pub(super) fn pack(
             }
         }
     }
-    if ordinary_native {
-        if hits.hits.len() > 10 || packets.len() > super::context_set_packing::MAX_POOL {
-            selection_warnings.push(format!(
-                "native lexical set assembly uses at most 10 owners and 320 unchanged proposals; {} owners and {} proposals use existing greedy allocation without truncation",
-                hits.hits.len(), packets.len(),
-            ));
-        } else if let Some(selected) =
-            super::context_set_packing::allocate(reader, request, &packets, text.len())?
-        {
-            for (index, packet) in packets.iter().enumerate() {
-                if selected.members.contains(&index) {
-                    if packet
-                        .selection
-                        .as_ref()
-                        .is_some_and(|candidate| candidate.clipped)
-                    {
-                        selection_warnings.push("a bounded source window was selected instead of a complete structural block; inspect its cited source for omitted text".into());
-                    }
-                    #[cfg(test)]
-                    accepted_lineage_ids.extend(
-                        packet_lineage_identity(packet)["proposals"]
-                            .as_array()
-                            .unwrap()
-                            .iter()
-                            .map(|row| row["proposal_id"].clone()),
-                    );
-                } else {
-                    omissions.push(ContextOmission {
-                        record_id: packet.passages[0]
-                            .locator
-                            .record
-                            .as_ref()
-                            .map(|r| r.record_id.clone()),
-                        path: Some(packet.passages[0].locator.path.clone()),
-                        reason: "not_selected_by_native_lexical_set".into(),
-                        count: 1,
-                    });
-                }
-            }
-            let statistics = &selected.statistics;
-            selection_warnings.push(format!(
-                "native lexical set assembly: {} of {} unchanged proposals; {} addition and {} exchange exact document trials ({} rejected); representation coverage {:.6}; selection is not proof of answer completeness",
-                selected.members.len(), packets.len(), statistics.additions, statistics.exchanges,
-                statistics.rejected, statistics.objective,
-            ));
-            if statistics.exhausted() {
-                // Counts interrupted search phases, not unknown unrun trials.
+    #[cfg(test)]
+    if ordinary_native && super::context_lexical_unit_diagnostic::active() {
+        let selected = super::context_lexical_unit_diagnostic::allocate_old(
+            reader,
+            request,
+            &packets,
+            text.len(),
+        )?;
+        if let Some(state) = selected.state {
+            passages = state.passages;
+            text = state.text;
+        }
+        for (index, packet) in packets.iter().enumerate() {
+            if !selected.members.contains(&index) {
                 omissions.push(ContextOmission {
-                    record_id: None,
-                    path: None,
-                    reason: "native_lexical_set_work_limit".into(),
-                    count: usize::from(statistics.addition_exhausted)
-                        + usize::from(statistics.exchange_exhausted),
+                    record_id: packet.passages[0]
+                        .locator
+                        .record
+                        .as_ref()
+                        .map(|r| r.record_id.clone()),
+                    path: Some(packet.passages[0].locator.path.clone()),
+                    reason: "not_selected_by_diagnostic_old_set".into(),
+                    count: 1,
                 });
-                selection_warnings.push(format!(
-                    "native lexical set work limit: addition {}/3072 (exhausted {}), exchange {}/1024 (exhausted {}); preserved the last fully admitted original-membership set",
-                    statistics.additions, statistics.addition_exhausted, statistics.exchanges, statistics.exchange_exhausted,
-                ));
             }
+        }
+        packets.clear();
+    }
+    if ordinary_native && !packets.is_empty() {
+        if request.documents.limits.hits > 10 || hits.hits.len() > 10 {
+            selection_warnings.push(format!("query-ranked lexical units support requests for at most 10 owners; requested limit {} and {} admitted owners retain existing allocation without truncation",request.documents.limits.hits,hits.hits.len()));
+        } else if native_lexical_units {
+            let selected =
+                super::context_lexical_unit_packing::allocate(reader, request, &packets)?;
+            for (index, reason) in &selected.rejected {
+                let passage = &packets[*index].passages[0];
+                omissions.push(ContextOmission {
+                    record_id: passage.locator.record.as_ref().map(|r| r.record_id.clone()),
+                    path: Some(passage.locator.path.clone()),
+                    reason: (*reason).into(),
+                    count: 1,
+                });
+            }
+            for &index in &selected.members {
+                if packets[index].selection.as_ref().is_some_and(|c| c.clipped) {
+                    selection_warnings.push("a bounded source window was selected instead of a complete structural block; inspect its cited source for omitted text".into());
+                }
+                #[cfg(test)]
+                accepted_lineage_ids.extend(
+                    packet_lineage_identity(&packets[index])["proposals"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .map(|row| row["proposal_id"].clone()),
+                );
+            }
+            selection_warnings.push(format!("query-ranked lexical units: {} of {} complete-or-explicitly-clipped candidates admitted in {} exact trials; raw unit BM25 precedes owner-rank ties; ranking does not prove answer completeness",selected.members.len(),packets.len(),selected.trials));
             if let Some(state) = selected.state {
                 passages = state.passages;
                 text = state.text;
             }
             packets.clear();
-        } else {
-            selection_warnings.push("native lexical set representation unavailable; existing greedy allocation retained without truncation".into());
         }
     }
     let mut covered_terms = vec![false; term_weights.len()];
