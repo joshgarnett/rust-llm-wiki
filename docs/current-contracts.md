@@ -1,5 +1,21 @@
 # Current contracts and local coverage
 
+The representative [native lexical-unit experiment](validation-native-lexical-units.md)
+is rejected: 14/32 complete positive tasks versus baseline 13/32, below the
+required 17/32, with nine baseline facts lost. Correctness and exact citations
+pass; the candidate remains isolated and unpromoted. A cheap complete-parent
+feasibility review recovered none of those losses, so further structural and
+packing parameter variants stop. **Native default completeness remains below
+acceptance.**
+
+The new [real-source cited Page lifecycle](validation-real-source-page-lifecycle.md)
+fails independent acceptance at 6.0/10. Both drafts, Source refresh, stale guards,
+immutable history and offline cache reconstruction work. Agent delivery leaves
+the Cargo answer and Page reconciliation incomplete; all failures remain counted.
+The existing scoped 0.2.0 preview is unchanged. Native semantic/hybrid routes
+already exist; the next decision must distinguish discovery losses from discarded
+evidence before selecting another production intervention.
+
 The [complete-subject search and reading comparison](validation-source-subject-search.md)
 passes its fixed development gate: 19/19 tasks and 31/31 required facts, versus
 16/19 tasks and 26/31 facts in prescribed baseline reads (27/31 across all returned
