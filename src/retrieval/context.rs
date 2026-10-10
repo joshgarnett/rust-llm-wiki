@@ -60,7 +60,9 @@ pub fn validate_request(query: &str, request: &ContextRequest) -> Result<Context
 }
 pub fn validate_selection_action(request: &ContextRequest, action: &SelectionAction) -> Result<()> {
     if let SelectionAction::PrepareOriginals(originals)
-        | SelectionAction::ApplyOriginals { request: originals, .. } = action
+    | SelectionAction::ApplyOriginals {
+        request: originals, ..
+    } = action
     {
         let filters = &request.documents.filters;
         if request.scope != ContextScope::IndexedDocuments
@@ -1805,7 +1807,10 @@ pub(super) fn pack(
             "scope label does not fit reserved context budget",
         ));
     }
-    if matches!(selection_action, SelectionAction::Prepare | SelectionAction::Apply(_)) {
+    if matches!(
+        selection_action,
+        SelectionAction::Prepare | SelectionAction::Apply(_)
+    ) {
         let cards = packets
             .iter()
             .enumerate()
@@ -1923,6 +1928,25 @@ pub(super) fn pack(
             }
         }
     }
+    let ordinary_native = evidence_sets.is_none()
+        && matches!(selection_action, SelectionAction::Automatic)
+        && source_aware
+        && request.documents.mode == SearchMode::Lexical
+        && request.scope == ContextScope::IndexedDocuments
+        && request.target == ContextTarget::Documents
+        && request.graph.is_none()
+        && !packets.is_empty()
+        && packets.iter().all(|packet| {
+            packet.passages.iter().all(|passage| {
+                passage.label == ExcerptLabel::CapturedSource
+                    && passage.contributors.is_empty()
+                    && !passage.citations.is_empty()
+                    && passage
+                        .citations
+                        .iter()
+                        .all(|citation| matches!(citation, CitationRef::Source(_)))
+            })
+        });
     if let Some(evidence_sets) = evidence_sets {
         if signals.semantic_complete && packets.iter().all(|p| p.unit_origin.is_some()) {
             let arm = evidence_sets.arm;
@@ -1975,6 +1999,74 @@ pub(super) fn pack(
                     packets.clear();
                 }
             }
+        }
+    }
+    if ordinary_native {
+        if hits.hits.len() > 10 || packets.len() > super::context_set_packing::MAX_POOL {
+            selection_warnings.push(format!(
+                "native lexical set assembly uses at most 10 owners and 320 unchanged proposals; {} owners and {} proposals use existing greedy allocation without truncation",
+                hits.hits.len(), packets.len(),
+            ));
+        } else if let Some(selected) =
+            super::context_set_packing::allocate(reader, request, &packets, text.len())?
+        {
+            for (index, packet) in packets.iter().enumerate() {
+                if selected.members.contains(&index) {
+                    if packet
+                        .selection
+                        .as_ref()
+                        .is_some_and(|candidate| candidate.clipped)
+                    {
+                        selection_warnings.push("a bounded source window was selected instead of a complete structural block; inspect its cited source for omitted text".into());
+                    }
+                    #[cfg(test)]
+                    accepted_lineage_ids.extend(
+                        packet_lineage_identity(packet)["proposals"]
+                            .as_array()
+                            .unwrap()
+                            .iter()
+                            .map(|row| row["proposal_id"].clone()),
+                    );
+                } else {
+                    omissions.push(ContextOmission {
+                        record_id: packet.passages[0]
+                            .locator
+                            .record
+                            .as_ref()
+                            .map(|r| r.record_id.clone()),
+                        path: Some(packet.passages[0].locator.path.clone()),
+                        reason: "not_selected_by_native_lexical_set".into(),
+                        count: 1,
+                    });
+                }
+            }
+            let statistics = &selected.statistics;
+            selection_warnings.push(format!(
+                "native lexical set assembly: {} of {} unchanged proposals; {} addition and {} exchange exact document trials ({} rejected); representation coverage {:.6}; selection is not proof of answer completeness",
+                selected.members.len(), packets.len(), statistics.additions, statistics.exchanges,
+                statistics.rejected, statistics.objective,
+            ));
+            if statistics.exhausted() {
+                // Counts interrupted search phases, not unknown unrun trials.
+                omissions.push(ContextOmission {
+                    record_id: None,
+                    path: None,
+                    reason: "native_lexical_set_work_limit".into(),
+                    count: usize::from(statistics.addition_exhausted)
+                        + usize::from(statistics.exchange_exhausted),
+                });
+                selection_warnings.push(format!(
+                    "native lexical set work limit: addition {}/3072 (exhausted {}), exchange {}/1024 (exhausted {}); preserved the last fully admitted original-membership set",
+                    statistics.additions, statistics.addition_exhausted, statistics.exchanges, statistics.exchange_exhausted,
+                ));
+            }
+            if let Some(state) = selected.state {
+                passages = state.passages;
+                text = state.text;
+            }
+            packets.clear();
+        } else {
+            selection_warnings.push("native lexical set representation unavailable; existing greedy allocation retained without truncation".into());
         }
     }
     let mut covered_terms = vec![false; term_weights.len()];

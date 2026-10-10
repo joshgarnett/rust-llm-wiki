@@ -124,6 +124,9 @@ class EvidenceTests(unittest.TestCase):
             self.assertEqual(count, 1)
             self.assertEqual(intervals, {"mirror": [(span["start"], span["end"])]})
             self.assertNotIn("owner", intervals)  # Uncited surrounding text earns no span credit.
+            with self.assertRaisesRegex(ValueError, "Citation owner differs"):
+                EVAL.citation_intervals(data, mapping, {"owner": {"blob": blob}, "mirror": {"blob": blob + b" unrelated owner"}},
+                                       Path("helper"), Path(folder), "wrong-owner", 1)
             data["passages"][0]["span"]["end"] = span["end"] - 1
             data["passages"][0]["text"] = blob[:span["end"] - 1].decode()
             data["text"] = data["passages"][0]["text"]
@@ -153,6 +156,29 @@ class EvidenceTests(unittest.TestCase):
             run.return_value = subprocess.CompletedProcess([], 0, json.dumps(envelope).encode(), b"")
             with self.assertRaisesRegex(ValueError, "network"):
                 EVAL.invoke(Path("mock-cli"), Path("wiki"), ["context", "q"], Path(folder), "network", 1)
+
+    def test_selected_freshness_rejects_cached_or_inconsistent_claims(self):
+        envelope = {"meta": {"freshness": "indexed_evidence", "index_generation": 1, "verified_at": "2026-10-10T00:00:00Z"},
+                    "data": {"verification": {"mode": "indexed_evidence", "evidence_domain": "selected_documents",
+                              "global_membership_verified": False, "discovery_generation": 1, "verified_at": "2026-10-10T00:00:00Z"},
+                             "snapshot": {"generation": 1}, "dependency_fingerprint": "blake3:" + "a" * 64}}
+        EVAL.check_context_freshness(envelope)
+        for path, value in [(('meta', 'freshness'), 'verified_snapshot'),
+                            (('data', 'verification', 'mode'), 'index_snapshot'),
+                            (('data', 'verification', 'evidence_domain'), 'global'),
+                            (('data', 'verification', 'global_membership_verified'), True),
+                            (('data', 'verification', 'discovery_generation'), True),
+                            (('meta', 'index_generation'), True),
+                            (('data', 'snapshot', 'generation'), 2),
+                            (('meta', 'verified_at'), 'another observation'),
+                            (('data', 'dependency_fingerprint'), '')]:
+            bad = copy.deepcopy(envelope)
+            parent = bad
+            for part in path[:-1]:
+                parent = parent[part]
+            parent[path[-1]] = value
+            with self.subTest(path=path), self.assertRaises(ValueError):
+                EVAL.check_context_freshness(bad)
 
     def test_dataset_alignment_and_hash_gate(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -496,6 +522,33 @@ class HostSelectionTests(unittest.TestCase):
         summary = json.loads((self.args.output / "summary.json").read_text())
         self.assertNotIn("workflow", summary)
         self.assertNotIn("selector_cost", summary)
+
+    def test_indexed_evidence_is_scored_without_claiming_global_verification(self):
+        def selected(binary, wiki, command, output, label, timeout):
+            envelope, seconds = self.mock_invoke(binary, wiki, command, output, label, timeout)
+            if command[0] == "context":
+                envelope["meta"].update(freshness="indexed_evidence", index_generation=1, verified_at="2026-10-10T00:00:00Z")
+                envelope["data"].update(snapshot={"generation": 1}, dependency_fingerprint=self.fingerprint,
+                    verification={"mode": "indexed_evidence", "evidence_domain": "selected_documents",
+                                  "global_membership_verified": False, "discovery_generation": 1, "verified_at": "2026-10-10T00:00:00Z"})
+            return envelope, seconds
+        with patch.object(EVAL, "invoke", side_effect=selected):
+            self.assertEqual(EVAL.run_evaluate(self.args, self.manifest, self.docs, self.questions, self.hashes), 0)
+        rows = json.loads((self.args.output / "results.json").read_text())
+        self.assertTrue(all(row["verification"]["mode"] == "indexed_evidence"
+                            and row["verification"]["global_membership_verified"] is False for row in rows))
+        self.assertTrue(all(row["context_seconds"] == 0.25 for row in rows))
+
+    def test_indexed_preparation_keeps_selected_verification_and_exact_cards(self):
+        envelope = self.preparation_for(self.compact_payload())
+        envelope["meta"].update(freshness="indexed_evidence", index_generation=1, verified_at="2026-10-10T00:00:00Z")
+        envelope["data"].update(snapshot={"generation": 1}, dependency_fingerprint=self.fingerprint,
+            verification={"mode": "indexed_evidence", "evidence_domain": "selected_documents",
+                          "global_membership_verified": False, "discovery_generation": 1, "verified_at": "2026-10-10T00:00:00Z"})
+        packet, task = EVAL.validate_preparation(envelope, "fixture query", self.args, self.mapping, self.docs, "prepared")
+        self.assertEqual(packet["candidate_count"], 1)
+        self.assertEqual(json.loads(task)["payload"]["cards"][0]["text"], self.blob.decode())
+        self.assertFalse(envelope["data"]["verification"]["global_membership_verified"])
 
 
 if __name__ == "__main__":

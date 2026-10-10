@@ -4,6 +4,7 @@ pub mod context;
 pub(crate) mod context_original_selection;
 pub(crate) mod context_evidence;
 pub(crate) mod context_selection;
+mod context_set_packing;
 pub mod context_selection_packet;
 pub mod context_types;
 pub(crate) mod context_units;

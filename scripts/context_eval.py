@@ -145,6 +145,31 @@ def check_mapping(mapping, wiki, docs):
         require(match and match.group(1) == row["revision_id"], "Mapped revision is no longer current")
 
 
+def check_context_freshness(envelope):
+    meta, data = envelope["meta"], envelope["data"]
+    verification = data["verification"]
+    mode = verification["mode"]
+    require(meta["freshness"] == mode, "Context freshness metadata disagrees")
+    if mode == "verified_snapshot":
+        return
+    require(mode == "indexed_evidence", "Context freshness unverified")
+    require(verification.get("evidence_domain") == "selected_documents"
+            and verification.get("global_membership_verified") is False,
+            "Indexed evidence must declare selected-document verification")
+    generation = verification.get("discovery_generation")
+    require(type(generation) is int and generation >= 0
+            and type(meta.get("index_generation")) is int
+            and type(data["snapshot"]["generation"]) is int
+            and meta.get("index_generation") == generation
+            and data["snapshot"]["generation"] == generation,
+            "Indexed evidence generation bindings disagree")
+    timestamp = verification.get("verified_at")
+    require(isinstance(timestamp, str) and timestamp and meta.get("verified_at") == timestamp,
+            "Indexed evidence verification timestamps disagree")
+    require(re.fullmatch(r"blake3:[0-9a-f]{64}", data.get("dependency_fingerprint", "")),
+            "Indexed evidence dependency fingerprint absent or invalid")
+
+
 def group_coverage(groups, intervals):
     total, found, complete, unmapped = 0, 0, 0, 0
     for group in groups:
@@ -184,6 +209,8 @@ def citation_intervals(data, mapping, docs, hash_binary, output, label, timeout)
             require(ref["source_revision"] in by_revision, "Citation revision not in frozen mapping")
             doc_id, row = by_revision[ref["source_revision"]]
             require(ref["source_id"] == row["source_id"], "Citation source/revision mismatch")
+            require(doc_id == owner or docs[doc_id]["blob"] == owner_blob,
+                    "Citation owner differs from containing passage's original source")
             span = ref["span"]
             start, end = span["start"], span["end"]
             blob = docs[doc_id]["blob"]
@@ -365,8 +392,8 @@ def validate_compact_cards(payload, args, mapping, docs):
 
 def validate_preparation(envelope, query, args, mapping, docs, label):
     data = envelope["data"]
-    require(data["network_used"] is False and envelope["meta"]["freshness"] == "verified_snapshot"
-            and data["verification"]["mode"] == "verified_snapshot", "Selection preparation is not verified offline")
+    require(data["network_used"] is False, "Selection preparation used network")
+    check_context_freshness(envelope)
     require(not data["passages"] and data["text"] == "", "Preparation unexpectedly emitted final context")
     packet = data["selection_packet"]
     require(isinstance(packet["selector_input"], str), "Selector input is not UTF-8 task text")
@@ -544,7 +571,7 @@ def run_evaluate(args, manifest, docs, questions, hashes):
                                        args.output, label + "-context", args.timeout)
             data = context["data"]
             require(data["network_used"] is False, "Context used network")
-            require(context["meta"]["freshness"] == "verified_snapshot" and data["verification"]["mode"] == "verified_snapshot", "Context freshness unverified")
+            check_context_freshness(context)
             rendered = len(data["text"].encode("utf-8"))
             usage = data["usage"]
             require(rendered == usage["rendered_bytes"] and rendered <= args.max_bytes, "Rendered byte budget mismatch")
@@ -559,7 +586,8 @@ def run_evaluate(args, manifest, docs, questions, hashes):
                            "gold_evidence": group_coverage(ref["required_evidence_all_of"], intervals),
                            "answer_highlights": group_coverage(ref["highlighted_evidence"], intervals)}
                           for ref in question["reference_answers_any_of"]] if answerable else []
-            row.update({"status": "ok", "query": query, "source_rank": rank if answerable else None,
+            row.update({"status": "ok", "query": query, "verification": data["verification"],
+                        "source_rank": rank if answerable else None,
                         "context_source_hit": question["doc_id"] in intervals if answerable else None,
                         "strict_gold_span_complete": any(r["gold_evidence"]["all_groups_complete"] for r in ref_scores) if answerable else None,
                         "best_gold_span_byte_coverage": max(r["gold_evidence"]["byte_coverage"] for r in ref_scores) if answerable else None,

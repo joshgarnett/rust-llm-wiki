@@ -244,6 +244,21 @@ fn term_key(term: &str) -> String {
     stem.to_owned()
 }
 
+/// Selection-only features over one complete retained candidate. Repetition
+/// within a candidate contributes once; source bytes and proposals are intact.
+pub(super) fn normalized_lexical_tokens(
+    tokenizer: &Tokenizer<'_>,
+    text: &str,
+) -> Result<BTreeSet<String>> {
+    let map = SourceMap::markdown(text, 0);
+    Ok(tokenizer
+        .tokens(&map.text)?
+        .into_iter()
+        .filter(|token| !function_word(&token.text) || identifier_syntax(&map.text, &token.span))
+        .map(|token| term_key(&token.text))
+        .collect())
+}
+
 // Generic English grammatical words are poor passage-location features: a
 // rare "how" can otherwise outweigh a repeated technical noun. This affects
 // only local context selection, never discovery or embeddings. Negation and
