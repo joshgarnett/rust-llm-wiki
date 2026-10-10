@@ -1155,3 +1155,30 @@ quality remains **13/32 complete tasks and 79/129 facts**. The 17/32 development
 threshold, preservation of every baseline fact, all eight absent controls, exact
 citations, private holdout, HIGH/semantic/scale requirements and independent
 at-least-nine score with no correctness blocker remain mandatory.
+
+
+## Actual assisted delivery failure, 2026-10-10
+
+A separately frozen task-conditioned selection campaign stopped on its first
+original development question, before a nomination or answer. The native offline
+preparation succeeded. The fresh selector then reported a clipped tool response;
+no Page/update/reconciliation operation or remaining question ran. Completed
+questions: zero; one failed, 39 unrun, all eight absent controls unrun. No quality
+score or gain follows, and the earlier failed campaign remains failed.
+
+The retained tool log contains the full 123,886-byte task, but its platform
+metadata specifies a 12,000-token fallback and the actor reports truncation. A
+complete persisted output therefore does not establish complete model-visible
+input. The dispatch audit independently failed because the saved message field
+is encrypted. Source review had not established these actual host behaviors;
+its prior approval does not qualify delivery. This route is closed without a
+prompt, output-limit or packing retry.
+
+The owning monotonic interval was 61.152 seconds: one native preparation and one
+fresh actor, with no embedding/provider API request. Accounting preserves 840
+booked prompt bytes and 124,822 bytes of unresolved input reservation; the latter
+is not claimed as verified delivery. Two actor usage records expose cumulative
+49,499 input and 333 output tokens (49,832 total, including 91 reasoning tokens
+within output). Monetary cost and complete campaign token usage are unavailable.
+The native baseline remains 13/32 complete tasks and 79/129 facts. Native,
+semantic/HIGH, unseen, lifecycle and representative-scale acceptance remain open.

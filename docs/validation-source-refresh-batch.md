@@ -311,7 +311,31 @@ error/panic accounting. The shipping smoke remained silent with the diagnostic
 environment variable set. An initial feature-build visibility error was fixed;
 the passing shipping build was reused.
 
-These checks qualify the diagnostic mechanism only. The prepared six-command
-update→search→read→rebuild→search→read measurement has not run. No new speedup,
-retrieval gain, representative capacity or release acceptance follows. The
-existing failed performance comparison and all mandatory workflow gates remain.
+The subsequent update→search→read→rebuild→search→read diagnostic preserved two
+orchestration failures: its first read requested 64 MiB above the public 16 MiB
+ceiling, and the continuation's catalog oracle incorrectly required an empty
+SQLite WAL. Neither failure is a product speedup or a quality result. The actual
+16-source refresh and search succeeded; corrected read and normalized rebuild
+also succeeded. Rebuild took 9.435 seconds on the 1K fixture. Independent read-only
+inspection authenticated complete publication 317 and the returned read's exact
+95,730 bytes and current citation. A WAL-aware continuation completed the last
+search/read in 0.329/0.033 seconds. Full current membership (1,000 documents),
+16 historical captures, all 1,001 Pages and 4,048 Source files remained exact.
+Independent review also compared the actual pre/post-rebuild hits, read body,
+source identities, byte spans and quote hashes. Composite mechanics are accepted
+as six successful operations across seven attempts; both interrupted campaigns
+remain failed. This is an instrumented 1K fixture observation, not shipping
+performance or 25K qualification.
+
+The refresh diagnostic closes the proposed path-buffer reuse optimization:
+optimistically eligible construction was only 6.060 ms, or 0.04987% of the
+12.152-second command-owner interval. Fresh filesystem canonicalization occupied
+3.194 seconds of that interval and cannot be treated as reusable validation.
+An independent architecture review instead motivated a descriptor-relative route
+and I/O candidate, preserving every current namespace and freshness check. Its
+performance remains unmeasured. The earlier failed threading comparison remains
+failed; the canonical 1,000-update/600-second product gate remains open.
+
+Separate interrupted campaigns do not supply a combined workflow timing. These
+observations qualify neither retrieval quality, representative capacity nor the
+release. All final workflow gates remain mandatory.
