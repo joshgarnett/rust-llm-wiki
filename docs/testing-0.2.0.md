@@ -9,7 +9,38 @@ evidence, a draft Page, Source refresh and guarded Page reconciliation. Capacity
 default answer completeness and full release qualification remain open; historical
 candidate artifacts and validation results are retained below.
 
-## Current local preview: 2026-10-09
+## Current scoped local preview: 2026-10-10
+
+The macOS ARM64 preview `local-preview-20261010-001` contains the optimized
+0.2.0 executable from source `3e2d2b4cf3b3b4319189062231f6ef9f5968bf2b`.
+Its SHA256 is
+`ba2b19d6032e55570b4cb7b1ccabf5e7b5ce7b1bc685498c7309720faf27c238`.
+The local archive is
+`.artifacts/releases/0.2.0/lwiki-0.2.0-macos-arm64-local-preview-20261010-001.tar.gz`;
+it contains `lwiki`, `BUILD-MANIFEST.json`, `ACCEPTANCE.json` and `README.md`.
+Set `LWIKI` to the extracted executable's absolute path. The binary is reused
+from its passing grouped checkpoint; packaging required no Rust rebuild.
+
+This preview adds [explicit original-source selection](validation-original-source-selection.md):
+discover Sources from a question, prepare complete authenticated originals,
+submit one range nomination, inspect native cited replay and save a draft Page.
+Six independently authored questions complete all 19 required facts and the
+absence task; eight controls pass. Source refresh, changed-fact reconciliation
+and separate old/current citation readbacks were observed. The original gate
+remains failed after an operator path-binding error and a late final audit;
+independent review supports this scoped preview without an aggregate score of
+at least 9. Default automatic completeness and full qualification remain open.
+
+Export the binary's current skill for its complete command and cited-Page recipe:
+
+```sh
+"$LWIKI" --offline skill export --target codex --output ./llm-wiki-skill
+```
+
+The output directory must be new. This exports guidance; it does not call a model
+or configure an embedding provider.
+
+## Earlier accepted subject-search preview: 2026-10-09
 
 The macOS ARM64 preview `local-preview-20261009-004` reuses the tested optimized
 0.2.0 executable from source `bbaba416e6471426bc739b8ccdb188ba84761a7c`. Its SHA256 is
@@ -103,6 +134,26 @@ Inspect the returned text, `data.source_citation.citation` and eligibility. Foll
 chosen evidence allowance. Each returned range has its own citation. Dry-run
 previews return no text or evidence, and cached `read --no-sync` is uncited. See
 [exact read and continuation](indexed-context.md#continuing-a-captured-source-read).
+
+With the new preview, complete-original selection offers a bounded alternative
+when short excerpts omit requested conditions. Prepare only actual discovered
+captured payload paths:
+
+```sh
+"$LWIKI" --wiki "$DEMO/wiki" --offline --json context \
+  'Atlas shipment crates and inspection time' \
+  --scope indexed-documents --mode lexical --prepare-original-selection \
+  --selection-original-path "$PAYLOAD_PATH" > "$DEMO/prepared.json"
+```
+
+Repeat the path flag for complementary Sources. Give your host selector the exact
+`data.selection_packet.selector_input`, then save its unchanged versioned range
+reply outside the vault. Replay the identical question, paths and bounds with
+`--selection "$DEMO/reply.json"` replacing `--prepare-original-selection`.
+Inspect the actual returned evidence, omissions and SourceRefs before drafting.
+Explicit historical questions add `--include-historical` to both commands.
+Source changes require fresh discovery/preparation, rather than repair of an old
+reply. The exported cited-Page recipe documents byte ceilings and accounting.
 
 Follow [answer and save](../skills/llm-wiki/references/cited-page.md#answer-then-save-only-when-authorized)
 to write `$DEMO/answer.md` and `$DEMO/refs.json` outside the vault. The body should

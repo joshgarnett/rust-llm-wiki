@@ -20,8 +20,15 @@ passes 224 related tests but regresses the known comparison to 3/6 tasks and
 Its unrestricted baseline query also exhausts the SQLite allowance; later
 mandatory tasks and controls are unrun. The candidate is rejected, with no
 promotion or default-quality gain. A fresh review selects explicit authenticated
-complete-original preparation and exact-range replay as the next integrated
-host-assisted product milestone; that workflow still needs its own acceptance.
+complete-original preparation and exact-range replay as the integrated
+host-assisted product milestone. The [implemented isolated candidate](validation-original-source-selection.md)
+passes 245 affected correctness checks and independently completes six fresh
+question tasks with all 19 facts in evidence and answers, exact citations and
+all eight controls. Cited Page reconciliation and separately admitted old/current
+readbacks support a scoped preview. The original full gate remains failed after
+an operator path-binding error and late final audit; no aggregate score of at
+least 9 or default-quality improvement is claimed. Representative 25K and the
+overall quality goal remain open.
 The separate save/reopen/draft-discovery boundary passes at 10/10: both required
 facts, two exact SourceRefs and six valid generated links, with unchanged Source
 history and the previous Page. No inferred answer or remote call was used.

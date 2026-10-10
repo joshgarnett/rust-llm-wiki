@@ -535,3 +535,28 @@ stale replay rejection and fresh reconciliation after a Source update, every
 mandatory fact and at least 9/10 without blockers. Assisted workflow acceptance
 cannot establish automatic native improvement. Broad-query cost, native
 completeness, semantic/HIGH, representative 25K and full release remain open.
+
+## 2026-10-10 — Close the assisted slice and return to representative quality
+
+The explicit original-source candidate is implemented, tested and pushed.
+Fresh question-driven discovery, direct guarded replay and answers complete all
+six tasks and nineteen required facts. Typed Page publication, changed-fact
+refresh and guarded reconciliation preserve authored text and exact provenance.
+The [maintained evidence](../validation-original-source-selection.md) retains
+both failed original gates, their unrun observations and the late audit.
+
+Manual root return transport added no native correctness property and failed
+across compaction. The successor used the existing one-shot wrapper directly,
+without a broker, native change, larger limit or rebuild. Its final historical
+read exposed a positional mutation-plan binding to the raw capture. Do not infer
+payload identity from operation-array order: use actual native cited locators.
+A separately reviewed two-call read-only supplement authenticated those old and
+current citations, without reopening or rescoring the failed gate.
+
+Package the unchanged optimized binary as a scoped tested 0.2.0 preview, preserving
+the earlier accepted preview. No aggregate score of at least 9, native Automatic,
+semantic, representative 25K or full-release acceptance follows. Do not spend
+another loop on this fixture. Choose representative default-task evidence and
+practical 25K readiness as the next high-impact milestone, with stage-specific
+loss attribution before another retrieval algorithm change. Keep the full goal
+active and all unfinished work intact.
