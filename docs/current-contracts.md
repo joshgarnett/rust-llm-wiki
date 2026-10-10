@@ -13,8 +13,15 @@ fails independent acceptance at 6.0/10. Both drafts, Source refresh, stale guard
 immutable history and offline cache reconstruction work. Agent delivery leaves
 the Cargo answer and Page reconciliation incomplete; all failures remain counted.
 The existing scoped 0.2.0 preview is unchanged. Native semantic/hybrid routes
-already exist; the next decision must distinguish discovery losses from discarded
-evidence before selecting another production intervention.
+already exist. A [test-only evidence-stage diagnostic](validation-native-lexical-units.md)
+found fifteen missing facts discarded during packing and seventeen feasible
+critic-selected packets. It established no deployable selection rule; the stricter
+byte-preservation analysis found no new complete witnesses within its bounds.
+Fresh review stops packing experiments under the current signals. Subsequent
+[long-source lifecycle attempts](validation-real-source-page-lifecycle.md) preserve
+their host-time and input-bound failures; one independently supported seven-fact
+draft is saved, but updated reconciliation remains incomplete. The next priority
+is representative 25K corpus/resource admission and integrated qualification.
 
 The [complete-subject search and reading comparison](validation-source-subject-search.md)
 passes its fixed development gate: 19/19 tasks and 31/31 required facts, versus

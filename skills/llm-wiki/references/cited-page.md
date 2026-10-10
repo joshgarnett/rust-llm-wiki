@@ -21,6 +21,23 @@ and available usage separately. Unknown host cost or inference time stays
 unavailable; CLI accounting does not observe host work. Measure owned intervals
 monotonically; external UTC observation times measure wall-clock turnaround.
 
+Keep large tasks and evidence in external files when they can exceed the host's
+tool display limit. Give the actor a small manifest containing the complete public
+task, permitted evidence paths, lengths and hashes, source/revision bindings,
+selection query and fingerprint, output paths and remaining limits. Keep expected
+answers out of the manifest. Read every task and evidence file in contiguous UTF-8
+chunks that fit the actual tool response limit; 4 KiB chunks are a conservative
+example. Retain the returned bytes and check them against each requested slice,
+including ordered coverage through EOF. A file hash or an actor's acknowledgement
+does not establish that a truncated tool response delivered the file. Preserve
+whitespace exactly and retain any truncation as a delivery failure.
+
+Write selection replies, complete answers, full Page proposals and SourceRefs to
+external files. Return their paths, hashes and status in the actor's final message.
+Inspect the actual replayed evidence before answering. Count chunk responses,
+wrappers, repeated reads and failed delivery against the original allowances;
+artifact paths grant no additional evidence or host budget.
+
 Use the known vault setup or inspect the resolved `data.request.scope` from a
 lexical `context QUERY --dry-run --json` preview: omitted scope resolves to
 `indexed_documents` on normalized vaults and `current` on legacy vaults. This
@@ -93,7 +110,18 @@ cap is not an additional task allowance. Inspect the actual range, body,
 `data.source_citation.citation`. Complete-source support requires start0, EOF and
 no truncation/continuation; the search preview's citation covers only its preview.
 Keep earlier supported context and check every requested condition against the
-new returned text before answering.
+new returned text before answering. When that complete read supports every
+condition, proceed directly to the answer and authorized Page write. Reserve
+additional selection for conditions still unsupported by the verified evidence.
+
+When the complete response would exceed the host display limit, use the bounded
+[continuation route](#read-remaining-gaps) from start zero instead. Inspect each
+actual returned range and its own citation, then follow `continuation.start` until
+EOF. Complete-document support requires contiguous coverage from zero through EOF
+of the same Source, immutable revision and payload hash, with no unread or
+truncated delivery. Retain each range's citation; no individual chunk citation
+covers the entire document. A document-scoped absence claim requires this complete
+coverage and does not establish absence elsewhere in the vault.
 
 If the response exceeds your allowance or is truncated, retain the gap. Continue
 only through a separately budgeted section/continuation route; do not label a

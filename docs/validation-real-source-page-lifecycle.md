@@ -73,3 +73,39 @@ remain local. Use the maintained [cited Page recipe](../skills/llm-wiki/referenc
 and [evaluation protocol](evaluating-context.md) for fresh-checkout workflows.
 Native completeness, semantic/HIGH, representative 25K and full release gates
 remain open. Further transport loops and exposed-question tuning are deferred.
+
+Two separately frozen Cargo follow-ups retain the same seven old and thirteen
+updated propositions; neither passes its twenty-fact gate. The first makes eight
+successful native calls in 1.417 seconds, but its answer actor exhausts the
+600-second observed turnaround limit, including scheduling delay. Manifest,
+selector input and replay delivery are complete; the whole-source response is
+only 35,000/52,319 bytes delivered at the acceptance-boundary observation. No
+answer or Page is published. This does not rescore the original 6.0/10 result.
+
+Fresh architecture review then chooses one direct verified-read/operator-authored
+workflow, avoiding the original-selector packet and replay that increased required
+evidence delivery to approximately 2.49 times the full read alone. Fifteen
+contiguous retained response chunks deliver all 52,319 bytes through EOF. The
+independent critic approves all seven old-answer propositions and the exact native
+whole-document reference before publication. The actual draft is saved; its
+author note survives, a stale complete-file proposal refuses with
+`CONTENT_CONFLICT`, and paired inventories remain byte-identical, including
+`operations.json`. The same Source refresh is staged and applied.
+
+The independent final result is **4.1/10, 7/20 facts**, with the updated
+question remaining 0/13. That direct workflow stops at its 512 KiB known-input bound: the full JSON
+`changes show` response is 377,805 bytes, and the subsequent successful native
+updated-source read brings native responses plus delivered operator input to
+570,828 bytes. There is no updated answer or reconciled Page, and its history and
+cache-loss gates are unexecuted. All fourteen ordinary native commands succeed;
+the fifteenth attempt is the expected author refusal. Their owning monotonic
+intervals total 1.859 seconds. No build, provider or answer actor is used. A
+pre-native Python artifact-name shadowing failure is retained; isolated startup
+runs the unchanged controller without repeating a native command.
+
+The direct result demonstrates the supported old-answer publication and safe
+guards only. It establishes neither host-model acceptance nor default retrieval
+improvement. Further Page/transport campaigns are stopped; representative 25K
+corpus admission and integrated qualification are next. The complete-original
+selector remains an optional route when the verified reading workflow leaves
+unsupported conditions; it adds no evidence to an already complete Source read.

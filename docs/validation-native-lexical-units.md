@@ -33,3 +33,22 @@ A separate old-pool diagnostic covered four cases/eight attempts. Its sole natur
 For fresh-checkout reconstruction, follow the tracked [evaluation protocol](evaluating-context.md) and [dataset reference](eval-datasets-quick-reference.md): import documents without labels into disposable vaults and pin binary/helper/revisions. Use ordinary offline lexical context with native discovery defaults and 12,000-byte/3,000-token budgets. This does not recreate private critic labels.
 
 The candidate is retained on branch `impl/query-ranked-evidence-units-20261010-001` at commit `970280967ecbf6db6e4da6483dbaaf258e15022d`; it is not merged into the preview. A fresh whole-workflow review rejected further parent expansion before a build: the unchanged selected children could recover none of the nine lost facts under the proposed complete-parent rule. No new completeness algorithm is accepted here. Full native, semantic, HIGH, representative 25K and cited-Page lifecycle acceptance, including the independent ≥9 gate, remain open. See the [preceding rejected set-assembly experiment](validation-native-default-set-assembly.md).
+
+A subsequent test-only baseline trace is preserved at `04dfff8` on
+`diag/native-evidence-stages-20261010-001`. One optimized library compilation and
+one forty-query diagnostic returned all baseline data exactly, excluding only the
+verification observation timestamp. All 8,834 canonical/retained fixture files
+remained unchanged. Twenty-one traces were complete; nineteen exhausted the
+64 MiB diagnostic allowance. Missing stages remain unknown, including eleven
+positive long tasks and all eight negative-control traces. Independent review
+authenticated 120,208 observed coordinate rows and all 327 native citations.
+
+The critic found seventeen legal complete-task packets using actual retained
+ranges under unchanged limits, while preserving all 79 baseline facts using
+witness packets and unchanged native evidence. Fifteen missing facts demonstrably
+survive retention and disappear during packing; six fail ten-owner admission;
+twenty-nine remain unknown. This is feasibility evidence, not a native score or a
+label-free selection rule. A stricter analysis requiring every existing evidence
+byte found no new complete witnesses within its frozen bounds; bounded and
+interrupted searches remain unknown. Fresh architecture review stops packing
+experiments under the current signals. Default native quality remains 13/32.
