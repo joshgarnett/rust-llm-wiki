@@ -9,6 +9,8 @@ pub mod config;
 pub mod domain;
 pub mod graph;
 pub mod jobs;
+mod maintenance_observers;
+mod maintenance_parallel;
 pub mod output;
 pub mod providers;
 pub mod records;

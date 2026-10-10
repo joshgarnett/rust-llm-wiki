@@ -257,6 +257,9 @@ string_type!(RecordId);
 #[serde(transparent)]
 pub struct Blake3Hash(String);
 impl Blake3Hash {
+    pub(crate) fn owned_capacity(&self) -> usize {
+        self.0.capacity()
+    }
     pub fn new(value: impl Into<String>) -> Result<Self> {
         let value = value.into();
         let valid = value.strip_prefix("blake3:").is_some_and(|s| {
@@ -284,6 +287,10 @@ string_type!(Blake3Hash);
 #[serde(transparent)]
 pub struct VaultRelativePath(String);
 impl VaultRelativePath {
+    /// Owned path bytes included in joined-maintenance descriptor reservations.
+    pub(crate) fn owned_capacity(&self) -> usize {
+        self.0.capacity()
+    }
     pub fn new(value: impl Into<String>) -> Result<Self> {
         let value = value.into();
         if value.is_empty() || value.starts_with('/') || value.contains('\\') {

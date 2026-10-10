@@ -136,7 +136,14 @@ fn failure(command: &str, error: WikiError) -> Envelope {
     envelope
 }
 pub fn execute(args: &Arguments) -> (Envelope, u8) {
-    match execute_inner(args) {
+    let (result, metrics) = match crate::maintenance_parallel::command_scope(|| {
+        let result = execute_inner(args);
+        Ok((result, crate::maintenance_parallel::metrics()))
+    }) {
+        Ok(value) => value,
+        Err(error) => (Err(error), Default::default()),
+    };
+    let (mut envelope, exit) = match result {
         Ok(envelope) => {
             let exit = if envelope.ok { 0 } else { 9 };
             (envelope, exit)
@@ -162,7 +169,12 @@ pub fn execute(args: &Arguments) -> (Envelope, u8) {
             let exit = error.exit_code();
             (failure(args.command.name(), error), exit)
         }
+    };
+    if metrics.submitted != 0 || metrics.owner_activation_validations != 0 {
+        envelope.meta.maintenance =
+            Some(serde_json::to_value(metrics).expect("maintenance metrics serialize"));
     }
+    (envelope, exit)
 }
 fn operation_options(args: &Arguments, offline: bool, timeout: u64) -> OperationOptions {
     OperationOptions {
@@ -210,8 +222,12 @@ fn execute_inner(args: &Arguments) -> Result<Envelope> {
         }
         Command::Schema { name } => {
             let schema = match name.as_str() {
-                "context-original-selection" => include_str!("../../schemas/context-original-selection-v1.json"),
-                "context-original-selection-auto" => include_str!("../../schemas/context-original-selection-v2.json"),
+                "context-original-selection" => {
+                    include_str!("../../schemas/context-original-selection-v1.json")
+                }
+                "context-original-selection-auto" => {
+                    include_str!("../../schemas/context-original-selection-v2.json")
+                }
                 "context-selection" => include_str!("../../schemas/context-selection-v1.json"),
                 "output" => include_str!("../../schemas/output-v1.json"),
                 "research-packet" => include_str!("../../schemas/research-packet-v1.json"),
@@ -1093,7 +1109,9 @@ fn execute_inner(args: &Arguments) -> Result<Envelope> {
             }
             let request = retrieval::context::validate_request(&context.search.query, &request)?;
             if request.scope == retrieval::ContextScope::IndexedEvidence
-                && (context.prepare_selection || context.prepare_original_selection || context.selection.is_some())
+                && (context.prepare_selection
+                    || context.prepare_original_selection
+                    || context.selection.is_some())
             {
                 return Err(usage(
                     "indexed-evidence does not support host selection; use lexical indexed-documents",

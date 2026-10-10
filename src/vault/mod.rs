@@ -2,6 +2,8 @@
 pub mod discovery;
 pub mod fs;
 pub mod lock;
+#[cfg(test)]
+pub(crate) mod maintenance_read_tests;
 pub(crate) mod operational;
 #[cfg(test)]
 mod operational_tests;

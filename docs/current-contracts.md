@@ -1,5 +1,12 @@
 # Current contracts and local coverage
 
+The [joined maintenance candidate](validation-joined-maintenance.md) preserves
+guarded publication while parallelizing eligible reads and staging. Independent
+local review accepts 550 affected library cases, 126 integration cases and four
+dispatcher workflow controls with exact citation checks. Shipping comparisons,
+mixed-binary continuation and performance remain unqualified; this checkpoint
+does not change retrieval completeness or the release gate.
+
 The [integrated original-source workflow](validation-original-source-selection.md#integrated-native-discovery-candidate-october-10-2026)
 now supports native bounded lexical discovery, complete-original preparation and
 versioned exact-range replay alongside explicit path requests. Its 354 affected

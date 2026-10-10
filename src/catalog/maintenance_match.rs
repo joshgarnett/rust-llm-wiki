@@ -4,7 +4,7 @@ use super::{
 };
 use crate::{
     domain::{Blake3Hash, ErrorCode, Result, VaultRelativePath, WikiError},
-    sources::{SourceInputReads, revision::canonical_path},
+    sources::revision::canonical_path,
     vault::ExpectedState,
 };
 use rusqlite::{Connection, OpenFlags, limits::Limit};
@@ -106,58 +106,92 @@ pub(super) fn compare(catalog: &Catalog, input: &MaintenanceInput) -> Result<Com
     let mut canonical_paths = std::collections::BTreeSet::new();
     let mut changed = std::collections::BTreeMap::new();
     let mut page_only = true;
-    while let Some(row) = rows.next().map_err(sql::sql_error)? {
-        input.require_clean()?;
-        count += 1;
-        if count > 2_000_000 {
-            return Err(WikiError::new(
-                ErrorCode::BudgetExceeded,
-                "sync dependency row allowance exhausted",
-            ));
+    loop {
+        // SQLite decoding and transaction ownership stay on the coordinator.
+        // At most sixteen independent read descriptors/results are retained.
+        let mut dependencies = Vec::new();
+        let mut decode_error = None;
+        for _ in 0..crate::maintenance_parallel::MAX_JOBS {
+            let decoded = (|| -> Result<Option<(VaultRelativePath, ExpectedState)>> {
+                let Some(row) = rows.next().map_err(sql::sql_error)? else {
+                    return Ok(None);
+                };
+                input.require_clean()?;
+                count += 1;
+                if count > 2_000_000 {
+                    return Err(WikiError::new(
+                        ErrorCode::BudgetExceeded,
+                        "sync dependency row allowance exhausted",
+                    ));
+                }
+                let raw_path = row
+                    .get_ref(0)
+                    .map_err(sql::sql_error)?
+                    .as_str()
+                    .map_err(|e| WikiError::new(ErrorCode::IndexCorrupt, e.to_string()))?;
+                if raw_path.len() > 64 * 1024 {
+                    return Err(WikiError::new(
+                        ErrorCode::BudgetExceeded,
+                        "sync dependency path exceeds allowance",
+                    ));
+                }
+                let path = VaultRelativePath::new(raw_path)?;
+                let expected = match row.get_ref(1).map_err(sql::sql_error)? {
+                    rusqlite::types::ValueRef::Null => ExpectedState::Absent,
+                    rusqlite::types::ValueRef::Text(bytes) if bytes.len() <= 128 => {
+                        ExpectedState::Hash(Blake3Hash::new(std::str::from_utf8(bytes).map_err(
+                            |e| WikiError::new(ErrorCode::IndexCorrupt, e.to_string()),
+                        )?)?)
+                    }
+                    _ => {
+                        return Err(WikiError::new(
+                            ErrorCode::IndexCorrupt,
+                            "sync dependency hash is invalid",
+                        ));
+                    }
+                };
+                Ok(Some((path, expected)))
+            })();
+            match decoded {
+                Ok(Some(dependency)) => dependencies.push(dependency),
+                Ok(None) => break,
+                Err(error) => {
+                    decode_error = Some(error);
+                    break;
+                }
+            }
         }
-        let raw_path = row
-            .get_ref(0)
-            .map_err(sql::sql_error)?
-            .as_str()
-            .map_err(|e| WikiError::new(ErrorCode::IndexCorrupt, e.to_string()))?;
-        if raw_path.len() > 64 * 1024 {
-            return Err(WikiError::new(
-                ErrorCode::BudgetExceeded,
-                "sync dependency path exceeds allowance",
-            ));
+        let paths: Vec<_> = dependencies
+            .iter()
+            .filter(|(path, _)| !canonical_path(path))
+            .map(|(path, _)| path.clone())
+            .collect();
+        let mut observed = input.states_observed(&paths)?.into_iter();
+        for (path, expected) in dependencies.iter() {
+            let actual = if canonical_path(path) {
+                canonical_paths.insert(path.clone());
+                input
+                    .notes()
+                    .get(path)
+                    .map_or(ExpectedState::Absent, |note| {
+                        ExpectedState::Hash(note.source_hash.clone())
+                    })
+            } else {
+                observed.next().expect("one observation per dependency")
+            };
+            if &actual != expected {
+                if !canonical_path(path) {
+                    page_only = false;
+                }
+                changed.insert(path.clone(), (expected.clone(), actual));
+            }
         }
-        let path = VaultRelativePath::new(raw_path)?;
-        let expected = match row.get_ref(1).map_err(sql::sql_error)? {
-            rusqlite::types::ValueRef::Null => ExpectedState::Absent,
-            rusqlite::types::ValueRef::Text(bytes) if bytes.len() <= 128 => {
-                ExpectedState::Hash(Blake3Hash::new(
-                    std::str::from_utf8(bytes)
-                        .map_err(|e| WikiError::new(ErrorCode::IndexCorrupt, e.to_string()))?,
-                )?)
-            }
-            _ => {
-                return Err(WikiError::new(
-                    ErrorCode::IndexCorrupt,
-                    "sync dependency hash is invalid",
-                ));
-            }
-        };
-        let actual = if canonical_path(&path) {
-            canonical_paths.insert(path.clone());
-            input
-                .notes()
-                .get(&path)
-                .map_or(ExpectedState::Absent, |note| {
-                    ExpectedState::Hash(note.source_hash.clone())
-                })
-        } else {
-            input.state_observed(&path)?
-        };
-        if actual != expected {
-            if !canonical_path(&path) {
-                page_only = false;
-            }
-            changed.insert(path, (expected, actual));
+        // An earlier dependency failure wins over a later row decode failure.
+        if let Some(error) = decode_error {
+            return Err(error);
+        }
+        if dependencies.len() < crate::maintenance_parallel::MAX_JOBS {
+            break;
         }
     }
     for (path, note) in input.notes().iter() {

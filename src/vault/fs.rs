@@ -6,10 +6,224 @@ use super::{
 use crate::domain::{Blake3Hash, ErrorCode, Result, VaultRelativePath, WikiError};
 use std::{
     fs::{self, File, OpenOptions},
-    io::Write,
+    io::{Read, Write},
     path::{Path, PathBuf},
     sync::Arc,
 };
+
+/// A bounded regular-file observation with fresh namespace checks on both sides.
+/// Unix nonblocking opens reject raced special files without stranding joined jobs.
+pub(crate) fn read_regular_bounded(
+    root: &VaultRoot,
+    relative: &VaultRelativePath,
+    raw: bool,
+    limit: usize,
+    layer: &'static str,
+) -> Result<Option<Vec<u8>>> {
+    observe_regular_bounded(
+        root,
+        relative,
+        raw,
+        limit,
+        layer,
+        |length| {
+            let mut bytes = Vec::new();
+            bytes.try_reserve_exact(length).map_err(|_| {
+                WikiError::new(ErrorCode::BudgetExceeded, "bounded input allocation failed")
+            })?;
+            if bytes.capacity() > limit {
+                return Err(WikiError::new(
+                    ErrorCode::BudgetExceeded,
+                    "bounded input capacity exceeds allowance",
+                ));
+            }
+            Ok(bytes)
+        },
+        |bytes, chunk| {
+            bytes.try_reserve_exact(chunk.len()).map_err(|_| {
+                WikiError::new(
+                    ErrorCode::BudgetExceeded,
+                    "bounded input growth allocation failed",
+                )
+            })?;
+            if bytes.capacity() > limit {
+                return Err(WikiError::new(
+                    ErrorCode::BudgetExceeded,
+                    "bounded input capacity exceeds allowance",
+                ));
+            }
+            bytes.extend_from_slice(chunk);
+            Ok(())
+        },
+    )
+    .map(|value| value.map(|(bytes, _)| bytes))
+}
+
+/// Stream an authority observation without allocating its full byte contents.
+/// The 64KiB read buffer and at most 8KiB hash state fit the activation reservation.
+pub(crate) fn hash_regular_raw_bounded(
+    root: &VaultRoot,
+    relative: &VaultRelativePath,
+    limit: usize,
+    layer: &'static str,
+) -> Result<Option<(u64, [u8; 32])>> {
+    const {
+        assert!(std::mem::size_of::<blake3::Hasher>() <= 8 * 1024);
+    }
+    observe_regular_bounded(
+        root,
+        relative,
+        true,
+        limit,
+        layer,
+        |_| Ok(blake3::Hasher::new()),
+        |hasher, chunk| {
+            hasher.update(chunk);
+            Ok(())
+        },
+    )
+    .map(|value| value.map(|(hasher, bytes)| (bytes, *hasher.finalize().as_bytes())))
+}
+
+fn observe_regular_bounded<T>(
+    root: &VaultRoot,
+    relative: &VaultRelativePath,
+    raw: bool,
+    limit: usize,
+    layer: &'static str,
+    initialize: impl FnOnce(usize) -> Result<T>,
+    mut consume: impl FnMut(&mut T, &[u8]) -> Result<()>,
+) -> Result<Option<(T, u64)>> {
+    let owner_activation = crate::storage::maintenance_activation::owner_capture_active();
+    if owner_activation {
+        crate::maintenance_parallel::record_owner_activation_read();
+    }
+    let resolve = || {
+        if raw {
+            root.resolve_raw(relative)
+        } else {
+            root.resolve(relative)
+        }
+    };
+    let path = resolve()?;
+    let before = match fs::symlink_metadata(&path) {
+        Ok(meta) => meta,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(io_error("inspect bounded input", e)),
+    };
+    if !before.is_file() || before.file_type().is_symlink() {
+        return Err(WikiError::invalid("bounded read requires regular file"));
+    }
+    if before.len() > limit as u64 {
+        return Err(WikiError::new(
+            ErrorCode::BudgetExceeded,
+            "bounded input exceeds byte allowance",
+        ));
+    }
+    #[cfg(test)]
+    super::maintenance_read_tests::before_open(&path);
+    #[cfg(unix)]
+    let mut file = {
+        use std::os::unix::fs::OpenOptionsExt;
+        OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+            .open(&path)
+    }
+    .map_err(|e| io_error("open bounded input", e))?;
+    #[cfg(not(unix))]
+    let mut file = File::open(&path).map_err(|e| io_error("open bounded input", e))?;
+    let same = |a: &fs::Metadata, b: &fs::Metadata| -> Result<()> {
+        if !b.is_file() || b.file_type().is_symlink() {
+            return Err(WikiError::new(
+                ErrorCode::ContentConflict,
+                "bounded input type changed",
+            ));
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            if a.dev() != b.dev() || a.ino() != b.ino() {
+                return Err(WikiError::new(
+                    ErrorCode::ContentConflict,
+                    "bounded input identity changed",
+                ));
+            }
+        }
+        #[cfg(not(unix))]
+        let _ = a;
+        Ok(())
+    };
+    let opened = file
+        .metadata()
+        .map_err(|e| io_error("inspect opened input", e))?;
+    same(&before, &opened)?;
+    if opened.len() > limit as u64 {
+        return Err(WikiError::new(
+            ErrorCode::BudgetExceeded,
+            "opened input exceeds byte allowance",
+        ));
+    }
+    let mut state = initialize(opened.len() as usize)?;
+    let mut observed = 0usize;
+    let result = (|| {
+        let mut buffer = [0u8; 64 * 1024];
+        loop {
+            let remaining = limit.saturating_sub(observed);
+            if remaining == 0 {
+                let mut sentinel = [0u8; 1];
+                let n = file
+                    .read(&mut sentinel)
+                    .map_err(|e| io_error("read input boundary", e))?;
+                observed += n;
+                if n != 0 {
+                    return Err(WikiError::new(
+                        ErrorCode::BudgetExceeded,
+                        "bounded input grew beyond allowance",
+                    ));
+                }
+                break;
+            }
+            let cap = remaining.min(buffer.len());
+            let n = file
+                .read(&mut buffer[..cap])
+                .map_err(|e| io_error("read bounded input", e))?;
+            observed += n;
+            if n == 0 {
+                break;
+            }
+            consume(&mut state, &buffer[..n])?;
+        }
+        let after = file
+            .metadata()
+            .map_err(|e| io_error("recheck opened input", e))?;
+        same(&opened, &after)?;
+        if resolve()? != path {
+            return Err(WikiError::new(
+                ErrorCode::ContentConflict,
+                "bounded input route changed",
+            ));
+        }
+        let named = fs::symlink_metadata(&path).map_err(|e| io_error("recheck named input", e))?;
+        same(&opened, &named)?;
+        if opened.len() != observed as u64 || after.len() != observed as u64 {
+            return Err(WikiError::new(
+                ErrorCode::ContentConflict,
+                "bounded input length changed",
+            ));
+        }
+        Ok(())
+    })();
+    if owner_activation {
+        crate::maintenance_parallel::record_owner_activation_bytes(observed as u64);
+    }
+    #[cfg(test)]
+    crate::catalog::query_diagnostics::read(layer, &path, observed);
+    #[cfg(not(test))]
+    let _ = (layer, observed);
+    result?;
+    Ok(Some((state, observed as u64)))
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(
@@ -147,7 +361,79 @@ pub struct VaultFs {
     root: VaultRoot,
     io: Arc<dyn DurableIo>,
     storage_recovery: bool,
-    published_refresh_paths: Option<crate::catalog::source_refresh::PublishedRefreshPaths>,
+    published_refresh_paths: Option<Arc<crate::catalog::source_refresh::PublishedRefreshPaths>>,
+}
+/// Owner-admitted temporary-file work. It grants no replacement authority.
+#[derive(Clone)]
+pub(crate) struct StagePreparation {
+    fs: VaultFs,
+    target: VaultRelativePath,
+    destination: PathBuf,
+}
+impl StagePreparation {
+    pub(crate) fn result_owned_bound(&self) -> u64 {
+        (std::mem::size_of::<StagedFile>()
+            + self.fs.root.owned_capacity()
+            + self.target.owned_capacity()
+            + 8192usize.max(
+                self.destination
+                    .capacity()
+                    .saturating_add(96)
+                    .saturating_mul(2),
+            )
+            + 128) as u64
+    }
+    pub(crate) fn owned_bytes(&self) -> usize {
+        std::mem::size_of::<Self>()
+            + self.fs.root.owned_capacity()
+            + self.target.owned_capacity()
+            + self.destination.capacity()
+    }
+    pub(crate) fn stage(&self, bytes: &[u8]) -> Result<StagedFile> {
+        self.fs.require_storage_ready()?;
+        self.fs.validate_paths(std::slice::from_ref(&self.target))?;
+        let destination = self.fs.root.resolve(&self.target)?;
+        if destination != self.destination {
+            return Err(WikiError::new(
+                ErrorCode::ContentConflict,
+                "stage route changed after admission",
+            ));
+        }
+        let parent = destination.parent().expect("managed file has parent");
+        let path = parent.join(format!(".lwiki-stage-{}.tmp", uuid::Uuid::now_v7()));
+        let mut file = match self.fs.io.create_stage(&path) {
+            Ok(file) => file,
+            Err(e) => {
+                if e.kind() != std::io::ErrorKind::AlreadyExists {
+                    let _ = self.fs.io.remove(&path);
+                }
+                return Err(io_error("create same-directory stage", e));
+            }
+        };
+        let staged = StagedFile {
+            path,
+            target: self.target.clone(),
+            root: self.fs.root.clone(),
+            io: Arc::clone(&self.fs.io),
+            proposed_hash: Blake3Hash::digest(bytes),
+            proposed_len: bytes.len(),
+        };
+        if staged.owned_bytes() > self.result_owned_bound() {
+            return Err(WikiError::new(
+                ErrorCode::BudgetExceeded,
+                "stage result exceeds admitted ownership",
+            ));
+        }
+        self.fs
+            .io
+            .write_stage(&mut file, bytes)
+            .map_err(|e| io_error("write stage", e))?;
+        self.fs
+            .io
+            .sync_file(&file)
+            .map_err(|e| io_error("sync stage", e))?;
+        Ok(staged)
+    }
 }
 pub struct StagedFile {
     path: PathBuf,
@@ -155,8 +441,16 @@ pub struct StagedFile {
     root: VaultRoot,
     io: Arc<dyn DurableIo>,
     proposed_hash: Blake3Hash,
+    proposed_len: usize,
 }
 impl StagedFile {
+    pub(crate) fn owned_bytes(&self) -> u64 {
+        (std::mem::size_of::<Self>()
+            + self.path.capacity()
+            + self.target.owned_capacity()
+            + self.root.owned_capacity()
+            + self.proposed_hash.owned_capacity()) as u64
+    }
     pub fn path(&self) -> &Path {
         &self.path
     }
@@ -170,6 +464,10 @@ impl Drop for StagedFile {
     }
 }
 impl VaultFs {
+    /// Inline descriptor and owned root bytes; I/O and published scope are shared.
+    pub(crate) fn owned_bytes(&self) -> usize {
+        std::mem::size_of::<Self>() + self.root.owned_capacity()
+    }
     pub fn new(root: VaultRoot) -> Self {
         Self::with_io(root, Arc::new(NativeIo))
     }
@@ -187,18 +485,21 @@ impl VaultFs {
     ) -> Result<Self> {
         paths.require_root(&self.root)?;
         let mut scoped = self.clone();
-        scoped.published_refresh_paths = Some(paths);
+        scoped.published_refresh_paths = Some(Arc::new(paths));
         Ok(scoped)
     }
     pub(crate) fn validate_paths(&self, paths: &[VaultRelativePath]) -> Result<()> {
         self.root
-            .validate_refresh_paths(paths, self.published_refresh_paths.as_ref())
+            .validate_refresh_paths(paths, self.published_refresh_paths.as_deref())
     }
     pub fn root(&self) -> &VaultRoot {
         &self.root
     }
     pub(crate) fn durable_io(&self) -> Arc<dyn DurableIo> {
         Arc::clone(&self.io)
+    }
+    pub(crate) fn is_storage_recovery(&self) -> bool {
+        self.storage_recovery
     }
     /// Only the storage coordinator may continue an immutable pending cleanup.
     pub(crate) fn for_storage_recovery(&self) -> Self {
@@ -211,10 +512,11 @@ impl VaultFs {
     }
     pub(crate) fn require_storage_ready(&self) -> Result<()> {
         if !self.storage_recovery
-            && crate::storage::layout::raw_read(
+            && hash_regular_raw_bounded(
                 &self.root,
                 &VaultRelativePath::new(".wiki/state/storage/cleanup.json")?,
                 64 * 1024 * 1024,
+                "storage-read",
             )?
             .is_some()
         {
@@ -300,11 +602,46 @@ impl VaultFs {
         permit.require_root(&self.root)?;
         self.require_storage_ready()?;
         let path = self.root.resolve(target)?;
-        match File::open(&path) {
-            Ok(file) => self
-                .io
-                .sync_file(&file)
-                .map_err(|e| io_error("sync observed target", e))?,
+        #[cfg(unix)]
+        let opened = {
+            use std::os::unix::fs::OpenOptionsExt;
+            OpenOptions::new()
+                .read(true)
+                .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+                .open(&path)
+        };
+        #[cfg(not(unix))]
+        let opened = File::open(&path);
+        match opened {
+            Ok(file) => {
+                let held = file
+                    .metadata()
+                    .map_err(|e| io_error("inspect sync target", e))?;
+                let named =
+                    fs::symlink_metadata(&path).map_err(|e| io_error("recheck sync target", e))?;
+                if !held.is_file() || !named.is_file() || named.file_type().is_symlink() {
+                    return Err(WikiError::invalid("sync target must remain a regular file"));
+                }
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::MetadataExt;
+                    if held.dev() != named.dev() || held.ino() != named.ino() {
+                        return Err(WikiError::new(
+                            ErrorCode::ContentConflict,
+                            "sync target identity changed",
+                        ));
+                    }
+                }
+                if self.root.resolve(target)? != path {
+                    return Err(WikiError::new(
+                        ErrorCode::ContentConflict,
+                        "sync target route changed",
+                    ));
+                }
+                self.io
+                    .sync_file(&file)
+                    .map_err(|e| io_error("sync observed target", e))?;
+            }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
             Err(e) => return Err(io_error("open observed target", e)),
         }
@@ -313,19 +650,14 @@ impl VaultFs {
             .map_err(|e| io_error("sync observed target directory", e))
     }
     pub fn read_before(&self, target: &VaultRelativePath) -> Result<Option<BeforeImage>> {
-        let path = self.root.resolve(target)?;
-        match fs::read(&path) {
-            Ok(bytes) => {
-                #[cfg(test)]
-                crate::catalog::query_diagnostics::read("vault-read", &path, bytes.len());
-                Ok(Some(BeforeImage {
+        Ok(
+            read_regular_bounded(&self.root, target, false, usize::MAX, "vault-read")?.map(
+                |bytes| BeforeImage {
                     hash: Blake3Hash::digest(&bytes),
                     bytes,
-                }))
-            }
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
-            Err(e) => Err(io_error("read before-image", e)),
-        }
+                },
+            ),
+        )
     }
     pub fn ensure_directory(
         &self,
@@ -372,6 +704,13 @@ impl VaultFs {
         bytes: &[u8],
         permit: &WriterPermit,
     ) -> Result<StagedFile> {
+        self.prepare_stage(target, permit)?.stage(bytes)
+    }
+    pub(crate) fn prepare_stage(
+        &self,
+        target: &VaultRelativePath,
+        permit: &WriterPermit,
+    ) -> Result<StagePreparation> {
         permit.require_root(&self.root)?;
         self.require_storage_ready()?;
         self.validate_paths(std::slice::from_ref(target))?;
@@ -397,31 +736,11 @@ impl VaultFs {
                 ));
             }
         }
-        let path = parent.join(format!(".lwiki-stage-{}.tmp", uuid::Uuid::now_v7()));
-        let mut file = match self.io.create_stage(&path) {
-            Ok(file) => file,
-            Err(e) => {
-                // Adapter failures after create can leave an empty private stage.
-                if e.kind() != std::io::ErrorKind::AlreadyExists {
-                    let _ = self.io.remove(&path);
-                }
-                return Err(io_error("create same-directory stage", e));
-            }
-        };
-        let staged = StagedFile {
-            path,
+        Ok(StagePreparation {
+            fs: self.clone(),
             target: target.clone(),
-            root: self.root.clone(),
-            io: Arc::clone(&self.io),
-            proposed_hash: Blake3Hash::digest(bytes),
-        };
-        self.io
-            .write_stage(&mut file, bytes)
-            .map_err(|e| io_error("write stage", e))?;
-        self.io
-            .sync_file(&file)
-            .map_err(|e| io_error("sync stage", e))?;
-        Ok(staged)
+            destination,
+        })
     }
     fn guard(&self, target: &VaultRelativePath, expected: &ExpectedState) -> Result<()> {
         let actual = self
@@ -460,9 +779,31 @@ impl VaultFs {
                 "stage must remain a regular file",
             ));
         }
-        if Blake3Hash::digest(fs::read(&staged.path).map_err(|e| io_error("verify stage", e))?)
-            != staged.proposed_hash
-        {
+        let stage_relative = staged
+            .path
+            .strip_prefix(self.root.path())
+            .ok()
+            .and_then(Path::to_str)
+            .ok_or_else(|| WikiError::invalid("stage escapes vault"))?;
+        let stage_relative = VaultRelativePath::new(stage_relative)?;
+        let (_, stage_hash) = hash_regular_raw_bounded(
+            &self.root,
+            &stage_relative,
+            staged.proposed_len,
+            "stage-read",
+        )
+        .map_err(|error| {
+            if error.code == ErrorCode::BudgetExceeded {
+                WikiError::new(
+                    ErrorCode::ContentConflict,
+                    "stage payload grew after preparation",
+                )
+            } else {
+                error
+            }
+        })?
+        .ok_or_else(|| WikiError::new(ErrorCode::ContentConflict, "stage disappeared"))?;
+        if blake3::Hash::from(stage_hash).to_hex().as_str() != staged.proposed_hash.hex() {
             return Err(WikiError::new(
                 ErrorCode::ContentConflict,
                 "stage payload changed",

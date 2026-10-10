@@ -27,7 +27,7 @@ mod general_query_fixture;
 #[cfg(test)]
 mod refresh_fixture_export;
 #[cfg(test)]
-mod refresh_path_profile;
+pub(crate) mod refresh_path_profile;
 
 pub(crate) mod page_citations;
 mod page_rename;
@@ -42,10 +42,10 @@ mod source_import;
 mod source_refresh_batch;
 mod source_refresh_batch_types;
 pub use source_refresh_batch_types::*;
-#[cfg(test)]
-mod source_refresh_batch_tests;
 mod source_import_state;
 mod source_import_types;
+#[cfg(test)]
+mod source_refresh_batch_tests;
 pub use source_import::{
     SourceImportGroup, SourceImportOutcome, SourceImportPendingItem, SourceImportPreparation,
     SourceImportedItem, prepare_source_import,

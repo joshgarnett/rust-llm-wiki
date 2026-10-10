@@ -48,6 +48,72 @@
         },
         "network_used": {
           "type": "boolean"
+        },
+        "maintenance": {
+          "type": "object",
+          "description": "Optional joined maintenance metrics. Worker service intervals can overlap and are not command elapsed time.",
+          "properties": {
+            "submitted": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "completed": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "failed": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "panicked": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "max_active": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 16
+            },
+            "max_in_flight_bytes": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 1073741824
+            },
+            "worker_service_ns": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "joined_batch_wall_ns": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "owner_activation_validations": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "owner_activation_reads": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "owner_activation_read_bytes": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          "required": [
+            "submitted",
+            "completed",
+            "failed",
+            "panicked",
+            "max_active",
+            "max_in_flight_bytes",
+            "worker_service_ns",
+            "joined_batch_wall_ns",
+            "owner_activation_validations",
+            "owner_activation_reads",
+            "owner_activation_read_bytes"
+          ],
+          "additionalProperties": false
         }
       },
       "required": [

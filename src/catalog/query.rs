@@ -829,7 +829,9 @@ impl QuerySnapshot {
         let raw = size(1)?;
         let payload = size(2)?;
         if payload < raw {
-            return Err(corrupt("original input payload length is smaller than raw text"));
+            return Err(corrupt(
+                "original input payload length is smaller than raw text",
+            ));
         }
         Ok(Some((raw, payload)))
     }

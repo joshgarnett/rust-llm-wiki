@@ -25,6 +25,32 @@ use std::{
 std::thread_local! {
     static PHASES: RefCell<Option<BTreeMap<&'static str, u128>>> = const { RefCell::new(None) };
 }
+pub(crate) fn worker_active() -> bool {
+    PHASES.with(|value| value.borrow().is_some())
+}
+pub(crate) fn worker_begin() {
+    PHASES.with(|value| assert!(value.borrow_mut().replace(BTreeMap::new()).is_none()));
+}
+pub(crate) fn worker_finish() -> BTreeMap<&'static str, u128> {
+    PHASES.with(|value| {
+        value
+            .borrow_mut()
+            .take()
+            .expect("worker phase profile missing")
+    })
+}
+/// Worker service durations overlap; these totals are not owning wall intervals.
+pub(crate) fn worker_merge(delta: BTreeMap<&'static str, u128>) {
+    PHASES.with(|value| {
+        let mut value = value.borrow_mut();
+        let owner = value
+            .as_mut()
+            .expect("owner phase profile ended before worker join");
+        for (key, value) in delta {
+            *owner.entry(key).or_default() += value;
+        }
+    });
+}
 pub(crate) struct PhaseGuard {
     name: &'static str,
     start: Option<Instant>,

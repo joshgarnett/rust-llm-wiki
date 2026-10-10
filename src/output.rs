@@ -21,6 +21,11 @@ pub struct Metadata {
     pub verified_at: Option<String>,
     pub partial: bool,
     pub network_used: bool,
+    /// Joined maintenance work, when this command submitted any worker jobs.
+    /// Service durations can overlap and are not command elapsed time.
+    /// In-flight bytes are admitted logical workspace, not actual process RSS.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub maintenance: Option<Value>,
 }
 
 #[derive(Debug, Serialize)]

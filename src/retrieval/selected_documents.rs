@@ -165,7 +165,9 @@ pub(crate) fn authenticate_with_document_limits(
     limits: &BTreeMap<VaultRelativePath, usize>,
 ) -> Result<SelectedDocuments> {
     if paths.iter().collect::<BTreeSet<_>>() != limits.keys().collect::<BTreeSet<_>>() {
-        return Err(WikiError::invalid("original-input bounds differ from selected paths"));
+        return Err(WikiError::invalid(
+            "original-input bounds differ from selected paths",
+        ));
     }
     authenticate_inner(catalog, reader, paths, budget, Some(limits))
 }

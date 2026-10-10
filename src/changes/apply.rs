@@ -11,6 +11,10 @@ use crate::{
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
+#[cfg(test)]
+#[path = "maintenance_guard_tests.rs"]
+pub(crate) mod maintenance_guard_tests;
+
 impl ChangeEngine {
     pub fn apply(
         &self,
@@ -268,6 +272,11 @@ impl ChangeEngine {
                 .iter()
                 .map(|o| o.apply_after.clone())
                 .collect();
+            #[cfg(test)]
+            maintenance_guard_tests::hook(
+                self.fs.root(),
+                maintenance_guard_tests::Event::LoopBegin,
+            )?;
             for index in topological_order(&dependencies)? {
                 self.verify_read_preconditions(permit, manifest, &change.manifest_hash)?;
                 guard_revision_trees(false)?;
@@ -323,6 +332,11 @@ impl ChangeEngine {
                 }
                 guard_revision_trees(false)?;
                 self.verify_read_preconditions(permit, manifest, &change.manifest_hash)?;
+                #[cfg(test)]
+                maintenance_guard_tests::hook(
+                    self.fs.root(),
+                    maintenance_guard_tests::Event::BeforeMutation(index),
+                )?;
                 let result = if observed == operation.before {
                     match staged {
                         Some(staged) => self.fs.replace(staged, &operation.before, permit),
@@ -368,6 +382,8 @@ impl ChangeEngine {
             }
             guard_revision_trees(true)?;
             self.verify_read_preconditions(permit, manifest, &change.manifest_hash)?;
+            #[cfg(test)]
+            maintenance_guard_tests::hook(self.fs.root(), maintenance_guard_tests::Event::LoopEnd)?;
             self.require_all_after(permit, manifest, &change.manifest_hash)?;
             state = journal::append_event(
                 &self.fs,
@@ -497,11 +513,19 @@ impl ChangeEngine {
         journal::require_sync(self.fs.replace(staged, &ExpectedState::Absent, permit)?)
     }
     pub(crate) fn target_state(&self, target: &VaultRelativePath) -> Result<ExpectedState> {
-        Ok(
-            read_bounded(&self.fs, target, MAX_PAYLOAD_BYTES)?.map_or(ExpectedState::Absent, |b| {
-                ExpectedState::Hash(Blake3Hash::digest(b))
-            }),
-        )
+        let bytes = read_bounded(&self.fs, target, MAX_PAYLOAD_BYTES)?;
+        #[cfg(test)]
+        maintenance_guard_tests::hook(
+            self.fs.root(),
+            maintenance_guard_tests::Event::TargetRead(
+                target,
+                bytes.as_ref().map(|b| *blake3::hash(b).as_bytes()),
+                bytes.as_ref().map_or(0, Vec::len),
+            ),
+        )?;
+        Ok(bytes.map_or(ExpectedState::Absent, |b| {
+            ExpectedState::Hash(Blake3Hash::digest(b))
+        }))
     }
     pub(crate) fn observe(&self, manifest: &ChangeManifest) -> Result<Vec<TargetObservation>> {
         manifest
@@ -770,23 +794,108 @@ impl ChangeEngine {
         manifest: &ChangeManifest,
         hash: &Blake3Hash,
     ) -> Result<()> {
-        for condition in &manifest.read_preconditions {
-            if self
-                .target_state(&condition.path)
-                .is_ok_and(|actual| actual == condition.expected)
-            {
-                continue;
+        // Each unchanged checkpoint obtains fresh observations. No read result is
+        // retained across checkpoints, and only this owner can journal a conflict.
+        #[cfg(test)]
+        maintenance_guard_tests::hook(self.fs.root(), maintenance_guard_tests::Event::PassBegin)?;
+        let proof = if manifest.read_preconditions.is_empty() {
+            None
+        } else {
+            crate::storage::maintenance_activation::prepare_parallel_activation(permit, &self.fs)?
+        };
+        // Sixteen maximum-size payloads leave no room for required scratch.
+        // Fifteen still fit the largest admitted path/diagnostic envelope.
+        for conditions in manifest
+            .read_preconditions
+            .chunks(crate::maintenance_parallel::MAX_JOBS - 1)
+        {
+            let eligible = proof.is_some()
+                && conditions.iter().all(|condition| {
+                    crate::vault::paths::parallel_path_workspace(self.fs.root(), &condition.path)
+                        .is_some()
+                });
+            let jobs = conditions
+                .iter()
+                .map(|condition| {
+                    let fs = self.fs.clone();
+                    let path = condition.path.clone();
+                    let workspace = if eligible {
+                        crate::vault::paths::parallel_path_workspace(fs.root(), &path)
+                            .unwrap()
+                            .max(
+                                proof
+                                    .as_ref()
+                                    .and_then(|proof| proof.path_workspace())
+                                    .unwrap(),
+                            )
+                    } else {
+                        0
+                    };
+                    let reservation = MAX_PAYLOAD_BYTES as u64
+                        + 64 * 1024
+                        + crate::storage::maintenance_activation::WORKSPACE_BYTES
+                        + workspace
+                        + fs.owned_bytes() as u64
+                        + path.owned_capacity() as u64
+                        + std::mem::size_of::<VaultRelativePath>() as u64;
+                    crate::maintenance_parallel::Job::new(reservation, move || {
+                        #[cfg(test)]
+                        maintenance_guard_tests::hook(
+                            fs.root(),
+                            maintenance_guard_tests::Event::BeforeRead(&path),
+                        )?;
+                        let bytes = read_bounded(&fs, &path, MAX_PAYLOAD_BYTES)?;
+                        let hash = bytes.as_ref().map(|bytes| *blake3::hash(bytes).as_bytes());
+                        #[cfg(test)]
+                        maintenance_guard_tests::hook(
+                            fs.root(),
+                            maintenance_guard_tests::Event::Read(
+                                &path,
+                                hash,
+                                bytes.as_ref().map_or(0, Vec::len),
+                            ),
+                        )?;
+                        Ok(hash)
+                    })
+                })
+                .collect();
+            // All admitted observations, including later failures, have finished
+            // and merged their diagnostics before ordered conflict reduction.
+            let observations = if !eligible {
+                crate::maintenance_parallel::run_batch_sequential(jobs)?
+            } else {
+                crate::maintenance_parallel::run_batch(jobs)?
+            };
+            #[cfg(test)]
+            maintenance_guard_tests::hook(
+                self.fs.root(),
+                maintenance_guard_tests::Event::AfterJoin,
+            )?;
+            for (condition, actual) in conditions.iter().zip(observations) {
+                let actual = actual.and_then(|hash| match hash {
+                    None => Ok(ExpectedState::Absent),
+                    Some(hash) => Blake3Hash::new(format!(
+                        "blake3:{}",
+                        blake3::Hash::from_bytes(hash).to_hex()
+                    ))
+                    .map(ExpectedState::Hash),
+                });
+                if actual.is_ok_and(|actual| actual == condition.expected) {
+                    continue;
+                }
+                let phase = format!("read precondition: {}", condition.path);
+                let state = journal::load_journal(&self.fs, manifest, hash)?;
+                if matches!(
+                    state.status,
+                    None | Some(ChangeStatus::Prepared | ChangeStatus::Conflict)
+                ) {
+                    return Err(WikiError::new(ErrorCode::ContentConflict, phase));
+                }
+                return self.conflict(permit, manifest, hash, &phase, Vec::new());
             }
-            let phase = format!("read precondition: {}", condition.path);
-            let state = journal::load_journal(&self.fs, manifest, hash)?;
-            if matches!(
-                state.status,
-                None | Some(ChangeStatus::Prepared | ChangeStatus::Conflict)
-            ) {
-                return Err(WikiError::new(ErrorCode::ContentConflict, phase));
-            }
-            return self.conflict(permit, manifest, hash, &phase, Vec::new());
         }
+        #[cfg(test)]
+        maintenance_guard_tests::hook(self.fs.root(), maintenance_guard_tests::Event::PassEnd)?;
         Ok(())
     }
     fn verify_dependencies(

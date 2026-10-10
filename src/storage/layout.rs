@@ -5,7 +5,6 @@ use crate::{
     vault::{ExpectedState, VaultFs, VaultRoot, WriterPermit},
 };
 use serde::{Deserialize, Serialize};
-use std::{fs::File, io::Read};
 pub(crate) const ACTIVE: &str = ".wiki/state/storage/layout.json";
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -20,33 +19,7 @@ pub(crate) fn raw_read(
     path: &VaultRelativePath,
     max: usize,
 ) -> Result<Option<Vec<u8>>> {
-    let actual = root.resolve_raw(path)?;
-    let mut file = match File::open(&actual) {
-        Ok(file) => file,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(e) => return Err(WikiError::new(ErrorCode::Internal, e.to_string())),
-    };
-    if !file
-        .metadata()
-        .map_err(|e| WikiError::new(ErrorCode::Internal, e.to_string()))?
-        .is_file()
-    {
-        return Err(WikiError::invalid("storage read requires regular file"));
-    }
-    let mut bytes = Vec::new();
-    (&mut file)
-        .take((max as u64).saturating_add(1))
-        .read_to_end(&mut bytes)
-        .map_err(|e| WikiError::new(ErrorCode::Internal, e.to_string()))?;
-    #[cfg(test)]
-    crate::catalog::query_diagnostics::read("storage-read", &actual, bytes.len());
-    if bytes.len() > max {
-        return Err(WikiError::new(
-            ErrorCode::BudgetExceeded,
-            "storage read exceeds bound",
-        ));
-    }
-    Ok(Some(bytes))
+    crate::vault::fs::read_regular_bounded(root, path, true, max, "storage-read")
 }
 pub(crate) type RawReader<'a> =
     dyn FnMut(&VaultRelativePath, usize) -> Result<Option<Vec<u8>>> + 'a;
@@ -141,6 +114,9 @@ impl ValidatedLayout {
 }
 
 pub fn active(root: &VaultRoot) -> Result<bool> {
+    if let Some(result) = super::maintenance_activation::worker_active(root) {
+        return result;
+    }
     let result = active_with_reader(
         root,
         &mut |path, max| raw_read(root, path, max),
@@ -159,6 +135,12 @@ fn active_with_reader(
     on_step: &mut dyn FnMut() -> Result<()>,
     native_reader: bool,
 ) -> Result<bool> {
+    if super::maintenance_activation::worker_context_active() {
+        return Err(WikiError::new(
+            ErrorCode::Internal,
+            "worker cannot decode unproved activation authority",
+        ));
+    }
     let Some(bytes) = read_with_reader(reader, &VaultRelativePath::new(ACTIVE)?, 4096)? else {
         if read_with_reader(reader, &VaultRelativePath::new("WIKI.md")?, 1024 * 1024)?.is_none() {
             // Initialization validates/creates empty managed directories before

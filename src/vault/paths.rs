@@ -44,6 +44,26 @@ pub(crate) mod profile {
     pub(crate) fn finish() -> PathProfile {
         ACTIVE.with(|value| value.borrow_mut().take().expect("path profile inactive"))
     }
+    pub(crate) fn active() -> bool {
+        ACTIVE.with(|value| value.borrow().is_some())
+    }
+    pub(crate) fn merge(delta: PathProfile) {
+        ACTIVE.with(|value| {
+            let mut value = value.borrow_mut();
+            let owner = value
+                .as_mut()
+                .expect("owner path profile ended before worker join");
+            owner.portable_calls += delta.portable_calls;
+            owner.portable_elapsed_ns += delta.portable_elapsed_ns;
+            for (key, delta) in delta.enumerations {
+                let total = owner.enumerations.entry(key).or_default();
+                total.opens += delta.opens;
+                total.entries += delta.entries;
+                total.folds += delta.folds;
+                total.elapsed_ns += delta.elapsed_ns;
+            }
+        });
+    }
     #[derive(Clone, Copy)]
     pub(crate) enum Kind {
         Physical,
@@ -163,6 +183,72 @@ pub struct VaultRoot {
     path: PathBuf,
 }
 
+/// Eligibility only: outliers keep the owner route before any worker is dispatched.
+/// Include room for retained prefixes, WIKI probes and temporary stage suffixes.
+pub(crate) fn parallel_path_workspace(
+    root: &VaultRoot,
+    relative: &VaultRelativePath,
+) -> Option<u64> {
+    let bytes = root
+        .path
+        .as_os_str()
+        .len()
+        .checked_add(relative.as_str().len())?
+        .checked_add(96)?;
+    let components = root
+        .path
+        .components()
+        .count()
+        .checked_add(relative.as_str().split('/').count())?
+        .checked_add(6)?;
+    if bytes > 4096
+        || components > 64
+        || root.owned_capacity() > 8192
+        || relative.owned_capacity() > 8192
+    {
+        return None;
+    }
+    let mut prefix = String::new();
+    for part in relative.as_str().split('/') {
+        if !prefix.is_empty() {
+            prefix.push('/');
+        }
+        prefix.push_str(part);
+        if UniCase::unicode(&prefix).to_folded_case().len() > 4096 {
+            return None;
+        }
+    }
+    Some(((8 + 4 * components) * 8192 + (components + 1) * 1024) as u64)
+}
+fn worker_path(path: &Path, capacity: usize) -> Result<()> {
+    if crate::storage::maintenance_activation::worker_context_active()
+        && (path.as_os_str().len() > 4096 || path.components().count() > 64 || capacity > 8192)
+    {
+        return Err(WikiError::new(
+            ErrorCode::BudgetExceeded,
+            "parallel path workspace exceeded",
+        ));
+    }
+    Ok(())
+}
+fn worker_text(value: &str, capacity: usize) -> Result<()> {
+    if crate::storage::maintenance_activation::worker_context_active()
+        && (value.len() > 4096 || capacity > 8192)
+    {
+        return Err(WikiError::new(
+            ErrorCode::BudgetExceeded,
+            "parallel path text workspace exceeded",
+        ));
+    }
+    Ok(())
+}
+fn checked_fold(value: &str) -> Result<String> {
+    worker_text(value, value.len())?;
+    let folded = UniCase::unicode(value).to_folded_case();
+    worker_text(&folded, folded.capacity())?;
+    Ok(folded)
+}
+
 pub(crate) fn io_error(action: &str, error: std::io::Error) -> WikiError {
     WikiError::new(ErrorCode::Internal, format!("{action}: {error}"))
 }
@@ -213,6 +299,10 @@ fn exact_marker_budgeted(path: &Path, on_entry: &mut dyn FnMut() -> Result<()>) 
     Ok(false)
 }
 impl VaultRoot {
+    /// Owned path bytes included in joined-maintenance descriptor reservations.
+    pub(crate) fn owned_capacity(&self) -> usize {
+        self.path.capacity()
+    }
     /// Reject a symlink supplied as the root itself; canonicalize ancestor aliases once.
     pub fn for_initialization(path: impl AsRef<Path>) -> Result<Self> {
         let path = path.as_ref();
@@ -282,9 +372,11 @@ impl VaultRoot {
         on_entry: &mut dyn FnMut() -> Result<()>,
     ) -> Result<PathBuf> {
         let mut path = self.path.clone();
+        worker_path(&path, path.capacity())?;
         for component in relative.as_str().split('/') {
             on_entry()?;
             path.push(component);
+            worker_path(&path, path.capacity())?;
             match fs::symlink_metadata(&path) {
                 Ok(meta) if meta.file_type().is_symlink() => {
                     return Err(WikiError::invalid("managed path has a symlink component"));
@@ -292,6 +384,7 @@ impl VaultRoot {
                 Ok(meta) => {
                     let canonical = fs::canonicalize(&path)
                         .map_err(|e| io_error("check destination containment", e))?;
+                    worker_path(&canonical, canonical.capacity())?;
                     if !canonical.starts_with(&self.path) {
                         return Err(WikiError::invalid("managed path escapes canonical vault"));
                     }
@@ -344,7 +437,8 @@ impl VaultRoot {
                     prefix.push('/');
                 }
                 prefix.push_str(component);
-                let folded = UniCase::unicode(&prefix).to_folded_case();
+                worker_text(&prefix, prefix.capacity())?;
+                let folded = checked_fold(&prefix)?;
                 if let Some(other) = planned.insert(folded, prefix.clone())
                     && other != prefix
                 {
@@ -357,7 +451,7 @@ impl VaultRoot {
                     && !scope.is_some_and(|scope| scope.published(&prefix))
                     && parent.is_dir()
                 {
-                    let folded = UniCase::unicode(component).to_folded_case();
+                    let folded = checked_fold(component)?;
                     #[cfg(test)]
                     let mut profile =
                         profile::enumeration(&parent, &self.path, profile::Kind::Physical);
@@ -375,7 +469,7 @@ impl VaultRoot {
                         if name != component {
                             #[cfg(test)]
                             profile.fold();
-                            if UniCase::unicode(name).to_folded_case() == folded {
+                            if checked_fold(name)? == folded {
                                 return Err(WikiError::invalid(
                                     "case-folded existing path collision",
                                 ));
@@ -384,6 +478,7 @@ impl VaultRoot {
                     }
                 }
                 parent.push(component);
+                worker_path(&parent, parent.capacity())?;
             }
         }
         Ok(())
@@ -406,7 +501,7 @@ impl VaultRoot {
                 }
                 _ => &[],
             };
-            let folded = UniCase::unicode(component).to_folded_case();
+            let folded = checked_fold(component)?;
             if reserved
                 .iter()
                 .any(|name| *name != component && *name == folded)
@@ -462,7 +557,7 @@ impl VaultRoot {
                     if name != component {
                         #[cfg(test)]
                         profile.fold();
-                        if UniCase::unicode(name).to_folded_case() == folded {
+                        if checked_fold(name)? == folded {
                             return Err(WikiError::invalid("case-folded logical path collision"));
                         }
                     }

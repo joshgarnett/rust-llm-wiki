@@ -31,6 +31,15 @@ struct ImportEpochMemo {
 std::thread_local! {
     static IMPORT_EPOCH: RefCell<Option<ImportEpochMemo>> = const { RefCell::new(None) };
 }
+/// Semantic import authority stays on its owning thread, including suspended scopes.
+pub(crate) fn import_epoch_active(root: &VaultRoot) -> bool {
+    IMPORT_EPOCH.with(|state| {
+        state
+            .borrow()
+            .as_ref()
+            .is_some_and(|memo| &memo.root == root)
+    })
+}
 
 /// One import's successful semantic predicate, never a filesystem observation.
 /// The Rc binding keeps teardown on the originating thread and prevents a

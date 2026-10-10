@@ -17,3 +17,6 @@ pub mod interrupt;
 pub mod research;
 pub mod source_import;
 pub mod storage;
+
+#[cfg(test)]
+mod maintenance_workflow_tests;

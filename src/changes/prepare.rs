@@ -15,9 +15,7 @@ use serde::{
 use serde_json::Value;
 use std::{
     collections::{BTreeMap, BTreeSet},
-    fmt,
-    fs::{self, File},
-    io::Read,
+    fmt, fs,
 };
 
 pub const MAX_MANIFEST_BYTES: usize = 4 * 1024 * 1024;
@@ -27,6 +25,10 @@ pub(crate) const MAX_OPS: usize = 10_000;
 pub(super) const MAX_GRAPH_INPUT_BYTES: usize = 64 * 1024 * 1024;
 pub(super) const MAX_INVERSE_PAYLOAD_BYTES: usize = 256 * 1024 * 1024;
 const OPEN: &[u8] = b"```lwiki-change-v1\n";
+
+#[cfg(test)]
+#[path = "maintenance_retention_tests.rs"]
+mod maintenance_retention_tests;
 
 /// Trusted admission result. The caller persists its exact normal manifest in
 /// bounded import intent before asking the engine to retain the proposal.
@@ -241,31 +243,7 @@ impl ChangeEngine {
             },
         )?;
         let manifest = sealed.manifest;
-        for (index, operation) in sealed.plan.operations.iter().enumerate() {
-            let before = self.retain(
-                permit,
-                &manifest.change_id,
-                index,
-                "before",
-                sealed.plan.before[index].as_deref(),
-                &operation.target,
-            )?;
-            let after = self.retain(
-                permit,
-                &manifest.change_id,
-                index,
-                "proposed",
-                operation.proposed.as_deref(),
-                &operation.target,
-            )?;
-            if before != manifest.operations[index].before_payload
-                || after != manifest.operations[index].after_payload
-            {
-                return Err(WikiError::invalid(
-                    "retained payload route changed during preparation",
-                ));
-            }
-        }
+        self.retain_plan(permit, &manifest, sealed.plan)?;
         let note = render_prepared_note(&manifest, &sealed.manifest_hash)?;
         self.persist(permit, &manifest_path(&manifest.change_id)?, &note)?;
         // Reload validates retained bytes, exact fence identity and manifest before authorization.
@@ -1112,32 +1090,217 @@ impl ChangeEngine {
             _ => Err(WikiError::invalid("payload/expectation mismatch")),
         }
     }
-    fn retain(
+    /// Deduplicate exact destinations before allocation. Only independent temporary
+    /// writes run in workers; destination installation/durability stays ordered.
+    fn retain_plan(
         &self,
         permit: &WriterPermit,
-        id: &RecordId,
-        index: usize,
-        side: &str,
-        bytes: Option<&[u8]>,
-        target: &VaultRelativePath,
-    ) -> Result<Option<PayloadRef>> {
-        let Some(bytes) = bytes else {
-            return Ok(None);
-        };
-        let path = if crate::storage::layout::active(self.fs.root())? {
-            let path = crate::storage::layout::object_path(&Blake3Hash::digest(bytes))?;
-            crate::storage::layout::put(&self.fs, permit, &path, bytes)?;
-            path
+        manifest: &ChangeManifest,
+        mut plan: ChangePlan,
+    ) -> Result<()> {
+        let retained_layout = crate::storage::layout::active(self.fs.root())?;
+        if retained_layout != (manifest.version == 2) {
+            return Err(WikiError::invalid(
+                "retained payload route changed during preparation",
+            ));
+        }
+        let mut unique = Vec::<(PayloadRef, Vec<u8>)>::new();
+        let mut destinations = BTreeMap::<VaultRelativePath, usize>::new();
+        for (index, operation) in plan.operations.iter_mut().enumerate() {
+            for (side, bytes, reference) in [
+                (
+                    "before",
+                    plan.before[index].take(),
+                    &manifest.operations[index].before_payload,
+                ),
+                (
+                    "proposed",
+                    operation.proposed.take(),
+                    &manifest.operations[index].after_payload,
+                ),
+            ] {
+                let Some(bytes) = bytes else {
+                    if reference.is_some() {
+                        return Err(WikiError::invalid(
+                            "retained payload route changed during preparation",
+                        ));
+                    }
+                    continue;
+                };
+                let hash = Blake3Hash::digest(&bytes);
+                let path = if retained_layout {
+                    crate::storage::layout::object_path(&hash)?
+                } else {
+                    payload_path(&manifest.change_id, index, side, &operation.target)?
+                };
+                let actual = PayloadRef {
+                    path: path.clone(),
+                    hash,
+                    byte_len: bytes.len() as u64,
+                };
+                if reference.as_ref() != Some(&actual) {
+                    return Err(WikiError::invalid(
+                        "retained payload route changed during preparation",
+                    ));
+                }
+                if let Some(previous) = destinations.get(&path) {
+                    if unique[*previous].1 != bytes {
+                        return Err(WikiError::new(
+                            ErrorCode::ContentConflict,
+                            "retained destination has conflicting payload bytes",
+                        ));
+                    }
+                } else {
+                    destinations.insert(path, unique.len());
+                    unique.push((actual, bytes));
+                }
+            }
+        }
+        // Plan bytes retain their existing admission; these job reservations also
+        // cover owned payloads, immutable authentication buffers and descriptors.
+        // Consume one bounded chunk before admitting any later chunk.
+        let proof = if unique.is_empty() {
+            None
         } else {
-            let path = payload_path(id, index, side, target)?;
-            self.persist(permit, &path, bytes)?;
-            path
+            crate::storage::maintenance_activation::prepare_parallel_activation(permit, &self.fs)?
         };
-        Ok(Some(PayloadRef {
-            path,
-            hash: Blake3Hash::digest(bytes),
-            byte_len: bytes.len() as u64,
-        }))
+        let mut pending = unique.into_iter().peekable();
+        while pending.peek().is_some() {
+            let mut jobs = Vec::with_capacity(crate::maintenance_parallel::MAX_JOBS);
+            let mut paths = Vec::with_capacity(crate::maintenance_parallel::MAX_JOBS);
+            let mut reserved = (jobs.capacity()
+                * std::mem::size_of::<
+                    crate::maintenance_parallel::Job<Option<crate::vault::StagedFile>>,
+                >()
+                + paths.capacity() * std::mem::size_of::<VaultRelativePath>())
+                as u64;
+            let mut eligible = proof.is_some();
+            while jobs.len() < crate::maintenance_parallel::MAX_JOBS {
+                let Some((reference, bytes)) = pending.peek() else {
+                    break;
+                };
+                let path_workspace =
+                    crate::vault::paths::parallel_path_workspace(self.fs.root(), &reference.path);
+                let workspace = path_workspace.unwrap_or(0).max(
+                    proof
+                        .as_ref()
+                        .and_then(|proof| proof.path_workspace())
+                        .unwrap_or(0),
+                );
+                // Route/result capacities are bounded below before creating any
+                // temporary file. Reserve enough bookkeeping to keep one pending
+                // descriptor outside this joined batch until admission is known.
+                let capture_bytes = std::mem::size_of::<(
+                    VaultFs,
+                    crate::vault::fs::StagePreparation,
+                    PayloadRef,
+                    Vec<u8>,
+                    bool,
+                )>();
+                let (parent, _) = reference
+                    .path
+                    .as_str()
+                    .rsplit_once('/')
+                    .expect("retained payload has a parent");
+                require_sync(
+                    self.fs
+                        .ensure_directory(&VaultRelativePath::new(parent)?, permit)?,
+                )?;
+                let prepared = self.fs.prepare_stage(&reference.path, permit)?;
+                let fs = self.fs.clone();
+                let result_bound = prepared.result_owned_bound();
+                let reservation = bytes.capacity() as u64
+                    + bytes.len() as u64
+                    + crate::storage::maintenance_activation::WORKSPACE_BYTES
+                    + 64 * 1024
+                    + workspace
+                    + fs.owned_bytes() as u64
+                    + prepared.owned_bytes() as u64
+                    + reference.path.owned_capacity() as u64 * 2
+                    + reference.hash.owned_capacity() as u64
+                    + std::mem::size_of::<PayloadRef>() as u64
+                    + result_bound
+                    + std::mem::size_of::<Option<crate::vault::StagedFile>>() as u64
+                    + if jobs.is_empty() {
+                        (paths.capacity() * std::mem::size_of::<VaultRelativePath>()) as u64
+                    } else {
+                        0
+                    };
+                let overhead = crate::maintenance_parallel::job_overhead::<
+                    Option<crate::vault::StagedFile>,
+                >() + (std::mem::size_of::<std::sync::mpsc::Receiver<()>>()
+                    + std::mem::size_of::<crate::domain::Result<Option<crate::vault::StagedFile>>>(
+                    )) as u64;
+                if reserved + reservation + capture_bytes as u64 + overhead
+                    > crate::maintenance_parallel::available_bytes()
+                {
+                    break;
+                }
+                let (reference, bytes) = pending.next().expect("peeked retained payload");
+                eligible &= path_workspace.is_some();
+                paths.push(reference.path.clone());
+                let work = (fs, prepared, reference, bytes, retained_layout);
+                jobs.push(crate::maintenance_parallel::Job::new(
+                    reservation,
+                    move || {
+                        let (fs, prepared, reference, bytes, retained_layout) = work;
+                        if crate::storage::layout::active(fs.root())? != retained_layout {
+                            return Err(WikiError::invalid(
+                                "retained payload route changed during preparation",
+                            ));
+                        }
+                        if retained_layout {
+                            if let Some(existing) = crate::storage::layout::raw_read(
+                                fs.root(),
+                                &reference.path,
+                                bytes.len(),
+                            )? {
+                                if existing != bytes {
+                                    return Err(WikiError::new(
+                                        ErrorCode::ContentConflict,
+                                        "immutable storage bytes changed",
+                                    ));
+                                }
+                                return Ok(None);
+                            }
+                        }
+                        Ok(Some(prepared.stage(&bytes)?))
+                    },
+                ));
+                reserved += reservation + capture_bytes as u64 + overhead;
+            }
+            if jobs.is_empty() {
+                return Err(WikiError::new(
+                    ErrorCode::BudgetExceeded,
+                    "retained staging in-flight allowance exhausted",
+                ));
+            }
+            let batch = if !eligible {
+                crate::maintenance_parallel::run_batch_sequential(jobs)?
+            } else {
+                crate::maintenance_parallel::run_batch(jobs)?
+            };
+            // Refuse the entire joined chunk before installing any destination if
+            // staging failed. Dropping its successes removes all owned temps.
+            let mut lease = batch.into_iter();
+            // Reverse drop order frees owner descriptor strings before its lease
+            // on early reduction/installation errors as well as success.
+            let paths = paths;
+            let mut stages = Vec::with_capacity(paths.len());
+            for result in lease.by_ref() {
+                stages.push(result?);
+            }
+            for (path, staged) in paths.iter().zip(stages) {
+                if let Some(staged) = staged {
+                    require_sync(self.fs.replace(staged, &ExpectedState::Absent, permit)?)?;
+                } else {
+                    require_sync(self.fs.sync_target(path, permit)?)?;
+                }
+            }
+            drop(paths);
+            drop(lease);
+        }
+        Ok(())
     }
     fn persist(&self, permit: &WriterPermit, path: &VaultRelativePath, bytes: &[u8]) -> Result<()> {
         let parent = path
@@ -1367,30 +1530,19 @@ pub(crate) fn read_bounded(
     path: &VaultRelativePath,
     limit: usize,
 ) -> Result<Option<Vec<u8>>> {
-    let logical = path;
-    let path = fs.root().resolve(path)?;
-    let mut file = match File::open(&path) {
-        Ok(file) => file,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            return crate::storage::layout::legacy_payload(fs, logical, limit);
-        }
-        Err(e) => return Err(io_error(e)),
-    };
-    let meta = file.metadata().map_err(io_error)?;
-    if !meta.is_file() || meta.len() > limit as u64 {
-        return Err(WikiError::invalid(
-            "managed read is not bounded regular file",
-        ));
+    let observed =
+        crate::vault::fs::read_regular_bounded(fs.root(), path, false, limit, "managed-read")
+            .map_err(|error| {
+                if error.code == ErrorCode::BudgetExceeded {
+                    WikiError::invalid(error.message)
+                } else {
+                    error
+                }
+            })?;
+    match observed {
+        Some(bytes) => Ok(Some(bytes)),
+        None => crate::storage::layout::legacy_payload(fs, path, limit),
     }
-    let mut bytes = Vec::new();
-    let read = (&mut file).take(limit as u64 + 1).read_to_end(&mut bytes);
-    #[cfg(test)]
-    crate::catalog::query_diagnostics::read("managed-read", &path, bytes.len());
-    read.map_err(io_error)?;
-    if bytes.len() > limit {
-        return Err(WikiError::invalid("managed read exceeds limit"));
-    }
-    Ok(Some(bytes))
 }
 pub(super) fn read_with_budget(
     fs: &VaultFs,
