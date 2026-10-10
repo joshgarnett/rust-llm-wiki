@@ -281,3 +281,14 @@ citation and recovery threshold, and report unfinished bulk/churn/rebuild and
 release gates separately. Passing a subset cannot qualify full capacity or
 default retrieval quality. The [large-vault protocol](testing-large-vaults.md)
 continues to define those gates.
+
+A fresh whole-workflow review on 2026-10-10 again rejects another throughput
+patch or experiment on current evidence. Guard counts are implementation-derived,
+but the next-guard refusal before additional canonical writes is observable.
+Stronger identity allocation cannot authenticate external byte edits; duplicate
+work within individual guard evaluations still lacks an exclusive cost case.
+A staged-publication redesign would need an explicit canonical/recovery contract,
+compatibility and restoration rules, reached recovery cuts, and a benefit case
+covering preparation as well as application. No such redesign was adopted.
+The useful functional 0.2.0 checkpoint remains separate from the failed bulk
+performance gate; no new build, benchmark or performance claim follows.

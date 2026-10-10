@@ -52,3 +52,10 @@ label-free selection rule. A stricter analysis requiring every existing evidence
 byte found no new complete witnesses within its frozen bounds; bounded and
 interrupted searches remain unknown. Fresh architecture review stops packing
 experiments under the current signals. Default native quality remains 13/32.
+
+A separately frozen [question-only model reformulation](validation-task-only-query-signals.md)
+changes the query signal while retaining this original native implementation.
+It reaches 16/32 complete tasks and 97/129 supported facts, but loses three
+baseline facts and fails the required 17/32/no-regression gate. All forty calls
+and 330 exact citations pass. This assisted experiment is closed without
+promotion or prompt tuning; default native quality remains unchanged.

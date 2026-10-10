@@ -20,8 +20,13 @@ byte-preservation analysis found no new complete witnesses within its bounds.
 Fresh review stops packing experiments under the current signals. Subsequent
 [long-source lifecycle attempts](validation-real-source-page-lifecycle.md) preserve
 their host-time and input-bound failures; one independently supported seven-fact
-draft is saved, but updated reconciliation remains incomplete. The next priority
-is representative 25K corpus/resource admission and integrated qualification.
+draft is saved, but updated reconciliation remains incomplete. A separate
+[task-only query reformulation](validation-task-only-query-signals.md) recovers
+21 facts but loses three baseline facts and completes only 16/32 tasks against
+the required 17. It is rejected without tuning or promotion. Fresh review also
+rejects another unsupported update-throughput patch. Representative 25K resource
+admission, default quality and full release qualification remain open; the useful
+functional 0.2.0 preview retains its explicit limits.
 
 The [complete-subject search and reading comparison](validation-source-subject-search.md)
 passes its fixed development gate: 19/19 tasks and 31/31 required facts, versus

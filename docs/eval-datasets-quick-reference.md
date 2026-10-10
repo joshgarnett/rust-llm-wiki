@@ -1,6 +1,6 @@
 # Evaluation datasets and approach: quick reference
 
-Updated 2026-10-08. This catalogs the datasets and fixture families recorded in this repository's evaluation research, acquisitions and curated validation summaries. **Acquired data, passing mechanics and high development scores are different from accepted end-user quality. Native HIGH and representative 25k capacity remain unqualified.** The reference records the named completed experiments; editing it makes no provider call.
+Updated 2026-10-10. This catalogs the datasets and fixture families recorded in this repository's evaluation research, acquisitions and curated validation summaries. **Acquired data, passing mechanics and high development scores are different from accepted end-user quality. Native HIGH and representative 25k capacity remain unqualified.** The reference records the named completed experiments; editing it makes no provider call.
 
 Use [the context protocol](evaluating-context.md), [dataset acquisition/adaptation details](eval-datasets.md), [critic workflow](testing-usability.md), [quality gates](rag-quality-targets.md) and [capacity protocol](testing-large-vaults.md) for implementation or a new run. Local `.artifacts/` manifests mentioned below are optional historical evidence; tracked guides/scripts supply the available fresh-checkout reproduction routes. Unknown facts are marked unavailable rather than inferred from a paper, mirror or vendor score.
 
@@ -28,6 +28,8 @@ Use [the context protocol](evaluating-context.md), [dataset acquisition/adaptati
 | [Aurora M7 normalized transfer](#repository-fixtures-and-operational-corpora) | Complementary mirror-operation facts, absent information, normalized cited draft and prescribed author conflict | Three fictional Sources / 6,131 bytes / one separately declared development task | [10/10, all ten mandatory gates, zero blockers](validation-skill-transfer.md#separate-aurora-successor--scoped-acceptance-passed); unchanged candidate, full public setup/edit instructions; no native HIGH or capacity credit |
 | [1k / occupied 10k / proposed 25k](#repository-fixtures-and-operational-corpora) | Public import, search/read, churn, reconstruction and resource costs | ~100 MB at 1k; generated 10k seed plus 64 imported notebooks; target ~2.5 GB at 25k | [Public 1K mechanics](validation-public-1k-lifecycle.md) and [subsequent WAL lifecycle](validation-wal-lifecycle.md) pass their scoped gates: 700 query workflows, unchanged native evidence 78–79/100 and combined 89–90/100 per round; prior failures preserved; 10K on hold and representative 25k unrun |
 | [Private native HIGH pilot](#current-gates-and-status) | Unseen task completion, strata, absence and integrity | 24 tasks: 20 positive + four absent controls | Questions/labels remain quarantined; **UNRUN**, no answer examples included here |
+| [Representative mixed development](#representative-development-and-25k-corpus-proposal) | Multi-article support, distant conditions and scientific methods | 994 public Sources / 5,582,095 UTF-8 bytes; 40 tasks / 129 facts | Native 13/32 positive tasks; lexical-unit and [task-only model-query](validation-task-only-query-signals.md) candidates rejected for regressions. Six additions withheld; successor holdout sealed |
+| [Wikimedia Wikipedia 20231101.en proposal](#representative-development-and-25k-corpus-proposal) | Whole real articles for a future 25K distribution/count control | Four pinned shard metadata records / 1,082,988,163 expected compressed bytes; proposed 24,006 articles plus existing 994 Sources | Metadata researched; no payload acquisition/import. Unique eligible article count, natural text bytes and resource admission unverified; no 2.5GB or rich-Markdown claim |
 
 ## Public datasets acquired or prepared
 
@@ -232,6 +234,46 @@ applied a guarded clarification and preserved it after the planned stale-hash re
 Independent scoped acceptance is 10/10, all mandatory checks, zero blockers. This
 reuses development evidence without a new model stage, dataset or unseen quality
 claim; the original trial and supervision failures remain unchanged.
+
+## Representative development and 25K corpus proposal
+
+The frozen mixed selection contains 1,000 real WixQA/ConditionalQA/QASPER
+documents (750/150/100). Initial import contains 994 Sources and 5,582,095 UTF-8
+bytes; six additions from four families remain withheld. Independent development
+questions contain 20 support and 12 long positive tasks, eight absent controls and
+129 required propositions. A separate 24-question/85-fact holdout remains sealed.
+Labels never enter indexed content. The [native lexical-unit summary](validation-native-lexical-units.md)
+records baseline 13/32 complete and 79/129 facts, with rejected candidates and
+bounded diagnosis. The separate [model-query experiment](validation-task-only-query-signals.md)
+reaches 16/32 and 97/129 but loses three baseline facts; it supplies no native
+default or unseen acceptance credit.
+
+The proposed capacity extension selects 24,006 unique whole articles from official
+[Wikimedia Wikipedia](https://huggingface.co/datasets/wikimedia/wikipedia), English
+release `20231101.en`, commit `ad5752b5e625abfcdeefe5ae0ad2c3721c4b2619`.
+Together with the existing 994 Sources this would produce 25,000 documents.
+Four distributed shards from the 41-shard release have pinned publisher metadata:
+
+| Shard | Expected compressed bytes | Publisher LFS SHA256 |
+| --- | ---: | --- |
+| `train-00000-of-00041.parquet` | 420,296,449 | `382e7f6f09e488b24793a7f7cfc659879d5a22da2cf2efec6491665f0c019677` |
+| `train-00010-of-00041.parquet` | 233,604,795 | `cd8b4e9ee2506ba5f47d552c56e2a7569402a6814d9fa171c0e995e56859e51b` |
+| `train-00020-of-00041.parquet` | 225,141,733 | `79ee06627f4ba2fec056fcd23c077a29238bbcbacc3187e8d1a0b47e663e9c7a` |
+| `train-00030-of-00041.parquet` | 203,945,186 | `1de329963a4aaed0c40d820a564487dc98ef113c8ca6b88b11d495d6a4b98774` |
+
+Pinned downloads resolve under
+`https://huggingface.co/datasets/wikimedia/wikipedia/resolve/ad5752b5e625abfcdeefe5ae0ad2c3721c4b2619/20231101.en/`.
+These are expected metadata hashes, not locally verified payloads. The dataset
+card declares CC BY-SA 3.0/GFDL with exceptions; retain article title, URL,
+identity, release and attribution/notices. Four distributed shards do not establish
+a uniform sample of the complete release. Cleaned article prose is not original
+rich Markdown. Eligible unique counts and natural extracted bytes remain
+unmeasured; no padding or 2.5GB equivalence is claimed.
+
+Bulk acquisition/import is unadmitted while prior disk-hold ownership/headroom
+remains unresolved. The candidate does not repair the failed 1,000-update gate,
+default completeness or full release qualification. Its metadata proposal is an
+input to a future admitted experiment, not another capacity measurement.
 
 ## How evaluations are run
 
