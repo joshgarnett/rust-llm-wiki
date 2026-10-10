@@ -199,3 +199,31 @@ and every declared author/freshness/history/rebuild invariant. This clears the
 native capability prerequisite for a separately frozen full development
 workflow evaluation; it does not turn the original failed verifier run into a
 passing trial or establish the required overall quality score.
+
+## Integrated full-development attempt, October 10, 2026
+
+A separate forty-question campaign using native discovery stopped at the first
+reader's task delivery. Native preparation succeeded in 0.205 seconds, producing
+a complete 123,886-byte task with five authenticated originals totaling 93,987
+bytes. The reader requested 50,000 output tokens from the nested shell tool but
+omitted the enclosing orchestration tool's output pragma. That enclosing call
+retained its 10,000-token default and clipped the task. This identifies a delivery
+configuration failure after successful native emission, not a measured platform
+capacity limit or a retrieval result.
+
+The campaign is **NO_GO**, with zero completed questions, the first failed before
+nomination, and 39 unrun questions including all eight absence controls. No
+replay, answer, Page or lifecycle operation occurred. One quality host and one
+native call ran; a separate history-only diagnostic follow-up identified the
+missing outer setting without reading more evidence or retrying. The wrapper
+charged 132,078 bytes for emitted task plus instruction reservation; actual
+received task bytes are unknown. Its corrected terminal recording preserved the
+primary failure and actual report. Both disposable vaults' 994 original captures
+remain unchanged.
+
+The owning campaign interval was 98.565 seconds; the root-observed host interval
+was 65.262 seconds, including observation and sealing delay. Inference calls,
+tokens and cost remain unavailable. No new provider call occurred. The native
+baseline remains 13/32 complete tasks and 79/129 facts. Further actor campaigns
+are suspended pending an enforceable delivery boundary; changing another prompt
+or output-limit instruction is not accepted as the next experiment.

@@ -121,3 +121,21 @@ citation, all timing/resource gates and zero correctness blockers.
 The first user capacity target remains 25K; 100K is deferred. This completed
 import does not lower the wider objective or establish shipping capacity. The
 summary records historical evidence; no new execution, Rust check or rebuild was needed.
+
+## Representative corpus preparation, October 10, 2026
+
+A bounded current resource census and independent review admit a separate
+28 GiB working allocation, preserving all historical evidence, the 24 GiB backup
+reserve and unresolved accounting allowances. The parent budget retains
+906,465,280 bytes of headroom; observed host free space minus all distinct future
+growth retains 4,602,466,304 bytes above its 40 GiB floor. This closes unused
+experimental forecasts prospectively; no files were deleted.
+
+The earlier Wikipedia proposal's 512 MiB prepared-text allowance cannot satisfy
+the unchanged 2.5 GB natural-content target. It remains rejected for that purpose.
+A finite public-source feasibility investigation is pending; allocation approval
+alone authorizes neither bulk acquisition nor native execution. The new account
+allows at most 3 GB of prepared whole originals and 24 GiB of native storage,
+with remaining capacity for evidence and scratch. These are stop limits, not a
+prediction that the complete workflow fits. Representative import, search,
+maintenance, semantic quality and full release qualification remain open.
