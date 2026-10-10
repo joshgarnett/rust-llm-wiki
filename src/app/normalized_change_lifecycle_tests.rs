@@ -1161,6 +1161,29 @@ fn legacy_page_admission_native_sigkill_reaps_and_recovers_same_id_at_four_cuts_
                 assert!(recovery.report.unwrap().staged.contains(&legacy.prepared));
                 assert_eq!(f.bytes(), marked);
                 assert_eq!(f.publication(), publication);
+                if let Some(bytes) = &retained_envelope {
+                    assert_eq!(fs::read(f.physical(&envelope_path)).unwrap(), *bytes);
+                }
+                assert!(
+                    !f.physical(&rel(format!(
+                        "changes/{}/legacy-page-validation-v4.json",
+                        legacy.prepared.change_id
+                    )))
+                    .exists(),
+                    "Prepared recovery must not finalize a terminal archive"
+                );
+            } else {
+                // Recovery itself must finish the terminal handoff before a
+                // later explicit retry can conceal an incomplete recovery.
+                terminal_view::assert_view(
+                    &f,
+                    &legacy.prepared,
+                    retained_envelope.as_ref().unwrap(),
+                );
+                let recovered = app.changes_show(legacy.prepared.change_id.clone()).unwrap();
+                assert_eq!(recovered.prepared, legacy.prepared);
+                assert_eq!(recovered.status, ChangeStatus::Committed);
+                assert_eq!(indexed_and_committed(&recovered), (1, 1));
             }
             let applied = app
                 .changes_apply(legacy.prepared.change_id.clone())
@@ -1184,11 +1207,9 @@ fn legacy_page_admission_native_sigkill_reaps_and_recovers_same_id_at_four_cuts_
             );
             assert_eq!(indexed_and_committed(&after), (1, 1));
             if let Some(bytes) = retained_envelope {
-                assert_eq!(
-                    fs::read(f.physical(&envelope_path)).unwrap(),
-                    bytes,
-                    "recovery must not reproject or replace retained v4 at {cut}"
-                );
+                // The terminal view is legacy readable; full immutable v4
+                // authority must survive byte for byte in its required archive.
+                terminal_view::assert_view(&f, &legacy.prepared, &bytes);
             }
             let parent_after = app.changes_show(parent.change_id.clone()).unwrap();
             assert_eq!(parent_after.manifest, parent_before.manifest);
@@ -1773,3 +1794,6 @@ fn adversarial_same_identity_pages_with_nonreversal_inverse_ancestry_refuse_with
         f.assert_source_history();
     }
 }
+
+#[path = "legacy_terminal_view_tests.rs"]
+mod terminal_view;

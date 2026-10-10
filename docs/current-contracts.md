@@ -4,9 +4,9 @@ The [joined maintenance candidate](validation-joined-maintenance.md) preserves
 guarded publication while parallelizing eligible reads and staging. Independent
 local review accepts 550 affected library cases, 126 integration cases and four
 dispatcher workflow controls with exact citation checks. Four shipping workflows
-also pass with matching returned content. Page undo and exact old-proposal
-adoption now pass affected checks, but mixed-version terminal retry still fails;
-performance remains unqualified. This checkpoint
+also pass with matching returned content. Page undo, exact old-proposal adoption
+and mixed-version terminal retry now pass their affected checks and original
+public continuation contract; performance remains unqualified. This checkpoint
 does not change retrieval completeness or the release gate.
 
 The [integrated original-source workflow](validation-original-source-selection.md#integrated-native-discovery-candidate-october-10-2026)

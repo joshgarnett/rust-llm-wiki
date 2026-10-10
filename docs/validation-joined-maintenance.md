@@ -119,3 +119,36 @@ an added old-binary preview changes vault mtimes, though its original continuati
 sequence succeeds. Candidate previews preserve bytes and mtimes. These limitations
 are retained separately; no original compatibility assertion is waived. A proposed
 terminal compatibility view remains an unimplemented mechanism experiment.
+
+## Terminal compatibility handoff
+
+The next candidate preserves the complete version4 admission in an immutable
+archive, then publishes a legacy-readable terminal view after commit and
+acknowledgement. Current readers require the archive and validate its complete
+authority. Public recovery resumes either durable handoff boundary; Prepared
+proposals cannot gain authority from a precreated archive.
+
+There are 137 unique affected passing checks, including 24 returned-I/O-error
+cells and 32 reached, reaped SIGKILL cells across both layouts. An existing crash
+test expected the full record at its former path after terminal completion.
+Its failure remains recorded; the corrected test verifies exact archived bytes,
+resolved full authority and Prepared-state preservation. Only that test was
+recompiled and rerun. The shipping binary did not change during the correction.
+
+Shipping SHA-256
+`f1b96d1f29ad96d1db5a22d68e4f53ee432fc7583510918396ea4c46ce803567`
+now passes all 81 original-contract calls: production finalization of the exact
+previously failed historical change, four old/new normal/dry-run terminal
+retries, and four fresh 19-call continuations across both layouts and directions.
+The same historical ID and generation9 survive without another publication;
+author content, source history and exact citations remain intact. The first
+call succeeded before its verifier rejected an outdated archive filename. Its
+complete before/after evidence was independently checked and retained. The
+remaining 80 calls ran separately in 76.924 seconds; that interval does not
+include the first call and is not a scale timing.
+
+The older extended 72-call campaign remains failed in the record. Its additional
+old-binary Prepared-preview mtime observations were outside the prospectively
+frozen original continuation contract; they are not relabeled as passing.
+Performance, representative 25K capacity, retrieval completeness and full
+release acceptance remain open.

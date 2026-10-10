@@ -191,7 +191,7 @@ fn publication(snapshot: &ReadSnapshot) -> Result<Publication> {
 pub(crate) fn delta_path(change: &PreparedChange) -> Result<VaultRelativePath> {
     VaultRelativePath::new(format!("changes/{}/indexed-delta.json", change.change_id))
 }
-fn intended(
+pub(crate) fn intended(
     base: &ReadSnapshot,
     change: &PreparedChange,
     delta_hash: &Blake3Hash,

@@ -16,6 +16,9 @@ use crate::{
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
+#[path = "legacy_terminal_view.rs"]
+mod legacy_terminal_view;
+
 /// New write receipts identify their admitted operation without inventing a
 /// source identity for authored pages. Version-two receipts keep their exact
 /// original fields and checksum encoding.
@@ -708,7 +711,30 @@ impl ChangeEngine {
         else {
             return Ok(None);
         };
-        let receipt: Receipt = strict_json(&bytes)?;
+        let (proof, delta) = self.decode_indexed_refresh_retention(change, &bytes)?;
+        if proof.version == 4 {
+            legacy_terminal_view::validate_full_archive(self, change, &bytes, &proof)?;
+        }
+        if proof.version == 3
+            && crate::catalog::source_refresh::intended(&proof.base, change, &proof.delta_hash, 3)?
+                != proof.intended
+        {
+            return legacy_terminal_view::resolve(self, change, &bytes, proof).map(Some);
+        }
+        Ok(Some((proof, delta)))
+    }
+
+    /// Strict nonrecursive codec shared by current receipts and the immutable
+    /// full-authority archive. Terminal-view resolution happens only above.
+    fn decode_indexed_refresh_retention(
+        &self,
+        change: &PreparedChange,
+        bytes: &[u8],
+    ) -> Result<(
+        IndexedRefreshProof,
+        Option<crate::catalog::source_refresh::RetainedDelta>,
+    )> {
+        let receipt: Receipt = strict_json(bytes)?;
         let encoded = if receipt.proof.version == 4 {
             if bytes.len() > MAX_LEGACY_PAGE_ENVELOPE_BYTES || receipt.embedded_delta.is_none() {
                 return Err(recovery(
@@ -743,7 +769,7 @@ impl ChangeEngine {
         if let Some(delta) = &receipt.embedded_delta {
             delta.validate_embedded_envelope(&receipt.proof)?;
         }
-        Ok(Some((receipt.proof, receipt.embedded_delta)))
+        Ok((receipt.proof, receipt.embedded_delta))
     }
 
     /// One atomic expected-absent envelope; no second delta-file migration cut.
@@ -967,6 +993,7 @@ impl ChangeEngine {
             &proof.change,
             publication(&proof.intended)?,
         )?;
+        legacy_terminal_view::finalize(self, writer, &proof.change)?;
         Ok(())
     }
 
@@ -1032,6 +1059,9 @@ impl ChangeEngine {
         outcome::sync_receipt(&self.fs, writer, &change.change_id)?;
         if self.indexed_refresh_terminal_outcome(change)?.as_ref() != Some(&report) {
             return Err(recovery("historical refresh receipt changed while syncing"));
+        }
+        if report.status == ChangeStatus::Committed {
+            legacy_terminal_view::finalize(self, writer, change)?;
         }
         Ok(Some(report))
     }
@@ -1105,6 +1135,7 @@ impl ChangeEngine {
                     ));
                 }
                 outcome::sync_receipt(&self.fs, writer, &proof.change.change_id)?;
+                legacy_terminal_view::finalize(self, writer, &proof.change)?;
                 return Ok(report);
             }
             require_active(&authority, &proof)?;
