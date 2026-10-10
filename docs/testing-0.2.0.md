@@ -11,6 +11,33 @@ candidate artifacts and validation results are retained below.
 
 ## Current scoped local preview: 2026-10-10
 
+The macOS ARM64 preview `local-preview-20261010-002` adds
+[compact retained Change review](validation-change-summary.md), accepted at
+10/10 with all ten mandatory tasks and no observed correctness blockers.
+It contains the optimized 0.2.0 executable from source
+`813f1199330c1c3ea5a4266ed46035c9db5be71e`, SHA256
+`480291171e63b47fff90ce5793c5f5defe5e8a92345d3da8740df41beeb332b8`.
+The local archive is
+`.artifacts/releases/0.2.0/lwiki-0.2.0-macos-arm64-local-preview-20261010-002.tar.gz`.
+It contains `lwiki`, `BUILD-MANIFEST.json`, `ACCEPTANCE.json` and `README.md`;
+packaging reused the tested binary and required no Rust rebuild.
+
+Thirty focused checks and 120 independent public commands met their expected
+outcomes. Summary lists every operation and read guard without reading retained
+file bodies. Payload availability/integrity and current target freshness remain
+explicitly unchecked; use exact operation inspection before guarded apply.
+The previous evidence-selection workflow is present, with its existing limits.
+Default retrieval completeness, semantic readiness, representative 25K capacity,
+update throughput and full release qualification remain open.
+
+Set `LWIKI` to the extracted executable's absolute path, then check the new flag:
+
+```sh
+"$LWIKI" --offline changes show --help
+```
+
+## Earlier scoped original-selection preview: 2026-10-10
+
 The macOS ARM64 preview `local-preview-20261010-001` contains the optimized
 0.2.0 executable from source `3e2d2b4cf3b3b4319189062231f6ef9f5968bf2b`.
 Its SHA256 is
@@ -188,7 +215,10 @@ printf 'Atlas shipment contains 19 amber crates.\n' > "$DEMO/shipment.txt"
 "$LWIKI" --wiki "$DEMO/wiki" --offline --json --stage source refresh \
   "$SOURCE_ID" --file "$DEMO/shipment.txt"
 # Set CHANGE_ID from this staged result.
-"$LWIKI" --wiki "$DEMO/wiki" --offline changes show "$CHANGE_ID"
+"$LWIKI" --wiki "$DEMO/wiki" --offline changes show "$CHANGE_ID" --summary
+# Set OPERATION_INDEX from the summary to inspect the retained original payload.
+"$LWIKI" --wiki "$DEMO/wiki" --offline --json changes show "$CHANGE_ID" \
+  --operation "$OPERATION_INDEX"
 "$LWIKI" --wiki "$DEMO/wiki" --offline --json changes apply "$CHANGE_ID"
 ```
 
