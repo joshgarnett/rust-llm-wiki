@@ -57,6 +57,7 @@ struct Parent<'a> {
     semantic: Vec<(ByteSpan, f64)>,
 }
 #[derive(Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(test, derive(Debug))]
 enum BlockKind {
     Heading,
     Prose,
@@ -189,6 +190,7 @@ fn semantic_strength(candidate: &SelectionCandidate) -> f64 {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[cfg_attr(test, derive(Debug))]
 enum Region {
     Unit(u64, u64),
     Unscored(u64),
@@ -606,6 +608,16 @@ pub(super) fn location_terms_for_test(
         .collect()
 }
 
+#[cfg(test)]
+fn constructor_candidate_row(candidate: &SelectionCandidate) -> serde_json::Value {
+    serde_json::json!({
+        "owner_index": candidate.owner_index, "span": candidate.span,
+        "covered_terms": candidate.covered_terms, "local_relevance": candidate.local_relevance,
+        "seed_overlap": candidate.seed_overlap, "clipped": candidate.clipped,
+        "semantic_affinity": candidate.semantic_affinity,
+    })
+}
+
 fn select(
     tokenizer: &Tokenizer<'_>,
     query: &str,
@@ -625,6 +637,8 @@ fn select(
         scanned_blocks: 0,
     };
     let (terms, term_cap) = query_terms(tokenizer, query)?;
+    #[cfg(test)]
+    let traced_owner = parents.first().map(|parent| parent.owner);
     let mut owners = Vec::new();
     let mut frequencies = vec![0usize; terms.len()];
     for parent in parents {
@@ -667,9 +681,39 @@ fn select(
                 reason: "context_source_scan_block_cap",
             });
         }
+        #[cfg(test)]
+        if Some(parent.owner) == traced_owner {
+            super::context::record_lineage_event("constructor_scan", || {
+                serde_json::json!({
+                    "owner_index": parent.owner, "body_start": parent.body, "source_bytes": parent.raw.len(),
+                    "scan_start": parent.body, "scan_end": end, "capacity": capacity,
+                    "anchor_reservation": reserved, "block_events": scanned_blocks,
+                    "block_limited": block_limit, "remaining_block_allowance": remaining,
+                    "anchors": parent.anchors, "query_terms": terms,
+                })
+            });
+            for block in &blocks {
+                super::context::record_lineage_event("constructor_blocks", || {
+                    serde_json::json!({
+                        "owner_index": parent.owner, "phase": "structural", "start": block.range.start,
+                        "end": block.range.end, "kind": format!("{:?}", block.kind), "clipped": block.clipped,
+                    })
+                });
+            }
+        }
         let mut blocks = teaching_blocks(blocks, bytes);
         for block in &mut blocks {
             block.terms = matched_terms(tokenizer, parent.raw, block.range.clone(), &terms)?;
+            #[cfg(test)]
+            if Some(parent.owner) == traced_owner {
+                super::context::record_lineage_event("constructor_blocks", || {
+                    serde_json::json!({
+                        "owner_index": parent.owner, "phase": "teaching", "start": block.range.start,
+                        "end": block.range.end, "kind": format!("{:?}", block.kind),
+                        "covered_terms": block.terms, "clipped": block.clipped,
+                    })
+                });
+            }
             for &term in &block.terms {
                 frequencies[term] += 1;
             }
@@ -699,6 +743,15 @@ fn select(
             let matched = matched_terms(tokenizer, parent.raw, range.clone(), &terms)?;
             owner_usage += range.len();
             result.scanned_bytes += range.len();
+            #[cfg(test)]
+            if Some(parent.owner) == traced_owner {
+                super::context::record_lineage_event("constructor_scan", || {
+                    serde_json::json!({
+                        "owner_index": parent.owner, "fallback_start": range.start, "fallback_end": range.end,
+                        "covered_terms": matched, "owner_scanned_bytes_after": owner_usage,
+                    })
+                });
+            }
             fallback_windows.push((range, matched));
         }
         owners.push(OwnerBlocks {
@@ -722,45 +775,77 @@ fn select(
     for owner in owners {
         let parent = owner.parent;
         let mut proposals = BTreeMap::<(usize, usize), SelectionCandidate>::new();
-        let mut propose =
-            |range: Range<usize>, covered_terms: Vec<usize>, clipped: bool| -> Result<()> {
-                if range.is_empty() || range.end - range.start > bytes {
-                    return Ok(());
+        let mut propose = |range: Range<usize>,
+                           covered_terms: Vec<usize>,
+                           clipped: bool|
+         -> Result<()> {
+            if range.is_empty() || range.end - range.start > bytes {
+                #[cfg(test)]
+                if Some(parent.owner) == traced_owner {
+                    super::context::record_lineage_event("constructor_proposals", || {
+                        serde_json::json!({
+                            "owner_index": parent.owner, "start": range.start, "end": range.end,
+                            "covered_terms": covered_terms, "clipped": clipped,
+                            "outcome": "rejected_empty_or_excerpt_bound",
+                        })
+                    });
                 }
-                // HTML anchors and markup-only windows have exact bytes but
-                // supply no readable evidence. Apply this to merged windows
-                // and semantic fallbacks as well as stand-alone blocks.
-                if SourceMap::markdown(&parent.raw[..range.end], range.start)
-                    .text
-                    .trim()
-                    .is_empty()
-                {
-                    return Ok(());
+                return Ok(());
+            }
+            // HTML anchors and markup-only windows have exact bytes but
+            // supply no readable evidence. Apply this to merged windows
+            // and semantic fallbacks as well as stand-alone blocks.
+            if SourceMap::markdown(&parent.raw[..range.end], range.start)
+                .text
+                .trim()
+                .is_empty()
+            {
+                #[cfg(test)]
+                if Some(parent.owner) == traced_owner {
+                    super::context::record_lineage_event("constructor_proposals", || {
+                        serde_json::json!({
+                            "owner_index": parent.owner, "start": range.start, "end": range.end,
+                            "covered_terms": covered_terms, "clipped": clipped,
+                            "outcome": "rejected_no_readable_text",
+                        })
+                    });
                 }
-                let span = ByteSpan::new(range.start as u64, range.end as u64)?;
-                let seed_overlap = parent
-                    .anchors
-                    .iter()
-                    .any(|anchor| anchor.start() < span.end() && span.start() < anchor.end());
-                let local_relevance = covered_terms
-                    .iter()
-                    .map(|&term| result.term_weights[term])
-                    .sum();
-                let candidate = SelectionCandidate {
-                    owner_index: parent.owner,
-                    span,
-                    covered_terms,
-                    local_relevance,
-                    seed_overlap,
-                    clipped,
-                    semantic_affinity: affinity(span, &parent.semantic),
-                };
-                proposals
-                    .entry((range.start, range.end))
-                    .and_modify(|old| old.clipped &= clipped)
-                    .or_insert(candidate);
-                Ok(())
+                return Ok(());
+            }
+            let span = ByteSpan::new(range.start as u64, range.end as u64)?;
+            let seed_overlap = parent
+                .anchors
+                .iter()
+                .any(|anchor| anchor.start() < span.end() && span.start() < anchor.end());
+            let local_relevance = covered_terms
+                .iter()
+                .map(|&term| result.term_weights[term])
+                .sum();
+            let candidate = SelectionCandidate {
+                owner_index: parent.owner,
+                span,
+                covered_terms,
+                local_relevance,
+                seed_overlap,
+                clipped,
+                semantic_affinity: affinity(span, &parent.semantic),
             };
+            #[cfg(test)]
+            if Some(parent.owner) == traced_owner {
+                super::context::record_lineage_event("constructor_proposals", || {
+                    serde_json::json!({
+                        "candidate": constructor_candidate_row(&candidate),
+                        "outcome": if proposals.contains_key(&(range.start, range.end)) { "deduplicated_same_span" } else { "generated" },
+                        "existing_clipped": proposals.get(&(range.start, range.end)).map(|old| old.clipped),
+                    })
+                });
+            }
+            proposals
+                .entry((range.start, range.end))
+                .and_modify(|old| old.clipped &= clipped)
+                .or_insert(candidate);
+            Ok(())
+        };
         for (index, block) in owner.blocks.iter().enumerate() {
             if block.range.len() > bytes {
                 let map = SourceMap::markdown(&parent.raw[..block.range.end], block.range.start);
@@ -845,6 +930,13 @@ fn select(
         let mut candidates = proposals
             .into_values()
             .filter(|candidate| {
+                #[cfg(test)]
+                if Some(parent.owner) == traced_owner {
+                    super::context::record_lineage_event("constructor_filter", || serde_json::json!({
+                        "candidate": constructor_candidate_row(candidate),
+                        "eligible": candidate.local_relevance > 0 || candidate.seed_overlap || candidate.semantic_affinity.is_some(),
+                    }));
+                }
                 candidate.local_relevance > 0
                     || candidate.seed_overlap
                     || candidate.semantic_affinity.is_some()
@@ -860,6 +952,17 @@ fn select(
                     .then(a.span.end().cmp(&b.span.end())),
             )
         });
+        #[cfg(test)]
+        if Some(parent.owner) == traced_owner {
+            for (order, candidate) in candidates.iter().enumerate() {
+                super::context::record_lineage_event("constructor_retention", || {
+                    serde_json::json!({
+                        "phase": "pre_cap_order", "order": order,
+                        "candidate": constructor_candidate_row(candidate),
+                    })
+                });
+            }
+        }
         // First reserve at most two proposals per dominant semantic unit (or
         // unscored source region). This is a deterministic region quota, not
         // vector MMR: no candidate-to-candidate vector similarity is claimed.
@@ -920,9 +1023,32 @@ fn select(
                 continue;
             };
             let candidate = candidates.remove(best);
+            #[cfg(test)]
+            if Some(parent.owner) == traced_owner {
+                super::context::record_lineage_event("constructor_retention", || {
+                    serde_json::json!({
+                        "phase": "retained", "retained_order": kept.len(), "remaining_index": best,
+                        "candidate": constructor_candidate_row(&candidate), "covered_terms_before": covered,
+                        "novel_weight": candidate.covered_terms.iter().filter(|term| !covered.contains(*term)).map(|&term| result.term_weights[term]).sum::<u64>(),
+                        "semantic_strength": semantic_strength(&candidate), "region": format!("{:?}", region(&candidate)),
+                        "diversify": diversify, "complementary_fill": complementary_fill,
+                    })
+                });
+            }
             *regions.entry(region(&candidate)).or_default() += 1;
             covered.extend(candidate.covered_terms.iter().copied());
             kept.push(candidate);
+        }
+        #[cfg(test)]
+        if Some(parent.owner) == traced_owner {
+            for candidate in &candidates {
+                super::context::record_lineage_event("constructor_retention", || {
+                    serde_json::json!({
+                        "phase": "not_retained", "reason": "context_source_candidate_cap",
+                        "retained_count": kept.len(), "candidate": constructor_candidate_row(candidate),
+                    })
+                });
+            }
         }
         if !candidates.is_empty() {
             result.omissions.push(SelectionOmission {

@@ -141,6 +141,15 @@ not default, HIGH, absence-control, unseen holdout or 25K acceptance. The next
 architecture review must explain the applicable evidence loss before another
 quality intervention; further local parameter tuning remains closed.
 
+A subsequent test-only diagnostic attempted to trace two unchanged context
+requests through construction and selection. The first request exceeded the
+frozen 2 MiB compact-trace limit; the second was not run. No partial trace was
+retained, so the result does not locate the missing facts or support another
+retrieval intervention. The owning wrapper took 0.799 seconds, including a
+0.593-second native invocation; these instrumentation observations are not
+shipping latency measurements. No provider request occurred. The failed
+observation remains inconclusive, with no cap increase or trace retry authorized.
+
 ## Implemented workflow
 
 Preparation uses exact authenticated Current Page, unmanaged-note and captured

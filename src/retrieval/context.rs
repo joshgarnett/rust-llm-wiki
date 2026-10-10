@@ -1332,6 +1332,14 @@ fn assemble_inner_with_evidence(
             || signals.semantic.is_empty()
             || !signals.semantic_complete
         {
+            #[cfg(test)]
+            record_candidate_ordering_trace("constructor_admitted_owners", || {
+                serde_json::json!(
+                owners.iter().map(|(index, document, anchors)| serde_json::json!({
+                    "owner_index": index, "path": document.path, "hash": document.hash, "seed_spans": anchors,
+                })).collect::<Vec<_>>()
+            )
+            });
             let selection = super::context_selection::select_candidates_with_semantics(
                 reader,
                 query.expect("source-aware query"),
@@ -2058,6 +2066,16 @@ pub(super) fn pack(
                 .and_then(|candidate| candidate.semantic_affinity)
         })
         .fold(0.0f64, f64::max);
+    #[cfg(test)]
+    record_candidate_ordering_trace("allocation_inputs", || {
+        serde_json::json!(
+        packets.iter().map(|packet| serde_json::json!({
+            "key": packet.key, "standalone_render_cost": rendered_costs.get(&packet.key).copied().unwrap_or(1),
+            "total_weight": total_weight, "best_affinity": best_affinity,
+            "tie_order": "utility descending then packet key ascending",
+        })).collect::<Vec<_>>()
+    )
+    });
     while !packets.is_empty() {
         let utility = |packet: &Packet| {
             packet_utility(
@@ -2092,6 +2110,14 @@ pub(super) fn pack(
             record_lineage_event("packing_trials", || {
                 serde_json::json!({
                     "identity": lineage_identity, "outcome": "contained_in_accepted_passage",
+                    "utility": {
+                    "chosen": packet_utility(&packet, &covered_terms, &term_weights, total_weight,
+                        rendered_costs.get(&packet.key).copied().unwrap_or(1), best_affinity),
+                    "covered_term_ids_before": covered_terms.iter().enumerate().filter_map(|(index, covered)| covered.then_some(index)).collect::<Vec<_>>(),
+                    "total_weight": total_weight, "best_affinity": best_affinity,
+                    "standalone_render_cost": rendered_costs.get(&packet.key).copied().unwrap_or(1),
+                    "base_score": packet.score, "unit_score": packet.unit_score,
+                },
                     "accepted_proposal_ids_before": accepted_lineage_ids,
                     "actual_render_cost": null, "accepted": passages.iter().map(passage_ordering_row).collect::<Vec<_>>()
                 })
@@ -2236,7 +2262,16 @@ pub(super) fn pack(
         #[cfg(test)]
         record_lineage_event("packing_trials", || {
             serde_json::json!({
-                "identity": lineage_identity, "actual_render_cost": {"bytes": _bytes, "estimated_tokens": _tokens,
+                "identity": lineage_identity,
+                "utility": {
+                    "chosen": packet_utility(&packet, &covered_terms, &term_weights, total_weight,
+                        rendered_costs.get(&packet.key).copied().unwrap_or(1), best_affinity),
+                    "covered_term_ids_before": covered_terms.iter().enumerate().filter_map(|(index, covered)| covered.then_some(index)).collect::<Vec<_>>(),
+                    "total_weight": total_weight, "best_affinity": best_affinity,
+                    "standalone_render_cost": rendered_costs.get(&packet.key).copied().unwrap_or(1),
+                    "base_score": packet.score, "unit_score": packet.unit_score,
+                },
+                "actual_render_cost": {"bytes": _bytes, "estimated_tokens": _tokens,
                     "graph_bytes": next_graph, "graph_estimated_tokens": _graph_tokens},
                 "accepted_proposal_ids_before": accepted_lineage_ids,
                 "caps": {"bytes": available_bytes, "estimated_tokens": available_tokens,

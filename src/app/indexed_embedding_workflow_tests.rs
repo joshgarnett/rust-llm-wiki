@@ -2443,3 +2443,325 @@ fn experimental_hybrid_lexical_evidence_keeps_exact_discovery_and_semantic_work(
     assert!(candidate.usage().rendered_bytes <= 12000);
     assert!(candidate.usage().estimated_tokens <= 3000);
 }
+
+// Two previously exposed development tasks only. This observer uses the existing
+// app context route and bounded trace collector; it never acquires vectors.
+mod retrieval_lineage022 {
+    use super::*;
+    use crate::{
+        retrieval::{ContextOptions, ContextRequest, ContextScope, context},
+        vault::{VaultFs, VaultRoot},
+    };
+    use serde::Deserialize;
+    use serde_json::{Value, json};
+    use std::{
+        fs,
+        io::{Read, Write},
+        panic::{AssertUnwindSafe, catch_unwind},
+        path::{Path, PathBuf},
+    };
+
+    const IDS: [&str; 2] = ["dev-long-train-26", "dev-long-train-35"];
+    const STAGES: [&str; 12] = [
+        "evidence_input_owners",
+        "constructor_admitted_owners",
+        "constructor_scan",
+        "constructor_blocks",
+        "constructor_proposals",
+        "constructor_filter",
+        "constructor_retention",
+        "candidate_pool",
+        "sorted_packets",
+        "allocation_inputs",
+        "packing_trials",
+        "final_accepted",
+    ];
+    const TRACE_MAX: usize = 2 * 1024 * 1024;
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Pin {
+        path: PathBuf,
+        bytes: u64,
+        hash: Blake3Hash,
+    }
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Task {
+        version: u32,
+        vault: PathBuf,
+        tasks: Pin,
+        references: [Pin; 2],
+        pins: Vec<Pin>,
+        output: PathBuf,
+    }
+
+    fn pinned(pin: &Pin) -> Result<()> {
+        let metadata =
+            fs::symlink_metadata(&pin.path).map_err(|e| WikiError::invalid(e.to_string()))?;
+        if !pin.path.is_absolute()
+            || !metadata.is_file()
+            || metadata.len() != pin.bytes
+            || pin.bytes > 256 * 1024 * 1024
+        {
+            return Err(WikiError::invalid("lineage pin path/type/length limit"));
+        }
+        let mut file = fs::File::open(&pin.path).map_err(|e| WikiError::invalid(e.to_string()))?;
+        let mut hash = blake3::Hasher::new();
+        let mut block = [0u8; 65536];
+        let mut seen = 0u64;
+        loop {
+            let n = file
+                .read(&mut block)
+                .map_err(|e| WikiError::invalid(e.to_string()))?;
+            if n == 0 {
+                break;
+            }
+            seen += n as u64;
+            if seen > pin.bytes {
+                return Err(WikiError::invalid("lineage pin grew while hashing"));
+            }
+            hash.update(&block[..n]);
+        }
+        if pin.hash != Blake3Hash::new(format!("blake3:{}", hash.finalize().to_hex()))? {
+            return Err(WikiError::invalid("lineage input pin drift"));
+        }
+        Ok(())
+    }
+    fn json_pin(pin: &Pin) -> Result<Value> {
+        pinned(pin)?;
+        if pin.bytes > 1024 * 1024 {
+            return Err(WikiError::invalid("lineage JSON input ceiling"));
+        }
+        serde_json::from_slice(&fs::read(&pin.path).map_err(|e| WikiError::invalid(e.to_string()))?)
+            .map_err(|e| WikiError::invalid(e.to_string()))
+    }
+    fn write_new(path: &Path, bytes: &[u8]) -> Result<()> {
+        fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(path)
+            .and_then(|mut file| file.write_all(bytes))
+            .map_err(|e| WikiError::invalid(e.to_string()))
+    }
+    fn tuples(data: &Value) -> Value {
+        json!(data["passages"].as_array().unwrap().iter().map(|passage| json!({
+            "locator": passage["locator"], "span": passage["span"], "text": passage["text"], "citations": passage["citations"],
+        })).collect::<Vec<_>>())
+    }
+    fn check_pins(task: &Task) -> Result<()> {
+        for pin in task
+            .pins
+            .iter()
+            .chain(std::iter::once(&task.tasks))
+            .chain(task.references.iter())
+        {
+            pinned(pin)?;
+        }
+        Ok(())
+    }
+
+    #[test]
+    #[ignore = "root-admitted two-task measurement only; explicit config, cache/source pins and output allocation"]
+    fn replay_two_frozen_contexts() {
+        let config = PathBuf::from(
+            std::env::var_os("LWIKI_RETRIEVAL_LINEAGE022_TASK")
+                .expect("explicit lineage config path"),
+        );
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .ancestors()
+            .nth(3)
+            .unwrap();
+        let fresh = root.join(".artifacts/workflow-priority-resume-20261010-fresh");
+        assert_eq!(
+            config,
+            fresh.join("readiness/RETRIEVAL-LINEAGE022-TASK.json")
+        );
+        let mut raw_config = Vec::new();
+        fs::File::open(&config)
+            .unwrap()
+            .take(64 * 1024 + 1)
+            .read_to_end(&mut raw_config)
+            .unwrap();
+        assert!(raw_config.len() <= 64 * 1024);
+        let task: Task = serde_json::from_slice(&raw_config).unwrap();
+        assert_eq!(task.version, 1);
+        assert_eq!(task.vault, root.join(".artifacts/workflow-priority-resume-20261007/representative-default-quality-next-20261010-001/runtime-account001/import002/vault"));
+        assert_eq!(task.tasks.path, fresh.join("root/TASKS001.json"));
+        assert_eq!(
+            task.output,
+            fresh.join("representative011/retrieval_lineage022")
+        );
+        assert_eq!(
+            task.references[0].path,
+            fresh.join("representative011/retrieval020/04-candidate.stdout")
+        );
+        assert_eq!(
+            task.references[1].path,
+            fresh.join("representative011/retrieval020/06-candidate.stdout")
+        );
+        assert!(!task.output.exists());
+        assert!(task.pins.len() <= 24);
+        assert!(task.pins.iter().map(|pin| pin.bytes).sum::<u64>() <= 512 * 1024 * 1024);
+        let selected = task.vault.join(".wiki/cache/catalog-current.json");
+        let vectors = task.vault.join(".wiki/cache/embeddings.sqlite3");
+        for required in [&selected, &vectors] {
+            assert!(task.pins.iter().any(|pin| &pin.path == required));
+        }
+        let source_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        for name in [
+            "retrieval/context.rs",
+            "retrieval/context_selection.rs",
+            "app/indexed_embedding_workflow_tests.rs",
+        ] {
+            assert!(
+                task.pins
+                    .iter()
+                    .any(|pin| pin.path == source_dir.join(name))
+            );
+        }
+        fs::create_dir(&task.output).unwrap();
+        let mut attempts = Vec::new();
+        let mut compact_bytes = 0usize;
+        let outcome = (|| -> Result<()> {
+            check_pins(&task)?;
+            let selector_pin = task.pins.iter().find(|pin| pin.path == selected).unwrap();
+            let selector = json_pin(selector_pin)?;
+            let catalog = task.vault.join(format!(
+                ".wiki/cache/catalogs/{}.sqlite",
+                selector["file_id"].as_str().unwrap()
+            ));
+            for required in [
+                &catalog,
+                &fresh.join("root/providers003.toml"),
+                &fresh.join("build010/retrieval020/bin/lwiki-binary"),
+            ] {
+                if !task.pins.iter().any(|pin| &pin.path == required) {
+                    return Err(WikiError::invalid(
+                        "missing source/config/publication/cache/binary pin",
+                    ));
+                }
+            }
+            for database in [&catalog, &vectors] {
+                let wal = PathBuf::from(format!("{}-wal", database.display()));
+                if wal.exists()
+                    && (!task.pins.iter().any(|pin| pin.path == wal)
+                        || fs::metadata(&wal).unwrap().len() != 0)
+                {
+                    return Err(WikiError::invalid("unfrozen or nonempty lineage WAL"));
+                }
+            }
+            let questions = json_pin(&task.tasks)?;
+            let rows = questions["tasks"]
+                .as_array()
+                .ok_or_else(|| WikiError::invalid("original task rows"))?;
+            if rows.len() != 40 {
+                return Err(WikiError::invalid("original forty tasks required"));
+            }
+            let app = OfflineApp::new(
+                VaultFs::new(VaultRoot::explicit(&task.vault)?),
+                OperationOptions {
+                    offline: true,
+                    ..Default::default()
+                },
+            )?;
+            let mut request = ContextRequest {
+                scope: ContextScope::IndexedDocuments,
+                ..Default::default()
+            };
+            request.documents.mode = SearchMode::Hybrid;
+            request.documents.limits.hits = 10;
+            request.documents.limits.candidates = 80;
+            request.documents.limits.excerpt_bytes = 1024;
+            for (index, id) in IDS.iter().enumerate() {
+                check_pins(&task)?;
+                if fs::read(&config).unwrap() != raw_config {
+                    return Err(WikiError::invalid("lineage config drift"));
+                }
+                let question = rows
+                    .iter()
+                    .find(|row| row["id"] == *id)
+                    .and_then(|row| row["question"].as_str())
+                    .ok_or_else(|| WikiError::invalid("frozen query missing"))?;
+                let expected = json_pin(&task.references[index])?;
+                let attempt = attempts.len();
+                attempts.push(json!({"id": id, "status": "STARTED", "trace_complete": false}));
+                let replay = catch_unwind(AssertUnwindSafe(|| {
+                    context::with_candidate_ordering_trace(|| {
+                        app.semantic_context_with_options(
+                            question,
+                            &request,
+                            None,
+                            true,
+                            false,
+                            &ContextOptions {
+                                experimental_hybrid_lexical_evidence: true,
+                                ..Default::default()
+                            },
+                        )
+                    })
+                }));
+                let (result, trace) = match replay {
+                    Ok(value) => value,
+                    Err(_) => {
+                        attempts[attempt] = json!({"id": id, "status": "INCONCLUSIVE", "trace_complete": false, "failure": "collector panic or existing lineage cap; no truncated trace emitted"});
+                        return Err(WikiError::invalid("lineage capture incomplete"));
+                    }
+                };
+                let bytes = serde_json::to_vec(&trace).unwrap();
+                compact_bytes += bytes.len();
+                if bytes.len() > TRACE_MAX || compact_bytes > 2 * TRACE_MAX {
+                    attempts[attempt] = json!({"id": id, "status": "INCONCLUSIVE", "trace_complete": false, "trace_bytes": bytes.len(), "failure": "compact lineage cap; no truncated trace emitted"});
+                    return Err(WikiError::invalid("lineage compact byte cap"));
+                }
+                write_new(&task.output.join(format!("{id}.trace.json")), &bytes)?;
+                let result = match result {
+                    Ok(value) => value,
+                    Err(error) => {
+                        attempts[attempt] = json!({"id": id, "status": "INCONCLUSIVE", "trace_complete": false, "failure": error.to_string()});
+                        return Err(error);
+                    }
+                };
+                let data =
+                    serde_json::to_value(result).map_err(|e| WikiError::invalid(e.to_string()))?;
+                let context_bytes = serde_json::to_vec(&data).unwrap();
+                if context_bytes.len() > 1024 * 1024 {
+                    return Err(WikiError::invalid(
+                        "ordinary context receipt exceeds existing capture bound",
+                    ));
+                }
+                write_new(
+                    &task.output.join(format!("{id}.context.json")),
+                    &context_bytes,
+                )?;
+                let stages_complete = STAGES
+                    .iter()
+                    .all(|stage| trace.iter().any(|entry| entry["stage"] == *stage));
+                let equal = tuples(&data) == tuples(&expected["data"])
+                    && data["snapshot"] == expected["data"]["snapshot"]
+                    && data["dependency_fingerprint"] == expected["data"]["dependency_fingerprint"];
+                attempts[attempt] = json!({"id": id, "status": if equal && stages_complete {"OBSERVATIONALLY_EQUIVALENT_FOR_CRITIC"} else {"INCONCLUSIVE"},
+                    "trace_complete": stages_complete, "trace_bytes": bytes.len(), "output_equivalent": equal});
+                check_pins(&task)?;
+                if !equal || !stages_complete || data["network_used"] != false {
+                    return Err(WikiError::invalid("lineage stage/output/offline gate"));
+                }
+            }
+            Ok(())
+        })();
+        let report = json!({"status": if outcome.is_ok() {"COMPLETE_FOR_INDEPENDENT_FIRST_LOSS_REVIEW"} else {"INCONCLUSIVE"},
+            "executed_context_replays": attempts.len(), "unrun_context_replays": 2 - attempts.len(),
+            "attempts": attempts, "planned_context_replays": 2, "compact_trace_bytes": compact_bytes,
+            "failure": outcome.as_ref().err().map(|error| error.to_string()), "provider_calls": 0,
+            "limits": {"stages": 16, "rows": 4096, "compact_bytes_per_request": TRACE_MAX, "aggregate_compact_bytes": 2 * TRACE_MAX},
+            "release_latency_claim": false, "new_retrieval_mechanism": false});
+        write_new(
+            &task.output.join("RESULTS022.json"),
+            &serde_json::to_vec_pretty(&report).unwrap(),
+        )
+        .unwrap();
+        assert!(
+            outcome.is_ok(),
+            "measurement inconclusive; preserved RESULTS022.json"
+        );
+    }
+}
