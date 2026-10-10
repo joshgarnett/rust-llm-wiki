@@ -154,7 +154,33 @@ pub(crate) fn authenticate(
     paths: &[VaultRelativePath],
     budget: &VerificationBudget,
 ) -> Result<SelectedDocuments> {
+    authenticate_inner(catalog, reader, paths, budget, None)
+}
+
+pub(crate) fn authenticate_with_document_limits(
+    catalog: &Catalog,
+    reader: &QuerySnapshot,
+    paths: &[VaultRelativePath],
+    budget: &VerificationBudget,
+    limits: &BTreeMap<VaultRelativePath, usize>,
+) -> Result<SelectedDocuments> {
+    if paths.iter().collect::<BTreeSet<_>>() != limits.keys().collect::<BTreeSet<_>>() {
+        return Err(WikiError::invalid("original-input bounds differ from selected paths"));
+    }
+    authenticate_inner(catalog, reader, paths, budget, Some(limits))
+}
+
+fn authenticate_inner(
+    catalog: &Catalog,
+    reader: &QuerySnapshot,
+    paths: &[VaultRelativePath],
+    budget: &VerificationBudget,
+    limits: Option<&BTreeMap<VaultRelativePath, usize>>,
+) -> Result<SelectedDocuments> {
     let mut meter = Meter::new(budget);
+    if let Some(limits) = limits {
+        meter.limit_file_bytes(limits);
+    }
     meter.check()?;
     reader.require_fact_layout()?;
     reader.verify_operations(catalog)?;

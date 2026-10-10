@@ -133,7 +133,7 @@ normalization preserves the flag, catalog context policy applies it before
 candidate limits, and authenticated owner admission uses the same eligibility
 policy. Current and historical revisions share one rendered budget and retain
 distinct exact citations; withdrawn state remains visible. Proposed requests,
-historical semantic/hybrid requests and historical host-selection preparation or
+historical semantic/hybrid requests and historical card-selection preparation or
 replay are refused. Selected dependency authentication and final byte/authority
 rechecks remain mandatory. This does not change strict historical scope or claim
 global membership verification.
@@ -153,6 +153,42 @@ Rank incident assertions by direct assertion-seed rank first, then parent-seed r
 Pack verified context greedily in ranked order within both byte and token budgets. Graph-only queries can use the full context budget. Count exact tokens only with the configured tokenizer; otherwise label estimates and enforce bytes. Reserve caller-specified instruction/output space before retrieval. Graph bundles must include original support; if the required support/contradiction cannot fit, omit that bundle and record why. Evidence caps expose omitted support/contradiction counts; they never imply exhaustiveness. Navigation expansion consumes the same budgets.
 
 `SearchHit`/`EvidenceBundle` carry locators, eligibility, rank contributions, seed/directed paths, predicates/qualifiers, `CitationRef`s, excerpts, generation, dependency fingerprint, and verification time. Final ties use kind/record ID/unit ID; cursors bind query/filters/generation. Plain notes are labeled note text. Return omissions/coverage/truncation; unit IDs alone are never factual citations. Before emission, storage checks the control manifest and dependency bytes, detecting new decisions/duplicate IDs and changed files. Mismatch requires refresh/retry or explicit unverified output. Edits after verification remain outside the snapshot guarantee.
+
+### Explicit complete-original host context selection
+
+Lexical normalized indexed-document requests can prepare exact discovered captured
+payload paths with `--prepare-original-selection` and repeated
+`--selection-original-path`. This distinct `lwiki.context-original-selection.v1`
+task/reply route retains Current-only defaults and permits explicit
+`--include-historical` for accurately labeled Current/Historical/Withdrawn input.
+Authored and unsupported/invalid input refuses. Source and path filters remain
+effective; kind/tag/status/cursor and graph/other modes refuse. No broad lexical
+discovery is repeated once exact paths are supplied, and no provider is called.
+
+Admission bounds 1–16 distinct paths, 96 KiB aggregate raw captured text, 512 KiB
+aggregate indexed payload and 130,048 complete escaped task bytes plus 1,024
+reserved transport bytes. Scalar cached payload sizes and canonical lengths are
+checked before document decoding; exact per-path read bounds remain active during
+selected authentication and final recheck. Complete text is never silently dropped
+or truncated. The task includes the full question, complete original UTF-8 text,
+byte line coordinates, observed locators/revisions/hash/eligibility and policy.
+
+The fingerprint binds that exact authority, ordered paths, normalized request,
+input/output/proof limits, publication and selected dependency fingerprint. Replay
+reconstructs authenticated authority and accepts only a strictly versioned reply
+with fingerprint and at most 16 exact ranges. Unknown or duplicate fields/IDs,
+overlaps, empty/invalid UTF-8 spans, more than four ranges per canonical owner,
+excerpt-limit violations or a reply above 4,096 bytes refuse without repair.
+An empty list is valid for unsupported questions. Native passage construction
+supplies exact SourceRefs; ordinary rendered packing retains nominated priority,
+shared output reservations and truthful omissions. Successful selection is not
+proof of completeness. Refreshed heads/dependencies or changed request invalidate
+the old task, while retained immutable citations remain readable.
+
+The [host recipe](../../skills/llm-wiki/references/cited-page.md#select-exact-ranges-after-reading-complete-captured-text)
+joins this route to typed Page publication and guarded reconciliation. Host
+inputs/calls/latency/cost remain separately observed; no automatic native quality
+or capacity claim follows. Existing Automatic and card routes retain their contracts.
 
 ## Bounded extraction and import
 

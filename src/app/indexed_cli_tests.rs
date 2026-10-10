@@ -2225,6 +2225,71 @@ fn indexed_cli_selection_staged_source_is_current_until_apply_and_withdrawal_rej
     );
 }
 
+#[test]
+fn indexed_cli_original_selection_routes_exact_ranges_and_rejects_crossed_or_stale_replies() {
+    let fixture = Fixture::new();
+    let path = format!("sources/{}/revisions/{}/content.md", fixture.source, fixture.first);
+    let question = "Explain the vessel's token count and Unicode text";
+    let before = canonical_tree(&fixture.root);
+    let prepared = fixture.cli(&[
+        "context", question, "--prepare-original-selection", "--selection-original-path", &path,
+    ]);
+    assert_eq!(canonical_tree(&fixture.root), before);
+    assert_eq!(prepared["data"]["text"], "");
+    let task: Value = serde_json::from_str(
+        prepared["data"]["selection_packet"]["selector_input"].as_str().unwrap(),
+    ).unwrap();
+    assert_eq!(task["payload"]["originals"][0]["text"], FIRST);
+    assert_eq!(task["payload"]["binding"]["query"], question);
+    let reply = serde_json::json!({
+        "version": "lwiki.context-original-selection.v1",
+        "packet_fingerprint": prepared["data"]["selection_packet"]["fingerprint"],
+        "ordered_ranges": [{
+            "original_id": task["payload"]["originals"][0]["id"],
+            "span": {"start": 0, "end": FIRST.len()},
+        }],
+    });
+    let reply_path = fixture.outside.join("original reply.json");
+    fs::write(&reply_path, serde_json::to_vec(&reply).unwrap()).unwrap();
+    let replay = [
+        "context", question, "--selection", reply_path.to_str().unwrap(),
+        "--selection-original-path", &path,
+    ];
+    let selected = fixture.cli(&replay);
+    let passage = &selected["data"]["passages"][0];
+    assert_eq!(passage["text"], FIRST);
+    let citation: CitationRef = serde_json::from_value(passage["citations"][0].clone()).unwrap();
+    let CitationRef::Source(reference) = citation else { panic!("missing exact SourceRef") };
+    assert_eq!(reference.source_id.as_str(), fixture.source);
+    assert_eq!(reference.source_revision.as_str(), fixture.first);
+    assert_eq!(reference.span.slice(FIRST).unwrap(), FIRST);
+    assert_eq!(reference.quote_hash, Blake3Hash::digest(FIRST));
+    assert_eq!(canonical_tree(&fixture.root), before);
+
+    fixture.cli_error(&[
+        "context", "A different question", "--selection", reply_path.to_str().unwrap(),
+        "--selection-original-path", &path,
+    ], "FRESHNESS_CONFLICT");
+    fixture.cli_error(&[
+        "context", question, "--selection", reply_path.to_str().unwrap(),
+    ], "USAGE");
+    fixture.cli_error(&[
+        "context", question, "--prepare-original-selection", "--selection-original-path", &path,
+        "--tag", "unused",
+    ], "USAGE");
+    let source = fixture.root.join(format!("sources/{}/source.md", fixture.source));
+    let original = fs::read(&source).unwrap();
+    fs::write(&source, String::from_utf8(original.clone()).unwrap()
+        .replace("Original source title", "External title")).unwrap();
+    fixture.cli_error(&replay, "FRESHNESS_CONFLICT");
+    fs::write(source, original).unwrap();
+
+    let schema = fixture.cli(&["schema", "context-original-selection"]);
+    assert_eq!(schema["data"]["properties"]["version"]["const"], "lwiki.context-original-selection.v1");
+    let capabilities = fixture.cli(&["capabilities"]);
+    assert_eq!(capabilities["data"]["original_source_selection"]["model_called"], false);
+}
+
 /// Independent canonical verification checks the citation emitted by the public
 /// read command, including its exact returned range rather than a search hit.
 fn exact_read_source_citation(

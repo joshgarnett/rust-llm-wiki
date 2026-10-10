@@ -59,6 +59,27 @@ pub fn validate_request(query: &str, request: &ContextRequest) -> Result<Context
     normalize_request(request)
 }
 pub fn validate_selection_action(request: &ContextRequest, action: &SelectionAction) -> Result<()> {
+    if let SelectionAction::PrepareOriginals(originals)
+        | SelectionAction::ApplyOriginals { request: originals, .. } = action
+    {
+        let filters = &request.documents.filters;
+        if request.scope != ContextScope::IndexedDocuments
+            || request.target != ContextTarget::Documents
+            || request.graph.is_some()
+            || request.documents.mode != SearchMode::Lexical
+            || !filters.kinds.is_empty()
+            || !filters.tags.is_empty()
+            || !filters.authored_statuses.is_empty()
+            || filters.include_proposed
+            || request.documents.cursor.is_some()
+        {
+            return Err(WikiError::new(
+                ErrorCode::Usage,
+                "original selection requires lexical indexed-documents with source/path filters only",
+            ));
+        }
+        return super::context_original_selection::validate_original_request(originals);
+    }
     if !matches!(action, SelectionAction::Automatic)
         && (!matches!(
             request.scope,
@@ -168,10 +189,10 @@ fn normalize_request(request: &ContextRequest) -> Result<ContextRequest> {
     Ok(normalized)
 }
 // One fallible lookup per admitted owner, reused by every selected window.
-struct DocumentOwner {
+pub(super) struct DocumentOwner {
     document: DocumentRow,
     canonical: Option<RecordRow>,
-    allowed: bool,
+    pub(super) allowed: bool,
 }
 /// Packing can merge several windows from one selected owner. Reuse its
 /// authenticated cached bytes rather than charging another SQL body decode for
@@ -236,7 +257,7 @@ impl QueryCatalog for OwnerCatalog<'_> {
         self.reader.decode_document(row, column)
     }
 }
-fn document_owner(
+pub(super) fn document_owner(
     reader: &dyn QueryCatalog,
     hit: &SearchHit,
     request: &ContextRequest,
@@ -297,7 +318,7 @@ fn document_owner(
         allowed: allowed && filters_match && source_matches,
     })
 }
-fn document_passage(
+pub(super) fn document_passage(
     reader: &dyn QueryCatalog,
     owner: &DocumentOwner,
     hit: &SearchHit,
@@ -1784,7 +1805,7 @@ pub(super) fn pack(
             "scope label does not fit reserved context budget",
         ));
     }
-    if !matches!(selection_action, SelectionAction::Automatic) {
+    if matches!(selection_action, SelectionAction::Prepare | SelectionAction::Apply(_)) {
         let cards = packets
             .iter()
             .enumerate()

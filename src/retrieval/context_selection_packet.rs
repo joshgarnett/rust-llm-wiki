@@ -48,6 +48,50 @@ pub struct SelectionPacket {
     /// available for local admission and final citation verification.
     #[serde(skip_serializing)]
     pub cards: Vec<SelectionCard>,
+    /// Complete originals belong only to the explicitly versioned original route.
+    #[serde(skip_serializing)]
+    pub originals: Vec<SelectionOriginal>,
+}
+
+pub const MAX_ORIGINAL_PATHS: usize = 16;
+pub const MAX_ORIGINAL_BYTES: usize = 96 * 1024;
+pub const MAX_ORIGINAL_INDEXED_BYTES: usize = 512 * 1024;
+pub const MAX_ORIGINAL_INPUT_BYTES: usize = MAX_INPUT_BYTES;
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct OriginalSelectionRequest {
+    pub paths: Vec<VaultRelativePath>,
+    pub max_input_bytes: usize,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct SelectionOriginal {
+    pub id: String,
+    pub locator: DocumentLocator,
+    pub source_id: RecordId,
+    pub source_revision: RevisionId,
+    pub eligibility: Eligibility,
+    pub title: String,
+    pub text: String,
+    pub line_starts: Vec<u64>,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum OriginalSelectionVersion {
+    #[serde(rename = "lwiki.context-original-selection.v1")]
+    V1,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct OriginalRange {
+    pub original_id: String,
+    pub span: ByteSpan,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct OriginalSelectionReply {
+    pub version: OriginalSelectionVersion,
+    pub packet_fingerprint: Blake3Hash,
+    pub ordered_ranges: Vec<OriginalRange>,
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -61,6 +105,11 @@ pub enum SelectionAction {
     Automatic,
     Prepare,
     Apply(SelectionReply),
+    PrepareOriginals(OriginalSelectionRequest),
+    ApplyOriginals {
+        request: OriginalSelectionRequest,
+        reply: OriginalSelectionReply,
+    },
 }
 
 #[derive(Serialize)]
@@ -231,7 +280,7 @@ impl Write for ByteCounter {
         Ok(())
     }
 }
-fn encoded_size_with_limit(value: &impl Serialize, limit: usize) -> Result<usize> {
+pub(super) fn encoded_size_with_limit(value: &impl Serialize, limit: usize) -> Result<usize> {
     let mut count = ByteCounter { bytes: 0, limit };
     if let Err(error) = serde_json::to_writer(&mut count, value) {
         if count.bytes > limit {
@@ -459,6 +508,7 @@ pub fn build_packet(binding: Value, mut cards: Vec<SelectionCard>) -> Result<Sel
         estimated_tokens,
         omitted_candidates: supplied_count - cards.len(),
         cards,
+        originals: vec![],
     })
 }
 

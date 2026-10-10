@@ -266,6 +266,18 @@ retains the passage selector's complementary-evidence priority before the card
 cap; automatic context keeps its existing selection policy. Neither route proves
 answer completeness. The CLI makes no model call and cannot observe host usage.
 
+## Complete-original selection
+
+An explicitly separate complete-original host route is described in
+[the cited-Page recipe](../skills/llm-wiki/references/cited-page.md#select-exact-ranges-after-reading-complete-captured-text).
+Use `context QUESTION --prepare-original-selection --selection-original-path PATH`
+for exact captured paths returned by discovery, then replay a versioned range
+reply with `--selection FILE` and identical paths/request. Preparation authenticates
+selected originals directly and does not repeat broad discovery. Current-only is
+the default; explicit `--include-historical` supports historical/mixed captured
+text on this route. Original and card replies are distinct. Larger intermediate
+host inputs have their own bounds; final rendered context budgets remain unchanged.
+
 ## Editing Pages on normalized indexes
 
 `page init`, `page put` and `page batch` update a selected normalized publication

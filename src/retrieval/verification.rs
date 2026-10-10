@@ -27,6 +27,7 @@ pub(super) struct Meter {
     bytes: usize,
     files: usize,
     entries: usize,
+    file_byte_limits: BTreeMap<VaultRelativePath, usize>,
 }
 impl Meter {
     pub(super) fn new(budget: &VerificationBudget) -> Self {
@@ -36,6 +37,7 @@ impl Meter {
             bytes: 0,
             files: 0,
             entries: 0,
+            file_byte_limits: BTreeMap::new(),
         }
     }
     pub(super) fn check(&self) -> Result<()> {
@@ -88,6 +90,33 @@ impl Meter {
         self.entries += 1;
         Ok(())
     }
+    /// Additional request-local input bounds survive the selected proof recheck.
+    pub(super) fn limit_file_bytes(&mut self, limits: &BTreeMap<VaultRelativePath, usize>) {
+        self.file_byte_limits = limits.clone();
+    }
+    pub(super) fn preflight_file_length(
+        &mut self,
+        catalog: &Catalog,
+        path: &VaultRelativePath,
+    ) -> Result<usize> {
+        self.check()?;
+        let full = catalog
+            .fs()
+            .root()
+            .resolve_budgeted(path, &mut || self.entry())?;
+        if self.files >= self.budget.max_files {
+            return Err(budget_error("original-input file budget exceeded"));
+        }
+        self.files += 1;
+        self.entry()?;
+        let metadata = std::fs::metadata(full).map_err(io_error)?;
+        self.check()?;
+        if !metadata.is_file() {
+            return Err(WikiError::invalid("original input is not a regular file"));
+        }
+        usize::try_from(metadata.len())
+            .map_err(|_| budget_error("original-input file length exceeds address range"))
+    }
     pub(super) fn read(
         &mut self,
         catalog: &Catalog,
@@ -119,6 +148,15 @@ impl Meter {
             .map_err(|_| budget_error("proof file length exceeds address range"))?;
         if len > self.budget.max_bytes.saturating_sub(self.bytes) {
             return Err(budget_error("final-proof byte budget exceeded before read"));
+        }
+        if self
+            .file_byte_limits
+            .get(path)
+            .is_some_and(|limit| len > *limit)
+        {
+            return Err(budget_error(
+                "original-input file grew beyond its admitted byte bound",
+            ));
         }
         let mut bytes = vec![0u8; len];
         let mut offset = 0;
