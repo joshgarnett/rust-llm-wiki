@@ -1,10 +1,12 @@
 # Joined maintenance candidate, October 10, 2026
 
-Independent review accepts the affected local correctness evidence and four
-shipping workflow comparisons for joined maintenance reads and staging.
-The follow-up repairs normalized Page undo and old proposal adoption, but
-old-version terminal retry still fails; performance qualification remains pending. This checkpoint is
-not a qualified release or a retrieval-quality improvement.
+Independent review accepts the ordinary workflow and terminal compatibility
+correctness evidence, with a scoped first-eight score of 10/10 and no blockers.
+The current candidate fails the fixed 1K update performance screen: 12.889 seconds
+versus 11.333 seconds for baseline. No-op, 10K and integrated performance stages
+remain unrun. This checkpoint is not a qualified release or a retrieval-quality
+improvement. Earlier failures below are retained historical evidence; the latest
+terminal and performance outcomes are described at the end.
 
 The command owns at most 16 joined workers and 1 GiB of logical workspace
 reservations. The owner retains ordered reduction, journal changes, installation
@@ -41,7 +43,7 @@ replayed after correcting these fixtures. The initial recovery group exceeded
 its 500-second group limit; its preserved partial passes and later exact matrix
 replay establish correctness, not passage of that original timing gate.
 
-## Remaining acceptance
+## Earlier acceptance checkpoint
 
 The pinned shipping candidate has SHA-256
 `dfb30abb711801f7233cda8af09cfec23929ab0a3cdcccbd97a9e9b3325f0c75`.
@@ -152,3 +154,37 @@ old-binary Prepared-preview mtime observations were outside the prospectively
 frozen original continuation contract; they are not relabeled as passing.
 Performance, representative 25K capacity, retrieval completeness and full
 release acceptance remain open.
+
+## Current performance screen
+
+The same release-profile shipping binary passed the independent first-eight
+correctness gate at 10/10, with all mandatory outcomes and no correctness blocker.
+This admitted one frozen performance comparison; it did not admit 25K qualification.
+
+The actual 1K control contains 1,000 natural Sources, 1,000 authored guides and
+one additional cited control Page.
+Ten authenticated import setup calls were reused without reimporting. All 71 new
+CLI commands succeeded, including occupied search/context/cited-Page controls and
+both genuine 16-Source updates. The updates returned matching semantic items and
+publication epochs. Candidate worker accounting reports 9,521 submitted/completed,
+zero failed/panicked, at most 15 active workers and 1,020,883,162 reserved bytes.
+
+The baseline update's owning interval was 11.332725 seconds; candidate was
+12.889334 seconds, or 113.74% of baseline. Candidate therefore failed both
+prospective thresholds: at most eight seconds and at most 25% of baseline.
+Runner intervals were 9.156671 and 10.851626 seconds respectively. No replacement
+sample, parameter adjustment or warm-up substitution was performed. All no-op
+pairs, 10K preparation/screens, the integrated 1,000-update workflow and its
+rebuild/history/external-edit checks remain unrun.
+
+The complete owner finished in 222.937111 seconds and drained every observed
+process. Monitoring is material: the outer owner recorded 521 allocation sweeps
+and 135.428470 seconds of service; the inner owner recorded 160 sweeps and
+46.838316 seconds. These intervals overlap native work and each other. They
+cannot be subtracted to claim product-only latency or capacity. Independent review confirms that performance category nine failed and category
+ten remains unrun. The measured acceptance screen remains failed; both product
+work and observer design require
+fresh architectural assessment before another performance experiment.
+
+Default retrieval remains 13/32 complete positive tasks and 79/129 required facts.
+The 25K, semantic, HIGH, unseen and independent full-release gates remain open.
