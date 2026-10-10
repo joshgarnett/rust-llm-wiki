@@ -34,6 +34,8 @@ mod page_rename;
 mod pages;
 pub use page_citations::PageSourceRefs;
 #[cfg(test)]
+mod normalized_change_lifecycle_tests;
+#[cfg(test)]
 mod page_citations_tests;
 pub mod probe;
 pub use pages::{PageBatchRequest, PageUpdate};

@@ -8,6 +8,21 @@ use crate::{
 use std::collections::{BTreeMap, BTreeSet};
 
 pub use super::types::{DEFAULT_READ_BYTES, MAX_INPUT_BYTES};
+
+enum PageWriteInput {
+    Ordinary(ChangeDraft),
+    Inverse(crate::changes::rollback::ValidatedPageInverse),
+}
+
+impl PageWriteInput {
+    fn draft(&self) -> &ChangeDraft {
+        match self {
+            Self::Ordinary(draft) => draft,
+            Self::Inverse(inverse) => inverse.draft(),
+        }
+    }
+}
+
 fn usage(message: &str) -> WikiError {
     WikiError::new(ErrorCode::Usage, message)
 }
@@ -473,14 +488,31 @@ impl OfflineApp {
     /// Page writes use selected admission on a normalized publication. Other
     /// mutation kinds retain their own validation and authority boundaries.
     pub(crate) fn execute_page_draft(&self, draft: ChangeDraft) -> Result<MutationOutcome> {
+        self.execute_page_input(PageWriteInput::Ordinary(draft), false)
+    }
+
+    fn execute_page_input(
+        &self,
+        input: PageWriteInput,
+        force_stage: bool,
+    ) -> Result<MutationOutcome> {
         use crate::catalog::{
-            query_types::QueryReadLimits, source_projection::RefreshProjectionLimits,
-            source_refresh::IndexedRefreshSession, write_projection::project_pages,
+            query_types::QueryReadLimits,
+            source_projection::RefreshProjectionLimits,
+            source_refresh::IndexedRefreshSession,
+            write_projection::{project_page_inverse, project_pages},
         };
         let catalog = self.catalog();
         if catalog.operation_state()?.is_none() {
-            return self.execute_draft(draft, false);
+            return match input {
+                PageWriteInput::Ordinary(draft) => self.execute_draft(draft, force_stage),
+                PageWriteInput::Inverse(_) => Err(WikiError::new(
+                    ErrorCode::RecoveryRequired,
+                    "normalized Page inverse lost its catalog authority",
+                )),
+            };
         }
+        let draft = input.draft();
         let mut outcome = MutationOutcome {
             source_capture: None,
             plan: summarize(&draft.title, &draft.read_preconditions, &draft.operations),
@@ -498,13 +530,14 @@ impl OfflineApp {
         }
         catalog.guard_query()?;
         let reader = catalog.query_snapshot(QueryReadLimits::default())?;
-        let Some(projected) = project_pages(
-            &self.fs,
-            &reader,
-            draft,
-            &RefreshProjectionLimits::default(),
-        )?
-        else {
+        let limits = RefreshProjectionLimits::default();
+        let projected = match input {
+            PageWriteInput::Ordinary(draft) => project_pages(&self.fs, &reader, draft, &limits)?,
+            PageWriteInput::Inverse(inverse) => {
+                project_page_inverse(&self.fs, &reader, inverse, &limits)?
+            }
+        };
+        let Some(projected) = projected else {
             outcome.plan.operations.clear();
             outcome.reused = true;
             return Ok(outcome);
@@ -519,7 +552,7 @@ impl OfflineApp {
         let mut session = IndexedRefreshSession::prepare_write(&catalog, &writer, projected)?;
         let change = session.proof().change.clone();
         outcome.change = Some(change.clone());
-        if self.options.stage_only {
+        if force_stage || self.options.stage_only {
             outcome.status = Some(ChangeStatus::Prepared);
             return Ok(outcome);
         }
@@ -1242,7 +1275,7 @@ impl OfflineApp {
                     outcome.snapshot = report.snapshot;
                     outcome.reused = true;
                 } else {
-                    IndexedRefreshSession::check_replay(&catalog, &proof)?;
+                    IndexedRefreshSession::check_preview(&catalog, &proof)?;
                     outcome.status = Some(
                         journal::load_journal(&self.fs, &manifest, &change.manifest_hash)?
                             .status
@@ -1295,6 +1328,24 @@ impl OfflineApp {
             outcome.status = Some(report.status);
             outcome.snapshot = report.snapshot;
             outcome.reused = true;
+            return Ok(outcome);
+        }
+        if authority.is_some() {
+            use crate::catalog::source_refresh::IndexedRefreshSession;
+            if self.options.dry_run {
+                IndexedRefreshSession::preview_legacy_page(&catalog, &change)?;
+                outcome.status = Some(ChangeStatus::Prepared);
+            } else {
+                let writer = self.writer()?;
+                let mut session =
+                    IndexedRefreshSession::adopt_legacy_page(&catalog, &writer, &change)
+                        .map_err(|error| retained_error(error, &change))?;
+                let report = engine
+                    .apply_indexed_refresh(&writer, &mut session)
+                    .map_err(|error| retained_error(error, &change))?;
+                outcome.status = Some(report.status);
+                outcome.snapshot = report.snapshot;
+            }
             return Ok(outcome);
         }
         // Never invoke the whole-vault legacy validator behind an activated
@@ -1366,6 +1417,12 @@ impl OfflineApp {
     pub fn changes_rollback(&self, id: RecordId) -> Result<MutationOutcome> {
         let engine = self.engine()?;
         let i = engine.inspect(&id)?;
+        if self.catalog().operation_state()?.is_some() {
+            return self.execute_page_input(
+                PageWriteInput::Inverse(engine.page_inverse_plan(&i.prepared)?),
+                true,
+            );
+        }
         self.execute_draft(engine.inverse_plan(&i.prepared)?.draft, true)
     }
     fn pending(&self, engine: &ChangeEngine) -> Result<Vec<RecordId>> {

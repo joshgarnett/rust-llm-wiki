@@ -138,7 +138,17 @@ pub(crate) fn project_pages(
     draft: ChangeDraft,
     limits: &RefreshProjectionLimits,
 ) -> Result<Option<ProjectedWrite>> {
-    project_selected(fs, reader, draft, None, limits)
+    project_selected(fs, reader, draft, None, false, limits)
+}
+
+/// Only authenticated committed Page replacements may carry inverse ancestry.
+pub(crate) fn project_page_inverse(
+    fs: &VaultFs,
+    reader: &QuerySnapshot,
+    validated: crate::changes::rollback::ValidatedPageInverse,
+    limits: &RefreshProjectionLimits,
+) -> Result<Option<ProjectedWrite>> {
+    project_selected(fs, reader, validated.into_draft(), None, true, limits)
 }
 
 /// The sealed draft was regenerated against the one existing operational ledger.
@@ -149,7 +159,7 @@ pub(crate) fn project_jobs(
     limits: &RefreshProjectionLimits,
 ) -> Result<Option<ProjectedWrite>> {
     let (draft, operation) = validated.into_parts();
-    project_selected(fs, reader, draft, Some(operation), limits)
+    project_selected(fs, reader, draft, Some(operation), false, limits)
 }
 
 fn project_selected(
@@ -157,6 +167,7 @@ fn project_selected(
     reader: &QuerySnapshot,
     mut draft: ChangeDraft,
     job: Option<IndexedWriteOperation>,
+    page_inverse: bool,
     limits: &RefreshProjectionLimits,
 ) -> Result<Option<ProjectedWrite>> {
     reader.require_policy_layout()?;
@@ -164,7 +175,7 @@ fn project_selected(
         return Err(conflict("Page admission requires a pinned publication"));
     }
     if draft.origin.is_some()
-        || draft.inverse_of.is_some()
+        || (draft.inverse_of.is_some() != page_inverse)
         || (job.is_none() && !draft.allocated_ids.is_empty())
         || draft.title.trim().is_empty()
         || draft.title.len() > 4096

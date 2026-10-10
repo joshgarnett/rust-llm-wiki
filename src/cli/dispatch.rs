@@ -1362,13 +1362,36 @@ fn execute_inner(args: &Arguments) -> Result<Envelope> {
                 }
             }
             ChangesCommand::Apply { id } => {
-                mutation(&mut envelope, app.changes_apply(id.clone())?)?
+                let outcome = app.changes_apply(id.clone())?;
+                let preview = app.options().dry_run
+                    && !outcome.reused
+                    && Catalog::new(app.fs().clone(), app.vault_id().clone())
+                        .operation_state()?
+                        .is_some();
+                mutation(&mut envelope, outcome)?;
+                if preview {
+                    envelope.data["dry_run"] = true.into();
+                    envelope.data["plan_complete"] = false.into();
+                    envelope.data["validation"] = json!({
+                        "retained_intent_checked": true,
+                        "retained_file_guards_checked": true,
+                        "indexed_admission_checked": false
+                    });
+                    envelope.warnings.push("Apply preview checks retained intent and file guards without opening the index. Index layout, ownership and publication readiness remain unchecked; applying performs those checks.".into());
+                }
             }
             ChangesCommand::Abort { id } => {
                 mutation(&mut envelope, app.changes_abort(id.clone())?)?
             }
             ChangesCommand::Rollback { id } => {
-                mutation(&mut envelope, app.changes_rollback(id.clone())?)?
+                mutation(&mut envelope, app.changes_rollback(id.clone())?)?;
+                if app.options().dry_run
+                    && Catalog::new(app.fs().clone(), app.vault_id().clone())
+                        .operation_state()?
+                        .is_some()
+                {
+                    page_preview_metadata(&mut envelope, true);
+                }
             }
         },
         Command::Jobs {

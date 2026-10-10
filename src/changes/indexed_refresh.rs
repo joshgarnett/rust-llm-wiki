@@ -305,8 +305,18 @@ pub(crate) struct IndexedRefreshProof {
 #[serde(deny_unknown_fields)]
 struct Receipt {
     proof: IndexedRefreshProof,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    embedded_delta: Option<crate::catalog::source_refresh::RetainedDelta>,
     checksum: Blake3Hash,
 }
+/// Supplemental first admission for an unchanged legacy Prepared Page inverse.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LegacyPageAdmission {
+    pub parent: PreparedChange,
+    pub prepared_journal_hash: Blake3Hash,
+}
+pub(crate) const MAX_LEGACY_PAGE_ENVELOPE_BYTES: usize = 1024 * 1024;
 fn recovery(message: &str) -> WikiError {
     super::apply::recovery_error(message)
 }
@@ -338,6 +348,11 @@ impl IndexedRefreshProof {
         match (self.version, &self.source_id, &self.operation) {
             (2, Some(_), None) => {}
             (3, None, Some(operation)) => operation.validate()?,
+            (4, None, Some(operation @ IndexedWriteOperation::PageBatch { pages }))
+                if pages.len() == 1 =>
+            {
+                operation.validate()?
+            }
             _ => {
                 return Err(recovery(
                     "indexed write operation identity or version differs",
@@ -392,6 +407,32 @@ impl IndexedRefreshProof {
     }
     pub(crate) fn validate_manifest(&self, manifest: &ChangeManifest) -> Result<()> {
         self.validate(&manifest.vault_id, &self.change)?;
+        if self.version == 4
+            && (manifest.inverse_of.is_none()
+                || manifest.origin.is_some()
+                || !manifest.allocated_ids.is_empty()
+                || !manifest.read_preconditions.is_empty()
+                || manifest.operations.len() != 1
+                || manifest.operations.iter().any(|op| {
+                    op.role != OperationRole::MutableRecord
+                        || !op.apply_after.is_empty()
+                        || !matches!(op.before, ExpectedState::Hash(_))
+                        || !matches!(op.after, ExpectedState::Hash(_))
+                }))
+        {
+            return Err(recovery(
+                "legacy Page envelope requires one unchanged inverse replacement",
+            ));
+        }
+        if self.version == 4 {
+            super::prepare::validate_retained_targets(
+                &self
+                    .before
+                    .iter()
+                    .map(|dependency| dependency.path.clone())
+                    .collect::<Vec<_>>(),
+            )?;
+        }
         if let Some(IndexedWriteOperation::JobBatch {
             records,
             checkpoint,
@@ -583,10 +624,11 @@ impl IndexedRefreshProof {
                         "indexed refresh baseline grants an undeclared mutation",
                     ));
                 }
-                if !manifest
-                    .read_preconditions
-                    .iter()
-                    .any(|dependency| dependency == before)
+                if self.version != 4
+                    && !manifest
+                        .read_preconditions
+                        .iter()
+                        .any(|dependency| dependency == before)
                 {
                     return Err(recovery(
                         "selected refresh boundary is absent from retained read preconditions",
@@ -648,18 +690,126 @@ impl ChangeEngine {
         &self,
         change: &PreparedChange,
     ) -> Result<Option<IndexedRefreshProof>> {
+        Ok(self
+            .load_indexed_refresh_retention(change)?
+            .map(|(proof, _)| proof))
+    }
+
+    pub(crate) fn load_indexed_refresh_retention(
+        &self,
+        change: &PreparedChange,
+    ) -> Result<
+        Option<(
+            IndexedRefreshProof,
+            Option<crate::catalog::source_refresh::RetainedDelta>,
+        )>,
+    > {
         let Some(bytes) = read_bounded(&self.fs, &baseline_path(change)?, MAX_JOURNAL_BYTES)?
         else {
             return Ok(None);
         };
         let receipt: Receipt = strict_json(&bytes)?;
-        let encoded = serde_json::to_vec(&receipt.proof)
-            .map_err(|error| WikiError::invalid(error.to_string()))?;
+        let encoded = if receipt.proof.version == 4 {
+            if bytes.len() > MAX_LEGACY_PAGE_ENVELOPE_BYTES || receipt.embedded_delta.is_none() {
+                return Err(recovery(
+                    "legacy Page envelope size or embedded delta invalid",
+                ));
+            }
+            if read_bounded(
+                &self.fs,
+                &crate::catalog::source_refresh::delta_path(change)?,
+                0,
+            )?
+            .is_some()
+            {
+                return Err(recovery(
+                    "legacy Page envelope has unexpected separate delta",
+                ));
+            }
+            serde_json::to_vec(&(&receipt.proof, &receipt.embedded_delta))
+        } else {
+            if receipt.embedded_delta.is_some() {
+                return Err(recovery(
+                    "ordinary indexed proof cannot embed a legacy Page delta",
+                ));
+            }
+            serde_json::to_vec(&receipt.proof)
+        }
+        .map_err(|error| WikiError::invalid(error.to_string()))?;
         if Blake3Hash::digest(encoded) != receipt.checksum {
             return Err(recovery("indexed refresh baseline checksum differs"));
         }
         receipt.proof.validate(&self.vault_id, change)?;
-        Ok(Some(receipt.proof))
+        if let Some(delta) = &receipt.embedded_delta {
+            delta.validate_embedded_envelope(&receipt.proof)?;
+        }
+        Ok(Some((receipt.proof, receipt.embedded_delta)))
+    }
+
+    /// One atomic expected-absent envelope; no second delta-file migration cut.
+    pub(crate) fn stage_legacy_page_envelope(
+        &self,
+        writer: &WriterPermit,
+        proof: &IndexedRefreshProof,
+        delta: &crate::catalog::source_refresh::RetainedDelta,
+    ) -> Result<()> {
+        writer.require_root(self.fs.root())?;
+        self.require_binding()?;
+        if proof.version != 4 {
+            return Err(recovery("legacy Page envelope requires version4"));
+        }
+        let (manifest, hash) = self.load_manifest_structure(&proof.change.change_id)?;
+        proof.validate_manifest(&manifest)?;
+        if hash != proof.change.manifest_hash {
+            return Err(recovery("legacy Page manifest changed"));
+        }
+        let state = journal::load_journal(&self.fs, &manifest, &hash)?;
+        if state.status != Some(ChangeStatus::Prepared)
+            || state.frames.len() != 1
+            || state.torn_tail
+            || outcome::terminal_report(&self.fs, &manifest, &hash)?.is_some()
+        {
+            return Err(recovery(
+                "legacy Page envelope needs original never-started Prepared history",
+            ));
+        }
+        let authority = required_authority(self)?;
+        authority.require_publication(&publication(&proof.base)?)?;
+        if authority.publication() != &publication(&proof.base)? {
+            return Err(recovery("legacy Page admission base changed"));
+        }
+        crate::catalog::normalized_delta::counted(
+            &(proof, Some(delta)),
+            MAX_LEGACY_PAGE_ENVELOPE_BYTES,
+        )?;
+        let embedded_delta = Some(delta.clone());
+        let checksum = Blake3Hash::digest(
+            serde_json::to_vec(&(proof, &embedded_delta))
+                .map_err(|e| WikiError::invalid(e.to_string()))?,
+        );
+        let receipt = Receipt {
+            proof: proof.clone(),
+            embedded_delta,
+            checksum,
+        };
+        crate::catalog::normalized_delta::counted(&receipt, MAX_LEGACY_PAGE_ENVELOPE_BYTES)?;
+        let bytes = serde_json::to_vec(&receipt).map_err(|e| WikiError::invalid(e.to_string()))?;
+        if bytes.len() > MAX_LEGACY_PAGE_ENVELOPE_BYTES {
+            return Err(recovery("legacy Page envelope exceeds bound"));
+        }
+        if read_bounded(
+            &self.fs,
+            &crate::catalog::source_refresh::delta_path(&proof.change)?,
+            0,
+        )?
+        .is_some()
+        {
+            return Err(recovery("legacy Page admission found separate delta"));
+        }
+        let staged = self
+            .fs
+            .stage(&baseline_path(&proof.change)?, &bytes, writer)?;
+        journal::require_sync(self.fs.replace(staged, &ExpectedState::Absent, writer)?)
     }
     /// Retain a staged baseline without activating a canonical operation.
     /// Successful preparation must survive a process boundary before first apply.
@@ -710,7 +860,7 @@ impl ChangeEngine {
                     .sync_target(&baseline_path(&proof.change)?, writer)?,
             );
         }
-        if !allow_create {
+        if !allow_create || proof.version == 4 {
             return Err(recovery(
                 "active indexed refresh lost its original baseline",
             ));
@@ -720,6 +870,7 @@ impl ChangeEngine {
         );
         let bytes = serde_json::to_vec(&Receipt {
             proof: proof.clone(),
+            embedded_delta: None,
             checksum,
         })
         .map_err(|error| WikiError::invalid(error.to_string()))?;

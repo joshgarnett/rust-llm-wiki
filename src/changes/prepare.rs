@@ -1355,7 +1355,7 @@ fn validate_targets(fs: &VaultFs, targets: &[VaultRelativePath]) -> Result<()> {
     validate_retained_targets(targets)?;
     fs.validate_paths(targets)
 }
-fn validate_retained_targets(targets: &[VaultRelativePath]) -> Result<()> {
+pub(crate) fn validate_retained_targets(targets: &[VaultRelativePath]) -> Result<()> {
     for path in targets {
         if path.as_str().split('/').any(|part| {
             let folded = unicase::UniCase::unicode(part).to_folded_case();

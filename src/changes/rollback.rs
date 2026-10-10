@@ -6,6 +6,22 @@ use crate::{
     vault::{ExpectedState, WriterPermit},
 };
 use std::collections::{BTreeMap, BTreeSet};
+/// Read-only authority for newly projected, authenticated Page replacements.
+/// The draft is private so ordinary drafts cannot claim this admission.
+pub(crate) struct ValidatedPageInverse {
+    draft: ChangeDraft,
+}
+impl ValidatedPageInverse {
+    pub(crate) fn draft(&self) -> &ChangeDraft {
+        &self.draft
+    }
+    pub(crate) fn into_draft(self) -> ChangeDraft {
+        self.draft
+    }
+}
+
+const PAGE_INVERSE_BYTES: usize = 16 * 1024 * 1024;
+
 impl ChangeEngine {
     pub fn abort(&self, permit: &WriterPermit, change: &PreparedChange) -> Result<ApplyReport> {
         permit.require_root(self.fs.root())?;
@@ -43,6 +59,174 @@ impl ChangeEngine {
         }
         outcome::finish(self, permit, &manifest, &hash, ChangeStatus::Aborted)
     }
+    /// Authenticate a bounded committed Page lineage without allocating a proposal.
+    /// Fresh projection adds its own read constraints to the newly retained inverse.
+    pub(crate) fn page_inverse_plan(
+        &self,
+        change: &PreparedChange,
+    ) -> Result<ValidatedPageInverse> {
+        self.require_binding()?;
+        let mut remaining = super::prepare::MAX_INVERSE_PAYLOAD_BYTES;
+        let (mut current, hash) =
+            self.load_manifest_with_budget(&change.change_id, &mut remaining)?;
+        if hash != change.manifest_hash {
+            return Err(WikiError::invalid("prepared manifest binding changed"));
+        }
+        let mut seen = BTreeSet::new();
+        let mut inverse = None;
+        let mut current_hash = hash.clone();
+        for depth in 1..=64 {
+            if !seen.insert(current.change_id.clone()) {
+                return Err(WikiError::invalid("Page inverse ancestry cycle"));
+            }
+            let committed = match outcome::terminal_report(&self.fs, &current, &current_hash)? {
+                Some(report) => report.status == ChangeStatus::Committed,
+                None => {
+                    journal::load_journal(&self.fs, &current, &current_hash)?.status
+                        == Some(ChangeStatus::Committed)
+                }
+            };
+            if !committed {
+                return Err(WikiError::new(
+                    ErrorCode::RecoveryRequired,
+                    "Page inverse requires authenticated committed history",
+                ));
+            }
+            let operations = self.page_replacement_reversal(&current, &mut remaining)?;
+            if inverse.is_none() {
+                for operation in &operations {
+                    let bytes = super::prepare::read_bounded(
+                        &self.fs,
+                        &operation.target,
+                        remaining.min(PAGE_INVERSE_BYTES),
+                    )?
+                    .ok_or_else(|| {
+                        WikiError::new(
+                            ErrorCode::ContentConflict,
+                            "Page inverse target disappeared",
+                        )
+                    })?;
+                    remaining = remaining
+                        .checked_sub(bytes.len())
+                        .ok_or_else(page_inverse_budget)?;
+                    if operation.expected != ExpectedState::Hash(Blake3Hash::digest(&bytes)) {
+                        return Err(WikiError::new(
+                            ErrorCode::ContentConflict,
+                            "Page changed before inverse admission",
+                        ));
+                    }
+                    let actual = parse_note(&bytes);
+                    let proposed =
+                        parse_note(operation.proposed.as_ref().expect("replacement verified"));
+                    if actual.canonical.as_ref().is_none_or(|record| {
+                        record.kind() != RecordKind::Page
+                            || proposed
+                                .canonical
+                                .as_ref()
+                                .is_none_or(|before| before.id() != record.id())
+                    }) {
+                        return Err(WikiError::invalid(
+                            "Page inverse must preserve current identity and kind",
+                        ));
+                    }
+                }
+                inverse = Some(ChangeDraft {
+                    title: format!("Inverse: {}", current.title),
+                    origin: None,
+                    inverse_of: Some(current.change_id.clone()),
+                    allocated_ids: BTreeMap::new(),
+                    read_preconditions: Vec::new(),
+                    operations,
+                });
+            }
+            let Some(parent_id) = current.inverse_of.clone() else {
+                let draft = inverse.expect("first replacement validated");
+                if draft.title.len() > 4096 {
+                    return Err(WikiError::invalid(
+                        "Page inverse title exceeds projection limit",
+                    ));
+                }
+                self.plan(&draft)?;
+                return Ok(ValidatedPageInverse { draft });
+            };
+            if depth == 64 {
+                return Err(WikiError::new(
+                    ErrorCode::BudgetExceeded,
+                    "Page inverse ancestry exceeds64 hops",
+                ));
+            }
+            let (parent, parent_hash) =
+                self.load_manifest_with_budget(&parent_id, &mut remaining)?;
+            exact_page_inverse(&current, &parent)?;
+            current = parent;
+            current_hash = parent_hash;
+        }
+        Err(WikiError::new(
+            ErrorCode::BudgetExceeded,
+            "Page inverse ancestry exceeds64 hops",
+        ))
+    }
+
+    fn page_replacement_reversal(
+        &self,
+        manifest: &ChangeManifest,
+        remaining: &mut usize,
+    ) -> Result<Vec<ExpectedWrite>> {
+        page_replacement_shape(manifest)?;
+        let mut operations = Vec::new();
+        let mut identities = BTreeSet::new();
+        for (index, operation) in manifest.operations.iter().enumerate() {
+            let mut payloads = Vec::new();
+            for (side, expected, payload) in [
+                ("before", &operation.before, &operation.before_payload),
+                ("proposed", &operation.after, &operation.after_payload),
+            ] {
+                let bytes = self
+                    .verify_payload_with_limit(
+                        &manifest.change_id,
+                        index,
+                        side,
+                        &operation.target,
+                        (expected, payload),
+                        (*remaining).min(PAGE_INVERSE_BYTES),
+                    )?
+                    .ok_or_else(|| {
+                        WikiError::invalid(
+                            "Page inverse requires two retained replacement payloads",
+                        )
+                    })?;
+                *remaining = remaining
+                    .checked_sub(bytes.len())
+                    .ok_or_else(page_inverse_budget)?;
+                payloads.push(bytes);
+            }
+            let before = parse_note(&payloads[0]);
+            let after = parse_note(&payloads[1]);
+            let valid = before
+                .canonical
+                .as_ref()
+                .zip(after.canonical.as_ref())
+                .filter(|(before, after)| {
+                    before.kind() == RecordKind::Page
+                        && after.kind() == RecordKind::Page
+                        && before.id() == after.id()
+                })
+                .ok_or_else(|| {
+                    WikiError::invalid("Page inverse payloads change identity or kind")
+                })?;
+            if !identities.insert(valid.0.id().clone()) {
+                return Err(WikiError::invalid("Page inverse has duplicate identities"));
+            }
+            operations.push(ExpectedWrite {
+                target: operation.target.clone(),
+                expected: operation.after.clone(),
+                proposed: Some(payloads.remove(0)),
+                apply_after: Vec::new(),
+            });
+        }
+        Ok(operations)
+    }
+
     pub fn inverse_plan(&self, change: &PreparedChange) -> Result<InversePlan> {
         self.require_binding()?;
         let mut remaining = super::prepare::MAX_INVERSE_PAYLOAD_BYTES;
@@ -458,4 +642,68 @@ fn exact_inverse(child: &ChangeManifest, parent: &ChangeManifest) -> Result<()> 
         }
     }
     Ok(())
+}
+
+fn page_inverse_budget() -> WikiError {
+    WikiError::new(
+        ErrorCode::BudgetExceeded,
+        "Page inverse aggregate read ceiling",
+    )
+}
+
+fn page_replacement_shape(manifest: &ChangeManifest) -> Result<()> {
+    if manifest.origin.is_some()
+        || !manifest.allocated_ids.is_empty()
+        || manifest.operations.is_empty()
+        || manifest.operations.len() > 16
+        || manifest.read_preconditions.len() > 128
+        || manifest.title.trim().is_empty()
+        || manifest.title.len() > 4096
+    {
+        return Err(WikiError::invalid(
+            "Page inverse requires a bounded ordinary replacement history",
+        ));
+    }
+    let mut paths = BTreeSet::new();
+    let mut before_bytes = 0usize;
+    let mut after_bytes = 0usize;
+    for op in &manifest.operations {
+        if op.role != OperationRole::MutableRecord
+            || !op.apply_after.is_empty()
+            || !crate::sources::revision::canonical_path(&op.target)
+            || !paths.insert(op.target.clone())
+            || !matches!(op.before, ExpectedState::Hash(_))
+            || !matches!(op.after, ExpectedState::Hash(_))
+        {
+            return Err(WikiError::invalid(
+                "Page inverse excludes assets, creation, deletion, rename and ordered operations",
+            ));
+        }
+        for (payload, total) in [
+            (&op.before_payload, &mut before_bytes),
+            (&op.after_payload, &mut after_bytes),
+        ] {
+            let size = payload
+                .as_ref()
+                .ok_or_else(|| WikiError::invalid("Page inverse replacement payload missing"))?
+                .byte_len;
+            *total = total
+                .checked_add(usize::try_from(size).map_err(|_| page_inverse_budget())?)
+                .ok_or_else(page_inverse_budget)?;
+            if *total > PAGE_INVERSE_BYTES {
+                return Err(page_inverse_budget());
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Page projection may add authenticated read-only constraints. They grant no
+/// write authority; the global graph inverse validator remains strict.
+fn exact_page_inverse(child: &ChangeManifest, parent: &ChangeManifest) -> Result<()> {
+    page_replacement_shape(child)?;
+    page_replacement_shape(parent)?;
+    let mut writes = child.clone();
+    writes.read_preconditions.clear();
+    exact_inverse(&writes, parent)
 }

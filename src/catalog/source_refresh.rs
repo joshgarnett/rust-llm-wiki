@@ -14,7 +14,9 @@ use crate::{
     changes::{
         ChangeEngine, ChangeStatus, PreparedChange, ReadDependency, RevisionOwnerRow,
         RevisionOwnershipLookup,
-        indexed_refresh::{IndexedRefreshPhase, IndexedRefreshProof, IndexedWriteOperation},
+        indexed_refresh::{
+            IndexedRefreshPhase, IndexedRefreshProof, IndexedWriteOperation, LegacyPageAdmission,
+        },
         journal,
         operation_authority::{self, ActiveOperation, Authority, Presence, Publication},
         prepare::{MAX_PAYLOAD_BYTES, read_bounded, strict_json},
@@ -37,9 +39,14 @@ const DELTA_VERSION: u32 = 3;
 const MAX_DELTA_BYTES: usize = 256 * 1024 * 1024;
 const MAX_SELECTED_BYTES: usize = 256 * 1024 * 1024;
 
+#[path = "indexed_preview.rs"]
+mod indexed_preview;
+#[path = "legacy_page_admission.rs"]
+mod legacy_page_admission;
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct RetainedDelta {
+pub(crate) struct RetainedDelta {
     version: u32,
     vault_id: RecordId,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -51,6 +58,8 @@ struct RetainedDelta {
     before: Vec<ReadDependency>,
     after: Vec<ReadDependency>,
     rows: CatalogDelta,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    legacy_page_admission: Option<LegacyPageAdmission>,
 }
 
 /// A frozen import intent compares trusted preparation results; it cannot
@@ -348,6 +357,42 @@ fn require_selected_delta_scope(
 }
 
 impl RetainedDelta {
+    pub(crate) fn validate_embedded_envelope(&self, proof: &IndexedRefreshProof) -> Result<()> {
+        let descriptor = self
+            .legacy_page_admission
+            .as_ref()
+            .ok_or_else(|| recovery("legacy Page descriptor missing"))?;
+        if self.version != 4
+            || proof.version != 4
+            || self.rows.version != 3
+            || self.vault_id != proof.vault_id
+            || self.change != proof.change
+            || self.source_id.is_some()
+            || self.operation != proof.operation
+            || self.base != proof.base
+            || self.before != proof.before
+            || self.after != proof.after
+            || descriptor.parent.change_id == self.change.change_id
+        {
+            return Err(recovery("embedded legacy Page delta identity differs"));
+        }
+        super::normalized_delta::counted(
+            self,
+            crate::changes::indexed_refresh::MAX_LEGACY_PAGE_ENVELOPE_BYTES,
+        )?;
+        let bytes =
+            serde_json::to_vec(self).map_err(|error| WikiError::invalid(error.to_string()))?;
+        if Blake3Hash::digest(bytes) != proof.delta_hash
+            || intended(&proof.base, &proof.change, &proof.delta_hash, 4)? != proof.intended
+        {
+            return Err(recovery(
+                "embedded legacy Page delta hash or publication differs",
+            ));
+        }
+        self.rows.validate()?;
+        Ok(())
+    }
+
     fn require_refresh_batch_rows(
         &self,
         refreshes: &[crate::changes::indexed_refresh::IndexedRefreshTarget],
@@ -1296,13 +1341,15 @@ impl RetainedDelta {
         let (manifest, hash) = engine.load_manifest_structure(&proof.change.change_id)?;
         proof.validate_manifest(&manifest)?;
         if hash != proof.change.manifest_hash
-            || (!matches!(self.version, 2 | 3) && !(cfg!(test) && self.version == 1))
+            || (!matches!(self.version, 2 | 3 | 4) && !(cfg!(test) && self.version == 1))
             || (self.version == 2 && self.rows.version != 2)
-            || (self.version == 3 && self.rows.version != 3)
+            || (self.version >= 3 && self.rows.version != 3)
             || (self.version <= 2
                 && (proof.version != 2 || self.operation.is_some() || self.source_id.is_none()))
-            || (self.version == 3
-                && (proof.version != 3 || self.operation.is_none() || self.source_id.is_some()))
+            || (self.version >= 3
+                && (proof.version != self.version
+                    || self.operation.is_none()
+                    || self.source_id.is_some()))
             || proof.vault_id != catalog.vault_id
             || self.vault_id != proof.vault_id
             || self.source_id != proof.source_id
@@ -1318,6 +1365,15 @@ impl RetainedDelta {
             return Err(recovery(
                 "refresh delta, manifest, or replay version differs from retained proof",
             ));
+        }
+        if (self.version == 4) != self.legacy_page_admission.is_some() {
+            return Err(recovery(
+                "legacy Page admission descriptor/version mismatch",
+            ));
+        }
+        if self.version == 4 {
+            self.validate_embedded_envelope(proof)?;
+            legacy_page_admission::validate_retained_admission(catalog, engine, proof, self)?;
         }
         self.rows.validate()?;
         self.require_operation_rows(&manifest, engine)?;
@@ -1362,7 +1418,7 @@ impl RetainedDelta {
             .iter()
             .map(|dep| (&dep.path, &dep.expected))
             .collect();
-        if self.version == 3 {
+        if self.version >= 3 {
             require_selected_delta_scope(&self.rows, &after)?;
         }
         if self
@@ -1380,12 +1436,63 @@ impl RetainedDelta {
 }
 
 fn load_delta(catalog: &Catalog, proof: &IndexedRefreshProof) -> Result<RetainedDelta> {
+    if proof.version == 4 {
+        let engine = ChangeEngine::new(catalog.fs.clone())?;
+        let (retained, delta) = engine
+            .load_indexed_refresh_retention(&proof.change)?
+            .ok_or_else(|| recovery("legacy Page admission envelope missing"))?;
+        if retained != *proof {
+            return Err(recovery("legacy Page admission proof changed"));
+        }
+        let delta = delta.ok_or_else(|| recovery("legacy Page embedded delta missing"))?;
+        if read_bounded(&catalog.fs, &delta_path(&proof.change)?, 0)?.is_some() {
+            return Err(recovery(
+                "legacy Page admission has unexpected separate delta",
+            ));
+        }
+        let bytes = serde_json::to_vec(&delta).map_err(|e| WikiError::invalid(e.to_string()))?;
+        if Blake3Hash::digest(bytes) != proof.delta_hash {
+            return Err(recovery("legacy Page embedded delta hash changed"));
+        }
+        return Ok(delta);
+    }
     let bytes = read_bounded(&catalog.fs, &delta_path(&proof.change)?, MAX_DELTA_BYTES)?
         .ok_or_else(|| recovery("retained refresh delta is missing"))?;
     if Blake3Hash::digest(&bytes) != proof.delta_hash {
         return Err(recovery("retained refresh delta hash changed"));
     }
     strict_json(&bytes)
+}
+
+fn retain_legacy_page_envelope(
+    catalog: &Catalog,
+    writer: &WriterPermit,
+    proof: &IndexedRefreshProof,
+    delta: &RetainedDelta,
+) -> Result<()> {
+    let engine = ChangeEngine::new(catalog.fs.clone())?;
+    delta.require_bound(catalog, &engine, proof)?;
+    super::normalized_delta::counted(
+        delta,
+        crate::changes::indexed_refresh::MAX_LEGACY_PAGE_ENVELOPE_BYTES,
+    )?;
+    let bytes = serde_json::to_vec(delta).map_err(|error| WikiError::invalid(error.to_string()))?;
+    if Blake3Hash::digest(bytes) != proof.delta_hash {
+        return Err(recovery("legacy Page admission delta hash differs"));
+    }
+    engine.stage_legacy_page_envelope(writer, proof, delta)
+}
+
+#[cfg(test)]
+pub(crate) fn rebind_legacy_delta_for_test(
+    proof: &mut IndexedRefreshProof,
+    delta: &RetainedDelta,
+) -> Result<()> {
+    proof.delta_hash = Blake3Hash::digest(
+        serde_json::to_vec(delta).map_err(|error| WikiError::invalid(error.to_string()))?,
+    );
+    proof.intended = intended(&proof.base, &proof.change, &proof.delta_hash, 4)?;
+    Ok(())
 }
 
 impl<'a> IndexedRefreshSession<'a> {
@@ -1455,6 +1562,7 @@ impl<'a> IndexedRefreshSession<'a> {
             before: parts.before,
             after: parts.after,
             rows: parts.delta,
+            legacy_page_admission: None,
         };
         super::normalized_delta::counted(&delta, MAX_DELTA_BYTES)?;
         let bytes =
@@ -1754,6 +1862,7 @@ impl<'a> IndexedRefreshSession<'a> {
             before,
             after,
             rows,
+            legacy_page_admission: None,
         };
         super::normalized_delta::counted(&delta, MAX_DELTA_BYTES)?;
         let bytes =
@@ -1827,9 +1936,9 @@ impl<'a> IndexedRefreshSession<'a> {
             ));
         }
         let delta = load_delta(catalog, proof)?;
-        if !matches!(delta.version, 2 | 3)
+        if !matches!(delta.version, 2 | 3 | 4)
             || (delta.version == 2 && delta.rows.version != 2)
-            || (delta.version == 3 && delta.rows.version != 3)
+            || (delta.version >= 3 && delta.rows.version != 3)
         {
             return Err(recovery(
                 "read-only indexed replay requires a supported production delta version",
@@ -2038,7 +2147,7 @@ impl<'a> IndexedRefreshSession<'a> {
         if fs.root() != self.catalog.fs.root() {
             return Err(recovery("refresh session belongs to another vault"));
         }
-        if !matches!(self.delta.version, 2 | 3) {
+        if !matches!(self.delta.version, 2 | 3 | 4) {
             return Ok(fs.clone());
         }
         self.retained()?;
@@ -2063,6 +2172,12 @@ impl<'a> IndexedRefreshSession<'a> {
             .ok_or_else(|| recovery("published refresh has no starting ownership capability"))
     }
     fn retained(&self) -> Result<()> {
+        if self.proof.version == 4 {
+            if load_delta(&self.catalog, &self.proof)? != self.delta {
+                return Err(recovery("retained legacy Page envelope changed"));
+            }
+            return Ok(());
+        }
         let bytes = read_bounded(
             &self.catalog.fs,
             &delta_path(&self.proof.change)?,
