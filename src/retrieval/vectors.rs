@@ -224,6 +224,61 @@ pub fn cosine(a: &[f32], b: &[f32]) -> Result<f64> {
     }
     Ok((dot / (na.sqrt() * nb.sqrt())).clamp(-1.0, 1.0))
 }
+/// A read-only coverage audit keeps one SQLite view while each completed owner
+/// scope uses its own unchanged read allowance. Ordinary readers cannot replace
+/// budgets. A failed scope poisons this session and cannot acquire another lease.
+pub(crate) struct VectorCoverageCheck {
+    store: VectorStore,
+    active: Option<SpaceState>,
+    failed: bool,
+}
+impl VectorCoverageCheck {
+    pub(crate) fn open(fs: &VaultFs, budget: &std::rc::Rc<VectorReadBudget>) -> Result<Self> {
+        let store = VectorStore::open_bounded_snapshot(fs, budget)?;
+        let active = store.active()?;
+        budget.check()?;
+        Ok(Self {
+            store,
+            active,
+            failed: false,
+        })
+    }
+    pub(crate) fn active(&self) -> Option<&SpaceState> {
+        self.active.as_ref()
+    }
+    pub(crate) fn coverage(
+        &mut self,
+        space: &Blake3Hash,
+        units: &[RenderedUnit],
+        budget: &std::rc::Rc<VectorReadBudget>,
+    ) -> Result<Coverage> {
+        if self.failed {
+            return Err(WikiError::new(
+                ErrorCode::FreshnessConflict,
+                "failed vector coverage scope cannot be resumed",
+            ));
+        }
+        self.failed = true;
+        if units
+            .iter()
+            .map(|unit| &unit.owner)
+            .collect::<BTreeSet<_>>()
+            .len()
+            > 16
+        {
+            return Err(WikiError::new(
+                ErrorCode::BudgetExceeded,
+                "vector coverage scope exceeds sixteen owners",
+            ));
+        }
+        self.store.attach_retained_budget(budget.clone())?;
+        let result = self.store.coverage(space, units)?;
+        budget.check()?;
+        self.failed = false;
+        Ok(result)
+    }
+}
+
 impl VectorStore {
     pub(crate) fn bind_read_budget(
         &mut self,
@@ -1874,6 +1929,117 @@ mod incremental_vector_tests {
                 &Blake3Hash::digest(b"mock input guard"),
             )
             .unwrap();
+    }
+
+    fn rendered(unit: &UnitDescriptor) -> RenderedUnit {
+        RenderedUnit {
+            unit_id: unit.unit_id.clone(),
+            owner: unit.owner.clone(),
+            target: unit.target,
+            target_id: unit.target_id.clone(),
+            source_hash: unit.source_hash.clone(),
+            source_span: unit.source_span,
+            dependency_fingerprint: Blake3Hash::digest(b"proof"),
+            input_hash: unit.input_hash.clone(),
+            utf8: "fixture".into(),
+        }
+    }
+    fn phase() -> std::rc::Rc<VectorReadBudget> {
+        VectorReadBudget::new(std::time::Instant::now() + Duration::from_secs(2)).unwrap()
+    }
+    #[test]
+    fn coverage_scopes_pin_one_view_across_concurrent_vector_and_active_commits() {
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::write(temp.path().join("WIKI.md"), "---\nwiki_schema: '1'\nwiki_id: vault_coverage\nwiki_kind: vault\ntitle: Coverage\n---\n").unwrap();
+        let fs = VaultFs::new(crate::vault::VaultRoot::explicit(temp.path()).unwrap());
+        let writer = WriterPermit::acquire(fs.root(), Duration::from_secs(1)).unwrap();
+        let mut store = VectorStore::open(&fs, Some(&writer)).unwrap();
+        let space = store.prepare_space(&spec()).unwrap();
+        let first = descriptor("a.md", "first");
+        let second = descriptor("b.md", "second");
+        put(&mut store, &space, &first, vec![1.0, 0.0]);
+        let mut audit = VectorCoverageCheck::open(&fs, &phase()).unwrap();
+        assert!(audit.active().is_none());
+        let first_budget = phase();
+        assert_eq!(
+            audit
+                .coverage(&space, &[rendered(&first)], &first_budget)
+                .unwrap()
+                .available_units,
+            1
+        );
+        put(&mut store, &space, &second, vec![0.0, 1.0]);
+        store
+            .connection
+            .execute(
+                "UPDATE embedding_spaces SET active=1 WHERE id=?1",
+                [space.as_str()],
+            )
+            .unwrap();
+        let second_budget = phase();
+        let coverage = audit
+            .coverage(&space, &[rendered(&second)], &second_budget)
+            .unwrap();
+        assert_eq!(coverage.missing_units, 1);
+        assert!(audit.active().is_none());
+        assert_eq!(first_budget.usage().vector_reads, 1);
+        assert!(second_budget.usage().vector_reads >= 1);
+        let mut fresh = VectorCoverageCheck::open(&fs, &phase()).unwrap();
+        assert_eq!(fresh.active().unwrap().id, space);
+        assert_eq!(
+            fresh
+                .coverage(&space, &[rendered(&second)], &phase())
+                .unwrap()
+                .available_units,
+            1
+        );
+    }
+    #[test]
+    fn coverage_failed_scope_cannot_replace_its_allowance() {
+        for limit in ["bytes", "reads", "deadline", "owners"] {
+            let mut store = store(true);
+            let space = store.prepare_space(&spec()).unwrap();
+            let unit = descriptor("a.md", "first");
+            put(&mut store, &space, &unit, vec![1.0, 0.0]);
+            let mut audit = VectorCoverageCheck {
+                store,
+                active: None,
+                failed: false,
+            };
+            let mut budget = phase();
+            let mut units = vec![rendered(&unit)];
+            match limit {
+                "bytes" => budget.usage.borrow_mut().vector_bytes_scanned = 64 * 1024 * 1024,
+                "reads" => budget.usage.borrow_mut().vector_reads = 131_072,
+                "deadline" => {
+                    std::rc::Rc::get_mut(&mut budget).unwrap().started -= Duration::from_secs(3)
+                }
+                _ => {
+                    units = (0..17)
+                        .map(|i| rendered(&descriptor(&format!("{i}.md"), "first")))
+                        .collect()
+                }
+            }
+            assert_eq!(
+                audit.coverage(&space, &units, &budget).unwrap_err().code,
+                ErrorCode::BudgetExceeded,
+                "{limit}"
+            );
+            assert_eq!(
+                audit
+                    .coverage(&space, &[rendered(&unit)], &phase())
+                    .unwrap_err()
+                    .code,
+                ErrorCode::FreshnessConflict,
+                "{limit}"
+            );
+        }
+        let mut ordinary = store(true);
+        ordinary.bind_read_budget(&phase()).unwrap();
+        assert_eq!(
+            ordinary.bind_read_budget(&phase()).unwrap_err().code,
+            ErrorCode::Usage
+        );
     }
 
     #[test]

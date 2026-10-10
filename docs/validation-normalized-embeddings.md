@@ -47,8 +47,31 @@ tests complete returned evidence; it does not isolate discovery from allocation.
 At 25K documents, even one 1,536-dimensional float32 vector per document requires
 153,600,000 scan bytes, exceeding the current 64 MiB vector-read limit before
 selected-owner reads. Smaller dimensions and a different discovery architecture
-remain separate, unqualified decisions. Live acquisition has not started and
-still requires the pending explicit outbound-data consent.
+remain separate, unqualified decisions. The bounded development acquisition is
+now explicitly authorized under the same USD2/296-attempt ceilings. Preparation
+has failed before external dispatch: the accepted preview exhausted selected SQL
+rows, and successful immutable-header reuse then exposed a canonical entry-budget
+failure. Neither attempt acquired embeddings or improved quality. A coherent
+scope-composition candidate separates scheduling pages, canonical proofs, supplier
+tasks and acknowledgment. The two failed attempts remain failed evidence.
+
+The integrated candidate passes 81 distinct affected checks, including receipt
+recovery, request accounting, proof boundaries and pinned coverage reads. Earlier
+unchanged query/proof checks are reused; this is not a full release test result.
+On the exact 994-source development fixture, a release-profile local mock sync
+completed in 96.835 seconds: 1,429 unique inputs, 67 requests and complete published
+coverage. Unchanged offline sync took 0.063 seconds without requests; a full
+canonical/vector coverage check took 4.144 seconds. These timings use the owning
+controller's monotonic clock and synthetic vectors, not a live provider.
+
+The same frozen mock workflow then failed before query dispatch because its
+60-second Run deadline could not admit a full 60-second HTTP timeout after setup.
+That trial remains failed. A separately declared recovery retained the original
+zero-attempt Run, explicitly amended only its deadline, acquired the one original
+query with one mock request, and completed offline hybrid context in 0.235 seconds.
+Fresh query preparation uses a 120-second Run deadline with unchanged attempt,
+request and financial limits. No task/fact gain or release acceptance follows from
+these preparation checks; the live paired comparison remains outstanding.
 
 ## Implemented workflow
 
@@ -264,7 +287,22 @@ The normalized candidate now stores policy-bound compact unit descriptors and
 a durable owner inventory in the rebuildable catalog. Policies bind parser,
 renderer, segmentation and all embedding settings separately from embedding-space
 identity. Preparation backfills in 128-owner pages and acknowledges authenticated
-owner versions in the retained vector store. Each invocation has a finite deadline
+owner versions in the retained vector store. Canonical authentication and owner
+acknowledgment use scopes of at most 16 owners within each scheduling page.
+Missing-input suppliers are selected across the page, with one Run and the same
+invocation accounting limits; provider tasks also contain at most 16 distinct
+suppliers. Acknowledgment commits each checked contiguous prefix and its cursor
+together. These scopes preserve the individual proof ceilings and do not retry
+an exhausted proof with a new allowance.
+
+Normalized `embeddings check` traverses at most 4,096 owners in 120 seconds,
+using bounded canonical scopes and one pinned vector-cache snapshot. It refuses
+catalog publication drift. Exceeding either command limit returns an explicit
+incomplete error with checked counts; unvisited units are not reported as
+missing vectors. Without a candidate or active space, the unit denominator is
+unknown. A local coverage check does not establish remote-provider compatibility.
+
+Each preparation invocation has a finite deadline
 and page allowance; repeated commands resume durable progress. A physical catalog
 rebuild changes acknowledgment authority while retaining compatible vector blobs.
 

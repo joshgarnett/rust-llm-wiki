@@ -34,6 +34,219 @@ fn normalized() -> Fixture {
     fixture
 }
 
+// Bulk fixture creation uses the existing capture planner and its exact file
+// layout, avoiding quadratic rebuilds while preparing disposable public inputs.
+fn captured_scope_fixture(count: usize) -> Fixture {
+    let fixture = Fixture::new();
+    for index in 0..count {
+        let plan = crate::sources::SourceStore::new(fixture.fs.clone())
+            .plan_capture(capture(TITLE, &format!("scope-{index}.txt"), FIRST))
+            .unwrap();
+        for operation in plan.draft.unwrap().operations {
+            let target = fixture.fs.root().path().join(operation.target.as_str());
+            std::fs::create_dir_all(target.parent().unwrap()).unwrap();
+            std::fs::write(target, operation.proposed.unwrap()).unwrap();
+        }
+    }
+    fixture.app.index_rebuild_normalized().unwrap();
+    fixture
+}
+
+#[test]
+fn normalized_captured_scope_and_scheduling_boundaries_complete_without_duplicate_requests() {
+    for count in [15, 16, 17, 127, 128, 129] {
+        let fixture = captured_scope_fixture(count);
+        let responses = Arc::new(Responses::new());
+        let dispatch = dispatcher(&fixture.fs, responses.clone());
+        let runtime = runtime(&fixture.service, &dispatch);
+        let settings = EmbeddingSettings::default();
+        let synced = fixture.app.embeddings_sync(&settings, &runtime).unwrap();
+        complete(&synced, count);
+        assert_eq!(
+            synced.generated_inputs, 1,
+            "equal rendered captures across scopes/pages"
+        );
+        assert_eq!(responses.calls.load(Ordering::SeqCst), 1);
+        let inspection = ledger(&fixture, &synced).inspect().unwrap();
+        assert_eq!(paid_inputs(&fixture, &inspection).len(), 1);
+        let cached = fixture.offline().embeddings_sync_cached(&settings).unwrap();
+        complete(&cached, count);
+        assert_eq!(cached.generated_inputs, 0);
+        assert_eq!(
+            cached.reused_inputs, 0,
+            "unchanged acknowledged owners are excluded"
+        );
+        let checked = fixture
+            .offline()
+            .embeddings_check(&settings, None, false)
+            .unwrap();
+        assert_eq!(checked.coverage.eligible_units, count);
+        assert_eq!(checked.coverage.available_units, count);
+        assert_eq!(checked.coverage.missing_units, 0);
+        assert_eq!(checked.coverage.pending_units, 0);
+        assert!(!checked.network_used);
+        assert_eq!(responses.calls.load(Ordering::SeqCst), 1);
+    }
+}
+
+#[test]
+fn normalized_interrupted_inner_prefix_is_atomic_and_resumes_exact_suffix() {
+    use crate::{
+        catalog::query_types::{QueryCatalog, QueryReadLimits},
+        retrieval::{context_types::VerificationBudget, unit_inventory_types::*},
+    };
+    let fixture = captured_scope_fixture(17);
+    let settings = EmbeddingSettings::default();
+    let catalog = Catalog::new(fixture.fs.clone(), fixture.app.vault_id().clone());
+    let writer = fixture.writer();
+    let inventory = catalog
+        .prepare_unit_inventory_page(&writer, &settings, 128)
+        .unwrap();
+    assert!(inventory.complete);
+    let reader = catalog
+        .cached_query_snapshot(QueryReadLimits::default())
+        .unwrap();
+    let bindings = reader
+        .unit_owner_bindings_page(
+            &inventory.policy,
+            None,
+            0,
+            reader.snapshot().generation,
+            128,
+        )
+        .unwrap();
+    assert_eq!(bindings.len(), 17);
+    let owners: Vec<_> = bindings
+        .iter()
+        .map(|binding| binding.owner.clone())
+        .collect();
+    let mut inputs = super::indexed_embedding_inputs::materialize(
+        &catalog,
+        &settings,
+        Some(&owners),
+        &VerificationBudget::default(),
+    )
+    .unwrap();
+    let spec = fixture.spec();
+    let mut store = VectorStore::open(&fixture.fs, Some(&writer)).unwrap();
+    let space = store.prepare_space(&spec).unwrap();
+    let input = &inputs.units[0];
+    assert!(
+        inputs
+            .units
+            .iter()
+            .all(|unit| unit.input_hash == input.input_hash)
+    );
+    store
+        .put_batch(
+            &space,
+            std::slice::from_ref(&input.input_hash),
+            &[vec![1.0, 0.0]],
+            true,
+            &input.dependency_fingerprint,
+        )
+        .unwrap();
+    let original = PreparationCursor {
+        version: INVENTORY_VERSION,
+        incarnation: catalog_incarnation(reader.vault_id(), reader.snapshot()).unwrap(),
+        policy: inventory.policy.clone(),
+        since_seq: 0,
+        through_seq: reader.snapshot().generation,
+        after: None,
+        complete: false,
+    };
+    let prefix = PreparationCursor {
+        after: Some(UnitOwnerCursor {
+            modified_seq: bindings[15].modified_seq,
+            owner: bindings[15].owner.clone(),
+        }),
+        ..original.clone()
+    };
+    let first: Vec<_> = bindings[..16]
+        .iter()
+        .map(|binding| {
+            (
+                binding.clone(),
+                reader
+                    .unit_descriptors_for_owner(&inventory.policy, &binding.owner, 4096)
+                    .unwrap(),
+            )
+        })
+        .collect();
+    store
+        .acknowledge_unit_owners_checked(&space, &first, Some(&prefix), false, &spec, || {
+            inputs.recheck(&catalog)
+        })
+        .unwrap();
+    let suffix = reader
+        .unit_owner_bindings_page(
+            &inventory.policy,
+            prefix.after.as_ref(),
+            prefix.since_seq,
+            prefix.through_seq,
+            128,
+        )
+        .unwrap();
+    assert_eq!(suffix, bindings[16..]);
+    let final_cursor = PreparationCursor {
+        after: Some(UnitOwnerCursor {
+            modified_seq: suffix[0].modified_seq,
+            owner: suffix[0].owner.clone(),
+        }),
+        complete: true,
+        ..prefix.clone()
+    };
+    let final_owners = vec![(
+        suffix[0].clone(),
+        reader
+            .unit_descriptors_for_owner(&inventory.policy, &suffix[0].owner, 4096)
+            .unwrap(),
+    )];
+    let failed = store.acknowledge_unit_owners_checked(
+        &space,
+        &final_owners,
+        Some(&final_cursor),
+        true,
+        &spec,
+        || {
+            Err(WikiError::new(
+                ErrorCode::FreshnessConflict,
+                "injected final guard failure",
+            ))
+        },
+    );
+    assert_eq!(failed.unwrap_err().code, ErrorCode::FreshnessConflict);
+    assert_eq!(
+        store
+            .preparation_cursor(&space, &inventory.policy, &original.incarnation)
+            .unwrap(),
+        Some(prefix)
+    );
+    assert!(!store.owner_binding_ready(&space, &suffix[0]).unwrap());
+    assert!(store.active().unwrap().is_none());
+    drop(store);
+    drop(inputs);
+    drop(reader);
+    drop(writer);
+    let responses = Arc::new(Responses::new());
+    let dispatch = dispatcher(&fixture.fs, responses.clone());
+    let runtime = runtime(&fixture.service, &dispatch);
+    let resumed = fixture.app.embeddings_sync(&settings, &runtime).unwrap();
+    complete(&resumed, 17);
+    assert_eq!(resumed.generated_inputs, 0);
+    assert_eq!(
+        resumed.reused_inputs, 1,
+        "only the remaining owner input is selected"
+    );
+    assert_eq!(responses.calls.load(Ordering::SeqCst), 0);
+    let checked = fixture
+        .offline()
+        .embeddings_check(&settings, None, false)
+        .unwrap();
+    assert_eq!(checked.coverage.available_units, 17);
+    assert_eq!(checked.coverage.pending_units, 0);
+}
+
 #[test]
 fn normalized_evidence_set_final_proof_rejects_changed_selected_source() {
     use crate::retrieval::{

@@ -43,6 +43,7 @@ pub(crate) struct QuerySnapshot {
     vault_id: RecordId,
     verification: SnapshotVerification,
     usage: Cell<QueryReadUsage>,
+    fact_layout_verified: Cell<bool>,
     pub(super) policy_layout_verified: Cell<bool>,
     limits: QueryReadLimits,
     query_started: Instant,
@@ -156,6 +157,7 @@ impl Catalog {
                 vault_id: self.vault_id.clone(),
                 verification: SnapshotVerification::IndexSnapshot,
                 usage: Cell::new(QueryReadUsage::default()),
+                fact_layout_verified: Cell::new(false),
                 policy_layout_verified: Cell::new(false),
                 limits,
                 query_started,
@@ -233,6 +235,7 @@ impl Catalog {
             vault_id: self.vault_id.clone(),
             verification: SnapshotVerification::IndexSnapshot,
             usage: Cell::new(QueryReadUsage::default()),
+            fact_layout_verified: Cell::new(false),
             policy_layout_verified: Cell::new(false),
             limits,
             query_started,
@@ -606,7 +609,14 @@ impl QuerySnapshot {
 // Bounded facts drive the selected overlay projector; they confer no global proof.
 impl QuerySnapshot {
     pub(crate) fn require_fact_layout(&self) -> Result<()> {
+        self.check_query_budget()?;
         self.require_refresh_publication()?;
+        // The selected read transaction pins this header for the reader's
+        // lifetime. Check it once; selected data rows keep their cumulative
+        // allowances, and failed layout checks are never acknowledged.
+        if self.fact_layout_verified.get() {
+            return Ok(());
+        }
         let mut statement = self
             .connection
             .prepare("SELECT proof_layout_version FROM catalog_meta WHERE singleton=1")
@@ -618,7 +628,10 @@ impl QuerySnapshot {
             .ok_or_else(|| corrupt("normalized proof layout header absent"))?;
         self.reserve_refresh_row(row, 1)?;
         match row.get::<_, i64>(0).map_err(sql::sql_error)? {
-            2 => Ok(()),
+            2 => {
+                self.fact_layout_verified.set(true);
+                Ok(())
+            }
             0 | 1 => Err(WikiError::new(
                 ErrorCode::OfflineUnavailable,
                 "normalized proof layout requires explicit rebuild",
@@ -2062,6 +2075,97 @@ mod tests {
             content_hash: Some(Blake3Hash::digest(b"repeat")),
             extractor_fingerprint: fingerprint,
         }
+    }
+
+    #[test]
+    fn fact_layout_success_preserves_selected_row_and_elapsed_limits() {
+        let (_temp, _root, catalog) = unsynced();
+        publish_normalized_layout(&catalog, 1, true);
+        let mut reader = catalog
+            .query_snapshot(QueryReadLimits {
+                max_rows: 2,
+                ..Default::default()
+            })
+            .unwrap();
+        for _ in 0..128 {
+            reader.require_fact_layout().unwrap();
+        }
+        assert_eq!(reader.usage().rows, 1);
+        reader.document(&path("page.md")).unwrap().unwrap();
+        assert_eq!(reader.usage().rows, 2);
+        assert_eq!(
+            reader.document(&path("page.md")).unwrap_err().code,
+            ErrorCode::BudgetExceeded
+        );
+        reader.require_fact_layout().unwrap();
+        reader.query_started = Instant::now() - Duration::from_secs(31);
+        assert_eq!(
+            reader.require_fact_layout().unwrap_err().code,
+            ErrorCode::BudgetExceeded
+        );
+        assert_eq!(reader.usage().rows, 2);
+    }
+
+    #[test]
+    fn fact_layout_refusals_remain_uncached_and_metered() {
+        for (version, expected) in [
+            (0, ErrorCode::OfflineUnavailable),
+            (1, ErrorCode::OfflineUnavailable),
+            (3, ErrorCode::IndexCorrupt),
+        ] {
+            let (_temp, _root, catalog) = unsynced();
+            let completed = publish_normalized_layout(&catalog, 1, true);
+            let database = Connection::open(&completed.path).unwrap();
+            // The schema prevents unknown layouts during ordinary writes;
+            // exercise a damaged future-layout header in this fixture only.
+            if version == 3 {
+                database
+                    .execute_batch("PRAGMA ignore_check_constraints=ON")
+                    .unwrap();
+            }
+            database
+                .execute(
+                    "UPDATE catalog_meta SET proof_layout_version=?1 WHERE singleton=1",
+                    [version],
+                )
+                .unwrap();
+            let reader = catalog
+                .query_snapshot(QueryReadLimits {
+                    max_rows: 2,
+                    ..Default::default()
+                })
+                .unwrap();
+            for rows in 1..=2 {
+                assert_eq!(reader.require_fact_layout().unwrap_err().code, expected);
+                assert_eq!(reader.usage().rows, rows);
+            }
+            assert_eq!(
+                reader.require_fact_layout().unwrap_err().code,
+                ErrorCode::BudgetExceeded
+            );
+            assert_eq!(reader.usage().rows, 2);
+        }
+    }
+
+    #[test]
+    fn fact_layout_success_is_bound_to_its_pinned_publication() {
+        let (_temp, _root, catalog) = unsynced();
+        publish_normalized_layout(&catalog, 1, true);
+        let old = defaults(&catalog);
+        old.require_fact_layout().unwrap();
+        let old_publication = old.publication_id().unwrap().to_owned();
+        // Publish a different file with the legacy proof layout. This does not
+        // mutate the read-only connection or header held by the old reader.
+        publish_normalized_layout(&catalog, 2, false);
+        old.require_fact_layout().unwrap();
+        assert_eq!(old.usage().rows, 1);
+        let fresh = defaults(&catalog);
+        assert_ne!(fresh.publication_id(), Some(old_publication.as_str()));
+        assert_eq!(
+            fresh.require_fact_layout().unwrap_err().code,
+            ErrorCode::OfflineUnavailable
+        );
+        assert_eq!(fresh.usage().rows, 1);
     }
 
     #[test]

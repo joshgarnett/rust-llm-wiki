@@ -14,6 +14,31 @@ fn changed(message: &str) -> WikiError {
     WikiError::new(ErrorCode::FreshnessConflict, message)
 }
 
+/// Advance exactly the successfully published prefix. Catch-up starts only once
+/// the original inclusive inventory interval has been completely acknowledged.
+fn acknowledged_prefix_cursor(
+    cursor: &PreparationCursor,
+    bindings: &[UnitOwnerBinding],
+    interval_complete: bool,
+    current_generation: u64,
+) -> PreparationCursor {
+    let mut next = cursor.clone();
+    if let Some(binding) = bindings.last() {
+        next.after = Some(UnitOwnerCursor {
+            modified_seq: binding.modified_seq,
+            owner: binding.owner.clone(),
+        });
+    }
+    next.complete = interval_complete;
+    if interval_complete && current_generation > next.through_seq {
+        next.since_seq = next.through_seq;
+        next.through_seq = current_generation;
+        next.after = None;
+        next.complete = false;
+    }
+    next
+}
+
 impl OfflineApp {
     /// Each acknowledged page is durable. An invocation that reaches its finite
     /// page/deadline allowance returns partial progress and can be resumed.
@@ -123,7 +148,8 @@ impl OfflineApp {
         }
         drop(store);
         drop(initial);
-        for _ in 0..MAX_PAGES {
+        let mut acknowledged_units = 0usize;
+        'pages: for _ in 0..MAX_PAGES {
             if Instant::now() >= deadline {
                 report.warnings.push("Preparation reached its command deadline; repeat embeddings sync to resume acknowledged owner pages.".into());
                 break;
@@ -162,12 +188,12 @@ impl OfflineApp {
             store.prepare_space(&spec)?;
             store.bind_read_budget(&phase)?;
             let mut selected = Vec::new();
-            let mut ready = Vec::new();
+            let mut page_ready_units = 0usize;
             for binding in &bindings {
-                if binding.tombstone {
-                    ready.push((binding.clone(), Vec::new()));
-                } else if !store.owner_binding_ready(&space, binding)? {
+                if !binding.tombstone && !store.owner_binding_ready(&space, binding)? {
                     selected.push(binding.owner.clone());
+                } else if !binding.tombstone {
+                    page_ready_units = page_ready_units.saturating_add(binding.unit_count);
                 }
             }
             let snapshot = reader.snapshot().clone();
@@ -175,23 +201,31 @@ impl OfflineApp {
             drop(reader);
             drop(store);
             drop(writer);
-            let mut units = Vec::new();
-            let mut prepared = None;
-            if !selected.is_empty() {
+            let mut planning =
+                indexed_embedding_inputs::EmbeddingPlanningSummary::new(snapshot.clone());
+            for owners in selected.chunks(indexed_embedding_inputs::PROOF_SCOPE_OWNERS) {
+                if Instant::now() >= deadline {
+                    return Err(fail(
+                        ErrorCode::BudgetExceeded,
+                        "preparation planning command deadline exceeded",
+                    ));
+                }
+                let scope_phase = Self::embedding_phase()?;
                 let mut inputs = indexed_embedding_inputs::materialize(
                     &catalog,
                     settings,
-                    Some(&selected),
-                    &Self::embedding_phase_proof_budget(&phase)?,
+                    Some(owners),
+                    &Self::embedding_phase_proof_budget(&scope_phase)?,
                 )?;
                 inputs.recheck(&catalog)?;
-                units = std::mem::take(&mut inputs.units);
-                prepared = Some(inputs);
+                planning.append(inputs.into_planning_summary()?)?;
             }
+            let phase = Self::embedding_phase()?;
+            let units = &planning.units;
             let available = VectorStore::open_bounded_snapshot(&self.fs, &phase)?;
             let mut missing = Vec::new();
             let mut hashes = BTreeSet::new();
-            for unit in &units {
+            for unit in units {
                 if hashes.insert(unit.input_hash.clone()) {
                     if counted_inputs.len() >= MAX_COUNTED_INPUTS
                         && !counted_inputs.contains(&unit.input_hash)
@@ -209,26 +243,23 @@ impl OfflineApp {
                     }
                 }
             }
-            let selected_coverage = available.coverage(&space, &units)?;
+            let selected_coverage = available.coverage(&space, units)?;
             drop(available);
-            let mut paid = false;
             if !missing.is_empty() {
                 if let Some(runtime) = runtime {
-                    paid = true;
-                    let scope = prepared
-                        .as_ref()
-                        .ok_or_else(|| {
-                            changed(
-                                "missing embedding inputs lost their authenticated owner proofs",
-                            )
-                        })?
-                        .paid_scope(&units, &missing, 127)?;
-                    let batches = self.embedding_guard_batches(
+                    let scope = planning.paid_scope(&missing, 127, deadline)?;
+                    let batches = self.embedding_supplier_batches(
                         runtime,
                         &missing,
-                        Some(&scope.source_bindings),
-                        &[],
+                        &scope.source_bindings,
+                        &scope.units,
                     )?;
+                    if Instant::now() >= deadline {
+                        return Err(fail(
+                            ErrorCode::BudgetExceeded,
+                            "preparation command deadline exceeded before paid Run admission",
+                        ));
+                    }
                     let (ledger, tasks) = self.embedding_job_with_bindings(
                         &spec,
                         &batches,
@@ -276,16 +307,15 @@ impl OfflineApp {
                         report.warnings.push(warning)
                     }
                 } else {
-                    if prepared
-                        .as_ref()
-                        .is_some_and(|inputs| inputs.snapshot != snapshot)
-                    {
+                    if planning.snapshot != snapshot {
                         return Err(changed(
                             "publication changed while checking offline preparation coverage",
                         ));
                     }
                     report.coverage.eligible_units = state.unit_count;
                     report.coverage.available_units = retained_available
+                        .saturating_add(acknowledged_units)
+                        .saturating_add(page_ready_units)
                         .saturating_add(selected_coverage.available_units)
                         .min(state.unit_count);
                     report.coverage.missing_units = state
@@ -298,114 +328,155 @@ impl OfflineApp {
                         .saturating_add(selected_coverage.pending_units)
                         .min(report.coverage.missing_units);
                     report.coverage.corrupt_units = selected_coverage.corrupt_units;
-                    report.warnings.push(format!("Coverage is incomplete at indexed generation {}; unvisited owner units remain pending. No provider was called.",snapshot.generation));
+                    report.warnings.push(format!("Coverage is incomplete at indexed generation {}; available units are a conservative observed floor and unvisited owner units remain pending. Previously acknowledged prefixes from an earlier invocation are not recounted. No provider was called.",snapshot.generation));
                     report.warnings.push("Cache-only preparation found missing current inputs; compatible retained blobs are preserved and this owner page remains pending. Run explicitly authorized online preparation or restore the retained cache.".into());
                     return Ok(report);
                 }
             }
-            let writer = self.embedding_writer()?;
-            let phase = Self::embedding_phase()?;
-            let reader = catalog.cached_query_snapshot(QueryReadLimits::default())?;
-            if catalog_incarnation(reader.vault_id(), reader.snapshot())? != incarnation {
-                return Err(changed("catalog rebuilt before owner acknowledgment"));
+            // Detached summaries are planning observations, never publication authority.
+            drop(planning);
+            let mut scopes: Vec<_> = bindings
+                .chunks(indexed_embedding_inputs::PROOF_SCOPE_OWNERS)
+                .collect();
+            if scopes.is_empty() {
+                // An empty final page still closes its original inventory interval.
+                scopes.push(&[]);
             }
-            for binding in &bindings {
-                if reader.unit_owner_binding(&policy, &binding.owner)?.as_ref() != Some(binding) {
-                    return Err(changed(
-                        "owner inventory version changed before acknowledgment",
-                    ));
+            for (scope_index, scope_bindings) in scopes.iter().enumerate() {
+                if Instant::now() >= deadline {
+                    report.warnings.push("Preparation reached its command deadline; repeat embeddings sync to resume the acknowledged owner prefix.".into());
+                    break 'pages;
                 }
-            }
-            let mut fresh = if paid
-                || prepared
-                    .as_ref()
-                    .is_some_and(|inputs| &inputs.snapshot != reader.snapshot())
-            {
-                drop(prepared);
-                drop(units);
-                Some(indexed_embedding_inputs::materialize(
-                    &catalog,
-                    settings,
-                    Some(&selected),
-                    &Self::embedding_phase_proof_budget(&phase)?,
-                )?)
-            } else {
-                if let Some(inputs) = &mut prepared {
-                    inputs.units = units;
+                let writer = self.embedding_writer()?;
+                let phase = Self::embedding_phase()?;
+                let reader = catalog.cached_query_snapshot(QueryReadLimits::default())?;
+                if catalog_incarnation(reader.vault_id(), reader.snapshot())? != incarnation {
+                    return Err(changed("catalog rebuilt before owner acknowledgment"));
                 }
-                prepared
-            };
-            if let Some(inputs) = &mut fresh {
-                inputs.recheck(&catalog)?;
-                for binding in bindings.iter().filter(|b| selected.contains(&b.owner)) {
-                    let descriptors =
-                        reader.unit_descriptors_for_owner(&policy, &binding.owner, 4096)?;
-                    if descriptors.len() != binding.unit_count
-                        || descriptors
-                            .iter()
-                            .any(|d| !inputs.units.iter().any(|u| d.matches_rendered(u)))
+                for binding in *scope_bindings {
+                    if reader.unit_owner_binding(&policy, &binding.owner)?.as_ref() != Some(binding)
                     {
                         return Err(changed(
-                            "authenticated owner units disagree with compact inventory",
+                            "owner inventory version changed before acknowledgment",
                         ));
                     }
-                    ready.push((binding.clone(), descriptors));
                 }
-                let dependencies = inputs.owner_dependencies()?;
-                catalog.record_unit_owner_dependencies(
-                    &writer,
-                    &policy,
-                    &reader.snapshot().clone(),
-                    &dependencies,
-                )?;
-            }
-            if let Some(last_binding) = bindings.last() {
-                cursor.after = Some(UnitOwnerCursor {
-                    modified_seq: last_binding.modified_seq,
-                    owner: last_binding.owner.clone(),
-                });
-            }
-            cursor.complete = last;
-            let current_generation = reader.snapshot().generation;
-            if last && current_generation > cursor.through_seq {
-                // Do not activate a stale interval. Preserve its inclusive
-                // high-water then start a fresh interval on the next iteration.
-                cursor.since_seq = cursor.through_seq;
-                cursor.through_seq = current_generation;
-                cursor.after = None;
-                cursor.complete = false;
-            }
-            let complete = cursor.complete;
-            let mut store = VectorStore::open(&self.fs, Some(&writer))?;
-            store.bind_read_budget(&phase)?;
-            let dimensions = store.space(&space)?.and_then(|x| x.actual_dimensions);
-            let activate = complete && state.unit_count > 0 && dimensions.is_some();
-            store.acknowledge_unit_owners_checked(
-                &space,
-                &ready,
-                Some(&cursor),
-                activate,
-                &spec,
-                || {
-                    if let Some(inputs) = &mut fresh {
-                        inputs.recheck(&catalog)?
+                let owners: Vec<_> = scope_bindings
+                    .iter()
+                    .filter(|binding| selected.contains(&binding.owner))
+                    .map(|binding| binding.owner.clone())
+                    .collect();
+                // Every newly acknowledged owner, including a cache hit, receives
+                // a new bounded canonical proof after the page's paid work.
+                let mut fresh = if owners.is_empty() {
+                    None
+                } else {
+                    Some(indexed_embedding_inputs::materialize(
+                        &catalog,
+                        settings,
+                        Some(&owners),
+                        &Self::embedding_phase_proof_budget(&phase)?,
+                    )?)
+                };
+                let mut ready = Vec::new();
+                if let Some(inputs) = &mut fresh {
+                    if &inputs.snapshot != reader.snapshot() {
+                        return Err(changed(
+                            "publication changed before owner acknowledgment proof",
+                        ));
                     }
-                    reader.verify_operations(&catalog)?;
-                    phase.remaining_ms()?;
-                    Ok(())
-                },
-            )?;
-            report.active_space = store.active()?.map(|x| x.id);
-            report.coverage = Coverage {
-                eligible_units: state.unit_count,
-                available_units: if complete { state.unit_count } else { 0 },
-                missing_units: if complete { 0 } else { state.unit_count },
-                ..Default::default()
-            };
-            report.published = activate;
-            let _ = snapshot;
-            if complete {
-                break;
+                    inputs.recheck(&catalog)?;
+                    for binding in scope_bindings.iter().filter(|b| owners.contains(&b.owner)) {
+                        let descriptors =
+                            reader.unit_descriptors_for_owner(&policy, &binding.owner, 4096)?;
+                        if descriptors.len() != binding.unit_count
+                            || descriptors
+                                .iter()
+                                .any(|d| !inputs.units.iter().any(|u| d.matches_rendered(u)))
+                        {
+                            return Err(changed(
+                                "authenticated owner units disagree with compact inventory",
+                            ));
+                        }
+                        ready.push((binding.clone(), descriptors));
+                    }
+                    catalog.record_unit_owner_dependencies(
+                        &writer,
+                        &policy,
+                        reader.snapshot(),
+                        &inputs.owner_dependencies()?,
+                    )?;
+                }
+                let mut store = VectorStore::open(&self.fs, Some(&writer))?;
+                store.bind_read_budget(&phase)?;
+                for binding in *scope_bindings {
+                    if binding.tombstone {
+                        ready.push((binding.clone(), Vec::new()));
+                    } else if !owners.contains(&binding.owner)
+                        && !store.owner_binding_ready(&space, binding)?
+                    {
+                        return Err(changed(
+                            "retained owner acknowledgment changed before prefix publication",
+                        ));
+                    }
+                }
+                let final_scope = scope_index + 1 == scopes.len();
+                let next = acknowledged_prefix_cursor(
+                    &cursor,
+                    scope_bindings,
+                    last && final_scope,
+                    reader.snapshot().generation,
+                );
+                let complete = next.complete;
+                let dimensions = store.space(&space)?.and_then(|x| x.actual_dimensions);
+                let activate = complete && state.unit_count > 0 && dimensions.is_some();
+                store.acknowledge_unit_owners_checked(
+                    &space,
+                    &ready,
+                    Some(&next),
+                    activate,
+                    &spec,
+                    || {
+                        if let Some(inputs) = &mut fresh {
+                            inputs.recheck(&catalog)?;
+                        }
+                        reader.verify_operations(&catalog)?;
+                        phase.remaining_ms()?;
+                        Ok(())
+                    },
+                )?;
+                // The cursor advances only after the matching owner transaction commits.
+                let catches_up = next.since_seq != cursor.since_seq;
+                cursor = next;
+                acknowledged_units = acknowledged_units.saturating_add(
+                    scope_bindings
+                        .iter()
+                        .filter(|b| !b.tombstone)
+                        .map(|b| b.unit_count)
+                        .sum::<usize>(),
+                );
+                report.active_space = store.active()?.map(|x| x.id);
+                let available = if complete {
+                    state.unit_count
+                } else {
+                    retained_available
+                        .saturating_add(acknowledged_units)
+                        .min(state.unit_count)
+                };
+                report.coverage = Coverage {
+                    eligible_units: state.unit_count,
+                    available_units: available,
+                    missing_units: state.unit_count.saturating_sub(available),
+                    pending_units: state.unit_count.saturating_sub(available),
+                    ..Default::default()
+                };
+                report.published = activate;
+                if complete {
+                    break 'pages;
+                }
+                if catches_up {
+                    acknowledged_units = 0;
+                }
             }
         }
         report.warnings.push("Coverage describes current inventory and retained owner acknowledgments; it is not a full vector-blob integrity audit. Query discovery checks the compatible blobs it reads; canonical evidence is authenticated only for selected owners.".into());
@@ -413,5 +484,57 @@ impl OfflineApp {
             report.warnings.push("Preparation is pending or empty; repeat embeddings sync to resume. The retained active space is unchanged.".into())
         }
         Ok(report)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn prefix_cursor_catches_up_only_after_the_original_interval_finishes() {
+        let policy = RenderPolicyId(Blake3Hash::digest("policy"));
+        let cursor = PreparationCursor {
+            version: INVENTORY_VERSION,
+            incarnation: Blake3Hash::digest("catalog"),
+            policy: policy.clone(),
+            since_seq: 0,
+            through_seq: 7,
+            after: None,
+            complete: false,
+        };
+        let binding = UnitOwnerBinding {
+            incarnation: cursor.incarnation.clone(),
+            policy,
+            owner: VaultRelativePath::new("a.md").unwrap(),
+            render_token: Blake3Hash::digest("render"),
+            proof_version: 1,
+            modified_seq: 4,
+            tombstone: false,
+            unit_count: 1,
+        };
+        let partial = acknowledged_prefix_cursor(&cursor, &[binding], false, 8);
+        assert_eq!(
+            cursor.after, None,
+            "planning a prefix must not mutate the durable cursor"
+        );
+        assert_eq!(partial.since_seq, 0);
+        assert_eq!(partial.through_seq, 7);
+        assert_eq!(partial.after.as_ref().unwrap().modified_seq, 4);
+        assert!(!partial.complete);
+        let closed = acknowledged_prefix_cursor(&partial, &[], true, 7);
+        assert!(
+            closed.complete,
+            "an empty final scheduling page closes the interval"
+        );
+        assert_eq!(closed.after, partial.after);
+        let next = acknowledged_prefix_cursor(&partial, &[], true, 8);
+        assert!(!next.complete);
+        assert_eq!(next.since_seq, 7);
+        assert_eq!(next.through_seq, 8);
+        assert!(
+            next.after.is_none(),
+            "new interval must revisit every changed owner"
+        );
     }
 }

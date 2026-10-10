@@ -33,6 +33,85 @@ const MAX_OWNERS: usize = 4096;
 const MAX_PATH_BYTES: usize = 8 * 1024 * 1024;
 const MAX_BINDING_ENTRIES: usize = 65_536;
 const MAX_BINDING_BYTES: usize = 64 * 1024 * 1024;
+pub(super) const PROOF_SCOPE_OWNERS: usize = 16;
+
+/// Detached planning observations. These guards and rendered inputs cannot
+/// authorize a later send or publication without a new canonical proof.
+pub(super) struct EmbeddingPlanningSummary {
+    pub snapshot: ReadSnapshot,
+    pub units: Vec<RenderedUnit>,
+    owners: BTreeMap<VaultRelativePath, Vec<ReadDependency>>,
+}
+impl EmbeddingPlanningSummary {
+    pub(super) fn new(snapshot: ReadSnapshot) -> Self {
+        Self {
+            snapshot,
+            units: Vec::new(),
+            owners: BTreeMap::new(),
+        }
+    }
+    pub(super) fn append(&mut self, summary: Self) -> Result<()> {
+        if self.snapshot != summary.snapshot {
+            return Err(conflict(
+                "publication changed between preparation planning scopes",
+            ));
+        }
+        if self.owners.len().saturating_add(summary.owners.len()) > 128
+            || self.units.len().saturating_add(summary.units.len()) > 65_536
+        {
+            return Err(exhausted(
+                "preparation planning page owner/unit allowance exhausted",
+            ));
+        }
+        let mut render_bytes = 0usize;
+        for unit in self.units.iter().chain(&summary.units) {
+            render_bytes = render_bytes
+                .checked_add(unit.utf8.len())
+                .filter(|bytes| *bytes <= 64 * 1024 * 1024)
+                .ok_or_else(|| exhausted("preparation planning page render allowance exhausted"))?;
+        }
+        let mut inventory = BindingInventory::default();
+        for guards in self.owners.values().chain(summary.owners.values()) {
+            for guard in guards {
+                inventory.reserve(1, guard_bytes(&guard.path, &guard.expected)?)?;
+            }
+        }
+        if summary
+            .owners
+            .keys()
+            .any(|owner| self.owners.contains_key(owner))
+        {
+            return Err(conflict(
+                "preparation planning owner repeated across scopes",
+            ));
+        }
+        self.units.extend(summary.units);
+        self.owners.extend(summary.owners);
+        Ok(())
+    }
+    pub(super) fn paid_scope(
+        &self,
+        missing: &[crate::providers::types::EmbeddingInput],
+        available_guards: usize,
+        deadline: Instant,
+    ) -> Result<PaidEmbeddingScope> {
+        paid_scope_from_owners(
+            &self.units,
+            missing,
+            available_guards,
+            self.owners
+                .iter()
+                .map(|(owner, guards)| (owner, guards.as_slice())),
+            || {
+                if Instant::now() < deadline {
+                    Ok(())
+                } else {
+                    Err(exhausted("preparation planning command deadline exceeded"))
+                }
+            },
+        )
+    }
+}
 
 /// Test-build scalar attribution only; shipping preparation has no observer.
 #[cfg(test)]
@@ -258,6 +337,96 @@ fn guard_bytes(path: &VaultRelativePath, expected: &ExpectedState) -> Result<usi
         .ok_or_else(|| exhausted("normalized embedding guard byte count overflow"))
 }
 
+fn paid_scope_from_owners<'a>(
+    units: &[RenderedUnit],
+    missing: &[crate::providers::types::EmbeddingInput],
+    available_guards: usize,
+    owners: impl IntoIterator<Item = (&'a VaultRelativePath, &'a [ReadDependency])>,
+    check_deadline: impl Fn() -> Result<()>,
+) -> Result<PaidEmbeddingScope> {
+    check_deadline()?;
+    let wanted: BTreeSet<_> = missing.iter().map(|input| &input.input_hash).collect();
+    let mut by_owner: BTreeMap<_, BTreeMap<_, Vec<_>>> = BTreeMap::new();
+    for unit in units
+        .iter()
+        .filter(|unit| wanted.contains(&unit.input_hash))
+    {
+        check_deadline()?;
+        by_owner
+            .entry(&unit.owner)
+            .or_default()
+            .entry(&unit.input_hash)
+            .or_default()
+            .push(unit);
+    }
+    let mut suppliers = BTreeMap::new();
+    let mut inventory = BindingInventory::default();
+    let mut oversized = BTreeMap::new();
+    // Inspect path-ordered supplier observations before freezing a task.
+    // Each per-input guard copy is metered before allocation; duplicate
+    // supplier observations do not enlarge the chosen paid guard union.
+    for (path, guards) in owners {
+        check_deadline()?;
+        let Some(owner_units) = by_owner.get(path) else {
+            continue;
+        };
+        for hash in owner_units.keys().copied() {
+            check_deadline()?;
+            if guards.len() <= available_guards {
+                if !suppliers.contains_key(hash) {
+                    let key_bytes = size_of::<(Blake3Hash, Vec<ReadDependency>)>()
+                        .checked_add(hash.as_str().len())
+                        .ok_or_else(|| exhausted("normalized embedding input key byte overflow"))?;
+                    inventory.reserve(1, key_bytes)?;
+                    for guard in guards {
+                        check_deadline()?;
+                        inventory.reserve(1, guard_bytes(&guard.path, &guard.expected)?)?;
+                    }
+                    suppliers.insert(hash.clone(), (path.clone(), guards.to_vec()));
+                }
+            } else {
+                let candidate = oversized
+                    .entry(hash.clone())
+                    .or_insert((path.clone(), guards.len()));
+                if guards.len() < candidate.1 {
+                    *candidate = (path.clone(), guards.len());
+                }
+            }
+        }
+    }
+    let mut scope = PaidEmbeddingScope {
+        units: Vec::new(),
+        source_bindings: BTreeMap::new(),
+    };
+    for input in missing {
+        check_deadline()?;
+        let Some((owner, guards)) = suppliers.remove(&input.input_hash) else {
+            if let Some((owner, required)) = oversized.get(&input.input_hash) {
+                let mut error = exhausted(&format!(
+                    "embedding input {} supplied by {} requires {} source guards; only {} are available (one additional Run guard is reserved)",
+                    input.input_hash, owner, required, available_guards,
+                ));
+                error.details = serde_json::json!({"input_hash":input.input_hash,"owner":owner,
+                        "required_source_guards":required,"available_source_guards":available_guards,
+                        "reserved_run_guards":1});
+                return Err(error);
+            }
+            return Err(conflict(
+                "missing embedding input has no authenticated supplier",
+            ));
+        };
+        scope.units.extend(
+            by_owner[&owner][&input.input_hash]
+                .iter()
+                .map(|unit| (**unit).clone()),
+        );
+        scope
+            .source_bindings
+            .insert(input.input_hash.clone(), guards);
+    }
+    Ok(scope)
+}
+
 pub(super) struct NormalizedEmbeddingInputs {
     pub snapshot: ReadSnapshot,
     /// All exact owner units remain present, including shared request inputs.
@@ -283,82 +452,28 @@ impl NormalizedEmbeddingInputs {
                 "cannot plan paid inputs from a failed owner proof",
             ));
         }
-        let wanted: BTreeSet<_> = missing.iter().map(|input| &input.input_hash).collect();
-        let mut by_owner: BTreeMap<_, BTreeMap<_, Vec<_>>> = BTreeMap::new();
-        for unit in units
-            .iter()
-            .filter(|unit| wanted.contains(&unit.input_hash))
-        {
-            by_owner
-                .entry(&unit.owner)
-                .or_default()
-                .entry(&unit.input_hash)
-                .or_default()
-                .push(unit);
+        let owners = self.owner_dependencies()?;
+        paid_scope_from_owners(
+            units,
+            missing,
+            available_guards,
+            owners
+                .iter()
+                .map(|(owner, guards)| (owner, guards.as_slice())),
+            || self.allowance.milliseconds().map(|_| ()),
+        )
+    }
+    pub(super) fn into_planning_summary(self) -> Result<EmbeddingPlanningSummary> {
+        self.allowance.milliseconds()?;
+        if self.failed {
+            return Err(conflict("failed proof cannot produce a planning summary"));
         }
-        let mut suppliers = BTreeMap::new();
-        let mut oversized = BTreeMap::new();
-        // Owners were admitted in path order. Inspect each complete proof once,
-        // before freezing a paid input's guards; the all-owner equal-hash union
-        // in source_bindings is deliberately not used for paid scope selection.
-        for owner in &self.owners {
-            self.allowance.milliseconds()?;
-            let path = owner
-                .proof
-                .documents
-                .keys()
-                .next()
-                .ok_or_else(|| conflict("authenticated embedding supplier disappeared"))?;
-            let Some(owner_units) = by_owner.get(path) else {
-                continue;
-            };
-            let guards = owner.read_preconditions();
-            for hash in owner_units.keys().copied() {
-                if guards.len() <= available_guards {
-                    suppliers
-                        .entry(hash.clone())
-                        .or_insert_with(|| (path.clone(), guards.clone()));
-                } else {
-                    let candidate = oversized
-                        .entry(hash.clone())
-                        .or_insert((path.clone(), guards.len()));
-                    if guards.len() < candidate.1 {
-                        *candidate = (path.clone(), guards.len());
-                    }
-                }
-            }
-        }
-        let mut scope = PaidEmbeddingScope {
-            units: Vec::new(),
-            source_bindings: BTreeMap::new(),
-        };
-        for input in missing {
-            self.allowance.milliseconds()?;
-            let Some((owner, guards)) = suppliers.remove(&input.input_hash) else {
-                if let Some((owner, required)) = oversized.get(&input.input_hash) {
-                    let mut error = exhausted(&format!(
-                        "embedding input {} supplied by {} requires {} source guards; only {} are available (one additional Run guard is reserved)",
-                        input.input_hash, owner, required, available_guards,
-                    ));
-                    error.details = serde_json::json!({"input_hash":input.input_hash,"owner":owner,
-                        "required_source_guards":required,"available_source_guards":available_guards,
-                        "reserved_run_guards":1});
-                    return Err(error);
-                }
-                return Err(conflict(
-                    "missing embedding input has no authenticated supplier",
-                ));
-            };
-            scope.units.extend(
-                by_owner[&owner][&input.input_hash]
-                    .iter()
-                    .map(|unit| (**unit).clone()),
-            );
-            scope
-                .source_bindings
-                .insert(input.input_hash.clone(), guards);
-        }
-        Ok(scope)
+        let owners = self.owner_dependencies()?.into_iter().collect();
+        Ok(EmbeddingPlanningSummary {
+            snapshot: self.snapshot,
+            units: self.units,
+            owners,
+        })
     }
     pub(super) fn owner_dependencies(
         &self,
@@ -757,6 +872,91 @@ mod tests {
         }
     }
     #[test]
+    fn captured_owner_page_preserves_cumulative_row_and_canonical_limits() {
+        let temp = tempfile::tempdir().unwrap();
+        fs::write(temp.path().join("WIKI.md"), "---\nwiki_schema: '1'\nwiki_id: vault_capture_page\nwiki_kind: vault\ntitle: Captured owner page\n---\n").unwrap();
+        let handle = VaultFs::new(VaultRoot::explicit(temp.path()).unwrap());
+        let mut paths = Vec::new();
+        for index in 0..128 {
+            let plan = SourceStore::new(handle.clone())
+                .plan_capture(CaptureRequest {
+                    title: format!("Captured owner {index}"),
+                    origin_kind: SourceOrigin::LocalFile,
+                    origin: format!("fixture-{index}.md"),
+                    original: format!("Exact captured evidence {index}.\n").into_bytes(),
+                    extraction: ExtractionInput::Utf8Preserve,
+                    media_type: None,
+                })
+                .unwrap();
+            paths.push(
+                plan.draft
+                    .as_ref()
+                    .unwrap()
+                    .operations
+                    .iter()
+                    .find(|op| op.target.as_str().ends_with("content.md"))
+                    .unwrap()
+                    .target
+                    .clone(),
+            );
+            apply(temp.path(), plan);
+        }
+        let catalog = Catalog::new(handle, RecordId::new("vault_capture_page").unwrap());
+        let writer = WriterPermit::acquire(catalog.fs().root(), Duration::from_secs(1)).unwrap();
+        catalog.rebuild_normalized(&writer).unwrap();
+        drop(writer);
+        let settings = EmbeddingSettings {
+            max_input_bytes: 8000,
+            ..Default::default()
+        };
+        let mut inputs = materialize(
+            &catalog,
+            &settings,
+            Some(&paths),
+            &VerificationBudget::default(),
+        )
+        .unwrap();
+        assert_eq!(inputs.owners.len(), 128);
+        assert_eq!(inputs.units.len(), 128);
+        assert_eq!(
+            inputs
+                .units
+                .iter()
+                .map(|u| &u.owner)
+                .collect::<BTreeSet<_>>(),
+            paths.iter().collect::<BTreeSet<_>>()
+        );
+        // These ordinary Source/Revision/Vault closures previously performed
+        // 46 selected-row reads each (5888), exceeding the shared4096 ceiling.
+        // The pinned layout is now read once; all31 other rows per owner,
+        // including both identity schema witnesses per record, remain charged.
+        assert_eq!(inputs.reader.usage().rows, 3969);
+        let before = inputs.allowance.remaining.max_files;
+        // A third full canonical pass over 128 owners exceeds the unchanged
+        // 16,384-entry allowance. Ordinary preparation must use smaller scopes.
+        assert_eq!(code(inputs.recheck(&catalog)), ErrorCode::BudgetExceeded);
+        assert_eq!(inputs.reader.usage().rows, 3969);
+        assert!(inputs.allowance.remaining.max_files < before);
+        assert_eq!(
+            code(inputs.into_planning_summary()),
+            ErrorCode::FreshnessConflict
+        );
+        assert_eq!(
+            code(materialize_with_query_limits(
+                &catalog,
+                &settings,
+                Some(&paths),
+                &VerificationBudget::default(),
+                QueryReadLimits {
+                    max_rows: 3968,
+                    ..Default::default()
+                },
+            )),
+            ErrorCode::BudgetExceeded
+        );
+    }
+
+    #[test]
     fn selected_and_full_corpus_keep_exact_owners_and_real_published_snapshot() {
         let fixture = Fixture::new();
         let full = fixture.materialize(None);
@@ -849,6 +1049,109 @@ mod tests {
             full.source_bindings.len() + full.source_bindings.values().map(Vec::len).sum::<usize>();
         assert_eq!(full.inventory.entries, expected_entries);
     }
+    #[test]
+    fn detached_planning_deduplicates_across_scopes_and_selects_feasible_supplier() {
+        let fixture = Fixture::new();
+        let mut first = fixture.materialize(Some(&[path("plain-a.md")]));
+        first.recheck(&fixture.catalog).unwrap();
+        let mut first = first.into_planning_summary().unwrap();
+        let mut second = fixture.materialize(Some(&[path("plain-b.md")]));
+        second.recheck(&fixture.catalog).unwrap();
+        let second = second.into_planning_summary().unwrap();
+        assert_eq!(first.units[0].input_hash, second.units[0].input_hash);
+        let missing = vec![first.units[0].input()];
+        let available_guards = second.owners[&path("plain-b.md")].len();
+        // A detached summary is an observation, not proof authority. Model a
+        // larger supplier closure here; later paid admission must authenticate
+        // the selected supplier independently against its actual task guards.
+        first
+            .owners
+            .get_mut(&path("plain-a.md"))
+            .unwrap()
+            .push(ReadDependency {
+                path: path("extra-dependency.md"),
+                expected: ExpectedState::Absent,
+            });
+        let mut page = EmbeddingPlanningSummary::new(first.snapshot.clone());
+        page.append(first).unwrap();
+        assert_eq!(
+            code(page.paid_scope(
+                &missing,
+                available_guards,
+                Instant::now() + Duration::from_secs(1)
+            )),
+            ErrorCode::BudgetExceeded
+        );
+        page.append(second).unwrap();
+        let paid = page
+            .paid_scope(
+                &missing,
+                available_guards,
+                Instant::now() + Duration::from_secs(1),
+            )
+            .unwrap();
+        assert_eq!(paid.source_bindings.len(), 1);
+        assert_eq!(paid.units.len(), 1);
+        assert_eq!(paid.units[0].owner, path("plain-b.md"));
+        assert_eq!(
+            paid.source_bindings[&missing[0].input_hash].len(),
+            available_guards
+        );
+        let repeated = fixture
+            .materialize(Some(&[path("plain-b.md")]))
+            .into_planning_summary()
+            .unwrap();
+        assert_eq!(code(page.append(repeated)), ErrorCode::FreshnessConflict);
+        let mut changed = fixture
+            .materialize(Some(&[path("plain-a.md")]))
+            .into_planning_summary()
+            .unwrap();
+        changed.snapshot.generation += 1;
+        assert_eq!(code(page.append(changed)), ErrorCode::FreshnessConflict);
+        assert_eq!(
+            page.units.len(),
+            2,
+            "failed append must preserve the original planning page"
+        );
+    }
+
+    #[test]
+    fn detached_paid_planning_retains_deadline_and_per_input_guard_copy_limits() {
+        let fixture = Fixture::new();
+        let mut inputs = fixture.materialize(Some(&[path("plain-a.md")]));
+        inputs.recheck(&fixture.catalog).unwrap();
+        let mut page = inputs.into_planning_summary().unwrap();
+        let missing = vec![page.units[0].input()];
+        assert_eq!(
+            code(page.paid_scope(&missing, 127, Instant::now())),
+            ErrorCode::BudgetExceeded
+        );
+        let guards = page.owners.get_mut(&path("plain-a.md")).unwrap();
+        while guards.len() < 127 {
+            guards.push(ReadDependency {
+                path: path(&format!("dependency-{}.md", guards.len())),
+                expected: ExpectedState::Absent,
+            });
+        }
+        // One bounded owner observation can supply many different input hashes.
+        // Its original 127 guards fit, but copying them for 600 paid inputs does
+        // not fit the unchanged cumulative 65,536-entry inventory.
+        let template = page.units[0].clone();
+        page.units = (0..600)
+            .map(|index| {
+                let mut unit = template.clone();
+                unit.utf8 = format!("distinct planning input {index}");
+                unit.input_hash = Blake3Hash::digest(unit.utf8.as_bytes());
+                unit
+            })
+            .collect();
+        let missing: Vec<_> = page.units.iter().map(RenderedUnit::input).collect();
+        assert_eq!(
+            code(page.paid_scope(&missing, 127, Instant::now() + Duration::from_secs(2))),
+            ErrorCode::BudgetExceeded
+        );
+    }
+
     #[test]
     fn same_size_selected_dependency_and_captured_payload_edits_poison_recheck() {
         for target in ["dependency", "capture"] {

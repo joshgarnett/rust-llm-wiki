@@ -3,6 +3,8 @@ use super::{
     OfflineApp,
     indexed_embedding_inputs::{self, NormalizedEmbeddingInputs},
 };
+#[path = "indexed_embedding_check.rs"]
+mod indexed_check;
 #[path = "indexed_embedding_sync.rs"]
 mod indexed_sync;
 use crate::config::providers::TrustedService;
@@ -306,12 +308,35 @@ impl OfflineApp {
         let normalized = catalog.operation_state()?.is_some();
         let paths = Self::embedding_owner_paths(expected);
         let result: Result<bool> = (|| {
-            let mut inputs =
-                self.embedding_inputs(&spec.settings, false, Some(writer), Some(&paths))?;
-            if !same_units(expected, inputs.units()) {
-                return Ok(false);
+            // Retained tasks may predate bounded supplier packing. Authenticate
+            // their original owners in declared scopes; the receipt still checks
+            // the complete original source-guard union atomically.
+            let scope_size = if normalized {
+                indexed_embedding_inputs::PROOF_SCOPE_OWNERS
+            } else {
+                paths.len().max(1)
+            };
+            let mut snapshot = None;
+            for scope in paths.chunks(scope_size) {
+                let mut inputs =
+                    self.embedding_inputs(&spec.settings, false, Some(writer), Some(scope))?;
+                if snapshot
+                    .as_ref()
+                    .is_some_and(|old| old != inputs.snapshot())
+                {
+                    return Ok(false);
+                }
+                snapshot = Some(inputs.snapshot().clone());
+                let selected: Vec<_> = expected
+                    .iter()
+                    .filter(|unit| scope.contains(&unit.owner))
+                    .cloned()
+                    .collect();
+                if !same_units(&selected, inputs.units()) {
+                    return Ok(false);
+                }
+                inputs.recheck(&catalog)?;
             }
-            inputs.recheck(&catalog)?;
             Ok(true)
         })();
         match result {
@@ -383,51 +408,64 @@ impl OfflineApp {
         let runtime = scoped_runtime.as_ref();
         settings.validate()?;
         self.embedding_policy_consistent(runtime)?;
-        let phase = Self::embedding_phase()?;
         let candidate = runtime
             .map(|r| SpaceSpec::from_service(r.service, settings.clone()))
             .transpose()?;
-        let store = match VectorStore::open_bounded(&self.fs, &phase) {
-            Ok(store) => Some(store),
-            Err(e) if e.code == ErrorCode::OfflineUnavailable => None,
-            Err(e) => return Err(e),
-        };
-        let active = store
-            .as_ref()
-            .map(VectorStore::active)
-            .transpose()?
-            .flatten();
-        let spec = candidate.or_else(|| active.as_ref().map(|s| s.spec.clone()));
-        let mut inputs = spec
-            .as_ref()
-            .map(|spec| {
-                self.embedding_inputs_bounded(
-                    &spec.settings,
-                    self.options.dry_run,
-                    None,
-                    None,
-                    &Self::embedding_phase_proof_budget(&phase)?,
-                )
-            })
-            .transpose()?;
-        let units = inputs.as_ref().map(EmbeddingCorpus::units).unwrap_or(&[]);
-        let space = spec.as_ref().map(SpaceSpec::id).transpose()?;
-        let coverage = if let (Some(store), Some(space)) = (&store, &space) {
-            store.coverage(space, &units)?
+        let catalog = Catalog::new(self.fs.clone(), self.vault_id.clone());
+        let normalized = catalog.operation_state()?.is_some();
+        let (spec, space, active, coverage) = if normalized {
+            self.embeddings_coverage_indexed(candidate)?
         } else {
-            Coverage {
-                eligible_units: units.len(),
-                missing_units: units.len(),
-                ..Default::default()
+            let phase = Self::embedding_phase()?;
+            let store = match VectorStore::open_bounded(&self.fs, &phase) {
+                Ok(store) => Some(store),
+                Err(e) if e.code == ErrorCode::OfflineUnavailable => None,
+                Err(e) => return Err(e),
+            };
+            let active = store
+                .as_ref()
+                .map(VectorStore::active)
+                .transpose()?
+                .flatten();
+            let spec = candidate.or_else(|| active.as_ref().map(|s| s.spec.clone()));
+            let mut inputs = spec
+                .as_ref()
+                .map(|spec| {
+                    self.embedding_inputs_bounded(
+                        &spec.settings,
+                        self.options.dry_run,
+                        None,
+                        None,
+                        &Self::embedding_phase_proof_budget(&phase)?,
+                    )
+                })
+                .transpose()?;
+            let units = inputs.as_ref().map(EmbeddingCorpus::units).unwrap_or(&[]);
+            let space = spec.as_ref().map(SpaceSpec::id).transpose()?;
+            let coverage = if let (Some(store), Some(space)) = (&store, &space) {
+                store.coverage(space, &units)?
+            } else {
+                Coverage {
+                    eligible_units: units.len(),
+                    missing_units: units.len(),
+                    ..Default::default()
+                }
+            };
+            if let Some(inputs) = &mut inputs {
+                inputs.recheck(&Catalog::new(self.fs.clone(), self.vault_id.clone()))?;
             }
+            phase.remaining_ms()?;
+            drop(inputs);
+            drop(store);
+            (spec, space, active.map(|state| state.id), coverage)
         };
-        if let Some(inputs) = &mut inputs {
-            inputs.recheck(&Catalog::new(self.fs.clone(), self.vault_id.clone()))?;
+        let mut report=EmbeddingReport {space:space.clone(),active_space:active,settings:spec.as_ref().map(|s|s.settings.clone()),coverage,generated_inputs:0,reused_inputs:0,published:false,dry_run:self.options.dry_run,network_used:false,run_id:None,warnings:vec!["local check does not establish provider compatibility; missing/corrupt cache is missing coverage".into()]};
+        if normalized {
+            report.warnings.push("Coverage uses one pinned vector-cache view and individually authenticated owner scopes at an unchanged catalog publication; check is limited to 4096 owners and 120 seconds, and fails explicitly if incomplete.".into());
         }
-        phase.remaining_ms()?;
-        drop(inputs);
-        drop(store);
-        let mut report=EmbeddingReport {space:space.clone(),active_space:active.map(|s|s.id),settings:spec.as_ref().map(|s|s.settings.clone()),coverage,generated_inputs:0,reused_inputs:0,published:false,dry_run:self.options.dry_run,network_used:false,run_id:None,warnings:vec!["local check does not establish provider compatibility; missing/corrupt cache is missing coverage".into()]};
+        if spec.is_none() {
+            report.warnings.push("No candidate or active embedding space is configured; the eligible-unit denominator is unknown, not an empty-corpus audit.".into());
+        }
         if probe && !self.options.dry_run {
             let runtime = runtime.ok_or_else(|| {
                 fail(
@@ -1233,6 +1271,25 @@ impl OfflineApp {
         bindings: Option<&BTreeMap<Blake3Hash, Vec<ReadDependency>>>,
         scope_guards: &[ReadDependency],
     ) -> Result<Vec<Vec<EmbeddingInput>>> {
+        self.embedding_guard_batches_bounded(runtime, inputs, bindings, scope_guards, None)
+    }
+    pub(super) fn embedding_supplier_batches(
+        &self,
+        runtime: &EmbeddingRuntime<'_>,
+        inputs: &[EmbeddingInput],
+        bindings: &BTreeMap<Blake3Hash, Vec<ReadDependency>>,
+        units: &[RenderedUnit],
+    ) -> Result<Vec<Vec<EmbeddingInput>>> {
+        self.embedding_guard_batches_bounded(runtime, inputs, Some(bindings), &[], Some(units))
+    }
+    fn embedding_guard_batches_bounded(
+        &self,
+        runtime: &EmbeddingRuntime<'_>,
+        inputs: &[EmbeddingInput],
+        bindings: Option<&BTreeMap<Blake3Hash, Vec<ReadDependency>>>,
+        scope_guards: &[ReadDependency],
+        suppliers: Option<&[RenderedUnit]>,
+    ) -> Result<Vec<Vec<EmbeddingInput>>> {
         let max_items =
             usize::from(runtime.service.service().max_batch_items.unwrap_or(32)).min(32);
         let max_bytes = runtime
@@ -1288,6 +1345,27 @@ impl OfflineApp {
             }
             Ok(guards.len().saturating_add(1))
         };
+        let owner_count = |batch: &[EmbeddingInput]| -> Result<usize> {
+            let Some(suppliers) = suppliers else {
+                return Ok(0);
+            };
+            let mut owners = BTreeSet::new();
+            for input in batch {
+                let matches: BTreeSet<_> = suppliers
+                    .iter()
+                    .filter(|unit| unit.input_hash == input.input_hash)
+                    .map(|unit| &unit.owner)
+                    .collect();
+                if matches.len() != 1 {
+                    return Err(fail(
+                        ErrorCode::FreshnessConflict,
+                        "embedding input must retain exactly one chosen supplier",
+                    ));
+                }
+                owners.extend(matches);
+            }
+            Ok(owners.len())
+        };
         let encoded_size = |batch: &[EmbeddingInput]| -> Result<usize> {
             serde_json::to_vec(&serde_json::json!({"model":runtime.service.summary().model,
                 "input":batch.iter().map(|i| &i.utf8).collect::<Vec<_>>(),
@@ -1301,6 +1379,8 @@ impl OfflineApp {
             if max_items == 0
                 || encoded_size(std::slice::from_ref(input))? > max_bytes
                 || union(std::slice::from_ref(input))? > 128
+                || owner_count(std::slice::from_ref(input))?
+                    > indexed_embedding_inputs::PROOF_SCOPE_OWNERS
             {
                 return Err(fail(
                     ErrorCode::BudgetExceeded,
@@ -1312,6 +1392,7 @@ impl OfflineApp {
             if candidate.len() > max_items
                 || encoded_size(&candidate)? > max_bytes
                 || union(&candidate)? > 128
+                || owner_count(&candidate)? > indexed_embedding_inputs::PROOF_SCOPE_OWNERS
             {
                 if batch.is_empty() {
                     return Err(fail(
@@ -2306,31 +2387,34 @@ impl OfflineApp {
         // Rebind fresh membership after own receipt changes; never the pre-HTTP generation.
         if corpus {
             let writer = self.embedding_writer()?;
-            let paths = Self::embedding_owner_paths(&target_expected);
-            let phase = Self::embedding_phase()?;
-            let mut fresh = self.embedding_inputs_bounded(
-                &spec.settings,
-                false,
-                Some(&writer),
-                Some(&paths),
-                &Self::embedding_phase_proof_budget(&phase)?,
-            )?;
-            if !same_units(&target_expected, fresh.units()) {
-                return Err(fail(
-                    ErrorCode::FreshnessConflict,
-                    "embedding targets changed after receipt; current membership withheld",
-                ));
-            }
-            let units = fresh.take_units();
-            let snapshot = fresh.snapshot().clone();
-            store.bind_read_budget(&phase)?;
             if catalog.operation_state()?.is_some() {
-                // Normalized readiness is acknowledged by the owner-page
-                // coordinator. A paid receipt must not replace the entire
-                // snapshot's legacy JSON membership with its task subset.
-                fresh.recheck(&catalog)?;
-                phase.remaining_ms()?;
+                // Reuse the original supplier subsets across bounded scopes.
+                // Owner readiness is published by the coordinator, not this task.
+                if !self.embedding_targets_current(spec, &target_expected, &writer)? {
+                    return Err(fail(
+                        ErrorCode::FreshnessConflict,
+                        "embedding targets changed after receipt; current membership withheld",
+                    ));
+                }
             } else {
+                let phase = Self::embedding_phase()?;
+                let paths = Self::embedding_owner_paths(&target_expected);
+                let mut fresh = self.embedding_inputs_bounded(
+                    &spec.settings,
+                    false,
+                    Some(&writer),
+                    Some(&paths),
+                    &Self::embedding_phase_proof_budget(&phase)?,
+                )?;
+                if !same_units(&target_expected, fresh.units()) {
+                    return Err(fail(
+                        ErrorCode::FreshnessConflict,
+                        "embedding targets changed after receipt; current membership withheld",
+                    ));
+                }
+                let units = fresh.take_units();
+                let snapshot = fresh.snapshot().clone();
+                store.bind_read_budget(&phase)?;
                 store.memberships_with_spec_checked(
                     &space,
                     &snapshot,

@@ -7,14 +7,15 @@ use crate::{
 };
 use std::{collections::BTreeMap, fs, sync::atomic::AtomicUsize};
 
-// Prospective work ceilings from the required safety pipeline, fixed before
-// execution: page selection, task guard freeze and final acknowledgment each
-// authenticate all changed owners; pre-send, receipt and post-receipt rebind
-// each authenticate the owners of the missing paid input. Received recovery
-// skips guard freezing and send, then reuses the cached page proof for its ack.
+// Retain the original conservative online work ceilings. Detached planning
+// and fresh acknowledgment now authenticate changed owners independently;
+// pre-send, receipt and post-receipt rebind authenticate paid suppliers.
+// Received recovery
+// authenticates receipt validation and post-receipt rebind, then independently
+// authenticates planning and fresh acknowledgment; ready owners stay untouched.
 const ONLINE_CHANGED_OWNER_PASSES: usize = 3;
 const ONLINE_PAID_OWNER_PASSES: usize = 3;
-const RECEIVED_SINGLE_OWNER_PASSES: usize = 3;
+const RECEIVED_SINGLE_OWNER_PASSES: usize = 4;
 
 fn ordinary_settings() -> EmbeddingSettings {
     let settings = EmbeddingSettings::default();
@@ -172,10 +173,9 @@ fn inventory_multiple_pages_received_resume_skips_ready_owners_and_noop_renders_
         3,
         "Received response must not be resent"
     );
-    assert!(
-        work.owner_attempts > 0 && work.owner_attempts <= RECEIVED_SINGLE_OWNER_PASSES,
-        "the first 128 ready owners must not be reauthenticated: {}",
-        work.owner_attempts
+    assert_eq!(
+        work.owner_attempts, RECEIVED_SINGLE_OWNER_PASSES,
+        "only the final owner needs receipt validation, post-receipt rebind, planning and fresh acknowledgment; the first 128 owners stay ready"
     );
     let after = job.inspect().unwrap();
     assert_eq!(after.attempts.len(), 1);
@@ -552,8 +552,8 @@ fn inventory_current_support_dependency_invalidates_proof_preserves_unrelated_ow
     assert!(!prepared.network_used);
     assert!(prepared.run_id.is_none());
     assert_eq!(
-        work.owner_attempts, 2,
-        "A's changed support proof and the Source's changed envelope require authentication, C does not"
+        work.owner_attempts, 4,
+        "A's changed support proof and the Source's changed envelope each need planning and fresh acknowledgment; C does not"
     );
     assert_eq!(responses.calls.load(Ordering::SeqCst), 3);
     assert_eq!(owner_state(&fixture, &settings, &c), c_before);
@@ -617,8 +617,8 @@ fn inventory_catalog_rebuild_and_retained_cache_restore_reuse_vectors_offline() 
         attribution::with_observation(|| fixture.offline().embeddings_sync_cached(&settings));
     complete(&rebuilt.unwrap(), 1);
     assert_eq!(
-        work.owner_attempts, 1,
-        "rebuild cannot reuse old-incarnation owner authority"
+        work.owner_attempts, 2,
+        "rebuild needs independent planning and fresh acknowledgment; old-incarnation authority is not reused"
     );
     let current = owner_state(&fixture, &settings, &content_path(&source, &revision));
     assert_ne!(current.0.incarnation, original.0.incarnation);
@@ -1003,7 +1003,10 @@ fn inventory_automatic_guard_oversized_first_supplier_uses_alternate_and_cached_
             .embeddings_sync_cached(&ordinary_settings())
     });
     complete(&rebuilt.unwrap(), 2);
-    assert_eq!(work.authenticated_owners, 2);
+    assert_eq!(
+        work.authenticated_owners, 4,
+        "both rebuilt owners need independent planning and fresh acknowledgment"
+    );
     assert_eq!(responses.calls.load(Ordering::SeqCst), 2);
     cached_noop(&fixture, &ordinary_settings(), 2);
 }
@@ -2099,7 +2102,7 @@ fn inventory_automatic_guard_released_not_sent_retries_existing_run_without_rece
 }
 
 #[test]
-fn inventory_invocation_budget_129_owners_stops_at_four_requests_and_continues_one_input() {
+fn inventory_invocation_budget_129_owners_keeps_four_request_operations_and_amends_original_run() {
     let mut fixture = normalized();
     for index in 0..129 {
         fs::write(
@@ -2137,57 +2140,225 @@ fn inventory_invocation_budget_129_owners_stops_at_four_requests_and_continues_o
     );
     assert_eq!(error.hint.as_deref(), error.details["next_action"].as_str());
     assert_eq!(responses.calls.load(Ordering::SeqCst), 4);
-    assert_eq!(responses.items.load(Ordering::SeqCst), 128);
-    assert_eq!(error.details["generated_inputs"], 128);
-    assert_eq!(retained_marker_count(&fixture), 2);
-    let run = serde_json::from_value(error.details["run_id"].clone()).unwrap();
-    let pending = JobLedger::new(
+    // New tasks retain at most 16 actual supplier owners, even though this
+    // provider permits 32 items. The first page therefore declares eight tasks;
+    // four requests acquire 64 distinct inputs, not the old hypothetical 128.
+    assert_eq!(responses.items.load(Ordering::SeqCst), 64);
+    assert_eq!(error.details["generated_inputs"], 64);
+    assert_eq!(retained_marker_count(&fixture), 1);
+    let run: RecordId = serde_json::from_value(error.details["run_id"].clone()).unwrap();
+    let original = JobLedger::new(
         fixture.fs.clone(),
         fixture.app.vault_id().clone(),
         run,
         options(),
     )
     .unwrap();
-    let before = pending.inspect().unwrap();
+    let before = original.inspect().unwrap();
     assert_eq!(before.state, RunState::Paused);
-    assert!(before.attempts.is_empty());
+    assert_eq!(before.tasks.len(), 8);
+    assert_eq!(before.attempts.len(), 4);
+    assert_eq!(before.budget.dispatched_requests, 4);
+    assert_eq!(before.budget.unknown_attempts.len(), 4);
     assert_eq!(before.spec.created_at_utc_ms, limited.created_at_utc_ms);
     assert_eq!(before.spec.deadline_utc_ms, limited.deadline_utc_ms);
     assert_eq!(before.effective_limits.requests, 4);
-    for index in 0..128 {
-        let (binding, _) = owner_state(
-            &fixture,
-            &ordinary_settings(),
-            &rel(&format!("invocation-{index:03}.md")),
-        );
+    assert_eq!(paid_inputs(&fixture, &before).len(), 128);
+    assert_receipt_guards(&fixture, &before);
+
+    let catalog = Catalog::new(fixture.fs.clone(), fixture.app.vault_id().clone());
+    let reader = catalog
+        .cached_query_snapshot(QueryReadLimits::default())
+        .unwrap();
+    let policy =
+        RenderPolicyId::for_settings(&reader.snapshot().parser_fingerprint, &ordinary_settings())
+            .unwrap();
+    let store = VectorStore::open(&fixture.fs, None).unwrap();
+    let space = fixture.spec().id().unwrap();
+    let incarnation = crate::retrieval::unit_inventory_types::catalog_incarnation(
+        reader.vault_id(),
+        reader.snapshot(),
+    )
+    .unwrap();
+    assert!(
+        store
+            .preparation_cursor(&space, &policy, &incarnation)
+            .unwrap()
+            .is_none()
+    );
+    let bindings: Vec<_> = (0..129)
+        .map(|index| {
+            reader
+                .unit_owner_binding(&policy, &rel(&format!("invocation-{index:03}.md")))
+                .unwrap()
+                .unwrap()
+        })
+        .collect();
+    for binding in &bindings {
         assert!(
-            VectorStore::open(&fixture.fs, None)
-                .unwrap()
-                .owner_binding_ready(&fixture.spec().id().unwrap(), &binding)
-                .unwrap()
+            !store.owner_binding_ready(&space, binding).unwrap(),
+            "an incomplete paid scheduling page cannot acknowledge its owners"
         );
     }
-    let (final_binding, _) = owner_state(&fixture, &ordinary_settings(), &rel("invocation-128.md"));
-    assert!(
-        !VectorStore::open(&fixture.fs, None)
-            .unwrap()
-            .owner_binding_ready(&fixture.spec().id().unwrap(), &final_binding)
-            .unwrap()
+    drop(store);
+    drop(reader);
+
+    // A new four-request operation cannot replenish the original Run's four
+    // cumulative requests or create a replacement Run for its pending tasks.
+    let repeated = fixture
+        .app
+        .embeddings_sync(&ordinary_settings(), &limited)
+        .unwrap_err();
+    assert_eq!(repeated.code, ErrorCode::BudgetExceeded);
+    assert_eq!(
+        repeated.details["run_id"],
+        serde_json::to_value(&before.spec.run_id).unwrap()
     );
+    assert_eq!(responses.calls.load(Ordering::SeqCst), 4);
+    assert_eq!(retained_marker_count(&fixture), 1);
+    let blocked = original.inspect().unwrap();
+    assert_eq!(blocked.attempts, before.attempts);
+    assert_eq!(
+        blocked.budget.dispatched_requests,
+        before.budget.dispatched_requests
+    );
+    assert_eq!(blocked.budget.outstanding, before.budget.outstanding);
+    assert_eq!(
+        blocked.budget.unknown_attempts,
+        before.budget.unknown_attempts
+    );
+
+    let mut amended = blocked.effective_limits.clone();
+    amended.requests = 8;
+    original
+        .amend_retained_limits(
+            amended,
+            blocked.effective_deadline_utc_ms,
+            "Explicitly allow the existing first-page Run's four remaining supplier tasks".into(),
+        )
+        .unwrap();
+    let after_amendment = original.inspect().unwrap();
+    assert_eq!(after_amendment.spec, before.spec);
+    assert_eq!(after_amendment.effective_limits.requests, 8);
+    assert_eq!(after_amendment.attempts, before.attempts);
+    assert_eq!(
+        after_amendment.budget.outstanding,
+        before.budget.outstanding
+    );
+    assert_eq!(
+        after_amendment.budget.unknown_attempts,
+        before.budget.unknown_attempts
+    );
+
+    // An explicit retained requests=4 override conflicts with the amended 8.
+    // Refuse it before any dispatch; this is not a successful explicit CLI
+    // --max-requests 4 continuation under an eight-request retained Run.
+    limited.requested_limits = Some(crate::app::remote::RequestedJobLimits {
+        limits: limited.limits.clone(),
+        specified: std::collections::BTreeSet::from(["requests"]),
+        deadline_ms: None,
+    });
+    let conflicting = fixture
+        .app
+        .embeddings_sync(&ordinary_settings(), &limited)
+        .unwrap_err();
+    assert_eq!(conflicting.code, ErrorCode::Usage);
+    assert_eq!(
+        conflicting.details["reason"],
+        "retained_limits_require_amendment"
+    );
+    assert_eq!(responses.calls.load(Ordering::SeqCst), 4);
+    let after_conflict = original.inspect().unwrap();
+    assert_eq!(after_conflict.attempts, before.attempts);
+    assert_eq!(after_conflict.budget.outstanding, before.budget.outstanding);
+    assert_eq!(
+        after_conflict.budget.unknown_attempts,
+        before.budget.unknown_attempts
+    );
+
+    // Public API composition control: the fixture's operation-default request
+    // allowance stays 4, with no explicit override of the retained Run's amended 8.
+    // The independent invocation budget must span recovery and the next page.
+    limited.requested_limits.as_mut().unwrap().specified.clear();
+    assert_eq!(limited.limits.requests, 4);
+    let continued = fixture
+        .app
+        .embeddings_sync(&ordinary_settings(), &limited)
+        .unwrap_err();
+    assert_eq!(continued.code, ErrorCode::BudgetExceeded);
+    assert_eq!(continued.details["budget_scope"], "invocation");
+    assert_eq!(continued.details["generated_inputs"], 64);
+    assert_eq!(responses.calls.load(Ordering::SeqCst), 8);
+    assert_eq!(responses.items.load(Ordering::SeqCst), 128);
+    assert_eq!(retained_marker_count(&fixture), 2);
+    let completed = original.inspect().unwrap();
+    assert_eq!(completed.state, RunState::Completed);
+    assert_eq!(completed.spec, before.spec);
+    assert_eq!(&completed.attempts[..4], before.attempts.as_slice());
+    assert_eq!(completed.attempts.len(), 8);
+    assert_eq!(completed.budget.dispatched_requests, 8);
+    assert_eq!(completed.budget.unknown_attempts.len(), 8);
+    assert_receipt_guards(&fixture, &completed);
+    let reader = catalog
+        .cached_query_snapshot(QueryReadLimits::default())
+        .unwrap();
+    let store = VectorStore::open(&fixture.fs, None).unwrap();
+    for binding in &bindings[..128] {
+        assert_eq!(
+            reader
+                .unit_owner_binding(&policy, &binding.owner)
+                .unwrap()
+                .as_ref(),
+            Some(binding)
+        );
+        assert!(store.owner_binding_ready(&space, binding).unwrap());
+    }
+    assert!(!store.owner_binding_ready(&space, &bindings[128]).unwrap());
+    let prefix = store
+        .preparation_cursor(&space, &policy, &incarnation)
+        .unwrap()
+        .unwrap();
+    assert!(!prefix.complete);
+    assert_eq!(prefix.after.as_ref().unwrap().owner, bindings[127].owner);
+    drop(store);
+    drop(reader);
+    let pending_run: RecordId =
+        serde_json::from_value(continued.details["run_id"].clone()).unwrap();
+    assert_ne!(pending_run, before.spec.run_id);
+    let pending = JobLedger::new(
+        fixture.fs.clone(),
+        fixture.app.vault_id().clone(),
+        pending_run,
+        options(),
+    )
+    .unwrap();
+    let pending_before = pending.inspect().unwrap();
+    assert_eq!(pending_before.state, RunState::Paused);
+    assert_eq!(pending_before.tasks.len(), 1);
+    assert!(pending_before.attempts.is_empty());
+    assert_eq!(pending_before.budget.dispatched_requests, 0);
+    assert_eq!(pending_before.effective_limits.requests, 4);
     let report = fixture
         .app
         .embeddings_sync(&ordinary_settings(), &limited)
         .unwrap();
     complete(&report, 129);
     assert_eq!(report.generated_inputs, 1);
-    assert_eq!(responses.calls.load(Ordering::SeqCst), 5);
+    assert_eq!(report.run_id.as_ref(), Some(&pending_before.spec.run_id));
+    assert_eq!(responses.calls.load(Ordering::SeqCst), 9);
     assert_eq!(responses.items.load(Ordering::SeqCst), 129);
+    assert_eq!(retained_marker_count(&fixture), 2);
     let after = pending.inspect().unwrap();
     assert_eq!(after.state, RunState::Completed);
-    assert_eq!(after.spec, before.spec);
+    assert_eq!(after.spec, pending_before.spec);
+    assert_eq!(after.attempts.len(), 1);
+    assert_eq!(after.budget.dispatched_requests, 1);
     assert_eq!(after.budget.unknown_attempts.len(), 1);
+    assert_eq!(original.inspect().unwrap().attempts, completed.attempts);
+    assert_receipt_guards(&fixture, &after);
     cached_noop(&fixture, &ordinary_settings(), 129);
 }
+
 struct AfterCommittedCut {
     fired: AtomicBool,
 }
@@ -2441,4 +2612,89 @@ fn inventory_mixed_stale_budget_pause_preserves_siblings_for_same_run_continuati
     assert_eq!(after.budget.unknown_attempts.len(), 3);
     assert_eq!(after.spec, before.spec);
     assert_eq!(retained_marker_count(&fixture), 2);
+}
+
+#[test]
+fn supplier_packing_bounds_owners_without_splitting_multiunit_owner_unnecessarily() {
+    use crate::changes::ReadDependency;
+    use crate::retrieval::render::{RenderedUnit, TargetKind};
+    use crate::vault::ExpectedState;
+    let mut fixture = normalized();
+    let (dispatch, responses) = batch_dispatch(&mut fixture);
+    let runtime = runtime(&fixture.service, &dispatch);
+    let units: Vec<_> = (0..32)
+        .map(|index| {
+            let text = format!("supplier {index}");
+            RenderedUnit {
+                unit_id: Blake3Hash::digest(format!("unit{index}")),
+                owner: rel(&format!("supplier-{index:02}.md")),
+                target: TargetKind::Document,
+                target_id: None,
+                source_hash: Blake3Hash::digest(&text),
+                source_span: None,
+                dependency_fingerprint: Blake3Hash::digest(b"proof"),
+                input_hash: Blake3Hash::digest(&text),
+                utf8: text,
+            }
+        })
+        .collect();
+    let inputs: Vec<_> = units.iter().map(RenderedUnit::input).collect();
+    let bindings: BTreeMap<_, _> = units
+        .iter()
+        .map(|unit| {
+            (
+                unit.input_hash.clone(),
+                vec![ReadDependency {
+                    path: unit.owner.clone(),
+                    expected: ExpectedState::Absent,
+                }],
+            )
+        })
+        .collect();
+    for count in [15, 16, 17] {
+        let batches = fixture
+            .app
+            .embedding_supplier_batches(&runtime, &inputs[..count], &bindings, &units[..count])
+            .unwrap();
+        assert_eq!(
+            batches.iter().map(Vec::len).collect::<Vec<_>>(),
+            if count <= 16 {
+                vec![count]
+            } else {
+                vec![16, 1]
+            }
+        );
+    }
+    let one_owner: Vec<_> = units
+        .iter()
+        .cloned()
+        .map(|mut unit| {
+            unit.owner = rel("one-owner.md");
+            unit
+        })
+        .collect();
+    assert_eq!(
+        fixture
+            .app
+            .embedding_supplier_batches(&runtime, &inputs, &bindings, &one_owner)
+            .unwrap()
+            .iter()
+            .map(Vec::len)
+            .collect::<Vec<_>>(),
+        vec![32]
+    );
+    let mut ambiguous = units[..1].to_vec();
+    let mut duplicate = ambiguous[0].clone();
+    duplicate.owner = rel("duplicate.md");
+    ambiguous.push(duplicate);
+    assert_eq!(
+        fixture
+            .app
+            .embedding_supplier_batches(&runtime, &inputs[..1], &bindings, &ambiguous)
+            .err()
+            .expect("ambiguous supplier must be refused")
+            .code,
+        ErrorCode::FreshnessConflict
+    );
+    assert_eq!(responses.calls.load(Ordering::SeqCst), 0);
 }
