@@ -1099,6 +1099,49 @@ impl OfflineApp {
             provider_probe_performed: false,
         })
     }
+    /// Review authenticated metadata without inspecting retained or target bodies.
+    pub fn changes_summary(&self, id: RecordId) -> Result<ChangeSummary> {
+        let i = self.engine()?.inspect_metadata(&id)?;
+        let manifest = i.manifest;
+        let operations = manifest
+            .operations
+            .into_iter()
+            .enumerate()
+            .map(|(operation, metadata)| ChangeSummaryOperation {
+                operation,
+                kind: match (&metadata.before, &metadata.after) {
+                    (ExpectedState::Absent, _) => "create",
+                    (_, ExpectedState::Absent) => "delete",
+                    _ => "update",
+                },
+                metadata,
+            })
+            .collect::<Vec<_>>();
+        Ok(ChangeSummary {
+            inspection: "metadata_summary",
+            prepared: i.prepared,
+            vault_id: manifest.vault_id,
+            manifest_version: manifest.version,
+            status: i.status,
+            note_status: i.note_status,
+            title: manifest.title,
+            created_at: manifest.created_at,
+            origin: manifest.origin,
+            inverse_of: manifest.inverse_of,
+            allocated_ids: manifest.allocated_ids,
+            operation_count: operations.len(),
+            operations,
+            read_preconditions: manifest.read_preconditions,
+            checks: ChangeSummaryChecks {
+                manifest_binding: "verified",
+                status: "verified",
+                note_status: "diagnostic",
+                payload_availability: "not_checked",
+                payload_integrity: "not_checked",
+                current_target_freshness: "not_checked",
+            },
+        })
+    }
     pub fn changes_show(&self, id: RecordId) -> Result<ChangeDetails> {
         let engine = self.engine()?;
         let i = engine.inspect_history(&id)?;

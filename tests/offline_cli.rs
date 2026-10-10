@@ -1334,6 +1334,92 @@ fn human_search_pagination_and_input_errors_offer_executable_recovery() {
 }
 
 #[test]
+fn compact_change_summary_preserves_exact_inspection_and_is_read_only() {
+    for normalized in [false, true] {
+        let temp = fixture();
+        let input = temp.path().join("summary source.txt");
+        let original = "Exact retained bytes: 茶\0\u{1b}\n".as_bytes();
+        fs::write(&input, original).unwrap();
+        let index = if normalized {
+            vec!["index", "rebuild", "--normalized"]
+        } else {
+            vec!["index", "sync"]
+        };
+        ok(temp.path(), &index, None);
+        let stage = ok(
+            temp.path(),
+            &["--stage", "source", "add", input.to_str().unwrap()],
+            None,
+        );
+        let change = stage["data"]["change"]["change_id"].as_str().unwrap();
+        let before = tree(temp.path());
+        let summary = ok(
+            temp.path(),
+            &["--dry-run", "changes", "show", change, "--summary"],
+            None,
+        );
+        assert_eq!(tree(temp.path()), before);
+        assert_eq!(summary["data"]["inspection"], "metadata_summary");
+        assert_eq!(summary["meta"]["partial"], false);
+        for check in [
+            "payload_availability",
+            "payload_integrity",
+            "current_target_freshness",
+        ] {
+            assert_eq!(summary["data"]["checks"][check], "not_checked");
+        }
+        assert!(summary["warnings"].as_array().unwrap().iter().any(|w| {
+            w.as_str()
+                .unwrap()
+                .contains("does not establish apply readiness or undo availability")
+        }));
+        let full = ok(temp.path(), &["changes", "show", change], None);
+        assert_eq!(summary["data"]["prepared"], full["data"]["prepared"]);
+        assert_eq!(summary["data"]["status"], full["data"]["status"]);
+        let operations = full["data"]["manifest"]["operations"].as_array().unwrap();
+        assert_eq!(summary["data"]["operation_count"], operations.len());
+        let mut saw_original = false;
+        for (index, operation) in operations.iter().enumerate() {
+            let mut metadata = summary["data"]["operations"][index].clone();
+            let object = metadata.as_object_mut().unwrap();
+            assert_eq!(object.remove("operation").unwrap(), index);
+            assert!(object.remove("kind").is_some());
+            assert_eq!(&metadata, operation);
+            let selected = ok(
+                temp.path(),
+                &["changes", "show", change, "--operation", &index.to_string()],
+                None,
+            );
+            assert_eq!(selected["data"], full["data"]["payloads"][index]);
+            if let Some(values) = selected["data"]["proposed"].as_array() {
+                let bytes = values
+                    .iter()
+                    .map(|v| v.as_u64().unwrap() as u8)
+                    .collect::<Vec<_>>();
+                if bytes == original {
+                    saw_original = true;
+                }
+            }
+        }
+        assert!(
+            saw_original,
+            "original bytes must remain exactly inspectable"
+        );
+        let (exit, _) = invoke(
+            Some(temp.path()),
+            &["changes", "show", change, "--summary", "--operation", "0"],
+            None,
+        );
+        assert_ne!(exit, 0);
+        ok(temp.path(), &["changes", "apply", change], None);
+        let committed_before = tree(temp.path());
+        let committed = ok(temp.path(), &["changes", "show", change, "--summary"], None);
+        assert_eq!(committed["data"]["status"], "committed");
+        assert_eq!(tree(temp.path()), committed_before);
+    }
+}
+
+#[test]
 fn human_mutation_summary_distinguishes_preview_prepared_and_committed() {
     let temp = fixture();
     let input = temp.path().join("example.txt");
@@ -1399,6 +1485,26 @@ fn human_staged_commands_keep_vault_selection_and_search_escapes_terminal_contro
         .unwrap();
     assert!(output.status.success());
     let summary = String::from_utf8(output.stdout).unwrap();
+    let inspect_command = summary
+        .lines()
+        .find_map(|line| line.strip_prefix("Inspect with: lwiki "))
+        .unwrap();
+    assert!(inspect_command.ends_with("--summary"));
+    let inspected = Command::new("/bin/sh")
+        .args([
+            "-c",
+            &format!("exec \"$1\" {inspect_command}"),
+            "lwiki-test",
+        ])
+        .arg(test_paths::binary(env!("CARGO_BIN_EXE_lwiki")))
+        .current_dir(parent.path())
+        .output()
+        .unwrap();
+    assert!(inspected.status.success());
+    assert!(!inspected.stdout.contains(&0x1b));
+    let inspected = String::from_utf8(inspected.stdout).unwrap();
+    assert!(inspected.contains("not checked"));
+    assert!(inspected.contains("--operation 0"));
     let command = summary
         .lines()
         .find_map(|line| line.strip_prefix("Apply with: lwiki "))

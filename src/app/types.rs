@@ -115,6 +115,41 @@ pub struct ChangePayload {
     pub before: Option<Vec<u8>>,
     pub proposed: Option<Vec<u8>>,
 }
+/// Metadata review only; retained bytes and current targets remain unchecked.
+#[derive(Debug, Clone, Serialize)]
+pub struct ChangeSummary {
+    pub inspection: &'static str,
+    pub prepared: PreparedChange,
+    pub vault_id: RecordId,
+    pub manifest_version: u32,
+    pub status: ChangeStatus,
+    pub note_status: String,
+    pub title: String,
+    pub created_at: String,
+    pub origin: Option<ChangeOrigin>,
+    pub inverse_of: Option<RecordId>,
+    pub allocated_ids: BTreeMap<String, RecordId>,
+    pub operation_count: usize,
+    pub operations: Vec<ChangeSummaryOperation>,
+    pub read_preconditions: Vec<ReadDependency>,
+    pub checks: ChangeSummaryChecks,
+}
+#[derive(Debug, Clone, Serialize)]
+pub struct ChangeSummaryOperation {
+    pub operation: usize,
+    pub kind: &'static str,
+    #[serde(flatten)]
+    pub metadata: ChangeOp,
+}
+#[derive(Debug, Clone, Serialize)]
+pub struct ChangeSummaryChecks {
+    pub manifest_binding: &'static str,
+    pub status: &'static str,
+    pub note_status: &'static str,
+    pub payload_availability: &'static str,
+    pub payload_integrity: &'static str,
+    pub current_target_freshness: &'static str,
+}
 #[derive(Debug, Clone, Serialize)]
 pub struct CheckOutcome {
     pub diagnostics: Vec<CatalogDiagnostic>,

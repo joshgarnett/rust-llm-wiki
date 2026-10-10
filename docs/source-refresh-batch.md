@@ -48,8 +48,26 @@ Preview, stage and apply through the ordinary commands:
 ```sh
 lwiki --offline --json --wiki DIR --dry-run source refresh-batch --file REQUEST.json
 lwiki --offline --json --wiki DIR --stage source refresh-batch --file REQUEST.json
+lwiki --offline --wiki DIR changes show CHANGE_ID --summary
+lwiki --offline --json --wiki DIR changes show CHANGE_ID --operation 0
 lwiki --offline --json --wiki DIR changes apply CHANGE_ID
 ```
+
+`--summary` reviews authenticated Change metadata: every operation's zero-based
+index, path, create/update/delete kind, expected and proposed hashes, declared
+retained byte counts, application dependencies and read guards. It does not read
+retained file bodies or current targets. Payload availability, payload integrity
+and current target freshness are explicitly **not checked**; a summary establishes
+neither apply readiness nor undo availability. Its size grows with operation and
+guard metadata rather than file contents; there is no universal small-output limit.
+Editable note status is diagnostic and cannot override recorded Change status.
+
+Use `--operation N` to inspect the exact before/proposed bytes of a chosen operation,
+or omit both flags for the existing full inspection. These endpoints verify retained
+bytes separately and return JSON byte arrays. For unresolved Changes they also
+perform broader retained-body verification. `--summary` and `--operation` conflict.
+Summary inspection is read-only with `--offline` and `--dry-run`; apply continues to
+check the original guards and recovery rules.
 
 Dry-run validates the request and input files before accessing the catalog or
 writer lock. Source existence, current head and historical reuse remain unresolved

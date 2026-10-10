@@ -340,6 +340,9 @@ pub enum ChangesCommand {
         /// Zero-based operation index to inspect within the changeset.
         #[arg(long)]
         operation: Option<usize>,
+        /// Review authenticated metadata without reading payloads or checking current targets.
+        #[arg(long, conflicts_with = "operation")]
+        summary: bool,
     },
     /// Apply a prepared changeset with expected-hash guards and recovery.
     Apply {

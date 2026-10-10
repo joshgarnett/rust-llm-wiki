@@ -1320,8 +1320,15 @@ fn execute_inner(args: &Arguments) -> Result<Envelope> {
                     )?)?;
                 }
             }
-            ChangesCommand::Show { id, operation } => {
-                if let Some(operation) = operation {
+            ChangesCommand::Show {
+                id,
+                operation,
+                summary,
+            } => {
+                if *summary {
+                    envelope.data = value(app.changes_summary(id.clone())?)?;
+                    envelope.warnings.push("Metadata summary only: retained payload availability and integrity, and current target freshness are not checked. This does not establish apply readiness or undo availability. Full show or --operation verifies retained bytes separately; apply still enforces its guards.".into());
+                } else if let Some(operation) = operation {
                     envelope.data = value(app.changes_payload(id.clone(), *operation)?)?;
                 } else {
                     let details = app.changes_show(id.clone())?;
@@ -2248,6 +2255,83 @@ fn present_inner(
                 "Next: add a local file with lwiki --wiki PATH source add FILE, then search its contents."
             )
         }
+        OutputFormat::Human if envelope.data["inspection"] == "metadata_summary" => {
+            let summary = &envelope.data;
+            let change = summary["prepared"]["change_id"]
+                .as_str()
+                .unwrap_or_default();
+            writeln!(
+                output,
+                "Change {change}: {}",
+                summary["status"].as_str().unwrap_or_default()
+            )?;
+            writeln!(
+                output,
+                "Title: {}",
+                terminal_text(summary["title"].as_str().unwrap_or_default(), false)
+            )?;
+            writeln!(
+                output,
+                "Manifest: {}",
+                summary["prepared"]["manifest_hash"]
+                    .as_str()
+                    .unwrap_or_default()
+            )?;
+            writeln!(
+                output,
+                "Note status (diagnostic): {}",
+                terminal_text(summary["note_status"].as_str().unwrap_or_default(), false)
+            )?;
+            writeln!(output, "Operations: {}", summary["operation_count"])?;
+            for operation in summary["operations"].as_array().unwrap() {
+                writeln!(
+                    output,
+                    "  [{}] {} {} ({})",
+                    operation["operation"],
+                    operation["kind"].as_str().unwrap_or_default(),
+                    terminal_text(operation["target"].as_str().unwrap_or_default(), false),
+                    operation["role"].as_str().unwrap_or_default()
+                )?;
+                writeln!(
+                    output,
+                    "    Expected before: {}; proposed after: {}",
+                    operation["before"], operation["after"]
+                )?;
+                writeln!(
+                    output,
+                    "    Retained before: {}; retained proposed: {}",
+                    operation["before_payload"], operation["after_payload"]
+                )?;
+                writeln!(
+                    output,
+                    "    Apply after operations: {}",
+                    operation["apply_after"]
+                )?;
+            }
+            writeln!(output, "Read guards (current state not checked):")?;
+            for guard in summary["read_preconditions"].as_array().unwrap() {
+                writeln!(
+                    output,
+                    "  {}: {}",
+                    terminal_text(guard["path"].as_str().unwrap_or_default(), false),
+                    guard["expected"]
+                )?;
+            }
+            writeln!(
+                output,
+                "Manifest binding and recorded status verified. Payload availability, payload integrity and current target freshness: not checked."
+            )?;
+            for warning in &envelope.warnings {
+                writeln!(output, "{}", terminal_text(warning, false))?;
+            }
+            if summary["operation_count"].as_u64().unwrap_or_default() > 0 {
+                writeln!(
+                    output,
+                    "Inspect exact bytes with: {command_prefix} changes show {change} --operation 0"
+                )?;
+            }
+            Ok(())
+        }
         OutputFormat::Human if envelope.data["plan"]["operations"].is_array() => {
             let status = envelope.data["status"].as_str().unwrap_or("preview");
             writeln!(output, "{}: {status}", envelope.command)?;
@@ -2281,7 +2365,7 @@ fn present_inner(
                 if status == "prepared" {
                     writeln!(
                         output,
-                        "Inspect with: {command_prefix} changes show {change}\nApply with: {command_prefix} changes apply {change}"
+                        "Inspect with: {command_prefix} changes show {change} --summary\nApply with: {command_prefix} changes apply {change}"
                     )?;
                 }
             }

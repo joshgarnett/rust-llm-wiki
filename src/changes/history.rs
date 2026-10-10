@@ -6,6 +6,16 @@ use super::{
 };
 use crate::{domain::*, records::parse_note, vault::ExpectedState};
 
+/// Structurally authenticated metadata only. This is not application authority
+/// and says nothing about retained payloads or current target contents.
+#[derive(Debug)]
+pub struct ChangeMetadataInspection {
+    pub prepared: PreparedChange,
+    pub manifest: ChangeManifest,
+    pub status: ChangeStatus,
+    pub note_status: String,
+}
+
 /// The engine verified the original manifest and retained terminal transcript.
 /// This proves an old selected output hash, not the current target's contents.
 #[derive(Debug)]
@@ -26,6 +36,34 @@ impl CommittedOutputProof {
     }
 }
 impl ChangeEngine {
+    /// Read structurally authenticated manifest and status metadata only.
+    /// Retained payload availability/integrity and current target freshness are
+    /// not checked; this result cannot establish apply readiness or undo authority.
+    pub fn inspect_metadata(&self, id: &RecordId) -> Result<ChangeMetadataInspection> {
+        self.require_binding()?;
+        let (manifest, manifest_hash) = self.load_manifest_structure(id)?;
+        let journal = journal::load_journal(&self.fs, &manifest, &manifest_hash)?;
+        let terminal = outcome::terminal_report(&self.fs, &manifest, &manifest_hash)?;
+        let status = terminal.map_or_else(
+            || journal.status.unwrap_or(ChangeStatus::Prepared),
+            |report| report.status,
+        );
+        let note = read_bounded(&self.fs, &manifest_path(id)?, MAX_MANIFEST_BYTES + 65_536)?
+            .ok_or_else(|| WikiError::invalid("missing change note"))?;
+        let note_status = parse_note(&note)
+            .canonical
+            .and_then(|record| record.string("wiki_status").map(str::to_owned))
+            .ok_or_else(|| WikiError::invalid("missing note status"))?;
+        Ok(ChangeMetadataInspection {
+            prepared: PreparedChange {
+                change_id: id.clone(),
+                manifest_hash,
+            },
+            manifest,
+            status,
+            note_status,
+        })
+    }
     /// Payload-independent terminal history; unresolved work keeps strict loading.
     pub fn inspect_history(&self, id: &RecordId) -> Result<ChangeInspection> {
         self.require_binding()?;
@@ -139,3 +177,7 @@ impl ChangeEngine {
         })
     }
 }
+
+#[cfg(test)]
+#[path = "history_metadata_tests.rs"]
+mod compact_change_metadata_tests;

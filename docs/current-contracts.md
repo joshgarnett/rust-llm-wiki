@@ -1,5 +1,12 @@
 # Current contracts and local coverage
 
+The [compact Change review](validation-change-summary.md) now passes its separate
+functional gate at 10/10: all 120 public commands and 30 focused checks meet their
+expected outcomes. `changes show --summary` lists operations and guards without
+reading retained file bodies, with unchecked payload/freshness scope explicit.
+Exact operation inspection and guarded apply remain available. This improves the
+update-review workflow; retrieval, throughput and full release gates remain open.
+
 The representative [native lexical-unit experiment](validation-native-lexical-units.md)
 is rejected: 14/32 complete positive tasks versus baseline 13/32, below the
 required 17/32, with nine baseline facts lost. Correctness and exact citations
