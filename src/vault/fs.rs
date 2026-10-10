@@ -94,135 +94,210 @@ fn observe_regular_bounded<T>(
     initialize: impl FnOnce(usize) -> Result<T>,
     mut consume: impl FnMut(&mut T, &[u8]) -> Result<()>,
 ) -> Result<Option<(T, u64)>> {
-    let owner_activation = crate::storage::maintenance_activation::owner_capture_active();
-    if owner_activation {
-        crate::maintenance_parallel::record_owner_activation_read();
-    }
-    let resolve = || {
-        if raw {
-            root.resolve_raw(relative)
-        } else {
-            root.resolve(relative)
-        }
-    };
-    let path = resolve()?;
-    let before = match fs::symlink_metadata(&path) {
-        Ok(meta) => meta,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(e) => return Err(io_error("inspect bounded input", e)),
-    };
-    if !before.is_file() || before.file_type().is_symlink() {
-        return Err(WikiError::invalid("bounded read requires regular file"));
-    }
-    if before.len() > limit as u64 {
-        return Err(WikiError::new(
-            ErrorCode::BudgetExceeded,
-            "bounded input exceeds byte allowance",
-        ));
-    }
-    #[cfg(test)]
-    super::maintenance_read_tests::before_open(&path);
-    #[cfg(unix)]
-    let mut file = {
-        use std::os::unix::fs::OpenOptionsExt;
-        OpenOptions::new()
-            .read(true)
-            .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
-            .open(&path)
-    }
-    .map_err(|e| io_error("open bounded input", e))?;
-    #[cfg(not(unix))]
-    let mut file = File::open(&path).map_err(|e| io_error("open bounded input", e))?;
-    let same = |a: &fs::Metadata, b: &fs::Metadata| -> Result<()> {
-        if !b.is_file() || b.file_type().is_symlink() {
-            return Err(WikiError::new(
-                ErrorCode::ContentConflict,
-                "bounded input type changed",
-            ));
-        }
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::MetadataExt;
-            if a.dev() != b.dev() || a.ino() != b.ino() {
+    crate::maintenance_diagnostic::observe(
+        crate::maintenance_diagnostic::Phase::FileBinding,
+        || {
+            let owner_activation = crate::storage::maintenance_activation::owner_capture_active();
+            if owner_activation {
+                crate::maintenance_parallel::record_owner_activation_read();
+            }
+            let resolve = || {
+                if raw {
+                    root.resolve_raw(relative)
+                } else {
+                    root.resolve(relative)
+                }
+            };
+            let path = resolve()?;
+            let before = match crate::maintenance_diagnostic::observe(
+                crate::maintenance_diagnostic::Phase::MetadataObservation,
+                || {
+                    crate::maintenance_diagnostic::bump(
+                        crate::maintenance_diagnostic::Counter::MetadataCall,
+                        1,
+                    );
+                    fs::symlink_metadata(&path)
+                },
+            ) {
+                Ok(meta) => meta,
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                    crate::maintenance_diagnostic::bump(
+                        crate::maintenance_diagnostic::Counter::ExpectedMissing,
+                        1,
+                    );
+                    return Ok(None);
+                }
+                Err(e) => return Err(io_error("inspect bounded input", e)),
+            };
+            if !before.is_file() || before.file_type().is_symlink() {
+                return Err(WikiError::invalid("bounded read requires regular file"));
+            }
+            if before.len() > limit as u64 {
                 return Err(WikiError::new(
-                    ErrorCode::ContentConflict,
-                    "bounded input identity changed",
+                    ErrorCode::BudgetExceeded,
+                    "bounded input exceeds byte allowance",
                 ));
             }
-        }
-        #[cfg(not(unix))]
-        let _ = a;
-        Ok(())
-    };
-    let opened = file
-        .metadata()
-        .map_err(|e| io_error("inspect opened input", e))?;
-    same(&before, &opened)?;
-    if opened.len() > limit as u64 {
-        return Err(WikiError::new(
-            ErrorCode::BudgetExceeded,
-            "opened input exceeds byte allowance",
-        ));
-    }
-    let mut state = initialize(opened.len() as usize)?;
-    let mut observed = 0usize;
-    let result = (|| {
-        let mut buffer = [0u8; 64 * 1024];
-        loop {
-            let remaining = limit.saturating_sub(observed);
-            if remaining == 0 {
-                let mut sentinel = [0u8; 1];
-                let n = file
-                    .read(&mut sentinel)
-                    .map_err(|e| io_error("read input boundary", e))?;
-                observed += n;
-                if n != 0 {
+            #[cfg(test)]
+            super::maintenance_read_tests::before_open(&path);
+            #[cfg(unix)]
+            let mut file = {
+                use std::os::unix::fs::OpenOptionsExt;
+                crate::maintenance_diagnostic::observe(
+                    crate::maintenance_diagnostic::Phase::FileOpen,
+                    || {
+                        crate::maintenance_diagnostic::bump(
+                            crate::maintenance_diagnostic::Counter::FileOpenCall,
+                            1,
+                        );
+                        OpenOptions::new()
+                            .read(true)
+                            .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+                            .open(&path)
+                    },
+                )
+            }
+            .map_err(|e| io_error("open bounded input", e))?;
+            #[cfg(not(unix))]
+            let mut file = crate::maintenance_diagnostic::observe(
+                crate::maintenance_diagnostic::Phase::FileOpen,
+                || {
+                    crate::maintenance_diagnostic::bump(
+                        crate::maintenance_diagnostic::Counter::FileOpenCall,
+                        1,
+                    );
+                    File::open(&path)
+                },
+            )
+            .map_err(|e| io_error("open bounded input", e))?;
+            let same = |a: &fs::Metadata, b: &fs::Metadata| -> Result<()> {
+                if !b.is_file() || b.file_type().is_symlink() {
                     return Err(WikiError::new(
-                        ErrorCode::BudgetExceeded,
-                        "bounded input grew beyond allowance",
+                        ErrorCode::ContentConflict,
+                        "bounded input type changed",
                     ));
                 }
-                break;
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::MetadataExt;
+                    if a.dev() != b.dev() || a.ino() != b.ino() {
+                        return Err(WikiError::new(
+                            ErrorCode::ContentConflict,
+                            "bounded input identity changed",
+                        ));
+                    }
+                }
+                #[cfg(not(unix))]
+                let _ = a;
+                Ok(())
+            };
+            let opened = crate::maintenance_diagnostic::observe(
+                crate::maintenance_diagnostic::Phase::MetadataObservation,
+                || {
+                    crate::maintenance_diagnostic::bump(
+                        crate::maintenance_diagnostic::Counter::MetadataCall,
+                        1,
+                    );
+                    file.metadata()
+                },
+            )
+            .map_err(|e| io_error("inspect opened input", e))?;
+            crate::maintenance_diagnostic::bump(
+                crate::maintenance_diagnostic::Counter::FileBindingCheck,
+                1,
+            );
+            same(&before, &opened)?;
+            if opened.len() > limit as u64 {
+                return Err(WikiError::new(
+                    ErrorCode::BudgetExceeded,
+                    "opened input exceeds byte allowance",
+                ));
             }
-            let cap = remaining.min(buffer.len());
-            let n = file
-                .read(&mut buffer[..cap])
-                .map_err(|e| io_error("read bounded input", e))?;
-            observed += n;
-            if n == 0 {
-                break;
+            let mut state = initialize(opened.len() as usize)?;
+            let mut observed = 0usize;
+            let result = (|| {
+                let mut buffer = [0u8; 64 * 1024];
+                loop {
+                    let remaining = limit.saturating_sub(observed);
+                    if remaining == 0 {
+                        let mut sentinel = [0u8; 1];
+                        let n = crate::maintenance_diagnostic::read(|| file.read(&mut sentinel))
+                            .map_err(|e| io_error("read input boundary", e))?;
+                        observed += n;
+                        if n != 0 {
+                            return Err(WikiError::new(
+                                ErrorCode::BudgetExceeded,
+                                "bounded input grew beyond allowance",
+                            ));
+                        }
+                        break;
+                    }
+                    let cap = remaining.min(buffer.len());
+                    let n = crate::maintenance_diagnostic::read(|| file.read(&mut buffer[..cap]))
+                        .map_err(|e| io_error("read bounded input", e))?;
+                    observed += n;
+                    if n == 0 {
+                        break;
+                    }
+                    consume(&mut state, &buffer[..n])?;
+                }
+                let after = crate::maintenance_diagnostic::observe(
+                    crate::maintenance_diagnostic::Phase::MetadataObservation,
+                    || {
+                        crate::maintenance_diagnostic::bump(
+                            crate::maintenance_diagnostic::Counter::MetadataCall,
+                            1,
+                        );
+                        file.metadata()
+                    },
+                )
+                .map_err(|e| io_error("recheck opened input", e))?;
+                crate::maintenance_diagnostic::bump(
+                    crate::maintenance_diagnostic::Counter::FileBindingCheck,
+                    1,
+                );
+                same(&opened, &after)?;
+                if resolve()? != path {
+                    return Err(WikiError::new(
+                        ErrorCode::ContentConflict,
+                        "bounded input route changed",
+                    ));
+                }
+                let named = crate::maintenance_diagnostic::observe(
+                    crate::maintenance_diagnostic::Phase::MetadataObservation,
+                    || {
+                        crate::maintenance_diagnostic::bump(
+                            crate::maintenance_diagnostic::Counter::MetadataCall,
+                            1,
+                        );
+                        fs::symlink_metadata(&path)
+                    },
+                )
+                .map_err(|e| io_error("recheck named input", e))?;
+                crate::maintenance_diagnostic::bump(
+                    crate::maintenance_diagnostic::Counter::FileBindingCheck,
+                    1,
+                );
+                same(&opened, &named)?;
+                if opened.len() != observed as u64 || after.len() != observed as u64 {
+                    return Err(WikiError::new(
+                        ErrorCode::ContentConflict,
+                        "bounded input length changed",
+                    ));
+                }
+                Ok(())
+            })();
+            if owner_activation {
+                crate::maintenance_parallel::record_owner_activation_bytes(observed as u64);
             }
-            consume(&mut state, &buffer[..n])?;
-        }
-        let after = file
-            .metadata()
-            .map_err(|e| io_error("recheck opened input", e))?;
-        same(&opened, &after)?;
-        if resolve()? != path {
-            return Err(WikiError::new(
-                ErrorCode::ContentConflict,
-                "bounded input route changed",
-            ));
-        }
-        let named = fs::symlink_metadata(&path).map_err(|e| io_error("recheck named input", e))?;
-        same(&opened, &named)?;
-        if opened.len() != observed as u64 || after.len() != observed as u64 {
-            return Err(WikiError::new(
-                ErrorCode::ContentConflict,
-                "bounded input length changed",
-            ));
-        }
-        Ok(())
-    })();
-    if owner_activation {
-        crate::maintenance_parallel::record_owner_activation_bytes(observed as u64);
-    }
-    #[cfg(test)]
-    crate::catalog::query_diagnostics::read(layer, &path, observed);
-    #[cfg(not(test))]
-    let _ = (layer, observed);
-    result?;
-    Ok(Some((state, observed as u64)))
+            #[cfg(test)]
+            crate::catalog::query_diagnostics::read(layer, &path, observed);
+            #[cfg(not(test))]
+            let _ = (layer, observed);
+            result?;
+            Ok(Some((state, observed as u64)))
+        },
+    )
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -390,49 +465,51 @@ impl StagePreparation {
             + self.destination.capacity()
     }
     pub(crate) fn stage(&self, bytes: &[u8]) -> Result<StagedFile> {
-        self.fs.require_storage_ready()?;
-        self.fs.validate_paths(std::slice::from_ref(&self.target))?;
-        let destination = self.fs.root.resolve(&self.target)?;
-        if destination != self.destination {
-            return Err(WikiError::new(
-                ErrorCode::ContentConflict,
-                "stage route changed after admission",
-            ));
-        }
-        let parent = destination.parent().expect("managed file has parent");
-        let path = parent.join(format!(".lwiki-stage-{}.tmp", uuid::Uuid::now_v7()));
-        let mut file = match self.fs.io.create_stage(&path) {
-            Ok(file) => file,
-            Err(e) => {
-                if e.kind() != std::io::ErrorKind::AlreadyExists {
-                    let _ = self.fs.io.remove(&path);
-                }
-                return Err(io_error("create same-directory stage", e));
+        crate::maintenance_diagnostic::observe(crate::maintenance_diagnostic::Phase::Stage, || {
+            self.fs.require_storage_ready()?;
+            self.fs.validate_paths(std::slice::from_ref(&self.target))?;
+            let destination = self.fs.root.resolve(&self.target)?;
+            if destination != self.destination {
+                return Err(WikiError::new(
+                    ErrorCode::ContentConflict,
+                    "stage route changed after admission",
+                ));
             }
-        };
-        let staged = StagedFile {
-            path,
-            target: self.target.clone(),
-            root: self.fs.root.clone(),
-            io: Arc::clone(&self.fs.io),
-            proposed_hash: Blake3Hash::digest(bytes),
-            proposed_len: bytes.len(),
-        };
-        if staged.owned_bytes() > self.result_owned_bound() {
-            return Err(WikiError::new(
-                ErrorCode::BudgetExceeded,
-                "stage result exceeds admitted ownership",
-            ));
-        }
-        self.fs
-            .io
-            .write_stage(&mut file, bytes)
-            .map_err(|e| io_error("write stage", e))?;
-        self.fs
-            .io
-            .sync_file(&file)
-            .map_err(|e| io_error("sync stage", e))?;
-        Ok(staged)
+            let parent = destination.parent().expect("managed file has parent");
+            let path = parent.join(format!(".lwiki-stage-{}.tmp", uuid::Uuid::now_v7()));
+            let mut file = match self.fs.io.create_stage(&path) {
+                Ok(file) => file,
+                Err(e) => {
+                    if e.kind() != std::io::ErrorKind::AlreadyExists {
+                        let _ = self.fs.io.remove(&path);
+                    }
+                    return Err(io_error("create same-directory stage", e));
+                }
+            };
+            let staged = StagedFile {
+                path,
+                target: self.target.clone(),
+                root: self.fs.root.clone(),
+                io: Arc::clone(&self.fs.io),
+                proposed_hash: Blake3Hash::digest(bytes),
+                proposed_len: bytes.len(),
+            };
+            if staged.owned_bytes() > self.result_owned_bound() {
+                return Err(WikiError::new(
+                    ErrorCode::BudgetExceeded,
+                    "stage result exceeds admitted ownership",
+                ));
+            }
+            self.fs
+                .io
+                .write_stage(&mut file, bytes)
+                .map_err(|e| io_error("write stage", e))?;
+            self.fs
+                .io
+                .sync_file(&file)
+                .map_err(|e| io_error("sync stage", e))?;
+            Ok(staged)
+        })
     }
 }
 pub struct StagedFile {
@@ -577,10 +654,18 @@ impl VaultFs {
             .open(path)
             .map_err(|e| io_error("open operational truncation", e))?;
         if length
-            > file
-                .metadata()
-                .map_err(|e| io_error("inspect operational length", e))?
-                .len()
+            > crate::maintenance_diagnostic::observe(
+                crate::maintenance_diagnostic::Phase::MetadataObservation,
+                || {
+                    crate::maintenance_diagnostic::bump(
+                        crate::maintenance_diagnostic::Counter::MetadataCall,
+                        1,
+                    );
+                    file.metadata()
+                },
+            )
+            .map_err(|e| io_error("inspect operational length", e))?
+            .len()
         {
             return Err(WikiError::invalid(
                 "operational truncation cannot extend a file",
@@ -614,11 +699,28 @@ impl VaultFs {
         let opened = File::open(&path);
         match opened {
             Ok(file) => {
-                let held = file
-                    .metadata()
-                    .map_err(|e| io_error("inspect sync target", e))?;
-                let named =
-                    fs::symlink_metadata(&path).map_err(|e| io_error("recheck sync target", e))?;
+                let held = crate::maintenance_diagnostic::observe(
+                    crate::maintenance_diagnostic::Phase::MetadataObservation,
+                    || {
+                        crate::maintenance_diagnostic::bump(
+                            crate::maintenance_diagnostic::Counter::MetadataCall,
+                            1,
+                        );
+                        file.metadata()
+                    },
+                )
+                .map_err(|e| io_error("inspect sync target", e))?;
+                let named = crate::maintenance_diagnostic::observe(
+                    crate::maintenance_diagnostic::Phase::MetadataObservation,
+                    || {
+                        crate::maintenance_diagnostic::bump(
+                            crate::maintenance_diagnostic::Counter::MetadataCall,
+                            1,
+                        );
+                        fs::symlink_metadata(&path)
+                    },
+                )
+                .map_err(|e| io_error("recheck sync target", e))?;
                 if !held.is_file() || !named.is_file() || named.file_type().is_symlink() {
                     return Err(WikiError::invalid("sync target must remain a regular file"));
                 }
@@ -642,7 +744,12 @@ impl VaultFs {
                     .sync_file(&file)
                     .map_err(|e| io_error("sync observed target", e))?;
             }
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                crate::maintenance_diagnostic::bump(
+                    crate::maintenance_diagnostic::Counter::ExpectedMissing,
+                    1,
+                );
+            }
             Err(e) => return Err(io_error("open observed target", e)),
         }
         self.io
@@ -771,8 +878,17 @@ impl VaultFs {
         self.validate_paths(std::slice::from_ref(&staged.target))?;
         let destination = self.root.resolve(&staged.target)?;
         // Stage is public by path for journal intent; detect accidental tampering.
-        let metadata =
-            fs::symlink_metadata(&staged.path).map_err(|e| io_error("inspect stage", e))?;
+        let metadata = crate::maintenance_diagnostic::observe(
+            crate::maintenance_diagnostic::Phase::MetadataObservation,
+            || {
+                crate::maintenance_diagnostic::bump(
+                    crate::maintenance_diagnostic::Counter::MetadataCall,
+                    1,
+                );
+                fs::symlink_metadata(&staged.path)
+            },
+        )
+        .map_err(|e| io_error("inspect stage", e))?;
         if metadata.file_type().is_symlink() || !metadata.is_file() {
             return Err(WikiError::new(
                 ErrorCode::ContentConflict,

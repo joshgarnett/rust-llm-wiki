@@ -707,21 +707,31 @@ impl ChangeEngine {
             Option<crate::catalog::source_refresh::RetainedDelta>,
         )>,
     > {
-        let Some(bytes) = read_bounded(&self.fs, &baseline_path(change)?, MAX_JOURNAL_BYTES)?
-        else {
-            return Ok(None);
-        };
-        let (proof, delta) = self.decode_indexed_refresh_retention(change, &bytes)?;
-        if proof.version == 4 {
-            legacy_terminal_view::validate_full_archive(self, change, &bytes, &proof)?;
-        }
-        if proof.version == 3
-            && crate::catalog::source_refresh::intended(&proof.base, change, &proof.delta_hash, 3)?
-                != proof.intended
-        {
-            return legacy_terminal_view::resolve(self, change, &bytes, proof).map(Some);
-        }
-        Ok(Some((proof, delta)))
+        crate::maintenance_diagnostic::observe(
+            crate::maintenance_diagnostic::Phase::RetainedAuthority,
+            || {
+                let Some(bytes) =
+                    read_bounded(&self.fs, &baseline_path(change)?, MAX_JOURNAL_BYTES)?
+                else {
+                    return Ok(None);
+                };
+                let (proof, delta) = self.decode_indexed_refresh_retention(change, &bytes)?;
+                if proof.version == 4 {
+                    legacy_terminal_view::validate_full_archive(self, change, &bytes, &proof)?;
+                }
+                if proof.version == 3
+                    && crate::catalog::source_refresh::intended(
+                        &proof.base,
+                        change,
+                        &proof.delta_hash,
+                        3,
+                    )? != proof.intended
+                {
+                    return legacy_terminal_view::resolve(self, change, &bytes, proof).map(Some);
+                }
+                Ok(Some((proof, delta)))
+            },
+        )
     }
 
     /// Strict nonrecursive codec shared by current receipts and the immutable
@@ -734,42 +744,49 @@ impl ChangeEngine {
         IndexedRefreshProof,
         Option<crate::catalog::source_refresh::RetainedDelta>,
     )> {
-        let receipt: Receipt = strict_json(bytes)?;
-        let encoded = if receipt.proof.version == 4 {
-            if bytes.len() > MAX_LEGACY_PAGE_ENVELOPE_BYTES || receipt.embedded_delta.is_none() {
-                return Err(recovery(
-                    "legacy Page envelope size or embedded delta invalid",
-                ));
-            }
-            if read_bounded(
-                &self.fs,
-                &crate::catalog::source_refresh::delta_path(change)?,
-                0,
-            )?
-            .is_some()
-            {
-                return Err(recovery(
-                    "legacy Page envelope has unexpected separate delta",
-                ));
-            }
-            serde_json::to_vec(&(&receipt.proof, &receipt.embedded_delta))
-        } else {
-            if receipt.embedded_delta.is_some() {
-                return Err(recovery(
-                    "ordinary indexed proof cannot embed a legacy Page delta",
-                ));
-            }
-            serde_json::to_vec(&receipt.proof)
-        }
-        .map_err(|error| WikiError::invalid(error.to_string()))?;
-        if Blake3Hash::digest(encoded) != receipt.checksum {
-            return Err(recovery("indexed refresh baseline checksum differs"));
-        }
-        receipt.proof.validate(&self.vault_id, change)?;
-        if let Some(delta) = &receipt.embedded_delta {
-            delta.validate_embedded_envelope(&receipt.proof)?;
-        }
-        Ok((receipt.proof, receipt.embedded_delta))
+        crate::maintenance_diagnostic::observe(
+            crate::maintenance_diagnostic::Phase::RetainedAuthority,
+            || {
+                let receipt: Receipt = strict_json(bytes)?;
+                let encoded = if receipt.proof.version == 4 {
+                    if bytes.len() > MAX_LEGACY_PAGE_ENVELOPE_BYTES
+                        || receipt.embedded_delta.is_none()
+                    {
+                        return Err(recovery(
+                            "legacy Page envelope size or embedded delta invalid",
+                        ));
+                    }
+                    if read_bounded(
+                        &self.fs,
+                        &crate::catalog::source_refresh::delta_path(change)?,
+                        0,
+                    )?
+                    .is_some()
+                    {
+                        return Err(recovery(
+                            "legacy Page envelope has unexpected separate delta",
+                        ));
+                    }
+                    serde_json::to_vec(&(&receipt.proof, &receipt.embedded_delta))
+                } else {
+                    if receipt.embedded_delta.is_some() {
+                        return Err(recovery(
+                            "ordinary indexed proof cannot embed a legacy Page delta",
+                        ));
+                    }
+                    serde_json::to_vec(&receipt.proof)
+                }
+                .map_err(|error| WikiError::invalid(error.to_string()))?;
+                if Blake3Hash::digest(encoded) != receipt.checksum {
+                    return Err(recovery("indexed refresh baseline checksum differs"));
+                }
+                receipt.proof.validate(&self.vault_id, change)?;
+                if let Some(delta) = &receipt.embedded_delta {
+                    delta.validate_embedded_envelope(&receipt.proof)?;
+                }
+                Ok((receipt.proof, receipt.embedded_delta))
+            },
+        )
     }
 
     /// One atomic expected-absent envelope; no second delta-file migration cut.
@@ -875,41 +892,47 @@ impl ChangeEngine {
         proof: &IndexedRefreshProof,
         allow_create: bool,
     ) -> Result<()> {
-        if let Some(retained) = self.load_indexed_refresh_proof(&proof.change)? {
-            if retained != *proof {
-                return Err(recovery(
-                    "indexed refresh must resume its exact retained plan",
-                ));
-            }
-            return journal::require_sync(
-                self.fs
-                    .sync_target(&baseline_path(&proof.change)?, writer)?,
-            );
-        }
-        if !allow_create || proof.version == 4 {
-            return Err(recovery(
-                "active indexed refresh lost its original baseline",
-            ));
-        }
-        let checksum = Blake3Hash::digest(
-            serde_json::to_vec(proof).map_err(|error| WikiError::invalid(error.to_string()))?,
-        );
-        let bytes = serde_json::to_vec(&Receipt {
-            proof: proof.clone(),
-            embedded_delta: None,
-            checksum,
-        })
-        .map_err(|error| WikiError::invalid(error.to_string()))?;
-        if bytes.len() > MAX_JOURNAL_BYTES {
-            return Err(WikiError::new(
-                ErrorCode::BudgetExceeded,
-                "indexed refresh baseline exceeds byte ceiling",
-            ));
-        }
-        let staged = self
-            .fs
-            .stage(&baseline_path(&proof.change)?, &bytes, writer)?;
-        journal::require_sync(self.fs.replace(staged, &ExpectedState::Absent, writer)?)
+        crate::maintenance_diagnostic::observe(
+            crate::maintenance_diagnostic::Phase::RetainedAuthority,
+            || {
+                if let Some(retained) = self.load_indexed_refresh_proof(&proof.change)? {
+                    if retained != *proof {
+                        return Err(recovery(
+                            "indexed refresh must resume its exact retained plan",
+                        ));
+                    }
+                    return journal::require_sync(
+                        self.fs
+                            .sync_target(&baseline_path(&proof.change)?, writer)?,
+                    );
+                }
+                if !allow_create || proof.version == 4 {
+                    return Err(recovery(
+                        "active indexed refresh lost its original baseline",
+                    ));
+                }
+                let checksum = Blake3Hash::digest(
+                    serde_json::to_vec(proof)
+                        .map_err(|error| WikiError::invalid(error.to_string()))?,
+                );
+                let bytes = serde_json::to_vec(&Receipt {
+                    proof: proof.clone(),
+                    embedded_delta: None,
+                    checksum,
+                })
+                .map_err(|error| WikiError::invalid(error.to_string()))?;
+                if bytes.len() > MAX_JOURNAL_BYTES {
+                    return Err(WikiError::new(
+                        ErrorCode::BudgetExceeded,
+                        "indexed refresh baseline exceeds byte ceiling",
+                    ));
+                }
+                let staged = self
+                    .fs
+                    .stage(&baseline_path(&proof.change)?, &bytes, writer)?;
+                journal::require_sync(self.fs.replace(staged, &ExpectedState::Absent, writer)?)
+            },
+        )
     }
     #[cfg(test)]
     fn verify_indexed_dependencies(
@@ -950,16 +973,21 @@ impl ChangeEngine {
         session: &IndexedRefreshSession<'_>,
         proof: &IndexedRefreshProof,
     ) -> Result<VerifiedIndexedRefreshPublication> {
-        if session.proof() != proof || session.verify_published()? != proof.intended {
-            return Err(recovery(
-                "catalog did not verify the exact intended indexed refresh",
-            ));
-        }
-        let seal = VerifiedIndexedRefreshPublication {
-            proof: proof.clone(),
-        };
-        seal.require_for(self, writer)?;
-        Ok(seal)
+        crate::maintenance_diagnostic::observe(
+            crate::maintenance_diagnostic::Phase::SqlPublication,
+            || {
+                if session.proof() != proof || session.verify_published()? != proof.intended {
+                    return Err(recovery(
+                        "catalog did not verify the exact intended indexed refresh",
+                    ));
+                }
+                let seal = VerifiedIndexedRefreshPublication {
+                    proof: proof.clone(),
+                };
+                seal.require_for(self, writer)?;
+                Ok(seal)
+            },
+        )
     }
     fn acknowledge_indexed_refresh(
         &self,
@@ -968,33 +996,39 @@ impl ChangeEngine {
         proof: &IndexedRefreshProof,
         report: &ApplyReport,
     ) -> Result<()> {
-        if report.status != ChangeStatus::Committed
-            || report.change != proof.change
-            || report.snapshot.as_ref() != Some(&proof.intended)
-        {
-            return Err(recovery(
-                "indexed refresh terminal receipt does not prove intended publication",
-            ));
-        }
-        outcome::sync_receipt(&self.fs, writer, &proof.change.change_id)?;
-        if outcome::terminal_report(&self.fs, manifest, &proof.change.manifest_hash)?.as_ref()
-            != Some(report)
-        {
-            return Err(recovery(
-                "indexed refresh terminal receipt changed before acknowledgement",
-            ));
-        }
-        let authority = required_authority(self)?;
-        require_active(&authority, proof)?;
-        operations::acknowledge(
-            &self.fs,
-            writer,
-            &authority,
-            &proof.change,
-            publication(&proof.intended)?,
-        )?;
-        legacy_terminal_view::finalize(self, writer, &proof.change)?;
-        Ok(())
+        crate::maintenance_diagnostic::observe(
+            crate::maintenance_diagnostic::Phase::Finalize,
+            || {
+                if report.status != ChangeStatus::Committed
+                    || report.change != proof.change
+                    || report.snapshot.as_ref() != Some(&proof.intended)
+                {
+                    return Err(recovery(
+                        "indexed refresh terminal receipt does not prove intended publication",
+                    ));
+                }
+                outcome::sync_receipt(&self.fs, writer, &proof.change.change_id)?;
+                if outcome::terminal_report(&self.fs, manifest, &proof.change.manifest_hash)?
+                    .as_ref()
+                    != Some(report)
+                {
+                    return Err(recovery(
+                        "indexed refresh terminal receipt changed before acknowledgement",
+                    ));
+                }
+                let authority = required_authority(self)?;
+                require_active(&authority, proof)?;
+                operations::acknowledge(
+                    &self.fs,
+                    writer,
+                    &authority,
+                    &proof.change,
+                    publication(&proof.intended)?,
+                )?;
+                legacy_terminal_view::finalize(self, writer, &proof.change)?;
+                Ok(())
+            },
+        )
     }
 
     /// Historical terminal retries must run before constructing a live session:
@@ -1004,47 +1038,52 @@ impl ChangeEngine {
         &self,
         change: &PreparedChange,
     ) -> Result<Option<ApplyReport>> {
-        self.require_binding()?;
-        let Some(proof) = self.load_indexed_refresh_proof(change)? else {
-            return Ok(None);
-        };
-        let (manifest, hash) = self.load_manifest_structure(&change.change_id)?;
-        if hash != change.manifest_hash {
-            return Err(recovery("terminal refresh manifest binding changed"));
-        }
-        proof.validate_manifest(&manifest)?;
-        let Some(report) = outcome::terminal_report(&self.fs, &manifest, &hash)? else {
-            return Ok(None);
-        };
-        if report.change != *change
-            || (report.status == ChangeStatus::Committed
-                && report.snapshot.as_ref() != Some(&proof.intended))
-        {
-            return Err(recovery(
-                "terminal refresh receipt differs from retained plan",
-            ));
-        }
-        let authority = required_authority(self)?;
-        if authority
-            .active()
-            .is_some_and(|active| active.change == *change)
-        {
-            return Ok(None); // exact live session must finish acknowledgement/cancel
-        }
-        let expected = publication(if report.status == ChangeStatus::Committed {
-            &proof.intended
-        } else {
-            &proof.base
-        })?;
-        let floor = authority.publication();
-        if floor.epoch < expected.epoch
-            || (floor.epoch == expected.epoch && floor.file_id != expected.file_id)
-        {
-            return Err(recovery(
-                "historical refresh outcome exceeds acknowledged publication",
-            ));
-        }
-        Ok(Some(report))
+        crate::maintenance_diagnostic::observe(
+            crate::maintenance_diagnostic::Phase::Finalize,
+            || {
+                self.require_binding()?;
+                let Some(proof) = self.load_indexed_refresh_proof(change)? else {
+                    return Ok(None);
+                };
+                let (manifest, hash) = self.load_manifest_structure(&change.change_id)?;
+                if hash != change.manifest_hash {
+                    return Err(recovery("terminal refresh manifest binding changed"));
+                }
+                proof.validate_manifest(&manifest)?;
+                let Some(report) = outcome::terminal_report(&self.fs, &manifest, &hash)? else {
+                    return Ok(None);
+                };
+                if report.change != *change
+                    || (report.status == ChangeStatus::Committed
+                        && report.snapshot.as_ref() != Some(&proof.intended))
+                {
+                    return Err(recovery(
+                        "terminal refresh receipt differs from retained plan",
+                    ));
+                }
+                let authority = required_authority(self)?;
+                if authority
+                    .active()
+                    .is_some_and(|active| active.change == *change)
+                {
+                    return Ok(None); // exact live session must finish acknowledgement/cancel
+                }
+                let expected = publication(if report.status == ChangeStatus::Committed {
+                    &proof.intended
+                } else {
+                    &proof.base
+                })?;
+                let floor = authority.publication();
+                if floor.epoch < expected.epoch
+                    || (floor.epoch == expected.epoch && floor.file_id != expected.file_id)
+                {
+                    return Err(recovery(
+                        "historical refresh outcome exceeds acknowledged publication",
+                    ));
+                }
+                Ok(Some(report))
+            },
+        )
     }
 
     pub(crate) fn indexed_refresh_terminal_report(
@@ -1083,247 +1122,255 @@ impl ChangeEngine {
         writer: &WriterPermit,
         session: &mut IndexedRefreshSession<'_>,
     ) -> Result<ApplyReport> {
-        writer.require_root(self.fs.root())?;
-        self.require_binding()?;
-        let proof = session.proof().clone();
-        proof.validate(&self.vault_id, &proof.change)?;
-        let (manifest, hash) = self.load_manifest_structure(&proof.change.change_id)?;
-        if hash != proof.change.manifest_hash {
-            return Err(recovery("indexed refresh retained manifest changed"));
-        }
-        proof.validate_manifest(&manifest)?;
-        let terminal = outcome::terminal_report(&self.fs, &manifest, &hash)?;
-        let state = journal::load_journal(&self.fs, &manifest, &hash)?;
-        let mut authority = required_authority(self)?;
-        let phase = session.phase();
-        let allow_create = phase == IndexedRefreshPhase::AtBase
-            && authority.active().is_none()
-            && terminal.is_none()
-            && matches!(state.status, None | Some(ChangeStatus::Prepared));
-        self.retain_indexed_refresh_proof(writer, &proof, allow_create)?;
+        crate::maintenance_diagnostic::observe(crate::maintenance_diagnostic::Phase::Apply, || {
+            writer.require_root(self.fs.root())?;
+            self.require_binding()?;
+            let proof = session.proof().clone();
+            proof.validate(&self.vault_id, &proof.change)?;
+            let (manifest, hash) = self.load_manifest_structure(&proof.change.change_id)?;
+            if hash != proof.change.manifest_hash {
+                return Err(recovery("indexed refresh retained manifest changed"));
+            }
+            proof.validate_manifest(&manifest)?;
+            let terminal = outcome::terminal_report(&self.fs, &manifest, &hash)?;
+            let state = journal::load_journal(&self.fs, &manifest, &hash)?;
+            let mut authority = required_authority(self)?;
+            let phase = session.phase();
+            let allow_create = phase == IndexedRefreshPhase::AtBase
+                && authority.active().is_none()
+                && terminal.is_none()
+                && matches!(state.status, None | Some(ChangeStatus::Prepared));
+            self.retain_indexed_refresh_proof(writer, &proof, allow_create)?;
 
-        if let Some(report) = terminal {
-            if report.change != proof.change {
-                return Err(recovery("indexed refresh terminal identity differs"));
-            }
-            if report.status == ChangeStatus::Aborted {
-                if phase != IndexedRefreshPhase::AtBase {
-                    return Err(recovery("aborted indexed refresh has a published delta"));
+            if let Some(report) = terminal {
+                if report.change != proof.change {
+                    return Err(recovery("indexed refresh terminal identity differs"));
                 }
-                session.verify_selected(false, false)?;
-                self.require_abandoned_revision_trees(&manifest)?;
-                outcome::sync_receipt(&self.fs, writer, &proof.change.change_id)?;
-                if authority.active().is_some() {
-                    require_active(&authority, &proof)?;
-                    operations::cancel(&self.fs, writer, &authority, &proof.change)?;
+                if report.status == ChangeStatus::Aborted {
+                    if phase != IndexedRefreshPhase::AtBase {
+                        return Err(recovery("aborted indexed refresh has a published delta"));
+                    }
+                    session.verify_selected(false, false)?;
+                    self.require_abandoned_revision_trees(&manifest)?;
+                    outcome::sync_receipt(&self.fs, writer, &proof.change.change_id)?;
+                    if authority.active().is_some() {
+                        require_active(&authority, &proof)?;
+                        operations::cancel(&self.fs, writer, &authority, &proof.change)?;
+                    }
+                    return Ok(report);
                 }
-                return Ok(report);
-            }
-            if report.snapshot.as_ref() != Some(&proof.intended) {
-                return Err(recovery(
-                    "terminal indexed refresh names another publication",
-                ));
-            }
-            if authority.active().is_none() {
-                let committed = publication(&proof.intended)?;
-                let floor = authority.publication();
-                if floor.epoch < committed.epoch
-                    || (floor.epoch == committed.epoch && floor.file_id != committed.file_id)
-                {
+                if report.snapshot.as_ref() != Some(&proof.intended) {
                     return Err(recovery(
-                        "terminal indexed refresh has not been acknowledged by idle authority",
+                        "terminal indexed refresh names another publication",
                     ));
                 }
-                outcome::sync_receipt(&self.fs, writer, &proof.change.change_id)?;
-                legacy_terminal_view::finalize(self, writer, &proof.change)?;
+                if authority.active().is_none() {
+                    let committed = publication(&proof.intended)?;
+                    let floor = authority.publication();
+                    if floor.epoch < committed.epoch
+                        || (floor.epoch == committed.epoch && floor.file_id != committed.file_id)
+                    {
+                        return Err(recovery(
+                            "terminal indexed refresh has not been acknowledged by idle authority",
+                        ));
+                    }
+                    outcome::sync_receipt(&self.fs, writer, &proof.change.change_id)?;
+                    legacy_terminal_view::finalize(self, writer, &proof.change)?;
+                    return Ok(report);
+                }
+                require_active(&authority, &proof)?;
+                if phase != IndexedRefreshPhase::AlreadyPublished {
+                    return Err(recovery(
+                        "committed indexed refresh SQL publication is absent",
+                    ));
+                }
+                session.verify_selected(true, false)?;
+                self.require_all_after(writer, &manifest, &hash)?;
+                let seal = self.seal_indexed_publication(writer, session, &proof)?;
+                self.verify_indexed_finalization(writer, &seal)?;
+                self.acknowledge_indexed_refresh(writer, &manifest, &proof, &report)?;
                 return Ok(report);
             }
-            require_active(&authority, &proof)?;
-            if phase != IndexedRefreshPhase::AlreadyPublished {
+            if matches!(
+                state.status,
+                Some(ChangeStatus::Conflict | ChangeStatus::Aborted)
+            ) {
                 return Err(recovery(
-                    "committed indexed refresh SQL publication is absent",
+                    "indexed refresh has a durable conflict or aborted intent",
                 ));
+            }
+            // A known unapplied capture cannot adopt an independently occupied
+            // Source parent, even when its planned revision tree is still absent.
+            // Applying recovery uses the retained tree/member and journal authority.
+            if phase == IndexedRefreshPhase::AtBase
+                && matches!(state.status, None | Some(ChangeStatus::Prepared))
+                && let Some(operation) = &proof.operation
+            {
+                for capture in operation.capture_targets() {
+                    let path = self.fs.root().resolve(&VaultRelativePath::new(format!(
+                        "sources/{}",
+                        capture.source_id
+                    ))?)?;
+                    match std::fs::symlink_metadata(path) {
+                        Ok(_) => {
+                            return Err(WikiError::new(
+                                ErrorCode::ContentConflict,
+                                "source namespace was independently occupied after preparation",
+                            ));
+                        }
+                        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                        Err(error) => {
+                            return Err(WikiError::new(
+                                ErrorCode::Internal,
+                                format!("inspect prepared source namespace: {error}"),
+                            ));
+                        }
+                    }
+                }
+            }
+            if phase == IndexedRefreshPhase::AlreadyPublished {
+                require_active(&authority, &proof)?;
+                if !matches!(
+                    state.status,
+                    Some(
+                        ChangeStatus::FilesApplied
+                            | ChangeStatus::Indexed
+                            | ChangeStatus::Committed
+                    )
+                ) {
+                    return Err(recovery(
+                        "published indexed refresh lacks surviving files-applied intent",
+                    ));
+                }
+                // Never replay canonical writes or try to open the vanished base.
+                session.verify_selected(true, false)?;
+                self.require_all_after(writer, &manifest, &hash)?;
+            } else {
+                if !matches!(
+                    state.status,
+                    None | Some(
+                        ChangeStatus::Prepared
+                            | ChangeStatus::Applying
+                            | ChangeStatus::FilesApplied
+                    )
+                ) {
+                    return Err(recovery(
+                        "base indexed refresh has incompatible journal publication",
+                    ));
+                }
+                if authority.active().is_none() {
+                    if authority.publication() != &publication(&proof.base)?
+                        || !matches!(state.status, None | Some(ChangeStatus::Prepared))
+                    {
+                        return Err(recovery("indexed refresh base differs from idle authority"));
+                    }
+                    session.verify_selected(false, false)?;
+                    session.validate_before_files()?;
+                    authority = operations::begin(
+                        &self.fs,
+                        writer,
+                        &authority,
+                        proof.change.clone(),
+                        publication(&proof.intended)?,
+                    )?;
+                }
+                require_active(&authority, &proof)?;
+                let mixed = matches!(
+                    state.status,
+                    Some(ChangeStatus::Applying | ChangeStatus::FilesApplied)
+                );
+                session.verify_selected(false, mixed)?;
+                session.validate_before_files()?;
+                let observations = self.observe(&manifest)?;
+                if observations.iter().any(|value| {
+                    value.observed != value.before && (!mixed || value.observed != value.after)
+                }) {
+                    return self.conflict(
+                        writer,
+                        &manifest,
+                        &hash,
+                        "indexed refresh preflight",
+                        observations,
+                    );
+                }
+                // Verify retained payloads before the shared executor can mutate.
+                self.validate_manifest(&manifest, &proof.change.change_id)?;
+                let guard = self.indexed_revision_guard(
+                    writer,
+                    &proof.change,
+                    session.starting_ownership_lookup()?,
+                )?;
+                if let Err(error) = guard.preflight() {
+                    return self.revision_failure(writer, &manifest, &hash, &state, error);
+                }
+                self.apply_files_to_files_applied(
+                    writer,
+                    &proof.change,
+                    &manifest,
+                    &state,
+                    &observations,
+                    &|complete| {
+                        if let Err(error) = guard.verify(complete) {
+                            let state = journal::load_journal(&self.fs, &manifest, &hash)?;
+                            return self.revision_failure(writer, &manifest, &hash, &state, error);
+                        }
+                        Ok(())
+                    },
+                )?;
+                self.require_all_after(writer, &manifest, &hash)?;
+                session.verify_selected(true, false)?;
+                let owners = guard.complete_owner_rows()?;
+                drop(guard);
+                if session.publish(&owners)? != proof.intended {
+                    return Err(recovery("indexed refresh published an unexpected snapshot"));
+                }
             }
             session.verify_selected(true, false)?;
             self.require_all_after(writer, &manifest, &hash)?;
             let seal = self.seal_indexed_publication(writer, session, &proof)?;
             self.verify_indexed_finalization(writer, &seal)?;
-            self.acknowledge_indexed_refresh(writer, &manifest, &proof, &report)?;
-            return Ok(report);
-        }
-        if matches!(
-            state.status,
-            Some(ChangeStatus::Conflict | ChangeStatus::Aborted)
-        ) {
-            return Err(recovery(
-                "indexed refresh has a durable conflict or aborted intent",
-            ));
-        }
-        // A known unapplied capture cannot adopt an independently occupied
-        // Source parent, even when its planned revision tree is still absent.
-        // Applying recovery uses the retained tree/member and journal authority.
-        if phase == IndexedRefreshPhase::AtBase
-            && matches!(state.status, None | Some(ChangeStatus::Prepared))
-            && let Some(operation) = &proof.operation
-        {
-            for capture in operation.capture_targets() {
-                let path = self.fs.root().resolve(&VaultRelativePath::new(format!(
-                    "sources/{}",
-                    capture.source_id
-                ))?)?;
-                match std::fs::symlink_metadata(path) {
-                    Ok(_) => {
-                        return Err(WikiError::new(
-                            ErrorCode::ContentConflict,
-                            "source namespace was independently occupied after preparation",
+            let state = journal::load_journal(&self.fs, &manifest, &hash)?;
+            let report = match state.status {
+                Some(ChangeStatus::Committed) => {
+                    outcome::retain_terminal(self, writer, &manifest, &hash, &state)?
+                }
+                Some(ChangeStatus::FilesApplied) => {
+                    journal::append_event(
+                        &self.fs,
+                        writer,
+                        &manifest,
+                        &hash,
+                        ChangeEvent::Indexed {
+                            snapshot: proof.intended.clone(),
+                        },
+                    )?;
+                    outcome::finish(self, writer, &manifest, &hash, ChangeStatus::Committed)?
+                }
+                Some(ChangeStatus::Indexed) => {
+                    let indexed = state
+                        .frames
+                        .iter()
+                        .rev()
+                        .find_map(|frame| match &frame.event {
+                            ChangeEvent::Indexed { snapshot } => Some(snapshot),
+                            _ => None,
+                        });
+                    if indexed != Some(&proof.intended) {
+                        return Err(recovery(
+                            "indexed journal snapshot differs from retained intended publication",
                         ));
                     }
-                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-                    Err(error) => {
-                        return Err(WikiError::new(
-                            ErrorCode::Internal,
-                            format!("inspect prepared source namespace: {error}"),
-                        ));
-                    }
+                    outcome::finish(self, writer, &manifest, &hash, ChangeStatus::Committed)?
                 }
-            }
-        }
-        if phase == IndexedRefreshPhase::AlreadyPublished {
-            require_active(&authority, &proof)?;
-            if !matches!(
-                state.status,
-                Some(ChangeStatus::FilesApplied | ChangeStatus::Indexed | ChangeStatus::Committed)
-            ) {
-                return Err(recovery(
-                    "published indexed refresh lacks surviving files-applied intent",
-                ));
-            }
-            // Never replay canonical writes or try to open the vanished base.
-            session.verify_selected(true, false)?;
-            self.require_all_after(writer, &manifest, &hash)?;
-        } else {
-            if !matches!(
-                state.status,
-                None | Some(
-                    ChangeStatus::Prepared | ChangeStatus::Applying | ChangeStatus::FilesApplied
-                )
-            ) {
-                return Err(recovery(
-                    "base indexed refresh has incompatible journal publication",
-                ));
-            }
-            if authority.active().is_none() {
-                if authority.publication() != &publication(&proof.base)?
-                    || !matches!(state.status, None | Some(ChangeStatus::Prepared))
-                {
-                    return Err(recovery("indexed refresh base differs from idle authority"));
-                }
-                session.verify_selected(false, false)?;
-                session.validate_before_files()?;
-                authority = operations::begin(
-                    &self.fs,
-                    writer,
-                    &authority,
-                    proof.change.clone(),
-                    publication(&proof.intended)?,
-                )?;
-            }
-            require_active(&authority, &proof)?;
-            let mixed = matches!(
-                state.status,
-                Some(ChangeStatus::Applying | ChangeStatus::FilesApplied)
-            );
-            session.verify_selected(false, mixed)?;
-            session.validate_before_files()?;
-            let observations = self.observe(&manifest)?;
-            if observations.iter().any(|value| {
-                value.observed != value.before && (!mixed || value.observed != value.after)
-            }) {
-                return self.conflict(
-                    writer,
-                    &manifest,
-                    &hash,
-                    "indexed refresh preflight",
-                    observations,
-                );
-            }
-            // Verify retained payloads before the shared executor can mutate.
-            self.validate_manifest(&manifest, &proof.change.change_id)?;
-            let guard = self.indexed_revision_guard(
-                writer,
-                &proof.change,
-                session.starting_ownership_lookup()?,
-            )?;
-            if let Err(error) = guard.preflight() {
-                return self.revision_failure(writer, &manifest, &hash, &state, error);
-            }
-            self.apply_files_to_files_applied(
-                writer,
-                &proof.change,
-                &manifest,
-                &state,
-                &observations,
-                &|complete| {
-                    if let Err(error) = guard.verify(complete) {
-                        let state = journal::load_journal(&self.fs, &manifest, &hash)?;
-                        return self.revision_failure(writer, &manifest, &hash, &state, error);
-                    }
-                    Ok(())
-                },
-            )?;
-            self.require_all_after(writer, &manifest, &hash)?;
-            session.verify_selected(true, false)?;
-            let owners = guard.complete_owner_rows()?;
-            drop(guard);
-            if session.publish(&owners)? != proof.intended {
-                return Err(recovery("indexed refresh published an unexpected snapshot"));
-            }
-        }
-        session.verify_selected(true, false)?;
-        self.require_all_after(writer, &manifest, &hash)?;
-        let seal = self.seal_indexed_publication(writer, session, &proof)?;
-        self.verify_indexed_finalization(writer, &seal)?;
-        let state = journal::load_journal(&self.fs, &manifest, &hash)?;
-        let report = match state.status {
-            Some(ChangeStatus::Committed) => {
-                outcome::retain_terminal(self, writer, &manifest, &hash, &state)?
-            }
-            Some(ChangeStatus::FilesApplied) => {
-                journal::append_event(
-                    &self.fs,
-                    writer,
-                    &manifest,
-                    &hash,
-                    ChangeEvent::Indexed {
-                        snapshot: proof.intended.clone(),
-                    },
-                )?;
-                outcome::finish(self, writer, &manifest, &hash, ChangeStatus::Committed)?
-            }
-            Some(ChangeStatus::Indexed) => {
-                let indexed = state
-                    .frames
-                    .iter()
-                    .rev()
-                    .find_map(|frame| match &frame.event {
-                        ChangeEvent::Indexed { snapshot } => Some(snapshot),
-                        _ => None,
-                    });
-                if indexed != Some(&proof.intended) {
+                _ => {
                     return Err(recovery(
-                        "indexed journal snapshot differs from retained intended publication",
+                        "indexed refresh cannot finalize from its journal state",
                     ));
                 }
-                outcome::finish(self, writer, &manifest, &hash, ChangeStatus::Committed)?
-            }
-            _ => {
-                return Err(recovery(
-                    "indexed refresh cannot finalize from its journal state",
-                ));
-            }
-        };
-        self.acknowledge_indexed_refresh(writer, &manifest, &proof, &report)?;
-        Ok(report)
+            };
+            self.acknowledge_indexed_refresh(writer, &manifest, &proof, &report)?;
+            Ok(report)
+        })
     }
 }
 

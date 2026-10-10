@@ -153,128 +153,134 @@ impl<'a> NormalizedBuilder<'a> {
         identity: BuildIdentity,
         limits: BuildLimits,
     ) -> Result<Self> {
-        writer.require_root(fs.root())?;
-        fs.require_storage_ready()?;
-        identity.selection.validate(&identity.selection.vault_id)?;
-        limits.validate()?;
-        let started = Instant::now();
-        let io = fs.durable_io();
-        for directory in [".wiki/cache", ".wiki/cache/catalogs"] {
-            let relative = VaultRelativePath::new(directory)?;
-            fs.root()
-                .validate_portable_paths(std::slice::from_ref(&relative))?;
-            let path = fs.root().resolve(&relative)?;
-            match io.create_directory(&path) {
-                Ok(()) => {
-                    require_sync(
-                        io.sync_directory(&path)
-                            .map_err(|e| io_error("sync catalog directory", e))?,
-                    )?;
-                    require_sync(
-                        io.sync_directory(path.parent().expect("managed directory parent"))
-                            .map_err(|e| io_error("sync catalog directory parent", e))?,
-                    )?;
+        crate::maintenance_diagnostic::observe(
+            crate::maintenance_diagnostic::Phase::RebuildIndexPublication,
+            || {
+                writer.require_root(fs.root())?;
+                fs.require_storage_ready()?;
+                identity.selection.validate(&identity.selection.vault_id)?;
+                limits.validate()?;
+                let started = Instant::now();
+                let io = fs.durable_io();
+                for directory in [".wiki/cache", ".wiki/cache/catalogs"] {
+                    let relative = VaultRelativePath::new(directory)?;
+                    fs.root()
+                        .validate_portable_paths(std::slice::from_ref(&relative))?;
+                    let path = fs.root().resolve(&relative)?;
+                    match io.create_directory(&path) {
+                        Ok(()) => {
+                            require_sync(
+                                io.sync_directory(&path)
+                                    .map_err(|e| io_error("sync catalog directory", e))?,
+                            )?;
+                            require_sync(
+                                io.sync_directory(path.parent().expect("managed directory parent"))
+                                    .map_err(|e| io_error("sync catalog directory parent", e))?,
+                            )?;
+                        }
+                        Err(e)
+                            if e.kind() == std::io::ErrorKind::AlreadyExists && path.is_dir() => {}
+                        Err(e) => return Err(io_error("create catalog directory", e)),
+                    }
                 }
-                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists && path.is_dir() => {}
-                Err(e) => return Err(io_error("create catalog directory", e)),
-            }
-        }
-        let relative = VaultRelativePath::new(format!(
-            ".wiki/cache/catalogs/{}.sqlite",
-            identity.selection.file_id
-        ))?;
-        fs.root()
-            .validate_portable_paths(std::slice::from_ref(&relative))?;
-        let path = fs.root().resolve(&relative)?;
-        // SQLite opens sidecars itself, so guard these names before handing it
-        // the path. An unused primary filename must not adopt an old WAL.
-        for suffix in ["-wal", "-shm", "-journal"] {
-            let sidecar = VaultRelativePath::new(format!("{}{suffix}", relative.as_str()))?;
-            fs.root()
-                .validate_portable_paths(std::slice::from_ref(&sidecar))?;
-            let sidecar = fs.root().resolve(&sidecar)?;
-            match std::fs::symlink_metadata(sidecar) {
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-                Err(error) => return Err(io_error("inspect new catalog sidecar", error)),
-                Ok(_) => {
-                    return Err(WikiError::new(
-                        ErrorCode::IndexCorrupt,
-                        "unused catalog identity has an existing SQLite sidecar",
-                    ));
+                let relative = VaultRelativePath::new(format!(
+                    ".wiki/cache/catalogs/{}.sqlite",
+                    identity.selection.file_id
+                ))?;
+                fs.root()
+                    .validate_portable_paths(std::slice::from_ref(&relative))?;
+                let path = fs.root().resolve(&relative)?;
+                // SQLite opens sidecars itself, so guard these names before handing it
+                // the path. An unused primary filename must not adopt an old WAL.
+                for suffix in ["-wal", "-shm", "-journal"] {
+                    let sidecar = VaultRelativePath::new(format!("{}{suffix}", relative.as_str()))?;
+                    fs.root()
+                        .validate_portable_paths(std::slice::from_ref(&sidecar))?;
+                    let sidecar = fs.root().resolve(&sidecar)?;
+                    match std::fs::symlink_metadata(sidecar) {
+                        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                        Err(error) => return Err(io_error("inspect new catalog sidecar", error)),
+                        Ok(_) => {
+                            return Err(WikiError::new(
+                                ErrorCode::IndexCorrupt,
+                                "unused catalog identity has an existing SQLite sidecar",
+                            ));
+                        }
+                    }
                 }
-            }
-        }
-        // Creation is exclusive even if an accidentally reused identity was supplied.
-        let file = io
-            .create_stage(&path)
-            .map_err(|e| io_error("create catalog sibling", e))?;
-        io.sync_file(&file)
-            .map_err(|e| io_error("sync new catalog sibling", e))?;
-        require_sync(
-            io.sync_directory(path.parent().expect("catalog parent"))
-                .map_err(|e| io_error("sync new catalog parent", e))?,
-        )?;
-        drop(file);
-        let connection = Connection::open_with_flags(
-            &path,
-            OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NO_MUTEX,
-        )
-        .map_err(build_sql_error)?;
-        connection
-            .set_limit(
-                Limit::SQLITE_LIMIT_LENGTH,
-                (limits.max_row_bytes + 65536) as i32,
-            )
-            .map_err(build_sql_error)?;
-        connection
-            .set_limit(Limit::SQLITE_LIMIT_SQL_LENGTH, 256 * 1024)
-            .map_err(build_sql_error)?;
-        connection.execute_batch(&format!(
+                // Creation is exclusive even if an accidentally reused identity was supplied.
+                let file = io
+                    .create_stage(&path)
+                    .map_err(|e| io_error("create catalog sibling", e))?;
+                io.sync_file(&file)
+                    .map_err(|e| io_error("sync new catalog sibling", e))?;
+                require_sync(
+                    io.sync_directory(path.parent().expect("catalog parent"))
+                        .map_err(|e| io_error("sync new catalog parent", e))?,
+                )?;
+                drop(file);
+                let connection = Connection::open_with_flags(
+                    &path,
+                    OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+                )
+                .map_err(build_sql_error)?;
+                connection
+                    .set_limit(
+                        Limit::SQLITE_LIMIT_LENGTH,
+                        (limits.max_row_bytes + 65536) as i32,
+                    )
+                    .map_err(build_sql_error)?;
+                connection
+                    .set_limit(Limit::SQLITE_LIMIT_SQL_LENGTH, 256 * 1024)
+                    .map_err(build_sql_error)?;
+                connection.execute_batch(&format!(
             "PRAGMA page_size=4096; PRAGMA max_page_count={}; PRAGMA mmap_size=0; PRAGMA cache_size=-{}; PRAGMA temp_store=FILE; PRAGMA wal_autocheckpoint=0;",
             limits.max_database_bytes / 4096, limits.sqlite_cache_bytes / 1024
         )).map_err(build_sql_error)?;
-        sql::configure(&connection, 1000, true)?;
-        let deadline = limits.max_elapsed;
-        connection
-            .progress_handler(1000, Some(move || started.elapsed() >= deadline))
-            .map_err(build_sql_error)?;
-        connection
-            .execute_batch("BEGIN IMMEDIATE")
-            .map_err(build_sql_error)?;
-        connection
-            .execute_batch(normalized_schema::SCHEMA)
-            .map_err(build_sql_error)?;
-        connection
-            .execute_batch(super::unit_inventory::SCHEMA)
-            .map_err(build_sql_error)?;
-        let selection = &identity.selection;
-        connection.execute("INSERT INTO catalog_meta(singleton,schema_version,vault_id,file_id,creation_epoch,creation_header_hash,epoch,state,origin_change_id,origin_manifest_hash,vector_cache_lost,vector_loss_unknown) VALUES(1,3,?1,?2,?3,?4,?3,'building',?5,?6,?7,?8)", params![
+                sql::configure(&connection, 1000, true)?;
+                let deadline = limits.max_elapsed;
+                connection
+                    .progress_handler(1000, Some(move || started.elapsed() >= deadline))
+                    .map_err(build_sql_error)?;
+                connection
+                    .execute_batch("BEGIN IMMEDIATE")
+                    .map_err(build_sql_error)?;
+                connection
+                    .execute_batch(normalized_schema::SCHEMA)
+                    .map_err(build_sql_error)?;
+                connection
+                    .execute_batch(super::unit_inventory::SCHEMA)
+                    .map_err(build_sql_error)?;
+                let selection = &identity.selection;
+                connection.execute("INSERT INTO catalog_meta(singleton,schema_version,vault_id,file_id,creation_epoch,creation_header_hash,epoch,state,origin_change_id,origin_manifest_hash,vector_cache_lost,vector_loss_unknown) VALUES(1,3,?1,?2,?3,?4,?3,'building',?5,?6,?7,?8)", params![
             selection.vault_id.as_str(), selection.file_id, sql::integer(selection.creation_epoch)?, selection.creation_header_hash.as_str(),
             identity.origin.as_ref().map(|v| v.change_id.as_str()), identity.origin.as_ref().map(|v| v.manifest_hash.as_str()),
             identity.vector_cache_lost, identity.vector_loss_unknown
         ]).map_err(build_sql_error)?;
-        connection
-            .execute_batch("COMMIT")
-            .map_err(build_sql_error)?;
-        checkpoint(&connection)?;
-        let builder = Self {
-            fs: fs.clone(),
-            writer,
-            identity,
-            limits,
-            path,
-            connection: Some(connection),
-            started,
-            batch_bytes: 0,
-            batch_rows: 0,
-            total_rows: 0,
-            transaction_open: false,
-            poisoned: false,
-            stats: BuildStats::default(),
-            lookup_hash: blake3::Hasher::new(),
-        };
-        builder.step(BuildCheckpoint::AfterHeader)?;
-        Ok(builder)
+                connection
+                    .execute_batch("COMMIT")
+                    .map_err(build_sql_error)?;
+                checkpoint(&connection)?;
+                let builder = Self {
+                    fs: fs.clone(),
+                    writer,
+                    identity,
+                    limits,
+                    path,
+                    connection: Some(connection),
+                    started,
+                    batch_bytes: 0,
+                    batch_rows: 0,
+                    total_rows: 0,
+                    transaction_open: false,
+                    poisoned: false,
+                    stats: BuildStats::default(),
+                    lookup_hash: blake3::Hasher::new(),
+                };
+                builder.step(BuildCheckpoint::AfterHeader)?;
+                Ok(builder)
+            },
+        )
     }
 
     fn connection(&self) -> &Connection {
@@ -332,19 +338,24 @@ impl<'a> NormalizedBuilder<'a> {
         Ok(())
     }
     fn flush(&mut self) -> Result<()> {
-        if !self.transaction_open {
-            return Ok(());
-        }
-        self.step(BuildCheckpoint::BeforeBatchCommit)?;
-        self.connection()
-            .execute_batch("COMMIT")
-            .map_err(build_sql_error)?;
-        self.transaction_open = false;
-        checkpoint(self.connection())?;
-        self.stats.batches += 1;
-        self.batch_bytes = 0;
-        self.batch_rows = 0;
-        self.step(BuildCheckpoint::AfterBatchCheckpoint)
+        crate::maintenance_diagnostic::observe(
+            crate::maintenance_diagnostic::Phase::RebuildIndexPublication,
+            || {
+                if !self.transaction_open {
+                    return Ok(());
+                }
+                self.step(BuildCheckpoint::BeforeBatchCommit)?;
+                self.connection()
+                    .execute_batch("COMMIT")
+                    .map_err(build_sql_error)?;
+                self.transaction_open = false;
+                checkpoint(self.connection())?;
+                self.stats.batches += 1;
+                self.batch_bytes = 0;
+                self.batch_rows = 0;
+                self.step(BuildCheckpoint::AfterBatchCheckpoint)
+            },
+        )
     }
     fn failed(&mut self) {
         self.poisoned = true;
@@ -357,90 +368,100 @@ impl<'a> NormalizedBuilder<'a> {
     }
 
     fn insert_document(&mut self, row: &DocumentRow) -> Result<()> {
-        self.guard()?;
-        let aliases_size = counted_json(&row.aliases, self.limits.max_row_bytes)?;
-        let tags_size = counted_json(&row.tags, self.limits.max_row_bytes)?;
-        let reasons_size = counted_json(&row.reasons, self.limits.max_row_bytes)?;
-        let aliases_text_size = joined_size(&row.aliases)?;
-        let tags_text_size = joined_size(&row.tags)?;
-        let ordinary = checked_sum(&[
-            512,
-            row.path.as_str().len() as u64,
-            row.hash.as_str().len() as u64,
-            row.record_id.as_ref().map_or(0, |v| v.as_str().len()) as u64,
-            row.kind.map_or(0, |v| v.as_str().len()) as u64,
-            row.source_id.as_ref().map_or(0, |v| v.as_str().len()) as u64,
-            row.owner_revision.as_ref().map_or(0, |v| v.as_str().len()) as u64,
-            eligibility(row.eligibility).len() as u64,
-            row.title.len() as u64,
-            row.headings.len() as u64,
-            row.body.len() as u64,
-            row.raw_text.len() as u64,
-            aliases_size,
-            tags_size,
-            reasons_size,
-            aliases_text_size,
-            tags_text_size,
-        ])?;
-        let fts = checked_sum(&[
-            row.title.len() as u64,
-            aliases_text_size,
-            row.headings.len() as u64,
-            tags_text_size,
-            row.body.len() as u64,
-        ])?;
-        self.admit(checked_sum(&[ordinary, fts])?)?;
-        let aliases_json = sql::json(&row.aliases)?;
-        let tags_json = sql::json(&row.tags)?;
-        let reasons_json = sql::json(&row.reasons)?;
-        let aliases_text = row.aliases.join(" ");
-        let tags_text = row.tags.join(" ");
-        self.connection().execute("INSERT INTO documents(path,record_id,kind,file_hash,title,aliases_json,aliases_text,headings,tags_json,tags_text,body,raw_text,source_id,owner_revision,eligibility,reasons_json) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16)", params![
+        crate::maintenance_diagnostic::observe(
+            crate::maintenance_diagnostic::Phase::RebuildIndexPublication,
+            || {
+                self.guard()?;
+                let aliases_size = counted_json(&row.aliases, self.limits.max_row_bytes)?;
+                let tags_size = counted_json(&row.tags, self.limits.max_row_bytes)?;
+                let reasons_size = counted_json(&row.reasons, self.limits.max_row_bytes)?;
+                let aliases_text_size = joined_size(&row.aliases)?;
+                let tags_text_size = joined_size(&row.tags)?;
+                let ordinary = checked_sum(&[
+                    512,
+                    row.path.as_str().len() as u64,
+                    row.hash.as_str().len() as u64,
+                    row.record_id.as_ref().map_or(0, |v| v.as_str().len()) as u64,
+                    row.kind.map_or(0, |v| v.as_str().len()) as u64,
+                    row.source_id.as_ref().map_or(0, |v| v.as_str().len()) as u64,
+                    row.owner_revision.as_ref().map_or(0, |v| v.as_str().len()) as u64,
+                    eligibility(row.eligibility).len() as u64,
+                    row.title.len() as u64,
+                    row.headings.len() as u64,
+                    row.body.len() as u64,
+                    row.raw_text.len() as u64,
+                    aliases_size,
+                    tags_size,
+                    reasons_size,
+                    aliases_text_size,
+                    tags_text_size,
+                ])?;
+                let fts = checked_sum(&[
+                    row.title.len() as u64,
+                    aliases_text_size,
+                    row.headings.len() as u64,
+                    tags_text_size,
+                    row.body.len() as u64,
+                ])?;
+                self.admit(checked_sum(&[ordinary, fts])?)?;
+                let aliases_json = sql::json(&row.aliases)?;
+                let tags_json = sql::json(&row.tags)?;
+                let reasons_json = sql::json(&row.reasons)?;
+                let aliases_text = row.aliases.join(" ");
+                let tags_text = row.tags.join(" ");
+                self.connection().execute("INSERT INTO documents(path,record_id,kind,file_hash,title,aliases_json,aliases_text,headings,tags_json,tags_text,body,raw_text,source_id,owner_revision,eligibility,reasons_json) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16)", params![
             row.path.as_str(),row.record_id.as_ref().map(|v|v.as_str()),row.kind.map(|v|v.as_str()),row.hash.as_str(),row.title,
             aliases_json,aliases_text,row.headings,tags_json,tags_text,row.body,row.raw_text,row.source_id.as_ref().map(|v|v.as_str()),
             row.owner_revision.as_ref().map(|v|v.as_str()),eligibility(row.eligibility),reasons_json
         ]).map_err(build_sql_error)?;
-        let rowid = self.connection().last_insert_rowid();
-        self.step(BuildCheckpoint::AfterOrdinaryRow)?;
-        self.connection().execute("INSERT INTO documents_fts(rowid,title,aliases,headings,tags,body) VALUES(?1,?2,?3,?4,?5,?6)",
+                let rowid = self.connection().last_insert_rowid();
+                self.step(BuildCheckpoint::AfterOrdinaryRow)?;
+                self.connection().execute("INSERT INTO documents_fts(rowid,title,aliases,headings,tags,body) VALUES(?1,?2,?3,?4,?5,?6)",
             params![rowid,row.title,aliases_text,row.headings,tags_text,row.body]).map_err(build_sql_error)?;
-        self.step(BuildCheckpoint::AfterFtsRow)?;
-        self.stats.documents += 1;
-        Ok(())
+                self.step(BuildCheckpoint::AfterFtsRow)?;
+                self.stats.documents += 1;
+                Ok(())
+            },
+        )
     }
     fn insert_graph(&mut self, row: &GraphRow) -> Result<()> {
-        self.guard()?;
-        let aliases_size = counted_json(&row.aliases, self.limits.max_row_bytes)?;
-        let aliases_text_size = joined_size(&row.aliases)?;
-        let text = checked_sum(&[
-            row.name.len() as u64,
-            aliases_text_size,
-            row.endpoints.len() as u64,
-            row.predicate.len() as u64,
-            row.qualifiers.len() as u64,
-            row.description.len() as u64,
-        ])?;
-        self.admit(checked_sum(&[
-            512,
-            aliases_size,
-            text,
-            text,
-            row.target_id.as_str().len() as u64,
-            row.target_id.as_str().len() as u64,
-            row.target_kind.as_str().len() as u64,
-            row.target_kind.as_str().len() as u64,
-        ])?)?;
-        let aliases_json = sql::json(&row.aliases)?;
-        let aliases_text = row.aliases.join(" ");
-        self.connection().execute("INSERT INTO graph_rows(target_id,target_kind,name,aliases_json,aliases_text,endpoints,predicate,qualifiers,description) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9)",
+        crate::maintenance_diagnostic::observe(
+            crate::maintenance_diagnostic::Phase::RebuildIndexPublication,
+            || {
+                self.guard()?;
+                let aliases_size = counted_json(&row.aliases, self.limits.max_row_bytes)?;
+                let aliases_text_size = joined_size(&row.aliases)?;
+                let text = checked_sum(&[
+                    row.name.len() as u64,
+                    aliases_text_size,
+                    row.endpoints.len() as u64,
+                    row.predicate.len() as u64,
+                    row.qualifiers.len() as u64,
+                    row.description.len() as u64,
+                ])?;
+                self.admit(checked_sum(&[
+                    512,
+                    aliases_size,
+                    text,
+                    text,
+                    row.target_id.as_str().len() as u64,
+                    row.target_id.as_str().len() as u64,
+                    row.target_kind.as_str().len() as u64,
+                    row.target_kind.as_str().len() as u64,
+                ])?)?;
+                let aliases_json = sql::json(&row.aliases)?;
+                let aliases_text = row.aliases.join(" ");
+                self.connection().execute("INSERT INTO graph_rows(target_id,target_kind,name,aliases_json,aliases_text,endpoints,predicate,qualifiers,description) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9)",
             params![row.target_id.as_str(),row.target_kind.as_str(),row.name,aliases_json,aliases_text,row.endpoints,row.predicate,row.qualifiers,row.description]).map_err(build_sql_error)?;
-        let rowid = self.connection().last_insert_rowid();
-        self.step(BuildCheckpoint::AfterOrdinaryRow)?;
-        self.connection().execute("INSERT INTO graph_fts(rowid,name,aliases,endpoints,predicate,qualifiers,description,target_kind,target_id) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9)",
+                let rowid = self.connection().last_insert_rowid();
+                self.step(BuildCheckpoint::AfterOrdinaryRow)?;
+                self.connection().execute("INSERT INTO graph_fts(rowid,name,aliases,endpoints,predicate,qualifiers,description,target_kind,target_id) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9)",
             params![rowid,row.name,aliases_text,row.endpoints,row.predicate,row.qualifiers,row.description,row.target_kind.as_str(),row.target_id.as_str()]).map_err(build_sql_error)?;
-        self.step(BuildCheckpoint::AfterFtsRow)?;
-        self.stats.graph_rows += 1;
-        Ok(())
+                self.step(BuildCheckpoint::AfterFtsRow)?;
+                self.stats.graph_rows += 1;
+                Ok(())
+            },
+        )
     }
     fn insert_link(&mut self, row: &LinkRow) -> Result<()> {
         self.admit(checked_sum(&[
@@ -630,95 +651,98 @@ impl<'a> NormalizedBuilder<'a> {
         projection: &ValidationProjection,
         facts: Option<&super::eligibility_facts::NormalizedEligibilityFacts>,
     ) -> Result<CompletedCatalog> {
-        self.guard()?;
-        if projection.vault_id != self.identity.selection.vault_id {
-            return Err(WikiError::new(
-                ErrorCode::IndexCorrupt,
-                "validation projection belongs to another vault",
-            ));
-        }
-        if let Some(facts) = facts {
-            self.insert_eligibility_facts(projection, facts)?;
-        } else if self.stats.registry_keys != 0 || self.stats.link_facts != 0 {
-            return Err(WikiError::new(
-                ErrorCode::IndexCorrupt,
-                "normalized emitted facts require normalized finalization",
-            ));
-        }
-        for (id, row) in &projection.records {
-            if id != row.record.id() {
-                return Err(WikiError::new(
-                    ErrorCode::IndexCorrupt,
-                    "record key disagrees with canonical identity",
-                ));
-            }
-            let size = counted_json(row, self.limits.max_row_bytes)?;
-            self.admit(checked_sum(&[
-                512,
-                size,
-                id.as_str().len() as u64,
-                row.record.kind().as_str().len() as u64,
-                row.path.as_str().len() as u64,
-                row.hash.as_str().len() as u64,
-                row.authored_status.as_ref().map_or(0, String::len) as u64,
-                eligibility(row.eligibility).len() as u64,
-                row.identity_eligibility.map_or(0, |v| eligibility(v).len()) as u64,
-                row.description_eligibility
-                    .map_or(0, |v| eligibility(v).len()) as u64,
-            ])?)?;
-            let row_json = sql::json(row)?;
-            self.connection()
-                .execute(
-                    "INSERT INTO records VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)",
-                    params![
-                        id.as_str(),
-                        row.record.kind().as_str(),
-                        row.path.as_str(),
-                        row.hash.as_str(),
-                        row.authored_status,
-                        eligibility(row.eligibility),
-                        row.identity_eligibility.map(eligibility),
-                        row.description_eligibility.map(eligibility),
-                        row.disputed,
-                        row_json
-                    ],
-                )
-                .map_err(build_sql_error)?;
-            self.stats.records += 1;
-        }
-        self.insert_refresh_lookups(projection)?;
-        let revision_ownership_hash = self.reconstruct_revision_owners()?;
-        for dependency in &projection.dependencies {
-            let hash = match &dependency.expected {
-                ExpectedState::Absent => None,
-                ExpectedState::Hash(hash) => Some(hash.as_str()),
-            };
-            self.admit(checked_sum(&[
-                256,
-                dependency.path.as_str().len() as u64,
-                hash.map_or(0, str::len) as u64,
-            ])?)?;
-            self.connection()
-                .execute(
-                    "INSERT INTO dependencies(path,expected_hash) VALUES(?1,?2)",
-                    params![dependency.path.as_str(), hash],
-                )
-                .map_err(build_sql_error)?;
-            self.stats.dependencies += 1;
-        }
-        for diagnostic in &projection.diagnostics {
-            let size = counted_json(&diagnostic.details, self.limits.max_row_bytes)?;
-            self.admit(checked_sum(&[
-                512,
-                size,
-                diagnostic.path.as_str().len() as u64,
-                diagnostic
-                    .record_id
-                    .as_ref()
-                    .map_or(0, |v| v.as_str().len()) as u64,
-                diagnostic.code.to_string().len() as u64,
-            ])?)?;
-            self.connection()
+        crate::maintenance_diagnostic::observe(
+            crate::maintenance_diagnostic::Phase::RebuildIndexPublication,
+            || {
+                self.guard()?;
+                if projection.vault_id != self.identity.selection.vault_id {
+                    return Err(WikiError::new(
+                        ErrorCode::IndexCorrupt,
+                        "validation projection belongs to another vault",
+                    ));
+                }
+                if let Some(facts) = facts {
+                    self.insert_eligibility_facts(projection, facts)?;
+                } else if self.stats.registry_keys != 0 || self.stats.link_facts != 0 {
+                    return Err(WikiError::new(
+                        ErrorCode::IndexCorrupt,
+                        "normalized emitted facts require normalized finalization",
+                    ));
+                }
+                for (id, row) in &projection.records {
+                    if id != row.record.id() {
+                        return Err(WikiError::new(
+                            ErrorCode::IndexCorrupt,
+                            "record key disagrees with canonical identity",
+                        ));
+                    }
+                    let size = counted_json(row, self.limits.max_row_bytes)?;
+                    self.admit(checked_sum(&[
+                        512,
+                        size,
+                        id.as_str().len() as u64,
+                        row.record.kind().as_str().len() as u64,
+                        row.path.as_str().len() as u64,
+                        row.hash.as_str().len() as u64,
+                        row.authored_status.as_ref().map_or(0, String::len) as u64,
+                        eligibility(row.eligibility).len() as u64,
+                        row.identity_eligibility.map_or(0, |v| eligibility(v).len()) as u64,
+                        row.description_eligibility
+                            .map_or(0, |v| eligibility(v).len()) as u64,
+                    ])?)?;
+                    let row_json = sql::json(row)?;
+                    self.connection()
+                        .execute(
+                            "INSERT INTO records VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)",
+                            params![
+                                id.as_str(),
+                                row.record.kind().as_str(),
+                                row.path.as_str(),
+                                row.hash.as_str(),
+                                row.authored_status,
+                                eligibility(row.eligibility),
+                                row.identity_eligibility.map(eligibility),
+                                row.description_eligibility.map(eligibility),
+                                row.disputed,
+                                row_json
+                            ],
+                        )
+                        .map_err(build_sql_error)?;
+                    self.stats.records += 1;
+                }
+                self.insert_refresh_lookups(projection)?;
+                let revision_ownership_hash = self.reconstruct_revision_owners()?;
+                for dependency in &projection.dependencies {
+                    let hash = match &dependency.expected {
+                        ExpectedState::Absent => None,
+                        ExpectedState::Hash(hash) => Some(hash.as_str()),
+                    };
+                    self.admit(checked_sum(&[
+                        256,
+                        dependency.path.as_str().len() as u64,
+                        hash.map_or(0, str::len) as u64,
+                    ])?)?;
+                    self.connection()
+                        .execute(
+                            "INSERT INTO dependencies(path,expected_hash) VALUES(?1,?2)",
+                            params![dependency.path.as_str(), hash],
+                        )
+                        .map_err(build_sql_error)?;
+                    self.stats.dependencies += 1;
+                }
+                for diagnostic in &projection.diagnostics {
+                    let size = counted_json(&diagnostic.details, self.limits.max_row_bytes)?;
+                    self.admit(checked_sum(&[
+                        512,
+                        size,
+                        diagnostic.path.as_str().len() as u64,
+                        diagnostic
+                            .record_id
+                            .as_ref()
+                            .map_or(0, |v| v.as_str().len()) as u64,
+                        diagnostic.code.to_string().len() as u64,
+                    ])?)?;
+                    self.connection()
                 .execute(
                     "INSERT INTO diagnostics(path,record_id,code,details_json) VALUES(?1,?2,?3,?4)",
                     params![
@@ -729,131 +753,135 @@ impl<'a> NormalizedBuilder<'a> {
                     ],
                 )
                 .map_err(build_sql_error)?;
-            self.stats.diagnostics += 1;
-        }
-        self.flush()?;
-        let dependency_hash = dependency_fingerprint(&projection.dependencies)?;
-        self.guard()?;
-        self.connection()
-            .execute(
-                "INSERT INTO documents_fts(documents_fts,rank) VALUES('integrity-check',1)",
-                [],
-            )
-            .map_err(build_sql_error)?;
-        self.connection()
-            .execute(
-                "INSERT INTO graph_fts(graph_fts,rank) VALUES('integrity-check',1)",
-                [],
-            )
-            .map_err(build_sql_error)?;
-        let quick: String = self
-            .connection()
-            .query_row("PRAGMA quick_check", [], |r| r.get(0))
-            .map_err(build_sql_error)?;
-        if quick != "ok" {
-            return Err(WikiError::new(ErrorCode::IndexCorrupt, quick));
-        }
-        let violation: Option<String> = self
-            .connection()
-            .query_row("PRAGMA foreign_key_check", [], |r| r.get(0))
-            .optional()
-            .map_err(build_sql_error)?;
-        if violation.is_some() {
-            return Err(WikiError::new(
-                ErrorCode::IndexCorrupt,
-                "normalized catalog foreign key violation",
-            ));
-        }
-        self.step(BuildCheckpoint::BeforeComplete)?;
-        // This names a publication, not a fresh full-vault proof. Subsequent
-        // deltas chain their exact changed inputs without recomputing a global
-        // digest. The full-build observations are separately epoch-bound.
-        let mut publication_hash = Blake3Hash::digest(sql::json(&(
-            "lwiki.catalog-publication.v3.build",
-            &self.identity.selection,
-            self.identity
-                .origin
-                .as_ref()
-                .map(|origin| (&origin.change_id, &origin.manifest_hash)),
-            &projection.parser_fingerprint,
-            &projection.control_manifest,
-            &dependency_hash,
-            &revision_ownership_hash,
-        ))?);
-        if facts.is_some() {
-            if self.stats.links != self.stats.link_facts {
-                return Err(WikiError::new(
-                    ErrorCode::IndexCorrupt,
-                    "normalized link facts do not cover emitted links",
-                ));
-            }
-            let missing: bool = self.connection().query_row(
+                    self.stats.diagnostics += 1;
+                }
+                self.flush()?;
+                let dependency_hash = dependency_fingerprint(&projection.dependencies)?;
+                self.guard()?;
+                self.connection()
+                    .execute(
+                        "INSERT INTO documents_fts(documents_fts,rank) VALUES('integrity-check',1)",
+                        [],
+                    )
+                    .map_err(build_sql_error)?;
+                self.connection()
+                    .execute(
+                        "INSERT INTO graph_fts(graph_fts,rank) VALUES('integrity-check',1)",
+                        [],
+                    )
+                    .map_err(build_sql_error)?;
+                let quick: String = self
+                    .connection()
+                    .query_row("PRAGMA quick_check", [], |r| r.get(0))
+                    .map_err(build_sql_error)?;
+                if quick != "ok" {
+                    return Err(WikiError::new(ErrorCode::IndexCorrupt, quick));
+                }
+                let violation: Option<String> = self
+                    .connection()
+                    .query_row("PRAGMA foreign_key_check", [], |r| r.get(0))
+                    .optional()
+                    .map_err(build_sql_error)?;
+                if violation.is_some() {
+                    return Err(WikiError::new(
+                        ErrorCode::IndexCorrupt,
+                        "normalized catalog foreign key violation",
+                    ));
+                }
+                self.step(BuildCheckpoint::BeforeComplete)?;
+                // This names a publication, not a fresh full-vault proof. Subsequent
+                // deltas chain their exact changed inputs without recomputing a global
+                // digest. The full-build observations are separately epoch-bound.
+                let mut publication_hash = Blake3Hash::digest(sql::json(&(
+                    "lwiki.catalog-publication.v3.build",
+                    &self.identity.selection,
+                    self.identity
+                        .origin
+                        .as_ref()
+                        .map(|origin| (&origin.change_id, &origin.manifest_hash)),
+                    &projection.parser_fingerprint,
+                    &projection.control_manifest,
+                    &dependency_hash,
+                    &revision_ownership_hash,
+                ))?);
+                if facts.is_some() {
+                    if self.stats.links != self.stats.link_facts {
+                        return Err(WikiError::new(
+                            ErrorCode::IndexCorrupt,
+                            "normalized link facts do not cover emitted links",
+                        ));
+                    }
+                    let missing: bool = self.connection().query_row(
                 "SELECT EXISTS(SELECT 1 FROM records r WHERE NOT EXISTS(SELECT 1 FROM registry_match_keys k WHERE k.kind='id' AND k.value=r.id AND k.record_id=r.id AND k.path=r.path))",
                 [], |row| row.get(0),
             ).map_err(build_sql_error)?;
-            if missing {
-                return Err(WikiError::new(
-                    ErrorCode::IndexCorrupt,
-                    "normalized registry facts omit adopted identity",
-                ));
-            }
-            // This additional commitment names the proof layout and exact facts;
-            // legacy full-proof builds retain their existing publication encoding.
-            publication_hash = Blake3Hash::digest(sql::json(&(
-                "lwiki.normalized-proof-layout.v2",
-                &publication_hash,
-                self.lookup_hash.finalize().to_hex().to_string(),
-            ))?);
-            self.connection().execute("UPDATE catalog_meta SET proof_layout_version=2 WHERE singleton=1 AND state='building'", []).map_err(build_sql_error)?;
-        }
-        self.connection().execute("UPDATE catalog_meta SET parser_hash=?1,control_hash=?2,dependency_hash=?3,publication_hash=?4,audit_epoch=epoch,state='complete' WHERE singleton=1 AND state='building'",params![projection.parser_fingerprint.as_str(),projection.control_manifest.as_str(),dependency_hash.as_str(),publication_hash.as_str()]).map_err(build_sql_error)?;
-        self.step(BuildCheckpoint::AfterComplete)?;
-        checkpoint(self.connection())?;
-        self.step(BuildCheckpoint::BeforeSeal)?;
-        // Prepare normal serving before selection, so the first document delta
-        // does not have to wait for every reader to release a rollback database.
-        super::selector::configure_wal(self.connection())?;
-        let connection = self.connection.take().expect("open builder connection");
-        connection
-            .close()
-            .map_err(|(_, error)| sql::sql_error(error))?;
-        self.step(BuildCheckpoint::BeforeSync)?;
-        let relative = VaultRelativePath::new(format!(
-            ".wiki/cache/catalogs/{}.sqlite",
-            self.identity.selection.file_id
-        ))?;
-        if self.fs.root().resolve(&relative)? != self.path {
-            return Err(WikiError::invalid("catalog sibling binding changed"));
-        }
-        let file = File::open(&self.path).map_err(|e| io_error("open sealed catalog", e))?;
-        self.stats.database_bytes = file
-            .metadata()
-            .map_err(|e| io_error("inspect sealed catalog", e))?
-            .len();
-        if self.stats.database_bytes > self.limits.max_database_bytes {
-            return Err(budget("catalog database exceeds page limit"));
-        }
-        let io = self.fs.durable_io();
-        io.sync_file(&file)
-            .map_err(|e| io_error("sync sealed catalog", e))?;
-        require_sync(
-            io.sync_directory(self.path.parent().expect("catalog parent"))
-                .map_err(|e| io_error("sync sealed catalog parent", e))?,
-        )?;
-        self.step(BuildCheckpoint::AfterSync)?;
-        self.stats.elapsed_ms = self.started.elapsed().as_millis().min(u64::MAX as u128) as u64;
-        Ok(CompletedCatalog {
-            identity: self.identity.clone(),
-            snapshot: ReadSnapshot::published(
-                self.identity.selection.creation_epoch,
-                projection.parser_fingerprint.clone(),
-                self.identity.selection.file_id.clone(),
-                publication_hash,
-            )?,
-            dependency_hash,
-            stats: self.stats.clone(),
-            path: self.path.clone(),
-        })
+                    if missing {
+                        return Err(WikiError::new(
+                            ErrorCode::IndexCorrupt,
+                            "normalized registry facts omit adopted identity",
+                        ));
+                    }
+                    // This additional commitment names the proof layout and exact facts;
+                    // legacy full-proof builds retain their existing publication encoding.
+                    publication_hash = Blake3Hash::digest(sql::json(&(
+                        "lwiki.normalized-proof-layout.v2",
+                        &publication_hash,
+                        self.lookup_hash.finalize().to_hex().to_string(),
+                    ))?);
+                    self.connection().execute("UPDATE catalog_meta SET proof_layout_version=2 WHERE singleton=1 AND state='building'", []).map_err(build_sql_error)?;
+                }
+                self.connection().execute("UPDATE catalog_meta SET parser_hash=?1,control_hash=?2,dependency_hash=?3,publication_hash=?4,audit_epoch=epoch,state='complete' WHERE singleton=1 AND state='building'",params![projection.parser_fingerprint.as_str(),projection.control_manifest.as_str(),dependency_hash.as_str(),publication_hash.as_str()]).map_err(build_sql_error)?;
+                self.step(BuildCheckpoint::AfterComplete)?;
+                checkpoint(self.connection())?;
+                self.step(BuildCheckpoint::BeforeSeal)?;
+                // Prepare normal serving before selection, so the first document delta
+                // does not have to wait for every reader to release a rollback database.
+                super::selector::configure_wal(self.connection())?;
+                let connection = self.connection.take().expect("open builder connection");
+                connection
+                    .close()
+                    .map_err(|(_, error)| sql::sql_error(error))?;
+                self.step(BuildCheckpoint::BeforeSync)?;
+                let relative = VaultRelativePath::new(format!(
+                    ".wiki/cache/catalogs/{}.sqlite",
+                    self.identity.selection.file_id
+                ))?;
+                if self.fs.root().resolve(&relative)? != self.path {
+                    return Err(WikiError::invalid("catalog sibling binding changed"));
+                }
+                let file =
+                    File::open(&self.path).map_err(|e| io_error("open sealed catalog", e))?;
+                self.stats.database_bytes = file
+                    .metadata()
+                    .map_err(|e| io_error("inspect sealed catalog", e))?
+                    .len();
+                if self.stats.database_bytes > self.limits.max_database_bytes {
+                    return Err(budget("catalog database exceeds page limit"));
+                }
+                let io = self.fs.durable_io();
+                io.sync_file(&file)
+                    .map_err(|e| io_error("sync sealed catalog", e))?;
+                require_sync(
+                    io.sync_directory(self.path.parent().expect("catalog parent"))
+                        .map_err(|e| io_error("sync sealed catalog parent", e))?,
+                )?;
+                self.step(BuildCheckpoint::AfterSync)?;
+                self.stats.elapsed_ms =
+                    self.started.elapsed().as_millis().min(u64::MAX as u128) as u64;
+                Ok(CompletedCatalog {
+                    identity: self.identity.clone(),
+                    snapshot: ReadSnapshot::published(
+                        self.identity.selection.creation_epoch,
+                        projection.parser_fingerprint.clone(),
+                        self.identity.selection.file_id.clone(),
+                        publication_hash,
+                    )?,
+                    dependency_hash,
+                    stats: self.stats.clone(),
+                    path: self.path.clone(),
+                })
+            },
+        )
     }
 }
 /// One coherent SQLite backup of a pinned selected transaction, followed only

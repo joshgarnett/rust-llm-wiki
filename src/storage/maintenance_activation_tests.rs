@@ -29,6 +29,7 @@ fn observe(fs: &VaultFs) -> crate::domain::Result<bool> {
 #[test]
 #[cfg(unix)]
 fn stable_proof_rereads_the_same_three_witnesses_on_every_activation() {
+    let _diagnostic = crate::maintenance_diagnostic::TestDiagnostic::start();
     let (_temp, fs, owner) = fixture(true);
     maintenance_parallel::command_scope(|| {
         let proof = prepare_parallel_activation(&owner, &fs)?.unwrap();
@@ -87,6 +88,7 @@ fn stable_proof_rereads_the_same_three_witnesses_on_every_activation() {
 #[test]
 #[cfg(unix)]
 fn changed_each_authority_and_restore_preserve_observed_failure() {
+    let _diagnostic = crate::maintenance_diagnostic::TestDiagnostic::start();
     for index in 0..3 {
         let (temp, fs, owner) = fixture(true);
         maintenance_parallel::command_scope(|| {
@@ -119,6 +121,7 @@ fn changed_each_authority_and_restore_preserve_observed_failure() {
 #[test]
 #[cfg(unix)]
 fn equivalent_marker_bytes_after_proof_conflict_but_before_proof_are_valid() {
+    let _diagnostic = crate::maintenance_diagnostic::TestDiagnostic::start();
     for before in [false, true] {
         let (temp, fs, owner) = fixture(true);
         maintenance_parallel::command_scope(|| {
@@ -147,6 +150,7 @@ fn equivalent_marker_bytes_after_proof_conflict_but_before_proof_are_valid() {
 #[test]
 #[cfg(unix)]
 fn wrong_root_unproved_worker_and_nested_proof_are_refused_without_decoding() {
+    let _diagnostic = crate::maintenance_diagnostic::TestDiagnostic::start();
     let (_temp, fs, owner) = fixture(true);
     let (_other, other, _owner) = fixture(true);
     maintenance_parallel::command_scope(|| {
@@ -167,6 +171,7 @@ fn wrong_root_unproved_worker_and_nested_proof_are_refused_without_decoding() {
 
 #[test]
 fn legacy_import_and_recovery_select_owner_before_dispatch() {
+    let _diagnostic = crate::maintenance_diagnostic::TestDiagnostic::start();
     for retained in [false, true] {
         let (_temp, fs, owner) = fixture(retained);
         maintenance_parallel::command_scope(|| {
@@ -188,6 +193,7 @@ fn legacy_import_and_recovery_select_owner_before_dispatch() {
 #[test]
 #[cfg(unix)]
 fn panic_drops_worker_proof_before_next_job() {
+    let _diagnostic = crate::maintenance_diagnostic::TestDiagnostic::start();
     let (_temp, fs, owner) = fixture(true);
     maintenance_parallel::command_scope(|| {
         assert!(prepare_parallel_activation(&owner, &fs)?.is_some());
@@ -207,6 +213,7 @@ fn panic_drops_worker_proof_before_next_job() {
 #[test]
 #[cfg(unix)]
 fn large_valid_receipt_is_owner_validated_and_hostile_replacement_only_hashed() {
+    let _diagnostic = crate::maintenance_diagnostic::TestDiagnostic::start();
     let (temp, fs, owner) = fixture(true);
     let layout_path = temp.path().join(layout::ACTIVE);
     let mut activation: Layout = layout::decode(&fs::read(&layout_path).unwrap()).unwrap();
@@ -240,6 +247,7 @@ fn large_valid_receipt_is_owner_validated_and_hostile_replacement_only_hashed() 
 
 #[test]
 fn pending_cleanup_selects_owner_without_constructing_a_partial_proof() {
+    let _diagnostic = crate::maintenance_diagnostic::TestDiagnostic::start();
     let (temp, fs, owner) = fixture(true);
     fs::write(
         temp.path().join(".wiki/state/storage/cleanup.json"),

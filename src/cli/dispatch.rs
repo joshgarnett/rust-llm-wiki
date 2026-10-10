@@ -136,6 +136,8 @@ fn failure(command: &str, error: WikiError) -> Envelope {
     envelope
 }
 pub fn execute(args: &Arguments) -> (Envelope, u8) {
+    crate::maintenance_diagnostic::begin_command();
+    let _diagnostic_unwind = crate::maintenance_diagnostic::Unwind;
     let (result, metrics) = match crate::maintenance_parallel::command_scope(|| {
         let result = execute_inner(args);
         Ok((result, crate::maintenance_parallel::metrics()))
@@ -146,6 +148,7 @@ pub fn execute(args: &Arguments) -> (Envelope, u8) {
     let (mut envelope, exit) = match result {
         Ok(envelope) => {
             let exit = if envelope.ok { 0 } else { 9 };
+            crate::maintenance_diagnostic::command_result(exit == 0);
             (envelope, exit)
         }
         Err(mut error) => {
@@ -174,6 +177,7 @@ pub fn execute(args: &Arguments) -> (Envelope, u8) {
         envelope.meta.maintenance =
             Some(serde_json::to_value(metrics).expect("maintenance metrics serialize"));
     }
+    crate::maintenance_diagnostic::command_result(exit == 0);
     (envelope, exit)
 }
 fn operation_options(args: &Arguments, offline: bool, timeout: u64) -> OperationOptions {
@@ -185,6 +189,19 @@ fn operation_options(args: &Arguments, offline: bool, timeout: u64) -> Operation
     }
 }
 fn execute_inner(args: &Arguments) -> Result<Envelope> {
+    match args.command.name() {
+        "search" => crate::maintenance_diagnostic::observe(
+            crate::maintenance_diagnostic::Phase::Search,
+            || execute_inner_diagnostic_body(args),
+        ),
+        "read" => crate::maintenance_diagnostic::observe(
+            crate::maintenance_diagnostic::Phase::Read,
+            || execute_inner_diagnostic_body(args),
+        ),
+        _ => execute_inner_diagnostic_body(args),
+    }
+}
+fn execute_inner_diagnostic_body(args: &Arguments) -> Result<Envelope> {
     let command = args.command.name();
     if args.output_format() == OutputFormat::Jsonl && !args.command.streaming() {
         return Err(usage(
@@ -2027,19 +2044,22 @@ pub fn present_with_wiki(
     output: &mut impl Write,
     wiki: Option<&Path>,
 ) -> io::Result<()> {
-    if matches!(format, OutputFormat::Human)
-        && !(envelope.ok && matches!(envelope.command.as_str(), "read" | "context"))
-    {
-        let mut bytes = Vec::new();
-        present_inner(envelope, format, &mut bytes, wiki)?;
-        write!(
-            output,
-            "{}",
-            terminal_text(&String::from_utf8_lossy(&bytes), true)
-        )
-    } else {
-        present_inner(envelope, format, output, wiki)
-    }
+    let _diagnostic_finish = crate::maintenance_diagnostic::Finish;
+    crate::maintenance_diagnostic::observe(crate::maintenance_diagnostic::Phase::Output, || {
+        if matches!(format, OutputFormat::Human)
+            && !(envelope.ok && matches!(envelope.command.as_str(), "read" | "context"))
+        {
+            let mut bytes = Vec::new();
+            present_inner(envelope, format, &mut bytes, wiki)?;
+            write!(
+                output,
+                "{}",
+                terminal_text(&String::from_utf8_lossy(&bytes), true)
+            )
+        } else {
+            present_inner(envelope, format, output, wiki)
+        }
+    })
 }
 
 fn terminal_text(text: &str, multiline: bool) -> String {

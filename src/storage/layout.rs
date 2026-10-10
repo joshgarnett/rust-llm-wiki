@@ -238,12 +238,17 @@ pub fn managed_path(path: &VaultRelativePath) -> Option<VaultRelativePath> {
     VaultRelativePath::new(internal).ok()
 }
 pub fn physical_relative(root: &VaultRoot, path: &VaultRelativePath) -> Result<VaultRelativePath> {
-    if let Some(mapped) = managed_path(path)
-        && active(root)?
-    {
-        return Ok(mapped);
-    }
-    Ok(path.clone())
+    crate::maintenance_diagnostic::observe(
+        crate::maintenance_diagnostic::Phase::RouteConstruction,
+        || {
+            if let Some(mapped) = managed_path(path)
+                && active(root)?
+            {
+                return Ok(mapped);
+            }
+            Ok(path.clone())
+        },
+    )
 }
 pub(crate) fn logical_path(path: &VaultRelativePath) -> Option<VaultRelativePath> {
     let s = path.as_str();

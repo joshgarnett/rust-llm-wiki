@@ -203,6 +203,7 @@ struct Counts {
 #[test]
 #[cfg(unix)]
 fn exact_193_applying_passes_observe_all_119_paths_and_bytes_in_both_controls_and_layouts() {
+    let _diagnostic = crate::maintenance_diagnostic::TestDiagnostic::start();
     for retained in [false, true] {
         for sequential in [true, false] {
             let f = Fixture::new(retained);
@@ -339,6 +340,7 @@ fn exact_193_applying_passes_observe_all_119_paths_and_bytes_in_both_controls_an
 #[test]
 #[cfg(unix)]
 fn reached_preobservation_and_after_join_edits_refuse_at_next_guard_without_publication() {
+    let _diagnostic = crate::maintenance_diagnostic::TestDiagnostic::start();
     for when in ["before", "held", "joined"] {
         for role in [0, 1, 2] {
             let f = Fixture::new(true);
@@ -504,6 +506,7 @@ fn reached_preobservation_and_after_join_edits_refuse_at_next_guard_without_publ
 #[test]
 #[cfg(unix)]
 fn apply_guard_fifo_and_parent_symlink_races_refuse_and_preserve_targets() {
+    let _diagnostic = crate::maintenance_diagnostic::TestDiagnostic::start();
     use std::os::unix::ffi::OsStrExt;
     for fifo in [true, false] {
         let f = Fixture::new(true);

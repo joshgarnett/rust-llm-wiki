@@ -292,3 +292,26 @@ compatibility and restoration rules, reached recovery cuts, and a benefit case
 covering preparation as well as application. No such redesign was adopted.
 The useful functional 0.2.0 checkpoint remains separate from the failed bulk
 performance gate; no new build, benchmark or performance claim follows.
+
+
+## Maintenance cost instrumentation checkpoint
+
+Developer instrumentation now covers ordinary update, search/read and normalized
+rebuild phases, filesystem observations and joined worker accounting. It is
+disabled in the shipping build; enabling it requires both the private Cargo
+feature `maintenance-diagnostic029` and runtime
+`LWIKI_MAINTENANCE_DIAGNOSTIC029=1`. Fixed-size summaries record attempted work,
+errors and overflow without changing freshness decisions or mutation order.
+
+One release-profile checkpoint passed 41 affected Rust tests and a public
+default-off CLI smoke. Independent review authenticated the binaries, actual
+streams and source identities. Both layouts retained the exact 193-checkpoint,
+119-precondition guard fixture, with reached filesystem/activation races and
+error/panic accounting. The shipping smoke remained silent with the diagnostic
+environment variable set. An initial feature-build visibility error was fixed;
+the passing shipping build was reused.
+
+These checks qualify the diagnostic mechanism only. The prepared six-command
+update→search→read→rebuild→search→read measurement has not run. No new speedup,
+retrieval gain, representative capacity or release acceptance follows. The
+existing failed performance comparison and all mandatory workflow gates remain.

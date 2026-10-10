@@ -189,36 +189,41 @@ pub(crate) fn parallel_path_workspace(
     root: &VaultRoot,
     relative: &VaultRelativePath,
 ) -> Option<u64> {
-    let bytes = root
-        .path
-        .as_os_str()
-        .len()
-        .checked_add(relative.as_str().len())?
-        .checked_add(96)?;
-    let components = root
-        .path
-        .components()
-        .count()
-        .checked_add(relative.as_str().split('/').count())?
-        .checked_add(6)?;
-    if bytes > 4096
-        || components > 64
-        || root.owned_capacity() > 8192
-        || relative.owned_capacity() > 8192
-    {
-        return None;
-    }
-    let mut prefix = String::new();
-    for part in relative.as_str().split('/') {
-        if !prefix.is_empty() {
-            prefix.push('/');
-        }
-        prefix.push_str(part);
-        if UniCase::unicode(&prefix).to_folded_case().len() > 4096 {
-            return None;
-        }
-    }
-    Some(((8 + 4 * components) * 8192 + (components + 1) * 1024) as u64)
+    crate::maintenance_diagnostic::measure(
+        crate::maintenance_diagnostic::Phase::PathWorkspaceConstruction,
+        || {
+            let bytes = root
+                .path
+                .as_os_str()
+                .len()
+                .checked_add(relative.as_str().len())?
+                .checked_add(96)?;
+            let components = root
+                .path
+                .components()
+                .count()
+                .checked_add(relative.as_str().split('/').count())?
+                .checked_add(6)?;
+            if bytes > 4096
+                || components > 64
+                || root.owned_capacity() > 8192
+                || relative.owned_capacity() > 8192
+            {
+                return None;
+            }
+            let mut prefix = String::new();
+            for part in relative.as_str().split('/') {
+                if !prefix.is_empty() {
+                    prefix.push('/');
+                }
+                prefix.push_str(part);
+                if UniCase::unicode(&prefix).to_folded_case().len() > 4096 {
+                    return None;
+                }
+            }
+            Some(((8 + 4 * components) * 8192 + (components + 1) * 1024) as u64)
+        },
+    )
 }
 fn worker_path(path: &Path, capacity: usize) -> Result<()> {
     if crate::storage::maintenance_activation::worker_context_active()
@@ -243,10 +248,15 @@ fn worker_text(value: &str, capacity: usize) -> Result<()> {
     Ok(())
 }
 fn checked_fold(value: &str) -> Result<String> {
-    worker_text(value, value.len())?;
-    let folded = UniCase::unicode(value).to_folded_case();
-    worker_text(&folded, folded.capacity())?;
-    Ok(folded)
+    crate::maintenance_diagnostic::observe(
+        crate::maintenance_diagnostic::Phase::PathWorkspaceConstruction,
+        || {
+            worker_text(value, value.len())?;
+            let folded = UniCase::unicode(value).to_folded_case();
+            worker_text(&folded, folded.capacity())?;
+            Ok(folded)
+        },
+    )
 }
 
 pub(crate) fn io_error(action: &str, error: std::io::Error) -> WikiError {
@@ -270,33 +280,75 @@ fn exact_marker(path: &Path) -> Result<bool> {
     exact_marker_budgeted(path, &mut || Ok(()))
 }
 fn exact_marker_budgeted(path: &Path, on_entry: &mut dyn FnMut() -> Result<()>) -> Result<bool> {
-    // Most managed directories are not nested vaults. A fresh negative probe
-    // avoids enumerating every sibling again for each checked file path.
-    // A positive probe still needs exact-name enumeration on case-insensitive
-    // filesystems, where looking up WIKI.md can find a differently cased name.
-    on_entry()?;
-    match fs::symlink_metadata(path.join("WIKI.md")) {
-        Ok(meta) if !meta.is_file() || meta.file_type().is_symlink() => return Ok(false),
-        Ok(_) => {}
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
-        Err(error) => return Err(io_error("inspect vault marker", error)),
-    }
-    on_entry()?;
-    #[cfg(test)]
-    let mut profile = profile::enumeration(path, Path::new(""), profile::Kind::Marker);
-    for entry in fs::read_dir(path).map_err(|e| io_error("read vault directory", e))? {
-        #[cfg(test)]
-        profile.entry();
-        on_entry()?;
-        let entry = entry.map_err(|e| io_error("read vault entry", e))?;
-        if entry.file_name() == "WIKI.md" {
-            let kind = entry
-                .file_type()
-                .map_err(|e| io_error("inspect WIKI.md", e))?;
-            return Ok(kind.is_file() && !kind.is_symlink());
-        }
-    }
-    Ok(false)
+    crate::maintenance_diagnostic::observe(
+        crate::maintenance_diagnostic::Phase::MarkerObservation,
+        || {
+            crate::maintenance_diagnostic::bump(
+                crate::maintenance_diagnostic::Counter::MarkerProbe,
+                1,
+            );
+            // Most managed directories are not nested vaults. A fresh negative probe
+            // avoids enumerating every sibling again for each checked file path.
+            // A positive probe still needs exact-name enumeration on case-insensitive
+            // filesystems, where looking up WIKI.md can find a differently cased name.
+            on_entry()?;
+            match crate::maintenance_diagnostic::observe(
+                crate::maintenance_diagnostic::Phase::MetadataObservation,
+                || {
+                    crate::maintenance_diagnostic::bump(
+                        crate::maintenance_diagnostic::Counter::MetadataCall,
+                        1,
+                    );
+                    fs::symlink_metadata(crate::maintenance_diagnostic::measure(
+                        crate::maintenance_diagnostic::Phase::MarkerPathConstruction,
+                        || path.join("WIKI.md"),
+                    ))
+                },
+            ) {
+                Ok(meta) if !meta.is_file() || meta.file_type().is_symlink() => return Ok(false),
+                Ok(_) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                    crate::maintenance_diagnostic::bump(
+                        crate::maintenance_diagnostic::Counter::ExpectedMissing,
+                        1,
+                    );
+                    return Ok(false);
+                }
+                Err(error) => return Err(io_error("inspect vault marker", error)),
+            }
+            on_entry()?;
+            #[cfg(test)]
+            let mut profile = profile::enumeration(path, Path::new(""), profile::Kind::Marker);
+            for entry in crate::maintenance_diagnostic::observe(
+                crate::maintenance_diagnostic::Phase::DirectoryObservation,
+                || {
+                    crate::maintenance_diagnostic::bump(
+                        crate::maintenance_diagnostic::Counter::DirectoryEnumeration,
+                        1,
+                    );
+                    fs::read_dir(path)
+                },
+            )
+            .map_err(|e| io_error("read vault directory", e))?
+            {
+                crate::maintenance_diagnostic::bump(
+                    crate::maintenance_diagnostic::Counter::EnumerationEntry,
+                    1,
+                );
+                #[cfg(test)]
+                profile.entry();
+                on_entry()?;
+                let entry = entry.map_err(|e| io_error("read vault entry", e))?;
+                if entry.file_name() == "WIKI.md" {
+                    let kind = entry
+                        .file_type()
+                        .map_err(|e| io_error("inspect WIKI.md", e))?;
+                    return Ok(kind.is_file() && !kind.is_symlink());
+                }
+            }
+            Ok(false)
+        },
+    )
 }
 impl VaultRoot {
     /// Owned path bytes included in joined-maintenance descriptor reservations.
@@ -307,13 +359,33 @@ impl VaultRoot {
     pub fn for_initialization(path: impl AsRef<Path>) -> Result<Self> {
         let path = path.as_ref();
         utf8(path)?;
-        let meta = fs::symlink_metadata(path).map_err(|e| root_error("inspect vault root", e))?;
+        let meta = crate::maintenance_diagnostic::observe(
+            crate::maintenance_diagnostic::Phase::MetadataObservation,
+            || {
+                crate::maintenance_diagnostic::bump(
+                    crate::maintenance_diagnostic::Counter::MetadataCall,
+                    1,
+                );
+                fs::symlink_metadata(path)
+            },
+        )
+        .map_err(|e| root_error("inspect vault root", e))?;
         if meta.file_type().is_symlink() || !meta.is_dir() {
             return Err(WikiError::invalid(
                 "vault root must be a directory, not a symlink",
             ));
         }
-        let path = fs::canonicalize(path).map_err(|e| root_error("canonicalize vault root", e))?;
+        let path = crate::maintenance_diagnostic::observe(
+            crate::maintenance_diagnostic::Phase::CanonicalizeObservation,
+            || {
+                crate::maintenance_diagnostic::bump(
+                    crate::maintenance_diagnostic::Counter::CanonicalizeCall,
+                    1,
+                );
+                fs::canonicalize(path)
+            },
+        )
+        .map_err(|e| root_error("canonicalize vault root", e))?;
         utf8(&path)?;
         Ok(Self { path })
     }
@@ -329,8 +401,17 @@ impl VaultRoot {
     }
     pub fn discover(start: impl AsRef<Path>) -> Result<Self> {
         utf8(start.as_ref())?;
-        let mut path =
-            fs::canonicalize(start).map_err(|e| root_error("resolve discovery start", e))?;
+        let mut path = crate::maintenance_diagnostic::observe(
+            crate::maintenance_diagnostic::Phase::CanonicalizeObservation,
+            || {
+                crate::maintenance_diagnostic::bump(
+                    crate::maintenance_diagnostic::Counter::CanonicalizeCall,
+                    1,
+                );
+                fs::canonicalize(start)
+            },
+        )
+        .map_err(|e| root_error("resolve discovery start", e))?;
         if !path.is_dir() {
             path.pop();
         }
@@ -359,8 +440,17 @@ impl VaultRoot {
         relative: &VaultRelativePath,
         on_entry: &mut dyn FnMut() -> Result<()>,
     ) -> Result<PathBuf> {
-        let physical = crate::storage::layout::physical_relative(self, relative)?;
-        self.resolve_raw_budgeted(&physical, on_entry)
+        crate::maintenance_diagnostic::observe(
+            crate::maintenance_diagnostic::Phase::ResolveValidation,
+            || {
+                crate::maintenance_diagnostic::bump(
+                    crate::maintenance_diagnostic::Counter::LogicalResolve,
+                    1,
+                );
+                let physical = crate::storage::layout::physical_relative(self, relative)?;
+                self.resolve_raw_budgeted(&physical, on_entry)
+            },
+        )
     }
     /// Containment-checked physical paths for migration, never logical aliases.
     pub(crate) fn resolve_raw(&self, relative: &VaultRelativePath) -> Result<PathBuf> {
@@ -371,34 +461,78 @@ impl VaultRoot {
         relative: &VaultRelativePath,
         on_entry: &mut dyn FnMut() -> Result<()>,
     ) -> Result<PathBuf> {
-        let mut path = self.path.clone();
-        worker_path(&path, path.capacity())?;
-        for component in relative.as_str().split('/') {
-            on_entry()?;
-            path.push(component);
-            worker_path(&path, path.capacity())?;
-            match fs::symlink_metadata(&path) {
-                Ok(meta) if meta.file_type().is_symlink() => {
-                    return Err(WikiError::invalid("managed path has a symlink component"));
-                }
-                Ok(meta) => {
-                    let canonical = fs::canonicalize(&path)
-                        .map_err(|e| io_error("check destination containment", e))?;
-                    worker_path(&canonical, canonical.capacity())?;
-                    if !canonical.starts_with(&self.path) {
-                        return Err(WikiError::invalid("managed path escapes canonical vault"));
+        crate::maintenance_diagnostic::observe(
+            crate::maintenance_diagnostic::Phase::ResolveValidation,
+            || {
+                crate::maintenance_diagnostic::bump(
+                    crate::maintenance_diagnostic::Counter::RawResolve,
+                    1,
+                );
+                let mut path = crate::maintenance_diagnostic::measure(
+                    crate::maintenance_diagnostic::Phase::PathBufferConstruction,
+                    || self.path.clone(),
+                );
+                worker_path(&path, path.capacity())?;
+                for component in relative.as_str().split('/') {
+                    on_entry()?;
+                    crate::maintenance_diagnostic::bump(
+                        crate::maintenance_diagnostic::Counter::PathComponent,
+                        1,
+                    );
+                    crate::maintenance_diagnostic::measure(
+                        crate::maintenance_diagnostic::Phase::PathWorkspaceConstruction,
+                        || path.push(component),
+                    );
+                    worker_path(&path, path.capacity())?;
+                    match crate::maintenance_diagnostic::observe(
+                        crate::maintenance_diagnostic::Phase::MetadataObservation,
+                        || {
+                            crate::maintenance_diagnostic::bump(
+                                crate::maintenance_diagnostic::Counter::MetadataCall,
+                                1,
+                            );
+                            fs::symlink_metadata(&path)
+                        },
+                    ) {
+                        Ok(meta) if meta.file_type().is_symlink() => {
+                            return Err(WikiError::invalid("managed path has a symlink component"));
+                        }
+                        Ok(meta) => {
+                            let canonical = crate::maintenance_diagnostic::observe(
+                                crate::maintenance_diagnostic::Phase::CanonicalizeObservation,
+                                || {
+                                    crate::maintenance_diagnostic::bump(
+                                        crate::maintenance_diagnostic::Counter::CanonicalizeCall,
+                                        1,
+                                    );
+                                    fs::canonicalize(&path)
+                                },
+                            )
+                            .map_err(|e| io_error("check destination containment", e))?;
+                            worker_path(&canonical, canonical.capacity())?;
+                            if !canonical.starts_with(&self.path) {
+                                return Err(WikiError::invalid(
+                                    "managed path escapes canonical vault",
+                                ));
+                            }
+                            if meta.is_dir() && exact_marker_budgeted(&path, on_entry)? {
+                                return Err(WikiError::invalid(
+                                    "managed path crosses a nested vault boundary",
+                                ));
+                            }
+                        }
+                        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                            crate::maintenance_diagnostic::bump(
+                                crate::maintenance_diagnostic::Counter::ExpectedMissing,
+                                1,
+                            );
+                        }
+                        Err(e) => return Err(io_error("inspect managed path", e)),
                     }
-                    if meta.is_dir() && exact_marker_budgeted(&path, on_entry)? {
-                        return Err(WikiError::invalid(
-                            "managed path crosses a nested vault boundary",
-                        ));
-                    }
                 }
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-                Err(e) => return Err(io_error("inspect managed path", e)),
-            }
-        }
-        Ok(path)
+                Ok(path)
+            },
+        )
     }
     /// Compare every path prefix against plans and existing siblings, using full Unicode folding.
     pub fn validate_portable_paths(&self, paths: &[VaultRelativePath]) -> Result<()> {
@@ -429,6 +563,10 @@ impl VaultRoot {
                 self.validate_retained_logical_siblings(relative, scope)?;
             }
             self.resolve(relative)?;
+            crate::maintenance_diagnostic::bump(
+                crate::maintenance_diagnostic::Counter::LogicalResolve,
+                1,
+            );
             let physical = crate::storage::layout::physical_relative(self, relative)?;
             let mut parent = self.path.clone();
             let mut prefix = String::new();
@@ -455,9 +593,22 @@ impl VaultRoot {
                     #[cfg(test)]
                     let mut profile =
                         profile::enumeration(&parent, &self.path, profile::Kind::Physical);
-                    for entry in
-                        fs::read_dir(&parent).map_err(|e| io_error("check portable siblings", e))?
+                    for entry in crate::maintenance_diagnostic::observe(
+                        crate::maintenance_diagnostic::Phase::DirectoryObservation,
+                        || {
+                            crate::maintenance_diagnostic::bump(
+                                crate::maintenance_diagnostic::Counter::DirectoryEnumeration,
+                                1,
+                            );
+                            fs::read_dir(&parent)
+                        },
+                    )
+                    .map_err(|e| io_error("check portable siblings", e))?
                     {
+                        crate::maintenance_diagnostic::bump(
+                            crate::maintenance_diagnostic::Counter::EnumerationEntry,
+                            1,
+                        );
                         #[cfg(test)]
                         profile.entry();
                         let name = entry
@@ -540,12 +691,31 @@ impl VaultRoot {
                 #[cfg(test)]
                 let mut profile =
                     profile::enumeration(&directory, &self.path, profile::Kind::Logical);
-                let entries = match fs::read_dir(directory) {
+                let entries = match crate::maintenance_diagnostic::observe(
+                    crate::maintenance_diagnostic::Phase::DirectoryObservation,
+                    || {
+                        crate::maintenance_diagnostic::bump(
+                            crate::maintenance_diagnostic::Counter::DirectoryEnumeration,
+                            1,
+                        );
+                        fs::read_dir(directory)
+                    },
+                ) {
                     Ok(entries) => entries,
-                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                        crate::maintenance_diagnostic::bump(
+                            crate::maintenance_diagnostic::Counter::ExpectedMissing,
+                            1,
+                        );
+                        continue;
+                    }
                     Err(e) => return Err(io_error("check logical siblings", e)),
                 };
                 for entry in entries {
+                    crate::maintenance_diagnostic::bump(
+                        crate::maintenance_diagnostic::Counter::EnumerationEntry,
+                        1,
+                    );
                     #[cfg(test)]
                     profile.entry();
                     let name = entry
@@ -648,7 +818,22 @@ impl VaultRoot {
         on_path: &mut dyn FnMut(&VaultRelativePath) -> Result<()>,
     ) -> Result<()> {
         on_entry()?;
-        for entry in fs::read_dir(directory).map_err(|e| io_error("scan directory", e))? {
+        for entry in crate::maintenance_diagnostic::observe(
+            crate::maintenance_diagnostic::Phase::DirectoryObservation,
+            || {
+                crate::maintenance_diagnostic::bump(
+                    crate::maintenance_diagnostic::Counter::DirectoryEnumeration,
+                    1,
+                );
+                fs::read_dir(directory)
+            },
+        )
+        .map_err(|e| io_error("scan directory", e))?
+        {
+            crate::maintenance_diagnostic::bump(
+                crate::maintenance_diagnostic::Counter::EnumerationEntry,
+                1,
+            );
             on_entry()?;
             let entry = entry.map_err(|e| io_error("scan entry", e))?;
             let name = entry.file_name();

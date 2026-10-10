@@ -29,63 +29,73 @@ pub fn scan(fs: &VaultFs, vault_id: &RecordId) -> Result<CatalogProjection> {
 }
 
 pub(crate) fn scan_input(fs: &VaultFs, vault_id: &RecordId) -> Result<ValidationInput> {
-    let mut documents = Vec::new();
-    for path in fs.root().scan_markdown()? {
-        let before = fs.read_before(&path)?.ok_or_else(|| {
-            WikiError::new(
-                ErrorCode::ContentConflict,
-                "canonical path disappeared during scan",
-            )
-        })?;
-        documents.push(ScanDocument {
-            path,
-            bytes: before.bytes,
-            hash: before.hash,
-        });
-    }
-    Ok(ValidationInput {
-        vault_id: vault_id.clone(),
-        documents,
-        overlay: vec![],
-    })
+    crate::maintenance_diagnostic::observe(
+        crate::maintenance_diagnostic::Phase::RebuildScanParse,
+        || {
+            let mut documents = Vec::new();
+            for path in fs.root().scan_markdown()? {
+                let before = fs.read_before(&path)?.ok_or_else(|| {
+                    WikiError::new(
+                        ErrorCode::ContentConflict,
+                        "canonical path disappeared during scan",
+                    )
+                })?;
+                documents.push(ScanDocument {
+                    path,
+                    bytes: before.bytes,
+                    hash: before.hash,
+                });
+            }
+            Ok(ValidationInput {
+                vault_id: vault_id.clone(),
+                documents,
+                overlay: vec![],
+            })
+        },
+    )
 }
 
 pub(crate) fn input_notes(
     input: &ValidationInput,
 ) -> Result<BTreeMap<VaultRelativePath, ParsedNote>> {
-    let mut notes = BTreeMap::new();
-    let mut seen = BTreeSet::new();
-    for document in &input.documents {
-        if !seen.insert(document.path.clone()) {
-            return Err(WikiError::invalid("duplicate canonical scan path"));
-        }
-        if Blake3Hash::digest(&document.bytes) != document.hash {
-            return Err(WikiError::new(
-                ErrorCode::ContentConflict,
-                "canonical scan hash mismatch",
-            ));
-        }
-        if canonical_path(&document.path) {
-            notes.insert(document.path.clone(), parse_note(&document.bytes));
-        }
-    }
-    seen.clear();
-    for target in &input.overlay {
-        if !seen.insert(target.path.clone()) {
-            return Err(WikiError::invalid("duplicate proposed path"));
-        }
-        if canonical_path(&target.path) {
-            match &target.bytes {
-                Some(bytes) => {
-                    notes.insert(target.path.clone(), parse_note(bytes));
+    crate::maintenance_diagnostic::observe(
+        crate::maintenance_diagnostic::Phase::RebuildScanParse,
+        || {
+            let mut notes = BTreeMap::new();
+            let mut seen = BTreeSet::new();
+            for document in &input.documents {
+                if !seen.insert(document.path.clone()) {
+                    return Err(WikiError::invalid("duplicate canonical scan path"));
                 }
-                None => {
-                    notes.remove(&target.path);
+                if Blake3Hash::digest(&document.bytes) != document.hash {
+                    return Err(WikiError::new(
+                        ErrorCode::ContentConflict,
+                        "canonical scan hash mismatch",
+                    ));
+                }
+                if canonical_path(&document.path) {
+                    notes.insert(document.path.clone(), parse_note(&document.bytes));
                 }
             }
-        }
-    }
-    Ok(notes)
+            seen.clear();
+            for target in &input.overlay {
+                if !seen.insert(target.path.clone()) {
+                    return Err(WikiError::invalid("duplicate proposed path"));
+                }
+                if canonical_path(&target.path) {
+                    match &target.bytes {
+                        Some(bytes) => {
+                            notes.insert(target.path.clone(), parse_note(bytes));
+                        }
+                        None => {
+                            notes.remove(&target.path);
+                        }
+                    }
+                }
+            }
+            Ok(notes)
+        },
+    )
 }
 
 /// A safely delimited scalar ID still reserves identity when later metadata is invalid.
@@ -193,9 +203,14 @@ pub(crate) fn project_normalized_with_sink(
     closed: bool,
     sink: &mut dyn RetrievalSink,
 ) -> Result<NormalizedValidationProjection> {
-    let mut facts = super::eligibility_facts::NormalizedEligibilityFacts::new();
-    let validation = project_input(fs, input, closed, Some(sink), Some(&mut facts))?;
-    Ok(NormalizedValidationProjection { validation, facts })
+    crate::maintenance_diagnostic::observe(
+        crate::maintenance_diagnostic::Phase::RebuildScanParse,
+        || {
+            let mut facts = super::eligibility_facts::NormalizedEligibilityFacts::new();
+            let validation = project_input(fs, input, closed, Some(sink), Some(&mut facts))?;
+            Ok(NormalizedValidationProjection { validation, facts })
+        },
+    )
 }
 
 fn project_catalog(

@@ -196,210 +196,222 @@ impl ChangeEngine {
         observations: &[TargetObservation],
         guard_revision_trees: &dyn Fn(bool) -> Result<()>,
     ) -> Result<JournalState> {
-        let mut state = initial.clone();
-        if state.status.is_none() {
-            state = journal::append_event(
-                &self.fs,
-                permit,
-                manifest,
-                &change.manifest_hash,
-                ChangeEvent::Prepared,
-            )?;
-        }
-        if state.status == Some(ChangeStatus::Prepared) {
-            state = journal::append_event(
-                &self.fs,
-                permit,
-                manifest,
-                &change.manifest_hash,
-                ChangeEvent::Applying,
-            )?;
-        }
-        let replay = matches!(
-            state.status,
-            Some(ChangeStatus::FilesApplied | ChangeStatus::Indexed)
-        ) && observations.iter().any(|o| o.observed == o.before)
-            || state.status == Some(ChangeStatus::Applying)
-                && state
-                    .frames
-                    .iter()
-                    .filter_map(|f| match f.event {
-                        ChangeEvent::Done { op } => Some(op),
-                        _ => None,
-                    })
-                    .any(|op| observations[op].observed == observations[op].before);
-        if replay {
-            state = journal::append_event(
-                &self.fs,
-                permit,
-                manifest,
-                &change.manifest_hash,
-                ChangeEvent::Applying,
-            )?;
-        }
-        if state.status == Some(ChangeStatus::Applying) {
-            let epoch = state
-                .frames
-                .iter()
-                .rposition(|f| {
-                    matches!(
-                        f.event,
-                        ChangeEvent::Applying
-                            | ChangeEvent::ResolutionAccepted {
-                                mode: ConflictResolutionMode::Resume,
-                                ..
-                            }
-                    )
-                })
-                .expect("applying epoch");
-            let completed: BTreeSet<_> = state.frames[epoch..]
-                .iter()
-                .filter_map(|f| match f.event {
-                    ChangeEvent::Done { op } => Some(op),
-                    _ => None,
-                })
-                .collect();
-            let mut intent = None;
-            for frame in &state.frames[epoch..] {
-                match frame.event {
-                    ChangeEvent::Intent { op } => intent = Some(op),
-                    ChangeEvent::Done { .. } => intent = None,
-                    _ => {}
-                }
-            }
-            let dependencies: Vec<_> = manifest
-                .operations
-                .iter()
-                .map(|o| o.apply_after.clone())
-                .collect();
-            #[cfg(test)]
-            maintenance_guard_tests::hook(
-                self.fs.root(),
-                maintenance_guard_tests::Event::LoopBegin,
-            )?;
-            for index in topological_order(&dependencies)? {
-                self.verify_read_preconditions(permit, manifest, &change.manifest_hash)?;
-                guard_revision_trees(false)?;
-                let operation = &manifest.operations[index];
-                let observed = self.target_state(&operation.target)?;
-                if observed != operation.before && observed != operation.after {
-                    return self.conflict(
+        crate::maintenance_diagnostic::observe(
+            crate::maintenance_diagnostic::Phase::IntentReplaceDone,
+            || {
+                let mut state = initial.clone();
+                if state.status.is_none() {
+                    state = journal::append_event(
+                        &self.fs,
                         permit,
                         manifest,
                         &change.manifest_hash,
-                        "operation recheck",
-                        self.observe(manifest)?,
-                    );
+                        ChangeEvent::Prepared,
+                    )?;
                 }
-                let already_done = completed.contains(&index);
-                // A completed target may have reverted to its old state after the interruption.
-                // Its existing durable intent authorizes redoing it; its flag is never evidence of bytes.
-                let staged = if observed == operation.before {
-                    if let Some(bytes) = self.verify_payload(
-                        &manifest.change_id,
-                        index,
-                        "proposed",
-                        &operation.target,
-                        &operation.after,
-                        &operation.after_payload,
-                    )? {
-                        if let Some((parent, _)) = operation.target.as_str().rsplit_once('/') {
-                            journal::require_sync(
-                                self.fs
-                                    .ensure_directory(&VaultRelativePath::new(parent)?, permit)?,
+                if state.status == Some(ChangeStatus::Prepared) {
+                    state = journal::append_event(
+                        &self.fs,
+                        permit,
+                        manifest,
+                        &change.manifest_hash,
+                        ChangeEvent::Applying,
+                    )?;
+                }
+                let replay = matches!(
+                    state.status,
+                    Some(ChangeStatus::FilesApplied | ChangeStatus::Indexed)
+                ) && observations.iter().any(|o| o.observed == o.before)
+                    || state.status == Some(ChangeStatus::Applying)
+                        && state
+                            .frames
+                            .iter()
+                            .filter_map(|f| match f.event {
+                                ChangeEvent::Done { op } => Some(op),
+                                _ => None,
+                            })
+                            .any(|op| observations[op].observed == observations[op].before);
+                if replay {
+                    state = journal::append_event(
+                        &self.fs,
+                        permit,
+                        manifest,
+                        &change.manifest_hash,
+                        ChangeEvent::Applying,
+                    )?;
+                }
+                if state.status == Some(ChangeStatus::Applying) {
+                    let epoch = state
+                        .frames
+                        .iter()
+                        .rposition(|f| {
+                            matches!(
+                                f.event,
+                                ChangeEvent::Applying
+                                    | ChangeEvent::ResolutionAccepted {
+                                        mode: ConflictResolutionMode::Resume,
+                                        ..
+                                    }
+                            )
+                        })
+                        .expect("applying epoch");
+                    let completed: BTreeSet<_> = state.frames[epoch..]
+                        .iter()
+                        .filter_map(|f| match f.event {
+                            ChangeEvent::Done { op } => Some(op),
+                            _ => None,
+                        })
+                        .collect();
+                    let mut intent = None;
+                    for frame in &state.frames[epoch..] {
+                        match frame.event {
+                            ChangeEvent::Intent { op } => intent = Some(op),
+                            ChangeEvent::Done { .. } => intent = None,
+                            _ => {}
+                        }
+                    }
+                    let dependencies: Vec<_> = manifest
+                        .operations
+                        .iter()
+                        .map(|o| o.apply_after.clone())
+                        .collect();
+                    #[cfg(test)]
+                    maintenance_guard_tests::hook(
+                        self.fs.root(),
+                        maintenance_guard_tests::Event::LoopBegin,
+                    )?;
+                    for index in topological_order(&dependencies)? {
+                        self.verify_read_preconditions(permit, manifest, &change.manifest_hash)?;
+                        guard_revision_trees(false)?;
+                        let operation = &manifest.operations[index];
+                        let observed = self.target_state(&operation.target)?;
+                        if observed != operation.before && observed != operation.after {
+                            return self.conflict(
+                                permit,
+                                manifest,
+                                &change.manifest_hash,
+                                "operation recheck",
+                                self.observe(manifest)?,
+                            );
+                        }
+                        let already_done = completed.contains(&index);
+                        // A completed target may have reverted to its old state after the interruption.
+                        // Its existing durable intent authorizes redoing it; its flag is never evidence of bytes.
+                        let staged = if observed == operation.before {
+                            if let Some(bytes) = self.verify_payload(
+                                &manifest.change_id,
+                                index,
+                                "proposed",
+                                &operation.target,
+                                &operation.after,
+                                &operation.after_payload,
+                            )? {
+                                if let Some((parent, _)) =
+                                    operation.target.as_str().rsplit_once('/')
+                                {
+                                    journal::require_sync(self.fs.ensure_directory(
+                                        &VaultRelativePath::new(parent)?,
+                                        permit,
+                                    )?)?;
+                                }
+                                Some(self.fs.stage(&operation.target, &bytes, permit)?)
+                            } else {
+                                None
+                            }
+                        } else {
+                            None
+                        };
+                        if !already_done && intent != Some(index) {
+                            if intent.is_some() {
+                                return Err(WikiError::invalid(
+                                    "journal intent conflicts with application order",
+                                ));
+                            }
+                            journal::append_event(
+                                &self.fs,
+                                permit,
+                                manifest,
+                                &change.manifest_hash,
+                                ChangeEvent::Intent { op: index },
                             )?;
                         }
-                        Some(self.fs.stage(&operation.target, &bytes, permit)?)
-                    } else {
-                        None
+                        guard_revision_trees(false)?;
+                        self.verify_read_preconditions(permit, manifest, &change.manifest_hash)?;
+                        #[cfg(test)]
+                        maintenance_guard_tests::hook(
+                            self.fs.root(),
+                            maintenance_guard_tests::Event::BeforeMutation(index),
+                        )?;
+                        let result = if observed == operation.before {
+                            match staged {
+                                Some(staged) => self.fs.replace(staged, &operation.before, permit),
+                                None => {
+                                    self.fs.delete(&operation.target, &operation.before, permit)
+                                }
+                            }
+                        } else {
+                            self.fs.sync_target(&operation.target, permit)
+                        };
+                        match result {
+                            Ok(sync) => journal::require_sync(sync)?,
+                            Err(error) if error.code == ErrorCode::ContentConflict => {
+                                return self.conflict(
+                                    permit,
+                                    manifest,
+                                    &change.manifest_hash,
+                                    "guarded mutation",
+                                    self.observe(manifest)?,
+                                );
+                            }
+                            Err(error) => return Err(error),
+                        }
+                        guard_revision_trees(false)?;
+                        self.verify_read_preconditions(permit, manifest, &change.manifest_hash)?;
+                        if self.target_state(&operation.target)? != operation.after {
+                            return self.conflict(
+                                permit,
+                                manifest,
+                                &change.manifest_hash,
+                                "post-mutation",
+                                self.observe(manifest)?,
+                            );
+                        }
+                        if !already_done {
+                            journal::append_event(
+                                &self.fs,
+                                permit,
+                                manifest,
+                                &change.manifest_hash,
+                                ChangeEvent::Done { op: index },
+                            )?;
+                            intent = None;
+                        }
                     }
-                } else {
-                    None
-                };
-                if !already_done && intent != Some(index) {
-                    if intent.is_some() {
-                        return Err(WikiError::invalid(
-                            "journal intent conflicts with application order",
-                        ));
-                    }
-                    journal::append_event(
+                    guard_revision_trees(true)?;
+                    self.verify_read_preconditions(permit, manifest, &change.manifest_hash)?;
+                    #[cfg(test)]
+                    maintenance_guard_tests::hook(
+                        self.fs.root(),
+                        maintenance_guard_tests::Event::LoopEnd,
+                    )?;
+                    self.require_all_after(permit, manifest, &change.manifest_hash)?;
+                    state = journal::append_event(
                         &self.fs,
                         permit,
                         manifest,
                         &change.manifest_hash,
-                        ChangeEvent::Intent { op: index },
+                        ChangeEvent::FilesApplied,
                     )?;
                 }
-                guard_revision_trees(false)?;
-                self.verify_read_preconditions(permit, manifest, &change.manifest_hash)?;
-                #[cfg(test)]
-                maintenance_guard_tests::hook(
-                    self.fs.root(),
-                    maintenance_guard_tests::Event::BeforeMutation(index),
-                )?;
-                let result = if observed == operation.before {
-                    match staged {
-                        Some(staged) => self.fs.replace(staged, &operation.before, permit),
-                        None => self.fs.delete(&operation.target, &operation.before, permit),
-                    }
-                } else {
-                    self.fs.sync_target(&operation.target, permit)
-                };
-                match result {
-                    Ok(sync) => journal::require_sync(sync)?,
-                    Err(error) if error.code == ErrorCode::ContentConflict => {
-                        return self.conflict(
-                            permit,
-                            manifest,
-                            &change.manifest_hash,
-                            "guarded mutation",
-                            self.observe(manifest)?,
-                        );
-                    }
-                    Err(error) => return Err(error),
+                if !matches!(
+                    state.status,
+                    Some(ChangeStatus::FilesApplied | ChangeStatus::Indexed)
+                ) {
+                    return Err(recovery_error("change cannot publish in its current state"));
                 }
-                guard_revision_trees(false)?;
-                self.verify_read_preconditions(permit, manifest, &change.manifest_hash)?;
-                if self.target_state(&operation.target)? != operation.after {
-                    return self.conflict(
-                        permit,
-                        manifest,
-                        &change.manifest_hash,
-                        "post-mutation",
-                        self.observe(manifest)?,
-                    );
-                }
-                if !already_done {
-                    journal::append_event(
-                        &self.fs,
-                        permit,
-                        manifest,
-                        &change.manifest_hash,
-                        ChangeEvent::Done { op: index },
-                    )?;
-                    intent = None;
-                }
-            }
-            guard_revision_trees(true)?;
-            self.verify_read_preconditions(permit, manifest, &change.manifest_hash)?;
-            #[cfg(test)]
-            maintenance_guard_tests::hook(self.fs.root(), maintenance_guard_tests::Event::LoopEnd)?;
-            self.require_all_after(permit, manifest, &change.manifest_hash)?;
-            state = journal::append_event(
-                &self.fs,
-                permit,
-                manifest,
-                &change.manifest_hash,
-                ChangeEvent::FilesApplied,
-            )?;
-        }
-        if !matches!(
-            state.status,
-            Some(ChangeStatus::FilesApplied | ChangeStatus::Indexed)
-        ) {
-            return Err(recovery_error("change cannot publish in its current state"));
-        }
-        Ok(state)
+                Ok(state)
+            },
+        )
     }
 
     fn guard_revision_trees(
@@ -409,11 +421,16 @@ impl ChangeEngine {
         hash: &Blake3Hash,
         complete: bool,
     ) -> Result<()> {
-        if let Err(error) = self.verify_revision_trees(permit, manifest, hash, complete) {
-            let state = journal::load_journal(&self.fs, manifest, hash)?;
-            return self.revision_failure(permit, manifest, hash, &state, error);
-        }
-        Ok(())
+        crate::maintenance_diagnostic::observe(
+            crate::maintenance_diagnostic::Phase::RetainedAuthority,
+            || {
+                if let Err(error) = self.verify_revision_trees(permit, manifest, hash, complete) {
+                    let state = journal::load_journal(&self.fs, manifest, hash)?;
+                    return self.revision_failure(permit, manifest, hash, &state, error);
+                }
+                Ok(())
+            },
+        )
     }
     pub(super) fn revision_failure<T>(
         &self,
@@ -449,68 +466,80 @@ impl ChangeEngine {
         graph: &ValidatedGraph,
         scan: &BTreeMap<VaultRelativePath, Blake3Hash>,
     ) -> Result<()> {
-        let path = VaultRelativePath::new(format!("changes/{}/validation.json", change.change_id))?;
-        let proof = ValidationProof {
-            version: 1,
-            change: change.clone(),
-            parser_fingerprint: graph.parser_fingerprint.clone(),
-            control_manifest: graph.control_manifest.clone(),
-            dependencies: graph.dependencies.clone(),
-            scan: scan.clone(),
-        };
-        if let Some(bytes) = read_bounded(&self.fs, &path, super::prepare::MAX_JOURNAL_BYTES)? {
-            let retained: ValidationReceipt = super::prepare::strict_json(&bytes)?;
-            let checksum = Blake3Hash::digest(
-                serde_json::to_vec(&retained.proof)
-                    .map_err(|e| WikiError::invalid(e.to_string()))?,
-            );
-            if checksum != retained.checksum
-                || retained.proof.version != 1
-                || retained.proof.change != *change
-            {
-                return Err(WikiError::invalid(
-                    "retained prevalidation integrity failure",
-                ));
-            }
-            if retained.proof != proof {
+        crate::maintenance_diagnostic::observe(
+            crate::maintenance_diagnostic::Phase::RetainedAuthority,
+            || {
+                let path = VaultRelativePath::new(format!(
+                    "changes/{}/validation.json",
+                    change.change_id
+                ))?;
+                let proof = ValidationProof {
+                    version: 1,
+                    change: change.clone(),
+                    parser_fingerprint: graph.parser_fingerprint.clone(),
+                    control_manifest: graph.control_manifest.clone(),
+                    dependencies: graph.dependencies.clone(),
+                    scan: scan.clone(),
+                };
+                if let Some(bytes) =
+                    read_bounded(&self.fs, &path, super::prepare::MAX_JOURNAL_BYTES)?
+                {
+                    let retained: ValidationReceipt = super::prepare::strict_json(&bytes)?;
+                    let checksum = Blake3Hash::digest(
+                        serde_json::to_vec(&retained.proof)
+                            .map_err(|e| WikiError::invalid(e.to_string()))?,
+                    );
+                    if checksum != retained.checksum
+                        || retained.proof.version != 1
+                        || retained.proof.change != *change
+                    {
+                        return Err(WikiError::invalid(
+                            "retained prevalidation integrity failure",
+                        ));
+                    }
+                    if retained.proof != proof {
+                        if matches!(
+                            state.status,
+                            None | Some(ChangeStatus::Prepared | ChangeStatus::Conflict)
+                        ) {
+                            return Err(WikiError::new(
+                                ErrorCode::ContentConflict,
+                                "retained whole-graph prevalidation is stale; restore its original scope before resuming",
+                            ));
+                        }
+                        return self.conflict(
+                            permit,
+                            manifest,
+                            &change.manifest_hash,
+                            "retained whole-graph validation changed",
+                            self.observe(manifest)?,
+                        );
+                    }
+                    journal::require_sync(self.fs.sync_target(&path, permit)?)?;
+                    return Ok(());
+                }
                 if matches!(
                     state.status,
-                    None | Some(ChangeStatus::Prepared | ChangeStatus::Conflict)
+                    Some(
+                        ChangeStatus::Applying | ChangeStatus::FilesApplied | ChangeStatus::Indexed
+                    )
                 ) {
-                    return Err(WikiError::new(
-                        ErrorCode::ContentConflict,
-                        "retained whole-graph prevalidation is stale; restore its original scope before resuming",
+                    return Err(recovery_error(
+                        "applying journal lost its retained whole-graph validation",
                     ));
                 }
-                return self.conflict(
-                    permit,
-                    manifest,
-                    &change.manifest_hash,
-                    "retained whole-graph validation changed",
-                    self.observe(manifest)?,
+                let checksum = Blake3Hash::digest(
+                    serde_json::to_vec(&proof).map_err(|e| WikiError::invalid(e.to_string()))?,
                 );
-            }
-            journal::require_sync(self.fs.sync_target(&path, permit)?)?;
-            return Ok(());
-        }
-        if matches!(
-            state.status,
-            Some(ChangeStatus::Applying | ChangeStatus::FilesApplied | ChangeStatus::Indexed)
-        ) {
-            return Err(recovery_error(
-                "applying journal lost its retained whole-graph validation",
-            ));
-        }
-        let checksum = Blake3Hash::digest(
-            serde_json::to_vec(&proof).map_err(|e| WikiError::invalid(e.to_string()))?,
-        );
-        let bytes = serde_json::to_vec(&ValidationReceipt { proof, checksum })
-            .map_err(|e| WikiError::invalid(e.to_string()))?;
-        if bytes.len() > super::prepare::MAX_JOURNAL_BYTES {
-            return Err(WikiError::invalid("validation receipt exceeds limit"));
-        }
-        let staged = self.fs.stage(&path, &bytes, permit)?;
-        journal::require_sync(self.fs.replace(staged, &ExpectedState::Absent, permit)?)
+                let bytes = serde_json::to_vec(&ValidationReceipt { proof, checksum })
+                    .map_err(|e| WikiError::invalid(e.to_string()))?;
+                if bytes.len() > super::prepare::MAX_JOURNAL_BYTES {
+                    return Err(WikiError::invalid("validation receipt exceeds limit"));
+                }
+                let staged = self.fs.stage(&path, &bytes, permit)?;
+                journal::require_sync(self.fs.replace(staged, &ExpectedState::Absent, permit)?)
+            },
+        )
     }
     pub(crate) fn target_state(&self, target: &VaultRelativePath) -> Result<ExpectedState> {
         let bytes = read_bounded(&self.fs, target, MAX_PAYLOAD_BYTES)?;
@@ -794,109 +823,119 @@ impl ChangeEngine {
         manifest: &ChangeManifest,
         hash: &Blake3Hash,
     ) -> Result<()> {
-        // Each unchanged checkpoint obtains fresh observations. No read result is
-        // retained across checkpoints, and only this owner can journal a conflict.
-        #[cfg(test)]
-        maintenance_guard_tests::hook(self.fs.root(), maintenance_guard_tests::Event::PassBegin)?;
-        let proof = if manifest.read_preconditions.is_empty() {
-            None
-        } else {
-            crate::storage::maintenance_activation::prepare_parallel_activation(permit, &self.fs)?
-        };
-        // Sixteen maximum-size payloads leave no room for required scratch.
-        // Fifteen still fit the largest admitted path/diagnostic envelope.
-        for conditions in manifest
-            .read_preconditions
-            .chunks(crate::maintenance_parallel::MAX_JOBS - 1)
-        {
-            let eligible = proof.is_some()
-                && conditions.iter().all(|condition| {
-                    crate::vault::paths::parallel_path_workspace(self.fs.root(), &condition.path)
-                        .is_some()
-                });
-            let jobs = conditions
-                .iter()
-                .map(|condition| {
-                    let fs = self.fs.clone();
-                    let path = condition.path.clone();
-                    let workspace = if eligible {
-                        crate::vault::paths::parallel_path_workspace(fs.root(), &path)
-                            .unwrap()
-                            .max(
-                                proof
-                                    .as_ref()
-                                    .and_then(|proof| proof.path_workspace())
-                                    .unwrap(),
-                            )
-                    } else {
-                        0
-                    };
-                    let reservation = MAX_PAYLOAD_BYTES as u64
-                        + 64 * 1024
-                        + crate::storage::maintenance_activation::WORKSPACE_BYTES
-                        + workspace
-                        + fs.owned_bytes() as u64
-                        + path.owned_capacity() as u64
-                        + std::mem::size_of::<VaultRelativePath>() as u64;
-                    crate::maintenance_parallel::Job::new(reservation, move || {
-                        #[cfg(test)]
-                        maintenance_guard_tests::hook(
-                            fs.root(),
-                            maintenance_guard_tests::Event::BeforeRead(&path),
-                        )?;
-                        let bytes = read_bounded(&fs, &path, MAX_PAYLOAD_BYTES)?;
-                        let hash = bytes.as_ref().map(|bytes| *blake3::hash(bytes).as_bytes());
-                        #[cfg(test)]
-                        maintenance_guard_tests::hook(
-                            fs.root(),
-                            maintenance_guard_tests::Event::Read(
-                                &path,
-                                hash,
-                                bytes.as_ref().map_or(0, Vec::len),
-                            ),
-                        )?;
-                        Ok(hash)
-                    })
-                })
-                .collect();
-            // All admitted observations, including later failures, have finished
-            // and merged their diagnostics before ordered conflict reduction.
-            let observations = if !eligible {
-                crate::maintenance_parallel::run_batch_sequential(jobs)?
-            } else {
-                crate::maintenance_parallel::run_batch(jobs)?
-            };
+        crate::maintenance_diagnostic::checkpoint(|| {
+            // Each unchanged checkpoint obtains fresh observations. No read result is
+            // retained across checkpoints, and only this owner can journal a conflict.
             #[cfg(test)]
             maintenance_guard_tests::hook(
                 self.fs.root(),
-                maintenance_guard_tests::Event::AfterJoin,
+                maintenance_guard_tests::Event::PassBegin,
             )?;
-            for (condition, actual) in conditions.iter().zip(observations) {
-                let actual = actual.and_then(|hash| match hash {
-                    None => Ok(ExpectedState::Absent),
-                    Some(hash) => Blake3Hash::new(format!(
-                        "blake3:{}",
-                        blake3::Hash::from_bytes(hash).to_hex()
-                    ))
-                    .map(ExpectedState::Hash),
-                });
-                if actual.is_ok_and(|actual| actual == condition.expected) {
-                    continue;
+            let proof = if manifest.read_preconditions.is_empty() {
+                None
+            } else {
+                crate::storage::maintenance_activation::prepare_parallel_activation(
+                    permit, &self.fs,
+                )?
+            };
+            // Sixteen maximum-size payloads leave no room for required scratch.
+            // Fifteen still fit the largest admitted path/diagnostic envelope.
+            for conditions in manifest
+                .read_preconditions
+                .chunks(crate::maintenance_parallel::MAX_JOBS - 1)
+            {
+                let eligible = proof.is_some()
+                    && conditions.iter().all(|condition| {
+                        crate::vault::paths::parallel_path_workspace(
+                            self.fs.root(),
+                            &condition.path,
+                        )
+                        .is_some()
+                    });
+                let jobs = conditions
+                    .iter()
+                    .map(|condition| {
+                        let fs = self.fs.clone();
+                        let path = condition.path.clone();
+                        let workspace = if eligible {
+                            crate::vault::paths::parallel_path_workspace(fs.root(), &path)
+                                .unwrap()
+                                .max(
+                                    proof
+                                        .as_ref()
+                                        .and_then(|proof| proof.path_workspace())
+                                        .unwrap(),
+                                )
+                        } else {
+                            0
+                        };
+                        let reservation = MAX_PAYLOAD_BYTES as u64
+                            + 64 * 1024
+                            + crate::storage::maintenance_activation::WORKSPACE_BYTES
+                            + workspace
+                            + fs.owned_bytes() as u64
+                            + path.owned_capacity() as u64
+                            + std::mem::size_of::<VaultRelativePath>() as u64;
+                        crate::maintenance_parallel::Job::new(reservation, move || {
+                            #[cfg(test)]
+                            maintenance_guard_tests::hook(
+                                fs.root(),
+                                maintenance_guard_tests::Event::BeforeRead(&path),
+                            )?;
+                            let bytes = read_bounded(&fs, &path, MAX_PAYLOAD_BYTES)?;
+                            let hash = bytes.as_ref().map(|bytes| *blake3::hash(bytes).as_bytes());
+                            #[cfg(test)]
+                            maintenance_guard_tests::hook(
+                                fs.root(),
+                                maintenance_guard_tests::Event::Read(
+                                    &path,
+                                    hash,
+                                    bytes.as_ref().map_or(0, Vec::len),
+                                ),
+                            )?;
+                            Ok(hash)
+                        })
+                    })
+                    .collect();
+                // All admitted observations, including later failures, have finished
+                // and merged their diagnostics before ordered conflict reduction.
+                let observations = if !eligible {
+                    crate::maintenance_parallel::run_batch_sequential(jobs)?
+                } else {
+                    crate::maintenance_parallel::run_batch(jobs)?
+                };
+                #[cfg(test)]
+                maintenance_guard_tests::hook(
+                    self.fs.root(),
+                    maintenance_guard_tests::Event::AfterJoin,
+                )?;
+                for (condition, actual) in conditions.iter().zip(observations) {
+                    let actual = actual.and_then(|hash| match hash {
+                        None => Ok(ExpectedState::Absent),
+                        Some(hash) => Blake3Hash::new(format!(
+                            "blake3:{}",
+                            blake3::Hash::from_bytes(hash).to_hex()
+                        ))
+                        .map(ExpectedState::Hash),
+                    });
+                    if actual.is_ok_and(|actual| actual == condition.expected) {
+                        continue;
+                    }
+                    let phase = format!("read precondition: {}", condition.path);
+                    let state = journal::load_journal(&self.fs, manifest, hash)?;
+                    if matches!(
+                        state.status,
+                        None | Some(ChangeStatus::Prepared | ChangeStatus::Conflict)
+                    ) {
+                        return Err(WikiError::new(ErrorCode::ContentConflict, phase));
+                    }
+                    return self.conflict(permit, manifest, hash, &phase, Vec::new());
                 }
-                let phase = format!("read precondition: {}", condition.path);
-                let state = journal::load_journal(&self.fs, manifest, hash)?;
-                if matches!(
-                    state.status,
-                    None | Some(ChangeStatus::Prepared | ChangeStatus::Conflict)
-                ) {
-                    return Err(WikiError::new(ErrorCode::ContentConflict, phase));
-                }
-                return self.conflict(permit, manifest, hash, &phase, Vec::new());
             }
-        }
-        #[cfg(test)]
-        maintenance_guard_tests::hook(self.fs.root(), maintenance_guard_tests::Event::PassEnd)?;
-        Ok(())
+            #[cfg(test)]
+            maintenance_guard_tests::hook(self.fs.root(), maintenance_guard_tests::Event::PassEnd)?;
+            Ok(())
+        })
     }
     fn verify_dependencies(
         &self,

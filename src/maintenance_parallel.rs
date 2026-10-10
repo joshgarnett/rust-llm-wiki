@@ -327,90 +327,210 @@ fn run_batch_with_mode<T: Send + 'static>(
     jobs: Vec<Job<T>>,
     force_sequential: bool,
 ) -> Result<Batch<T>> {
-    if IN_JOB.with(|slot| *slot.borrow()) {
-        return Err(error("nested maintenance jobs are forbidden"));
-    }
-    if jobs.len() > MAX_JOBS {
-        return Err(WikiError::new(
-            ErrorCode::BudgetExceeded,
-            "maintenance descriptor batch exceeds allowance",
-        ));
-    }
-    let bytes = jobs
-        .iter()
-        .try_fold(0u64, |sum, job| sum.checked_add(job.reservation))
-        .filter(|bytes| *bytes <= MAX_IN_FLIGHT_BYTES)
-        .ok_or_else(|| {
-            WikiError::new(
+    crate::maintenance_diagnostic::observe(crate::maintenance_diagnostic::Phase::BatchWall, || {
+        if IN_JOB.with(|slot| *slot.borrow()) {
+            return Err(error("nested maintenance jobs are forbidden"));
+        }
+        if jobs.len() > MAX_JOBS {
+            return Err(WikiError::new(
                 ErrorCode::BudgetExceeded,
-                "maintenance in-flight byte allowance exhausted",
-            )
-        })?;
-    let mut receivers = Vec::<mpsc::Receiver<Completion<T>>>::with_capacity(jobs.len());
-    let mut results = Vec::<Result<T>>::with_capacity(jobs.len());
-    let overhead = (jobs.capacity() * std::mem::size_of::<Job<T>>()
-        + receivers.capacity() * std::mem::size_of::<mpsc::Receiver<Completion<T>>>()
-        + results.capacity() * std::mem::size_of::<Result<T>>()) as u64
-        + jobs.len() as u64 * job_overhead::<T>();
-    let bytes = bytes
-        .checked_add(overhead)
-        .filter(|bytes| *bytes <= MAX_IN_FLIGHT_BYTES)
-        .ok_or_else(|| {
-            WikiError::new(
-                ErrorCode::BudgetExceeded,
-                "maintenance batch bookkeeping allowance exhausted",
-            )
-        })?;
-    let pool = CURRENT.with(|slot| slot.borrow().clone());
-    let reservation = if let Some(pool) = &pool {
-        let previous = pool
-            .counters
-            .reserved
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |held| {
-                held.checked_add(bytes)
-                    .filter(|total| *total <= MAX_IN_FLIGHT_BYTES)
-            })
-            .map_err(|_| {
+                "maintenance descriptor batch exceeds allowance",
+            ));
+        }
+        let bytes = jobs
+            .iter()
+            .try_fold(0u64, |sum, job| sum.checked_add(job.reservation))
+            .filter(|bytes| *bytes <= MAX_IN_FLIGHT_BYTES)
+            .ok_or_else(|| {
                 WikiError::new(
                     ErrorCode::BudgetExceeded,
-                    "maintenance retained batch allowance exhausted",
+                    "maintenance in-flight byte allowance exhausted",
                 )
             })?;
-        pool.counters
-            .max_reserved
-            .fetch_max(previous + bytes, Ordering::Relaxed);
-        Some(Reservation {
-            counters: pool.counters.clone(),
-            bytes,
-        })
-    } else {
-        None
-    };
-    let started = Instant::now();
-    if force_sequential || pool.as_ref().is_none_or(|pool| pool.sequential) {
-        // The invoking thread already owns its observers. Preserve them directly;
-        // installing a worker observer here would create a nested observation.
-        for job in jobs {
-            let service = Instant::now();
-            IN_JOB.with(|slot| *slot.borrow_mut() = true);
-            let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(job.run));
-            IN_JOB.with(|slot| *slot.borrow_mut() = false);
-            let result = match outcome {
-                Ok(result) => result,
-                Err(_) => {
-                    if let Some(pool) = &pool {
-                        pool.counters.panicked.fetch_add(1, Ordering::Relaxed);
+        let mut receivers = Vec::<mpsc::Receiver<Completion<T>>>::with_capacity(jobs.len());
+        let mut results = Vec::<Result<T>>::with_capacity(jobs.len());
+        let overhead = (jobs.capacity() * std::mem::size_of::<Job<T>>()
+            + receivers.capacity() * std::mem::size_of::<mpsc::Receiver<Completion<T>>>()
+            + results.capacity() * std::mem::size_of::<Result<T>>()) as u64
+            + jobs.len() as u64 * job_overhead::<T>();
+        let bytes = bytes
+            .checked_add(overhead)
+            .filter(|bytes| *bytes <= MAX_IN_FLIGHT_BYTES)
+            .ok_or_else(|| {
+                WikiError::new(
+                    ErrorCode::BudgetExceeded,
+                    "maintenance batch bookkeeping allowance exhausted",
+                )
+            })?;
+        let pool = CURRENT.with(|slot| slot.borrow().clone());
+        let reservation = if let Some(pool) = &pool {
+            let previous = pool
+                .counters
+                .reserved
+                .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |held| {
+                    held.checked_add(bytes)
+                        .filter(|total| *total <= MAX_IN_FLIGHT_BYTES)
+                })
+                .map_err(|_| {
+                    WikiError::new(
+                        ErrorCode::BudgetExceeded,
+                        "maintenance retained batch allowance exhausted",
+                    )
+                })?;
+            pool.counters
+                .max_reserved
+                .fetch_max(previous + bytes, Ordering::Relaxed);
+            Some(Reservation {
+                counters: pool.counters.clone(),
+                bytes,
+            })
+        } else {
+            None
+        };
+        let started = Instant::now();
+        let _diagnostic_batch = crate::maintenance_diagnostic::batch(started);
+        if force_sequential || pool.as_ref().is_none_or(|pool| pool.sequential) {
+            // The invoking thread already owns its observers. Preserve them directly;
+            // installing a worker observer here would create a nested observation.
+            for job in jobs {
+                let service = Instant::now();
+                IN_JOB.with(|slot| *slot.borrow_mut() = true);
+                let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    crate::maintenance_diagnostic::observe(
+                        crate::maintenance_diagnostic::Phase::WorkerJob,
+                        job.run,
+                    )
+                }));
+                IN_JOB.with(|slot| *slot.borrow_mut() = false);
+                let result = match outcome {
+                    Ok(result) => result,
+                    Err(_) => {
+                        if let Some(pool) = &pool {
+                            pool.counters.panicked.fetch_add(1, Ordering::Relaxed);
+                        }
+                        Err(error("maintenance worker panicked"))
                     }
-                    Err(error("maintenance worker panicked"))
+                };
+                if let Some(pool) = &pool {
+                    pool.counters.submitted.fetch_add(1, Ordering::Relaxed);
+                    pool.counters.completed.fetch_add(1, Ordering::Relaxed);
+                    pool.counters.max_active.fetch_max(1, Ordering::Relaxed);
+                    pool.counters
+                        .service_ns
+                        .fetch_add(nanos(service), Ordering::Relaxed);
+                    if result.is_err() {
+                        pool.counters.failed.fetch_add(1, Ordering::Relaxed);
+                    }
                 }
-            };
+                results.push(result);
+            }
+            if let Some(pool) = &pool {
+                pool.counters
+                    .wall_ns
+                    .fetch_add(nanos(started), Ordering::Relaxed);
+            }
+            return Ok(Batch {
+                results,
+                reservation,
+            });
+        }
+        let pool_ref = pool.as_ref().expect("parallel execution has an owner pool");
+        if !jobs.is_empty() {
+            pool_ref.start()?;
+        }
+        let context = crate::maintenance_observers::WorkerContext::capture();
+        for job in jobs {
+            let (sender, receiver) = mpsc::sync_channel(1);
+            let context = context.clone();
+            let counters = pool_ref.counters.clone();
+            let task: Task = Box::new(move || {
+                struct JobGuard;
+                impl Drop for JobGuard {
+                    fn drop(&mut self) {
+                        IN_JOB.with(|slot| *slot.borrow_mut() = false);
+                    }
+                }
+                struct Timing {
+                    counters: Arc<Counters>,
+                    started: Instant,
+                }
+                impl Drop for Timing {
+                    fn drop(&mut self) {
+                        self.counters
+                            .service_ns
+                            .fetch_add(nanos(self.started), Ordering::Relaxed);
+                        self.counters.active.fetch_sub(1, Ordering::Relaxed);
+                    }
+                }
+                let active = counters.active.fetch_add(1, Ordering::Relaxed) + 1;
+                counters.max_active.fetch_max(active, Ordering::Relaxed);
+                let timing = Timing {
+                    counters,
+                    started: Instant::now(),
+                };
+                let result = {
+                    IN_JOB.with(|slot| *slot.borrow_mut() = true);
+                    let _guard = JobGuard;
+                    context.run(|| {
+                        crate::maintenance_diagnostic::observe(
+                            crate::maintenance_diagnostic::Phase::WorkerJob,
+                            job.run,
+                        )
+                    })
+                };
+                // Publish completion only after service/active accounting and all
+                // worker context teardown. The owner snapshot cannot race a postlude.
+                drop(timing);
+                let _ = sender.send(result);
+            });
             if let Some(pool) = &pool {
                 pool.counters.submitted.fetch_add(1, Ordering::Relaxed);
+                pool.sender
+                    .lock()
+                    .expect("maintenance sender poisoned")
+                    .as_ref()
+                    .expect("active maintenance pool")
+                    .send(task)
+                    .expect("maintenance worker stopped before join");
+            } else {
+                task();
+            }
+            receivers.push(receiver);
+        }
+        for receiver in receivers {
+            let result = match crate::maintenance_diagnostic::observe(
+                crate::maintenance_diagnostic::Phase::QueueWait,
+                || receiver.recv(),
+            ) {
+                Ok((outcome, delta)) => {
+                    let diagnostics = delta.merge();
+                    if let Err(error) = diagnostics {
+                        if outcome.is_err() {
+                            if let Some(pool) = &pool {
+                                pool.counters.panicked.fetch_add(1, Ordering::Relaxed);
+                            }
+                        }
+                        results.push(Err(error));
+                        if let Some(pool) = &pool {
+                            pool.counters.completed.fetch_add(1, Ordering::Relaxed);
+                            pool.counters.failed.fetch_add(1, Ordering::Relaxed);
+                        }
+                        continue;
+                    }
+                    match outcome {
+                        Ok(result) => result,
+                        Err(_) => {
+                            if let Some(pool) = &pool {
+                                pool.counters.panicked.fetch_add(1, Ordering::Relaxed);
+                            }
+                            Err(error("maintenance worker panicked"))
+                        }
+                    }
+                }
+                Err(_) => Err(error("maintenance worker did not return a joined result")),
+            };
+            if let Some(pool) = &pool {
                 pool.counters.completed.fetch_add(1, Ordering::Relaxed);
-                pool.counters.max_active.fetch_max(1, Ordering::Relaxed);
-                pool.counters
-                    .service_ns
-                    .fetch_add(nanos(service), Ordering::Relaxed);
                 if result.is_err() {
                     pool.counters.failed.fetch_add(1, Ordering::Relaxed);
                 }
@@ -422,114 +542,10 @@ fn run_batch_with_mode<T: Send + 'static>(
                 .wall_ns
                 .fetch_add(nanos(started), Ordering::Relaxed);
         }
-        return Ok(Batch {
+        Ok(Batch {
             results,
             reservation,
-        });
-    }
-    let pool_ref = pool.as_ref().expect("parallel execution has an owner pool");
-    if !jobs.is_empty() {
-        pool_ref.start()?;
-    }
-    let context = crate::maintenance_observers::WorkerContext::capture();
-    for job in jobs {
-        let (sender, receiver) = mpsc::sync_channel(1);
-        let context = context.clone();
-        let counters = pool_ref.counters.clone();
-        let task: Task = Box::new(move || {
-            struct JobGuard;
-            impl Drop for JobGuard {
-                fn drop(&mut self) {
-                    IN_JOB.with(|slot| *slot.borrow_mut() = false);
-                }
-            }
-            struct Timing {
-                counters: Arc<Counters>,
-                started: Instant,
-            }
-            impl Drop for Timing {
-                fn drop(&mut self) {
-                    self.counters
-                        .service_ns
-                        .fetch_add(nanos(self.started), Ordering::Relaxed);
-                    self.counters.active.fetch_sub(1, Ordering::Relaxed);
-                }
-            }
-            let active = counters.active.fetch_add(1, Ordering::Relaxed) + 1;
-            counters.max_active.fetch_max(active, Ordering::Relaxed);
-            let timing = Timing {
-                counters,
-                started: Instant::now(),
-            };
-            let result = {
-                IN_JOB.with(|slot| *slot.borrow_mut() = true);
-                let _guard = JobGuard;
-                context.run(job.run)
-            };
-            // Publish completion only after service/active accounting and all
-            // worker context teardown. The owner snapshot cannot race a postlude.
-            drop(timing);
-            let _ = sender.send(result);
-        });
-        if let Some(pool) = &pool {
-            pool.counters.submitted.fetch_add(1, Ordering::Relaxed);
-            pool.sender
-                .lock()
-                .expect("maintenance sender poisoned")
-                .as_ref()
-                .expect("active maintenance pool")
-                .send(task)
-                .expect("maintenance worker stopped before join");
-        } else {
-            task();
-        }
-        receivers.push(receiver);
-    }
-    for receiver in receivers {
-        let result = match receiver.recv() {
-            Ok((outcome, delta)) => {
-                let diagnostics = delta.merge();
-                if let Err(error) = diagnostics {
-                    if outcome.is_err() {
-                        if let Some(pool) = &pool {
-                            pool.counters.panicked.fetch_add(1, Ordering::Relaxed);
-                        }
-                    }
-                    results.push(Err(error));
-                    if let Some(pool) = &pool {
-                        pool.counters.completed.fetch_add(1, Ordering::Relaxed);
-                        pool.counters.failed.fetch_add(1, Ordering::Relaxed);
-                    }
-                    continue;
-                }
-                match outcome {
-                    Ok(result) => result,
-                    Err(_) => {
-                        if let Some(pool) = &pool {
-                            pool.counters.panicked.fetch_add(1, Ordering::Relaxed);
-                        }
-                        Err(error("maintenance worker panicked"))
-                    }
-                }
-            }
-            Err(_) => Err(error("maintenance worker did not return a joined result")),
-        };
-        if let Some(pool) = &pool {
-            pool.counters.completed.fetch_add(1, Ordering::Relaxed);
-            if result.is_err() {
-                pool.counters.failed.fetch_add(1, Ordering::Relaxed);
-            }
-        }
-        results.push(result);
-    }
-    if let Some(pool) = &pool {
-        pool.counters
-            .wall_ns
-            .fetch_add(nanos(started), Ordering::Relaxed);
-    }
-    Ok(Batch {
-        results,
-        reservation,
+        })
     })
 }
 

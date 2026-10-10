@@ -281,66 +281,68 @@ impl OfflineApp {
         self.read_selected(request, Some(start))
     }
     fn read_selected(&self, request: ReadRequest, from: Option<u64>) -> Result<ReadOutcome> {
-        if request.max_bytes == 0 || request.max_bytes > MAX_INPUT_BYTES {
-            return Err(usage("read limit must be 1..=16 MiB"));
-        }
-        let p = self.current_projection()?;
-        let path = self.resolve_path(&request.selector, &p)?;
-        let document = p.documents.iter().find(|d| d.path == path).ok_or_else(|| {
-            WikiError::new(
-                ErrorCode::RecordNotFound,
-                "path must name a visible canonical note or captured content passage",
-            )
-        })?;
-        let bytes = read_bytes(&self.fs, &path)?;
-        if Blake3Hash::digest(&bytes) != document.hash {
-            return Err(WikiError::new(
-                ErrorCode::FreshnessConflict,
-                "record bytes changed after canonical scan",
-            ));
-        }
-        let note = parse_note(&bytes);
-        let canonical = crate::sources::revision::canonical_path(&path);
-        let body = if canonical {
-            note.body()
-        } else {
-            bytes.as_slice()
-        };
-        let text = std::str::from_utf8(body)
-            .map_err(|_| WikiError::invalid("requested body is not UTF-8"))?;
-        let requested = requested_read_range(text, request.range, from)?;
-        let start = usize::try_from(requested.start())
-            .map_err(|_| usage("byte range exceeds platform limit"))?;
-        let wanted_end = usize::try_from(requested.end())
-            .map_err(|_| usage("byte range exceeds platform limit"))?;
-        let end = bounded_utf8_end(text, start, wanted_end, request.max_bytes)?;
-        let record = if canonical {
-            p.records
-                .values()
-                .find(|row| row.path == path)
-                .map(|row| row.record.clone())
-        } else {
-            None
-        };
-        Ok(ReadOutcome {
-            continuation: if end < wanted_end {
-                Some(ByteSpan::new(end as u64, wanted_end as u64)?)
+        crate::maintenance_diagnostic::observe(crate::maintenance_diagnostic::Phase::Read, || {
+            if request.max_bytes == 0 || request.max_bytes > MAX_INPUT_BYTES {
+                return Err(usage("read limit must be 1..=16 MiB"));
+            }
+            let p = self.current_projection()?;
+            let path = self.resolve_path(&request.selector, &p)?;
+            let document = p.documents.iter().find(|d| d.path == path).ok_or_else(|| {
+                WikiError::new(
+                    ErrorCode::RecordNotFound,
+                    "path must name a visible canonical note or captured content passage",
+                )
+            })?;
+            let bytes = read_bytes(&self.fs, &path)?;
+            if Blake3Hash::digest(&bytes) != document.hash {
+                return Err(WikiError::new(
+                    ErrorCode::FreshnessConflict,
+                    "record bytes changed after canonical scan",
+                ));
+            }
+            let note = parse_note(&bytes);
+            let canonical = crate::sources::revision::canonical_path(&path);
+            let body = if canonical {
+                note.body()
+            } else {
+                bytes.as_slice()
+            };
+            let text = std::str::from_utf8(body)
+                .map_err(|_| WikiError::invalid("requested body is not UTF-8"))?;
+            let requested = requested_read_range(text, request.range, from)?;
+            let start = usize::try_from(requested.start())
+                .map_err(|_| usage("byte range exceeds platform limit"))?;
+            let wanted_end = usize::try_from(requested.end())
+                .map_err(|_| usage("byte range exceeds platform limit"))?;
+            let end = bounded_utf8_end(text, start, wanted_end, request.max_bytes)?;
+            let record = if canonical {
+                p.records
+                    .values()
+                    .find(|row| row.path == path)
+                    .map(|row| row.record.clone())
             } else {
                 None
-            },
-            path: path.clone(),
-            hash: Blake3Hash::digest(&bytes),
-            record,
-            metadata: if canonical { note.fields.clone() } else { None },
-            body: text[start..end].to_owned(),
-            range: ByteSpan::new(start as u64, end as u64)?,
-            truncated: end < wanted_end,
-            source_citation: None,
-            diagnostics: p
-                .diagnostics
-                .into_iter()
-                .filter(|d| d.path == path)
-                .collect(),
+            };
+            Ok(ReadOutcome {
+                continuation: if end < wanted_end {
+                    Some(ByteSpan::new(end as u64, wanted_end as u64)?)
+                } else {
+                    None
+                },
+                path: path.clone(),
+                hash: Blake3Hash::digest(&bytes),
+                record,
+                metadata: if canonical { note.fields.clone() } else { None },
+                body: text[start..end].to_owned(),
+                range: ByteSpan::new(start as u64, end as u64)?,
+                truncated: end < wanted_end,
+                source_citation: None,
+                diagnostics: p
+                    .diagnostics
+                    .into_iter()
+                    .filter(|d| d.path == path)
+                    .collect(),
+            })
         })
     }
     pub(crate) fn execute_draft(
@@ -1026,39 +1028,44 @@ impl OfflineApp {
         self.index_normalized(true)
     }
     fn index_normalized(&self, rebuild: bool) -> Result<IndexOutcome> {
-        let catalog = self.catalog();
-        // Dry-run describes maintenance without acquiring a writer, creating
-        // SQLite files or scanning the full corpus.
-        catalog.operation_state()?;
-        if self.options.dry_run {
-            return Ok(IndexOutcome {
-                report: None,
-                dry_run: true,
-                cache_state_unknown: true,
-                maintenance: Some(
-                    serde_json::json!({"layout":"normalized","canonical_scan_performed":false}),
-                ),
-            });
-        }
-        let writer = self.writer()?;
-        let result = if rebuild {
-            catalog.rebuild_normalized(&writer)?
-        } else {
-            catalog.sync_normalized(&writer)?
-        };
-        Ok(IndexOutcome {
-            maintenance: Some(serde_json::json!({
-                "layout":"normalized", "resumed":result.resumed,
-                "input":result.input, "build":result.build,
-                "page_sync": result.page_sync,
-                "retirement_deferred":result.retirement_deferred,
-                "cleanup_errors":result.cleanup_errors,
-                "abandoned_rebuild_candidates": result.abandoned_rebuild_candidates,
-            })),
-            report: Some(result.report),
-            dry_run: false,
-            cache_state_unknown: false,
-        })
+        crate::maintenance_diagnostic::observe(
+            crate::maintenance_diagnostic::Phase::RebuildIndexPublication,
+            || {
+                let catalog = self.catalog();
+                // Dry-run describes maintenance without acquiring a writer, creating
+                // SQLite files or scanning the full corpus.
+                catalog.operation_state()?;
+                if self.options.dry_run {
+                    return Ok(IndexOutcome {
+                        report: None,
+                        dry_run: true,
+                        cache_state_unknown: true,
+                        maintenance: Some(
+                            serde_json::json!({"layout":"normalized","canonical_scan_performed":false}),
+                        ),
+                    });
+                }
+                let writer = self.writer()?;
+                let result = if rebuild {
+                    catalog.rebuild_normalized(&writer)?
+                } else {
+                    catalog.sync_normalized(&writer)?
+                };
+                Ok(IndexOutcome {
+                    maintenance: Some(serde_json::json!({
+                        "layout":"normalized", "resumed":result.resumed,
+                        "input":result.input, "build":result.build,
+                        "page_sync": result.page_sync,
+                        "retirement_deferred":result.retirement_deferred,
+                        "cleanup_errors":result.cleanup_errors,
+                        "abandoned_rebuild_candidates": result.abandoned_rebuild_candidates,
+                    })),
+                    report: Some(result.report),
+                    dry_run: false,
+                    cache_state_unknown: false,
+                })
+            },
+        )
     }
     pub fn check(&self) -> Result<CheckOutcome> {
         if self.options.dry_run {

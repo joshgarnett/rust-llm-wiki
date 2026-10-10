@@ -1436,32 +1436,38 @@ impl RetainedDelta {
 }
 
 fn load_delta(catalog: &Catalog, proof: &IndexedRefreshProof) -> Result<RetainedDelta> {
-    if proof.version == 4 {
-        let engine = ChangeEngine::new(catalog.fs.clone())?;
-        let (retained, delta) = engine
-            .load_indexed_refresh_retention(&proof.change)?
-            .ok_or_else(|| recovery("legacy Page admission envelope missing"))?;
-        if retained != *proof {
-            return Err(recovery("legacy Page admission proof changed"));
-        }
-        let delta = delta.ok_or_else(|| recovery("legacy Page embedded delta missing"))?;
-        if read_bounded(&catalog.fs, &delta_path(&proof.change)?, 0)?.is_some() {
-            return Err(recovery(
-                "legacy Page admission has unexpected separate delta",
-            ));
-        }
-        let bytes = serde_json::to_vec(&delta).map_err(|e| WikiError::invalid(e.to_string()))?;
-        if Blake3Hash::digest(bytes) != proof.delta_hash {
-            return Err(recovery("legacy Page embedded delta hash changed"));
-        }
-        return Ok(delta);
-    }
-    let bytes = read_bounded(&catalog.fs, &delta_path(&proof.change)?, MAX_DELTA_BYTES)?
-        .ok_or_else(|| recovery("retained refresh delta is missing"))?;
-    if Blake3Hash::digest(&bytes) != proof.delta_hash {
-        return Err(recovery("retained refresh delta hash changed"));
-    }
-    strict_json(&bytes)
+    crate::maintenance_diagnostic::observe(
+        crate::maintenance_diagnostic::Phase::RetainedAuthority,
+        || {
+            if proof.version == 4 {
+                let engine = ChangeEngine::new(catalog.fs.clone())?;
+                let (retained, delta) = engine
+                    .load_indexed_refresh_retention(&proof.change)?
+                    .ok_or_else(|| recovery("legacy Page admission envelope missing"))?;
+                if retained != *proof {
+                    return Err(recovery("legacy Page admission proof changed"));
+                }
+                let delta = delta.ok_or_else(|| recovery("legacy Page embedded delta missing"))?;
+                if read_bounded(&catalog.fs, &delta_path(&proof.change)?, 0)?.is_some() {
+                    return Err(recovery(
+                        "legacy Page admission has unexpected separate delta",
+                    ));
+                }
+                let bytes =
+                    serde_json::to_vec(&delta).map_err(|e| WikiError::invalid(e.to_string()))?;
+                if Blake3Hash::digest(bytes) != proof.delta_hash {
+                    return Err(recovery("legacy Page embedded delta hash changed"));
+                }
+                return Ok(delta);
+            }
+            let bytes = read_bounded(&catalog.fs, &delta_path(&proof.change)?, MAX_DELTA_BYTES)?
+                .ok_or_else(|| recovery("retained refresh delta is missing"))?;
+            if Blake3Hash::digest(&bytes) != proof.delta_hash {
+                return Err(recovery("retained refresh delta hash changed"));
+            }
+            strict_json(&bytes)
+        },
+    )
 }
 
 fn retain_legacy_page_envelope(
@@ -1693,56 +1699,61 @@ impl<'a> IndexedRefreshSession<'a> {
         proof_maximum: usize,
         delta_maximum: usize,
     ) -> Result<Self> {
-        if matches!(
-            &parts.operation,
-            IndexedWriteOperation::SourceRefreshBatch { .. }
-        ) {
-            // These tuples cover all unbounded receipt/delta fields without
-            // allocating their encoded bytes. Remaining proof fields are fixed
-            // bounded IDs/hashes/snapshots (<16 KiB); <=16 fresh owner rows plus
-            // the delta envelope fit the separate conservative 1 MiB reserve.
-            super::normalized_delta::counted(
-                &(&parts.operation, &parts.before, &parts.after, &parts.base),
-                proof_maximum.checked_sub(16 * 1024).ok_or_else(|| {
-                    budget("batch proof byte ceiling is below its fixed-field reserve")
-                })?,
-            )?;
-            super::normalized_delta::counted(
-                &(
+        crate::maintenance_diagnostic::observe(
+            crate::maintenance_diagnostic::Phase::PrepareWrite,
+            || {
+                if matches!(
                     &parts.operation,
-                    &parts.before,
-                    &parts.after,
-                    &parts.base,
-                    &parts.delta,
-                ),
-                delta_maximum.checked_sub(1024 * 1024).ok_or_else(|| {
-                    budget("batch delta byte ceiling is below its fixed-field reserve")
-                })?,
-            )?;
-        }
-        let engine = Self::admitted_engine(catalog, writer, &parts)?;
-        if matches!(&parts.operation, IndexedWriteOperation::JobBatch { .. }) {
-            return Err(recovery("JobBatch requires exact frozen named intent"));
-        }
-        let change = engine.prepare(writer, parts.draft)?.prepared;
-        let retained_change = change.clone();
-        let result: Result<Self> = (|| {
-            parts.delta.owners = engine.manifest_revision_owners(&change)?;
-            let session = Self::retain_bound(
-                catalog,
-                writer,
-                parts.operation,
-                change,
-                parts.base,
-                parts.before,
-                parts.after,
-                parts.delta,
-                DELTA_VERSION,
-            )?;
-            engine.stage_indexed_refresh_proof(writer, session.proof())?;
-            Ok(session)
-        })();
-        result.map_err(|error| retained_error(error, &retained_change))
+                    IndexedWriteOperation::SourceRefreshBatch { .. }
+                ) {
+                    // These tuples cover all unbounded receipt/delta fields without
+                    // allocating their encoded bytes. Remaining proof fields are fixed
+                    // bounded IDs/hashes/snapshots (<16 KiB); <=16 fresh owner rows plus
+                    // the delta envelope fit the separate conservative 1 MiB reserve.
+                    super::normalized_delta::counted(
+                        &(&parts.operation, &parts.before, &parts.after, &parts.base),
+                        proof_maximum.checked_sub(16 * 1024).ok_or_else(|| {
+                            budget("batch proof byte ceiling is below its fixed-field reserve")
+                        })?,
+                    )?;
+                    super::normalized_delta::counted(
+                        &(
+                            &parts.operation,
+                            &parts.before,
+                            &parts.after,
+                            &parts.base,
+                            &parts.delta,
+                        ),
+                        delta_maximum.checked_sub(1024 * 1024).ok_or_else(|| {
+                            budget("batch delta byte ceiling is below its fixed-field reserve")
+                        })?,
+                    )?;
+                }
+                let engine = Self::admitted_engine(catalog, writer, &parts)?;
+                if matches!(&parts.operation, IndexedWriteOperation::JobBatch { .. }) {
+                    return Err(recovery("JobBatch requires exact frozen named intent"));
+                }
+                let change = engine.prepare(writer, parts.draft)?.prepared;
+                let retained_change = change.clone();
+                let result: Result<Self> = (|| {
+                    parts.delta.owners = engine.manifest_revision_owners(&change)?;
+                    let session = Self::retain_bound(
+                        catalog,
+                        writer,
+                        parts.operation,
+                        change,
+                        parts.base,
+                        parts.before,
+                        parts.after,
+                        parts.delta,
+                        DELTA_VERSION,
+                    )?;
+                    engine.stage_indexed_refresh_proof(writer, session.proof())?;
+                    Ok(session)
+                })();
+                result.map_err(|error| retained_error(error, &retained_change))
+            },
+        )
     }
 
     fn admitted_engine(
@@ -2234,194 +2245,210 @@ impl<'a> IndexedRefreshSession<'a> {
     }
 
     pub(crate) fn publish(&mut self, owners: &[RevisionOwnerRow]) -> Result<ReadSnapshot> {
-        if self.phase != IndexedRefreshPhase::AtBase {
-            return Err(recovery("refresh publication already occurred"));
-        }
-        self.retained()?;
-        self.authority(true)?;
-        let engine = ChangeEngine::new(self.catalog.fs.clone())?;
-        let (manifest, hash) = engine.load_manifest_structure(&self.proof.change.change_id)?;
-        self.proof.validate_manifest(&manifest)?;
-        if hash != self.proof.change.manifest_hash
-            || owners != self.delta.rows.owners
-            || owners != engine.manifest_revision_owners(&self.proof.change)?
-        {
-            return Err(recovery("refresh publication owner or manifest mismatch"));
-        }
-        let state = journal::load_journal(&self.catalog.fs, &manifest, &hash)?;
-        if !matches!(
-            state.status,
-            Some(ChangeStatus::FilesApplied | ChangeStatus::Indexed)
-        ) {
-            return Err(recovery(
-                "refresh publication requires durable files-applied intent",
-            ));
-        }
-        self.verify_selected(true, false)?;
-        // Recheck complete immutable membership and indexed competing ownership
-        // at the publication boundary, even if a caller supplied a matching slice.
-        let guard = engine.indexed_revision_guard(
-            self.writer,
-            &self.proof.change,
-            self.starting_ownership_lookup()?,
-        )?;
-        if guard.complete_owner_rows()? != owners {
-            return Err(recovery("refresh owner membership changed"));
-        }
-        drop(guard);
-        let connection = self.sql_writer.connection();
-        configure_delta(connection)?;
-        let transaction = Transaction::new_unchecked(connection, TransactionBehavior::Immediate)
-            .map_err(sql::sql_error)?;
-        let header = normalized_read::header(&transaction, self.sql_writer.selection())?;
-        if header.snapshot != self.proof.base {
-            return Err(recovery("refresh base changed before transaction"));
-        }
-        self.authority(true)?;
-        self.delta
-            .rows
-            .apply_for_operation(&transaction, self.proof.operation.as_ref())?;
-        let after_binding = self
-            .proof
-            .intended
-            .publication()
-            .expect("validated published proof");
-        let base_binding = self
-            .proof
-            .base
-            .publication()
-            .expect("validated published base");
-        let changed = transaction.execute(
+        crate::maintenance_diagnostic::observe(
+            crate::maintenance_diagnostic::Phase::SqlPublication,
+            || {
+                if self.phase != IndexedRefreshPhase::AtBase {
+                    return Err(recovery("refresh publication already occurred"));
+                }
+                self.retained()?;
+                self.authority(true)?;
+                let engine = ChangeEngine::new(self.catalog.fs.clone())?;
+                let (manifest, hash) =
+                    engine.load_manifest_structure(&self.proof.change.change_id)?;
+                self.proof.validate_manifest(&manifest)?;
+                if hash != self.proof.change.manifest_hash
+                    || owners != self.delta.rows.owners
+                    || owners != engine.manifest_revision_owners(&self.proof.change)?
+                {
+                    return Err(recovery("refresh publication owner or manifest mismatch"));
+                }
+                let state = journal::load_journal(&self.catalog.fs, &manifest, &hash)?;
+                if !matches!(
+                    state.status,
+                    Some(ChangeStatus::FilesApplied | ChangeStatus::Indexed)
+                ) {
+                    return Err(recovery(
+                        "refresh publication requires durable files-applied intent",
+                    ));
+                }
+                self.verify_selected(true, false)?;
+                // Recheck complete immutable membership and indexed competing ownership
+                // at the publication boundary, even if a caller supplied a matching slice.
+                let guard = engine.indexed_revision_guard(
+                    self.writer,
+                    &self.proof.change,
+                    self.starting_ownership_lookup()?,
+                )?;
+                if guard.complete_owner_rows()? != owners {
+                    return Err(recovery("refresh owner membership changed"));
+                }
+                drop(guard);
+                let connection = self.sql_writer.connection();
+                configure_delta(connection)?;
+                let transaction =
+                    Transaction::new_unchecked(connection, TransactionBehavior::Immediate)
+                        .map_err(sql::sql_error)?;
+                let header = normalized_read::header(&transaction, self.sql_writer.selection())?;
+                if header.snapshot != self.proof.base {
+                    return Err(recovery("refresh base changed before transaction"));
+                }
+                self.authority(true)?;
+                self.delta
+                    .rows
+                    .apply_for_operation(&transaction, self.proof.operation.as_ref())?;
+                let after_binding = self
+                    .proof
+                    .intended
+                    .publication()
+                    .expect("validated published proof");
+                let base_binding = self
+                    .proof
+                    .base
+                    .publication()
+                    .expect("validated published base");
+                let changed = transaction.execute(
             "UPDATE catalog_meta SET epoch=?1,publication_hash=?2,origin_change_id=?3,origin_manifest_hash=?4,audit_epoch=NULL,control_hash=NULL,dependency_hash=NULL WHERE singleton=1 AND file_id=?5 AND epoch=?6 AND publication_hash=?7 AND parser_hash=?8 AND state='complete'",
             params![sql::integer(self.proof.intended.generation)?,after_binding.publication_hash.as_str(),
                 self.proof.change.change_id.as_str(),self.proof.change.manifest_hash.as_str(),base_binding.file_id,
                 sql::integer(self.proof.base.generation)?,base_binding.publication_hash.as_str(),self.proof.base.parser_fingerprint.as_str()],
         ).map_err(sql::sql_error)?;
-        if changed != 1 {
-            return Err(recovery("refresh publication compare-and-swap failed"));
-        }
-        if let Some(fault) = &self.catalog.options.fault {
-            fault.check(PublicationCheckpoint::AfterPointer)?;
-        }
-        self.verify_selected(true, false)?;
-        self.authority(true)?;
-        transaction.commit().map_err(sql::sql_error)?;
-        // Set this before a fault can return: this session can never publish twice.
-        self.phase = IndexedRefreshPhase::AlreadyPublished;
-        self.starting = None;
-        if let Some(fault) = &self.catalog.options.fault {
-            fault.check(PublicationCheckpoint::AfterCommit)?;
-        }
-        let snapshot = self.verify_published()?;
-        // The SQL publication is durable; only its acknowledgement remains.
-        // AlreadyPublished recovery verifies/finalizes without retrying optional
-        // maintenance. Busy external readers are a normal deferred outcome.
-        self.sql_writer.checkpoint_wal().map_err(|error| {
-            let mut error = retained_error(error, &self.proof.change);
-            let details = error
-                .details
-                .as_object_mut()
-                .expect("retained error details");
-            details.insert(
-                "maintenance".into(),
-                serde_json::json!("wal_checkpoint_truncate"),
-            );
-            details.insert("publication_committed".into(), serde_json::json!(true));
-            details.insert(
-                "intended_snapshot".into(),
-                serde_json::json!(self.proof.intended),
-            );
-            error
-        })?;
-        Ok(snapshot)
+                if changed != 1 {
+                    return Err(recovery("refresh publication compare-and-swap failed"));
+                }
+                if let Some(fault) = &self.catalog.options.fault {
+                    fault.check(PublicationCheckpoint::AfterPointer)?;
+                }
+                self.verify_selected(true, false)?;
+                self.authority(true)?;
+                transaction.commit().map_err(sql::sql_error)?;
+                // Set this before a fault can return: this session can never publish twice.
+                self.phase = IndexedRefreshPhase::AlreadyPublished;
+                self.starting = None;
+                if let Some(fault) = &self.catalog.options.fault {
+                    fault.check(PublicationCheckpoint::AfterCommit)?;
+                }
+                let snapshot = self.verify_published()?;
+                // The SQL publication is durable; only its acknowledgement remains.
+                // AlreadyPublished recovery verifies/finalizes without retrying optional
+                // maintenance. Busy external readers are a normal deferred outcome.
+                self.sql_writer.checkpoint_wal().map_err(|error| {
+                    let mut error = retained_error(error, &self.proof.change);
+                    let details = error
+                        .details
+                        .as_object_mut()
+                        .expect("retained error details");
+                    details.insert(
+                        "maintenance".into(),
+                        serde_json::json!("wal_checkpoint_truncate"),
+                    );
+                    details.insert("publication_committed".into(), serde_json::json!(true));
+                    details.insert(
+                        "intended_snapshot".into(),
+                        serde_json::json!(self.proof.intended),
+                    );
+                    error
+                })?;
+                Ok(snapshot)
+            },
+        )
     }
 
     pub(crate) fn verify_published(&self) -> Result<ReadSnapshot> {
-        configure_delta(self.sql_writer.connection())?;
-        self.retained()?;
-        self.authority(false)?;
-        let header =
-            normalized_read::header(self.sql_writer.connection(), self.sql_writer.selection())?;
-        if header.snapshot != self.proof.intended
-            || !header.origin.as_ref().is_some_and(|origin| {
-                origin.change_id == self.proof.change.change_id
-                    && origin.manifest_hash == self.proof.change.manifest_hash
-            })
-        {
-            return Err(recovery("intended refresh publication or origin changed"));
-        }
-        let engine = ChangeEngine::new(self.catalog.fs.clone())?;
-        let (manifest, hash) = engine.load_manifest_structure(&self.proof.change.change_id)?;
-        self.proof.validate_manifest(&manifest)?;
-        if hash != self.proof.change.manifest_hash
-            || self.delta.rows.owners != engine.manifest_revision_owners(&self.proof.change)?
-        {
-            return Err(recovery("published refresh manifest ownership changed"));
-        }
-        let state = journal::load_journal(&self.catalog.fs, &manifest, &hash)?;
-        if let Some(terminal) =
-            crate::changes::outcome::terminal_report(&self.catalog.fs, &manifest, &hash)?
-        {
-            if terminal.status != ChangeStatus::Committed
-                || terminal.snapshot.as_ref() != Some(&self.proof.intended)
-            {
-                return Err(recovery(
-                    "refresh terminal receipt differs from intended publication",
-                ));
-            }
-            // A valid retained terminal transcript remains proof even when the
-            // operational journal is only a prefix. terminal_report checks that
-            // exact prefix relationship; the receipt is durable authority.
-        } else {
-            if !matches!(
-                state.status,
-                Some(ChangeStatus::FilesApplied | ChangeStatus::Indexed)
-            ) {
-                return Err(recovery(
-                    "published refresh lacks durable apply intent or terminal receipt",
-                ));
-            }
-            if state.status == Some(ChangeStatus::Indexed)
-                && state
-                    .frames
-                    .iter()
-                    .rev()
-                    .find_map(|frame| match &frame.event {
-                        crate::changes::ChangeEvent::Indexed { snapshot } => Some(snapshot),
-                        _ => None,
+        crate::maintenance_diagnostic::observe(
+            crate::maintenance_diagnostic::Phase::Finalize,
+            || {
+                configure_delta(self.sql_writer.connection())?;
+                self.retained()?;
+                self.authority(false)?;
+                let header = normalized_read::header(
+                    self.sql_writer.connection(),
+                    self.sql_writer.selection(),
+                )?;
+                if header.snapshot != self.proof.intended
+                    || !header.origin.as_ref().is_some_and(|origin| {
+                        origin.change_id == self.proof.change.change_id
+                            && origin.manifest_hash == self.proof.change.manifest_hash
                     })
-                    != Some(&self.proof.intended)
-            {
-                return Err(recovery(
-                    "indexed refresh journal names another publication",
-                ));
-            }
-        }
-        let ready: bool = self
-            .sql_writer
-            .connection()
-            .query_row(
-                "SELECT revision_ownership_version=1 FROM catalog_meta WHERE singleton=1",
-                [],
-                |row| row.get(0),
-            )
-            .map_err(sql::sql_error)?;
-        if !ready {
-            return Err(recovery("published revision ownership registry is unready"));
-        }
-        for owner in &self.delta.rows.owners {
-            let exists: bool = self.sql_writer.connection().query_row(
+                {
+                    return Err(recovery("intended refresh publication or origin changed"));
+                }
+                let engine = ChangeEngine::new(self.catalog.fs.clone())?;
+                let (manifest, hash) =
+                    engine.load_manifest_structure(&self.proof.change.change_id)?;
+                self.proof.validate_manifest(&manifest)?;
+                if hash != self.proof.change.manifest_hash
+                    || self.delta.rows.owners
+                        != engine.manifest_revision_owners(&self.proof.change)?
+                {
+                    return Err(recovery("published refresh manifest ownership changed"));
+                }
+                let state = journal::load_journal(&self.catalog.fs, &manifest, &hash)?;
+                if let Some(terminal) =
+                    crate::changes::outcome::terminal_report(&self.catalog.fs, &manifest, &hash)?
+                {
+                    if terminal.status != ChangeStatus::Committed
+                        || terminal.snapshot.as_ref() != Some(&self.proof.intended)
+                    {
+                        return Err(recovery(
+                            "refresh terminal receipt differs from intended publication",
+                        ));
+                    }
+                    // A valid retained terminal transcript remains proof even when the
+                    // operational journal is only a prefix. terminal_report checks that
+                    // exact prefix relationship; the receipt is durable authority.
+                } else {
+                    if !matches!(
+                        state.status,
+                        Some(ChangeStatus::FilesApplied | ChangeStatus::Indexed)
+                    ) {
+                        return Err(recovery(
+                            "published refresh lacks durable apply intent or terminal receipt",
+                        ));
+                    }
+                    if state.status == Some(ChangeStatus::Indexed)
+                        && state
+                            .frames
+                            .iter()
+                            .rev()
+                            .find_map(|frame| match &frame.event {
+                                crate::changes::ChangeEvent::Indexed { snapshot } => Some(snapshot),
+                                _ => None,
+                            })
+                            != Some(&self.proof.intended)
+                    {
+                        return Err(recovery(
+                            "indexed refresh journal names another publication",
+                        ));
+                    }
+                }
+                let ready: bool = self
+                    .sql_writer
+                    .connection()
+                    .query_row(
+                        "SELECT revision_ownership_version=1 FROM catalog_meta WHERE singleton=1",
+                        [],
+                        |row| row.get(0),
+                    )
+                    .map_err(sql::sql_error)?;
+                if !ready {
+                    return Err(recovery("published revision ownership registry is unready"));
+                }
+                for owner in &self.delta.rows.owners {
+                    let exists: bool = self.sql_writer.connection().query_row(
                 "SELECT EXISTS(SELECT 1 FROM revision_tree_owners WHERE source_component=?1 AND revision_component=?2 AND change_id=?3 AND manifest_hash=?4)",
                 params![owner.key.source_component,owner.key.revision_component,owner.change.change_id.as_str(),owner.change.manifest_hash.as_str()], |row| row.get(0),
             ).map_err(sql::sql_error)?;
-            if !exists {
-                return Err(recovery(
-                    "published refresh owner row differs from exact change",
-                ));
-            }
-        }
-        self.verify_selected(true, false)?;
-        Ok(header.snapshot)
+                    if !exists {
+                        return Err(recovery(
+                            "published refresh owner row differs from exact change",
+                        ));
+                    }
+                }
+                self.verify_selected(true, false)?;
+                Ok(header.snapshot)
+            },
+        )
     }
 }
 

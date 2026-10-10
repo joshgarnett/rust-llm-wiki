@@ -32,8 +32,9 @@ queries, retries or parameter sweep can supply credit. The holdout stays sealed;
 even a passing development result would not qualify defaults, HIGH or 25K.
 
 Embedding geometry is fixed at an 8,000-byte input limit, empty prefixes and no
-quality target. Exact input/request counts and complete coverage within the
-prospective USD2/296-attempt ceiling remain unknown. CLI embedding dry-run returns
+quality target. Before acquisition, exact input/request counts and complete coverage within the
+prospective USD2/296-attempt ceiling were unknown. The completed live acquisition
+below settles the actual counts and accounting. CLI embedding dry-run returns
 unknown coverage before materialization; it does not forecast batches or cost.
 The accepted adapter reserves 8,192 input units per item. At the currently listed
 USD0.02 per million input tokens, 8,192 such items would reserve USD1.34217728
@@ -49,8 +50,8 @@ At 25K documents, even one 1,536-dimensional float32 vector per document require
 153,600,000 scan bytes, exceeding the current 64 MiB vector-read limit before
 selected-owner reads. Smaller dimensions and a different discovery architecture
 remain separate, unqualified decisions. The bounded development acquisition is
-now explicitly authorized under the same USD2/296-attempt ceilings. Preparation
-has failed before external dispatch: the accepted preview exhausted selected SQL
+explicitly authorized under the same USD2/296-attempt ceilings and completed as
+recorded below. Earlier preparation failed before external dispatch: the accepted preview exhausted selected SQL
 rows, and successful immutable-header reuse then exposed a canonical entry-budget
 failure. Neither attempt acquired embeddings or improved quality. A coherent
 scope-composition candidate separates scheduling pages, canonical proofs, supplier
@@ -1116,3 +1117,41 @@ currentness, absence and resource gates remain unchanged. Successful preparation
 alone earns no quality credit; lexical defaults, HIGH, fine-sync, 25K and full
 release acceptance remain open. The forty-question hybrid comparison above
 supersedes that twelve-question proposal; its original evidence is retained.
+
+
+## Broader architecture reassessment, 2026-10-10
+
+A fresh independent architecture review and primary-source comparison rejected
+integration of the proposed persistent structural index as the next quality fix.
+Persistence can amortize preparation, but supplies no demonstrated new signal for
+selecting all applicable conditions and exceptions. Earlier lexical-unit evidence
+already established seventeen feasible complete packets and fifteen facts lost
+after retention. Another general packing-feasibility diagnostic would repeat
+that work. The proposed exact-ancestry recipe also makes deep sections and long
+lists ineligible under the unchanged four-passage/1,024-byte limits. Its uncompiled
+source artifact is retained separately; no schema or ordinary workflow integration
+was performed.
+
+The next quality design must distinguish task-conditioned selection of sufficient
+evidence from passage relevance. Existing complete-source reading and original-span
+selection provide a design basis, with their previous scoped successes and failed
+transport/lifecycle gates preserved. Any assisted comparison requires mechanically
+complete evidence delivery and separately declared input, call, cost and latency
+accounting. It cannot supply native/default acceptance credit. No new provider
+acquisition or model experiment follows from this review.
+
+Primary references distinguish these mechanisms: contextual text improves chunk
+matching, layered ranking separates document discovery from returned chunks, and
+learned set retrieval scores complementary evidence jointly. Their reported results
+do not establish a local gain or justify adopting a model dependency. See
+[contextual retrieval](https://www.anthropic.com/engineering/contextual-retrieval),
+[Vespa chunk selection](https://docs.vespa.ai/en/rag/working-with-chunks.html), and
+[set-level retrieval](https://arxiv.org/abs/2607.05712v2).
+
+The plan retains three outcomes: establish actual selection quality under the
+unchanged development gates; make ordinary maintenance and semantic discovery
+practical at 25K; independently qualify the complete release workflow. Default
+quality remains **13/32 complete tasks and 79/129 facts**. The 17/32 development
+threshold, preservation of every baseline fact, all eight absent controls, exact
+citations, private holdout, HIGH/semantic/scale requirements and independent
+at-least-nine score with no correctness blocker remain mandatory.

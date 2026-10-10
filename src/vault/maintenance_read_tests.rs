@@ -57,6 +57,7 @@ fn fixture() -> (tempfile::TempDir, VaultFs) {
 
 #[test]
 fn bounded_guard_preserves_exact_bytes_and_refuses_oversize_before_allocation() {
+    let _diagnostic = crate::maintenance_diagnostic::TestDiagnostic::start();
     let (temp, vault) = fixture();
     let path = VaultRelativePath::new("page.md").unwrap();
     fs::write(temp.path().join("page.md"), "Café\n").unwrap();
@@ -78,6 +79,7 @@ fn bounded_guard_preserves_exact_bytes_and_refuses_oversize_before_allocation() 
 
 #[test]
 fn streamed_authority_hash_rereads_complete_bytes_and_observes_same_size_edit() {
+    let _diagnostic = crate::maintenance_diagnostic::TestDiagnostic::start();
     let (_temp, vault) = fixture();
     let path = VaultRelativePath::new("authority.json").unwrap();
     let target = vault.root().path().join(path.as_str());
@@ -125,6 +127,7 @@ fn streamed_authority_hash_rereads_complete_bytes_and_observes_same_size_edit() 
 
 #[test]
 fn generic_owner_read_keeps_existing_large_file_compatibility() {
+    let _diagnostic = crate::maintenance_diagnostic::TestDiagnostic::start();
     use std::io::{Seek, SeekFrom, Write};
     let (_temp, vault) = fixture();
     let path = VaultRelativePath::new("large-author-note.md").unwrap();
@@ -143,6 +146,7 @@ fn generic_owner_read_keeps_existing_large_file_compatibility() {
 #[cfg(unix)]
 #[test]
 fn raced_fifo_after_regular_metadata_refuses_without_waiting_for_a_writer() {
+    let _diagnostic = crate::maintenance_diagnostic::TestDiagnostic::start();
     let (_temp, vault) = fixture();
     let target = vault.root().path().join("page.md");
     fs::write(&target, b"before").unwrap();
@@ -169,6 +173,7 @@ fn raced_fifo_after_regular_metadata_refuses_without_waiting_for_a_writer() {
 #[cfg(unix)]
 #[test]
 fn raced_symlink_after_regular_metadata_does_not_read_external_bytes() {
+    let _diagnostic = crate::maintenance_diagnostic::TestDiagnostic::start();
     let (_temp, vault) = fixture();
     let outside = tempfile::tempdir().unwrap();
     let secret = outside.path().join("outside.md");
@@ -196,6 +201,7 @@ fn raced_symlink_after_regular_metadata_does_not_read_external_bytes() {
 
 #[test]
 fn prepared_stage_keeps_replacement_authority_on_writer_and_rejects_tampering() {
+    let _diagnostic = crate::maintenance_diagnostic::TestDiagnostic::start();
     let (_temp, vault) = fixture();
     let permit = WriterPermit::acquire(vault.root(), Duration::from_secs(1)).unwrap();
     let path = VaultRelativePath::new("page.md").unwrap();

@@ -1,6 +1,8 @@
 //! Transfer bounded diagnostics and the exact activation proof across joined jobs.
 #[derive(Clone)]
 pub(crate) struct WorkerContext {
+    #[cfg(any(test, feature = "maintenance-diagnostic029"))]
+    diagnostic: crate::maintenance_diagnostic::WorkerContext,
     activation: Option<std::sync::Arc<crate::storage::maintenance_activation::ActivationProof>>,
     #[cfg(test)]
     query: crate::catalog::query_diagnostics::WorkerContext,
@@ -10,6 +12,8 @@ pub(crate) struct WorkerContext {
     phases: bool,
 }
 pub(crate) struct WorkerDelta {
+    #[cfg(any(test, feature = "maintenance-diagnostic029"))]
+    diagnostic: crate::maintenance_diagnostic::WorkerDelta,
     #[cfg(test)]
     query: crate::catalog::query_diagnostics::WorkerDelta,
     #[cfg(test)]
@@ -19,23 +23,31 @@ pub(crate) struct WorkerDelta {
 }
 impl WorkerContext {
     pub(crate) fn reservation_bytes(&self) -> u64 {
+        #[cfg(any(test, feature = "maintenance-diagnostic029"))]
+        let diagnostic = self.diagnostic.reservation_bytes();
+        #[cfg(not(any(test, feature = "maintenance-diagnostic029")))]
+        let diagnostic = 0;
         #[cfg(test)]
         {
-            self.query
-                .reservation_bytes()
-                .max(if self.paths || self.phases {
-                    1024 * 1024
-                } else {
-                    0
-                })
+            diagnostic
+                + self
+                    .query
+                    .reservation_bytes()
+                    .max(if self.paths || self.phases {
+                        1024 * 1024
+                    } else {
+                        0
+                    })
         }
         #[cfg(not(test))]
         {
-            0
+            diagnostic
         }
     }
     pub(crate) fn capture() -> Self {
         Self {
+            #[cfg(any(test, feature = "maintenance-diagnostic029"))]
+            diagnostic: crate::maintenance_diagnostic::WorkerContext::capture(),
             activation: crate::storage::maintenance_activation::current_proof(),
             #[cfg(test)]
             query: crate::catalog::query_diagnostics::WorkerContext::capture(),
@@ -46,6 +58,8 @@ impl WorkerContext {
         }
     }
     pub(crate) fn run<T>(self, job: impl FnOnce() -> T) -> (std::thread::Result<T>, WorkerDelta) {
+        #[cfg(any(test, feature = "maintenance-diagnostic029"))]
+        self.diagnostic.install();
         #[cfg(test)]
         {
             self.query.install();
@@ -63,6 +77,8 @@ impl WorkerContext {
             job()
         }));
         let delta = WorkerDelta {
+            #[cfg(any(test, feature = "maintenance-diagnostic029"))]
+            diagnostic: self.diagnostic.take(),
             #[cfg(test)]
             query: self.query.take(),
             #[cfg(test)]
@@ -77,6 +93,8 @@ impl WorkerContext {
 }
 impl WorkerDelta {
     pub(crate) fn merge(self) -> crate::domain::Result<()> {
+        #[cfg(any(test, feature = "maintenance-diagnostic029"))]
+        self.diagnostic.merge();
         #[cfg(test)]
         {
             let result = self.query.merge();

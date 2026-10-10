@@ -99,68 +99,77 @@ pub(crate) fn prepare_parallel_activation(
     Ok(proof)
 }
 fn capture(root: &VaultRoot) -> Result<Option<Arc<ActivationProof>>> {
-    let mut observed = BTreeMap::<VaultRelativePath, Witness>::new();
-    let mut activation = None;
-    let mut shape_valid = true;
-    let validated = {
-        let _capture = OwnerCaptureGuard::enter()?;
-        crate::maintenance_parallel::record_owner_activation_validation();
-        ValidatedLayout::capture_with_reader(root, &mut |path, limit| {
-            let bytes = layout::raw_read(root, path, limit)?;
-            if let Some(bytes) = &bytes {
-                if path.as_str() == layout::ACTIVE {
-                    activation = Some(layout::decode::<Layout>(bytes)?);
-                }
-                let witness = Witness {
-                    path: path.clone(),
-                    len: bytes.len() as u64,
-                    hash: *blake3::hash(bytes).as_bytes(),
-                    limit,
-                };
-                if observed.insert(path.clone(), witness).is_some() {
-                    shape_valid = false;
-                }
-            } else {
-                shape_valid = false;
+    crate::maintenance_diagnostic::observe(
+        crate::maintenance_diagnostic::Phase::ActivationSemantic,
+        || {
+            crate::maintenance_diagnostic::bump(
+                crate::maintenance_diagnostic::Counter::ActivationSemanticValidation,
+                1,
+            );
+            let mut observed = BTreeMap::<VaultRelativePath, Witness>::new();
+            let mut activation = None;
+            let mut shape_valid = true;
+            let validated = {
+                let _capture = OwnerCaptureGuard::enter()?;
+                crate::maintenance_parallel::record_owner_activation_validation();
+                ValidatedLayout::capture_with_reader(root, &mut |path, limit| {
+                    let bytes = layout::raw_read(root, path, limit)?;
+                    if let Some(bytes) = &bytes {
+                        if path.as_str() == layout::ACTIVE {
+                            activation = Some(layout::decode::<Layout>(bytes)?);
+                        }
+                        let witness = Witness {
+                            path: path.clone(),
+                            len: bytes.len() as u64,
+                            hash: *blake3::hash(bytes).as_bytes(),
+                            limit,
+                        };
+                        if observed.insert(path.clone(), witness).is_some() {
+                            shape_valid = false;
+                        }
+                    } else {
+                        shape_valid = false;
+                    }
+                    Ok(bytes)
+                })
+            }?;
+            if !validated.retained(root)? || !shape_valid || observed.len() != 3 {
+                return Ok(None);
             }
-            Ok(bytes)
-        })
-    }?;
-    if !validated.retained(root)? || !shape_valid || observed.len() != 3 {
-        return Ok(None);
-    }
-    let Some(activation) = activation else {
-        return Ok(None);
-    };
-    let receipt = VaultRelativePath::new(format!(
-        ".wiki/state/storage/receipts/{}.plan.json",
-        activation.migration_id
-    ))?;
-    let paths = [
-        (layout::ACTIVE, 4096),
-        ("WIKI.md", 1024 * 1024),
-        (receipt.as_str(), 64 * 1024 * 1024),
-    ];
-    let mut witnesses = Vec::with_capacity(3);
-    for (path, limit) in paths {
-        let Some(witness) = observed.remove(&VaultRelativePath::new(path)?) else {
-            return Ok(None);
-        };
-        if witness.limit != limit {
-            return Ok(None);
-        }
-        witnesses.push(witness);
-    }
-    let proof = ActivationProof {
-        root: root.clone(),
-        witnesses: witnesses
-            .try_into()
-            .map_err(|_| admission("activation witness shape changed"))?,
-    };
-    if proof.path_workspace().is_none() {
-        return Ok(None);
-    }
-    Ok(Some(Arc::new(proof)))
+            let Some(activation) = activation else {
+                return Ok(None);
+            };
+            let receipt = VaultRelativePath::new(format!(
+                ".wiki/state/storage/receipts/{}.plan.json",
+                activation.migration_id
+            ))?;
+            let paths = [
+                (layout::ACTIVE, 4096),
+                ("WIKI.md", 1024 * 1024),
+                (receipt.as_str(), 64 * 1024 * 1024),
+            ];
+            let mut witnesses = Vec::with_capacity(3);
+            for (path, limit) in paths {
+                let Some(witness) = observed.remove(&VaultRelativePath::new(path)?) else {
+                    return Ok(None);
+                };
+                if witness.limit != limit {
+                    return Ok(None);
+                }
+                witnesses.push(witness);
+            }
+            let proof = ActivationProof {
+                root: root.clone(),
+                witnesses: witnesses
+                    .try_into()
+                    .map_err(|_| admission("activation witness shape changed"))?,
+            };
+            if proof.path_workspace().is_none() {
+                return Ok(None);
+            }
+            Ok(Some(Arc::new(proof)))
+        },
+    )
 }
 impl ActivationProof {
     /// Account the single shared proof allocation, owned paths/root and Arc words.
@@ -175,31 +184,42 @@ impl ActivationProof {
                 .sum::<usize>()) as u64
     }
     fn active(&self, root: &VaultRoot) -> Result<bool> {
-        if &self.root != root {
-            return Err(conflict(
-                "activation proof belongs to a different vault root",
-            ));
-        }
-        for witness in &self.witnesses {
-            let actual = crate::vault::fs::hash_regular_raw_bounded(
-                root,
-                &witness.path,
-                witness.limit,
-                "storage-read",
-            )
-            .map_err(|error| {
-                conflict(&format!(
-                    "activation authority observation failed: {}",
-                    error.message
-                ))
-            })?;
-            if actual != Some((witness.len, witness.hash)) {
-                return Err(conflict(
-                    "activation authority bytes changed during parallel phase",
-                ));
-            }
-        }
-        Ok(true)
+        crate::maintenance_diagnostic::observe(
+            crate::maintenance_diagnostic::Phase::ActivationWitness,
+            || {
+                if &self.root != root {
+                    return Err(conflict(
+                        "activation proof belongs to a different vault root",
+                    ));
+                }
+                for witness in &self.witnesses {
+                    crate::maintenance_diagnostic::bump(
+                        crate::maintenance_diagnostic::Counter::ActivationWitnessRead,
+                        1,
+                    );
+                    let actual = crate::maintenance_diagnostic::witness_read(|| {
+                        crate::vault::fs::hash_regular_raw_bounded(
+                            root,
+                            &witness.path,
+                            witness.limit,
+                            "storage-read",
+                        )
+                    })
+                    .map_err(|error| {
+                        conflict(&format!(
+                            "activation authority observation failed: {}",
+                            error.message
+                        ))
+                    })?;
+                    if actual != Some((witness.len, witness.hash)) {
+                        return Err(conflict(
+                            "activation authority bytes changed during parallel phase",
+                        ));
+                    }
+                }
+                Ok(true)
+            },
+        )
     }
     pub(crate) fn path_workspace(&self) -> Option<u64> {
         self.witnesses
