@@ -701,6 +701,20 @@ fn select(
             result.scanned_bytes += range.len();
             fallback_windows.push((range, matched));
         }
+        #[cfg(test)]
+        super::context_stage_trace::event("owner_scan", || {
+            serde_json::json!({
+                "owner_index": parent.owner, "body_start": parent.body,
+                "body_end": end, "source_bytes": parent.raw.len(),
+                "scan_capacity": capacity, "body_capacity": body_capacity,
+                "scanned_blocks": scanned_blocks, "block_limit": block_limit,
+                "remaining_block_capacity": remaining,
+                "fallback_ranges": fallback_windows.iter().map(|(range, _)| serde_json::json!({"start":range.start,"end":range.end})).collect::<Vec<_>>(),
+                "owner_scanned_bytes": owner_usage,
+                "total_scanned_bytes": result.scanned_bytes, "total_scanned_blocks": result.scanned_blocks,
+                "caps": {"owner_bytes": OWNER_SCAN_BYTES,"total_bytes":TOTAL_SCAN_BYTES,"blocks":MAX_BLOCKS,"per_owner_candidates":MAX_CANDIDATES,"excerpt_bytes":bytes}
+            })
+        });
         owners.push(OwnerBlocks {
             parent,
             blocks,
@@ -724,7 +738,23 @@ fn select(
         let mut proposals = BTreeMap::<(usize, usize), SelectionCandidate>::new();
         let mut propose =
             |range: Range<usize>, covered_terms: Vec<usize>, clipped: bool| -> Result<()> {
+                #[cfg(test)]
+                super::context_stage_trace::candidate_event(
+                    "candidate_constructed",
+                    parent.owner,
+                    range.start,
+                    range.end,
+                    "constructed",
+                );
                 if range.is_empty() || range.end - range.start > bytes {
+                    #[cfg(test)]
+                    super::context_stage_trace::candidate_event(
+                        "candidate_filter",
+                        parent.owner,
+                        range.start,
+                        range.end,
+                        "empty_or_excerpt_byte_cap",
+                    );
                     return Ok(());
                 }
                 // HTML anchors and markup-only windows have exact bytes but
@@ -735,6 +765,14 @@ fn select(
                     .trim()
                     .is_empty()
                 {
+                    #[cfg(test)]
+                    super::context_stage_trace::candidate_event(
+                        "candidate_filter",
+                        parent.owner,
+                        range.start,
+                        range.end,
+                        "no_readable_evidence",
+                    );
                     return Ok(());
                 }
                 let span = ByteSpan::new(range.start as u64, range.end as u64)?;
@@ -755,6 +793,18 @@ fn select(
                     clipped,
                     semantic_affinity: affinity(span, &parent.semantic),
                 };
+                #[cfg(test)]
+                super::context_stage_trace::candidate_event(
+                    "candidate_dedup",
+                    parent.owner,
+                    range.start,
+                    range.end,
+                    if proposals.contains_key(&(range.start, range.end)) {
+                        "duplicate_span_merge_clipped"
+                    } else {
+                        "unique_span_admitted"
+                    },
+                );
                 proposals
                     .entry((range.start, range.end))
                     .and_modify(|old| old.clipped &= clipped)
@@ -845,6 +895,21 @@ fn select(
         let mut candidates = proposals
             .into_values()
             .filter(|candidate| {
+                #[cfg(test)]
+                super::context_stage_trace::candidate_event(
+                    "candidate_relevance",
+                    parent.owner,
+                    candidate.span.start() as usize,
+                    candidate.span.end() as usize,
+                    if candidate.local_relevance > 0
+                        || candidate.seed_overlap
+                        || candidate.semantic_affinity.is_some()
+                    {
+                        "relevance_or_seed_or_semantic_admitted"
+                    } else {
+                        "no_relevance_seed_or_semantic"
+                    },
+                );
                 candidate.local_relevance > 0
                     || candidate.seed_overlap
                     || candidate.semantic_affinity.is_some()
@@ -922,7 +987,25 @@ fn select(
             let candidate = candidates.remove(best);
             *regions.entry(region(&candidate)).or_default() += 1;
             covered.extend(candidate.covered_terms.iter().copied());
+            #[cfg(test)]
+            super::context_stage_trace::candidate_event(
+                "candidate_retention",
+                parent.owner,
+                candidate.span.start() as usize,
+                candidate.span.end() as usize,
+                "retained",
+            );
             kept.push(candidate);
+        }
+        #[cfg(test)]
+        for candidate in &candidates {
+            super::context_stage_trace::candidate_event(
+                "candidate_retention",
+                parent.owner,
+                candidate.span.start() as usize,
+                candidate.span.end() as usize,
+                "context_source_candidate_cap",
+            );
         }
         if !candidates.is_empty() {
             result.omissions.push(SelectionOmission {
@@ -932,6 +1015,14 @@ fn select(
         }
         result.candidates.extend(kept);
     }
+    #[cfg(test)]
+    super::context_stage_trace::event("selection_terminal", || {
+        serde_json::json!({
+            "retained_count": result.candidates.len(), "scanned_bytes": result.scanned_bytes,
+            "scanned_blocks": result.scanned_blocks,
+            "omissions": result.omissions.iter().map(|omission| serde_json::json!({"owner_index":omission.owner_index,"reason":omission.reason})).collect::<Vec<_>>()
+        })
+    });
     Ok(result)
 }
 

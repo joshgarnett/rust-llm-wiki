@@ -490,6 +490,25 @@ fn search_inner_with_discovery(
             query,
             &mut candidates,
         )?;
+    #[cfg(test)]
+    if context_scope.is_some() && !source_only {
+        super::context_stage_trace::event("owner_discovery", || {
+            serde_json::json!({
+                "candidate_count": candidate_count, "overflow": overflow,
+            "discovery_trace_scope": "complete capped merged pool before hit admission",
+            "earlier_per_leg_and_candidate_cap_membership": "unknown",
+                "omitted_candidates_lower_bound": omitted_candidates,
+                "candidate_cap": plan.limits.candidates, "hit_cap": plan.limits.hits,
+                "offset": offset,
+                "owners": candidates.iter().enumerate().map(|(rank, candidate)| serde_json::json!({
+                    "rank": rank + 1, "path": candidate.document.path, "hash": candidate.document.hash,
+                    "source_id": candidate.document.source_id, "revision": candidate.document.owner_revision,
+                    "admitted_by_hit_limit": rank >= offset && rank < offset + plan.limits.hits,
+                    "reasons": candidate.reasons, "rank_contributions": candidate.ranks,
+                })).collect::<Vec<_>>()
+            })
+        });
+    }
     let end = (offset + plan.limits.hits).min(candidates.len());
     let mut hits = Vec::new();
     for candidate in candidates

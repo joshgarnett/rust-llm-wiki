@@ -60,7 +60,9 @@ pub fn validate_request(query: &str, request: &ContextRequest) -> Result<Context
 }
 pub fn validate_selection_action(request: &ContextRequest, action: &SelectionAction) -> Result<()> {
     if let SelectionAction::PrepareOriginals(originals)
-        | SelectionAction::ApplyOriginals { request: originals, .. } = action
+    | SelectionAction::ApplyOriginals {
+        request: originals, ..
+    } = action
     {
         let filters = &request.documents.filters;
         if request.scope != ContextScope::IndexedDocuments
@@ -1260,6 +1262,14 @@ fn assemble_inner_with_evidence(
             )?
             .is_none()
             {
+                #[cfg(test)]
+                super::context_stage_trace::event("owner_rejected", || {
+                    serde_json::json!({
+                        "owner_index": i, "locator": hit.locator,
+                        "source_id": hit.source_id, "revision": hit.owner_revision,
+                        "reason": "discovery_only_or_empty"
+                    })
+                });
                 omissions.push(ContextOmission {
                     record_id: hit.locator.record.as_ref().map(|r| r.record_id.clone()),
                     path: Some(hit.locator.path.clone()),
@@ -1273,6 +1283,8 @@ fn assemble_inner_with_evidence(
                 .chain(hit.secondary_excerpts.iter().take(1))
                 .map(|e| e.span)
                 .collect::<Vec<_>>();
+            #[cfg(test)]
+            super::context_stage_trace::admit_owner(i, document);
             owners.push((i, document, anchors));
         }
         let documents = owners
@@ -1766,6 +1778,15 @@ pub(super) fn pack(
         dependency_fingerprint,
         evidence_sets,
     } = input;
+    #[cfg(test)]
+    super::context_stage_trace::event("packing_entry", || {
+        serde_json::json!({
+            "pool": packets.iter().map(|packet| serde_json::json!({
+                "key": packet.key,
+                "candidates": packet.passages.iter().map(|passage| super::context_stage_trace::passage_identity(passage)).collect::<Vec<_>>()
+            })).collect::<Vec<_>>()
+        })
+    });
     let preserve_selection_order = !matches!(selection_action, SelectionAction::Automatic);
     #[cfg(test)]
     record_candidate_ordering_trace("candidate_pool", || {
@@ -1805,7 +1826,10 @@ pub(super) fn pack(
             "scope label does not fit reserved context budget",
         ));
     }
-    if matches!(selection_action, SelectionAction::Prepare | SelectionAction::Apply(_)) {
+    if matches!(
+        selection_action,
+        SelectionAction::Prepare | SelectionAction::Apply(_)
+    ) {
         let cards = packets
             .iter()
             .enumerate()
@@ -2016,6 +2040,15 @@ pub(super) fn pack(
             .expect("nonempty packets");
         let mut packet = packets.remove(best);
         #[cfg(test)]
+        let stage_candidate_ids = super::context_stage_trace::if_active(|| {
+            packet
+                .passages
+                .iter()
+                .map(super::context_stage_trace::passage_identity)
+                .collect::<Vec<_>>()
+        });
+
+        #[cfg(test)]
         let lineage_identity = packet_lineage_identity(&packet);
         if (packet.selection.is_some() || packet.unit_score.is_some())
             && packet.passages.iter().all(|p| {
@@ -2032,6 +2065,12 @@ pub(super) fn pack(
                     "identity": lineage_identity, "outcome": "contained_in_accepted_passage",
                     "accepted_proposal_ids_before": accepted_lineage_ids,
                     "actual_render_cost": null, "accepted": passages.iter().map(passage_ordering_row).collect::<Vec<_>>()
+                })
+            });
+            #[cfg(test)]
+            super::context_stage_trace::event("packing_decision", || {
+                serde_json::json!({
+                    "candidates": stage_candidate_ids, "reason": "contained_in_accepted_passage"
                 })
             });
             continue;
@@ -2187,6 +2226,14 @@ pub(super) fn pack(
                 "coalesced_trial": next.iter().map(passage_ordering_row).collect::<Vec<_>>()
             })
         });
+        #[cfg(test)]
+        super::context_stage_trace::event("packing_decision", || {
+            serde_json::json!({
+                "candidates": stage_candidate_ids,
+                "reason": reason.unwrap_or("accepted"),
+                "coalesced_ranges": next.iter().map(super::context_stage_trace::passage_identity).collect::<Vec<_>>()
+            })
+        });
         if let Some(reason) = reason {
             if let Some(child) = packet.fallback.take() {
                 // Keep one child fallback associated with its ranked unit;
@@ -2253,6 +2300,12 @@ pub(super) fn pack(
         serde_json::json!({
             "accepted_proposal_ids": accepted_lineage_ids,
             "passages": passages.iter().map(passage_ordering_row).collect::<Vec<_>>(),
+        })
+    });
+    #[cfg(test)]
+    super::context_stage_trace::event("final_ranges", || {
+        serde_json::json!({
+            "passages": passages.iter().map(super::context_stage_trace::passage_identity).collect::<Vec<_>>()
         })
     });
     let mut warnings = vec![
