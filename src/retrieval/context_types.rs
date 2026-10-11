@@ -20,6 +20,8 @@ pub(crate) struct ContextSemanticCue {
 
 #[derive(Debug, Clone, Default)]
 pub(crate) struct ContextSelectionSignals {
+    pub relations: Vec<super::selected_documents::relation_annotations::SourceRelationAnnotation>,
+    pub relation_deadline: Option<std::time::Instant>,
     pub semantic: Vec<ContextSemanticCue>,
     pub semantic_complete: bool,
     pub experimental_hybrid_lexical_evidence: bool,
@@ -208,6 +210,8 @@ impl ContextResult {
 }
 #[derive(Clone, Default)]
 pub struct ContextOptions {
+    /// Explicit source-prepared experimental lexical selection; no query-time generation.
+    pub experimental_source_relations: bool,
     /// Explicit experimental evidence route; discovery and semantic checks stay unchanged.
     pub experimental_hybrid_lexical_evidence: bool,
     pub fault: Option<std::sync::Arc<dyn ContextFault>>,

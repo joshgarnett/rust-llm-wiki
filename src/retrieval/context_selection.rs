@@ -225,7 +225,7 @@ fn dominant_region(
 
 // This normalization influences selection only. It never changes source bytes,
 // FTS discovery, embeddings, or citation identity. Keep short identifiers exact.
-fn term_key(term: &str) -> String {
+pub(super) fn term_key(term: &str) -> String {
     if !term.is_ascii() || term.len() < 5 {
         return term.to_owned();
     }
@@ -565,7 +565,10 @@ fn bounded_window(raw: &str, bounds: Range<usize>, anchor: usize, bytes: usize) 
     start..end
 }
 
-fn query_terms(tokenizer: &Tokenizer<'_>, query: &str) -> Result<(BTreeMap<String, usize>, bool)> {
+pub(super) fn query_terms(
+    tokenizer: &Tokenizer<'_>,
+    query: &str,
+) -> Result<(BTreeMap<String, usize>, bool)> {
     let mut terms = BTreeMap::new();
     let mut term_cap = false;
     for token in tokenizer.tokens(query)? {

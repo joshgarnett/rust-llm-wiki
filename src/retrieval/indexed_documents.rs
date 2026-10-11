@@ -96,6 +96,7 @@ pub(crate) fn context(
     let mut meter = Meter::new(&request.verification_budget);
     let request = context::validate_request(query, request)?;
     context::validate_selection_action(&request, &options.selection)?;
+    context::validate_source_relations(&request, options)?;
     if request.scope != ContextScope::IndexedDocuments
         || !matches!(
             request.documents.mode,
@@ -141,6 +142,15 @@ pub(crate) fn context(
     let mut budget = request.verification_budget.clone();
     budget.max_elapsed_ms = meter.remaining_ms();
     let mut proof = selected_documents::authenticate(catalog, &reader, &paths, &budget)?;
+    let mut relation_omissions = Vec::new();
+    let mut signals = ContextSelectionSignals::default();
+    if options.experimental_source_relations {
+        let loaded = proof.load_source_relations(catalog, &reader, &paths)?;
+        signals.relations = loaded.annotations;
+        signals.relation_deadline = Some(loaded.deadline);
+        signals.warnings = loaded.warnings;
+        relation_omissions = loaded.omissions;
+    }
     // Candidates belong to the pinned generation; assembly is additionally bound
     // to the exact selected canonical dependency set authenticated above.
     hits.dependency_fingerprint = proof.fingerprint.clone();
@@ -148,13 +158,15 @@ pub(crate) fn context(
         reader: &reader,
         proof: &proof,
     };
-    let mut draft = context::assemble_bounded_documents_with_selection_for_query(
+    let mut draft = context::assemble_bounded_documents_with_signals(
         &selected,
         &request,
         &hits,
         query,
+        &signals,
         &options.selection,
     )?;
+    draft.omissions.extend(relation_omissions);
     reader.check_query_budget()?;
     draft.warnings.push("Discovery uses the published generation; selected document dependencies are verified. Global membership, identity uniqueness, completeness and unselected freshness are not verified. Use index sync to discover external edits.".into());
     if let Some(fault) = &options.fault {

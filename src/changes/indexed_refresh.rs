@@ -123,7 +123,10 @@ impl IndexedWriteOperation {
                 use crate::domain::RecordKind;
                 let ids: std::collections::BTreeSet<_> = records.iter().map(|r| &r.id).collect();
                 if records.is_empty()
-                    || records.len() > 2
+                    || records.len() > 3
+                    || (records.len() == 3
+                        && (checkpoint.is_some()
+                            || records.iter().any(|r| r.kind != RecordKind::RunEvent)))
                     || ids.len() != records.len()
                     || !records.windows(2).all(|p| p[0].path < p[1].path)
                     || records.iter().any(|r| match r.kind {
@@ -437,9 +440,9 @@ impl IndexedRefreshProof {
             )?;
         }
         if let Some(IndexedWriteOperation::JobBatch {
+            run_id,
             records,
             checkpoint,
-            ..
         }) = &self.operation
         {
             let written_asset = checkpoint
@@ -494,6 +497,45 @@ impl IndexedRefreshProof {
                 {
                     return Err(recovery(
                         "compact asset must precede its exact guarded Run after-image",
+                    ));
+                }
+            } else if records.len() == 3 {
+                // Structural shape only: fresh sealing and retained delta replay
+                // must still authenticate the exact typed relation payloads.
+                // Manifest operations are path-sorted, not raw/annotation/receipt
+                // ordered; execution dependencies identify the final receipt.
+                let receipt_id = manifest.allocated_ids.get("receipt").ok_or_else(|| {
+                    recovery("three-event job requires an allocated accounted receipt")
+                })?;
+                let receipt_path = format!("runs/{run_id}/events/{receipt_id}.md");
+                let receipt = manifest
+                    .operations
+                    .iter()
+                    .position(|op| op.target.as_str() == receipt_path)
+                    .ok_or_else(|| recovery("three-event job receipt target is absent"))?;
+                let required: std::collections::BTreeSet<_> = (0..manifest.operations.len())
+                    .filter(|index| *index != receipt)
+                    .collect();
+                let actual: std::collections::BTreeSet<_> = manifest.operations[receipt]
+                    .apply_after
+                    .iter()
+                    .copied()
+                    .collect();
+                if manifest.title != "Retain accounted response receipt"
+                    || manifest.origin.is_some()
+                    || manifest.inverse_of.is_some()
+                    || manifest.allocated_ids.len() != 2
+                    || manifest.allocated_ids.get("run") != Some(run_id)
+                    || manifest.operations[receipt].apply_after.len() != 2
+                    || actual != required
+                    || manifest
+                        .operations
+                        .iter()
+                        .enumerate()
+                        .any(|(index, op)| index != receipt && !op.apply_after.is_empty())
+                {
+                    return Err(recovery(
+                        "three-event job requires exactly two immutable leaves before its allocated receipt",
                     ));
                 }
             } else if manifest

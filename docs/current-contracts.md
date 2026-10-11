@@ -575,3 +575,9 @@ The subsequent [1,000-update scalar measurement](validation-capacity-workflow.md
 fails at 272 completed updates in 600 seconds. This admits a bounded existing-Source
 batch candidate subject to correctness and complete paired performance; native
 completeness remains an explicit open blocker.
+
+The [experimental Source relation preparation workflow](source-relation-preparation.md)
+connects source-only generation, immutable preparation records and offline cited
+context/cache reconstruction. Its synthetic local workflow passes; default
+retrieval completeness, complete development-corpus evaluation and 25K/release
+acceptance remain open. The experimental flag is disabled by default.

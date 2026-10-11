@@ -21,7 +21,8 @@ const MAX_FILE_BYTES: usize = 64 * 1024 * 1024;
 const MAX_CAPTURED_BYTES: usize = 128 * 1024 * 1024;
 const MAX_RECORD_BYTES: usize = 1024 * 1024;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct SelectedSourceBinding {
     pub vault_id: RecordId,
     pub source_id: RecordId,

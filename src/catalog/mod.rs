@@ -59,6 +59,7 @@ pub(crate) mod selector;
 pub mod snapshot;
 pub(crate) mod source_projection;
 pub(crate) mod source_refresh;
+pub(crate) mod source_relations;
 pub mod sql;
 mod structural_projection;
 pub(crate) mod structural_rules;

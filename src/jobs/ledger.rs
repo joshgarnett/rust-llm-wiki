@@ -138,6 +138,11 @@ impl JobLedger {
                 .tasks
                 .get(key)
                 .ok_or_else(|| WikiError::invalid("unknown remote task"))?;
+            // A failed mixed Run may authenticate an already completed relation
+            // task, but cannot transition or dispatch any task through this path.
+            let failed_relation_replay = loaded.state.inspection.state == RunState::Failed
+                && task.state == TaskState::Completed
+                && task.spec.stage == TaskStage::PrepareSourceRelations;
             if task.spec.capability.is_none()
                 || task.spec.dependencies.iter().any(|k| {
                     loaded
@@ -151,17 +156,25 @@ impl JobLedger {
                     loaded.state.inspection.state,
                     RunState::Running | RunState::Paused | RunState::Stopped
                 ) || loaded.state.inspection.state == RunState::Completed
-                    && task.state == TaskState::Completed)
+                    && task.state == TaskState::Completed
+                    || failed_relation_replay)
             {
                 return Err(WikiError::invalid("remote task cannot complete"));
             }
-            if !self.historical_embedding_receipt(
+            let historical = self.historical_remote_receipt(
                 loaded,
                 key,
                 OutputDisposition::Validated,
                 &outputs,
                 &cache_outputs,
-            )? {
+            )?;
+            if failed_relation_replay && !historical {
+                return Err(fail(
+                    ErrorCode::RecoveryRequired,
+                    "failed Run requires authenticated historical relation completion",
+                ));
+            }
+            if !historical {
                 tasks::bind(&self.fs, &task.spec)?;
             }
             let paid = loaded
@@ -244,7 +257,7 @@ impl JobLedger {
             )
         })
     }
-    /// A rejected, settled cache-only embedding response ends its exact task;
+    /// A rejected, settled embedding or source-relation response ends its exact task;
     /// independent siblings retain their original Run and paid scope.
     pub(crate) fn finish_rejected_remote_task(&self, key: &Blake3Hash) -> Result<EventRef> {
         self.local_write()?;
@@ -255,7 +268,12 @@ impl JobLedger {
                 .tasks
                 .get(key)
                 .ok_or_else(|| WikiError::invalid("unknown rejected task"))?;
-            if !self.historical_embedding_receipt(
+            let reason = if task.spec.stage == TaskStage::PrepareSourceRelations {
+                "source_relation_response_rejected"
+            } else {
+                "embedding_response_rejected"
+            };
+            if !self.historical_remote_receipt(
                 loaded,
                 key,
                 OutputDisposition::Rejected,
@@ -264,7 +282,7 @@ impl JobLedger {
             )? {
                 return Err(fail(
                     ErrorCode::RecoveryRequired,
-                    "rejected embedding receipt is not terminal and authenticated",
+                    "rejected remote receipt is not terminal and authenticated",
                 ));
             }
             if task.state == TaskState::Failed {
@@ -276,11 +294,9 @@ impl JobLedger {
                         EventPayload::TaskFinished {
                             task_key,
                             state: TaskState::Failed,
-                            reason,
+                            reason: recorded_reason,
                             ..
-                        } if task_key == key
-                            && reason.as_deref() == Some("embedding_response_rejected") =>
-                        {
+                        } if task_key == key && recorded_reason.as_deref() == Some(reason) => {
                             Some(events::event_ref(frame))
                         }
                         _ => None,
@@ -306,14 +322,14 @@ impl JobLedger {
                     state: TaskState::Failed,
                     outputs: Vec::new(),
                     cache_outputs: Vec::new(),
-                    reason: Some("embedding_response_rejected".into()),
+                    reason: Some(reason.into()),
                 },
             )
         })
     }
     /// Historical authorization authenticates immutable identity and already
     /// committed accounting. It confers no fresh send or membership authority.
-    fn historical_embedding_receipt(
+    fn historical_remote_receipt(
         &self,
         loaded: &Loaded,
         key: &Blake3Hash,
@@ -327,7 +343,18 @@ impl JobLedger {
             .tasks
             .get(key)
             .ok_or_else(|| WikiError::invalid("unknown historical task"))?;
-        if task.spec.capability != Some(Capability::Embed)
+        let relations = task.spec.stage == TaskStage::PrepareSourceRelations
+            && task.spec.capability == Some(Capability::Generate);
+        if relations {
+            let count = match disposition {
+                OutputDisposition::Validated => 2,
+                OutputDisposition::Rejected => 0,
+                _ => return Ok(false),
+            };
+            if outputs.len() != count || !cache_outputs.is_empty() {
+                return Ok(false);
+            }
+        } else if task.spec.capability != Some(Capability::Embed)
             || task.spec.stage != TaskStage::Embed
             || !outputs.is_empty()
             || !task.outputs.is_empty()
@@ -335,27 +362,32 @@ impl JobLedger {
             return Ok(false);
         }
         self.bind_global_inputs(&loaded.state.inspection)?;
-        let bytes = read(&self.fs, &task.spec.input.path)?.ok_or_else(|| {
-            fail(
-                ErrorCode::FreshnessConflict,
-                "historical embedding descriptor missing",
-            )
-        })?;
-        if bytes.len() as u64 != task.spec.input.byte_len
-            || Blake3Hash::digest(&bytes) != task.spec.input.hash
-        {
-            return Err(fail(
-                ErrorCode::FreshnessConflict,
-                "historical embedding descriptor changed",
-            ));
-        }
-        let descriptor: crate::providers::types::RemoteInput = json(&bytes)?;
-        if !matches!(
-            descriptor.operation,
-            crate::providers::types::RemoteOperation::Embed { .. }
-        ) || crate::graph::packet::canonical_json(&descriptor)? != bytes
-        {
-            return Err(events::corrupt("historical embedding descriptor differs"));
+        // Relation descriptors survive in authenticated canonical raw output;
+        // already committed completion needs neither a current Source nor cache.
+        // Embedding compatibility retains its existing descriptor check.
+        if !relations {
+            let bytes = read(&self.fs, &task.spec.input.path)?.ok_or_else(|| {
+                fail(
+                    ErrorCode::FreshnessConflict,
+                    "historical embedding descriptor missing",
+                )
+            })?;
+            if bytes.len() as u64 != task.spec.input.byte_len
+                || Blake3Hash::digest(&bytes) != task.spec.input.hash
+            {
+                return Err(fail(
+                    ErrorCode::FreshnessConflict,
+                    "historical embedding descriptor changed",
+                ));
+            }
+            let descriptor: crate::providers::types::RemoteInput = json(&bytes)?;
+            if !matches!(
+                descriptor.operation,
+                crate::providers::types::RemoteOperation::Embed { .. }
+            ) || crate::graph::packet::canonical_json(&descriptor)? != bytes
+            {
+                return Err(events::corrupt("historical embedding descriptor differs"));
+            }
         }
         let owned = loaded
             .state
@@ -378,11 +410,12 @@ impl JobLedger {
             .into_iter()
             .filter(|a| a.billing != BillingDisposition::ReleasedNotSent)
         {
-            if paid.bound.capability != Capability::Embed
+            if Some(paid.bound.capability) != task.spec.capability
                 || paid.bound.input_hash != task.spec.input_hash
-                || !paid.outputs.is_empty()
+                || (!relations && !paid.outputs.is_empty())
+                || (relations && !paid.cache_outputs.is_empty())
             {
-                return Err(events::corrupt("historical embedding attempt differs"));
+                return Err(events::corrupt("historical remote attempt differs"));
             }
             let reference = paid
                 .receipt
@@ -391,12 +424,26 @@ impl JobLedger {
             let receipt = checkpoint::receipt(&self.fs, reference)?;
             // Temporary response metadata may have been legitimately pruned.
             // Immutable receipt authority remains in the complete journal.
-            let committed = loaded.frames.iter().any(|frame| matches!(
-                &frame.event.payload,
-                EventPayload::OutputsCommitted { attempt, receipt: recorded, outputs, cache_outputs, .. }
-                    if attempt == &paid.attempt && recorded == reference
-                        && outputs == &paid.outputs && cache_outputs == &paid.cache_outputs
-            ));
+            let committed_change =
+                loaded
+                    .frames
+                    .iter()
+                    .find_map(|frame| match &frame.event.payload {
+                        EventPayload::OutputsCommitted {
+                            attempt,
+                            receipt: recorded,
+                            outputs,
+                            cache_outputs,
+                            change,
+                        } if attempt == &paid.attempt
+                            && recorded == reference
+                            && outputs == &paid.outputs
+                            && cache_outputs == &paid.cache_outputs =>
+                        {
+                            Some(change)
+                        }
+                        _ => None,
+                    });
             let settled = loaded.frames.iter().any(|frame| {
                 matches!(
                     &frame.event.payload,
@@ -412,7 +459,7 @@ impl JobLedger {
                         if attempt == &paid.attempt
                 )
             });
-            if !committed
+            if committed_change.is_none()
                 || !settled
                 || !terminal
                 || reference.record.vault_id != self.vault_id
@@ -432,9 +479,19 @@ impl JobLedger {
                 || receipt.outputs != paid.outputs
                 || receipt.cache_outputs != paid.cache_outputs
             {
-                return Err(events::corrupt(
-                    "historical embedding receipt binding differs",
-                ));
+                return Err(events::corrupt("historical remote receipt binding differs"));
+            }
+            if relations {
+                // Retained journal identity alone is insufficient after disk
+                // tampering: all outputs and receipt must still prove the same
+                // actual committed Change. This grants no fresh send/currentness.
+                let mut retained = paid.outputs.clone();
+                retained.push(reference.clone());
+                checkpoint::committed(
+                    &self.fs,
+                    committed_change.expect("checked above"),
+                    &retained,
+                )?;
             }
             if loaded
                 .state
@@ -965,14 +1022,14 @@ impl JobLedger {
                 false
             } else {
                 match task.state {
-                    TaskState::Completed => self.historical_embedding_receipt(
+                    TaskState::Completed => self.historical_remote_receipt(
                         loaded,
                         &task.spec.key,
                         OutputDisposition::Validated,
                         &task.outputs,
                         &task.cache_outputs,
                     )?,
-                    TaskState::Failed => self.historical_embedding_receipt(
+                    TaskState::Failed => self.historical_remote_receipt(
                         loaded,
                         &task.spec.key,
                         OutputDisposition::Rejected,
@@ -1754,7 +1811,7 @@ impl JobLedgerApi for JobLedger {
         self.with(false, |g, l| self.ack_checkpoint(g, l, change))
     }
 }
-pub(super) fn initial_inspection(spec: &RunSpec) -> Result<LedgerInspection> {
+pub(crate) fn initial_inspection(spec: &RunSpec) -> Result<LedgerInspection> {
     let path = checkpoint::run_path(&spec.run_id)?;
     let placeholder = reference(
         &spec.vault_id,

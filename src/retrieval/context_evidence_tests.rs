@@ -122,6 +122,7 @@ impl Fixture {
             unit_score: Some(cosine),
             unit_origin: Some((origin, cosine)),
             fallback: Some(self.passage(core)),
+            relation: None,
             unit_clipped: core != origin,
         }
     }

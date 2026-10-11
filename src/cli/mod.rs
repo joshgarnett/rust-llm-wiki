@@ -20,3 +20,5 @@ pub mod storage;
 
 #[cfg(test)]
 mod maintenance_workflow_tests;
+
+pub mod source_relations;

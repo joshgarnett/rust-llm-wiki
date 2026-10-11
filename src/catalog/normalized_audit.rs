@@ -300,7 +300,21 @@ pub(crate) fn validate_schema(copy: &Connection) -> Result<()> {
         .map_err(sql::sql_error)?;
     // Older version-3 catalogs may lack this optional derived capability.
     // Admit its entire exact schema, never arbitrary extra or partial objects.
-    if (actual != base && actual != schema_rows(&expected)?) || sql::version(copy)? != 3 {
+    let units = schema_rows(&expected)?;
+    expected
+        .execute_batch(super::source_relations::SCHEMA)
+        .map_err(sql::sql_error)?;
+    let both = schema_rows(&expected)?;
+    let relations = Connection::open_in_memory().map_err(sql::sql_error)?;
+    relations
+        .execute_batch(normalized_schema::SCHEMA)
+        .map_err(sql::sql_error)?;
+    relations
+        .execute_batch(super::source_relations::SCHEMA)
+        .map_err(sql::sql_error)?;
+    if (actual != base && actual != units && actual != both && actual != schema_rows(&relations)?)
+        || sql::version(copy)? != 3
+    {
         return Err(corrupt(
             "normalized schema differs from the exact catalog schema",
         ));

@@ -325,7 +325,28 @@ impl CatalogDelta {
         if let Some(facts) = &self.facts {
             facts.validate(self, &mut count)?;
         }
-        counted(self, MAX_DELTA_BYTES)?;
+        let mut bytes = counted(self, MAX_DELTA_BYTES)?;
+        // Derived hint rows share the existing delta row/byte ceilings. Their
+        // compact metadata is additional storage, not free document projection.
+        for mutation in &self.documents {
+            if let DocumentMutation::Put { row } | DocumentMutation::MovePage { row, .. } = mutation
+            {
+                let prepared = super::source_relations::prepare_document(row)?;
+                for &charge in prepared.storage_charges() {
+                    count = count
+                        .checked_add(1)
+                        .filter(|n| *n <= MAX_ROWS)
+                        .ok_or_else(|| budget("relation projection exceeds delta row ceiling"))?;
+                    if charge > MAX_ROW_BYTES {
+                        return Err(budget("relation projection row exceeds byte ceiling"));
+                    }
+                    bytes = bytes
+                        .checked_add(charge)
+                        .filter(|n| *n <= MAX_DELTA_BYTES)
+                        .ok_or_else(|| budget("relation projection exceeds delta byte ceiling"))?;
+                }
+            }
+        }
         Ok(())
     }
 
@@ -833,12 +854,21 @@ fn delete_page(c: &Connection, path: &VaultRelativePath, stats: &mut DeltaStats)
         [id.as_str()],
     )
     .map_err(sql::sql_error)?;
+    super::source_relations::charge_retired_document(c, path, stats)?;
+    super::source_relations::delete_document(c, path)?;
     c.execute("DELETE FROM documents WHERE path=?1", [path.as_str()])
         .map_err(sql::sql_error)?;
     Ok(())
 }
 
 fn put_document(c: &Connection, row: &DocumentRow, stats: &mut DeltaStats) -> Result<()> {
+    let relations = super::source_relations::prepare_document(row)?;
+    // validate() admitted the exact deterministic new projection; old rows are
+    // separately charged before replacing either the document or its hints.
+    super::source_relations::charge_retired_document(c, &row.path, stats)?;
+    if relations.storage_bytes() > 0 {
+        super::source_relations::ensure_for_publication(c)?;
+    }
     let mut s=c.prepare("SELECT doc_row,title,aliases_text,headings,tags_text,body,length(CAST(title AS BLOB)),length(CAST(aliases_text AS BLOB)),length(CAST(headings AS BLOB)),length(CAST(tags_text AS BLOB)),length(CAST(body AS BLOB)),record_id IS ?2 AND kind IS ?3 AND source_id IS ?4 AND owner_revision IS ?5 FROM documents WHERE path=?1").map_err(sql::sql_error)?;
     let mut rows = s
         .query(params![
@@ -869,6 +899,7 @@ fn put_document(c: &Connection, row: &DocumentRow, stats: &mut DeltaStats) -> Re
     c.execute("INSERT INTO documents(doc_row,path,record_id,kind,file_hash,title,aliases_json,aliases_text,headings,tags_json,tags_text,body,raw_text,source_id,owner_revision,eligibility,reasons_json) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17) ON CONFLICT(path) DO UPDATE SET record_id=excluded.record_id,kind=excluded.kind,file_hash=excluded.file_hash,title=excluded.title,aliases_json=excluded.aliases_json,aliases_text=excluded.aliases_text,headings=excluded.headings,tags_json=excluded.tags_json,tags_text=excluded.tags_text,body=excluded.body,raw_text=excluded.raw_text,source_id=excluded.source_id,owner_revision=excluded.owner_revision,eligibility=excluded.eligibility,reasons_json=excluded.reasons_json",params![rowid,row.path.as_str(),row.record_id.as_ref().map(RecordId::as_str),row.kind.map(RecordKind::as_str),row.hash.as_str(),row.title,sql::json(&row.aliases)?,aliases,row.headings,sql::json(&row.tags)?,tags,row.body,row.raw_text,row.source_id.as_ref().map(RecordId::as_str),row.owner_revision.as_ref().map(RecordId::as_str),eligibility(row.eligibility),sql::json(&row.reasons)?]).map_err(sql::sql_error)?;
     let id = rowid.unwrap_or_else(|| c.last_insert_rowid());
     c.execute("INSERT INTO documents_fts(rowid,title,aliases,headings,tags,body) VALUES(?1,?2,?3,?4,?5,?6)",params![id,row.title,aliases,row.headings,tags,row.body]).map_err(sql::sql_error)?;
+    super::source_relations::apply_document(c, &relations)?;
     Ok(())
 }
 fn put_graph(c: &Connection, row: &GraphRow, stats: &mut DeltaStats) -> Result<()> {

@@ -54,3 +54,14 @@ pub use source_import::{
 };
 #[cfg(test)]
 mod source_import_tests;
+
+mod generation_publication;
+pub(crate) mod source_relation_inputs;
+pub(crate) mod source_relation_materialization;
+pub(crate) mod source_relation_planning;
+pub(crate) mod source_relation_preparation;
+pub(crate) mod source_relation_preparation_types;
+
+pub(crate) mod source_relation_prepare;
+#[cfg(test)]
+mod source_relation_workflow_tests;

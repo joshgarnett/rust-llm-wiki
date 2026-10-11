@@ -47,6 +47,8 @@ pub const COMMANDS: &[&str] = &[
     "evidence revalidate",
     "index sync",
     "index rebuild",
+    "relations prepare",
+    "relations run",
     "embeddings check",
     "embeddings sync",
     "search",
@@ -690,6 +692,56 @@ fn execute_inner_diagnostic_body(args: &Arguments) -> Result<Envelope> {
             }
             envelope.data = value(outcome)?;
         }
+        Command::Relations(options) => {
+            use super::source_relations::SourceRelationsCommand;
+            if args.stage {
+                return Err(usage(
+                    "relation preparation uses its own resumable Run and cannot be staged",
+                ));
+            }
+            let remote = match &options.command {
+                SourceRelationsCommand::Prepare(o) => &o.remote,
+                SourceRelationsCommand::Run(o) => &o.remote,
+            };
+            remote.limits()?;
+            let deadline = std::time::Instant::now()
+                .checked_add(Duration::from_millis(remote.deadline_ms.unwrap_or(900_000)))
+                .ok_or_else(|| usage("relation deadline exceeds clock range"))?;
+            let runtime = remote.runtime(&app, args.profile.as_deref(), Capability::Generate)?;
+            match &options.command {
+                SourceRelationsCommand::Prepare(o) => {
+                    let bytes = app.prepare_source_relation_manifest(
+                        &o.source_ids,
+                        &runtime,
+                        o.max_output_tokens,
+                        deadline,
+                    )?;
+                    let hash = Blake3Hash::digest(&bytes);
+                    let text = String::from_utf8(bytes).map_err(|_| {
+                        WikiError::new(ErrorCode::Internal, "manifest encoding differs")
+                    })?;
+                    envelope.data = json!({"manifest_json":text,"manifest_hash":hash,
+                        "sources":o.source_ids.len(),"provider_calls":0,"persisted":false});
+                    envelope.warnings.push("Save manifest_json verbatim and supply that file with the same --run identity for every resume. Preparation does not send provider requests.".into());
+                }
+                SourceRelationsCommand::Run(o) => {
+                    let bytes = o.manifest_bytes(deadline)?;
+                    let report = with_network_activity(
+                        Some(&runtime.dispatcher),
+                        app.run_source_relation_preparation(
+                            &bytes,
+                            &o.run,
+                            &runtime,
+                            deadline,
+                            o.max_tasks,
+                        ),
+                    )?;
+                    envelope.meta.network_used = runtime.dispatcher.network_used();
+                    envelope.meta.partial = report.pending > 0 || report.failed > 0;
+                    envelope.data = value(report)?;
+                }
+            }
+        }
         Command::Embeddings(options) => {
             use super::embeddings::EmbeddingCommand;
             let (settings, remote, probe, sync) = match &options.command {
@@ -1141,6 +1193,14 @@ fn execute_inner_diagnostic_body(args: &Arguments) -> Result<Envelope> {
                 &selection,
                 context.experimental_hybrid_lexical_evidence,
             )?;
+            retrieval::context::validate_source_relations(
+                &request,
+                &retrieval::ContextOptions {
+                    experimental_source_relations: context.experimental_source_relations,
+                    selection: selection.clone(),
+                    ..Default::default()
+                },
+            )?;
             if context.experimental_hybrid_lexical_evidence && context.search.lexical_fallback {
                 return Err(usage(
                     "experimental hybrid lexical evidence cannot use lexical discovery fallback",
@@ -1247,10 +1307,14 @@ fn execute_inner_diagnostic_body(args: &Arguments) -> Result<Envelope> {
                         &request,
                         &retrieval::ContextOptions {
                             selection: selection.clone(),
+                            experimental_source_relations: context.experimental_source_relations,
                             ..Default::default()
                         },
                     )?
                 };
+                if context.experimental_source_relations {
+                    envelope.meta.evidence_strategy = Some("experimental_source_relations".into());
+                }
                 if context.experimental_hybrid_lexical_evidence {
                     envelope.meta.evidence_strategy =
                         Some("experimental_hybrid_owner_lexical_evidence".into());

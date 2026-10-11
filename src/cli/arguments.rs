@@ -147,6 +147,8 @@ pub enum Command {
     Research(super::research::ResearchArguments),
     /// Inspect local vector coverage or explicitly generate embeddings.
     Embeddings(super::embeddings::EmbeddingArguments),
+    /// Explicitly prepare source relations for experimental offline selection.
+    Relations(super::source_relations::SourceRelationsArguments),
     /// Find text with literal, lexical, semantic or hybrid retrieval.
     /// Normalized search uses cached discovery by default; --verify-selected adds bounded evidence verification.
     Search(SearchCommandArguments),
@@ -744,6 +746,7 @@ impl Command {
             Self::Index {
                 command: IndexCommand::Rebuild { .. },
             } => "index rebuild",
+            Self::Relations(options) => options.command.name(),
             Self::Embeddings(options) => match options.command {
                 super::embeddings::EmbeddingCommand::Check(_) => "embeddings check",
                 super::embeddings::EmbeddingCommand::Sync(_) => "embeddings sync",

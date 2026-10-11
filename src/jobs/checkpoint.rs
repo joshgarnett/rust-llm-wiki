@@ -10,6 +10,26 @@ use crate::{
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, time::Duration};
 
+#[path = "source_relation_publication.rs"]
+mod source_relation_publication;
+
+pub(crate) fn source_relation_plan(
+    job: &JobLedger,
+    attempt: &AttemptRef,
+    deadline: std::time::Instant,
+) -> Result<SourceRelationPreparation> {
+    source_relation_publication::received_plan(job, attempt, deadline)
+}
+
+pub(crate) enum SourceRelationPreparation {
+    Fresh(MaterializationPlan),
+    Committed {
+        change: PreparedChange,
+        receipt: DurableOutputRef,
+        usage: UsageReceipt,
+    },
+}
+
 /// One internally regenerated job plan; callers cannot construct this seal.
 pub(crate) struct ValidatedJobDraft {
     draft: ChangeDraft,
@@ -45,6 +65,9 @@ pub(crate) fn validate_job_payloads(
         return Err(WikiError::invalid("not a job publication"));
     };
     operation.validate()?;
+    if draft.title == "Retain accounted response receipt" && draft.operations.len() == 3 {
+        return source_relation_publication::replay(fs, vault, operation, draft);
+    }
     if draft.origin.is_some()
         || draft.inverse_of.is_some()
         || draft.allocated_ids.get("run") != Some(run_id)
@@ -288,7 +311,10 @@ pub(crate) fn validate_job_draft(
     // with(false) authenticates the head, journal and response metadata. This
     // short read lock is released before projection and transport; it never
     // acquires writer authority while holding the run lock.
-    job.with(false, |_, loaded| {
+    job.with(false, |guard, loaded| {
+        if draft.title == "Retain accounted response receipt" && draft.operations.len() == 3 {
+            return source_relation_publication::validate_locked(job, guard, loaded, draft);
+        }
         let inspection = &loaded.state.inspection;
         let mut records = Vec::new();
         let mut checkpoint = None;
@@ -1782,6 +1808,14 @@ pub(crate) fn publish_job_draft(
     let catalog = Catalog::new(fs.clone(), job.vault_id.clone());
     let engine = ChangeEngine::new(fs.clone())?;
     if catalog.operation_state()?.is_none() {
+        // The global catalog path has the same typed Received authority gate.
+        // Canonical-looking relation envelopes alone cannot authorize writes.
+        let draft =
+            if draft.title == "Retain accounted response receipt" && draft.operations.len() == 3 {
+                validate_job_draft(job, draft)?.draft
+            } else {
+                draft
+            };
         let prepared = ledger::find_or_prepare(&engine, writer, &draft)?;
         engine.apply(writer, &prepared, &CatalogGraphValidator, &catalog)?;
         return Ok(prepared);
@@ -2026,7 +2060,7 @@ fn decode_fence<T: serde::de::DeserializeOwned>(bytes: &[u8], fence: &str) -> Re
     crate::changes::prepare::strict_json(body.as_bytes())
         .map_err(|_| events::corrupt("canonical payload invalid"))
 }
-pub(super) fn run_bytes(i: &LedgerInspection) -> Result<Vec<u8>> {
+pub(crate) fn run_bytes(i: &LedgerInspection) -> Result<Vec<u8>> {
     run_bytes_version(i, 1)
 }
 fn run_bytes_version(i: &LedgerInspection, formatter: u32) -> Result<Vec<u8>> {

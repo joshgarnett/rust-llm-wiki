@@ -3329,6 +3329,7 @@ impl OfflineApp {
         fallback: bool,
         options: &ContextOptions,
     ) -> Result<ContextResult> {
+        retrieval::context::validate_source_relations(request, options)?;
         retrieval::context::validate_experimental_evidence(
             request,
             &options.selection,

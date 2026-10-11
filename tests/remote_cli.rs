@@ -251,6 +251,436 @@ fn native_api_cli_case(invalid_response: bool, responses: bool) {
     );
 }
 
+/// Serialized public CLI mechanics with one tiny fictional Source and one
+/// unpriced loopback response. This does not establish relation entailment,
+/// distant-evidence relevance, live-provider compatibility or quality.
+#[test]
+fn native_source_relations_cli_prepares_retains_and_rebuilds_offline() {
+    use lwiki::{
+        domain::{Blake3Hash, ByteSpan, CitationRef, ReadSnapshot, RecordKind},
+        jobs::{AttemptPhase, BillingDisposition, LedgerInspection, TaskState},
+        records::parse_note,
+    };
+    fn same_rendered_across_publication(before: &Value, after: &Value) {
+        let header = |generation| {
+            format!(
+                "[context indexed_documents; discovery generation {generation}; selected document dependencies verified; global membership, identity uniqueness and completeness not verified]\n\n"
+            )
+        };
+        let mut snapshots = Vec::new();
+        let mut remaining = Vec::new();
+        for result in [before, after] {
+            let snapshot: ReadSnapshot =
+                serde_json::from_value(result["data"]["snapshot"].clone()).unwrap();
+            assert_eq!(result["meta"]["index_generation"], snapshot.generation);
+            let exact_header = header(snapshot.generation);
+            remaining.push(
+                result["data"]["text"]
+                    .as_str()
+                    .unwrap()
+                    .strip_prefix(&exact_header)
+                    .unwrap(),
+            );
+            snapshots.push(snapshot);
+        }
+        assert_ne!(snapshots[0], snapshots[1]);
+        assert_eq!(remaining[0].as_bytes(), remaining[1].as_bytes());
+        assert_eq!(before["data"]["passages"], after["data"]["passages"]);
+    }
+    fn artifact(bytes: &[u8], fence: &str) -> Value {
+        let note = parse_note(bytes);
+        assert_eq!(
+            note.canonical.as_ref().unwrap().kind(),
+            RecordKind::RunEvent
+        );
+        let prefix = format!("\n```{fence}\n");
+        let body = std::str::from_utf8(note.body()).unwrap();
+        serde_json::from_str(
+            body.strip_prefix(&prefix)
+                .unwrap()
+                .strip_suffix("\n```\n")
+                .unwrap(),
+        )
+        .unwrap()
+    }
+    let f = Fixture::new();
+    let source = &f.request.export.source_id;
+    let revision = f.request.export.revision_id.as_ref().unwrap();
+    let content_path = format!("sources/{source}/revisions/{revision}/content.md");
+    let original = std::fs::read_to_string(f.temp.path().join(&content_path)).unwrap();
+    assert_eq!(original, f.packet.windows[0].text);
+    let listener = std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let address = listener.local_addr().unwrap();
+    let config = f.temp.path().join("providers.toml");
+    let configured = std::fs::read_to_string(&config)
+        .unwrap()
+        .replace(
+            "https://gateway.example/chat",
+            &format!("http://{address}/exact-generation?retained=yes"),
+        )
+        .replace(
+            "model=\"test-model\"",
+            "allow_loopback_http=true\ntimeout_seconds=10\nmodel=\"test-model\"",
+        )
+        .replace(
+            "adapter=\"chat-completions-v1\"",
+            "adapter=\"responses-v1\"\nresponse_mode=\"json-schema\"",
+        );
+    std::fs::write(&config, configured).unwrap();
+    let invoke = |args: &[&str], offline: bool, remote: bool| {
+        let mut command =
+            std::process::Command::new(test_paths::binary(env!("CARGO_BIN_EXE_lwiki")));
+        command.args(["--wiki", f.temp.path().to_str().unwrap(), "--json"]);
+        command.env_remove("EXPLICIT_FIXTURE_TOKEN");
+        if offline {
+            command.arg("--offline");
+        }
+        if remote {
+            command.args(["--profile", "primary"]);
+        }
+        command.args(args);
+        if remote {
+            command.args([
+                "--providers-config",
+                config.to_str().unwrap(),
+                "--max-requests",
+                "1",
+                "--attempts-per-task",
+                "1",
+                "--concurrency",
+                "1",
+                "--deadline-ms",
+                "20000",
+            ]);
+            if !offline {
+                command.env("EXPLICIT_FIXTURE_TOKEN", "synthetic-cli-secret");
+            }
+        }
+        let output = command.output().unwrap();
+        let value: Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert!(
+            output.status.success(),
+            "{args:?}: {value}; {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(value.get("error").is_none_or(Value::is_null), "{value}");
+        assert!(!String::from_utf8_lossy(&output.stdout).contains("synthetic-cli-secret"));
+        assert!(!String::from_utf8_lossy(&output.stderr).contains("synthetic-cli-secret"));
+        if offline {
+            assert_eq!(value["meta"]["network_used"], false);
+        }
+        value
+    };
+    let context_args = [
+        "context",
+        "Ada",
+        "--mode",
+        "lexical",
+        "--scope",
+        "indexed-documents",
+        "--excerpt-bytes",
+        "1024",
+        "--max-bytes",
+        "12000",
+        "--max-tokens",
+        "3000",
+    ];
+    let mut experimental_args = context_args.to_vec();
+    experimental_args.push("--experimental-source-relations");
+    invoke(&["index", "rebuild", "--normalized"], true, false);
+    let baseline = invoke(&context_args, true, false);
+    let absent = invoke(&experimental_args, true, false);
+    assert_eq!(baseline["data"]["text"], absent["data"]["text"]);
+    assert_eq!(baseline["data"]["passages"], absent["data"]["passages"]);
+    let before_prepare = files(f.temp.path());
+    let planned = invoke(
+        &[
+            "relations",
+            "prepare",
+            "--source-id",
+            source.as_str(),
+            "--max-output-tokens",
+            "1024",
+        ],
+        true,
+        true,
+    );
+    assert_eq!(planned["data"]["sources"], 1);
+    assert_eq!(planned["data"]["provider_calls"], 0);
+    assert_eq!(planned["data"]["persisted"], false);
+    assert_eq!(files(f.temp.path()), before_prepare);
+    assert!(matches!(listener.accept(), Err(e) if e.kind() == std::io::ErrorKind::WouldBlock));
+    let manifest_bytes = planned["data"]["manifest_json"]
+        .as_str()
+        .unwrap()
+        .as_bytes();
+    let manifest_hash = Blake3Hash::digest(manifest_bytes);
+    assert_eq!(planned["data"]["manifest_hash"], json!(manifest_hash));
+    let manifest: Value = serde_json::from_slice(manifest_bytes).unwrap();
+    assert_eq!(manifest["entries"].as_array().unwrap().len(), 1);
+    assert_eq!(manifest["max_output_tokens"], 1024);
+    assert_eq!(manifest["entries"][0]["source"]["source_id"], json!(source));
+    assert_eq!(
+        manifest["entries"][0]["source"]["revision_id"],
+        json!(revision)
+    );
+    assert_eq!(
+        manifest["entries"][0]["source"]["content_hash"],
+        json!(Blake3Hash::digest(&original))
+    );
+    let manifest_path = f.temp.path().join("relations-manifest.json");
+    std::fs::write(&manifest_path, manifest_bytes).unwrap();
+    assert_eq!(std::fs::read(&manifest_path).unwrap(), manifest_bytes);
+    let response_text = serde_json::to_string(&json!({
+        "schema":"lwiki.source-relation-response.v1",
+        "nodes":[{"id":"ada","kind":"rule","scope":"Ada Tool","span_id":"span_000000"},
+            {"id":"tool","kind":"condition","scope":"Ada Tool","span_id":"span_000000"}],
+        "edges":[{"from":"ada","to":"tool","kind":"qualifies","evidence_span_id":"span_000000"}]
+    }))
+    .unwrap();
+    let response = serde_json::to_vec(&json!({"object":"response","status":"completed","model":"test-model",
+        "output":[{"type":"message","role":"assistant","status":"completed","content":[{"type":"output_text","text":response_text}]}],
+        "usage":{"input_tokens":10,"output_tokens":8,"total_tokens":18,
+            "input_tokens_details":{"cached_tokens":0,"cache_write_tokens":0},"output_tokens_details":{"reasoning_tokens":0},"cost":null}})).unwrap();
+    let expected_original = original.clone();
+    let server = std::thread::spawn(move || {
+        let (mut socket, header, body) = accept_cli_json_request(&listener);
+        assert!(header.starts_with("POST /exact-generation?retained=yes HTTP/1.1"));
+        assert_eq!(body["model"], "test-model");
+        assert_eq!(body["max_output_tokens"], 1024);
+        assert_eq!(body["store"], false);
+        assert_eq!(body["input"][0]["role"], "user");
+        assert!(body.get("messages").is_none());
+        assert_eq!(body["text"]["format"]["type"], "json_schema");
+        assert!(
+            body["instructions"]
+                .as_str()
+                .unwrap()
+                .contains("unassessed navigation metadata")
+        );
+        let input: Value =
+            serde_json::from_str(body["input"][0]["content"].as_str().unwrap()).unwrap();
+        assert_eq!(input["schema"], "lwiki.source-relation-input.v1");
+        assert_eq!(
+            input["fragments"],
+            json!([{"id":"span_000000","text":expected_original}])
+        );
+        assert!(input.get("query").is_none());
+        socket
+            .set_write_timeout(Some(Duration::from_secs(10)))
+            .unwrap();
+        write!(socket, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", response.len()).unwrap();
+        socket.write_all(&response).unwrap();
+        socket.flush().unwrap();
+        (listener, body)
+    });
+    let run = "run_relation_cli";
+    let run_args = [
+        "relations",
+        "run",
+        "--file",
+        manifest_path.to_str().unwrap(),
+        "--run",
+        run,
+        "--max-tasks",
+        "1",
+    ];
+    let first = invoke(&run_args, false, true);
+    let (listener, sent) = server.join().unwrap();
+    assert_eq!(first["meta"]["network_used"], true);
+    let assert_report = |result: &Value| {
+        assert_eq!(result["data"]["run_id"], run);
+        assert_eq!(result["data"]["manifest_hash"], json!(manifest_hash));
+        for key in ["manifest_sources", "admitted_tasks", "completed"] {
+            assert_eq!(result["data"][key], 1);
+        }
+        for key in ["failed", "pending"] {
+            assert_eq!(result["data"][key], 0);
+        }
+        assert_eq!(result["data"]["dry_run"], false);
+        assert_eq!(result["meta"]["partial"], false);
+    };
+    assert_report(&first);
+    let before: LedgerInspection = serde_json::from_value(native_probe_status(&f, run)).unwrap();
+    assert_eq!(
+        before.spec.scope.scope_payload_hash.as_ref(),
+        Some(&manifest_hash)
+    );
+    assert_eq!(before.attempts.len(), 1);
+    assert_eq!(before.attempts[0].phase, AttemptPhase::Settled);
+    assert_eq!(before.attempts[0].bound.timeout_ms, 10_000);
+    assert_eq!(
+        before.attempts[0].billing,
+        BillingDisposition::UnknownReserved
+    );
+    assert_eq!(before.budget.dispatched_requests, 1);
+    assert_eq!(before.budget.outstanding.requests, 1);
+    assert_eq!(before.budget.settled.requests, 0);
+    assert_eq!(before.budget.unknown_attempts.len(), 1);
+    assert_eq!(before.effective_limits.requests, 1);
+    assert_eq!(before.effective_limits.concurrency, 1);
+    assert_eq!(before.effective_limits.attempts_per_task, 1);
+    let task = before.tasks.values().next().unwrap();
+    assert_eq!(before.tasks.len(), 1);
+    assert_eq!(task.state, TaskState::Completed);
+    assert_eq!(json!(task.spec), manifest["entries"][0]["task"]);
+    assert_eq!(task.outputs.len(), 2);
+    assert_eq!(before.attempts[0].outputs, task.outputs);
+    let mut retained = BTreeMap::new();
+    for reference in task.outputs.iter().chain(std::iter::once(
+        before.attempts[0].receipt.as_ref().unwrap(),
+    )) {
+        assert_eq!(reference.record.expected_kind, RecordKind::RunEvent);
+        assert_eq!(
+            reference.path.as_str(),
+            format!("runs/{run}/events/{}.md", reference.record.record_id)
+        );
+        let bytes = std::fs::read(f.fs.root().resolve(&reference.path).unwrap()).unwrap();
+        assert_eq!(Blake3Hash::digest(&bytes), reference.hash);
+        assert_eq!(
+            parse_note(&bytes)
+                .canonical
+                .as_ref()
+                .unwrap()
+                .string("wiki_run_id"),
+            Some(run)
+        );
+        assert!(retained.insert(reference.path.clone(), bytes).is_none());
+    }
+    assert_eq!(retained.len(), 3);
+    let raw = artifact(
+        &retained[&task.outputs[0].path],
+        "lwiki-source-relation-generation-v1",
+    );
+    let annotation = artifact(
+        &retained[&task.outputs[1].path],
+        "lwiki-source-relation-annotation-v1",
+    );
+    assert_eq!(raw["task"], manifest["entries"][0]["task"]);
+    assert_eq!(raw["response"], response_text);
+    assert_eq!(
+        raw["response_hash"],
+        json!(Blake3Hash::digest(&response_text))
+    );
+    assert_eq!(annotation["raw"], json!(task.outputs[0]));
+    assert_eq!(
+        annotation["envelope"]["source"]["raw_hash"],
+        json!(Blake3Hash::digest(&original))
+    );
+    assert_eq!(annotation["envelope"]["nodes"].as_array().unwrap().len(), 2);
+    assert_eq!(annotation["envelope"]["edges"].as_array().unwrap().len(), 1);
+    let descriptor = raw["descriptor"].as_str().unwrap();
+    assert_eq!(
+        raw["descriptor_hash"],
+        json!(Blake3Hash::digest(descriptor))
+    );
+    assert_eq!(task.spec.input_hash, Blake3Hash::digest(descriptor));
+    let input: lwiki::providers::types::RemoteInput = serde_json::from_str(descriptor).unwrap();
+    let lwiki::providers::types::RemoteOperation::Generate {
+        instructions,
+        data,
+        max_output_tokens,
+        ..
+    } = input.operation
+    else {
+        panic!("generation descriptor required")
+    };
+    assert_eq!(sent["instructions"], instructions);
+    assert_eq!(sent["input"][0]["content"], data);
+    assert_eq!(max_output_tokens, 1024);
+    let second = invoke(&run_args, true, true);
+    assert_report(&second);
+    assert_eq!(first["data"], second["data"]);
+    let disabled = invoke(&context_args, true, false);
+    same_rendered_across_publication(&baseline, &disabled);
+    std::fs::remove_file(&config).unwrap();
+    let prepared = invoke(&experimental_args, true, false);
+    assert_eq!(
+        prepared["meta"]["evidence_strategy"],
+        "experimental_source_relations"
+    );
+    assert!(
+        prepared["warnings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|v| v.as_str().unwrap().contains("unassessed"))
+    );
+    let check_originals = |result: &Value| {
+        let passages = result["data"]["passages"].as_array().unwrap();
+        assert!(!passages.is_empty());
+        assert!(passages.len() <= 4);
+        for passage in passages {
+            let span: ByteSpan = serde_json::from_value(passage["span"].clone()).unwrap();
+            assert!(span.len() <= 1024);
+            assert_eq!(passage["text"], span.slice(&original).unwrap());
+            assert_eq!(passage["locator"]["path"], content_path);
+            assert_eq!(passage["label"], "captured_source");
+            assert_eq!(passage["eligibility"], "current");
+            let citations = passage["citations"].as_array().unwrap();
+            assert!(!citations.is_empty());
+            for citation in citations {
+                let CitationRef::Source(citation) =
+                    serde_json::from_value(citation.clone()).unwrap()
+                else {
+                    panic!("exact source citation required")
+                };
+                assert_eq!(
+                    (&citation.source_id, &citation.source_revision),
+                    (source, revision)
+                );
+                assert_eq!(citation.span, span);
+                assert_eq!(
+                    citation.quote_hash,
+                    Blake3Hash::digest(span.slice(&original).unwrap())
+                );
+            }
+        }
+        let usage = &result["data"]["usage"];
+        assert_eq!(
+            usage["rendered_bytes"],
+            result["data"]["text"].as_str().unwrap().len()
+        );
+        for (field, ceiling) in [
+            ("rendered_bytes", 12000),
+            ("estimated_tokens", 3000),
+            ("verification_bytes", 67108864),
+            ("verification_files", 4096),
+            ("verification_entries", 16384),
+        ] {
+            assert!(
+                usage[field].as_u64().unwrap() <= ceiling,
+                "{field}: {usage}"
+            );
+        }
+    };
+    check_originals(&baseline);
+    check_originals(&prepared);
+    std::fs::remove_dir_all(f.temp.path().join(".wiki/cache")).unwrap();
+    assert!(!config.exists());
+    invoke(&["index", "rebuild", "--normalized"], true, false);
+    let rebuilt = invoke(&experimental_args, true, false);
+    same_rendered_across_publication(&prepared, &rebuilt);
+    check_originals(&rebuilt);
+    assert_eq!(std::fs::read(&manifest_path).unwrap(), manifest_bytes);
+    for (path, bytes) in retained {
+        assert_eq!(
+            std::fs::read(f.fs.root().resolve(&path).unwrap()).unwrap(),
+            bytes
+        );
+    }
+    let after: LedgerInspection = serde_json::from_value(native_probe_status(&f, run)).unwrap();
+    assert_eq!(after.attempts, before.attempts);
+    assert_eq!(after.tasks, before.tasks);
+    assert_eq!(after.budget, before.budget);
+    assert_eq!(after.effective_limits, before.effective_limits);
+    assert!(
+        matches!(listener.accept(), Err(e) if e.kind() == std::io::ErrorKind::WouldBlock),
+        "only one HTTP request is permitted across the lifecycle"
+    );
+}
+
 #[test]
 fn native_responses_doctor_probe_uses_default_and_service_capped_output() {
     native_generation_probe_case(true, None, false);
@@ -684,13 +1114,15 @@ fn native_generation_probe_unknown_unit_bound_refuses_before_send() {
 
 #[path = "fixtures/p17/common.rs"]
 mod embedding_fixture;
-fn accept_embedding_request(listener: &std::net::TcpListener) -> std::net::TcpStream {
+fn accept_cli_json_request(
+    listener: &std::net::TcpListener,
+) -> (std::net::TcpStream, String, Value) {
     let deadline = Instant::now() + Duration::from_secs(20);
     let mut socket = loop {
         match listener.accept() {
             Ok((socket, _)) => break socket,
             Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
-                assert!(Instant::now() < deadline, "embedding mock request timeout");
+                assert!(Instant::now() < deadline, "CLI mock request timeout");
                 std::thread::sleep(Duration::from_millis(2));
             }
             Err(error) => panic!("embedding mock accept: {error}"),
@@ -701,7 +1133,7 @@ fn accept_embedding_request(listener: &std::net::TcpListener) -> std::net::TcpSt
         .set_read_timeout(Some(Duration::from_secs(10)))
         .unwrap();
     let mut request = Vec::new();
-    let (start, length) = loop {
+    let (start, length, header) = loop {
         let mut buffer = [0; 4096];
         let count = socket.read(&mut buffer).unwrap();
         assert!(count > 0);
@@ -717,7 +1149,8 @@ fn accept_embedding_request(listener: &std::net::TcpListener) -> std::net::TcpSt
                         .then(|| value.trim().parse::<usize>().unwrap())
                 })
                 .unwrap();
-            break (end + 4, length);
+            assert!(end + 4 + length < 512 * 1024);
+            break (end + 4, length, header.to_owned());
         }
     };
     while request.len() < start + length {
@@ -727,6 +1160,10 @@ fn accept_embedding_request(listener: &std::net::TcpListener) -> std::net::TcpSt
         request.extend_from_slice(&buffer[..count]);
     }
     let body: Value = serde_json::from_slice(&request[start..start + length]).unwrap();
+    (socket, header, body)
+}
+fn accept_embedding_request(listener: &std::net::TcpListener) -> std::net::TcpStream {
+    let (socket, _, body) = accept_cli_json_request(listener);
     assert_eq!(body["model"], "test-model");
     socket
 }

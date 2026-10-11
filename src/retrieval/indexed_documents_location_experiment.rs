@@ -126,6 +126,7 @@ fn proposals(trace: &[Value]) -> Result<(Vec<Proposal>, Vec<u64>)> {
                 unit_score: row["unit_score"].as_f64(),
                 unit_origin: None,
                 fallback,
+                relation: None,
                 unit_clipped: row["unit_clipped"].as_bool().unwrap_or(false),
             },
         });
@@ -1241,6 +1242,7 @@ mod tests {
                 unit_score: Some(100.0 - i as f64),
                 unit_origin: None,
                 fallback: None,
+                relation: None,
                 unit_clipped: false,
             })
             .collect();
@@ -1317,6 +1319,7 @@ mod tests {
                     unit_score: Some(10.0 - i as f64),
                     unit_origin: None,
                     fallback: None,
+                    relation: None,
                     unit_clipped: false,
                 })
                 .collect();

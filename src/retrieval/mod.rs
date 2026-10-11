@@ -33,5 +33,11 @@ pub use types::*;
 pub mod fusion;
 pub mod render;
 pub mod segment;
+pub(crate) mod source_relation_packet;
+pub(crate) mod source_relation_selection;
+pub(crate) mod source_relation_store;
+pub(crate) mod source_relations;
 pub mod spaces;
 pub mod vectors;
+
+mod context_relation_groups;

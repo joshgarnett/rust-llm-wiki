@@ -9,6 +9,7 @@ pub(crate) mod checkpoint;
 pub mod diagnostics;
 pub mod events;
 mod ledger;
+pub(crate) use ledger::initial_inspection;
 mod replay;
 pub mod tasks;
 #[cfg(test)]

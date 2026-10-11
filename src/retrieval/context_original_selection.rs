@@ -545,6 +545,7 @@ pub(super) fn context(
                 unit_score: Some(score),
                 unit_origin: None,
                 fallback: None,
+                relation: None,
                 unit_clipped: false,
             });
         }

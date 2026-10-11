@@ -210,7 +210,7 @@ pub fn completed_task_summary(mut keys: Vec<Blake3Hash>) -> Result<CompletedTask
     })
 }
 
-fn bounded_json(value: &impl serde::Serialize, max: usize) -> Result<Vec<u8>> {
+pub(crate) fn bounded_json(value: &impl serde::Serialize, max: usize) -> Result<Vec<u8>> {
     struct Limited {
         bytes: Vec<u8>,
         max: usize,

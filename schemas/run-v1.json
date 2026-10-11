@@ -604,6 +604,7 @@
       "enum": [
         "embed",
         "extract",
+        "prepare_source_relations",
         "probe"
       ]
     },

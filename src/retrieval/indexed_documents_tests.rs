@@ -689,6 +689,7 @@ fn same_packet_automatic(
                 unit_score: None,
                 unit_origin: None,
                 fallback: None,
+                relation: None,
                 unit_clipped: false,
             }
         })
@@ -1372,6 +1373,7 @@ fn coverage_trial_pack(
                 unit_score: Some(1.0 / (rank + 1) as f64),
                 unit_origin: None,
                 fallback: None,
+                relation: None,
                 unit_clipped: false,
             }
         })

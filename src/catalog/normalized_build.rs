@@ -251,6 +251,9 @@ impl<'a> NormalizedBuilder<'a> {
                 connection
                     .execute_batch(super::unit_inventory::SCHEMA)
                     .map_err(build_sql_error)?;
+                connection
+                    .execute_batch(super::source_relations::SCHEMA)
+                    .map_err(build_sql_error)?;
                 let selection = &identity.selection;
                 connection.execute("INSERT INTO catalog_meta(singleton,schema_version,vault_id,file_id,creation_epoch,creation_header_hash,epoch,state,origin_change_id,origin_manifest_hash,vector_cache_lost,vector_loss_unknown) VALUES(1,3,?1,?2,?3,?4,?3,'building',?5,?6,?7,?8)", params![
             selection.vault_id.as_str(), selection.file_id, sql::integer(selection.creation_epoch)?, selection.creation_header_hash.as_str(),
@@ -403,7 +406,35 @@ impl<'a> NormalizedBuilder<'a> {
                     tags_text_size,
                     row.body.len() as u64,
                 ])?;
-                self.admit(checked_sum(&[ordinary, fts])?)?;
+                let relations = super::source_relations::prepare_document(row)?;
+                let extra_rows = relations.storage_charges().len() as u64;
+                let group_rows = extra_rows
+                    .checked_add(1)
+                    .ok_or_else(|| budget("relation projection row overflow"))?;
+                if group_rows > self.limits.max_batch_rows
+                    || self
+                        .total_rows
+                        .checked_add(group_rows)
+                        .is_none_or(|n| n > self.limits.max_rows)
+                {
+                    return Err(budget("relation projection exceeds build row allowance"));
+                }
+                if self
+                    .batch_rows
+                    .checked_add(group_rows)
+                    .is_none_or(|n| n > self.limits.max_batch_rows)
+                {
+                    self.flush()?;
+                }
+                // Reserve the logical document and all hints in one batch;
+                // a flush between reservations must not lose its byte charge.
+                self.admit(checked_sum(&[
+                    ordinary,
+                    fts,
+                    relations.storage_bytes() as u64,
+                ])?)?;
+                self.total_rows += extra_rows;
+                self.batch_rows += extra_rows;
                 let aliases_json = sql::json(&row.aliases)?;
                 let tags_json = sql::json(&row.tags)?;
                 let reasons_json = sql::json(&row.reasons)?;
@@ -419,6 +450,7 @@ impl<'a> NormalizedBuilder<'a> {
                 self.connection().execute("INSERT INTO documents_fts(rowid,title,aliases,headings,tags,body) VALUES(?1,?2,?3,?4,?5,?6)",
             params![rowid,row.title,aliases_text,row.headings,tags_text,row.body]).map_err(build_sql_error)?;
                 self.step(BuildCheckpoint::AfterFtsRow)?;
+                super::source_relations::apply_document(self.connection(), &relations)?;
                 self.stats.documents += 1;
                 Ok(())
             },

@@ -74,6 +74,37 @@ fn omission_aggregation_preserves_exact_keys_counts_and_first_order() {
 }
 
 #[test]
+fn ordering_only_capture_preserves_full_lineage_opt_in() {
+    let full_capture = || {
+        with_candidate_ordering_trace(|| {
+            record_candidate_ordering_trace("candidate_pool", || serde_json::json!([]));
+            record_lineage_event(
+                "packing_trials",
+                || serde_json::json!({"outcome": "accepted"}),
+            );
+        })
+        .1
+    };
+    let before = full_capture();
+    assert_eq!(before.len(), 2);
+    assert_eq!(before[1]["stage"], "packing_trials");
+    assert_eq!(before[1]["rows"][0]["outcome"], "accepted");
+    let (_, ordering) = with_candidate_ordering_trace_only(|| {
+        record_candidate_ordering_trace("candidate_pool", || serde_json::json!([]));
+        record_lineage_event("packing_trials", || {
+            panic!("ordering-only capture must not evaluate lineage")
+        });
+    });
+    assert_eq!(ordering.len(), 1);
+    assert_eq!(ordering[0]["stage"], "candidate_pool");
+    assert_eq!(
+        full_capture(),
+        before,
+        "full capture must remain unchanged after ordering-only scope"
+    );
+}
+
+#[test]
 fn complementary_lexical_priority_survives_host_packet_card_cap() {
     // Five real owners each produce the bounded 32-proposal pool. Forty short
     // early paragraphs create many overlapping windows; one distant rare term
@@ -114,14 +145,14 @@ fn complementary_lexical_priority_survives_host_packet_card_cap() {
     request.budget.max_tokens = 1500;
     request.verification_budget.max_elapsed_ms = 30_000;
     let query = "orderneedle complementneedle";
-    let (automatic_before, automatic_trace) = with_candidate_ordering_trace(|| {
+    let (automatic_before, automatic_trace) = with_candidate_ordering_trace_only(|| {
         verification::context(&catalog, Some(&writer), query, &request).unwrap()
     });
     let prepare = ContextOptions {
         selection: SelectionAction::Prepare,
         ..Default::default()
     };
-    let (prepared, trace) = with_candidate_ordering_trace(|| {
+    let (prepared, trace) = with_candidate_ordering_trace_only(|| {
         verification::context_with_options(&catalog, Some(&writer), query, &request, &prepare)
             .unwrap()
     });

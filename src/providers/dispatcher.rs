@@ -152,58 +152,9 @@ impl Dispatcher {
             .ok_or_else(|| {
                 WikiError::new(ErrorCode::RecoveryRequired, "retained metadata missing")
             })?;
-        if body.hash != spool.response.hash
-            || body.bytes.len() as u64 != spool.response.byte_len
-            || meta.hash != spool.metadata.hash
-            || meta.bytes.len() as u64 != spool.metadata.byte_len
-        {
-            return Err(RetainedDecodeFailure::Recovery(WikiError::new(
-                ErrorCode::RecoveryRequired,
-                "retained response bytes differ",
-            )));
-        }
-        let metadata: ResponseMetadata = crate::changes::prepare::strict_json(&meta.bytes)?;
-        let status = metadata.status_code.ok_or_else(|| {
-            WikiError::new(
-                ErrorCode::ProviderResponse,
-                "retained response is incomplete",
-            )
-        })?;
-        if !metadata.terminal_response {
-            return Err(RetainedDecodeFailure::Recovery(WikiError::new(
-                ErrorCode::RecoveryRequired,
-                "retained response is incomplete",
-            )));
-        }
-        if !(200..300).contains(&status) || metadata.failure_code.is_some() {
-            return Err(RetainedDecodeFailure::InvalidResponse(
-                super::diagnostics::error(
-                    ErrorCode::ProviderResponse,
-                    metadata
-                        .failure_code
-                        .as_deref()
-                        .filter(|r| super::diagnostics::allowed(r))
-                        .unwrap_or("provider_output_invalid"),
-                ),
-            ));
-        }
-        let reply = TransportReply {
-            status,
-            headers: Vec::new(),
-            observed_body_bytes: body.bytes.len() as u64,
-            body: body.bytes,
-            body_exceeded: false,
-            headers_exceeded: false,
-            terminal: true,
-        };
-        if observe(&prepared, &reply).contract_violation.is_some() {
-            return Err(RetainedDecodeFailure::InvalidResponse(WikiError::new(
-                ErrorCode::ProviderResponse,
-                "retained response violates sealed contract",
-            )));
-        }
-        decode(&prepared, &reply).map_err(RetainedDecodeFailure::InvalidResponse)
+        decode_authenticated_spool(&prepared, spool, body, meta)
     }
+
     /// Resume a generation response without authentication, DNS, HTTP or a new
     /// attempt. Rejected spools remain paid; caller materializes their receipt.
     pub fn recover_response(
@@ -782,6 +733,7 @@ impl Dispatcher {
                     &vault_id,
                     &attempt,
                     out.materialization.as_ref().unwrap(),
+                    task.stage == TaskStage::PrepareSourceRelations,
                     options.lock_timeout_ms,
                     &mut retained_change,
                 ) {
@@ -1041,9 +993,23 @@ fn commit_receipt(
     vault_id: &RecordId,
     attempt: &AttemptRef,
     plan: &MaterializationPlan,
+    source_relation: bool,
     timeout: u64,
     retained_change: &mut Option<crate::changes::PreparedChange>,
 ) -> Result<()> {
+    if source_relation {
+        // The ordinary wire-invalid/HTTP rejection path must use the same
+        // named, recoverable zero-output publication as retained recovery.
+        return jobs::checkpoint::settle_receipt(
+            fs,
+            ledger,
+            MaterializationPlan {
+                attempt: plan.attempt.clone(),
+                receipt: plan.receipt.clone(),
+                draft: plan.draft.clone(),
+            },
+        );
+    }
     let op = plan
         .draft
         .operations
@@ -1554,4 +1520,99 @@ mod diagnostic_redaction_tests {
         );
         assert!(!format!("{safe:?}").contains("secret-marker"));
     }
+}
+
+/// Decode an already locked and authenticated attempt without acquiring the Run
+/// lock again or consulting a live service. Publication callers retain the lock
+/// and supply exact bounded spool reads; source freshness is their separate proof.
+pub(crate) fn decode_retained_locked(
+    fs: &VaultFs,
+    task: &TaskSpec,
+    recorded: &AttemptInspection,
+    body: crate::vault::BeforeImage,
+    meta: crate::vault::BeforeImage,
+) -> std::result::Result<ValidatedOutput, RetainedDecodeFailure> {
+    if recorded.bound.codec.is_none()
+        || recorded.attempt.task_key != task.key
+        || body.bytes.len() as u64 > recorded.bound.response_bytes
+        || meta.bytes.len() > METADATA_MAX_BYTES
+    {
+        return Err(WikiError::new(
+            ErrorCode::RecoveryRequired,
+            "locked response lacks a sealed bounded decoding contract",
+        )
+        .into());
+    }
+    let spool = recorded
+        .spool
+        .as_ref()
+        .ok_or_else(|| WikiError::new(ErrorCode::RecoveryRequired, "retained response missing"))?;
+    let prepared = super::history::restore(fs, task, &recorded.bound, DispatchPurpose::Task)?;
+    if prepared.bound != recorded.bound || spool.attempt != recorded.attempt {
+        return Err(WikiError::new(
+            ErrorCode::FreshnessConflict,
+            "locked retained wire contract differs",
+        )
+        .into());
+    }
+    decode_authenticated_spool(&prepared, spool, body, meta)
+}
+
+fn decode_authenticated_spool(
+    prepared: &PreparedWire,
+    spool: &SpoolRef,
+    body: crate::vault::BeforeImage,
+    meta: crate::vault::BeforeImage,
+) -> std::result::Result<ValidatedOutput, RetainedDecodeFailure> {
+    if body.hash != spool.response.hash
+        || body.bytes.len() as u64 != spool.response.byte_len
+        || meta.hash != spool.metadata.hash
+        || meta.bytes.len() as u64 != spool.metadata.byte_len
+    {
+        return Err(RetainedDecodeFailure::Recovery(WikiError::new(
+            ErrorCode::RecoveryRequired,
+            "retained response bytes differ",
+        )));
+    }
+    let metadata: ResponseMetadata = crate::changes::prepare::strict_json(&meta.bytes)?;
+    let status = metadata.status_code.ok_or_else(|| {
+        WikiError::new(
+            ErrorCode::ProviderResponse,
+            "retained response is incomplete",
+        )
+    })?;
+    if !metadata.terminal_response {
+        return Err(RetainedDecodeFailure::Recovery(WikiError::new(
+            ErrorCode::RecoveryRequired,
+            "retained response is incomplete",
+        )));
+    }
+    if !(200..300).contains(&status) || metadata.failure_code.is_some() {
+        return Err(RetainedDecodeFailure::InvalidResponse(
+            super::diagnostics::error(
+                ErrorCode::ProviderResponse,
+                metadata
+                    .failure_code
+                    .as_deref()
+                    .filter(|r| super::diagnostics::allowed(r))
+                    .unwrap_or("provider_output_invalid"),
+            ),
+        ));
+    }
+    let reply = TransportReply {
+        status,
+        headers: Vec::new(),
+        observed_body_bytes: body.bytes.len() as u64,
+        body: body.bytes,
+        body_exceeded: false,
+        headers_exceeded: false,
+        terminal: true,
+    };
+    if observe(prepared, &reply).contract_violation.is_some() {
+        return Err(RetainedDecodeFailure::InvalidResponse(WikiError::new(
+            ErrorCode::ProviderResponse,
+            "retained response violates sealed contract",
+        )));
+    }
+    decode(prepared, &reply).map_err(RetainedDecodeFailure::InvalidResponse)
 }

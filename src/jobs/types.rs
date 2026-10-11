@@ -192,6 +192,7 @@ pub enum TaskState {
 pub enum TaskStage {
     Embed,
     Extract,
+    PrepareSourceRelations,
     Probe,
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

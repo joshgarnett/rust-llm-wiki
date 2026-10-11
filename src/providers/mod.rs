@@ -13,6 +13,7 @@ pub mod types;
 mod diagnostics;
 mod embedding_wire;
 mod generation_schema;
+pub(crate) mod generation_task;
 mod generation_wire;
 pub mod wire;
 mod wire_json;

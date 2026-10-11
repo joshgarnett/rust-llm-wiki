@@ -695,3 +695,6 @@ fn authenticate_inner(
 #[cfg(test)]
 #[path = "selected_documents_tests.rs"]
 mod tests;
+
+#[path = "selected_relation_annotations.rs"]
+pub(crate) mod relation_annotations;

@@ -94,6 +94,15 @@ impl Meter {
     pub(super) fn limit_file_bytes(&mut self, limits: &BTreeMap<VaultRelativePath, usize>) {
         self.file_byte_limits = limits.clone();
     }
+    /// Tighten additional optional-artifact caps without relaxing existing limits.
+    pub(super) fn extend_file_byte_limits(&mut self, limits: &BTreeMap<VaultRelativePath, usize>) {
+        for (path, limit) in limits {
+            self.file_byte_limits
+                .entry(path.clone())
+                .and_modify(|old| *old = (*old).min(*limit))
+                .or_insert(*limit);
+        }
+    }
     pub(super) fn preflight_file_length(
         &mut self,
         catalog: &Catalog,
@@ -364,6 +373,7 @@ pub fn context_with_options(
     request: &ContextRequest,
     options: &ContextOptions,
 ) -> Result<ContextResult> {
+    context::validate_source_relations(request, options)?;
     if options.experimental_hybrid_lexical_evidence {
         return Err(WikiError::new(
             ErrorCode::Usage,
@@ -468,6 +478,7 @@ where
 {
     // The caller's held-writer acquisition is outside this function. The deadline
     // starts before validation, reader opens, operational guards and maintenance.
+    context::validate_source_relations(request, options)?;
     if options.experimental_hybrid_lexical_evidence {
         return Err(WikiError::new(
             ErrorCode::Usage,

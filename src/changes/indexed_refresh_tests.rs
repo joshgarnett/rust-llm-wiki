@@ -1922,3 +1922,178 @@ fn specified_deployed_v2_full_receipt_public_pending_apply_and_repeat() {
         );
     }
 }
+
+#[test]
+fn three_event_job_shape_preserves_run_checkpoint_and_identity_boundaries() {
+    use crate::domain::RecordKind;
+    let run = id("run_shape");
+    let event = |name: &str| IndexedJobTarget {
+        path: path(&format!("runs/{run}/events/{name}.md")),
+        id: id(name),
+        kind: RecordKind::RunEvent,
+    };
+    let events = vec![event("event_a"), event("event_b"), event("event_c")];
+    let shape = |records, checkpoint| IndexedWriteOperation::JobBatch {
+        run_id: run.clone(),
+        records,
+        checkpoint,
+    };
+    // Structural validity alone grants no write or replay authority.
+    assert!(shape(events.clone(), None).validate().is_ok());
+    assert!(shape(vec![event("event_a")], None).validate().is_ok());
+    let mut four = events.clone();
+    four.push(event("event_d"));
+    assert!(shape(four, None).validate().is_err());
+    let run_record = IndexedJobTarget {
+        path: path(&format!("runs/{run}/run.md")),
+        id: run.clone(),
+        kind: RecordKind::Run,
+    };
+    let mut mixed = vec![event("event_a"), event("event_b"), run_record.clone()];
+    mixed.sort_by(|a, b| a.path.cmp(&b.path));
+    assert!(shape(mixed, None).validate().is_err());
+    let run_hash = Blake3Hash::digest(b"canonical run");
+    let checkpoint = IndexedCheckpointTarget {
+        path: path(&format!("runs/{run}/checkpoints/{}.json", run_hash.hex())),
+        hash: Blake3Hash::digest(b"checkpoint"),
+        run_hash,
+    };
+    assert!(
+        shape(events.clone(), Some(checkpoint.clone()))
+            .validate()
+            .is_err()
+    );
+    let mut ordinary = vec![event("event_a"), run_record];
+    ordinary.sort_by(|a, b| a.path.cmp(&b.path));
+    assert!(shape(ordinary, Some(checkpoint)).validate().is_ok());
+    let mut duplicate = events.clone();
+    duplicate[1] = duplicate[0].clone();
+    assert!(shape(duplicate, None).validate().is_err());
+    let mut unsorted = events.clone();
+    unsorted.swap(0, 1);
+    assert!(shape(unsorted, None).validate().is_err());
+    let mut foreign = events;
+    foreign[0].path = path("runs/foreign/events/event_a.md");
+    foreign.sort_by(|a, b| a.path.cmp(&b.path));
+    assert!(shape(foreign, None).validate().is_err());
+}
+
+#[test]
+fn three_event_proof_requires_exact_receipt_dependencies_at_every_path_position() {
+    // Structural proof checks only. Typed publication tests independently verify
+    // payload authority and reconstruct real path-sorted retained manifests.
+    let (_temp, _engine, _writer, change, original_proof) = fixture();
+    let run = id("run_ordering");
+    let records: Vec<_> = ["event_a", "event_b", "event_c"]
+        .into_iter()
+        .map(|name| IndexedJobTarget {
+            path: path(&format!("runs/{run}/events/{name}.md")),
+            id: id(name),
+            kind: crate::domain::RecordKind::RunEvent,
+        })
+        .collect();
+    for receipt in 0..3 {
+        let mut manifest = change.manifest.clone();
+        manifest.title = "Retain accounted response receipt".into();
+        manifest.allocated_ids = BTreeMap::from([
+            ("run".into(), run.clone()),
+            ("receipt".into(), records[receipt].id.clone()),
+        ]);
+        manifest.read_preconditions.clear();
+        manifest.operations = records
+            .iter()
+            .map(|record| {
+                let mut op = change.manifest.operations[0].clone();
+                op.target = record.path.clone();
+                op.before = ExpectedState::Absent;
+                op.before_payload = None;
+                op.apply_after.clear();
+                op
+            })
+            .collect();
+        let leaves: Vec<_> = (0..3).filter(|index| *index != receipt).collect();
+        manifest.operations[receipt].apply_after = leaves.clone();
+        let mut proof = original_proof.clone();
+        proof.version = 3;
+        proof.source_id = None;
+        proof.operation = Some(IndexedWriteOperation::JobBatch {
+            run_id: run.clone(),
+            records: records.clone(),
+            checkpoint: None,
+        });
+        proof.before = manifest
+            .operations
+            .iter()
+            .map(|op| ReadDependency {
+                path: op.target.clone(),
+                expected: op.before.clone(),
+            })
+            .collect();
+        proof.after = manifest
+            .operations
+            .iter()
+            .map(|op| ReadDependency {
+                path: op.target.clone(),
+                expected: op.after.clone(),
+            })
+            .collect();
+        proof.validate_manifest(&manifest).unwrap();
+        let mut reversed = manifest.clone();
+        reversed.operations[receipt].apply_after.reverse();
+        proof.validate_manifest(&reversed).unwrap();
+        for bad_edges in [
+            vec![],
+            vec![leaves[0]],
+            vec![leaves[0], leaves[0]],
+            vec![receipt, leaves[0]],
+            vec![leaves[0], 3],
+            vec![leaves[0], leaves[1], receipt],
+        ] {
+            let mut invalid = manifest.clone();
+            invalid.operations[receipt].apply_after = bad_edges;
+            assert!(proof.validate_manifest(&invalid).is_err());
+        }
+        for leaf in &leaves {
+            let mut invalid = manifest.clone();
+            invalid.operations[*leaf].apply_after = vec![receipt];
+            assert!(proof.validate_manifest(&invalid).is_err());
+        }
+        for variant in 0..5 {
+            let mut invalid = manifest.clone();
+            match variant {
+                0 => invalid.title = "arbitrary job".into(),
+                1 => {
+                    invalid.allocated_ids.remove("receipt");
+                }
+                2 => {
+                    invalid
+                        .allocated_ids
+                        .insert("receipt".into(), id("event_absent"));
+                }
+                3 => {
+                    invalid.allocated_ids.insert("run".into(), id("run_other"));
+                }
+                _ => {
+                    invalid
+                        .allocated_ids
+                        .insert("extra".into(), id("event_extra"));
+                }
+            }
+            assert!(proof.validate_manifest(&invalid).is_err());
+        }
+        // The pre-existing ordinary one-event branch still forbids ordering.
+        let mut ordinary = manifest.clone();
+        ordinary.operations = vec![manifest.operations[receipt].clone()];
+        let mut ordinary_proof = proof.clone();
+        ordinary_proof.operation = Some(IndexedWriteOperation::JobBatch {
+            run_id: run.clone(),
+            records: vec![records[receipt].clone()],
+            checkpoint: None,
+        });
+        ordinary_proof.before = vec![proof.before[receipt].clone()];
+        ordinary_proof.after = vec![proof.after[receipt].clone()];
+        assert!(ordinary_proof.validate_manifest(&ordinary).is_err());
+        ordinary.operations[0].apply_after.clear();
+        ordinary_proof.validate_manifest(&ordinary).unwrap();
+    }
+}

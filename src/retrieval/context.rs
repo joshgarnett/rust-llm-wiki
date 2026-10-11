@@ -135,6 +135,27 @@ pub fn validate_experimental_evidence(
     Ok(())
 }
 
+pub(crate) fn validate_source_relations(
+    request: &ContextRequest,
+    options: &ContextOptions,
+) -> Result<()> {
+    if options.experimental_source_relations
+        && (request.scope != ContextScope::IndexedDocuments
+            || request.target != ContextTarget::Documents
+            || request.documents.mode != SearchMode::Lexical
+            || request.documents.filters.include_historical
+            || request.graph.is_some()
+            || options.experimental_hybrid_lexical_evidence
+            || !matches!(options.selection, SelectionAction::Automatic))
+    {
+        return Err(WikiError::new(
+            ErrorCode::Usage,
+            "experimental source relations require automatic current lexical indexed-documents context",
+        ));
+    }
+    Ok(())
+}
+
 fn normalize_request(request: &ContextRequest) -> Result<ContextRequest> {
     if request.scope == ContextScope::IndexedDocuments
         && (request.target != ContextTarget::Documents
@@ -228,7 +249,7 @@ fn normalize_request(request: &ContextRequest) -> Result<ContextRequest> {
 }
 // One fallible lookup per admitted owner, reused by every selected window.
 pub(super) struct DocumentOwner {
-    document: DocumentRow,
+    pub(super) document: DocumentRow,
     canonical: Option<RecordRow>,
     pub(super) allowed: bool,
 }
@@ -500,6 +521,14 @@ fn matches_filters(
                     })
             }))
 }
+#[derive(Clone, Debug)]
+pub(super) struct RelationGroup {
+    pub covered_terms: Vec<usize>,
+    pub local_relevance: u64,
+    /// Exact union of the original source spans, never a fabricated window.
+    pub original_bytes: u64,
+}
+
 pub(super) struct Packet {
     pub(super) passages: Vec<ContextPassage>,
     pub(super) bundle: Option<EvidenceBundle>,
@@ -514,6 +543,7 @@ pub(super) struct Packet {
     /// Exact representative before child focusing and parent deduplication.
     pub(super) unit_origin: Option<(ByteSpan, f64)>,
     pub(super) fallback: Option<ContextPassage>,
+    pub(super) relation: Option<RelationGroup>,
     pub(super) unit_clipped: bool,
 }
 
@@ -542,11 +572,31 @@ std::thread_local! {
     static CANDIDATE_ORDERING_TRACE: std::cell::RefCell<Option<Vec<serde_json::Value>>> = const {
         std::cell::RefCell::new(None)
     };
+    static RECORD_LINEAGE_EVENTS: std::cell::Cell<bool> = const {
+        std::cell::Cell::new(false)
+    };
 }
 
 #[cfg(test)]
 pub(crate) fn with_candidate_ordering_trace<T>(
     run: impl FnOnce() -> T,
+) -> (T, Vec<serde_json::Value>) {
+    with_candidate_ordering_trace_mode(run, true)
+}
+
+// Ordering fixtures need candidate/card identities, not the independent full
+// allocation observer. Existing diagnostic consumers retain full capture.
+#[cfg(test)]
+pub(crate) fn with_candidate_ordering_trace_only<T>(
+    run: impl FnOnce() -> T,
+) -> (T, Vec<serde_json::Value>) {
+    with_candidate_ordering_trace_mode(run, false)
+}
+
+#[cfg(test)]
+fn with_candidate_ordering_trace_mode<T>(
+    run: impl FnOnce() -> T,
+    record_lineage_events: bool,
 ) -> (T, Vec<serde_json::Value>) {
     struct ClearTrace;
     impl Drop for ClearTrace {
@@ -554,12 +604,14 @@ pub(crate) fn with_candidate_ordering_trace<T>(
             CANDIDATE_ORDERING_TRACE.with(|trace| {
                 trace.borrow_mut().take();
             });
+            RECORD_LINEAGE_EVENTS.with(|enabled| enabled.set(false));
         }
     }
     CANDIDATE_ORDERING_TRACE.with(|trace| {
         assert!(trace.borrow().is_none(), "ordering trace cannot be nested");
         *trace.borrow_mut() = Some(Vec::new());
     });
+    RECORD_LINEAGE_EVENTS.with(|enabled| enabled.set(record_lineage_events));
     let _clear = ClearTrace;
     let result = run();
     let trace = CANDIDATE_ORDERING_TRACE.with(|trace| trace.borrow_mut().take().unwrap());
@@ -606,6 +658,9 @@ fn check_lineage_bounds(trace: &[serde_json::Value]) {
 // collector owns these development-only rows; no new observer runtime exists.
 #[cfg(test)]
 pub(super) fn record_lineage_event(stage: &str, row: impl FnOnce() -> serde_json::Value) {
+    if !RECORD_LINEAGE_EVENTS.with(std::cell::Cell::get) {
+        return;
+    }
     CANDIDATE_ORDERING_TRACE.with(|trace| {
         if let Some(trace) = trace.borrow_mut().as_mut() {
             let position = trace.iter().position(|entry| entry["stage"] == stage);
@@ -1359,6 +1414,38 @@ fn assemble_inner_with_evidence(
                 ));
             }
             term_weights = selection.term_weights;
+            let groups = super::context_relation_groups::nominate_groups(
+                reader,
+                request,
+                hits,
+                &document_owners,
+                query.expect("source-aware query"),
+                signals,
+                &term_weights,
+                &mut omissions,
+            )?;
+            let relation_groups_admitted = !groups.packets.is_empty();
+            let mut retained_spans = groups.reserved_spans;
+            if relation_groups_admitted {
+                selection_warnings.push(format!(
+                    "unassessed source relation groups share the existing32 spans per owner; inspected {} nodes and {} edges with {} local validation hash bytes",
+                    groups.node_visits, groups.edge_visits, groups.validation_hash_bytes,
+                ));
+            }
+            for packet in groups.packets {
+                for passage in &packet.passages {
+                    if let Some(owner) = document_owners
+                        .iter()
+                        .position(|owner| owner.document.path == passage.locator.path)
+                    {
+                        direct
+                            .entry(bundles::owner(passage))
+                            .and_modify(|rank| *rank = (*rank).min(owner + 1))
+                            .or_insert(owner + 1);
+                    }
+                }
+                packets.push(packet);
+            }
             for omission in selection.omissions {
                 let hit = &hits.hits[omission.owner_index];
                 omissions.push(ContextOmission {
@@ -1374,6 +1461,23 @@ fn assemble_inner_with_evidence(
         ));
             for (selection_ordinal, candidate) in selection.candidates.into_iter().enumerate() {
                 let hit = &hits.hits[candidate.owner_index];
+                if relation_groups_admitted {
+                    let retained = retained_spans.entry(candidate.owner_index).or_default();
+                    let span = (candidate.span.start(), candidate.span.end());
+                    if retained.contains(&span) {
+                        continue;
+                    }
+                    if retained.len() >= 32 {
+                        omissions.push(ContextOmission {
+                            record_id: hit.locator.record.as_ref().map(|r| r.record_id.clone()),
+                            path: Some(hit.locator.path.clone()),
+                            reason: "source_relation_shared_candidate_limit".into(),
+                            count: 1,
+                        });
+                        continue;
+                    }
+                    retained.insert(span);
+                }
                 let excerpt = SearchExcerpt {
                     text: String::new(),
                     span: candidate.span,
@@ -1409,6 +1513,7 @@ fn assemble_inner_with_evidence(
                         unit_score: None,
                         unit_origin: None,
                         fallback: None,
+                        relation: None,
                         unit_clipped: false,
                     });
                 }
@@ -1507,6 +1612,7 @@ fn assemble_inner_with_evidence(
                         unit_score: Some(candidate.score),
                         unit_origin: Some((candidate.origin_span, candidate.origin_cosine)),
                         fallback,
+                        relation: None,
                         unit_clipped: candidate.clipped,
                     });
                 }
@@ -1536,6 +1642,7 @@ fn assemble_inner_with_evidence(
                         unit_score: None,
                         unit_origin: None,
                         fallback: None,
+                        relation: None,
                         unit_clipped: false,
                     })
                 } else {
@@ -1622,6 +1729,7 @@ fn assemble_inner_with_evidence(
                     unit_score: None,
                     unit_origin: None,
                     fallback: None,
+                    relation: None,
                     unit_clipped: false,
                 })
             } else {
@@ -1669,6 +1777,7 @@ fn assemble_inner_with_evidence(
                     unit_score: None,
                     unit_origin: None,
                     fallback: None,
+                    relation: None,
                     unit_clipped: false,
                 });
             }
@@ -1785,6 +1894,18 @@ pub(super) fn packet_utility(
 ) -> f64 {
     if let Some(score) = packet.unit_score {
         return score;
+    }
+    if let Some(group) = &packet.relation {
+        let novel = group
+            .covered_terms
+            .iter()
+            .filter(|&&t| !covered_terms[t])
+            .map(|&t| term_weights[t])
+            .sum::<u64>() as f64
+            / total_weight;
+        let local = group.local_relevance as f64 / total_weight;
+        let density = group.original_bytes as f64 / rendered_cost.max(1) as f64;
+        return packet.score * (0.25 + 2.0 * novel + 0.5 * local) * density;
     }
     let Some(candidate) = &packet.selection else {
         return packet.score;
@@ -2055,7 +2176,7 @@ pub(super) fn pack(
     let total_weight = term_weights.iter().copied().sum::<u64>().max(1) as f64;
     let rendered_costs = packets
         .iter()
-        .filter(|packet| packet.selection.is_some())
+        .filter(|packet| packet.selection.is_some() || packet.relation.is_some())
         .map(|packet| -> Result<_> {
             let (rendered, _) = render(reader, request.scope, &packet.passages, &[], &[])?;
             Ok((packet.key.clone(), rendered.len().max(1)))
@@ -2101,7 +2222,7 @@ pub(super) fn pack(
         let mut packet = packets.remove(best);
         #[cfg(test)]
         let lineage_identity = packet_lineage_identity(&packet);
-        if (packet.selection.is_some() || packet.unit_score.is_some())
+        if (packet.selection.is_some() || packet.unit_score.is_some() || packet.relation.is_some())
             && packet.passages.iter().all(|p| {
                 passages.iter().any(|old| {
                     old.locator.path == p.locator.path
@@ -2151,7 +2272,9 @@ pub(super) fn pack(
             && packet.navigation.is_none()
             && bundles.is_empty()
             && navigation.is_empty()
-            && (packet.selection.is_some() || packet.unit_score.is_some())
+            && (packet.selection.is_some()
+                || packet.unit_score.is_some()
+                || packet.relation.is_some())
         {
             let trial = document_trial(reader, request, &passages, &packet.passages)?;
             let bytes = trial.text.len();
@@ -2232,7 +2355,9 @@ pub(super) fn pack(
             } else {
                 2
             };
-            let reason = if (packet.selection.is_some() || packet.unit_score.is_some())
+            let reason = if (packet.selection.is_some()
+                || packet.unit_score.is_some()
+                || packet.relation.is_some())
                 && next.iter().any(|p| {
                     p.contributors.is_empty()
                         && p.text.len() > request.documents.limits.excerpt_bytes
@@ -2303,6 +2428,7 @@ pub(super) fn pack(
                     unit_score: packet.unit_score,
                     unit_origin: packet.unit_origin,
                     fallback: None,
+                    relation: None,
                     unit_clipped: true,
                 });
                 continue;
@@ -2314,8 +2440,19 @@ pub(super) fn pack(
                         .as_ref()
                         .and_then(|n| n.to.record.as_ref().map(|r| r.record_id.clone()))
                 }),
-                path: packet.navigation.as_ref().map(|n| n.to.path.clone()),
-                reason: if packet.navigation.is_some() {
+                path: packet
+                    .navigation
+                    .as_ref()
+                    .map(|n| n.to.path.clone())
+                    .or_else(|| {
+                        packet
+                            .relation
+                            .as_ref()
+                            .and_then(|_| packet.passages.first().map(|p| p.locator.path.clone()))
+                    }),
+                reason: if packet.relation.is_some() {
+                    format!("source_relation_group_{reason}")
+                } else if packet.navigation.is_some() {
                     format!("navigation_{reason}")
                 } else {
                     reason.into()
@@ -2330,6 +2467,11 @@ pub(super) fn pack(
             }
             if candidate.clipped {
                 selection_warnings.push("a bounded source window was selected instead of a complete structural block; inspect its cited source for omitted text".into());
+            }
+        }
+        if let Some(group) = &packet.relation {
+            for &term in &group.covered_terms {
+                covered_terms[term] = true;
             }
         }
         if packet.unit_clipped {

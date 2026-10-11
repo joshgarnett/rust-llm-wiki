@@ -1060,6 +1060,209 @@ Options:
 
 ```
 
+## relations prepare
+
+```text
+Plan complete current Sources without sending requests or creating jobs
+
+Usage: lwiki relations prepare [OPTIONS] --source-id <SOURCE_IDS>
+
+Options:
+      --providers-config <PROVIDERS_CONFIG>
+          Private TOML configuration; never discover provider files inside a vault
+
+      --wiki <WIKI>
+          Wiki root containing WIKI.md; defaults to discovery from the current directory
+
+      --format <FORMAT>
+          Output format: human-readable text, a JSON envelope or JSON Lines events
+
+          [possible values: human, json, jsonl]
+
+      --max-requests <MAX_REQUESTS>
+          Lifetime request-attempt ceiling, including retries
+
+      --concurrency <CONCURRENCY>
+          Maximum simultaneous provider requests
+
+      --json
+          Emit one structured JSON envelope
+
+      --attempts-per-task <ATTEMPTS_PER_TASK>
+          Maximum attempts for an individual provider task
+
+      --jsonl
+          Emit JSON Lines events for supported streaming commands
+
+      --deadline-ms <DEADLINE_MS>
+          Overall remote operation deadline in milliseconds from startup
+
+      --offline
+          Prevent provider requests and credential helper calls; local operations remain available
+
+      --dry-run
+          Preview without writes, provider requests or credential resolution
+
+      --max-request-bytes <MAX_REQUEST_BYTES>
+          Lifetime ceiling on outgoing request bytes
+
+      --max-response-bytes <MAX_RESPONSE_BYTES>
+          Lifetime ceiling on incoming response bytes
+
+      --stage
+          Retain a guarded preparation for a later explicit changes apply
+
+      --max-input-units <MAX_INPUT_UNITS>
+          Lifetime ceiling for each input and cached-input billable class
+
+      --preferences <PREFERENCES>
+          Explicit trusted local JSON preferences; never read ambient credentials
+
+      --max-output-units <MAX_OUTPUT_UNITS>
+          Lifetime ceiling for each output and reasoning billable class
+
+      --profile <PROFILE>
+          Trusted provider profile name from the private provider configuration
+
+      --lock-timeout-ms <LOCK_TIMEOUT_MS>
+          Maximum writer-lock wait in milliseconds (default: 5000; preferences may override)
+
+      --max-cost <MAX_COST>
+          Checked decimal ceiling; requires a complete provable provider bound
+
+      --currency <CURRENCY>
+          Currency code used with --max-cost
+
+          [default: USD]
+
+      --requests-per-minute <REQUESTS_PER_MINUTE>
+          Maximum provider requests dispatched per minute
+
+      --tokens-per-minute <TOKENS_PER_MINUTE>
+          Maximum accounted provider tokens per minute
+
+      --retry-uncertain
+          Opt into retrying uncertain work under retained accounting; prior attempts may be billed
+
+      --retain-http-error-body
+          Retain a bounded private HTTP error-body diagnostic for explicit inspection
+
+      --source-id <SOURCE_IDS>
+          Complete current Source ID to prepare; repeat up to4096 times
+
+      --max-output-tokens <MAX_OUTPUT_TOKENS>
+          Maximum generated output tokens for each prepared Source task
+
+          [default: 4096]
+
+  -h, --help
+          Print help
+
+```
+
+## relations run
+
+```text
+Execute or resume the same Run using the exact prepared manifest bytes
+
+Usage: lwiki relations run [OPTIONS] --file <FILE> --run <RUN>
+
+Options:
+      --providers-config <PROVIDERS_CONFIG>
+          Private TOML configuration; never discover provider files inside a vault
+
+      --wiki <WIKI>
+          Wiki root containing WIKI.md; defaults to discovery from the current directory
+
+      --format <FORMAT>
+          Output format: human-readable text, a JSON envelope or JSON Lines events
+
+          [possible values: human, json, jsonl]
+
+      --max-requests <MAX_REQUESTS>
+          Lifetime request-attempt ceiling, including retries
+
+      --concurrency <CONCURRENCY>
+          Maximum simultaneous provider requests
+
+      --json
+          Emit one structured JSON envelope
+
+      --attempts-per-task <ATTEMPTS_PER_TASK>
+          Maximum attempts for an individual provider task
+
+      --jsonl
+          Emit JSON Lines events for supported streaming commands
+
+      --deadline-ms <DEADLINE_MS>
+          Overall remote operation deadline in milliseconds from startup
+
+      --offline
+          Prevent provider requests and credential helper calls; local operations remain available
+
+      --dry-run
+          Preview without writes, provider requests or credential resolution
+
+      --max-request-bytes <MAX_REQUEST_BYTES>
+          Lifetime ceiling on outgoing request bytes
+
+      --max-response-bytes <MAX_RESPONSE_BYTES>
+          Lifetime ceiling on incoming response bytes
+
+      --stage
+          Retain a guarded preparation for a later explicit changes apply
+
+      --max-input-units <MAX_INPUT_UNITS>
+          Lifetime ceiling for each input and cached-input billable class
+
+      --preferences <PREFERENCES>
+          Explicit trusted local JSON preferences; never read ambient credentials
+
+      --max-output-units <MAX_OUTPUT_UNITS>
+          Lifetime ceiling for each output and reasoning billable class
+
+      --profile <PROFILE>
+          Trusted provider profile name from the private provider configuration
+
+      --lock-timeout-ms <LOCK_TIMEOUT_MS>
+          Maximum writer-lock wait in milliseconds (default: 5000; preferences may override)
+
+      --max-cost <MAX_COST>
+          Checked decimal ceiling; requires a complete provable provider bound
+
+      --currency <CURRENCY>
+          Currency code used with --max-cost
+
+          [default: USD]
+
+      --requests-per-minute <REQUESTS_PER_MINUTE>
+          Maximum provider requests dispatched per minute
+
+      --tokens-per-minute <TOKENS_PER_MINUTE>
+          Maximum accounted provider tokens per minute
+
+      --retry-uncertain
+          Opt into retrying uncertain work under retained accounting; prior attempts may be billed
+
+      --retain-http-error-body
+          Retain a bounded private HTTP error-body diagnostic for explicit inspection
+
+      --file <FILE>
+          Exact manifest JSON file, or - for standard input
+
+      --run <RUN>
+          Explicit Run identity; repeat this identity and exact manifest to resume
+
+      --max-tasks <MAX_TASKS>
+          Maximum Source tasks processed in this invocation
+
+          [default: 16]
+
+  -h, --help
+          Print help
+
+```
+
 ## embeddings check
 
 ```text
