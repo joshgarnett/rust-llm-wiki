@@ -156,6 +156,8 @@ fn priority(
                     total,
                     pool[i].cost,
                     0.0,
+                    // Preserve this frozen diagnostic's original priority.
+                    false,
                 ),
                 pool[i].packet.key.clone(),
             )

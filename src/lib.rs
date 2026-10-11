@@ -9,6 +9,7 @@ pub mod config;
 pub mod domain;
 pub mod graph;
 pub mod jobs;
+mod markdown_text;
 pub mod output;
 pub mod providers;
 pub mod records;

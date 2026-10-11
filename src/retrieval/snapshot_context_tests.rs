@@ -114,7 +114,8 @@ fn complementary_lexical_priority_survives_host_packet_card_cap() {
     request.budget.max_tokens = 1500;
     request.verification_budget.max_elapsed_ms = 30_000;
     let query = "orderneedle complementneedle";
-    let (automatic_before, automatic_trace) = with_candidate_ordering_trace(|| {
+    // Keep automatic order assertions without unused quadratic trial snapshots.
+    let (automatic_before, automatic_trace) = with_candidate_ordering_only_trace(|| {
         verification::context(&catalog, Some(&writer), query, &request).unwrap()
     });
     let prepare = ContextOptions {

@@ -1,5 +1,8 @@
 //! Original-byte excerpt mapping; FTS snippets are never citation spans.
-use crate::domain::{ErrorCode, Result, WikiError};
+use crate::{
+    domain::{ErrorCode, Result, WikiError},
+    markdown_text::HtmlScanner,
+};
 use pulldown_cmark::{Event, Parser, TagEnd};
 use rusqlite::{Connection, ffi};
 use std::{ffi::c_void, ops::Range, ptr};
@@ -223,9 +226,13 @@ impl SourceMap {
             text: String::new(),
             segments: vec![],
         };
+        let mut html = HtmlScanner::default();
         for (event, range) in Parser::new(&raw[body_offset..]).into_offset_iter() {
             match event {
                 Event::Text(value) | Event::Code(value) => {
+                    if html.suppressing_text() {
+                        continue;
+                    }
                     let original = range.start + body_offset..range.end + body_offset;
                     let exact = raw.get(original.clone()) == Some(value.as_ref());
                     let original = if exact {
@@ -246,6 +253,20 @@ impl SourceMap {
                         original,
                         exact,
                     });
+                }
+                Event::Html(_) | Event::InlineHtml(_) => {
+                    map.text.push('\n');
+                    let range = range.start + body_offset..range.end + body_offset;
+                    for original in html.scan(raw, range).spans {
+                        let start = map.text.len();
+                        map.text.push_str(&raw[original.clone()]);
+                        map.segments.push(Segment {
+                            normalized: start..map.text.len(),
+                            original,
+                            exact: true,
+                        });
+                        map.text.push('\n');
+                    }
                 }
                 Event::SoftBreak
                 | Event::HardBreak
@@ -284,5 +305,23 @@ impl SourceMap {
             last.original.end
         };
         Some(start..end)
+    }
+}
+
+#[cfg(test)]
+mod readable_html_tests {
+    use super::*;
+
+    #[test]
+    fn readable_html_keeps_exact_unicode_tokens_and_tag_boundaries() {
+        let raw = "# Heading\n\n前<div data-hidden='hiddenmarker > attribute'>安全<b>éclair</b>後</div>\n\n<script>hiddenmarker</script>\n";
+        let map = SourceMap::markdown(raw, 0);
+        assert!(!map.text.contains("hiddenmarker"));
+        assert!(!map.text.contains("安全éclair"));
+        for value in ["安全", "éclair", "後"] {
+            let start = map.text.find(value).unwrap();
+            let span = map.original_span(start..start + value.len()).unwrap();
+            assert_eq!(&raw[span], value);
+        }
     }
 }

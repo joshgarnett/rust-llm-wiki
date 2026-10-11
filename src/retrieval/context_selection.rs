@@ -7,9 +7,10 @@ use super::{
 use crate::{
     catalog::{DocumentRow, query_types::QueryCatalog},
     domain::*,
+    markdown_text::{HtmlScanner, HtmlUnitKind},
     records::parse_note,
 };
-use pulldown_cmark::{Event, Parser, Tag};
+use pulldown_cmark::{Event, Parser, Tag, TagEnd};
 use std::{
     collections::{BTreeMap, BTreeSet},
     ops::Range,
@@ -42,7 +43,14 @@ pub(crate) struct SelectionOmission {
     pub owner_index: usize,
     pub reason: &'static str,
 }
+/// An all-or-none set of exact original units from one bounded source scope.
+#[derive(Clone, Debug)]
+pub(crate) struct SelectionGroup {
+    pub representative: SelectionCandidate,
+    pub members: Vec<ByteSpan>,
+}
 pub(crate) struct SelectionResult {
+    pub groups: Vec<SelectionGroup>,
     pub candidates: Vec<SelectionCandidate>,
     pub term_weights: Vec<u64>,
     pub omissions: Vec<SelectionOmission>,
@@ -62,17 +70,23 @@ enum BlockKind {
     Prose,
     Code,
     List,
+    Html,
+    HtmlCore,
     Other,
 }
+#[derive(Clone)]
 struct Block {
     range: Range<usize>,
     kind: BlockKind,
     terms: Vec<usize>,
     clipped: bool,
+    heading_level: Option<usize>,
+    nested_heading: bool,
 }
 struct OwnerBlocks<'a> {
     parent: &'a Parent<'a>,
     blocks: Vec<Block>,
+    group_blocks: Vec<Block>,
     fallback_windows: Vec<(Range<usize>, Vec<usize>)>,
 }
 
@@ -82,6 +96,27 @@ pub(crate) fn select_candidates_with_semantics(
     documents: &[SelectionDocument<'_>],
     max_excerpt_bytes: usize,
     cues: &[ContextSemanticCue],
+) -> Result<SelectionResult> {
+    select_candidates_inner(reader, query, documents, max_excerpt_bytes, cues, false)
+}
+
+/// Ordinary lexical assembly opts into bounded complete structural alternatives.
+pub(crate) fn select_candidates_with_groups(
+    reader: &dyn QueryCatalog,
+    query: &str,
+    documents: &[SelectionDocument<'_>],
+    max_excerpt_bytes: usize,
+) -> Result<SelectionResult> {
+    select_candidates_inner(reader, query, documents, max_excerpt_bytes, &[], true)
+}
+
+fn select_candidates_inner(
+    reader: &dyn QueryCatalog,
+    query: &str,
+    documents: &[SelectionDocument<'_>],
+    max_excerpt_bytes: usize,
+    cues: &[ContextSemanticCue],
+    construct_groups: bool,
 ) -> Result<SelectionResult> {
     if cues.len() > MAX_SEMANTIC_CUES {
         return Err(WikiError::new(
@@ -110,7 +145,13 @@ pub(crate) fn select_candidates_with_semantics(
         })
         .collect::<Result<Vec<_>>>()?;
     let tokenizer = Tokenizer::new(reader.connection())?;
-    select(&tokenizer, query, &parents, max_excerpt_bytes)
+    select(
+        &tokenizer,
+        query,
+        &parents,
+        max_excerpt_bytes,
+        construct_groups,
+    )
 }
 
 fn note_body_start(raw: &str) -> usize {
@@ -398,20 +439,103 @@ fn structural_blocks(
     start: usize,
     end: usize,
     limit: usize,
-) -> (Vec<Block>, bool, usize) {
+    bytes: usize,
+) -> (Vec<Block>, Vec<Block>, bool, usize) {
     let mut spans = BTreeMap::<(usize, usize), BlockKind>::new();
+    let mut heading_levels = BTreeMap::new();
+    let mut html_units = BTreeMap::new();
     let mut limited = false;
     let mut scanned = 0;
+    let mut html = HtmlScanner::default();
+    let mut html_block = None::<Range<usize>>;
+    let mut opaque_html = false;
+    let mut group_structure_limited = false;
     for (event, range) in Parser::new(&raw[start..end]).into_offset_iter() {
+        let range = range.start + start..range.end + start;
+        match &event {
+            Event::Html(_) | Event::InlineHtml(_) => {
+                let extracted = html.scan(raw, range.clone());
+                group_structure_limited |= extracted.units_truncated;
+                for unit in extracted.units {
+                    if !unit.scope_complete {
+                        group_structure_limited = true;
+                        opaque_html = true;
+                        continue;
+                    }
+                    if html_units.len() == limit {
+                        group_structure_limited = true;
+                        break;
+                    }
+                    let (kind, level) = match unit.kind {
+                        HtmlUnitKind::Paragraph => (BlockKind::Prose, None),
+                        HtmlUnitKind::Preformatted => (BlockKind::Code, None),
+                        HtmlUnitKind::Heading(level) => (BlockKind::Heading, Some(level as usize)),
+                    };
+                    if let Some(level) = level {
+                        heading_levels.insert((unit.range.start, unit.range.end), level);
+                    }
+                    html_units.insert((unit.range.start, unit.range.end), kind);
+                }
+                for pair in extracted.definition_pairs {
+                    if html_units.len() < limit {
+                        html_units.insert((pair.start, pair.end), BlockKind::HtmlCore);
+                    } else {
+                        group_structure_limited = true;
+                    }
+                    if html_block.as_ref().is_some_and(|block| {
+                        block.len() > bytes && block.start <= pair.start && pair.end <= block.end
+                    }) && pair.len() <= bytes
+                    {
+                        if scanned == limit {
+                            limited = true;
+                            break;
+                        }
+                        scanned += 1;
+                        spans.insert((pair.start, pair.end), BlockKind::HtmlCore);
+                    }
+                }
+                if limited {
+                    break;
+                }
+                continue;
+            }
+            Event::End(TagEnd::HtmlBlock) => {
+                if (opaque_html || html.has_open_heading())
+                    && let Some(block) = &html_block
+                {
+                    group_structure_limited = true;
+                    let removed = html_units
+                        .keys()
+                        .filter(|&&(start, end)| block.start <= start && end <= block.end)
+                        .copied()
+                        .collect::<Vec<_>>();
+                    for key in removed {
+                        html_units.remove(&key);
+                        heading_levels.remove(&key);
+                    }
+                }
+                html_block = None;
+                opaque_html = false;
+                continue;
+            }
+            _ => {}
+        }
         let kind = match event {
-            Event::Start(Tag::Heading { .. }) => BlockKind::Heading,
+            Event::Start(Tag::Heading { level, .. }) => {
+                heading_levels.insert((range.start, range.end), level as usize);
+                BlockKind::Heading
+            }
             Event::Start(Tag::Paragraph) => BlockKind::Prose,
             Event::Start(Tag::CodeBlock(_)) => BlockKind::Code,
             Event::Start(Tag::List(_)) => BlockKind::List,
             Event::Start(Tag::Item) => BlockKind::Other,
+            Event::Start(Tag::HtmlBlock) => {
+                html_block = Some(range.clone());
+                opaque_html = false;
+                BlockKind::Html
+            }
             _ => continue,
         };
-        let range = range.start + start..range.end + start;
         if range.is_empty() {
             continue;
         }
@@ -431,9 +555,10 @@ fn structural_blocks(
     });
     for ((begin, finish), kind) in spans {
         // A list/item already contains its nested paragraphs and commands.
-        if blocks
-            .last()
-            .is_some_and(|previous| previous.range.end >= finish)
+        if kind != BlockKind::HtmlCore
+            && blocks
+                .last()
+                .is_some_and(|previous| previous.range.end >= finish)
         {
             continue;
         }
@@ -441,7 +566,11 @@ fn structural_blocks(
             range: begin..finish,
             kind,
             terms: vec![],
-            clipped: finish == end && end < raw.len(),
+            clipped: kind != BlockKind::HtmlCore && finish == end && end < raw.len(),
+            heading_level: heading_levels.get(&(begin, finish)).copied(),
+            nested_heading: heading_levels
+                .range((begin, 0)..(finish, 0))
+                .any(|(&(start, end), _)| start != begin || end != finish),
         });
     }
     if blocks.is_empty() && start < end && limit > 0 {
@@ -450,9 +579,71 @@ fn structural_blocks(
             kind: BlockKind::Prose,
             terms: vec![],
             clipped: end < raw.len(),
+            heading_level: None,
+            nested_heading: false,
         });
     }
-    (blocks, limited, scanned)
+    if opaque_html || html.has_open_heading() {
+        group_structure_limited = true;
+        if let Some(block) = &html_block {
+            let removed = html_units
+                .keys()
+                .filter(|&&(start, finish)| block.start <= start && finish <= block.end)
+                .copied()
+                .collect::<Vec<_>>();
+            for key in removed {
+                html_units.remove(&key);
+                heading_levels.remove(&key);
+            }
+        }
+    }
+    let mut group_blocks = blocks
+        .iter()
+        .filter(|block| {
+            block.kind != BlockKind::Html
+                && (block.kind != BlockKind::HtmlCore
+                    || html_units.contains_key(&(block.range.start, block.range.end)))
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    if html_units.len() > limit.saturating_sub(scanned) {
+        group_structure_limited = true;
+    }
+    for ((begin, finish), kind) in html_units.into_iter().take(limit.saturating_sub(scanned)) {
+        group_blocks.push(Block {
+            range: begin..finish,
+            kind,
+            terms: vec![],
+            clipped: false,
+            heading_level: heading_levels.get(&(begin, finish)).copied(),
+            nested_heading: heading_levels
+                .range((begin, 0)..(finish, 0))
+                .any(|(&(start, end), _)| start != begin || end != finish),
+        });
+    }
+    group_blocks.sort_by(|a, b| {
+        a.range
+            .start
+            .cmp(&b.range.start)
+            .then(b.range.end.cmp(&a.range.end))
+    });
+    let mut complete = Vec::<Block>::new();
+    for block in group_blocks {
+        if block.kind != BlockKind::Heading
+            && complete.last().is_some_and(|parent| {
+                !parent.nested_heading
+                    && parent.range.start <= block.range.start
+                    && parent.range.end >= block.range.end
+            })
+        {
+            continue;
+        }
+        complete.push(block);
+    }
+    if group_structure_limited {
+        complete.clear();
+    }
+    (blocks, complete, limited, scanned)
 }
 
 // Keep a short explanatory paragraph with its following command or list.
@@ -469,6 +660,8 @@ fn teaching_blocks(mut blocks: Vec<Block>, bytes: usize) -> Vec<Block> {
                 kind: BlockKind::Other,
                 terms: vec![],
                 clipped: false,
+                heading_level: None,
+                nested_heading: false,
             },
         );
         let follows_teaching = block.kind == BlockKind::Prose
@@ -479,6 +672,7 @@ fn teaching_blocks(mut blocks: Vec<Block>, bytes: usize) -> Vec<Block> {
             index += 1;
             block.range.end = blocks[index].range.end;
             block.clipped |= blocks[index].clipped;
+            block.nested_heading |= blocks[index].nested_heading;
             block.kind = blocks[index].kind;
         }
         // Tiny prose fragments are usually connective context. Retain their
@@ -493,6 +687,7 @@ fn teaching_blocks(mut blocks: Vec<Block>, bytes: usize) -> Vec<Block> {
                 index += 1;
                 block.range.end = blocks[index].range.end;
                 block.clipped |= blocks[index].clipped;
+                block.nested_heading |= blocks[index].nested_heading;
                 block.kind = blocks[index].kind;
             } else if let Some(previous) = grouped.last_mut()
                 && previous.kind == BlockKind::Prose
@@ -500,6 +695,7 @@ fn teaching_blocks(mut blocks: Vec<Block>, bytes: usize) -> Vec<Block> {
             {
                 previous.range.end = block.range.end;
                 previous.clipped |= block.clipped;
+                previous.nested_heading |= block.nested_heading;
                 index += 1;
                 continue;
             }
@@ -525,6 +721,7 @@ fn teaching_blocks(mut blocks: Vec<Block>, bytes: usize) -> Vec<Block> {
                 index += 1;
                 block.range.end = blocks[index].range.end;
                 block.clipped |= blocks[index].clipped;
+                block.nested_heading |= blocks[index].nested_heading;
                 if terminal_prose {
                     break;
                 }
@@ -611,6 +808,7 @@ fn select(
     query: &str,
     parents: &[Parent<'_>],
     bytes: usize,
+    construct_groups: bool,
 ) -> Result<SelectionResult> {
     if bytes == 0 || bytes > 2048 {
         return Err(WikiError::invalid(
@@ -618,6 +816,7 @@ fn select(
         ));
     }
     let mut result = SelectionResult {
+        groups: vec![],
         candidates: vec![],
         term_weights: vec![],
         omissions: vec![],
@@ -651,8 +850,8 @@ fn select(
         let body_capacity = capacity - reserved;
         let end = boundary_before(parent.raw, parent.body.saturating_add(body_capacity));
         let remaining = MAX_BLOCKS.saturating_sub(result.scanned_blocks);
-        let (blocks, block_limit, scanned_blocks) =
-            structural_blocks(parent.raw, parent.body, end, remaining);
+        let (blocks, group_blocks, block_limit, scanned_blocks) =
+            structural_blocks(parent.raw, parent.body, end, remaining, bytes);
         result.scanned_bytes += end - parent.body;
         result.scanned_blocks += scanned_blocks;
         if end < parent.raw.len() {
@@ -668,12 +867,28 @@ fn select(
             });
         }
         let mut blocks = teaching_blocks(blocks, bytes);
+        let group_blocks = if construct_groups {
+            teaching_blocks(group_blocks, bytes)
+        } else {
+            vec![]
+        };
         for block in &mut blocks {
             block.terms = matched_terms(tokenizer, parent.raw, block.range.clone(), &terms)?;
             for &term in &block.terms {
                 frequencies[term] += 1;
             }
         }
+        #[cfg(test)]
+        super::context::record_lineage_event("source_blocks", || {
+            serde_json::json!({
+                "owner_index": parent.owner,
+                "scanned_end": end,
+                "blocks": blocks.iter().map(|block| serde_json::json!({
+                    "start": block.range.start, "end": block.range.end,
+                    "clipped": block.clipped,
+                })).collect::<Vec<_>>(),
+            })
+        });
         let mut fallback_windows = Vec::new();
         let mut owner_usage = end - parent.body;
         if parent.anchors.len() > 2 {
@@ -704,8 +919,47 @@ fn select(
         owners.push(OwnerBlocks {
             parent,
             blocks,
+            group_blocks,
             fallback_windows,
         });
+    }
+    // Reserve native parsing first so groups cannot alter discovery candidates
+    // or term frequencies. Additional original HTML/teaching units consume only
+    // the remaining global block allowance; reject a whole unknown scope rather
+    // than delete a heading and accidentally join its neighboring procedures.
+    let mut group_allowance = MAX_BLOCKS.saturating_sub(result.scanned_blocks);
+    for owner in &mut owners {
+        let additional = owner
+            .group_blocks
+            .iter()
+            .filter(|block| {
+                !owner
+                    .blocks
+                    .iter()
+                    .any(|original| original.range == block.range)
+            })
+            .count();
+        if additional > group_allowance {
+            owner.group_blocks.clear();
+            result.omissions.push(SelectionOmission {
+                owner_index: owner.parent.owner,
+                reason: "context_group_scan_block_cap",
+            });
+            continue;
+        }
+        group_allowance -= additional;
+        result.scanned_blocks += additional;
+        for block in &mut owner.group_blocks {
+            block.terms = if let Some(original) = owner
+                .blocks
+                .iter()
+                .find(|original| original.range == block.range)
+            {
+                original.terms.clone()
+            } else {
+                matched_terms(tokenizer, owner.parent.raw, block.range.clone(), &terms)?
+            };
+        }
     }
     let total_blocks: usize = owners.iter().map(|owner| owner.blocks.len()).sum();
     result.term_weights = frequencies
@@ -721,10 +975,26 @@ fn select(
         .collect();
     for owner in owners {
         let parent = owner.parent;
+        let html_cores = owner
+            .blocks
+            .iter()
+            .filter(|block| block.kind == BlockKind::HtmlCore)
+            .collect::<Vec<_>>();
         let mut proposals = BTreeMap::<(usize, usize), SelectionCandidate>::new();
         let mut propose =
             |range: Range<usize>, covered_terms: Vec<usize>, clipped: bool| -> Result<()> {
                 if range.is_empty() || range.end - range.start > bytes {
+                    return Ok(());
+                }
+                // A known complete definition pair is atomic. Query windows
+                // and discovery fallbacks must not compete with a clipped
+                // label/value fragment when the complete core is available.
+                let first = html_cores.partition_point(|core| core.range.end <= range.start);
+                if html_cores[first..]
+                    .iter()
+                    .take_while(|core| core.range.start < range.end)
+                    .any(|core| range.start > core.range.start || range.end < core.range.end)
+                {
                     return Ok(());
                 }
                 // HTML anchors and markup-only windows have exact bytes but
@@ -806,7 +1076,7 @@ fn select(
                 for anchor in anchors {
                     let range = bounded_window(parent.raw, block.range.clone(), anchor, bytes);
                     let matched = matched_terms(tokenizer, parent.raw, range.clone(), &terms)?;
-                    propose(range, matched, true)?;
+                    propose(range.clone(), matched.clone(), true)?;
                 }
                 continue;
             }
@@ -839,8 +1109,8 @@ fn select(
         }
         // Preserve semantic discovery when the query is a paraphrase, when its
         // terms are absent, or when bounded source scanning misses an anchor.
-        for (range, matched) in owner.fallback_windows {
-            propose(range, matched, true)?;
+        for (range, matched) in &owner.fallback_windows {
+            propose(range.clone(), matched.clone(), true)?;
         }
         let mut candidates = proposals
             .into_values()
@@ -850,6 +1120,15 @@ fn select(
                     || candidate.semantic_affinity.is_some()
             })
             .collect::<Vec<_>>();
+        #[cfg(test)]
+        super::context::record_lineage_event("source_candidates_generated", || {
+            serde_json::json!({
+                "owner_index": parent.owner,
+                "candidates": candidates.iter().map(|candidate| serde_json::json!({
+                    "span": candidate.span, "clipped": candidate.clipped,
+                })).collect::<Vec<_>>(),
+            })
+        });
         candidates.sort_by(|a, b| {
             semantic_strength(b).total_cmp(&semantic_strength(a)).then(
                 b.local_relevance
@@ -930,14 +1209,290 @@ fn select(
                 reason: "context_source_candidate_cap",
             });
         }
+        #[cfg(test)]
+        super::context::record_lineage_event("source_candidates_retained", || {
+            serde_json::json!({
+                "owner_index": parent.owner,
+                "spans": kept.iter().map(|candidate| candidate.span).collect::<Vec<_>>(),
+            })
+        });
+        result.groups.extend(structural_groups(
+            &owner,
+            &kept,
+            &result.term_weights,
+            bytes,
+        )?);
         result.candidates.extend(kept);
     }
     Ok(result)
 }
 
+// Groups preserve complete parsed teaching units from one exact heading ancestry.
+// They add no scan, tokenization, source rewrite or evaluator-specific scope rule.
+fn structural_groups(
+    owner: &OwnerBlocks<'_>,
+    candidates: &[SelectionCandidate],
+    weights: &[u64],
+    bytes: usize,
+) -> Result<Vec<SelectionGroup>> {
+    let blocks = &owner.group_blocks;
+    let mut ancestry = Vec::<usize>::new();
+    let mut scopes = vec![Vec::<usize>::new(); blocks.len()];
+    for (index, block) in blocks.iter().enumerate() {
+        if let Some(level) = block.heading_level {
+            while ancestry.last().is_some_and(|&previous| {
+                blocks[previous]
+                    .heading_level
+                    .is_some_and(|old| old >= level)
+            }) {
+                ancestry.pop();
+            }
+            ancestry.push(index);
+        }
+        scopes[index] = ancestry.clone();
+    }
+    // A complete unit must already occur wholly inside a retained original
+    // candidate. Oversized, clipped, unheaded or opaque HTML units remain
+    // original fallbacks; no ancestry is invented outside the bounded parse.
+    let eligible = blocks
+        .iter()
+        .enumerate()
+        .filter(|(index, block)| {
+            !scopes[*index].is_empty()
+                && !block.nested_heading
+                && !block.clipped
+                && block.range.len() <= bytes
+                && matches!(
+                    block.kind,
+                    BlockKind::Prose | BlockKind::Code | BlockKind::List | BlockKind::HtmlCore
+                )
+                && candidates.iter().any(|candidate| {
+                    candidate.span.start() <= block.range.start as u64
+                        && candidate.span.end() >= block.range.end as u64
+                })
+        })
+        .map(|(index, _)| index)
+        .collect::<Vec<_>>();
+    let mut groups = Vec::new();
+    let mut seen = BTreeSet::new();
+    let mut seen_scope = BTreeSet::<Vec<usize>>::new();
+    for seed in candidates {
+        if groups.len() == MAX_CANDIDATES {
+            continue;
+        }
+        let primary = eligible
+            .iter()
+            .copied()
+            .filter(|&index| {
+                seed.span.start() <= blocks[index].range.start as u64
+                    && seed.span.end() >= blocks[index].range.end as u64
+            })
+            .max_by(|&a, &b| {
+                let coverage = |index: usize| {
+                    blocks[index]
+                        .terms
+                        .iter()
+                        .filter(|term| seed.covered_terms.contains(term))
+                        .map(|&term| weights[term])
+                        .sum::<u64>()
+                };
+                coverage(a).cmp(&coverage(b)).then(b.cmp(&a))
+            });
+        let Some(primary) = primary else {
+            continue;
+        };
+        let scope = &scopes[primary];
+        if seen_scope.contains(scope) {
+            continue;
+        }
+        let mut member_ranges = Vec::<Range<usize>>::new();
+        let mut covered = BTreeSet::new();
+        let mut anchored = true;
+        for &heading in scope {
+            let block = &blocks[heading];
+            if block.clipped || block.nested_heading || block.range.len() > bytes {
+                anchored = false;
+                break;
+            }
+            covered.extend(block.terms.iter().copied());
+            if let Some(previous) = member_ranges.last_mut()
+                && block.range.end.saturating_sub(previous.start) <= bytes
+                && owner.parent.raw[previous.end..block.range.start]
+                    .trim()
+                    .is_empty()
+            {
+                previous.end = block.range.end;
+            } else {
+                member_ranges.push(block.range.clone());
+            }
+        }
+        if !anchored || member_ranges.len() >= 4 {
+            continue;
+        }
+        member_ranges.push(blocks[primary].range.clone());
+        covered.extend(blocks[primary].terms.iter().copied());
+        // Complementary complete units compete by newly covered query terms;
+        // ties follow the existing retained-candidate order then source order.
+        // No extra vocabulary, field weights or approval inference is used.
+        while member_ranges.len() < 4 {
+            let best = eligible
+                .iter()
+                .copied()
+                .filter(|&index| {
+                    scopes[index] == *scope
+                        && !member_ranges.iter().any(|span| {
+                            span.start < blocks[index].range.end
+                                && blocks[index].range.start < span.end
+                        })
+                })
+                .max_by(|&a, &b| {
+                    let gain = |index: usize| {
+                        blocks[index]
+                            .terms
+                            .iter()
+                            .filter(|term| !covered.contains(*term))
+                            .map(|&term| weights[term])
+                            .sum::<u64>()
+                    };
+                    let order = |index: usize| {
+                        candidates
+                            .iter()
+                            .position(|candidate| {
+                                candidate.span.start() <= blocks[index].range.start as u64
+                                    && candidate.span.end() >= blocks[index].range.end as u64
+                            })
+                            .unwrap_or(usize::MAX)
+                    };
+                    gain(a)
+                        .cmp(&gain(b))
+                        .then(order(b).cmp(&order(a)))
+                        .then(b.cmp(&a))
+                });
+            let Some(best) = best else {
+                break;
+            };
+            if blocks[best].terms.iter().all(|term| covered.contains(term)) {
+                break;
+            }
+            member_ranges.push(blocks[best].range.clone());
+            covered.extend(blocks[best].terms.iter().copied());
+        }
+        member_ranges.sort_by_key(|range| (range.start, range.end));
+        let identity = member_ranges
+            .iter()
+            .map(|range| (range.start, range.end))
+            .collect::<Vec<_>>();
+        if !seen.insert(identity) {
+            continue;
+        }
+        let members = member_ranges
+            .iter()
+            .map(|range| ByteSpan::new(range.start as u64, range.end as u64))
+            .collect::<Result<Vec<_>>>()?;
+        for span in &members {
+            span.slice(owner.parent.raw)?;
+        }
+        let mut representative = seed.clone();
+        representative.span = ByteSpan::new(
+            blocks[primary].range.start as u64,
+            blocks[primary].range.end as u64,
+        )?;
+        representative.clipped = false;
+        representative.semantic_affinity = None;
+        representative.covered_terms = covered.into_iter().collect();
+        representative.local_relevance = representative
+            .covered_terms
+            .iter()
+            .map(|&term| weights[term])
+            .sum();
+        representative.seed_overlap = members.iter().any(|span| {
+            owner
+                .parent
+                .anchors
+                .iter()
+                .any(|anchor| anchor.start() < span.end() && span.start() < anchor.end())
+        });
+        seen_scope.insert(scope.clone());
+        groups.push(SelectionGroup {
+            representative,
+            members,
+        });
+    }
+    Ok(groups)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn group_opt_in_preserves_native_candidates_and_weights() {
+        let raw = "<h2>Build guide</h2>\n<p>Choose the release profile before building.</p>\n<pre>tool --release</pre>\n<p>The executable uses optimized settings.</p>";
+        let connection = rusqlite::Connection::open_in_memory().unwrap();
+        let tokenizer = Tokenizer::new(&connection).unwrap();
+        let parents = [Parent {
+            owner: 0,
+            raw,
+            body: 0,
+            anchors: &[],
+            semantic: vec![],
+        }];
+        let original = select(
+            &tokenizer,
+            "release executable settings",
+            &parents,
+            1024,
+            false,
+        )
+        .unwrap();
+        let grouped = select(
+            &tokenizer,
+            "release executable settings",
+            &parents,
+            1024,
+            true,
+        )
+        .unwrap();
+        assert!(original.groups.is_empty());
+        assert!(!grouped.groups.is_empty());
+        assert_eq!(original.term_weights, grouped.term_weights);
+        let identity = |result: &SelectionResult| {
+            result
+                .candidates
+                .iter()
+                .map(|candidate| {
+                    (
+                        candidate.span,
+                        candidate.covered_terms.clone(),
+                        candidate.local_relevance,
+                        candidate.seed_overlap,
+                        candidate.clipped,
+                        candidate.semantic_affinity,
+                    )
+                })
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(identity(&original), identity(&grouped));
+        assert!(grouped.scanned_blocks <= MAX_BLOCKS);
+    }
+
+    #[test]
+    fn truncated_html_heading_inventory_keeps_native_fallback_without_groups() {
+        let raw = format!(
+            "<h2>First procedure</h2>{}<h2>Second procedure</h2><p>release requires the signed permit.</p>",
+            "<p>background</p>".repeat(MAX_BLOCKS)
+        );
+        let selected = selection(&raw, "release signed permit", 1024, &[]);
+        assert!(
+            !selected.candidates.is_empty(),
+            "native exact evidence remains available"
+        );
+        assert!(
+            selected.groups.is_empty(),
+            "discarding a heading cannot establish stale ancestry"
+        );
+        assert!(selected.scanned_blocks <= MAX_BLOCKS);
+    }
     fn selection(raw: &str, query: &str, bytes: usize, anchors: &[ByteSpan]) -> SelectionResult {
         let connection = rusqlite::Connection::open_in_memory().unwrap();
         let tokenizer = Tokenizer::new(&connection).unwrap();
@@ -952,9 +1507,231 @@ mod tests {
                 semantic: vec![],
             }],
             bytes,
+            true,
         )
         .unwrap()
     }
+    #[test]
+    fn groups_separate_nested_and_sibling_original_heading_scopes() {
+        let raw = "# Project
+
+## Current
+
+Quasar current owner uses the violet setting.
+
+### Limits
+
+Orbit nested limit is twelve units.
+
+## Archived
+
+Quasar archived owner uses the orange setting.
+";
+        let selected = selection(raw, "quasar orbit owner limit", 160, &[]);
+        assert!(!selected.groups.is_empty());
+        let texts = selected
+            .groups
+            .iter()
+            .map(|group| {
+                group
+                    .members
+                    .iter()
+                    .map(|span| span.slice(raw).unwrap())
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            })
+            .collect::<Vec<_>>();
+        assert!(
+            texts
+                .iter()
+                .any(|text| text.contains("Quasar current owner"))
+        );
+        assert!(texts.iter().any(|text| text.contains("Orbit nested limit")
+            && text.contains("### Limits")
+            && text.contains("## Current")));
+        for text in texts {
+            assert!(
+                !(text.contains("Quasar current owner") && text.contains("Quasar archived owner"))
+            );
+            assert!(
+                !(text.contains("Quasar current owner") && text.contains("Orbit nested limit"))
+            );
+        }
+    }
+    #[test]
+    fn groups_retain_distant_complements_and_complete_command_conditions() {
+        let raw = format!(
+            "# Execution guide\n\nQuasar runs this command:\n\n```sh\nrunner --continue\n```\n\nThe option continues between executables; it never changes failure handling inside an executable.\n\n{}Orbit uses the remaining independent batch window.\n",
+            "Unrelated background paragraph with no requested features.\n\n".repeat(30)
+        );
+        let selected = selection(
+            &raw,
+            "quasar orbit --continue executables failure",
+            256,
+            &[],
+        );
+        let group = selected
+            .groups
+            .iter()
+            .find(|group| {
+                let text = group
+                    .members
+                    .iter()
+                    .map(|span| span.slice(&raw).unwrap())
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                text.contains("runner --continue") && text.contains("Orbit uses")
+            })
+            .expect("one joint group must retain both distant units");
+        let command = group
+            .members
+            .iter()
+            .map(|span| span.slice(&raw).unwrap())
+            .find(|text| text.contains("runner --continue"))
+            .unwrap();
+        assert!(command.contains("Quasar runs"));
+        assert!(command.contains("never changes failure handling inside an executable"));
+        assert!(group.members.len() <= 4);
+        assert!(
+            group
+                .members
+                .iter()
+                .any(|span| span.slice(&raw).unwrap() == "# Execution guide\n")
+        );
+    }
+    #[test]
+    fn groups_deduplicate_overlapping_variants_with_exact_unicode_members() {
+        let raw = "# Café 🦀\n\nQuasar 中文 behavior stays exact.\n\nOrbit uses the violet window.\n\nA final unrelated explanation.\n";
+        let selected = selection(raw, "quasar orbit", 160, &[]);
+        assert!(!selected.groups.is_empty());
+        let mut identities = BTreeSet::new();
+        for group in selected.groups {
+            let identity = group
+                .members
+                .iter()
+                .map(|span| (span.start(), span.end()))
+                .collect::<Vec<_>>();
+            assert!(identities.insert(identity));
+            for pair in group.members.windows(2) {
+                assert!(pair[0].end() <= pair[1].start());
+            }
+            for span in group.members {
+                assert!(span.slice(raw).unwrap().len() <= 160);
+            }
+        }
+    }
+    #[test]
+    fn html_groups_keep_balanced_option_conditions_and_separate_sibling_headings() {
+        let raw = "# Wrapper\n\n<div>\n<h2>Current execution</h2>\n<p>Quasar runs this option:</p>\n<pre>runner --continue</pre>\n<p>It continues between executables; it never changes failure handling inside one executable.</p>\n<h2>Archived execution</h2>\n<p>Quasar used a different option in the archived procedure.</p>\n</div>\n";
+        let selected = selection(
+            raw,
+            "quasar --continue executables failure archived",
+            256,
+            &[],
+        );
+        let current = selected
+            .groups
+            .iter()
+            .find(|group| {
+                group
+                    .members
+                    .iter()
+                    .any(|span| span.slice(raw).unwrap().contains("runner --continue"))
+            })
+            .expect("balanced command and condition group");
+        let member = current
+            .members
+            .iter()
+            .map(|span| span.slice(raw).unwrap())
+            .find(|text| text.contains("runner --continue"))
+            .unwrap();
+        assert!(member.contains("<p>Quasar runs"));
+        assert!(member.contains("never changes failure handling inside one executable"));
+        assert!(current.members.iter().any(|span| {
+            span.slice(raw)
+                .unwrap()
+                .contains("<h2>Current execution</h2>")
+        }));
+        assert!(
+            !current
+                .members
+                .iter()
+                .any(|span| span.slice(raw).unwrap().contains("Archived execution"))
+        );
+        assert!(selected.groups.len() <= MAX_CANDIDATES);
+        for group in selected.groups {
+            for span in group.members {
+                assert!(span.slice(raw).unwrap().len() <= 256);
+            }
+        }
+    }
+    #[test]
+    fn unknown_html_and_beyond_prefix_units_remain_original_fallbacks() {
+        let html = "# Guide\n\n<div><p>Quasar pressure\n";
+        let selected = selection(html, "quasar pressure", 128, &[]);
+        assert!(!selected.candidates.is_empty());
+        assert!(selected.groups.is_empty());
+        let incomplete_scope =
+            "# Guide\n\n<div>\n<h2>Unclosed scope\n<p>Quasar pressure</p>\n</div>\n";
+        let unresolved = selection(incomplete_scope, "quasar pressure", 128, &[]);
+        assert!(!unresolved.candidates.is_empty());
+        assert!(unresolved.groups.is_empty());
+        let prefix = format!(
+            "# Bounded guide\n\n{}",
+            "unrelated background paragraph.\n\n".repeat(OWNER_SCAN_BYTES / 20)
+        );
+        let raw = format!("{prefix}Quasar late fact 🦀.\n");
+        let anchor = ByteSpan::new(prefix.len() as u64, raw.len() as u64).unwrap();
+        let selected = selection(&raw, "quasar", 128, &[anchor]);
+        assert!(selected.groups.is_empty());
+        assert!(selected.candidates.iter().any(|candidate| {
+            candidate
+                .span
+                .slice(&raw)
+                .unwrap()
+                .contains("Quasar late fact")
+        }));
+        assert!(selected.scanned_bytes <= OWNER_SCAN_BYTES);
+        assert!(selected.scanned_blocks <= MAX_BLOCKS);
+        assert!(
+            selected
+                .omissions
+                .iter()
+                .any(|omission| omission.reason == "context_source_scan_byte_cap")
+        );
+    }
+    #[test]
+    fn mixed_markdown_html_retains_complete_definition_core_and_unicode() {
+        let raw = format!(
+            "# Guide\n\nUnrelated introductory material.\n\n<dl>\n{}<dt>Pressure 安全 label</dt><dd>Tensor pressure uses an exact bounded setting.</dd>\n</dl>\n",
+            "<dt>Unrelated label</dt><dd>Background material without the requested terms.</dd>\n"
+                .repeat(24)
+        );
+        let selected = selection(&raw, "tensor pressure", 160, &[]);
+        assert!(selected.candidates.iter().any(|candidate| {
+            let text = candidate.span.slice(&raw).unwrap();
+            !candidate.clipped
+                && text.starts_with("<dt>Pressure 安全 label</dt>")
+                && text.contains("<dd>Tensor pressure uses an exact bounded setting.</dd>")
+        }));
+        for candidate in selected.candidates {
+            assert!(candidate.span.slice(&raw).unwrap().len() <= 160);
+        }
+        assert!(selected.scanned_bytes <= OWNER_SCAN_BYTES);
+        assert!(selected.scanned_blocks <= MAX_BLOCKS);
+    }
+
+    #[test]
+    fn html_markup_comments_and_script_terms_do_not_propose_evidence() {
+        let raw = "# Guide\n\nOrdinary visible prose.\n\n<div title='hiddenmarker > hiddenmarker'><!-- hiddenmarker --><script>hiddenmarker</script><style>hiddenmarker</style><p>安全 pressure</p></div>\n";
+        assert!(
+            selection(raw, "hiddenmarker", 256, &[])
+                .candidates
+                .is_empty()
+        );
+        assert!(!selection(raw, "pressure", 256, &[]).candidates.is_empty());
+    }
+
     #[test]
     fn finds_late_source_block_and_keeps_explanation_with_commands() {
         let raw = "# General\n\nEarly unrelated material.\n\n# Special operation\n\nIgnore expensive cases during ordinary execution.\n\n```sh\nrunner test --ignored\nrunner test --include-ignored\n```\n";
@@ -1166,6 +1943,7 @@ mod tests {
                     semantic: semantic.clone(),
                 }],
                 128,
+                false,
             )
             .unwrap()
         };
@@ -1327,6 +2105,7 @@ mod tests {
                     semantic: semantic.clone(),
                 }],
                 256,
+                false,
             )
             .unwrap()
         };
@@ -1370,6 +2149,7 @@ mod tests {
                     semantic: vec![(ByteSpan::new(0, source.len() as u64).unwrap(), 0.9)],
                 }],
                 256,
+                false,
             )
             .unwrap();
             if source == anchors {

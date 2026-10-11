@@ -29,7 +29,12 @@ pub use context_types::*;
 pub use lexical::search;
 pub use types::*;
 pub mod fusion;
+#[cfg(test)]
+mod native_evidence_group_experiment;
 pub mod render;
 pub mod segment;
 pub mod spaces;
 pub mod vectors;
+
+#[cfg(test)]
+mod structural_group_workflow_tests;

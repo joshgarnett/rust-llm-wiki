@@ -448,6 +448,33 @@ pub(super) struct Packet {
     pub(super) unit_clipped: bool,
 }
 
+// A causal diagnostic may restrict the already generated pool without changing
+// its weights or the allocator. This seam is absent from production builds.
+#[cfg(test)]
+std::thread_local! {
+    static PACKET_SCOPE_FOR_TEST: std::cell::RefCell<Option<Box<dyn Fn(&Packet, &[u64]) -> bool>>> = const { std::cell::RefCell::new(None) };
+}
+
+#[cfg(test)]
+pub(super) fn with_packet_scope_for_test<T>(
+    keep: impl Fn(&Packet, &[u64]) -> bool + 'static,
+    f: impl FnOnce() -> T,
+) -> T {
+    struct Reset;
+    impl Drop for Reset {
+        fn drop(&mut self) {
+            PACKET_SCOPE_FOR_TEST.with(|slot| *slot.borrow_mut() = None);
+        }
+    }
+    PACKET_SCOPE_FOR_TEST.with(|slot| {
+        let mut slot = slot.borrow_mut();
+        assert!(slot.is_none(), "packet scope diagnostic cannot nest");
+        *slot = Some(Box::new(keep));
+    });
+    let _reset = Reset;
+    f()
+}
+
 fn sort_packets(packets: &mut [Packet], preserve_selection_order: bool) {
     packets.sort_by(|a, b| {
         b.score
@@ -473,6 +500,36 @@ std::thread_local! {
     static CANDIDATE_ORDERING_TRACE: std::cell::RefCell<Option<Vec<serde_json::Value>>> = const {
         std::cell::RefCell::new(None)
     };
+    static ORDERING_TRACE_ONLY: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    static SOURCE_SELECTION_TRACE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+#[cfg(test)]
+pub(crate) fn with_source_selection_trace<T>(
+    run: impl FnOnce() -> T,
+) -> (T, Vec<serde_json::Value>) {
+    struct Reset;
+    impl Drop for Reset {
+        fn drop(&mut self) {
+            SOURCE_SELECTION_TRACE.with(|active| active.set(false));
+        }
+    }
+    SOURCE_SELECTION_TRACE.with(|active| assert!(!active.replace(true)));
+    let _reset = Reset;
+    with_candidate_ordering_trace(run)
+}
+
+#[cfg(test)]
+fn trace_stage_enabled(stage: &str) -> bool {
+    if stage == "packing_trials" && ORDERING_TRACE_ONLY.with(std::cell::Cell::get) {
+        return false;
+    }
+    let source = SOURCE_SELECTION_TRACE.with(std::cell::Cell::get);
+    match stage {
+        "source_blocks" | "source_candidates_generated" | "source_candidates_retained" => source,
+        _ if source => stage == "document_hits",
+        _ => true,
+    }
 }
 
 #[cfg(test)]
@@ -497,11 +554,30 @@ pub(crate) fn with_candidate_ordering_trace<T>(
     (result, trace)
 }
 
+// Ordering assertions do not need the quadratic snapshots of accepted passages
+// after every attempted packing variant. Keep all pool/order/card metadata and
+// the same trace limits; full packing diagnostics remain separately available.
+#[cfg(test)]
+fn with_candidate_ordering_only_trace<T>(run: impl FnOnce() -> T) -> (T, Vec<serde_json::Value>) {
+    struct Reset;
+    impl Drop for Reset {
+        fn drop(&mut self) {
+            ORDERING_TRACE_ONLY.with(|flag| flag.set(false));
+        }
+    }
+    ORDERING_TRACE_ONLY.with(|flag| assert!(!flag.replace(true), "ordering trace cannot nest"));
+    let _reset = Reset;
+    with_candidate_ordering_trace(run)
+}
+
 #[cfg(test)]
 pub(super) fn record_candidate_ordering_trace(
     stage: &str,
     rows: impl FnOnce() -> serde_json::Value,
 ) {
+    if !trace_stage_enabled(stage) {
+        return;
+    }
     CANDIDATE_ORDERING_TRACE.with(|trace| {
         if let Some(trace) = trace.borrow_mut().as_mut() {
             assert!(trace.len() < 16, "bounded ordering trace stage count");
@@ -537,6 +613,9 @@ fn check_lineage_bounds(trace: &[serde_json::Value]) {
 // collector owns these development-only rows; no new observer runtime exists.
 #[cfg(test)]
 pub(super) fn record_lineage_event(stage: &str, row: impl FnOnce() -> serde_json::Value) {
+    if !trace_stage_enabled(stage) {
+        return;
+    }
     CANDIDATE_ORDERING_TRACE.with(|trace| {
         if let Some(trace) = trace.borrow_mut().as_mut() {
             let position = trace.iter().position(|entry| entry["stage"] == stage);
@@ -1203,6 +1282,8 @@ fn assemble_inner_with_evidence(
             "context candidates are from another pinned snapshot",
         ));
     }
+    #[cfg(test)]
+    record_candidate_ordering_trace("document_hits", || serde_json::json!(hits.hits));
     let document_owners = if request.target != ContextTarget::Graph {
         hits.hits
             .iter()
@@ -1259,13 +1340,28 @@ fn assemble_inner_with_evidence(
             )
             .collect::<Vec<_>>();
         if signals.semantic.is_empty() || !signals.semantic_complete {
-            let selection = super::context_selection::select_candidates_with_semantics(
-                reader,
-                query.expect("source-aware query"),
-                &documents,
-                request.documents.limits.excerpt_bytes,
-                &[],
-            )?;
+            let structural_groups = request.scope == ContextScope::IndexedDocuments
+                && request.target == ContextTarget::Documents
+                && request.documents.mode == SearchMode::Lexical
+                && matches!(selection_action, SelectionAction::Automatic)
+                && signals.semantic.is_empty()
+                && !signals.semantic_complete;
+            let selection = if structural_groups {
+                super::context_selection::select_candidates_with_groups(
+                    reader,
+                    query.expect("source-aware query"),
+                    &documents,
+                    request.documents.limits.excerpt_bytes,
+                )?
+            } else {
+                super::context_selection::select_candidates_with_semantics(
+                    reader,
+                    query.expect("source-aware query"),
+                    &documents,
+                    request.documents.limits.excerpt_bytes,
+                    &[],
+                )?
+            };
             term_weights = selection.term_weights;
             for omission in selection.omissions {
                 let hit = &hits.hits[omission.owner_index];
@@ -1280,6 +1376,74 @@ fn assemble_inner_with_evidence(
             "source-aware context inspected {} bytes in {} blocks; query overlap guides passage selection, not answer completeness",
             selection.scanned_bytes, selection.scanned_blocks,
         ));
+            // Structural alternatives are original-span sets, never summaries.
+            // Conversion is all-or-none: an unavailable member cannot silently
+            // turn a condition-bearing group into a smaller apparently complete one.
+            if request.scope == ContextScope::IndexedDocuments
+                && request.target == ContextTarget::Documents
+                && request.documents.mode == SearchMode::Lexical
+                && matches!(selection_action, SelectionAction::Automatic)
+                && signals.semantic.is_empty()
+                && !signals.semantic_complete
+            {
+                for (ordinal, group) in selection.groups.into_iter().enumerate() {
+                    let candidate = group.representative;
+                    let hit = &hits.hits[candidate.owner_index];
+                    let mut members = Vec::with_capacity(group.members.len());
+                    for span in &group.members {
+                        let excerpt = SearchExcerpt {
+                            text: String::new(),
+                            span: *span,
+                            matched_spans: vec![],
+                            label: hit.excerpt.label,
+                            citation: None,
+                        };
+                        let Some(passage) = document_passage(
+                            reader,
+                            &document_owners[candidate.owner_index],
+                            hit,
+                            &excerpt,
+                            request,
+                            candidate.owner_index + 1,
+                        )?
+                        else {
+                            break;
+                        };
+                        members.push(passage);
+                    }
+                    if members.len() != group.members.len() || members.is_empty() {
+                        omissions.push(ContextOmission {
+                            record_id: hit.locator.record.as_ref().map(|r| r.record_id.clone()),
+                            path: Some(hit.locator.path.clone()),
+                            reason: "structural_group_member_unavailable".into(),
+                            count: 1,
+                        });
+                        continue;
+                    }
+                    direct
+                        .entry(bundles::owner(&members[0]))
+                        .and_modify(|r| *r = (*r).min(candidate.owner_index + 1))
+                        .or_insert(candidate.owner_index + 1);
+                    packets.push(Packet {
+                        key: format!(
+                            "group:{}:{:020}:{:020}:{ordinal}",
+                            members[0].locator.path,
+                            candidate.span.start(),
+                            candidate.span.end()
+                        ),
+                        passages: members,
+                        bundle: None,
+                        navigation: None,
+                        score: 0.,
+                        selection_ordinal: Some(ordinal),
+                        selection: Some(candidate),
+                        unit_score: None,
+                        unit_origin: None,
+                        fallback: None,
+                        unit_clipped: false,
+                    });
+                }
+            }
             for (selection_ordinal, candidate) in selection.candidates.into_iter().enumerate() {
                 let hit = &hits.hits[candidate.owner_index];
                 let excerpt = SearchExcerpt {
@@ -1684,6 +1848,7 @@ pub(super) fn packet_utility(
     total_weight: f64,
     rendered_cost: usize,
     best_affinity: f64,
+    lexical_only: bool,
 ) -> f64 {
     if let Some(score) = packet.unit_score {
         return score;
@@ -1699,10 +1864,16 @@ pub(super) fn packet_utility(
         .sum::<u64>() as f64
         / total_weight;
     let local = candidate.local_relevance as f64 / total_weight;
-    // Include the actual standalone reference/header cost. Tiny
-    // fragments must not gain priority merely by being short. Final
-    // admission still measures the fully coalesced rendered result.
-    let density = candidate.span.len() as f64 / rendered_cost.max(1) as f64;
+    // Charge native lexical evidence its actual standalone reference/header
+    // cost without rewarding surrounding payload that adds no query evidence.
+    // Complete command/list teaching units are retained by generation. Preserve
+    // the existing density preference for semantic and mixed candidate pools.
+    // Final admission still measures the fully coalesced rendered result.
+    let density = if lexical_only && candidate.semantic_affinity.is_none() {
+        1.0 / rendered_cost.max(1) as f64
+    } else {
+        candidate.span.len() as f64 / rendered_cost.max(1) as f64
+    };
     let relevance = if let Some(affinity) = candidate.semantic_affinity {
         // A monotone preference within this cached query/space, not a
         // calibrated relevance probability. Lexical coverage breaks
@@ -1755,6 +1926,12 @@ pub(super) fn pack(
             "preserve_selection_order": preserve_selection_order,
             "term_weights": term_weights,
         })
+    });
+    #[cfg(test)]
+    PACKET_SCOPE_FOR_TEST.with(|slot| {
+        if let Some(keep) = slot.borrow().as_ref() {
+            packets.retain(|packet| keep(packet, &term_weights));
+        }
     });
     sort_packets(&mut packets, preserve_selection_order);
     #[cfg(test)]
@@ -1969,6 +2146,53 @@ pub(super) fn pack(
                 .and_then(|candidate| candidate.semantic_affinity)
         })
         .fold(0.0f64, f64::max);
+    // Complete structural sets replace covered overlapping variants during
+    // primary allocation. Keep the exact original packets as deferred fallbacks:
+    // a failed joint trial must not lose their lexical metadata or ordering.
+    let groups = packets
+        .iter()
+        .filter(|p| p.key.starts_with("group:"))
+        .map(|p| (p.key.clone(), p.passages.clone()))
+        .collect::<Vec<_>>();
+    let mut group_fallbacks = BTreeMap::<String, Vec<Packet>>::new();
+    let mut primary = Vec::with_capacity(packets.len());
+    for packet in packets {
+        let group = (!packet.key.starts_with("group:")
+            && packet.selection.is_some()
+            && packet.passages.len() == 1)
+            .then(|| {
+                let original = &packet.passages[0];
+                groups
+                    .iter()
+                    .find(|(_, members)| {
+                        let mut covered_end = original.span.start();
+                        for member in members {
+                            if member.locator.path != original.locator.path
+                                || member.locator.observed_hash != original.locator.observed_hash
+                                || member.span.end() <= covered_end
+                            {
+                                continue;
+                            }
+                            if member.span.start() > covered_end {
+                                break;
+                            }
+                            covered_end = covered_end.max(member.span.end());
+                            if covered_end >= original.span.end() {
+                                return true;
+                            }
+                        }
+                        false
+                    })
+                    .map(|(key, _)| key.clone())
+            })
+            .flatten();
+        if let Some(key) = group {
+            group_fallbacks.entry(key).or_default().push(packet);
+        } else {
+            primary.push(packet);
+        }
+    }
+    packets = primary;
     while !packets.is_empty() {
         let utility = |packet: &Packet| {
             packet_utility(
@@ -1978,6 +2202,9 @@ pub(super) fn pack(
                 total_weight,
                 rendered_costs.get(&packet.key).copied().unwrap_or(1),
                 best_affinity,
+                request.documents.mode == SearchMode::Lexical
+                    && signals.semantic.is_empty()
+                    && !signals.semantic_complete,
             )
         };
         let best = (0..packets.len())
@@ -2161,6 +2388,9 @@ pub(super) fn pack(
             })
         });
         if let Some(reason) = reason {
+            if let Some(originals) = group_fallbacks.remove(&packet.key) {
+                packets.extend(originals);
+            }
             if let Some(child) = packet.fallback.take() {
                 // Keep one child fallback associated with its ranked unit;
                 // it is not another independently voting retrieval result.
