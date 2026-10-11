@@ -500,7 +500,7 @@ fn wide_invalid_evidence_span_remains_diagnosed_and_rebuildable() {
         .unwrap();
     fs::write(t.path().join("assertion.md"),b"---\nwiki_schema: \"1\"\nwiki_id: wide_assertion\nwiki_kind: assertion\ntitle: Proposed assertion\nwiki_status: proposed\nwiki_subject_id: entity_sql\nwiki_object_id: entity_sql\nwiki_predicate: uses\n---\n").unwrap();
     let evidence = format!(
-        "---\nwiki_schema: \"1\"\nwiki_id: wide_evidence\nwiki_kind: evidence\ntitle: Invalid wide span\nwiki_status: active\nwiki_assertion_id: wide_assertion\nwiki_source_id: {}\nwiki_source_revision: {}\nwiki_stance: supports\nwiki_locator_kind: utf8-bytes\nwiki_span_start: 0\nwiki_span_end: 9223372036854775808\nwiki_quote_hash: {}\n---\n```text\nquote\n```\n",
+        "---\nwiki_schema: \"1\"\nwiki_id: wide_evidence\nwiki_kind: evidence\ntitle: Invalid wide span\nwiki_status: active\nwiki_assertion_id: wide_assertion\nwiki_source_id: '{}'\nwiki_source_revision: '{}'\nwiki_stance: supports\nwiki_locator_kind: utf8-bytes\nwiki_span_start: 0\nwiki_span_end: 9223372036854775808\nwiki_quote_hash: {}\n---\n```text\nquote\n```\n",
         plan.source_id,
         plan.revision_id,
         Blake3Hash::digest(b"quote")

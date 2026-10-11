@@ -256,7 +256,18 @@ impl Fixture {
             "plain.md",
             b"# Plain commonword\ncommonword plaintext\n",
         );
-        write(root,"invalid.md",b"---\nwiki_kind: page\nwiki_id: broken_page\ninvalid: [unfinished\n---\ncommonword invalidtext\n");
+        write(
+            root,
+            "invalid.md",
+            &note(
+                "page",
+                "page_invalid_general",
+                "Invalid adopted page",
+                json!({"wiki_status":"reviewed","wiki_depends_on_ids":["assertion_absent"]}),
+                "commonword invalidtext\n",
+            ),
+        );
+        write(root, "malformed.md", b"---\nwiki_kind: page\nwiki_id: broken_page\ninvalid: [unfinished\n---\nmalformedplaintext\n");
         write(root, "nonutf8.md", b"\xff\xfe");
         write(root,"copied-packet.md",b"---\nwiki_kind: extraction_packet\nwiki_id: packet_broken\ninvalid: [unfinished\n---\ncommonword packettext\n");
         write(
@@ -444,6 +455,25 @@ fn paired_actual_builders_preserve_tiers_identity_invalid_and_history() {
                 f.paired(query, &plan, None);
             }
         }
+    }
+    for (name, token) in [
+        ("plain.md", "plaintext"),
+        ("malformed.md", "malformedplaintext"),
+    ] {
+        assert!(f.paired(token, &QueryPlan::default(), None).hits.is_empty());
+        let bytes = fs::read(f._temp.path().join(name)).unwrap();
+        let inspected = crate::app::literal::inspect_literal(
+            f.catalog.fs(),
+            crate::app::literal::LiteralInspectRequest {
+                path: path(name),
+                range: None,
+                max_bytes: bytes.len(),
+            },
+        )
+        .unwrap();
+        assert_eq!(inspected.bytes, bytes);
+        assert_eq!(inspected.hash, Blake3Hash::digest(&bytes));
+        assert!(!inspected.structured_currentness_asserted);
     }
     let identity = f.paired("AtlasAlias", &QueryPlan::default(), None);
     assert_eq!(identity.hits.len(), 1);
@@ -1154,7 +1184,7 @@ fn paired_unicode_normalization_preserves_raw_spans_and_exact_alias_bytes() {
     }
 }
 #[test]
-fn paired_duplicate_id_search_keeps_invalid_discovery_without_identity_privilege() {
+fn paired_duplicate_id_search_excludes_claims_without_identity_privilege() {
     let f = Fixture::new(0);
     assert!(
         !f.legacy
@@ -1162,20 +1192,31 @@ fn paired_duplicate_id_search_keeps_invalid_discovery_without_identity_privilege
             .records
             .contains_key(&id("page_duplicate_general"))
     );
-    let hits = f.paired("duplicateidentityneedle", &QueryPlan::default(), None);
-    assert_eq!(hits.hits.len(), 2);
-    assert_eq!(
-        hits.hits
-            .iter()
-            .map(|hit| hit.locator.path.clone())
-            .collect::<BTreeSet<_>>(),
-        BTreeSet::from([path("duplicate-a.md"), path("duplicate-b.md")])
+    assert!(
+        f.paired("duplicateidentityneedle", &QueryPlan::default(), None)
+            .hits
+            .is_empty()
     );
-    for hit in &hits.hits {
-        assert_eq!(hit.eligibility, Eligibility::Invalid);
-        assert!(hit.locator.record.is_none());
-        assert!(!hit.reasons.contains(&RetrievalReason::ExactId));
-        assert!(!hit.reasons.contains(&RetrievalReason::ExactAlias));
+    let reader = f.query();
+    for duplicate in ["duplicate-a.md", "duplicate-b.md"] {
+        let bytes = fs::read(f._temp.path().join(duplicate)).unwrap();
+        let document = reader.document(&path(duplicate)).unwrap().unwrap();
+        assert!(document.record_id.is_none());
+        assert_eq!(document.eligibility, Eligibility::Invalid);
+        assert_eq!(document.hash, Blake3Hash::digest(&bytes));
+        assert_eq!(document.raw_text.as_bytes(), bytes);
+        assert!(
+            reader
+                .diagnostics(&BTreeSet::from([path(duplicate)]))
+                .unwrap()
+                .iter()
+                .any(
+                    |diagnostic| diagnostic.code == ErrorCode::ReferenceAmbiguous
+                        && diagnostic.details["reason"] == "duplicate_id"
+                        && diagnostic.details["paths"]
+                            == json!(["duplicate-a.md", "duplicate-b.md"])
+                )
+        );
     }
     for query in ["page_duplicate_general", "DuplicatedAlias"] {
         assert!(f.paired(query, &QueryPlan::default(), None).hits.is_empty());
@@ -1494,11 +1535,10 @@ fn paired_literal_filters_exact_totals_caps_and_cursor_pool() {
             .hits
             .is_empty()
     );
-    assert_eq!(
+    assert!(
         f.paired("duplicateidentityneedle", &ordinary, None)
             .hits
-            .len(),
-        2
+            .is_empty()
     );
     assert!(
         f.paired("lifecyclewithdrawnneedle", &ordinary, None)

@@ -112,7 +112,7 @@ fn decode_output(format: &str, output: &Output) -> Value {
         serde_json::from_slice(&output.stdout)
             .unwrap_or_else(|error| panic!("invalid CLI output: {error}; {output:?}"))
     };
-    assert_eq!(envelope["schema_version"], "1");
+    assert_eq!(envelope["schema_version"], "2");
     assert_eq!(
         envelope["ok"],
         output.status.success(),

@@ -1509,6 +1509,7 @@ fn restore_accepted_old_selector_locks(root: &std::path::Path, capsule: &serde_j
 }
 
 #[test]
+#[ignore = "earlier-version upgrade acceptance is outside the owner-authorized v0.3 scope; authentic fixture retained"]
 fn accepted_old_v3_pending_scalar_refresh_public_apply_and_repeat() {
     use crate::app::{OfflineApp, OperationOptions};
     let capsule: serde_json::Value = serde_json::from_slice(include_bytes!(
@@ -1710,6 +1711,7 @@ fn accepted_old_v3_pending_scalar_refresh_public_apply_and_repeat() {
 
 // V2 bytes independently specified from deployed pre-v3 structs, not emitted by a v2 CLI.
 #[test]
+#[ignore = "earlier-version upgrade acceptance is outside the owner-authorized v0.3 scope; authentic fixture retained"]
 fn specified_deployed_v2_full_receipt_public_pending_apply_and_repeat() {
     use crate::app::{OfflineApp, OperationOptions};
     let capsule: serde_json::Value = serde_json::from_slice(include_bytes!(

@@ -80,6 +80,20 @@ fn page(root: &Path, path: &str, name: &str, title: &str, body: &str, tags: &[&s
         ),
     );
 }
+fn inspect_exact(catalog: &Catalog, path: &str, bytes: &[u8]) {
+    let inspected = library::app::literal::inspect_literal(
+        catalog.fs(),
+        library::app::literal::LiteralInspectRequest {
+            path: relative(path),
+            range: None,
+            max_bytes: bytes.len().max(1),
+        },
+    )
+    .unwrap();
+    assert_eq!(inspected.bytes, bytes);
+    assert_eq!(inspected.hash, Blake3Hash::digest(bytes));
+    assert!(!inspected.structured_currentness_asserted);
+}
 fn literal_plan() -> QueryPlan {
     QueryPlan {
         mode: SearchMode::Literal,
@@ -90,10 +104,13 @@ fn literal_plan() -> QueryPlan {
 #[test]
 fn literal_vec_t_e0308_symbols() {
     let (temp, root, catalog) = fixture();
-    write(
+    page(
         temp.path(),
         "symbols.md",
-        "Vec<T> E0308 e\u{301} λ → :: * Foo".as_bytes(),
+        "page_symbols",
+        "Symbols",
+        "Vec<T> E0308 e\u{301} λ → :: * Foo",
+        &[],
     );
     let r = reader(&root, &catalog);
     for query in ["Vec<T>", "E0308", "e\u{301}", "λ → :: *"] {
@@ -115,12 +132,12 @@ fn literal_vec_t_e0308_symbols() {
 
 #[test]
 fn lexical_excerpt_prefers_full_name_after_many_partial_matches() {
-    let (temp, root, catalog) = fixture();
+    let (_temp, root, catalog) = fixture();
     let body = format!(
         "{}\n## Hungry Howie's Pizza\nPizza for the whole family.\n",
         "Show up hungry at another restaurant.\n".repeat(100)
     );
-    write(temp.path(), "restaurants.md", body.as_bytes());
+    capture(&root, &catalog, body.as_bytes());
     let r = reader(&root, &catalog);
     let hits = search(&r, "Hungry Howie", &QueryPlan::default()).unwrap();
     assert_eq!(hits.hits.len(), 1);
@@ -176,12 +193,12 @@ fn lexical_question_focuses_late_identifiers_after_frequent_first_words() {
 
 #[test]
 fn lexical_excerpt_weights_distinct_overlap_without_language_stopwords() {
-    let (temp, root, catalog) = fixture();
+    let (_temp, root, catalog) = fixture();
     let raw = format!(
         "{}\n## Поздний раздел\n\nнастройка спутника проверяет маркер Ωmega.\n",
         "как работает общий пример как работает общий пример\n".repeat(150)
     );
-    write(temp.path(), "manual.md", raw.as_bytes());
+    capture(&root, &catalog, raw.as_bytes());
     let r = reader(&root, &catalog);
     let query = "как работает настройка спутника маркер Ωmega";
     let mut plan = QueryPlan::default();
@@ -197,14 +214,14 @@ fn lexical_excerpt_weights_distinct_overlap_without_language_stopwords() {
 
 #[test]
 fn lexical_excerpt_selects_late_cluster_after_more_than_64_repeats() {
-    let (temp, root, catalog) = fixture();
+    let (_temp, root, catalog) = fixture();
     let raw = format!(
         "{}\n{}\n{}\nHow alpha and beta work with shared state.\n",
         "How shared introductory material works.\n".repeat(100),
         "alpha alone describes a different topic.\n".repeat(100),
         "beta alone describes another topic.\n".repeat(100)
     );
-    write(temp.path(), "cluster.md", raw.as_bytes());
+    capture(&root, &catalog, raw.as_bytes());
     let r = reader(&root, &catalog);
     let query = "How shared beta alpha";
     let hits = search(&r, query, &QueryPlan::default()).unwrap();
@@ -256,12 +273,22 @@ fn lexical_focus_does_not_drop_literal_case_and_punctuation_match() {
 #[test]
 fn lexical_or_colon_star_quotes_are_data() {
     let (temp, root, catalog) = fixture();
-    write(
+    page(
         temp.path(),
         "syntax.md",
-        b"OR foo:bar a* quoted\"word ordinary phrase\n",
+        "page_syntax",
+        "Syntax",
+        "OR foo:bar a* quoted\"word ordinary phrase\n",
+        &[],
     );
-    write(temp.path(), "other.md", b"unrelated text\n");
+    page(
+        temp.path(),
+        "other.md",
+        "page_other",
+        "Other",
+        "unrelated text\n",
+        &[],
+    );
     let r = reader(&root, &catalog);
     for query in [
         "OR",
@@ -380,49 +407,80 @@ fn cursor_query_or_generation_change_is_stale() {
 }
 
 #[test]
-fn invalid_notes_remain_literal_discovery() {
+fn invalid_originals_require_capture_for_literal_discovery() {
     let (temp, root, catalog) = fixture();
     let raw =
         b"---\nwiki_schema: \"2\"\nwiki_id: future\ninvalid: [unfinished\n---\nRareSymbol<T>\n";
     write(temp.path(), "invalid.md", raw);
     let r = reader(&root, &catalog);
-    let hits = search(&r, "RareSymbol<T>", &literal_plan()).unwrap();
-    assert_eq!(hits.hits.len(), 1);
-    let hit = &hits.hits[0];
-    assert!(hit.locator.record.is_none());
-    assert_eq!(hit.eligibility, Eligibility::Invalid);
-    assert_eq!(hit.locator.observed_hash, Blake3Hash::digest(raw));
-    assert!(hit.excerpt.citation.is_none());
     assert!(
-        hits.warnings
-            .iter()
-            .any(|w| w.contains("invalid.md") && w.contains("RECORD_INVALID"))
-    );
-    let lexical = search(&r, "RareSymbol", &QueryPlan::default()).unwrap();
-    assert!(
-        lexical
-            .hits
-            .iter()
-            .any(|h| h.locator.path == relative("invalid.md"))
-    );
-    assert!(lexical.warnings.iter().any(|w| w.contains("invalid.md")));
-    assert!(
-        search(&r, "Wiki", &QueryPlan::default())
+        search(&r, "RareSymbol<T>", &literal_plan())
             .unwrap()
-            .warnings
-            .iter()
-            .all(|w| !w.contains("invalid.md"))
+            .hits
+            .is_empty()
     );
+    assert!(
+        search(&r, "RareSymbol", &QueryPlan::default())
+            .unwrap()
+            .hits
+            .is_empty()
+    );
+    assert!(
+        r.projection()
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.path == relative("invalid.md")
+                && diagnostic.code == ErrorCode::RecordInvalid)
+    );
+    inspect_exact(&catalog, "invalid.md", raw);
+    let captured = capture(&root, &catalog, raw);
+    let r = catalog.verified_snapshot(None).unwrap();
+    for plan in [literal_plan(), QueryPlan::default()] {
+        let query = if plan.mode == SearchMode::Literal {
+            "RareSymbol<T>"
+        } else {
+            "RareSymbol"
+        };
+        let hits = search(&r, query, &plan).unwrap();
+        assert_eq!(hits.hits.len(), 1);
+        let hit = &hits.hits[0];
+        assert_eq!(hit.source_id, Some(captured.source_id.clone()));
+        assert_eq!(hit.owner_revision, Some(captured.revision_id.clone()));
+        assert_eq!(hit.locator.observed_hash, Blake3Hash::digest(raw));
+        assert_eq!(
+            hit.excerpt
+                .span
+                .slice(std::str::from_utf8(raw).unwrap())
+                .unwrap(),
+            hit.excerpt.text
+        );
+        let citation = hit.excerpt.citation.as_ref().unwrap();
+        assert_eq!(
+            SourceView::from_fs(catalog.fs())
+                .unwrap()
+                .verify(citation, CitationScope::Current)
+                .unwrap()
+                .quote,
+            hit.excerpt.text.as_bytes()
+        );
+    }
+    inspect_exact(&catalog, "invalid.md", raw);
 }
 
 #[test]
-fn malformed_hit_warnings_are_bounded_and_do_not_repeat_diagnostic_text() {
+fn invalid_adopted_hit_warnings_are_bounded_and_do_not_repeat_diagnostic_text() {
     let (temp, root, catalog) = fixture();
     for i in 0..5 {
         write(
             temp.path(),
             &format!("broken-{i}.md"),
-            b"---\nwiki_schema: \"2\"\ninvalid: [unfinished\n---\nNoisyNeedle\n",
+            &note(
+                "page",
+                &format!("page_broken_{i}"),
+                "Invalid adopted note",
+                json!({"wiki_status":"reviewed","wiki_depends_on_ids":["assertion_missing"]}),
+                "NoisyNeedle\n",
+            ),
         );
     }
     let r = reader(&root, &catalog);
@@ -442,13 +500,13 @@ fn malformed_hit_warnings_are_bounded_and_do_not_repeat_diagnostic_text() {
             .take(3)
             .all(|w| w.contains("invalid_note_hit:")
                 && w.contains("RECORD_INVALID")
-                && !w.contains("unfinished"))
+                && !w.contains("assertion_missing"))
     );
     assert!(result.warnings[3].contains("2 additional invalid note hits"));
 }
 
 #[test]
-fn malformed_packet_path_requires_explicit_historical_audit() {
+fn malformed_packet_paths_remain_inspection_only_in_historical_audit() {
     let (temp, root, catalog) = fixture();
     let malformed = b"---\nwiki_kind: extraction_packet\nwiki_id: packet_broken\ninvalid: [unfinished\n---\nCEDAR-731 retained window\n";
     write(
@@ -462,20 +520,38 @@ fn malformed_packet_path_requires_explicit_historical_audit() {
         b"---\nwiki_kind: page\nwiki_id: broken_page\ninvalid: [unfinished\n---\nCEDAR-731 ordinary invalid note\n",
     );
     write(temp.path(), "copied-malformed-packet.md", malformed);
+    page(
+        temp.path(),
+        "adopted-page.md",
+        "page_control",
+        "Control",
+        "CEDAR-731 adopted note",
+        &[],
+    );
     let r = reader(&root, &catalog);
     let hits = search(&r, "CEDAR-731", &literal_plan()).unwrap();
     assert_eq!(hits.hits.len(), 1);
-    assert_eq!(hits.hits[0].locator.path, relative("ordinary-invalid.md"));
-    assert_eq!(hits.hits[0].eligibility, Eligibility::Invalid);
+    assert_eq!(hits.hits[0].locator.path, relative("adopted-page.md"));
+    assert_eq!(hits.hits[0].eligibility, Eligibility::Current);
     let mut audit = literal_plan();
     audit.filters.include_historical = true;
-    assert!(
-        search(&r, "CEDAR-731", &audit)
-            .unwrap()
-            .hits
-            .iter()
-            .any(|hit| hit.locator.path == relative("knowledge/extractions/packets/broken.md"))
-    );
+    let audit_hits = search(&r, "CEDAR-731", &audit).unwrap();
+    assert_eq!(audit_hits.hits.len(), 1);
+    assert_eq!(audit_hits.hits[0].locator.path, relative("adopted-page.md"));
+    for path in [
+        "knowledge/extractions/packets/broken.md",
+        "copied-malformed-packet.md",
+        "ordinary-invalid.md",
+    ] {
+        let bytes = fs::read(temp.path().join(path)).unwrap();
+        inspect_exact(&catalog, path, &bytes);
+        assert!(
+            r.projection()
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.path == relative(path))
+        );
+    }
 }
 
 #[test]
@@ -759,9 +835,16 @@ fn query_and_candidate_bounds_are_explicit() {
     let many = std::iter::repeat_n("word", 257)
         .collect::<Vec<_>>()
         .join(" ");
-    write(temp.path(), "many.md", many.as_bytes());
+    page(temp.path(), "many.md", "page_many", "Many", &many, &[]);
     for n in 0..90 {
-        write(temp.path(), &format!("hits/{n:03}.md"), b"needle");
+        page(
+            temp.path(),
+            &format!("hits/{n:03}.md"),
+            &format!("page_hit_{n}"),
+            "Hit",
+            "needle",
+            &[],
+        );
     }
     let r = reader(&root, &catalog);
     assert_eq!(
@@ -793,12 +876,22 @@ fn query_and_candidate_bounds_are_explicit() {
 #[test]
 fn long_scenario_query_keeps_its_last_requirement() {
     let (temp, root, catalog) = fixture();
-    write(
+    page(
         temp.path(),
         "answer.md",
-        b"The latequalifier applies here.\n",
+        "page_answer",
+        "Answer",
+        "The latequalifier applies here.\n",
+        &[],
     );
-    write(temp.path(), "distractor.md", b"Other unrelated material.\n");
+    page(
+        temp.path(),
+        "distractor.md",
+        "page_distractor",
+        "Distractor",
+        "Other unrelated material.\n",
+        &[],
+    );
     let r = reader(&root, &catalog);
     // Full scenarios may exceed 64 words. The last requirement must still
     // participate in discovery instead of being silently dropped.
@@ -831,7 +924,14 @@ fn unicode_query_limit_counts_utf8_bytes_and_preserves_literal_text() {
     let (temp, root, catalog) = fixture();
     let query = "界".repeat(5461) + "x";
     assert_eq!(query.len(), 16 * 1024);
-    write(temp.path(), "unicode.md", query.as_bytes());
+    page(
+        temp.path(),
+        "unicode.md",
+        "page_unicode",
+        "Unicode",
+        &query,
+        &[],
+    );
     let r = reader(&root, &catalog);
     assert_eq!(search(&r, &query, &literal_plan()).unwrap().hits.len(), 1);
     assert!(lexical_expression(&query).is_ok());
@@ -1387,7 +1487,7 @@ fn api_extraction_and_generation_output_never_supply_current_search() {
 }
 
 #[test]
-fn malformed_operational_declarations_preserve_ordinary_invalid_discovery() {
+fn malformed_operational_declarations_remain_inspection_only() {
     let (temp, root, catalog) = fixture();
     let extraction = b"---\nwiki_kind: extraction\nwiki_id: extraction_broken\ninvalid: [unfinished\n---\nCEDAR-731 retained output\n";
     let output = b"---\nwiki_kind: run_event\nwiki_id: run_event_generation_broken\ninvalid: [unfinished\n---\nCEDAR-731 retained API response\n";
@@ -1408,10 +1508,18 @@ fn malformed_operational_declarations_preserve_ordinary_invalid_discovery() {
         "ordinary-invalid.md",
         b"---\nwiki_kind: page\nwiki_id: broken_page\ninvalid: [unfinished\n---\nCEDAR-731 ordinary author note\n",
     );
+    page(
+        temp.path(),
+        "adopted-control.md",
+        "page_operational_control",
+        "Control",
+        "CEDAR-731 adopted author note",
+        &[],
+    );
     let r = reader(&root, &catalog);
     let hits = search(&r, "CEDAR-731", &literal_plan()).unwrap();
     assert_eq!(hits.hits.len(), 1);
-    assert_eq!(hits.hits[0].locator.path, relative("ordinary-invalid.md"));
+    assert_eq!(hits.hits[0].locator.path, relative("adopted-control.md"));
     let units = render::corpus(&r, &EmbeddingSettings::default()).unwrap();
     assert!(units.iter().all(|unit| {
         !unit.owner.as_str().contains("extraction_broken")
@@ -1421,5 +1529,25 @@ fn malformed_operational_declarations_preserve_ordinary_invalid_discovery() {
     let mut audit = literal_plan();
     audit.filters.include_historical = true;
     let historical = search(&r, "CEDAR-731", &audit).unwrap();
-    assert_eq!(historical.hits.len(), 5);
+    assert_eq!(historical.hits.len(), 1);
+    assert_eq!(
+        historical.hits[0].locator.path,
+        relative("adopted-control.md")
+    );
+    for path in [
+        "knowledge/extractions/extraction_broken.md",
+        "copied-malformed-extraction.md",
+        "runs/run_api_broken/outputs/run_event_generation_broken.md",
+        "copied-malformed-generation-output.md",
+        "ordinary-invalid.md",
+    ] {
+        let bytes = fs::read(temp.path().join(path)).unwrap();
+        inspect_exact(&catalog, path, &bytes);
+        assert!(
+            r.projection()
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.path == relative(path))
+        );
+    }
 }

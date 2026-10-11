@@ -19,7 +19,7 @@ use std::collections::{BTreeMap, BTreeSet};
 /// Cache identity binds every semantic adapter, not merely frontmatter parsing.
 pub fn parser_fingerprint() -> Blake3Hash {
     Blake3Hash::digest(format!(
-        "{};catalog-v1;canonical-unadopted-inspection-only-v2;bounded-envelope-claims-v1;adopted-review-candidates-v1;canonical-membership-bytewise-v1;source-original-content-span-quote-fence-structural-v2;typed-id-companion-v1;decisions-explicit-conflict-cycle-v1;mention-complete-artifact-membership-explicit-scope-v1;entity-explicit-exhaustive-remap-receipt-supersession-v1;receipt-relevant-proof-budget-v2;eligibility-full-note-transitive-v1;packet-source-lifecycle-v2;derived-source-lifecycle-v1;opposing-accepted-assertions-v1;evidence-navigation-diagnostics-v1;bookkeeping-kind-v2;markdown-lexical-events-v2-ordinary-html-span-stream-v1;graph-readable-directed-endpoints-v1;unicode61 remove_diacritics 2;no-stemming",
+        "{};catalog-v1;canonical-unadopted-inspection-only-v2;unreadable-note-diagnostics-v1;bounded-envelope-claims-v1;adopted-review-candidates-v1;canonical-membership-bytewise-v1;source-original-content-span-quote-fence-structural-v2;typed-id-companion-v1;decisions-explicit-conflict-cycle-v1;mention-complete-artifact-membership-explicit-scope-v1;entity-explicit-exhaustive-remap-receipt-supersession-v1;receipt-relevant-proof-budget-v2;eligibility-full-note-transitive-v1;packet-source-lifecycle-v2;derived-source-lifecycle-v1;opposing-accepted-assertions-v1;evidence-navigation-diagnostics-v1;bookkeeping-kind-v2;markdown-lexical-events-v2-ordinary-html-span-stream-v1;graph-readable-directed-endpoints-v1;unicode61 remove_diacritics 2;no-stemming",
         crate::records::parser_fingerprint()
     ))
 }
@@ -308,6 +308,7 @@ fn project_notes(
     for (path, note) in notes {
         let id = readable_id(note)?;
         let has_claim = crate::sources::identity::has_wiki_claim(note)?;
+        let unreadable_note = note.literal_text().is_none();
         for claimed in readable_ids(note)? {
             if let Some(paths) = memberships.get(&claimed).filter(|paths| paths.len() > 1) {
                 diagnostics.push(diagnostic(
@@ -318,12 +319,30 @@ fn project_notes(
                 ));
             }
         }
-        for error in note.diagnostics.iter().filter(|_| has_claim) {
+        for error in note
+            .diagnostics
+            .iter()
+            .filter(|_| has_claim || unreadable_note)
+        {
             diagnostics.push(diagnostic(
                 path,
                 id.as_ref(),
                 error.code,
                 serde_json::json!({"message":error.message,"details":error.details}),
+            ));
+        }
+        // Empty cached text with a physical-byte hash needs a decode diagnosis.
+        // Damaged-envelope parsing can return before its own UTF-8 check.
+        if unreadable_note
+            && !note.diagnostics.iter().any(|error| {
+                error.code == ErrorCode::RecordInvalid && error.message == "note is not UTF-8"
+            })
+        {
+            diagnostics.push(diagnostic(
+                path,
+                id.as_ref(),
+                ErrorCode::RecordInvalid,
+                serde_json::json!({"message":"note is not UTF-8","details":null}),
             ));
         }
         if let Some(record) = &note.canonical {

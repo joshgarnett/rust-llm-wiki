@@ -89,6 +89,26 @@ impl Fixture {
             .filter(|path| path.as_str().starts_with(prefix) && path.as_str().ends_with(suffix))
             .count()
     }
+    fn captured_source_ids(&self) -> Vec<RecordId> {
+        self.root
+            .scan_markdown()
+            .unwrap()
+            .into_iter()
+            .filter_map(|path| {
+                if !path.as_str().starts_with("sources/") || !path.as_str().ends_with("/source.md")
+                {
+                    return None;
+                }
+                let bytes = fs::read(self.root.path().join(path.as_str())).unwrap();
+                let record = lwiki::records::parse_note(&bytes)
+                    .canonical
+                    .expect("captured Source metadata");
+                assert_eq!(record.kind(), lwiki::domain::RecordKind::Source);
+                assert_eq!(path.as_str(), format!("sources/{}/source.md", record.id()));
+                Some(record.id().clone())
+            })
+            .collect()
+    }
     fn capture_many(&self, count: usize) -> Vec<RecordId> {
         self.capture_many_with(count, |n| format!("Cedar backup source number {n}."))
     }
@@ -289,7 +309,19 @@ fn competing_submissions_commit_exactly_one_packet_winner() {
             .count(),
         1
     );
-    assert_eq!(f.count("sources/source_", "/source.md"), 1);
+    assert_eq!(f.captured_source_ids().len(), 1);
+    let imported = results
+        .iter()
+        .find_map(|result| result.as_ref().ok())
+        .unwrap();
+    assert_eq!(
+        f.captured_source_ids(),
+        imported
+            .imported_sources
+            .iter()
+            .map(|span| span.source_id.clone())
+            .collect::<Vec<_>>()
+    );
     assert_eq!(f.count("runs/run_research_race/outputs/receipt_", ".md"), 1);
     let status = research::status(&f.app(), &id("run_research_race")).unwrap();
     assert_eq!(status["imports"], 1);
@@ -322,7 +354,15 @@ fn exact_retry_recovers_interrupted_apply_with_one_source_and_receipt() {
         ResearchStage::Answer
     );
     assert_eq!(recovered.imported_sources.len(), 1);
-    assert_eq!(f.count("sources/source_", "/source.md"), 1);
+    assert_eq!(f.captured_source_ids().len(), 1);
+    assert_eq!(
+        f.captured_source_ids(),
+        recovered
+            .imported_sources
+            .iter()
+            .map(|span| span.source_id.clone())
+            .collect::<Vec<_>>()
+    );
     assert_eq!(
         f.count("runs/run_research_retry/outputs/receipt_", ".md"),
         1
@@ -355,12 +395,21 @@ fn ordinary_resume_recovers_pending_import_before_returning_ready_packet() {
     assert!(ready.ready_to_import);
     assert_eq!(ready.packet.as_ref().unwrap().stage, ResearchStage::Answer);
     assert_eq!(ready.packet.as_ref().unwrap().passages.len(), 1);
-    assert_eq!(f.count("sources/source_", "/source.md"), 1);
+    assert_eq!(f.captured_source_ids().len(), 1);
     assert_eq!(
         f.count("runs/run_research_resume/outputs/receipt_", ".md"),
         1
     );
-    assert!(research::import(&reopened, &bytes).unwrap().reused);
+    let retry = research::import(&reopened, &bytes).unwrap();
+    assert!(retry.reused);
+    assert_eq!(
+        f.captured_source_ids(),
+        retry
+            .imported_sources
+            .iter()
+            .map(|span| span.source_id.clone())
+            .collect::<Vec<_>>()
+    );
 }
 
 #[test]

@@ -955,6 +955,62 @@ fn capture_batch_tampered_descriptor_and_retained_payload_are_not_replay_authori
 #[cfg(unix)]
 #[test]
 fn capture_batch_symlink_hardlink_nested_marker_and_legacy_alias_preserve_foreign_bytes() {
+    use std::{
+        os::unix::fs::MetadataExt,
+        path::{Path, PathBuf},
+        time::SystemTime,
+    };
+    #[derive(Debug, PartialEq, Eq)]
+    struct Entry {
+        kind: fs::FileType,
+        modified: SystemTime,
+        mode: u32,
+        inode: u64,
+        links: u64,
+        bytes: Option<Vec<u8>>,
+        symlink: Option<PathBuf>,
+    }
+    fn inventory(root: &Path) -> BTreeMap<PathBuf, Entry> {
+        fn visit(path: &Path, inventory: &mut BTreeMap<PathBuf, Entry>) {
+            let metadata = match fs::symlink_metadata(path) {
+                Ok(metadata) => metadata,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => return,
+                Err(error) => panic!("inventory {path:?}: {error}"),
+            };
+            inventory.insert(
+                path.to_owned(),
+                Entry {
+                    kind: metadata.file_type(),
+                    modified: metadata.modified().unwrap(),
+                    mode: metadata.mode(),
+                    inode: metadata.ino(),
+                    links: metadata.nlink(),
+                    bytes: metadata.is_file().then(|| fs::read(path).unwrap()),
+                    symlink: metadata
+                        .file_type()
+                        .is_symlink()
+                        .then(|| fs::read_link(path).unwrap()),
+                },
+            );
+            if metadata.is_dir() {
+                for child in fs::read_dir(path).unwrap() {
+                    visit(&child.unwrap().path(), inventory);
+                }
+            }
+        }
+        let mut inventory = BTreeMap::new();
+        for relative in [
+            "WIKI.md",
+            "foreign.dat",
+            "sources",
+            "changes",
+            ".wiki/retained",
+            ".wiki/state",
+        ] {
+            visit(&root.join(relative), &mut inventory);
+        }
+        inventory
+    }
     for variant in 0..4 {
         let fixture = Fixture::new(|_| {});
         let plan = SourceStore::new(fixture.fs.clone())
@@ -978,10 +1034,68 @@ fn capture_batch_symlink_hardlink_nested_marker_and_legacy_alias_preserve_foreig
                 fs::create_dir(&root).unwrap();
                 fs::write(root.join("WIKI.md"), b"nested vault").unwrap();
             }
-            _ => fs::create_dir(root.parent().unwrap().join("SOURCE_ALIAS_BATCH")).unwrap(),
+            _ => {
+                let alias = root.parent().unwrap().join("SOURCE_ALIAS_BATCH");
+                fs::create_dir(&alias).unwrap();
+                fs::write(alias.join("sentinel.bin"), b"foreign alias contents\0\xff").unwrap();
+            }
         }
-        assert!(fixture.project_batch(vec![plan]).is_err());
-        assert_eq!(fs::read(foreign).unwrap(), b"foreign exact bytes");
+        let before = inventory(fixture.fs.root().path());
+        let authority = fixture.catalog.operation_state().unwrap();
+        let publication = QueryCatalog::snapshot(
+            &fixture
+                .catalog
+                .query_snapshot(QueryReadLimits::default())
+                .unwrap(),
+        )
+        .clone();
+        let outcome = fixture.project_batch(vec![plan]);
+        if variant < 3 {
+            assert!(
+                outcome.is_err(),
+                "variant {variant} must refuse during projection"
+            );
+        } else if let Ok(projected) = outcome {
+            // Exact lowercase absence permits projection on case-sensitive
+            // filesystems. Ordinary preparation must still refuse the alias
+            // before retaining any Change or publication authority.
+            let error = match IndexedRefreshSession::prepare_write(
+                &fixture.catalog,
+                &fixture.writer,
+                projected,
+            ) {
+                Err(error) => error,
+                Ok(_) => panic!("folded alias passed ordinary preparation"),
+            };
+            assert_eq!(error.code, ErrorCode::RecordInvalid);
+            assert_eq!(error.message, "case-folded existing path collision");
+        } else {
+            let error = outcome.err().unwrap();
+            assert_eq!(error.code, ErrorCode::ContentConflict);
+            assert_eq!(error.message, "generated source root already exists");
+        }
+        assert_eq!(
+            inventory(fixture.fs.root().path()),
+            before,
+            "variant {variant}"
+        );
+        assert_eq!(fixture.catalog.operation_state().unwrap(), authority);
+        assert_eq!(
+            QueryCatalog::snapshot(
+                &fixture
+                    .catalog
+                    .query_snapshot(QueryReadLimits::default())
+                    .unwrap(),
+            ),
+            &publication
+        );
+        // Compare exact directory-entry spellings through the inventory;
+        // lowercase exists() also resolves the uppercase alias on macOS.
+        assert_eq!(fs::read(&foreign).unwrap(), b"foreign exact bytes");
+        assert_eq!(
+            Blake3Hash::digest(fs::read(&foreign).unwrap()),
+            Blake3Hash::digest(b"foreign exact bytes")
+        );
     }
 }
 

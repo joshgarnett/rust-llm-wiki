@@ -530,14 +530,33 @@ fn page_move_many_incoming_owners_loads_affected_policy_certificate() {
     let fence = crate::graph::review_types::GRAPH_REVIEW_FENCE;
     files.push((
         "policy-changed.md".into(),
-        format!("[[pages/guide.md]]\n```{fence}\n{{}}\n```\n").into_bytes(),
+        note(
+            "page",
+            "page_policy_changed",
+            json!({"wiki_schema":"unsupported"}),
+            &format!("[[pages/guide.md]]\n```{fence}\n{{}}\n```\n"),
+        ),
     ));
     // This untouched nonempty indexed certificate must actually be loaded by
     // the affected review recomputation, with >16 replaced owner exclusions.
     files.push((
         "policy-external.md".into(),
-        format!("```{fence}\n{{}}\n```\n").into_bytes(),
+        note(
+            "page",
+            "page_policy_external",
+            json!({"wiki_schema":"unsupported"}),
+            &format!("```{fence}\n{{}}\n```\n"),
+        ),
     ));
+    // These claimed malformed receipts are policy candidates, with no typed
+    // Page or valid review authority. Their author bytes remain mutable links.
+    for (name, bytes) in &files {
+        if name.starts_with("policy-") {
+            let parsed = crate::records::parse_note(bytes);
+            assert!(parsed.canonical.is_none());
+            assert!(crate::graph::review::is_receipt_candidate(&parsed).unwrap());
+        }
+    }
     let fixture = Fixture::new(
         &files
             .iter()
@@ -584,7 +603,77 @@ fn page_move_many_incoming_owners_loads_affected_policy_certificate() {
             .any(|r| r.kind == super::super::policy_facts::PolicyKind::Review)
     );
     fixture.apply(ProjectedWrite::from_parts(parts));
+    for (name, before) in &files {
+        if name.starts_with("policy-") {
+            let expected = String::from_utf8(before.clone())
+                .unwrap()
+                .replace("pages/guide.md", "handbook/Guide.md")
+                .into_bytes();
+            assert_eq!(
+                fs::read(fixture.fs.root().path().join(name)).unwrap(),
+                expected
+            );
+        }
+    }
     fixture.oracle();
+
+    // An adopted Page carrying the same invalid receipt must not be rewritten
+    // as ordinary author bytes: its typed eligibility guard still refuses.
+    let typed = Fixture::new(&[
+        ("pages/guide.md", page("page_guide", "Guide.")),
+        (
+            "policy-changed.md",
+            page(
+                "page_policy_changed",
+                &format!("[[pages/guide.md]]\n```{fence}\n{{}}\n```\n"),
+            ),
+        ),
+    ]);
+    let before = ["pages/guide.md", "policy-changed.md"].map(|name| {
+        let file = typed.fs.root().path().join(name);
+        (
+            name,
+            fs::read(&file).unwrap(),
+            fs::metadata(file).unwrap().modified().unwrap(),
+        )
+    });
+    let authority = typed.catalog.operation_state().unwrap();
+    let publication = typed
+        .catalog
+        .query_snapshot(QueryReadLimits::default())
+        .unwrap()
+        .snapshot()
+        .clone();
+    let error = typed.project("handbook/Guide.md").err().unwrap();
+    assert_eq!(error.code, ErrorCode::RecordInvalid);
+    assert_eq!(
+        error.message,
+        "rename invalidates typed record page_policy_changed"
+    );
+    for (name, bytes, modified) in before {
+        let file = typed.fs.root().path().join(name);
+        assert_eq!(fs::read(&file).unwrap(), bytes);
+        assert_eq!(fs::metadata(file).unwrap().modified().unwrap(), modified);
+    }
+    assert!(!typed.fs.root().path().join("handbook").exists());
+    assert!(!typed.fs.root().path().join("changes").exists());
+    assert!(
+        !typed
+            .fs
+            .root()
+            .path()
+            .join(".wiki/retained/changes")
+            .exists()
+    );
+    assert_eq!(typed.catalog.operation_state().unwrap(), authority);
+    assert_eq!(
+        typed
+            .catalog
+            .query_snapshot(QueryReadLimits::default())
+            .unwrap()
+            .snapshot(),
+        &publication
+    );
 }
 
 #[test]

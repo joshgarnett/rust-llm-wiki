@@ -426,11 +426,23 @@ fn retained_generation_output_with_invalidated_source_projects_without_panic() {
         )
         .unwrap();
     assert!(!hits.network_used);
-    assert!(hits.hits.iter().any(|hit| {
-        hit.locator.path.as_str() == "broken-duplicate.md"
-            && hit.locator.record.is_none()
-            && hit.excerpt.citation.is_none()
-    }));
+    assert!(
+        hits.hits
+            .iter()
+            .all(|hit| hit.locator.path.as_str() != "broken-duplicate.md")
+    );
+    let original = std::fs::read(f.temp.path().join("broken-duplicate.md")).unwrap();
+    let inspected = f
+        .app
+        .inspect_literal(lwiki::app::literal::LiteralInspectRequest {
+            path: VaultRelativePath::new("broken-duplicate.md").unwrap(),
+            range: None,
+            max_bytes: original.len(),
+        })
+        .unwrap();
+    assert_eq!(inspected.bytes, original);
+    assert_eq!(inspected.hash, Blake3Hash::digest(&original));
+    assert!(!inspected.structured_currentness_asserted);
     assert!(hits.hits.iter().all(|hit| {
         hit.excerpt.citation.is_none()
             && hit

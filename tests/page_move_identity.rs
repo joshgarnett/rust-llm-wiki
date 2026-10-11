@@ -365,7 +365,35 @@ fn native_cited_page_move_rebases_only_provenance_and_delete_sync_never_resurrec
     assert_eq!(current["data"]["record"], before["data"]["record"]);
     assert_eq!(current["data"]["path"], "handbook/deep/Answer.md");
     let source_after = f.ok(&["read", "--path", payload_path]);
-    assert_eq!(source_after["data"], proof["data"]);
+    let mut source_payload = source_after["data"].clone();
+    let mut original_payload = proof["data"].clone();
+    let after_health = source_payload
+        .as_object_mut()
+        .unwrap()
+        .remove("health")
+        .unwrap();
+    let before_health = original_payload
+        .as_object_mut()
+        .unwrap()
+        .remove("health")
+        .unwrap();
+    assert_eq!(source_payload, original_payload);
+    assert!(
+        after_health["index_generation"].as_u64().unwrap()
+            > before_health["index_generation"].as_u64().unwrap()
+    );
+    for health in [&before_health, &after_health] {
+        assert_eq!(health["schema_version"], "lwiki.health.v1");
+        assert_eq!(health["observation"], "published_generation");
+        assert_eq!(health["known_issues"], false);
+        assert!(health["structured_eligibility_complete"].is_null());
+        assert_eq!(health["current_health"], "unknown");
+        assert_eq!(health["global_membership_freshness"], "unknown");
+    }
+    assert_eq!(
+        after_health["selected_verification"],
+        before_health["selected_verification"]
+    );
     assert_eq!(source_files(&f.root.join("sources")), sources_before);
 
     // A valid Decision output reference must become dangling on deletion,
@@ -433,9 +461,39 @@ fn native_cited_page_move_rebases_only_provenance_and_delete_sync_never_resurrec
     );
     assert!(restored["data"]["maintenance"]["build"].is_null());
     let returned = f.ok(&["read", "--id", "Page.Cited"]);
-    assert_eq!(returned["data"], current["data"]);
     let predecessor_restored = f.ok(&["read", "--id", "Decision.PageOutput"]);
-    assert_eq!(predecessor_restored["data"], predecessor["data"]);
+    for (after, before) in [(&returned, &current), (&predecessor_restored, &predecessor)] {
+        let mut after_payload = after["data"].clone();
+        let mut before_payload = before["data"].clone();
+        let after_health = after_payload
+            .as_object_mut()
+            .unwrap()
+            .remove("health")
+            .unwrap();
+        let before_health = before_payload
+            .as_object_mut()
+            .unwrap()
+            .remove("health")
+            .unwrap();
+        assert_eq!(after_payload, before_payload);
+        assert!(
+            after_health["index_generation"].as_u64().unwrap()
+                > before_health["index_generation"].as_u64().unwrap()
+        );
+        for (health, read) in [(&before_health, before), (&after_health, after)] {
+            assert_eq!(health["schema_version"], "lwiki.health.v1");
+            assert_eq!(health["observation"], "published_generation");
+            assert_eq!(health["known_issues"], false);
+            assert!(health["structured_eligibility_complete"].is_null());
+            assert_eq!(health["selected_verification"], read["meta"]["freshness"]);
+            assert_eq!(health["current_health"], "unknown");
+            assert_eq!(health["global_membership_freshness"], "unknown");
+        }
+        assert_eq!(
+            after_health["selected_verification"],
+            before_health["selected_verification"]
+        );
+    }
     assert_eq!(source_files(&f.root.join("sources")), sources_before);
     let check = f.ok(&["check"]);
     assert_eq!(check["data"]["complete"], true);

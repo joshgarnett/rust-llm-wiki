@@ -147,6 +147,7 @@ fn maintenance_sync_rebuilds_incompatible_layout_without_input_changes() {
         "DROP INDEX document_titles",
     ] {
         let (temp, catalog) = fixture();
+        fs::write(temp.path().join("page.md"), "---\nwiki_schema: '1'\nwiki_id: page_maintenance_search\nwiki_kind: page\ntitle: Original\nwiki_status: reviewed\n---\n# First\n\noriginal content\n").unwrap();
         let writer = WriterPermit::acquire(catalog.fs.root(), Duration::from_secs(1)).unwrap();
         catalog.rebuild_normalized(&writer).unwrap();
         let (selected, _) =

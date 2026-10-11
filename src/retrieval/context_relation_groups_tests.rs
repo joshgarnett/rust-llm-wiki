@@ -216,12 +216,20 @@ impl Harness {
     fn new(fixtures: Vec<Fixture>) -> Self {
         let connection = Connection::open_in_memory().unwrap();
         // Only document_owner's ordinary default/path filter lookup is needed.
-        connection.execute_batch("CREATE TABLE documents(path TEXT PRIMARY KEY,record_id TEXT); CREATE TABLE records(id TEXT PRIMARY KEY);").unwrap();
+        connection.execute_batch("CREATE TABLE documents(path TEXT PRIMARY KEY,record_id TEXT,source_id TEXT,owner_revision TEXT); CREATE TABLE records(id TEXT PRIMARY KEY);").unwrap();
         for fixture in &fixtures {
             connection
                 .execute(
-                    "INSERT INTO documents(path) VALUES (?1)",
-                    [fixture.document.path.as_str()],
+                    "INSERT INTO documents(path,source_id,owner_revision) VALUES (?1,?2,?3)",
+                    rusqlite::params![
+                        fixture.document.path.as_str(),
+                        fixture.document.source_id.as_ref().map(RecordId::as_str),
+                        fixture
+                            .document
+                            .owner_revision
+                            .as_ref()
+                            .map(RecordId::as_str)
+                    ],
                 )
                 .unwrap();
         }

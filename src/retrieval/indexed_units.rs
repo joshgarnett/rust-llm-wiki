@@ -870,7 +870,7 @@ mod tests {
             paths.extend(page);
         }
         assert!(paths.contains(&path("page.md")) && paths.contains(&captured));
-        for excluded in ["WIKI.md", "entity.md", "run.md", "event.md"] {
+        for excluded in ["WIKI.md", "plain.md", "entity.md", "run.md", "event.md"] {
             assert!(!paths.contains(&path(excluded)));
             assert_eq!(
                 code(materialize_owner(
@@ -1166,7 +1166,7 @@ mod tests {
         );
         let replay_reader = catalog
             .cached_query_snapshot(QueryReadLimits {
-                max_rows: 6,
+                max_rows: 4,
                 ..Default::default()
             })
             .unwrap();
@@ -1177,7 +1177,7 @@ mod tests {
             .unwrap()
             .collect::<Result<Vec<_>>>()
             .unwrap();
-        assert_eq!(replay_reader.usage().rows, 6);
+        assert_eq!(replay_reader.usage().rows, 4);
         assert_eq!(
             code(
                 replay_factory
@@ -1187,7 +1187,7 @@ mod tests {
             ),
             ErrorCode::BudgetExceeded
         );
-        assert_eq!(replay_reader.usage().rows, 6);
+        assert_eq!(replay_reader.usage().rows, 4);
         let reader = catalog
             .cached_query_snapshot(QueryReadLimits::default())
             .unwrap();

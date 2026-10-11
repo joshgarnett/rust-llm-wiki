@@ -848,7 +848,10 @@ fn application_replays_indexed_interruptions_and_historical_results_without_payl
                     .changes_apply(proof.change.change_id.clone())
                     .unwrap_err();
                 assert_eq!(error.code, ErrorCode::RecoveryRequired);
-                assert!(error.message.contains("journal names another publication"));
+                assert_eq!(
+                    error.message, "preview journal names another indexed publication",
+                    "actual publication guard: {error:?}"
+                );
                 assert_eq!(fs::read(&journal_path).unwrap(), forged);
                 fs::write(journal_path, original).unwrap();
             }

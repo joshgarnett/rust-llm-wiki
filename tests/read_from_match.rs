@@ -458,7 +458,36 @@ fn native_forward_read_uses_authored_body_coordinates_preserves_legacy_and_refus
             "5",
             "--no-sync",
         ]);
-        assert_eq!(cached["data"], explicit["data"]);
+        let mut cached_payload = cached["data"].clone();
+        let mut verified_payload = explicit["data"].clone();
+        let cached_health = cached_payload
+            .as_object_mut()
+            .unwrap()
+            .remove("health")
+            .unwrap();
+        let verified_health = verified_payload
+            .as_object_mut()
+            .unwrap()
+            .remove("health")
+            .unwrap();
+        assert_eq!(cached_payload, verified_payload);
+        assert_eq!(cached_health["selected_verification"], "index_snapshot");
+        assert_eq!(
+            verified_health["selected_verification"],
+            explicit["meta"]["freshness"]
+        );
+        for health in [&cached_health, &verified_health] {
+            assert_eq!(health["schema_version"], "lwiki.health.v1");
+            assert_eq!(health["observation"], "published_generation");
+            assert_eq!(health["known_issues"], false);
+            assert!(health["structured_eligibility_complete"].is_null());
+            assert_eq!(health["current_health"], "unknown");
+            assert_eq!(health["global_membership_freshness"], "unknown");
+        }
+        assert_eq!(
+            cached_health["index_generation"],
+            verified_health["index_generation"]
+        );
         assert!(cached["data"]["source_citation"].is_null());
         assert_eq!(cached["meta"]["freshness"], "index_snapshot");
         if !normalized {

@@ -2534,7 +2534,7 @@ fn refresh_batch_rechecksummed_historical_head_revision_row_owner_path_and_title
 // Frozen prospectively against operator/cli-acceptance-002.py. Only physical
 // SQLite row IDs and publication/build bookkeeping are excluded; cache-unit
 // state is compared in full (this fixture intentionally has no unit policy).
-const BATCH_LOGICAL_TABLES: [&str; 23] = [
+const BATCH_LOGICAL_TABLES: [&str; 25] = [
     "documents",
     "graph_rows",
     "records",
@@ -2558,6 +2558,8 @@ const BATCH_LOGICAL_TABLES: [&str; 23] = [
     "unit_owners",
     "unit_owner_dependencies",
     "unit_policies",
+    "relation_annotations",
+    "relation_dependencies",
 ];
 fn batch_sql_rows(connection: &rusqlite::Connection, sql: &str) -> Vec<Vec<String>> {
     let mut statement = connection.prepare(sql).unwrap();
@@ -2762,7 +2764,7 @@ fn batch_public_read_citation(
     }
 }
 #[test]
-fn refresh_batch_complete_23_table_oracle_and_public_cited_results() {
+fn refresh_batch_complete_25_table_oracle_and_public_cited_results() {
     use crate::retrieval::{
         ContextRequest, ContextScope, QueryPlan, SearchFilters, lexical, verification,
     };

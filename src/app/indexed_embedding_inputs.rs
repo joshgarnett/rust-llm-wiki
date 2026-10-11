@@ -802,10 +802,16 @@ mod tests {
             fs::write(temp.path().join("page.md"), "---\nwiki_schema: '1'\nwiki_id: page_inputs\nwiki_kind: page\ntitle: Page café 東京\nwiki_status: reviewed\nwiki_depends_on_ids: [assertion_inputs]\n---\nAuthored dependency evidence.\n").unwrap();
             fs::write(temp.path().join("entity.md"), "---\nwiki_schema: '1'\nwiki_id: entity_inputs\nwiki_kind: entity\ntitle: Entity\nwiki_status: active\nwiki_entity_type: component\n---\n").unwrap();
             fs::write(temp.path().join("run.md"), "---\nwiki_schema: '1'\nwiki_id: run_inputs\nwiki_kind: run\ntitle: Run\nwiki_status: planned\nwiki_created_at: '2026-10-06T00:00:00Z'\n---\n").unwrap();
-            for p in ["plain-a.md", "plain-b.md"] {
+            // Distinct reviewed identities render the same embedding input.
+            fs::write(
+                temp.path().join("original.md"),
+                "Ordinary uncaptured original.\n",
+            )
+            .unwrap();
+            for p in ["shared-a.md", "shared-b.md"] {
                 fs::write(
                     temp.path().join(p),
-                    "# Shared café\n\nShared exact bytes.\n",
+                    format!("---\nwiki_schema: '1'\nwiki_id: page_shared_{}\nwiki_kind: page\ntitle: Shared café\nwiki_status: reviewed\n---\nShared exact bytes.\n", p.trim_end_matches(".md")),
                 )
                 .unwrap();
             }
@@ -967,6 +973,20 @@ mod tests {
         let full = fixture.materialize(None);
         let selected = fixture.materialize(Some(&[path("page.md"), path("page.md")]));
         assert_eq!(full.owners.len(), 5);
+        assert!(
+            full.units
+                .iter()
+                .all(|unit| unit.owner != path("original.md"))
+        );
+        assert_eq!(
+            code(materialize(
+                &fixture.catalog,
+                &EmbeddingSettings::default(),
+                Some(&[path("original.md")]),
+                &VerificationBudget::default()
+            )),
+            ErrorCode::CapabilityUnavailable
+        );
         assert_eq!(selected.owners.len(), 1);
         assert_eq!(
             full.units
@@ -1042,11 +1062,11 @@ mod tests {
         let plain = full
             .units
             .iter()
-            .find(|unit| unit.owner == path("plain-a.md"))
+            .find(|unit| unit.owner == path("shared-a.md"))
             .unwrap();
         let guards = &full.source_bindings[&plain.input_hash];
-        assert!(guards.iter().any(|guard| guard.path == path("plain-a.md")));
-        assert!(guards.iter().any(|guard| guard.path == path("plain-b.md")));
+        assert!(guards.iter().any(|guard| guard.path == path("shared-a.md")));
+        assert!(guards.iter().any(|guard| guard.path == path("shared-b.md")));
         assert!(guards.windows(2).all(|pair| pair[0].path < pair[1].path));
         assert!(full.source_bindings.len() < full.units.len());
         // Count repeated guard copies across distinct input keys explicitly.
@@ -1057,21 +1077,21 @@ mod tests {
     #[test]
     fn detached_planning_deduplicates_across_scopes_and_selects_feasible_supplier() {
         let fixture = Fixture::new();
-        let mut first = fixture.materialize(Some(&[path("plain-a.md")]));
+        let mut first = fixture.materialize(Some(&[path("shared-a.md")]));
         first.recheck(&fixture.catalog).unwrap();
         let mut first = first.into_planning_summary().unwrap();
-        let mut second = fixture.materialize(Some(&[path("plain-b.md")]));
+        let mut second = fixture.materialize(Some(&[path("shared-b.md")]));
         second.recheck(&fixture.catalog).unwrap();
         let second = second.into_planning_summary().unwrap();
         assert_eq!(first.units[0].input_hash, second.units[0].input_hash);
         let missing = vec![first.units[0].input()];
-        let available_guards = second.owners[&path("plain-b.md")].len();
+        let available_guards = second.owners[&path("shared-b.md")].len();
         // A detached summary is an observation, not proof authority. Model a
         // larger supplier closure here; later paid admission must authenticate
         // the selected supplier independently against its actual task guards.
         first
             .owners
-            .get_mut(&path("plain-a.md"))
+            .get_mut(&path("shared-a.md"))
             .unwrap()
             .push(ReadDependency {
                 path: path("extra-dependency.md"),
@@ -1097,18 +1117,18 @@ mod tests {
             .unwrap();
         assert_eq!(paid.source_bindings.len(), 1);
         assert_eq!(paid.units.len(), 1);
-        assert_eq!(paid.units[0].owner, path("plain-b.md"));
+        assert_eq!(paid.units[0].owner, path("shared-b.md"));
         assert_eq!(
             paid.source_bindings[&missing[0].input_hash].len(),
             available_guards
         );
         let repeated = fixture
-            .materialize(Some(&[path("plain-b.md")]))
+            .materialize(Some(&[path("shared-b.md")]))
             .into_planning_summary()
             .unwrap();
         assert_eq!(code(page.append(repeated)), ErrorCode::FreshnessConflict);
         let mut changed = fixture
-            .materialize(Some(&[path("plain-a.md")]))
+            .materialize(Some(&[path("shared-a.md")]))
             .into_planning_summary()
             .unwrap();
         changed.snapshot.generation += 1;
@@ -1123,7 +1143,7 @@ mod tests {
     #[test]
     fn detached_paid_planning_retains_deadline_and_per_input_guard_copy_limits() {
         let fixture = Fixture::new();
-        let mut inputs = fixture.materialize(Some(&[path("plain-a.md")]));
+        let mut inputs = fixture.materialize(Some(&[path("shared-a.md")]));
         inputs.recheck(&fixture.catalog).unwrap();
         let mut page = inputs.into_planning_summary().unwrap();
         let missing = vec![page.units[0].input()];
@@ -1131,7 +1151,7 @@ mod tests {
             code(page.paid_scope(&missing, 127, Instant::now())),
             ErrorCode::BudgetExceeded
         );
-        let guards = page.owners.get_mut(&path("plain-a.md")).unwrap();
+        let guards = page.owners.get_mut(&path("shared-a.md")).unwrap();
         while guards.len() < 127 {
             guards.push(ReadDependency {
                 path: path(&format!("dependency-{}.md", guards.len())),
@@ -1213,7 +1233,7 @@ mod tests {
         let mut inputs = materialize(
             &fixture.catalog,
             &EmbeddingSettings::default(),
-            Some(&[path("plain-a.md"), path("plain-b.md")]),
+            Some(&[path("shared-a.md"), path("shared-b.md")]),
             &VerificationBudget {
                 max_files: 10,
                 ..Default::default()
@@ -1232,7 +1252,7 @@ mod tests {
             .filter(|read| read.layer == "proof-open")
             .collect::<Vec<_>>();
         assert_eq!(opens.len(), 2);
-        assert!(opens.iter().all(|read| !read.path.ends_with("plain-b.md")));
+        assert!(opens.iter().all(|read| !read.path.ends_with("shared-b.md")));
         crate::catalog::query_diagnostics::begin();
         assert_eq!(
             code(inputs.recheck(&fixture.catalog)),
@@ -1288,7 +1308,7 @@ mod tests {
     #[test]
     fn deadline_row_and_selected_path_caps_remain_finite() {
         let fixture = Fixture::new();
-        let mut inputs = fixture.materialize(Some(&[path("plain-a.md")]));
+        let mut inputs = fixture.materialize(Some(&[path("shared-a.md")]));
         inputs.allowance.deadline = Instant::now();
         crate::catalog::query_diagnostics::begin();
         assert_eq!(
@@ -1313,7 +1333,7 @@ mod tests {
             code(materialize(
                 &fixture.catalog,
                 &EmbeddingSettings::default(),
-                Some(&vec![path("plain-a.md"); MAX_OWNERS + 1]),
+                Some(&vec![path("shared-a.md"); MAX_OWNERS + 1]),
                 &VerificationBudget::default()
             )),
             ErrorCode::BudgetExceeded

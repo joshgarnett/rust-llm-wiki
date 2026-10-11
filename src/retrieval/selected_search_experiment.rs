@@ -173,6 +173,7 @@ fn paired_selected_search_probe() {
 mod tests {
     use super::*;
     use crate::{
+        catalog::query_types::QueryCatalog,
         changes::ChangeDraft,
         sources::{CaptureRequest, ExtractionInput, SourceOrigin, SourceStore},
         vault::{VaultFs, VaultRoot, WriterPermit},
@@ -221,7 +222,7 @@ mod tests {
             fs::write(temp.path().join("WIKI.md"), "---\nwiki_schema: '1'\nwiki_id: vault_search_proof\nwiki_kind: vault\ntitle: Search proof\n---\n").unwrap();
             fs::write(
                 temp.path().join("authored.md"),
-                format!("# Authored café\n\n{QUERY}: uncited authored setup.\n"),
+                format!("---\nwiki_schema: '1'\nwiki_id: page_search_proof\nwiki_kind: page\ntitle: Authored café\nwiki_status: reviewed\n---\n{QUERY}: uncited authored setup.\n"),
             )
             .unwrap();
             let handle = VaultFs::new(VaultRoot::explicit(temp.path()).unwrap());
@@ -583,7 +584,7 @@ mod tests {
     }
 
     #[test]
-    fn selected_identity_edit_and_malformed_entity_still_refuse() {
+    fn selected_identity_edit_refuses_and_malformed_entity_is_inspection_only() {
         let fixture = Fixture::new();
         let entity_path = fixture.add_identity("entity_identity", "");
         fixture.sync();
@@ -617,8 +618,7 @@ mod tests {
         let mut malformed = plan();
         malformed.filters.path_prefix = Some("malformed-entity.md".into());
         let baseline = cached(&fixture.catalog, QUERY, &malformed).0.unwrap();
-        assert_eq!(baseline.hits.len(), 1);
-        assert!(baseline.hits[0].identity_eligibility.is_none());
+        assert!(baseline.hits.is_empty());
         assert!(
             search(
                 &fixture.catalog,
@@ -626,8 +626,21 @@ mod tests {
                 &malformed,
                 &VerificationBudget::default()
             )
-            .is_err()
+            .unwrap()
+            .hits
+            .is_empty()
         );
+        let reader = fixture
+            .catalog
+            .cached_query_snapshot(QueryReadLimits::default())
+            .unwrap();
+        let document = reader
+            .document(&path("malformed-entity.md"))
+            .unwrap()
+            .unwrap();
+        assert!(document.record_id.is_none());
+        assert_eq!(document.eligibility, Eligibility::Invalid);
+        assert!(document.raw_text.contains("malformed body"));
     }
 
     #[test]
@@ -936,8 +949,7 @@ mod tests {
         let mut plan = plan();
         plan.filters.path_prefix = Some("invalid.md".into());
         let baseline = cached(&fixture.catalog, QUERY, &plan).0.unwrap();
-        assert_eq!(baseline.hits.len(), 1);
-        assert_eq!(baseline.hits[0].eligibility, Eligibility::Invalid);
+        assert!(baseline.hits.is_empty());
         assert!(
             search(
                 &fixture.catalog,
@@ -945,8 +957,18 @@ mod tests {
                 &plan,
                 &VerificationBudget::default()
             )
-            .is_err()
+            .unwrap()
+            .hits
+            .is_empty()
         );
+        let reader = fixture
+            .catalog
+            .cached_query_snapshot(QueryReadLimits::default())
+            .unwrap();
+        let invalid = reader.document(&path("invalid.md")).unwrap().unwrap();
+        assert_eq!(invalid.eligibility, Eligibility::Invalid);
+        assert!(invalid.record_id.is_none());
+        assert!(invalid.raw_text.contains("malformed text"));
         let mut unsupported = request(b"binary");
         unsupported.extraction = ExtractionInput::Unsupported {
             extractor: "fixture".into(),
@@ -997,11 +1019,33 @@ mod tests {
             )
             .is_err()
         );
-        for mode in [
-            SearchMode::Literal,
-            SearchMode::Semantic,
-            SearchMode::Hybrid,
-        ] {
+        plan.mode = SearchMode::Literal;
+        let literal = paired(&fixture, QUERY, &plan);
+        assert_eq!(literal.hits.len(), 2);
+        assert!(literal.hits.iter().all(|hit| {
+            hit.eligibility == Eligibility::Current
+                && hit
+                    .reasons
+                    .contains(&super::super::RetrievalReason::Literal)
+        }));
+        let captured = literal
+            .hits
+            .iter()
+            .find(|hit| hit.locator.path == fixture.content)
+            .unwrap();
+        assert_citation(&fixture, captured);
+        let authored = literal
+            .hits
+            .iter()
+            .find(|hit| hit.locator.path == path("authored.md"))
+            .unwrap();
+        assert_eq!(
+            authored.locator.record.as_ref().unwrap().record_id,
+            id("page_search_proof")
+        );
+        assert!(authored.excerpt.citation.is_none());
+        assert_eq!(authored.excerpt.label, ExcerptLabel::NoteText);
+        for mode in [SearchMode::Semantic, SearchMode::Hybrid] {
             plan.mode = mode;
             assert_eq!(
                 search(

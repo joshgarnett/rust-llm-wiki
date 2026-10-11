@@ -637,6 +637,176 @@ fn indexed_cli_cached_read_matches_legacy_for_notes_and_ranges() {
 }
 
 #[test]
+fn indexed_cli_unreadable_notes_retain_decode_diagnosis_and_exact_hashes() {
+    let unreadable: &[(&str, &[u8])] = &[
+        ("pages/unreadable-plain.md", b"bad\xffbody"),
+        (
+            "pages/unreadable-suspected.md",
+            b"wiki_schema: '1'\nwiki_kind: page\nwiki_id: page_unreadable_suspected\n---\n\xff",
+        ),
+        (
+            "pages/unreadable-envelope.md",
+            b"---\nwiki_schema: '1'\nwiki_kind: page\nwiki_id: page_unreadable_envelope\ntitle: Unreadable\n---\n\xff",
+        ),
+    ];
+    let readable: &[(&str, &[u8], &str)] = &[
+        ("pages/empty.md", b"", ""),
+        (
+            "pages/ordinary-properties.md",
+            b"---\nauthor: [\n---\nOrdinary note body.\n",
+            "Ordinary note body.\n",
+        ),
+        (
+            "pages/ordinary-valid-properties.md",
+            b"---\nauthor: Ada\nproperties:\n  project: Orion\n---\nUnknown properties note.\n",
+            "Unknown properties note.\n",
+        ),
+        (
+            "pages/plain.md",
+            b"# Plain\nOrdinary readable note.\n",
+            "# Plain\nOrdinary readable note.\n",
+        ),
+    ];
+    let notes: Vec<_> = unreadable
+        .iter()
+        .copied()
+        .chain(readable.iter().map(|&(path, bytes, _)| (path, bytes)))
+        .collect();
+    for normalized in [false, true] {
+        let fixture = Fixture::with_notes(&notes, normalized);
+        let before = canonical_tree(&fixture.root);
+        for &(path, bytes) in unreadable {
+            let cached = fixture.cli(&["read", "--path", path, "--no-sync"]);
+            assert_eq!(cached["meta"]["freshness"], "index_snapshot", "{cached}");
+            assert_eq!(cached["data"]["hash"], Blake3Hash::digest(bytes).as_str());
+            assert_eq!(cached["data"]["body"], "", "{cached}");
+            assert!(cached["data"]["record"].is_null(), "{cached}");
+            assert!(cached["data"]["metadata"].is_null(), "{cached}");
+            assert!(cached["data"]["source_citation"].is_null(), "{cached}");
+            let diagnostics = cached["data"]["diagnostics"].as_array().unwrap();
+            assert_eq!(
+                diagnostics
+                    .iter()
+                    .filter(|diagnostic| {
+                        diagnostic["code"] == "RECORD_INVALID"
+                            && diagnostic["details"]["message"] == "note is not UTF-8"
+                    })
+                    .count(),
+                1,
+                "{cached}"
+            );
+            assert!(
+                diagnostics
+                    .iter()
+                    .all(|diagnostic| diagnostic["path"] == path)
+            );
+            if path == "pages/unreadable-suspected.md" {
+                assert!(
+                    diagnostics.iter().any(|diagnostic| {
+                        diagnostic["details"]["details"]["reason"] == "suspected_wiki_envelope"
+                    }),
+                    "{cached}"
+                );
+            }
+
+            let physical = fixture.cli(&["inspect", "--path", path]);
+            assert_eq!(physical["meta"]["freshness"], "physical_bytes");
+            assert_eq!(physical["data"]["hash"], cached["data"]["hash"]);
+            assert_eq!(physical["data"]["bytes"], serde_json::json!(bytes));
+            assert!(physical["data"]["text"].is_null(), "{physical}");
+            assert_eq!(physical["data"]["parse_status"], "invalid");
+            assert!(physical["data"]["body_range"].is_null(), "{physical}");
+            assert!(physical["data"]["envelope_content_range"].is_null());
+            assert_eq!(physical["data"]["structured_currentness_asserted"], false);
+            assert!(
+                !physical["data"]["diagnostics"]
+                    .as_array()
+                    .unwrap()
+                    .is_empty()
+            );
+        }
+        for &(path, bytes, body) in readable {
+            let cached = fixture.cli(&["read", "--path", path, "--no-sync"]);
+            assert_eq!(cached["data"]["hash"], Blake3Hash::digest(bytes).as_str());
+            assert_eq!(cached["data"]["body"], body);
+            assert!(cached["data"]["diagnostics"].as_array().unwrap().is_empty());
+            assert!(cached["data"]["record"].is_null());
+        }
+        for id in ["page_unreadable_suspected", "page_unreadable_envelope"] {
+            fixture.cli_error(&["read", "--id", id, "--no-sync"], "RECORD_NOT_FOUND");
+        }
+
+        let strict = fixture.cli_error(&["check"], "RECORD_INVALID");
+        assert_eq!(strict["data"]["complete"], true);
+        let diagnostics = strict["data"]["diagnostics"].as_array().unwrap();
+        for &(path, _) in unreadable {
+            assert!(
+                diagnostics.iter().any(|diagnostic| {
+                    diagnostic["path"] == path
+                        && diagnostic["code"] == "RECORD_INVALID"
+                        && diagnostic["details"]["message"] == "note is not UTF-8"
+                }),
+                "{strict}"
+            );
+        }
+        let captured_path = format!(
+            "sources/{}/revisions/{}/content.md",
+            fixture.source, fixture.first
+        );
+        let healthy = fixture.cli(&["read", "--path", &captured_path]);
+        assert_eq!(healthy["data"]["body"], FIRST);
+        assert!(!healthy["data"]["source_citation"].is_null(), "{healthy}");
+        assert_eq!(canonical_tree(&fixture.root), before);
+
+        let database = if normalized {
+            fixture
+                .root
+                .join(format!(".wiki/cache/catalogs/{}.sqlite", fixture.file_id))
+        } else {
+            fixture.root.join(".wiki/cache/index.sqlite")
+        };
+        // Keep the fixture-only tamper handle open so CLI reads retain WAL/SHM.
+        let connection = rusqlite::Connection::open(database).unwrap();
+        for &(path, bytes) in &notes {
+            let original = std::str::from_utf8(bytes).unwrap_or_default();
+            let tampered = if original.is_empty() {
+                "forged text"
+            } else {
+                ""
+            };
+            assert_eq!(
+                connection
+                    .execute(
+                        "UPDATE documents SET raw_text=?1 WHERE path=?2",
+                        rusqlite::params![tampered, path],
+                    )
+                    .unwrap(),
+                1
+            );
+            let corrupt =
+                fixture.cli_error(&["read", "--path", path, "--no-sync"], "INDEX_CORRUPT");
+            if normalized {
+                assert_eq!(
+                    corrupt["error"]["message"],
+                    "cached document text differs from its stored hash"
+                );
+            }
+            assert_eq!(
+                connection
+                    .execute(
+                        "UPDATE documents SET raw_text=?1 WHERE path=?2",
+                        rusqlite::params![original, path],
+                    )
+                    .unwrap(),
+                1
+            );
+            assert_eq!(fs::read(fixture.root.join(path)).unwrap(), bytes);
+        }
+        assert_eq!(canonical_tree(&fixture.root), before);
+    }
+}
+
+#[test]
 fn indexed_cli_cached_read_is_stale_by_contract_and_never_writes() {
     let fixture = Fixture::new();
     let path = format!(
@@ -1409,7 +1579,18 @@ fn indexed_cli_general_search_preserves_authored_results_filters_and_cached_dry_
     let before = tree(&normalized.root);
     let dry = normalized.cli(&["--dry-run", "search", "PlanningSignal", "--no-sync"]);
     let actual = normalized.cli(&["search", "PlanningSignal", "--no-sync"]);
-    assert_eq!(dry["data"], actual["data"]);
+    let mut executed = actual["data"].clone();
+    let health = executed.as_object_mut().unwrap().remove("health").unwrap();
+    assert_eq!(dry["data"], executed);
+    assert!(dry["data"]["health"].is_null());
+    assert_eq!(health["schema_version"], "lwiki.health.v1");
+    assert_eq!(health["observation"], "published_generation");
+    assert_eq!(health["known_issues"], false);
+    assert!(health["index_generation"].as_u64().unwrap() > 0);
+    assert!(health["structured_eligibility_complete"].is_null());
+    assert_eq!(health["selected_verification"], actual["meta"]["freshness"]);
+    assert_eq!(health["current_health"], "unknown");
+    assert_eq!(health["global_membership_freshness"], "unknown");
     same_read_tree(&normalized, before);
     fs::write(
         normalized.root.join("pages/a.md"),
@@ -1420,12 +1601,35 @@ fn indexed_cli_general_search_preserves_authored_results_filters_and_cached_dry_
     assert_eq!(stale["data"]["hits"][0]["title"], "PlanningSignal Handbook");
     let plain = normalized.cli(&["search", "page_general_a"]);
     assert_eq!(plain["data"], stale["data"]);
-    // Normalized literal discovery is now supported; a cached read must still
-    // expose the pinned old bytes without manufacturing verified citations.
+    // Literal discovery includes adopted Pages. The cached read still exposes
+    // pinned old bytes without manufacturing verified citations.
     let literal = normalized.cli(&["search", "PlanningSignal", "--no-sync", "--mode", "literal"]);
     assert_eq!(literal["meta"]["freshness"], "index_snapshot");
     let hits = literal["data"]["hits"].as_array().unwrap();
-    assert_eq!(hits.len(), 4);
+    assert_eq!(hits.len(), 3);
+    let hit_paths = hits
+        .iter()
+        .map(|hit| hit["path"].as_str().unwrap())
+        .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(
+        hit_paths,
+        ["pages/a.md", "pages/b.md", "pages/draft.md"]
+            .into_iter()
+            .collect()
+    );
+    let original = fs::read(normalized.root.join("plain.md")).unwrap();
+    let inspection = crate::app::literal::inspect_literal(
+        &VaultFs::new(VaultRoot::explicit(&normalized.root).unwrap()),
+        crate::app::literal::LiteralInspectRequest {
+            path: crate::domain::VaultRelativePath::new("plain.md").unwrap(),
+            range: None,
+            max_bytes: original.len(),
+        },
+    )
+    .unwrap();
+    assert_eq!(inspection.bytes, original);
+    assert_eq!(inspection.hash, Blake3Hash::digest(&original));
+    assert!(!inspection.structured_currentness_asserted);
     let first = hits.iter().find(|hit| hit["path"] == "pages/a.md").unwrap();
     assert!(
         first["excerpt"]["text"]
@@ -1490,7 +1694,18 @@ fn indexed_cli_general_snapshot_context_preserves_reviewed_facets_and_dry_run() 
     let mut dry_args = vec!["--dry-run"];
     dry_args.extend(args);
     let dry = normalized.cli(&dry_args);
-    assert_eq!(dry["data"], actual["data"]);
+    let mut executed = actual["data"].clone();
+    let health = executed.as_object_mut().unwrap().remove("health").unwrap();
+    assert_eq!(dry["data"], executed);
+    assert!(dry["data"]["health"].is_null());
+    assert_eq!(health["schema_version"], "lwiki.health.v1");
+    assert_eq!(health["observation"], "published_generation");
+    assert_eq!(health["known_issues"], false);
+    assert!(health["index_generation"].as_u64().unwrap() > 0);
+    assert!(health["structured_eligibility_complete"].is_null());
+    assert_eq!(health["selected_verification"], actual["meta"]["freshness"]);
+    assert_eq!(health["current_health"], "unknown");
+    assert_eq!(health["global_membership_freshness"], "unknown");
     same_read_tree(&normalized, before);
 }
 

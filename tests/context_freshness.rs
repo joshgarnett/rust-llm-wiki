@@ -908,7 +908,7 @@ fn bridge_overlap_closure_preserves_all_stances_and_remaps_prior_bundles() {
         )
         .unwrap();
         let quote = &b"abcdefghijklmnop"[start..end];
-        let mut note=format!("---\nwiki_schema: \"1\"\nwiki_id: {name}_evidence\nwiki_kind: evidence\ntitle: {name}\nwiki_status: active\nwiki_assertion_id: {name}_claim\nwiki_source_id: {}\nwiki_source_revision: {}\nwiki_stance: supports\nwiki_locator_kind: utf8-bytes\nwiki_span_start: {start}\nwiki_span_end: {end}\nwiki_quote_hash: \"{}\"\n---\n",source.source_id,source.revision_id,Blake3Hash::digest(quote)).into_bytes();
+        let mut note=format!("---\nwiki_schema: \"1\"\nwiki_id: {name}_evidence\nwiki_kind: evidence\ntitle: {name}\nwiki_status: active\nwiki_assertion_id: {name}_claim\nwiki_source_id: '{}'\nwiki_source_revision: '{}'\nwiki_stance: supports\nwiki_locator_kind: utf8-bytes\nwiki_span_start: {start}\nwiki_span_end: {end}\nwiki_quote_hash: \"{}\"\n---\n",source.source_id,source.revision_id,Blake3Hash::digest(quote)).into_bytes();
         note.extend(
             lwiki::sources::evidence::exact_quote_body(quote, "\n", "Bridge fixture").unwrap(),
         );

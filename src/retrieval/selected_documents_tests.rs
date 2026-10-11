@@ -130,7 +130,7 @@ fn unadopted_and_malformed_text_can_be_read_without_eligible_claim() {
     .unwrap();
     assert_eq!(
         proof.documents[&path("plain.md")].reasons,
-        vec!["note_text"]
+        vec!["unadopted_note_inspection_only"]
     );
     assert_eq!(
         proof.documents[&path("malformed.md")].eligibility,

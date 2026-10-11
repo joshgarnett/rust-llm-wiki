@@ -175,7 +175,7 @@ mod tests {
             for index in 0..17 {
                 std::fs::write(
                     fixture.fs.root().path().join(format!("note-{index:02}.md")),
-                    format!("Coverage note {index} with exact content.\n"),
+                    format!("---\nwiki_schema: '1'\nwiki_id: page_coverage_{index}\nwiki_kind: page\ntitle: Coverage {index}\nwiki_status: reviewed\n---\nCoverage note {index} with exact content.\n"),
                 )
                 .unwrap();
             }
