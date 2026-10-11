@@ -23,6 +23,7 @@ use crate::{
 };
 use rusqlite::{params_from_iter, types::Value};
 use std::{
+    cell::RefCell,
     collections::BTreeMap,
     time::{Duration, Instant},
 };
@@ -107,13 +108,14 @@ pub(crate) fn with_lineage_witness_catalog_for_test(
 
 /// Filter before exact top-owner selection, using this same pinned SQL view.
 /// Borrowed scalar fields are charged before ownership; no legacy gen join.
-fn allowed(
+fn resolve_owner(
     reader: &QuerySnapshot,
-    unit: &UnitDescriptor,
+    owner: &VaultRelativePath,
     filter: &SearchFilters,
     for_context: bool,
-) -> Result<bool> {
-    let mut values = vec![Value::Text(unit.owner.as_str().to_owned())];
+    remaining_retention: usize,
+) -> Result<(OwnerFields, usize)> {
+    let mut values = vec![Value::Text(owner.as_str().to_owned())];
     let common = filters::catalog_sql(filter, &mut values, true);
     let policy = if for_context {
         filters::catalog_context_policy(false, true)
@@ -142,16 +144,107 @@ fn allowed(
         .map_err(crate::catalog::sql::sql_error)?
         .as_str()
         .map_err(|_| conflict("semantic owner hash is not text"))?;
-    let target: Option<String> = row.get(1).map_err(crate::catalog::sql::sql_error)?;
-    if hash != unit.source_hash.as_str()
-        || target.as_deref() != unit.target_id.as_ref().map(RecordId::as_str)
-    {
-        return Err(conflict(
-            "semantic owner identity differs from its inventory descriptor",
+    let target = row.get_ref(1).map_err(crate::catalog::sql::sql_error)?;
+    let target = match target {
+        rusqlite::types::ValueRef::Null => None,
+        rusqlite::types::ValueRef::Text(bytes) => Some(
+            std::str::from_utf8(bytes)
+                .map_err(|_| conflict("semantic owner target is not UTF-8"))?,
+        ),
+        _ => return Err(conflict("semantic owner target is not text")),
+    };
+    // Reserve compact retained ownership before parsing/cloning any row fields.
+    let bytes = owner.as_str().len()
+        + hash.len()
+        + target.map_or(0, str::len)
+        + std::mem::size_of::<(VaultRelativePath, OwnerFields)>()
+        + 128;
+    if bytes > QueryReadLimits::default().max_row_bytes || bytes > remaining_retention {
+        return Err(WikiError::new(
+            ErrorCode::BudgetExceeded,
+            "semantic owner resolution retention budget exhausted",
         ));
     }
-    row.get(2).map_err(crate::catalog::sql::sql_error)
+    Ok((
+        OwnerFields {
+            source_hash: hash.to_owned(),
+            target_id: target.map(str::to_owned),
+            eligible: row.get(2).map_err(crate::catalog::sql::sql_error)?,
+        },
+        bytes,
+    ))
 }
+
+/// Compact discovery metadata, never canonical evidence or a reusable proof.
+#[derive(Debug)]
+struct OwnerFields {
+    source_hash: String,
+    target_id: Option<String>,
+    eligible: bool,
+}
+
+/// A resolver exists only inside one discovery invocation. Its borrowed reader,
+/// filter and context policy cannot change between the scan and selected replay.
+struct OwnerResolver<'a> {
+    reader: &'a QuerySnapshot,
+    filter: &'a SearchFilters,
+    for_context: bool,
+    owners: BTreeMap<VaultRelativePath, OwnerFields>,
+    retained_bytes: usize,
+}
+impl<'a> OwnerResolver<'a> {
+    fn new(reader: &'a QuerySnapshot, filter: &'a SearchFilters, for_context: bool) -> Self {
+        Self {
+            reader,
+            filter,
+            for_context,
+            owners: BTreeMap::new(),
+            retained_bytes: 0,
+        }
+    }
+
+    fn allowed(&mut self, unit: &UnitDescriptor) -> Result<bool> {
+        // Cache hits perform no SQL, but still consume the one query deadline.
+        self.reader.check_query_budget()?;
+        if !self.owners.contains_key(&unit.owner) {
+            let ceiling = QueryReadLimits::default();
+            if self.owners.len() >= ceiling.max_rows {
+                return Err(WikiError::new(
+                    ErrorCode::BudgetExceeded,
+                    "semantic owner resolution retention budget exhausted",
+                ));
+            }
+            // Actual SQL row/byte admission and compact retention admission both
+            // precede constructing owned fields and cloning the path.
+            let (fields, bytes) = resolve_owner(
+                self.reader,
+                &unit.owner,
+                self.filter,
+                self.for_context,
+                ceiling.max_bytes.saturating_sub(self.retained_bytes),
+            )?;
+            self.retained_bytes += bytes;
+            self.owners.insert(unit.owner.clone(), fields);
+        }
+        let fields = self
+            .owners
+            .get(&unit.owner)
+            .expect("resolved owner inserted");
+        // An excluded owner is not permission to skip binding a later descriptor.
+        if fields.source_hash != unit.source_hash.as_str()
+            || fields.target_id.as_deref() != unit.target_id.as_ref().map(RecordId::as_str)
+        {
+            return Err(conflict(
+                "semantic owner identity differs from its inventory descriptor",
+            ));
+        }
+        Ok(fields.eligible)
+    }
+}
+
+#[cfg(test)]
+#[path = "indexed_semantic_owner_tests.rs"]
+mod owner_tests;
 
 struct Discovery {
     hits: HitSet,
@@ -182,13 +275,14 @@ fn discover(
     }
     require_space(store, state)?;
     let corpus = InventoryDocumentUnits::new(reader, &state.spec.settings, units)?;
+    let owners = RefCell::new(OwnerResolver::new(reader, &plan.filters, for_context));
     let scan = store.exact_descriptor_stream(
         &state.id,
         query,
         || corpus.replay(units),
         &[render::TargetKind::Document],
         plan.limits.candidates,
-        |unit| allowed(reader, unit, &plan.filters, for_context),
+        |unit| owners.borrow_mut().allowed(unit),
         |paths| corpus.selected_owners(paths, units),
     )?;
     let mut dense = BTreeMap::new();

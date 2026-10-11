@@ -37,10 +37,14 @@ fn normalized() -> Fixture {
 // Bulk fixture creation uses the existing capture planner and its exact file
 // layout, avoiding quadratic rebuilds while preparing disposable public inputs.
 fn captured_scope_fixture(count: usize) -> Fixture {
+    captured_scope_body_fixture(count, FIRST)
+}
+
+fn captured_scope_body_fixture(count: usize, body: &str) -> Fixture {
     let fixture = Fixture::new();
     for index in 0..count {
         let plan = crate::sources::SourceStore::new(fixture.fs.clone())
-            .plan_capture(capture(TITLE, &format!("scope-{index}.txt"), FIRST))
+            .plan_capture(capture(TITLE, &format!("scope-{index}.txt"), body))
             .unwrap();
         for operation in plan.draft.unwrap().operations {
             let target = fixture.fs.root().path().join(operation.target.as_str());
@@ -2768,3 +2772,145 @@ mod retrieval_lineage022 {
 
 #[path = "representation_control025.rs"]
 mod representation_control025;
+
+#[test]
+fn normalized_multi_unit_owner_reuse_completes_unchanged_semantic_row_budget() {
+    use crate::{
+        catalog::query_types::{QueryCatalog, QueryReadLimits},
+        retrieval::{ContextRequest, ContextScope},
+    };
+    // 100 real captured owners, genuinely segmented by the default renderer.
+    // Identical content/title deduplicates paid inputs; all transport is mock.
+    let line = "Signalneedle stores 17 amber tokens. Unicode café 東京 🦀. Complementary source details remain immutable.\n";
+    let body = (0..(168_000 / (line.len() + 11)))
+        .map(|index| format!("Part {index:04}: {line}"))
+        .collect::<String>();
+    let fixture = captured_scope_body_fixture(100, &body);
+    let responses = Arc::new(Responses::new());
+    let dispatch = dispatcher(&fixture.fs, responses.clone());
+    let runtime = runtime(&fixture.service, &dispatch);
+    let settings = EmbeddingSettings::default();
+    let synced = fixture.app.embeddings_sync(&settings, &runtime).unwrap();
+    let unit_count = synced.coverage.eligible_units;
+    assert_eq!(
+        unit_count % 100,
+        0,
+        "identical owners have identical real segmentation"
+    );
+    let per_owner = unit_count / 100;
+    assert!(
+        (15..=18).contains(&per_owner),
+        "unexpected production segmentation: {per_owner}"
+    );
+    assert_eq!(synced.coverage.available_units, unit_count);
+    assert_eq!(synced.coverage.missing_units, 0);
+    assert_eq!(
+        synced.generated_inputs, per_owner,
+        "shared bodies deduplicate input vectors"
+    );
+    assert_eq!(responses.calls.load(Ordering::SeqCst), per_owner);
+    // Historical per-descriptor resolution exceeds the unchanged row ceiling
+    // before hydration/proof. Cached geometry also reserves full hybrid paging.
+    let old_discovery_rows = 2 + 2 * unit_count + 80 + 2 * 80 * per_owner;
+    let cached_complete_rows = 2 + unit_count + 100 + 80 + 80 * per_owner + 80 + 240 + 239;
+    assert!(old_discovery_rows > QueryReadLimits::default().max_rows);
+    assert!(cached_complete_rows <= QueryReadLimits::default().max_rows);
+    fixture.query_seed(&fixture.spec(), "Signalneedle", vec![1.0, 0.0]);
+    let offline = fixture.offline();
+    let catalog = Catalog::new(fixture.fs.clone(), fixture.app.vault_id().clone());
+    for mode in [SearchMode::Semantic, SearchMode::Hybrid] {
+        let mut request = plan(mode, vec![], 80);
+        request.limits.hits = 10;
+        request.limits.excerpt_bytes = 1024;
+        let hits = offline
+            .semantic_search_selected("Signalneedle", &request, None, false)
+            .unwrap();
+        selected_verification(&hits);
+        assert_eq!(hits.hits.len(), 10);
+        for hit in &hits.hits {
+            exact_source_hit(
+                hit,
+                hit.source_id.as_ref().unwrap(),
+                hit.owner_revision.as_ref().unwrap(),
+                &body,
+            );
+        }
+        let context = offline
+            .semantic_context(
+                "Signalneedle",
+                &ContextRequest {
+                    scope: ContextScope::IndexedDocuments,
+                    documents: request.clone(),
+                    ..Default::default()
+                },
+                None,
+                true,
+                false,
+            )
+            .unwrap();
+        assert!(!context.network_used);
+        assert!(!context.passages().is_empty());
+        assert!(context.usage().rendered_bytes <= 12000);
+        assert!(context.usage().estimated_tokens <= 3000);
+        for passage in context.passages() {
+            assert!(!passage.citations.is_empty());
+            assert_eq!(
+                body.get(passage.span.start() as usize..passage.span.end() as usize),
+                Some(passage.text.as_str())
+            );
+            let mut primary_cited = false;
+            for citation in &passage.citations {
+                let CitationRef::Source(reference) = citation else {
+                    panic!("captured Source citation required")
+                };
+                assert_eq!(reference.span, passage.span);
+                assert_eq!(
+                    reference.quote_hash,
+                    Blake3Hash::digest(passage.text.as_bytes())
+                );
+                // Identical passages may merge exact citations from distinct
+                // owners. Authenticate each against its own canonical revision.
+                let cited_path = content_path(&reference.source_id, &reference.source_revision);
+                let canonical =
+                    std::fs::read(fixture.fs.root().path().join(cited_path.as_str())).unwrap();
+                let cited_bytes = canonical
+                    .get(reference.span.start() as usize..reference.span.end() as usize)
+                    .expect("citation span must be within its exact Source revision");
+                assert_eq!(cited_bytes, passage.text.as_bytes());
+                assert_eq!(reference.quote_hash, Blake3Hash::digest(cited_bytes));
+                primary_cited |= cited_path == passage.locator.path;
+            }
+            assert!(
+                primary_cited,
+                "primary passage owner must have an exact matching citation"
+            );
+        }
+        // This previously small/working route remains deterministic and matches
+        // ordered evidence when unrelated owners are filtered before the cap.
+        let source = hits.hits[0].source_id.clone().unwrap();
+        let filtered = plan(mode, vec![source], 1);
+        let first = offline
+            .semantic_search_selected("Signalneedle", &filtered, None, false)
+            .unwrap();
+        let second = offline
+            .semantic_search_selected("Signalneedle", &filtered, None, false)
+            .unwrap();
+        assert_eq!(
+            serde_json::to_value(&first.hits).unwrap(),
+            serde_json::to_value(&second.hits).unwrap()
+        );
+        let reader = catalog
+            .cached_query_snapshot(QueryReadLimits::default())
+            .unwrap();
+        assert_eq!(
+            reader.usage().rows,
+            0,
+            "each invocation receives its own unchanged cumulative reader"
+        );
+    }
+    assert_eq!(
+        responses.calls.load(Ordering::SeqCst),
+        per_owner,
+        "ordinary retrieval uses cache only"
+    );
+}

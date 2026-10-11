@@ -111,6 +111,36 @@ review must precede the next quality intervention. Complete preparation, live
 cache reuse and correct citations do not establish useful answer completeness,
 HIGH, representative 25K capacity or release acceptance.
 
+A separate operational repair on 2026-10-11 reuses one compact owner projection
+within each pinned semantic discovery invocation. Every unit still compares its
+source hash and target identity, including excluded owners; cache hits retain the
+query deadline check. Filters, currentness, ranking, output and proof budgets are
+unchanged. Actual SQL reads remain charged, and retained projections are bounded.
+
+The frozen successful first hybrid question retained identical ordered evidence,
+usage, omissions, warnings and snapshot identity (excluding the declared verification
+time and SQL row/byte counters), with decoded rows reduced **3,677 → 3,153**.
+The previously failing QASPER question completed at **3,415 / 4,096 rows**.
+These two offline commands took 0.734 and 0.237 seconds respectively under the
+existing executor; total replay owner time was 2.070 seconds. This is a two-command
+operational observation, not a latency distribution or a speedup comparison.
+All 994 Sources, 1,429 units, forty query vectors and publication 281 remained
+pinned. No new provider calls or cost were incurred.
+
+Twelve affected checks passed across retained executions: ten original passes and
+two fixture corrections replayed after a test-only rebuild. The first corruption
+fixture had removed the required SQLite WAL; the other incorrectly assumed every
+merged citation used the primary passage path. Both failures remain recorded;
+the corrected test authenticates every merged citation against its own canonical
+revision. The shipping CLI stayed unchanged through the corrective test rebuild.
+Independent review authenticated all **15 citations across eleven revisions** and
+rated this operational repair **9/10**, with no observed scoped correctness blocker.
+Both native outputs still honestly report partial/truncated evidence under the
+unchanged output limits (three omitted groups for the control; one passage-cap
+omission and 28 non-fitting groups for QASPER). These results repair row-budget
+exhaustion and establish no task/fact gain, absent-control pass, semantic scale,
+HIGH, unseen or release acceptance. Exact linear vector scanning remains.
+
 A subsequent independent loss-stage audit found that 41 of 49 undisputed lexical
 misses already had an applicable owner in the discovery set; all 27 observed
 hybrid fact losses occurred within admitted owners. This does not establish
