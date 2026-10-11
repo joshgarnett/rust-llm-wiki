@@ -395,6 +395,56 @@ Nonempty retained relation rows are included in reconstruction coverage.
 Unchanged primitive, default-format and legacy lifecycle results are reused with
 their original source and executable identities, not presented as reruns of the
 corrected binary. Native process-death checks do not establish power-loss or
-other-platform safety. Complete update-speed comparison, the 1,000-update product
-gate and representative 25K qualification remain pending. These correctness
+other-platform safety. The subsequent development comparison failed its advancement
+gate, as described below; the 1,000-update product gate and representative 25K
+qualification remain open. These correctness
 results establish no retrieval-completeness improvement or release acceptance.
+
+### Complete Revision development comparison: advancement rejected
+
+One frozen comparison completed all 13 offline public commands on equivalent
+copies of the same 1,000-Source, 1,001-Page vault. A single baseline rebuild first
+prepared a common sealed derivative, outside paired timing. Each arm then updated
+the same 16 Sources, searched and read cited evidence, rebuilt, and repeated the
+search and read. Both pinned native macOS ARM64 binaries used optimization level
+3 and debug information 0; only the candidate enabled Revision-tree installation.
+
+| Complete owning interval | Baseline | Candidate | Candidate change |
+| --- | ---: | ---: | ---: |
+| Sixteen updates, including preservation and journal checks | 13.023 s | 12.027 s | −7.65% |
+| Downstream commands and full-data audits | 219.024 s | 221.947 s | +1.33% |
+| Complete six-command workflow and its audits | 232.047 s | 233.975 s | +0.83% |
+
+The frozen screen required a strictly faster complete update, no downstream or
+whole-workflow regression, exact evidence parity and actual feature adoption.
+It therefore **failed**. The candidate remains default-off; this result does not
+admit a 1,000-update run, another parameter variant or representative 25K work.
+
+Both arms passed complete 25-table, schema, stable metadata and logical full-text
+posting reconstruction checks. All original immutable captures and Pages were
+preserved, with exactly 16 new Revision triplets per arm. Current membership,
+returned ranking, quotes, reads and exact citations agreed; only generated new
+Revision identities were normalized across arms. Retained journal evidence
+confirmed 64 versus 32 installation units and 133 versus 69 frames. Runtime guard
+and synchronization counts were unavailable; source-derived counts are not timings.
+Nonempty relation reconstruction remains covered by the separate correctness
+tests above; relation tables in this performance fixture were empty.
+
+Independent review checked all 13 returned command envelopes, the four actual
+search/read pairs against source bytes, all 32 new Revision trees and both
+retained journal proofs. It found no observed correctness blocker in this bounded
+task and confirmed rejection under the unchanged performance gate. The two reads
+per arm are current reads before and after rebuild; historical preservation does
+not imply a separate public historical-read command ran in this pair.
+
+These are observed workflow-and-audit timings, not unobserved product-only costs.
+Seven complete projections visited approximately 92 million full-text postings.
+The external owner also spent 657.722 seconds in allocation sweeps during its
+860.892-second lifetime; those intervals overlap the measured work and must not
+be added or subtracted. The candidate ran second, with three retained copies in
+the observed account versus two during the baseline. This single fixed-order pair
+does not establish a general latency distribution or an intrinsic 0.83% product
+regression. Those limitations do not turn the failed advancement screen into a
+pass. All commands and descendants were reaped, provider calls and cost were zero,
+and the failed result and prior evidence remain retained. Retrieval completeness,
+unseen semantic acceptance and full release qualification are unchanged.
