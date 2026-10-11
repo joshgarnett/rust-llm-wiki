@@ -2,11 +2,114 @@ name: Opt-in native qualification
 
 on:
   workflow_dispatch:
+    inputs:
+      archive-run-id:
+        description: 'Existing release-build run for editor checks; leave empty for full native qualification'
+        type: string
+        default: ''
+      source-commit:
+        description: 'Full source commit of the existing release archives'
+        type: string
+        default: ''
 
 permissions:
   contents: read
+  actions: read
 
 jobs:
   qualify-final-archives:
+    if: inputs.archive-run-id == ''
     # Use the release pipeline so qualification never substitutes another build.
     uses: ./.github/workflows/release-build.yml
+
+  editor:
+    name: Test the final executable with Obsidian
+    if: inputs.archive-run-id != ''
+    runs-on: macos-26
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: bash
+    env:
+      SOURCE_RUN_ID: ${{ inputs.archive-run-id }}
+      SOURCE_COMMIT: ${{ inputs.source-commit }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Verify the archive run and record the qualification source
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          [[ "$SOURCE_RUN_ID" =~ ^[0-9]+$ ]]
+          [[ "$SOURCE_COMMIT" =~ ^[0-9a-f]{40}$ ]]
+          test -z "$(git status --porcelain)"
+          mkdir "$RUNNER_TEMP/editor-inputs"
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$SOURCE_RUN_ID" > "$RUNNER_TEMP/editor-inputs/source-run.json"
+          python3 - "$RUNNER_TEMP/editor-inputs/source-run.json" <<'PY'
+          import json, os, pathlib, subprocess, sys
+          path = pathlib.Path(sys.argv[1])
+          run = json.loads(path.read_text())
+          if (run['head_sha'] != os.environ['SOURCE_COMMIT']
+                  or run['repository']['full_name'] != os.environ['GITHUB_REPOSITORY']
+                  or run['path'] != '.github/workflows/release-build.yml'):
+              raise SystemExit('archive run does not match the expected repository, workflow and source')
+          record = {'product_source_commit': run['head_sha'], 'archive_run_id': run['id'],
+                    'harness_commit': subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip()}
+          (path.parent / 'qualification-source.json').write_text(json.dumps(record, indent=2) + '\n')
+          PY
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: qualification-assets-${{ inputs.source-commit }}
+          run-id: ${{ inputs.archive-run-id }}
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/editor-release-assets
+      - name: Verify and extract the archived executable
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json, os, pathlib, sys
+          sys.path.insert(0, 'scripts')
+          import qualify_artifact as qualification
+          root = pathlib.Path(os.environ['RUNNER_TEMP'])
+          assets, evidence = root / 'editor-release-assets', root / 'editor-inputs'
+          commit, target = os.environ['SOURCE_COMMIT'], 'aarch64-apple-darwin'
+          version = qualification.package_version(pathlib.Path.cwd())
+          host = qualification.host_information(target, 'macos-26', 26)
+          archive, binary, record = qualification.prepare_archive(
+              assets / ('lwiki-' + version + '-' + target + '.tar.gz'),
+              evidence, commit, version, target, host, assets)
+          (evidence / 'artifact.json').write_text(json.dumps(record, indent=2) + '\n')
+          with open(os.environ['GITHUB_ENV'], 'a') as env:
+              for key, value in {'EDITOR_BINARY': str(binary), 'EDITOR_ARCHIVE': str(archive),
+                                 'EDITOR_BINARY_SHA256': record['binary_sha256'],
+                                 'EDITOR_ARCHIVE_SHA256': record['archive_sha256']}.items():
+                  env.write(key + '=' + value + '\n')
+          PY
+      - name: Run the actual editor save and citation workflow
+        run: |
+          python3 scripts/editor-qualification/run.py \
+            --binary "$EDITOR_BINARY" --binary-sha256 "$EDITOR_BINARY_SHA256" \
+            --archive "$EDITOR_ARCHIVE" --archive-sha256 "$EDITOR_ARCHIVE_SHA256" \
+            --source-commit "$SOURCE_COMMIT" --evidence "$RUNNER_TEMP/editor-evidence"
+      - name: Retain editor qualification evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: editor-evidence-${{ inputs.source-commit }}-${{ github.run_id }}
+          path: |
+            ${{ runner.temp }}/editor-inputs/*.json
+            ${{ runner.temp }}/editor-inputs/*.sha256
+            ${{ runner.temp }}/editor-evidence/*.json
+            ${{ runner.temp }}/editor-evidence/*.jsonl
+            ${{ runner.temp }}/editor-evidence/*.stdout
+            ${{ runner.temp }}/editor-evidence/*.stderr
+            ${{ runner.temp }}/editor-evidence/*.png
+            ${{ runner.temp }}/editor-evidence/*.bin
+            ${{ runner.temp }}/editor-evidence/*.log
+            ${{ runner.temp }}/editor-evidence/*.sb
+            ${{ runner.temp }}/editor-evidence/vault/**
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 30

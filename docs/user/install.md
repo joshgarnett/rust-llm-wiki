@@ -2,7 +2,8 @@
 
 Install the command, put it on your PATH, then run [guided setup](getting-started.md)
 to create your wiki and connect your agent. Releases support Apple silicon Macs
-running macOS 15, 26 or 27, and x86-64 GNU/Linux. Windows wiki writes are unsupported.
+running macOS 15, 26 or 27, and x86-64 GNU/Linux with glibc 2.39 or newer.
+The installer checks your system before installing. Windows wiki writes are unsupported.
 
 ## Download and install
 

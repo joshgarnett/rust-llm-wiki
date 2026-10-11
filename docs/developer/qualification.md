@@ -36,6 +36,25 @@ Page moves. Verify exact author preservation, stable IDs, provenance, exclusions
 refresh/history. Source mode handles unsupported nested-property representations;
 ordinary editor state remains editor-owned.
 
+For the hosted macOS editor check, first let a release-build run finish verifying
+its archives. Then run the qualification workflow with that run ID and full source
+commit:
+
+```sh
+gh workflow run qualification.yml --ref BRANCH \
+  -f archive-run-id=RUN_ID -f source-commit=FULL_COMMIT
+```
+
+This downloads and verifies the existing archive, then opens a test wiki in a
+pinned official Obsidian build on a fresh GitHub-hosted Mac. It checks real editor
+saves, capture and refresh, old and new citations, Page moves and stale-edit
+conflicts. The report records the product and test-tool commits separately.
+Download the `editor-evidence` artifact to inspect the saved bytes, command output
+and screenshots. A newer test-tool commit does not require rebuilding the product.
+
+Record any newline or byte-order-mark changes made by the editor. Captured bytes
+must match the saved file exactly; never restore a fixture to hide editor changes.
+
 Install fresh versioned exports in real Codex, Claude and Cursor sessions without
 overwriting existing instructions. Check explicit invocation, natural-language
 discovery, a complete capture/edit/refresh/cited-draft workflow and an unrelated-task
