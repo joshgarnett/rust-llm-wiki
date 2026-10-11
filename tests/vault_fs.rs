@@ -86,6 +86,184 @@ fn path_escape_symlink_reserved_and_case_collision() {
     }
 }
 
+#[cfg(unix)]
+#[test]
+fn root_reached_through_ancestor_alias_stores_the_canonical_anchor() {
+    let temp = tempfile::tempdir().unwrap();
+    let parent = temp.path().join("parent");
+    let directory = parent.join("vault");
+    fs::create_dir_all(&directory).unwrap();
+    fs::write(directory.join("WIKI.md"), b"wiki").unwrap();
+    fs::write(directory.join("page.md"), b"page").unwrap();
+    let alias = temp.path().join("alias");
+    std::os::unix::fs::symlink(&parent, &alias).unwrap();
+    let root = VaultRoot::explicit(alias.join("vault")).unwrap();
+    assert_eq!(root.path(), fs::canonicalize(&directory).unwrap());
+    assert_eq!(
+        root.resolve(&rel("page.md")).unwrap(),
+        root.path().join("page.md")
+    );
+    // Removing the supplied alias cannot invalidate the stored canonical root.
+    fs::remove_file(alias).unwrap();
+    assert_eq!(
+        VaultFs::new(root)
+            .read_before(&rel("page.md"))
+            .unwrap()
+            .unwrap()
+            .bytes,
+        b"page"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn missing_destinations_recheck_intermediate_and_final_symlinks_between_calls() {
+    let (_temp, root) = fixture();
+    let outside = tempfile::tempdir().unwrap();
+    for destination in [root.path().join("inside"), outside.path().join("outside")] {
+        fs::create_dir_all(destination.join("deep")).unwrap();
+        fs::write(destination.join("deep/page.md"), b"untouched").unwrap();
+        for intermediate in [true, false] {
+            let target = if intermediate {
+                rel("late/deep/page.md")
+            } else {
+                rel("late.md")
+            };
+            assert_eq!(
+                root.resolve(&target).unwrap(),
+                root.path().join(target.as_str())
+            );
+            assert!(
+                VaultFs::new(root.clone())
+                    .read_before(&target)
+                    .unwrap()
+                    .is_none()
+            );
+            let link = root
+                .path()
+                .join(if intermediate { "late" } else { "late.md" });
+            let referent = if intermediate {
+                destination.clone()
+            } else {
+                destination.join("deep/page.md")
+            };
+            std::os::unix::fs::symlink(&referent, &link).unwrap();
+            let error = root.resolve(&target).unwrap_err();
+            assert_eq!(error.code, ErrorCode::RecordInvalid);
+            assert!(error.message.contains("symlink component"));
+            assert!(VaultFs::new(root.clone()).read_before(&target).is_err());
+            assert_eq!(
+                fs::read(destination.join("deep/page.md")).unwrap(),
+                b"untouched"
+            );
+            fs::remove_file(link).unwrap();
+            assert!(root.resolve(&target).is_ok());
+        }
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn root_and_ancestor_symlink_replacement_between_calls_refuses_before_reading() {
+    for replace_ancestor in [false, true] {
+        let temp = tempfile::tempdir().unwrap();
+        let parent = temp.path().join("parent");
+        let directory = parent.join("vault");
+        fs::create_dir_all(&directory).unwrap();
+        fs::write(directory.join("WIKI.md"), b"wiki").unwrap();
+        fs::write(directory.join("page.md"), b"original").unwrap();
+        let root = VaultRoot::explicit(&directory).unwrap();
+        let vault = VaultFs::new(root.clone());
+        assert_eq!(
+            vault.read_before(&rel("page.md")).unwrap().unwrap().bytes,
+            b"original"
+        );
+        let outside = tempfile::tempdir().unwrap();
+        let outside_root = outside.path().join("vault");
+        fs::create_dir(&outside_root).unwrap();
+        fs::write(outside_root.join("WIKI.md"), b"outside wiki").unwrap();
+        fs::write(outside_root.join("page.md"), b"outside bytes").unwrap();
+        let replaced = if replace_ancestor {
+            root.path().parent().unwrap()
+        } else {
+            root.path()
+        };
+        let saved = replaced.with_file_name("saved");
+        fs::rename(replaced, &saved).unwrap();
+        let referent = if replace_ancestor {
+            outside.path()
+        } else {
+            outside_root.as_path()
+        };
+        std::os::unix::fs::symlink(referent, replaced).unwrap();
+        let resolve_error = root.resolve(&rel("page.md")).unwrap_err();
+        let read_error = vault.read_before(&rel("page.md")).unwrap_err();
+        // Restore real directories before either fixture is cleaned up.
+        fs::remove_file(replaced).unwrap();
+        fs::rename(&saved, replaced).unwrap();
+        for error in [resolve_error, read_error] {
+            assert_eq!(error.code, ErrorCode::RecordInvalid);
+            assert!(error.message.contains(if replace_ancestor {
+                "root anchor changed"
+            } else {
+                "root must be a directory"
+            }));
+        }
+        assert_eq!(
+            fs::read(outside_root.join("page.md")).unwrap(),
+            b"outside bytes"
+        );
+        assert_eq!(
+            vault.read_before(&rel("page.md")).unwrap().unwrap().bytes,
+            b"original"
+        );
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn budget_refusal_precedes_root_probes_and_child_inspection() {
+    use lwiki::domain::WikiError;
+    let (_temp, root) = fixture();
+    std::os::unix::fs::symlink(root.path().join("WIKI.md"), root.path().join("probe.md")).unwrap();
+    for allowed in 0..=2 {
+        let mut calls = 0;
+        let error = root
+            .resolve_budgeted(&rel("probe.md"), &mut || {
+                calls += 1;
+                if calls > allowed {
+                    Err(WikiError::new(
+                        ErrorCode::BudgetExceeded,
+                        "root probe budget",
+                    ))
+                } else {
+                    Ok(())
+                }
+            })
+            .unwrap_err();
+        assert_eq!(error.code, ErrorCode::BudgetExceeded);
+        assert_eq!(calls, allowed + 1);
+    }
+    assert!(
+        root.resolve(&rel("probe.md"))
+            .unwrap_err()
+            .message
+            .contains("symlink component")
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn existing_nondirectory_intermediate_remains_an_error() {
+    let (_temp, root) = fixture();
+    fs::write(root.path().join("file.md"), b"original").unwrap();
+    assert!(root.resolve(&rel("file.md")).unwrap().is_file());
+    let error = root.resolve(&rel("file.md/child.md")).unwrap_err();
+    assert_eq!(error.code, ErrorCode::Internal);
+    assert!(error.message.contains("inspect managed path"));
+    assert_eq!(fs::read(root.path().join("file.md")).unwrap(), b"original");
+}
+
 #[test]
 fn discovery_is_nearest_exact_case_and_explicit() {
     let (_temp, root) = fixture();
@@ -798,10 +976,11 @@ fn fresh_marker_probe_preserves_case_nonregular_policy_and_positive_scan_budget(
     fs::remove_file(directory.join("wiki.md")).unwrap();
     fs::write(directory.join("WIKI.md"), b"nested marker").unwrap();
     let mut calls = 0;
+    let root_probes = if cfg!(unix) { 2 } else { 0 };
     let error = root
         .resolve_budgeted(&rel("child/page.md"), &mut || {
             calls += 1;
-            if calls > 2 {
+            if calls > root_probes + 2 {
                 Err(WikiError::new(
                     ErrorCode::BudgetExceeded,
                     "positive marker budget",
@@ -811,10 +990,10 @@ fn fresh_marker_probe_preserves_case_nonregular_policy_and_positive_scan_budget(
             }
         })
         .unwrap_err();
-    // Component check + fresh probe precede the separately metered exact-name
-    // directory open; a positive probe cannot bypass that work reservation.
+    // Root-anchor probes (on Unix), component check and fresh marker probe
+    // precede the separately metered exact-name directory open.
     assert_eq!(error.code, ErrorCode::BudgetExceeded);
-    assert_eq!(calls, 3);
+    assert_eq!(calls, root_probes + 3);
     assert!(
         root.resolve(&rel("child/page.md"))
             .unwrap_err()

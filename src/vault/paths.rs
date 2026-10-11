@@ -281,6 +281,25 @@ impl VaultRoot {
         relative: &VaultRelativePath,
         on_entry: &mut dyn FnMut() -> Result<()>,
     ) -> Result<PathBuf> {
+        #[cfg(unix)]
+        {
+            // The stored anchor can be replaced between calls, including through
+            // an ancestor. Verify it freshly before inspecting any child path.
+            on_entry()?;
+            let meta = fs::symlink_metadata(&self.path)
+                .map_err(|e| root_error("inspect vault root", e))?;
+            if meta.file_type().is_symlink() || !meta.is_dir() {
+                return Err(WikiError::invalid(
+                    "vault root must be a directory, not a symlink",
+                ));
+            }
+            on_entry()?;
+            let canonical = fs::canonicalize(&self.path)
+                .map_err(|e| root_error("canonicalize vault root", e))?;
+            if canonical != self.path {
+                return Err(WikiError::invalid("canonical vault root anchor changed"));
+            }
+        }
         let mut path = self.path.clone();
         for component in relative.as_str().split('/') {
             on_entry()?;
@@ -290,10 +309,17 @@ impl VaultRoot {
                     return Err(WikiError::invalid("managed path has a symlink component"));
                 }
                 Ok(meta) => {
-                    let canonical = fs::canonicalize(&path)
-                        .map_err(|e| io_error("check destination containment", e))?;
-                    if !canonical.starts_with(&self.path) {
-                        return Err(WikiError::invalid("managed path escapes canonical vault"));
+                    // On Unix, validated relative components and fresh lstat
+                    // rejection of every symlink preserve containment under the
+                    // freshly verified root. Concurrent replacement is outside
+                    // the local-vault model; this is not race-free confinement.
+                    #[cfg(not(unix))]
+                    {
+                        let canonical = fs::canonicalize(&path)
+                            .map_err(|e| io_error("check destination containment", e))?;
+                        if !canonical.starts_with(&self.path) {
+                            return Err(WikiError::invalid("managed path escapes canonical vault"));
+                        }
                     }
                     if meta.is_dir() && exact_marker_budgeted(&path, on_entry)? {
                         return Err(WikiError::invalid(

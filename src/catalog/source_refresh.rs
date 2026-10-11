@@ -1681,6 +1681,9 @@ impl<'a> IndexedRefreshSession<'a> {
         parts
             .delta
             .check_before_operation(QueryCatalog::connection(&query), Some(&parts.operation))?;
+        let usage = query.usage();
+        crate::diagnostic::count("selected_query", usage.rows as u64);
+        crate::diagnostic::bytes("selected_query", usage.bytes as u64);
         drop(query);
         let paths = PublishedRefreshPaths::admitted(
             catalog.fs.root(),
@@ -2060,12 +2063,14 @@ impl<'a> IndexedRefreshSession<'a> {
             .ok_or_else(|| recovery("published refresh has no starting ownership capability"))
     }
     fn retained(&self) -> Result<()> {
+        let _diagnostic = crate::diagnostic::counter_span("retained_delta_verify");
         let bytes = read_bounded(
             &self.catalog.fs,
             &delta_path(&self.proof.change)?,
             MAX_DELTA_BYTES,
         )?
         .ok_or_else(|| recovery("retained refresh delta disappeared"))?;
+        crate::diagnostic::bytes("retained_delta_verify", bytes.len() as u64);
         if Blake3Hash::digest(&bytes) != self.proof.delta_hash {
             return Err(recovery("retained refresh delta changed"));
         }
@@ -2098,6 +2103,7 @@ impl<'a> IndexedRefreshSession<'a> {
     }
 
     pub(crate) fn verify_selected(&self, after_only: bool, allow_mixed: bool) -> Result<()> {
+        let _diagnostic = crate::diagnostic::counter_span("session_selected_verify");
         if after_only {
             verify_dependencies(
                 &self.catalog,
@@ -2116,6 +2122,7 @@ impl<'a> IndexedRefreshSession<'a> {
     }
 
     pub(crate) fn publish(&mut self, owners: &[RevisionOwnerRow]) -> Result<ReadSnapshot> {
+        let _diagnostic = crate::diagnostic::stage("final_verification_and_acknowledgement");
         if self.phase != IndexedRefreshPhase::AtBase {
             return Err(recovery("refresh publication already occurred"));
         }
@@ -2160,9 +2167,26 @@ impl<'a> IndexedRefreshSession<'a> {
             return Err(recovery("refresh base changed before transaction"));
         }
         self.authority(true)?;
-        self.delta
-            .rows
-            .apply_for_operation(&transaction, self.proof.operation.as_ref())?;
+        {
+            let _diagnostic = crate::diagnostic::stage("selected_sql_dml");
+            let stats = self
+                .delta
+                .rows
+                .apply_for_operation(&transaction, self.proof.operation.as_ref())?;
+            crate::diagnostic::count("delta_records", stats.records as u64);
+            crate::diagnostic::count("delta_documents", stats.documents as u64);
+            crate::diagnostic::count("delta_graph_rows", stats.graph_rows as u64);
+            crate::diagnostic::count("delta_links", stats.links as u64);
+            crate::diagnostic::count("delta_diagnostics", stats.diagnostics as u64);
+            crate::diagnostic::count("delta_claims", stats.claims as u64);
+            crate::diagnostic::count("delta_revisions", stats.revisions as u64);
+            crate::diagnostic::count("delta_dependencies", stats.dependencies as u64);
+            crate::diagnostic::count("delta_owners", stats.owners as u64);
+            crate::diagnostic::count("delta_old_rows", stats.old_rows as u64);
+            crate::diagnostic::bytes("delta_old_fts", stats.old_fts_bytes as u64);
+            crate::diagnostic::bytes("delta_old_fact", stats.old_fact_bytes as u64);
+            crate::diagnostic::count("delta_fact_rows", stats.fact_rows as u64);
+        }
         let after_binding = self
             .proof
             .intended
@@ -2173,6 +2197,7 @@ impl<'a> IndexedRefreshSession<'a> {
             .base
             .publication()
             .expect("validated published base");
+        let diagnostic_header = crate::diagnostic::stage("selected_sql_dml");
         let changed = transaction.execute(
             "UPDATE catalog_meta SET epoch=?1,publication_hash=?2,origin_change_id=?3,origin_manifest_hash=?4,audit_epoch=NULL,control_hash=NULL,dependency_hash=NULL WHERE singleton=1 AND file_id=?5 AND epoch=?6 AND publication_hash=?7 AND parser_hash=?8 AND state='complete'",
             params![sql::integer(self.proof.intended.generation)?,after_binding.publication_hash.as_str(),
@@ -2182,14 +2207,23 @@ impl<'a> IndexedRefreshSession<'a> {
         if changed != 1 {
             return Err(recovery("refresh publication compare-and-swap failed"));
         }
+        drop(diagnostic_header);
         if let Some(fault) = &self.catalog.options.fault {
             fault.check(PublicationCheckpoint::AfterPointer)?;
         }
         self.verify_selected(true, false)?;
         self.authority(true)?;
-        transaction.commit().map_err(sql::sql_error)?;
+        {
+            let _diagnostic = crate::diagnostic::stage("sql_commit");
+            transaction.commit().map_err(sql::sql_error)?;
+        }
         // Set this before a fault can return: this session can never publish twice.
         self.phase = IndexedRefreshPhase::AlreadyPublished;
+        if let Some(starting) = &self.starting {
+            let usage = starting.usage();
+            crate::diagnostic::count("selected_query", usage.rows as u64);
+            crate::diagnostic::bytes("selected_query", usage.bytes as u64);
+        }
         self.starting = None;
         if let Some(fault) = &self.catalog.options.fault {
             fault.check(PublicationCheckpoint::AfterCommit)?;
@@ -2198,7 +2232,8 @@ impl<'a> IndexedRefreshSession<'a> {
         // The SQL publication is durable; only its acknowledgement remains.
         // AlreadyPublished recovery verifies/finalizes without retrying optional
         // maintenance. Busy external readers are a normal deferred outcome.
-        self.sql_writer.checkpoint_wal().map_err(|error| {
+        let diagnostic_checkpoint = crate::diagnostic::stage("wal_checkpoint");
+        let checkpoint = self.sql_writer.checkpoint_wal().map_err(|error| {
             let mut error = retained_error(error, &self.proof.change);
             let details = error
                 .details
@@ -2215,10 +2250,16 @@ impl<'a> IndexedRefreshSession<'a> {
             );
             error
         })?;
+        match checkpoint {
+            selector::WalCheckpoint::Complete => crate::diagnostic::count("checkpoint_complete", 1),
+            selector::WalCheckpoint::Deferred => crate::diagnostic::count("checkpoint_deferred", 1),
+        }
+        drop(diagnostic_checkpoint);
         Ok(snapshot)
     }
 
     pub(crate) fn verify_published(&self) -> Result<ReadSnapshot> {
+        let _diagnostic = crate::diagnostic::counter_span("published_verify");
         configure_delta(self.sql_writer.connection())?;
         self.retained()?;
         self.authority(false)?;
@@ -2349,12 +2390,18 @@ fn verify_dependencies(
     replay_after: Option<&[ReadDependency]>,
     remaining: &Cell<usize>,
 ) -> Result<()> {
+    let _diagnostic = crate::diagnostic::counter_span("session_dependencies");
+    crate::diagnostic::count("session_dependencies", expected.len() as u64);
     for (index, dep) in expected.iter().enumerate() {
         let bytes = read_bounded(
             &catalog.fs,
             &dep.path,
             MAX_PAYLOAD_BYTES.min(remaining.get()),
         )?;
+        crate::diagnostic::bytes(
+            "session_dependencies",
+            bytes.as_ref().map_or(0, Vec::len) as u64,
+        );
         remaining.set(
             remaining
                 .get()
@@ -2362,6 +2409,8 @@ fn verify_dependencies(
                 .ok_or_else(|| budget("selected refresh verification exceeds byte ceiling"))?,
         );
         let actual = bytes.map_or(ExpectedState::Absent, |bytes| {
+            let _diagnostic = crate::diagnostic::counter_span("session_dependency_hash");
+            crate::diagnostic::bytes("session_dependency_hash", bytes.len() as u64);
             ExpectedState::Hash(Blake3Hash::digest(bytes))
         });
         let after = replay_after.and_then(|deps| deps.get(index));

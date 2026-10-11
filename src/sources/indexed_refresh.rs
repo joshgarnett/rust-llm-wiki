@@ -37,6 +37,7 @@ struct Captured<'a> {
 impl<'a> Captured<'a> {
     /// Charge every read, including final dependency rereads, before allocation.
     fn read(&mut self, path: &VaultRelativePath) -> Result<Vec<u8>> {
+        let _diagnostic = crate::diagnostic::counter_span("planning_canonical_read");
         #[cfg(test)]
         READ_PATHS.with(|paths| paths.borrow_mut().push(path.clone()));
         let resolved = self.fs.root().resolve(path)?;
@@ -82,13 +83,18 @@ impl<'a> Captured<'a> {
         {
             return Err(integrity("selected refresh input grew during capture"));
         }
+        crate::diagnostic::bytes("planning_canonical_read", bytes.len() as u64);
         Ok(bytes)
     }
 
     fn capture(&mut self, path: &VaultRelativePath) -> Result<&ScanDocument> {
         if !self.files.contains_key(path) {
             let bytes = self.read(path)?;
-            let hash = Blake3Hash::digest(&bytes);
+            let hash = {
+                let _diagnostic = crate::diagnostic::counter_span("planning_hash");
+                crate::diagnostic::bytes("planning_hash", bytes.len() as u64);
+                Blake3Hash::digest(&bytes)
+            };
             self.files.insert(
                 path.clone(),
                 ScanDocument {
@@ -125,7 +131,12 @@ impl<'a> Captured<'a> {
             .map(|document| (document.path.clone(), document.hash.clone()))
             .collect();
         for (path, hash) in expected {
-            if Blake3Hash::digest(self.read(&path)?) != hash {
+            let bytes = self.read(&path)?;
+            if {
+                let _diagnostic = crate::diagnostic::counter_span("planning_hash");
+                crate::diagnostic::bytes("planning_hash", bytes.len() as u64);
+                Blake3Hash::digest(bytes) != hash
+            } {
                 return Err(WikiError::new(
                     ErrorCode::FreshnessConflict,
                     "selected refresh dependency changed during planning",
@@ -947,6 +958,7 @@ impl SourceStore {
         explicit_title: Option<&str>,
         limits: &SourceRefreshLimits,
     ) -> Result<IndexedSourceRefreshPlan> {
+        let _diagnostic = crate::diagnostic::counter_span("source_planner");
         if limits.max_file_bytes == 0
             || limits.max_file_bytes > 64 * 1024 * 1024
             || limits.max_canonical_bytes == 0

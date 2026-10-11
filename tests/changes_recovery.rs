@@ -883,6 +883,97 @@ fn recovery_replays_old_despite_done_filesapplied_and_indexed_flags() {
     }
 }
 #[test]
+fn dependency_edit_after_first_replace_refuses_before_second_mutation() {
+    struct EditDependencyAfterReplace {
+        first_target: PathBuf,
+        dependency: PathBuf,
+        fired: AtomicBool,
+    }
+    impl DurableIo for EditDependencyAfterReplace {
+        fn create_stage(&self, p: &Path) -> io::Result<File> {
+            NativeIo.create_stage(p)
+        }
+        fn open_append(&self, p: &Path) -> io::Result<File> {
+            NativeIo.open_append(p)
+        }
+        fn truncate_file(&self, f: &File, n: u64) -> io::Result<()> {
+            NativeIo.truncate_file(f, n)
+        }
+        fn write_stage(&self, f: &mut File, b: &[u8]) -> io::Result<()> {
+            NativeIo.write_stage(f, b)
+        }
+        fn sync_file(&self, f: &File) -> io::Result<()> {
+            NativeIo.sync_file(f)
+        }
+        fn replace(&self, staged: &Path, target: &Path) -> io::Result<()> {
+            NativeIo.replace(staged, target)?;
+            if target == self.first_target.as_path() && !self.fired.swap(true, Ordering::SeqCst) {
+                // A deterministic external edit after the real first mutation,
+                // before control returns to the guarded application pipeline.
+                fs::write(&self.dependency, b"unfamiliar authorization")?;
+            }
+            Ok(())
+        }
+        fn remove(&self, p: &Path) -> io::Result<()> {
+            NativeIo.remove(p)
+        }
+        fn create_directory(&self, p: &Path) -> io::Result<()> {
+            NativeIo.create_directory(p)
+        }
+        fn sync_directory(&self, p: &Path) -> io::Result<DirectorySync> {
+            NativeIo.sync_directory(p)
+        }
+    }
+    let (_temp, root) = fixture();
+    fs::write(root.path().join("beta.md"), b"old beta").unwrap();
+    fs::write(
+        root.path().join("authorizer.bin"),
+        b"original authorization",
+    )
+    .unwrap();
+    let mut proposal = draft();
+    proposal.operations.truncate(1);
+    proposal.operations.push(ExpectedWrite {
+        target: rel("beta.md"),
+        expected: ExpectedState::Hash(Blake3Hash::digest(b"old beta")),
+        proposed: Some(b"new beta".to_vec()),
+        apply_after: vec![rel("alpha.md")],
+    });
+    proposal.read_preconditions = vec![ReadDependency {
+        path: rel("authorizer.bin"),
+        expected: ExpectedState::Hash(Blake3Hash::digest(b"original authorization")),
+    }];
+    let permit = WriterPermit::acquire(&root, Duration::ZERO).unwrap();
+    let engine = ChangeEngine::new(VaultFs::new(root.clone())).unwrap();
+    let change = engine.prepare(&permit, proposal).unwrap().prepared;
+    let io = Arc::new(EditDependencyAfterReplace {
+        first_target: root.path().join("alpha.md"),
+        dependency: root.path().join("authorizer.bin"),
+        fired: AtomicBool::new(false),
+    });
+    let engine = ChangeEngine::new(VaultFs::with_io(root.clone(), io.clone())).unwrap();
+    let publisher = Publisher::default();
+    assert_eq!(
+        engine
+            .apply(&permit, &change, &Validator, &publisher)
+            .unwrap_err()
+            .code,
+        ErrorCode::ContentConflict
+    );
+    assert!(io.fired.load(Ordering::SeqCst));
+    assert_eq!(
+        fs::read(root.path().join("alpha.md")).unwrap(),
+        b"new alpha"
+    );
+    assert_eq!(fs::read(root.path().join("beta.md")).unwrap(), b"old beta");
+    assert_eq!(
+        fs::read(root.path().join("authorizer.bin")).unwrap(),
+        b"unfamiliar authorization"
+    );
+    assert_eq!(publisher.calls.load(Ordering::SeqCst), 0);
+}
+
+#[test]
 fn interrupted_apply_preserves_outside_scan_and_binary_read_dependencies() {
     let (_temp, root) = fixture();
     let change = prepared(&root);

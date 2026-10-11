@@ -218,6 +218,7 @@ impl ChangeEngine {
         })
     }
     pub fn prepare(&self, permit: &WriterPermit, draft: ChangeDraft) -> Result<ChangeInspection> {
+        let _diagnostic = crate::diagnostic::counter_span("change_prepare");
         if let Some(origin) = draft.origin.clone() {
             return self
                 .prepare_or_reuse(permit, origin, OriginPolicy::ReuseOrConflict, || Ok(draft))
@@ -883,8 +884,10 @@ impl ChangeEngine {
         &self,
         id: &RecordId,
     ) -> Result<(ChangeManifest, Blake3Hash)> {
+        let _diagnostic = crate::diagnostic::counter_span("manifest_load_parse");
         let bytes = read_bounded(&self.fs, &manifest_path(id)?, MAX_MANIFEST_BYTES + 65_536)?
             .ok_or_else(|| WikiError::invalid("missing retained manifest"))?;
+        crate::diagnostic::bytes("manifest_load_parse", bytes.len() as u64);
         let parsed = parse_note(&bytes);
         let record = parsed
             .canonical
@@ -922,7 +925,11 @@ impl ChangeEngine {
         if json.len() > MAX_MANIFEST_BYTES {
             return Err(WikiError::invalid("manifest exceeds limit"));
         }
-        let hash = Blake3Hash::digest(json);
+        let hash = {
+            let _diagnostic = crate::diagnostic::counter_span("manifest_hash");
+            crate::diagnostic::bytes("manifest_hash", json.len() as u64);
+            Blake3Hash::digest(json)
+        };
         if record.string("wiki_manifest_hash") != Some(hash.as_str()) {
             return Err(WikiError::invalid("manifest fence hash mismatch"));
         }
@@ -1089,6 +1096,7 @@ impl ChangeEngine {
         expected_payload: (&ExpectedState, &Option<PayloadRef>),
         limit: usize,
     ) -> Result<Option<Vec<u8>>> {
+        let _diagnostic = crate::diagnostic::counter_span("payload_verify");
         let (expected, payload) = expected_payload;
         match (expected, payload) {
             (ExpectedState::Absent, None) => Ok(None),
@@ -1102,9 +1110,12 @@ impl ChangeEngine {
                 }
                 let bytes = read_bounded(&self.fs, &payload.path, limit.min(MAX_PAYLOAD_BYTES))?
                     .ok_or_else(|| WikiError::invalid("missing retained payload"))?;
-                if bytes.len() as u64 != payload.byte_len
-                    || Blake3Hash::digest(&bytes) != payload.hash
-                {
+                crate::diagnostic::bytes("payload_verify", bytes.len() as u64);
+                if bytes.len() as u64 != payload.byte_len || {
+                    let _diagnostic = crate::diagnostic::counter_span("payload_hash");
+                    crate::diagnostic::bytes("payload_hash", bytes.len() as u64);
+                    Blake3Hash::digest(&bytes) != payload.hash
+                } {
                     return Err(WikiError::invalid("retained payload integrity failure"));
                 }
                 Ok(Some(bytes))
@@ -1121,9 +1132,11 @@ impl ChangeEngine {
         bytes: Option<&[u8]>,
         target: &VaultRelativePath,
     ) -> Result<Option<PayloadRef>> {
+        let _diagnostic = crate::diagnostic::counter_span("payload_retain");
         let Some(bytes) = bytes else {
             return Ok(None);
         };
+        crate::diagnostic::bytes("payload_retain", bytes.len() as u64);
         let path = if crate::storage::layout::active(self.fs.root())? {
             let path = crate::storage::layout::object_path(&Blake3Hash::digest(bytes))?;
             crate::storage::layout::put(&self.fs, permit, &path, bytes)?;
@@ -1140,6 +1153,8 @@ impl ChangeEngine {
         }))
     }
     fn persist(&self, permit: &WriterPermit, path: &VaultRelativePath, bytes: &[u8]) -> Result<()> {
+        let _diagnostic = crate::diagnostic::counter_span("prepare_persist");
+        crate::diagnostic::bytes("prepare_persist", bytes.len() as u64);
         let parent = path
             .as_str()
             .rsplit_once('/')
@@ -1367,6 +1382,7 @@ pub(crate) fn read_bounded(
     path: &VaultRelativePath,
     limit: usize,
 ) -> Result<Option<Vec<u8>>> {
+    let _diagnostic = crate::diagnostic::counter_span("bounded_canonical_read");
     let logical = path;
     let path = fs.root().resolve(path)?;
     let mut file = match File::open(&path) {
@@ -1384,6 +1400,7 @@ pub(crate) fn read_bounded(
     }
     let mut bytes = Vec::new();
     let read = (&mut file).take(limit as u64 + 1).read_to_end(&mut bytes);
+    crate::diagnostic::bytes("bounded_canonical_read", bytes.len() as u64);
     #[cfg(test)]
     crate::catalog::query_diagnostics::read("managed-read", &path, bytes.len());
     read.map_err(io_error)?;

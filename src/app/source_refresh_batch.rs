@@ -36,6 +36,7 @@ fn conflict(message: &str) -> WikiError {
 }
 
 fn external_input(path: &Path, max: usize) -> Result<(Vec<u8>, PathBuf)> {
+    let _diagnostic = crate::diagnostic::counter_span("caller_input_read");
     if path == Path::new("-") {
         return Err(usage(
             "source refresh batch requires regular files; standard input is unavailable",
@@ -69,6 +70,7 @@ fn external_input(path: &Path, max: usize) -> Result<(Vec<u8>, PathBuf)> {
     file.take(max as u64 + 1)
         .read_to_end(&mut bytes)
         .map_err(|error| usage(&error.to_string()))?;
+    crate::diagnostic::bytes("caller_input_read", bytes.len() as u64);
     if bytes.len() > max {
         return Err(budget());
     }
@@ -79,8 +81,12 @@ fn external_input(path: &Path, max: usize) -> Result<(Vec<u8>, PathBuf)> {
 impl OfflineApp {
     /// Relative input paths resolve from this explicit request's directory.
     pub fn source_refresh_batch_file(&self, file: &Path) -> Result<SourceRefreshBatchOutcome> {
-        let (bytes, canonical) = external_input(file, MAX_SOURCE_REFRESH_BATCH_REQUEST_BYTES)?;
-        let request: SourceRefreshBatchRequest = strict_json(&bytes)?;
+        let (request, canonical) = {
+            let _diagnostic = crate::diagnostic::stage("public_input_and_planning");
+            let (bytes, canonical) = external_input(file, MAX_SOURCE_REFRESH_BATCH_REQUEST_BYTES)?;
+            let request: SourceRefreshBatchRequest = strict_json(&bytes)?;
+            (request, canonical)
+        };
         self.source_refresh_batch(request, canonical.parent().expect("request file parent"))
     }
 
@@ -99,6 +105,7 @@ impl OfflineApp {
         input_dir: &Path,
         ceiling: RefreshProjectionLimits,
     ) -> Result<SourceRefreshBatchOutcome> {
+        let diagnostic_planning = crate::diagnostic::stage("public_input_and_planning");
         if request.items.is_empty() || request.items.len() > MAX_SOURCE_REFRESH_BATCH_ITEMS {
             return Err(usage(
                 "source refresh batch requires 1–16 distinct existing Sources",
@@ -146,7 +153,11 @@ impl OfflineApp {
                     "source refresh batch input paths alias another member",
                 ));
             }
-            if Blake3Hash::digest(&original) != item.input_hash {
+            if {
+                let _diagnostic = crate::diagnostic::counter_span("caller_input_hash");
+                crate::diagnostic::bytes("caller_input_hash", original.len() as u64);
+                Blake3Hash::digest(&original) != item.input_hash
+            } {
                 return Err(conflict(
                     "source refresh batch input bytes differ from input_hash",
                 ));
@@ -327,7 +338,15 @@ impl OfflineApp {
             max_elapsed: ceiling.max_elapsed - elapsed,
             ..ceiling
         };
-        let Some(projected) = project_refresh_batch(&self.fs, &reader, plans, &limits)? else {
+        drop(diagnostic_planning);
+        let projected = {
+            let _diagnostic = crate::diagnostic::stage("joint_projection");
+            project_refresh_batch(&self.fs, &reader, plans, &limits)?
+        };
+        let usage = reader.usage();
+        crate::diagnostic::count("selected_query", usage.rows as u64);
+        crate::diagnostic::bytes("selected_query", usage.bytes as u64);
+        let Some(projected) = projected else {
             if started.elapsed() >= ceiling.max_elapsed {
                 return Err(budget());
             }
@@ -347,12 +366,14 @@ impl OfflineApp {
             return Err(budget());
         }
         drop(reader);
+        let diagnostic_prepare = crate::diagnostic::stage("prepare_and_seal");
         let writer = self.writer()?;
         catalog.guard_current(None)?;
         if started.elapsed() >= ceiling.max_elapsed {
             return Err(budget());
         }
         let mut session = IndexedRefreshSession::prepare_write(&catalog, &writer, projected)?;
+        drop(diagnostic_prepare);
         let change = session.proof().change.clone();
         outcome.change = Some(change.clone());
         if self.options.stage_only {

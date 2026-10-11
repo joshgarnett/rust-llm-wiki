@@ -39,6 +39,7 @@ fn argument_format() -> OutputFormat {
     }
 }
 fn main() {
+    lwiki::diagnostic::begin();
     let args = match Arguments::try_parse() {
         Ok(args) => args,
         Err(error) => {
@@ -47,6 +48,7 @@ fn main() {
                 clap::error::ErrorKind::DisplayHelp | clap::error::ErrorKind::DisplayVersion
             ) {
                 error.print().ok();
+                lwiki::diagnostic::finish(0);
                 return;
             }
             let envelope = Envelope::failure("arguments", "USAGE", error.to_string());
@@ -75,6 +77,7 @@ fn main() {
             } else {
                 eprint!("{error}");
             }
+            lwiki::diagnostic::finish(2);
             std::process::exit(2);
         }
     };
@@ -90,6 +93,7 @@ fn main() {
         )
         .is_err()
     {
+        lwiki::diagnostic::finish(1);
         std::process::exit(1);
     }
     let (envelope, exit) = match lwiki::cli::interrupt::install() {
@@ -99,6 +103,7 @@ fn main() {
             1,
         ),
     };
+    let _final_ack_stage = lwiki::diagnostic::stage("final_verification_and_acknowledgement");
     if format == OutputFormat::Human {
         if envelope.ok
             && envelope.command == "read"
@@ -196,7 +201,9 @@ fn main() {
         )
     };
     if output_result.is_err() {
+        lwiki::diagnostic::finish(1);
         std::process::exit(1);
     }
+    lwiki::diagnostic::finish(i32::from(exit));
     std::process::exit(i32::from(exit));
 }

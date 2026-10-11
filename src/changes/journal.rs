@@ -43,6 +43,8 @@ pub fn decode_journal(
     manifest: &ChangeManifest,
     hash: &crate::domain::Blake3Hash,
 ) -> Result<JournalState> {
+    let _diagnostic = crate::diagnostic::counter_span("journal_parse");
+    crate::diagnostic::bytes("journal_parse", bytes.len() as u64);
     if bytes.len() > MAX_JOURNAL_BYTES {
         return Err(WikiError::invalid("journal exceeds limit"));
     }
@@ -99,8 +101,10 @@ pub fn load_journal(
     manifest: &ChangeManifest,
     hash: &crate::domain::Blake3Hash,
 ) -> Result<JournalState> {
+    let _diagnostic = crate::diagnostic::counter_span("journal_load");
     let bytes = read_bounded(fs, &journal_path(&manifest.change_id)?, MAX_JOURNAL_BYTES)?
         .unwrap_or_default();
+    crate::diagnostic::bytes("journal_load", bytes.len() as u64);
     decode_journal(&bytes, manifest, hash)
 }
 
@@ -111,6 +115,7 @@ pub fn append_event(
     hash: &crate::domain::Blake3Hash,
     event: ChangeEvent,
 ) -> Result<JournalState> {
+    let _diagnostic = crate::diagnostic::counter_span("journal_append");
     permit.require_root(fs.root())?;
     let mut state = load_journal(fs, manifest, hash)?;
     let frame = JournalFrame {
@@ -123,6 +128,7 @@ pub fn append_event(
     state.frames.push(frame.clone());
     validate_frames(&state.frames, manifest, hash)?;
     let bytes = encode_frame(&frame)?;
+    crate::diagnostic::bytes("journal_append", bytes.len() as u64);
     if state.safe_offset as usize + bytes.len() > MAX_JOURNAL_BYTES {
         return Err(WikiError::invalid("journal exceeds limit"));
     }

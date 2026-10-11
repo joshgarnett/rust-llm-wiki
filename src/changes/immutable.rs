@@ -677,6 +677,7 @@ impl IndexedRevisionGuard<'_> {
         Ok(())
     }
     pub(crate) fn preflight(&self) -> Result<()> {
+        let _diagnostic = crate::diagnostic::counter_span("immutable_preflight");
         self.require_active()?;
         let state =
             journal::load_journal(&self.engine.fs, &self.manifest, &self.change.manifest_hash)?;
@@ -702,6 +703,7 @@ impl IndexedRevisionGuard<'_> {
         )
     }
     pub(crate) fn verify(&self, complete: bool) -> Result<()> {
+        let _diagnostic = crate::diagnostic::counter_span("immutable_guard");
         self.require_active()?;
         self.engine.verify_revision_trees_with(
             self.writer,
@@ -712,6 +714,7 @@ impl IndexedRevisionGuard<'_> {
         )
     }
     pub(crate) fn complete_owner_rows(&self) -> Result<Vec<RevisionOwnerRow>> {
+        let _diagnostic = crate::diagnostic::counter_span("immutable_complete_owners");
         self.verify(true)?;
         let state =
             journal::load_journal(&self.engine.fs, &self.manifest, &self.change.manifest_hash)?;
@@ -736,6 +739,7 @@ fn check_members(
     manifest: &ChangeManifest,
     complete: bool,
 ) -> Result<()> {
+    let _diagnostic = crate::diagnostic::counter_span("immutable_tree");
     let root = engine.fs.root().resolve(&tree.root)?;
     match fs::symlink_metadata(&root) {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
@@ -799,6 +803,7 @@ fn walk(
         #[cfg(test)]
         profile.entry();
         let entry = entry.map_err(|e| WikiError::new(ErrorCode::Internal, e.to_string()))?;
+        crate::diagnostic::count("immutable_entries", 1);
         let name = entry
             .file_name()
             .into_string()
@@ -823,7 +828,13 @@ fn walk(
             if let Some(expected) = tree.members.get(&path) {
                 let bytes = read_bounded(&engine.fs, &path, MAX_PAYLOAD_BYTES)?
                     .ok_or_else(|| conflict("revision member disappeared"))?;
-                if Blake3Hash::digest(bytes) != *expected {
+                crate::diagnostic::bytes("immutable_members", bytes.len() as u64);
+                crate::diagnostic::count("immutable_members", 1);
+                if {
+                    let _diagnostic = crate::diagnostic::counter_span("immutable_hash");
+                    crate::diagnostic::bytes("immutable_hash", bytes.len() as u64);
+                    Blake3Hash::digest(bytes) != *expected
+                } {
                     return Err(conflict(format!(
                         "revision tree member {path} has unfamiliar bytes"
                     )));
