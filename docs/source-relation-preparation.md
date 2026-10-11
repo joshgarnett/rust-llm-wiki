@@ -6,6 +6,80 @@ context. It is disabled by default and currently requires normalized storage.
 There is no demonstrated development-corpus quality improvement: native
 completeness remains **13/32 positive tasks and 79/129 required facts**.
 
+## Retrieval-only evaluation plan, 2026-10-11
+
+The current priority is retrieval completeness. Scale experiments are deferred;
+their resource or platform failures do not block this evaluation. Paid generation
+is authorized up to **USD 20 total**, including pilot work, failed attempts and
+unknown accounting holds. No generation request has been executed under this
+authorization. Earlier statements that generation consent is pending are
+superseded. Existing embedding acquisition and its accounting remain separate.
+
+The hypothesis is that source-only preparation can connect a rule to a distant
+condition, exception or alternative, so deterministic retrieval returns the
+complete applicable evidence. It remains untested on the development corpus.
+The existing implementation nominates fragments of up to 1,024 bytes, ranks scope
+labels by query-term overlap, and operates within already admitted Sources.
+It cannot repair owner-discovery losses. A useful relationship also fails to help
+when its complete original support cannot fit the unchanged passage limits.
+
+The [Dense X Retrieval study](https://arxiv.org/abs/2312.06648) provides evidence
+that retrieval-unit granularity can affect retrieval and downstream task results.
+Its proposition-based results motivate inspecting our representation; they do
+not validate the current fragment-relation design or predict our task score.
+We will test the implemented representation before changing it or acquiring the
+whole corpus.
+
+1. **Test fidelity and usable support on eight Sources, at most USD 5.** Freeze
+   two longest encoded requests, two Sources with distant conditions/exceptions,
+   two with alternative procedures, and two ordinary Sources, chosen from source
+   content alone with deterministic ID tie-breaking. Keep questions and answer
+   labels out of selection and generation. Before dispatch, an independent critic
+   records expected source-only relationships, exact supporting ranges and the
+   limits. Freeze the supported model, recipe and 4,096-output-token ceiling.
+   Require eight valid, untruncated retained responses, no unsupported,
+   reversed or wrong-scenario emitted relationships, and at least three declared
+   distant rule/qualification examples across three Sources whose complete support
+   fits the existing limits. Record omissions too. Stop on a structural or fidelity
+   failure; do not retune the prompt or representation within this trial. This is
+   a representation diagnostic, not a retrieval-quality score.
+2. **Complete all 994 Sources only if the pilot warrants it.** Reuse the eight
+   successful preparations without paying for them again. Use disjoint manifests
+   for eight pilot Sources and the remaining 986, with separate Run lifetime caps
+   of USD 5 and USD 15. Source inspection confirms that retained annotations remain
+   eligible across Runs; a dedicated public-command reuse check remains required
+   before paid dispatch. The provider does not deduplicate across Runs: verify the
+   sets are disjoint and their union is exactly the original 994 Sources. Do not
+   create a third full-corpus Run. Use one attempt per Source, serial execution,
+   Run request ceilings of eight and 986, and a finite three-hour campaign window;
+   continuation receives only the time remaining in that window.
+   Refresh prices and inspect actual sealed inputs. Forecast remaining input cost
+   and maximum output cost separately from conservative reservation ceilings;
+   require the remainder forecast, a 25% contingency, its spent/unknown charges
+   and the next reservation to fit the USD 15 continuation cap. Unused pilot
+   allowance is not transferred. Reassess before continuing. Unknown charges are
+   retained. Incomplete acquisition fails the
+   coverage requirement and cannot become a partial quality success.
+3. **Compare actual returned evidence on all 40 development tasks.** Only after
+   994/994 successful preparations and reconciled accounting, freeze source,
+   publication and cache identities. Reuse the validated paired offline executor
+   and existing query vectors. Compare baseline with the explicitly named
+   model-prepared, deterministic-query workflow under identical evidence/proof
+   budgets. Require at least **17/32 complete positives**, preservation of every
+   one of the **79 baseline facts**, all **eight absent controls**, exact applicable
+   citations and an independent **at least 9/10 with no correctness blocker** for
+   the retrieval workflow, using a rubric frozen before dispatch. Report every
+   regression, cost and measured latency.
+   A failure closes this candidate without another parameter sweep. A pass permits
+   a separately frozen unseen evaluation; it does not change the unprepared native
+   baseline, prove answer generation, promote defaults or qualify a release.
+
+The immediate action is to freeze the pilot's exact Sources, critic checklist,
+fresh quote and reusable acquisition arrangement. No additional user approval is
+needed for that experiment within the USD 20 ceiling. Holdout labels remain
+private. No new model, harness, scale benchmark or build is justified by this
+planning checkpoint alone.
+
 ## Ordinary command path
 
 `relations prepare` authenticates complete current Sources and returns an exact

@@ -1,5 +1,11 @@
 # Current contracts and local coverage
 
+Current work focuses on [retrieval completeness](source-relation-preparation.md#retrieval-only-evaluation-plan-2026-10-11);
+scale experiments are deferred. The next experiment is a source-only relation
+pilot before any full-corpus generation, within an authorized USD 20 total.
+Native quality remains 13/32 complete positives and 79/129 facts. The plan is
+prospective: it records no paid generation result, quality gain or release pass.
+
 The [joined maintenance candidate](validation-joined-maintenance.md) preserves
 guarded publication while parallelizing eligible reads and staging. Independent
 local review accepts 550 affected library cases, 126 integration cases and four
