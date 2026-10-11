@@ -302,11 +302,17 @@ function downloadsModelObservation() {
       if (row.populated) {
         if (typeof data !== 'object') row.invalid.push('data is not a record');
         else for (const field of fields) {
-          if (!(field in data)) {row.missing.push(field); continue;}
+          if (!(field in data)) {row.missing.push(field); if (field === 'url') row.urlShape = 'undefined'; continue;}
           let value = data[field];
           if (field === 'url') {
-            if (value !== null && (typeof value !== 'object' || !('url' in value))) {row.invalid.push('url lacks its string field'); continue;}
-            value = value === null ? null : value.url;
+            row.urlShape = value === null ? 'null' : Array.isArray(value) ? 'array' : typeof value;
+            if (typeof value === 'string') {
+              row.urlLength = value.length;
+              row.url = value.slice(0, limits.maxStringCharacters);
+              observation.truncated ||= value.length > limits.maxStringCharacters;
+            } else if (value === null) row.url = null;
+            else row.invalid.push('url has an unsupported type');
+            continue;
           }
           if (field === 'total' && typeof value === 'bigint') value = value.toString();
           if (typeof value === 'string') {
