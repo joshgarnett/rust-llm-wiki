@@ -5,7 +5,9 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import pwd
 import re
+import shlex
 import signal
 import sqlite3
 import subprocess
@@ -49,6 +51,15 @@ def attrs(path):
             for name in names}
 
 
+def hosted_browser_home():
+    account = pwd.getpwuid(os.getuid())
+    home = Path(account.pw_dir).resolve(strict=True)
+    inherited = Path(os.environ['HOME']).resolve(strict=True)
+    if not home.is_dir() or home.stat().st_uid != os.getuid() or inherited != home:
+        raise RuntimeError('normal runner HOME must match the owned passwd account directory')
+    return home
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     for key in ['assets', 'archive-sha256', 'manifest-sha256', 'binary-sha256', 'installer-commit', 'installer-sha256', 'source-provenance', 'evidence']:
@@ -78,9 +89,9 @@ def main():
     save(root / 'result.json', result)
     commands = []
 
-    def command(name, argv, timeout=30, allow_failure=False):
+    def command(name, argv, timeout=30, allow_failure=False, command_env=None):
         start = time.monotonic()
-        process = subprocess.Popen(argv, env=env, cwd=root, stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True)
+        process = subprocess.Popen(argv, env=env if command_env is None else command_env, cwd=root, stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True)
         try:
             if name == 'install':
                 observations = []
@@ -131,6 +142,29 @@ def main():
             raise RuntimeError('host Gatekeeper is not enabled; cannot qualify default protection')
         command('sip-state', ['/usr/bin/csrutil', 'status'], allow_failure=True)
         result['archiveAttributesBefore'] = attrs(archive)
+        browser_home = hosted_browser_home()
+        browser_env = dict(env, HOME=str(browser_home))
+        result['homeIsolation'] = {'browserHOME': str(browser_home), 'controllerInstallerCLIHOME': env['HOME'], 'browserProfile': str(root / 'browser-profile'), 'keychainOperations': 'read-only default/search-list paths; no create/unlock/reset/preference changes'}
+        result['keychainHomes'] = {}
+        for label, keychain_env in [('fixture', env), ('normal-runner', browser_env)]:
+            observation = {'home': keychain_env['HOME'], 'commands': {}}
+            for operation in ['default-keychain', 'list-keychains']:
+                argv = ['/usr/bin/security', operation, '-d', 'user']
+                try:
+                    code, output = command('keychain-' + label + '-' + operation, argv, timeout=5, allow_failure=True, command_env=keychain_env)
+                    paths = shlex.split(output.decode())
+                    if any(not Path(value).is_absolute() for value in paths):
+                        raise RuntimeError('keychain path observation returned a nonabsolute path')
+                    observation['commands'][operation] = {'argv': argv, 'exit': code, 'paths': paths}
+                except RuntimeError as error:
+                    observation['commands'][operation] = {'argv': argv, 'error': str(error)}
+            result['keychainHomes'][label] = observation
+            save(root / 'result.json', result)
+        normal = result['keychainHomes']['normal-runner']['commands']
+        default_paths = normal['default-keychain'].get('paths', [])
+        if (normal['default-keychain'].get('exit') != 0 or normal['list-keychains'].get('exit') != 0
+                or len(default_paths) != 1 or not Path(default_paths[0]).is_file()):
+            raise RuntimeError('normal runner default keychain is unavailable; no creation, unlock, reset or fallback attempted')
         node = subprocess.check_output(['/usr/bin/which', 'node'], text=True).strip()
         url = 'https://raw.githubusercontent.com/joshgarnett/rust-llm-wiki/' + args.installer_commit + '/scripts/install.sh'
         result['installerURL'] = url
@@ -142,7 +176,7 @@ def main():
         except RuntimeError as error:
             # The independent transport diagnostic must not replace browser evidence.
             result['publicTransportDiagnostic']['error'] = str(error)
-        browser_code, _ = command('browser', [node, str(Path(__file__).with_name('browser.mjs')), str(root), url, args.installer_sha256], timeout=120, allow_failure=True)
+        browser_code, _ = command('browser', [node, str(Path(__file__).with_name('browser.mjs')), str(root), url, args.installer_sha256, str(browser_home)], timeout=120, allow_failure=True)
         installer = root / 'downloads/install.sh'
         if installer.exists():
             result['installerAttributesBefore'] = attrs(installer)
