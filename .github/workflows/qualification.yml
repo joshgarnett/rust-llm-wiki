@@ -79,6 +79,7 @@ jobs:
           github-token: ${{ github.token }}
           path: ${{ runner.temp }}/editor-release-assets
       - name: Verify and extract the archived executable
+        id: verified-inputs
         run: |
           set -euo pipefail
           python3 - <<'PY'
@@ -98,15 +99,34 @@ jobs:
           with open(os.environ['GITHUB_ENV'], 'a') as env:
               for key, value in {'EDITOR_BINARY': str(binary), 'EDITOR_ARCHIVE': str(archive),
                                  'EDITOR_BINARY_SHA256': record['binary_sha256'],
-                                 'EDITOR_ARCHIVE_SHA256': record['archive_sha256']}.items():
+                                 'EDITOR_ARCHIVE_SHA256': record['archive_sha256'],
+                                 'EDITOR_MANIFEST_SHA256': qualification.digest(assets / 'release-manifest.txt'),
+                                 'EDITOR_INSTALLER_SHA256': qualification.digest(assets / 'install.sh')}.items():
                   env.write(key + '=' + value + '\n')
           PY
+      - name: Check installed PATH, reinstall and removal with the final archive
+        run: |
+          python3 scripts/editor-qualification/installer.py \
+            --release-directory "$RUNNER_TEMP/editor-release-assets" \
+            --binary-sha256 "$EDITOR_BINARY_SHA256" --source-commit "$SOURCE_COMMIT" \
+            --evidence "$RUNNER_TEMP/installer-evidence"
       - name: Run the actual editor save and citation workflow
+        if: ${{ !cancelled() && steps.verified-inputs.outcome == 'success' }}
         run: |
           python3 scripts/editor-qualification/run.py \
             --binary "$EDITOR_BINARY" --binary-sha256 "$EDITOR_BINARY_SHA256" \
             --archive "$EDITOR_ARCHIVE" --archive-sha256 "$EDITOR_ARCHIVE_SHA256" \
             --source-commit "$SOURCE_COMMIT" --evidence "$RUNNER_TEMP/editor-evidence"
+      - name: Check the browser-downloaded installer with macOS protections enabled
+        if: ${{ !cancelled() && runner.os == 'macOS' && steps.verified-inputs.outcome == 'success' }}
+        run: |
+          python3 scripts/download-qualification/run.py \
+            --assets "$RUNNER_TEMP/editor-release-assets" \
+            --archive-sha256 "$EDITOR_ARCHIVE_SHA256" --binary-sha256 "$EDITOR_BINARY_SHA256" \
+            --manifest-sha256 "$EDITOR_MANIFEST_SHA256" \
+            --installer-commit "$GITHUB_SHA" --installer-sha256 "$EDITOR_INSTALLER_SHA256" \
+            --source-provenance "$RUNNER_TEMP/editor-inputs/qualification-source.json" \
+            --evidence "$RUNNER_TEMP/download-evidence"
       - name: Retain editor qualification evidence
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -126,6 +146,18 @@ jobs:
             ${{ runner.temp }}/editor-evidence/vendor-apparmor-profile
             ${{ runner.temp }}/editor-evidence/os-release
             ${{ runner.temp }}/editor-evidence/vault/**
+            ${{ runner.temp }}/installer-evidence/*.json
+            ${{ runner.temp }}/installer-evidence/*.stdout
+            ${{ runner.temp }}/installer-evidence/*.stderr
+            ${{ runner.temp }}/installer-evidence/home/My lasting wiki/**
+            ${{ runner.temp }}/installer-evidence/home/My lasting note.md
+            ${{ runner.temp }}/installer-evidence/home/.config/**
+            ${{ runner.temp }}/download-evidence/*.json
+            ${{ runner.temp }}/download-evidence/*.jsonl
+            ${{ runner.temp }}/download-evidence/*.stdout
+            ${{ runner.temp }}/download-evidence/*.stderr
+            ${{ runner.temp }}/download-evidence/*.png
+            ${{ runner.temp }}/download-evidence/downloads/install.sh
           include-hidden-files: true
           if-no-files-found: warn
           retention-days: 30

@@ -49,6 +49,8 @@ Each job downloads and verifies the existing archive, then opens a test wiki in 
 pinned official Obsidian build on a fresh GitHub-hosted runner. It checks real editor
 saves, capture and refresh, old and new citations, Page moves and stale-edit
 conflicts. The report records the product and test-tool commits separately.
+The same jobs check that a new shell finds the installed command and that
+reinstalling or removing it preserves the wiki, settings and unrelated files.
 Download each `editor-evidence-*` artifact to inspect the saved bytes, command output
 and screenshots. A newer test-tool commit does not require rebuilding the product.
 
@@ -57,6 +59,11 @@ the editor runs as the runner user with a virtual display and an isolated networ
 On macOS, the editor uses its normal network access. Both preserve the editor's
 shipped sandbox settings, disable updates and limit each app run to five
 minutes. All lwiki commands run offline.
+
+The Mac job also downloads the shell installer through Chrome with its normal
+download protections. It records quarantine metadata and runs that script with
+the verified Actions archive. This checks the downloaded script and installation;
+public release URLs and archives downloaded through a browser need separate checks.
 
 Record any newline or byte-order-mark changes made by the editor. Captured bytes
 must match the saved file exactly; never restore a fixture to hide editor changes.
