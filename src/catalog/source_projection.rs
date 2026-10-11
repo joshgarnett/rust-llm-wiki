@@ -703,11 +703,12 @@ fn admit_refresh(
         {
             return Err(conflict("invalid captured source input"));
         }
-        if let Some(prior) = work.captured.get(&document.path) {
-            if !deduplicate_captured || prior.hash != document.hash || prior.bytes != document.bytes
-            {
-                return Err(conflict("invalid overlapping captured source input"));
-            }
+        if let Some(prior) = work.captured.get(&document.path)
+            && (!deduplicate_captured
+                || prior.hash != document.hash
+                || prior.bytes != document.bytes)
+        {
+            return Err(conflict("invalid overlapping captured source input"));
         }
         work.observe(&document.path, ExpectedState::Hash(document.hash.clone()))?;
         work.captured

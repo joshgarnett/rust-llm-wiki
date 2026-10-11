@@ -1,5 +1,9 @@
 //! Integrated normalized workflows over disposable sources and accounted mock responses.
 //! Corpus vectors come only from embeddings_sync; query vectors are explicit cache fixtures.
+#[allow(
+    clippy::duplicate_mod,
+    reason = "Instantiate shared fixture code in independent test namespaces; sharing module state would change the test contract."
+)]
 #[path = "../../tests/fixtures/p17/common.rs"]
 mod common;
 
@@ -1183,7 +1187,7 @@ fn normalized_vector_read_reservation_stops_wide_valid_cache_reads() {
     store
         .put_batch(
             &space,
-            &[input.clone()],
+            std::slice::from_ref(&input),
             &[vec![1.0; 65_536]],
             true,
             &Blake3Hash::digest([]),
@@ -1826,7 +1830,9 @@ mod scale_attribution {
         xof.finalize_xof().fill(&mut bytes);
         let magnitude = 1.0 / (DIMENSIONS as f32).sqrt();
         bytes
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .map(|word| {
                 if word[0] & 1 == 0 {
                     magnitude
@@ -2776,7 +2782,7 @@ mod representation_control025;
 #[test]
 fn normalized_multi_unit_owner_reuse_completes_unchanged_semantic_row_budget() {
     use crate::{
-        catalog::query_types::{QueryCatalog, QueryReadLimits},
+        catalog::query_types::QueryReadLimits,
         retrieval::{ContextRequest, ContextScope},
     };
     // 100 real captured owners, genuinely segmented by the default renderer.

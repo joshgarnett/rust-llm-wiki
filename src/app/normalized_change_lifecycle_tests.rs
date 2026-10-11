@@ -15,7 +15,7 @@ use crate::{
     domain::{Blake3Hash, ErrorCode, VaultRelativePath},
     sources::{CaptureRequest, ExtractionInput, SourceOrigin},
     storage::{self, StorageOptions},
-    vault::{DurableIo, VaultFs, VaultRoot, WriterPermit},
+    vault::{VaultFs, VaultRoot, WriterPermit},
 };
 use std::{
     collections::BTreeMap,

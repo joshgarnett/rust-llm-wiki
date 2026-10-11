@@ -21,11 +21,39 @@ use std::{collections::BTreeMap, time::Instant};
 
 pub(crate) struct RelationTaskPlan {
     pub generation: GenerationTaskPlan,
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "Retained proof and accounting metadata is inspected by focused contract tests."
+        )
+    )]
     pub source: AuthenticatedRelationSource,
     /// Initial selected proof plus real-task authentication reservations. This
     /// is conservative charged work, not observed total digest consumption.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "Retained proof and accounting metadata is inspected by focused contract tests."
+        )
+    )]
     pub reserved_hash_bytes: u64,
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "Retained proof and accounting metadata is inspected by focused contract tests."
+        )
+    )]
     pub serialized_input_bytes: usize,
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "Retained proof and accounting metadata is inspected by focused contract tests."
+        )
+    )]
     pub fragment_count: usize,
 }
 fn budget(message: &str) -> WikiError {

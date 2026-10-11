@@ -37,6 +37,10 @@ struct TaskMaterialization {
     probe: bool,
     corpus: bool,
 }
+#[expect(
+    clippy::large_enum_variant,
+    reason = "Keep authenticated corpus ownership inline without adding an allocation to the bounded query workflow."
+)]
 enum EmbeddingCorpus {
     Legacy {
         reader: ReaderSnapshot,
@@ -443,7 +447,7 @@ impl OfflineApp {
             let units = inputs.as_ref().map(EmbeddingCorpus::units).unwrap_or(&[]);
             let space = spec.as_ref().map(SpaceSpec::id).transpose()?;
             let coverage = if let (Some(store), Some(space)) = (&store, &space) {
-                store.coverage(space, &units)?
+                store.coverage(space, units)?
             } else {
                 Coverage {
                     eligible_units: units.len(),
@@ -599,7 +603,7 @@ impl OfflineApp {
         };
         if self.options.dry_run {
             report.coverage = if let Some(store) = store {
-                store.coverage(&space, &units)?
+                store.coverage(&space, units)?
             } else {
                 report.coverage
             };
@@ -1505,6 +1509,10 @@ impl OfflineApp {
     ) -> Result<(JobLedger, Vec<TaskSpec>)> {
         self.embedding_job_with_bindings(spec, batches, units, runtime, operation, probe, None)
     }
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "Keep distinct proof, scope and budget authorities explicit at this boundary."
+    )]
     fn embedding_job_with_bindings(
         &self,
         spec: &SpaceSpec,
@@ -2967,6 +2975,10 @@ impl OfflineApp {
     ) -> Result<HitSet> {
         self.semantic_search_impl(text, plan, runtime, true, fallback, None, true)
     }
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "Keep distinct proof, scope and budget authorities explicit at this boundary."
+    )]
     fn semantic_search_impl(
         &self,
         text: &str,

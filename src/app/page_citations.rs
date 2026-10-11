@@ -329,12 +329,13 @@ impl OfflineApp {
             let content_path = payload_path(rp, revision, "wiki_content_path")?;
             for field in ["wiki_original_path", "wiki_content_path"] {
                 let path = payload_path(rp, revision, field)?;
-                if !assets.contains_key(&path) {
+                if let std::collections::btree_map::Entry::Vacant(entry) = assets.entry(path) {
                     let remaining = limits.max_bytes.saturating_sub(total);
-                    let bytes = crate::changes::prepare::read_bounded(&self.fs, &path, remaining)?
-                        .ok_or_else(|| integrity("citation payload is missing"))?;
+                    let bytes =
+                        crate::changes::prepare::read_bounded(&self.fs, entry.key(), remaining)?
+                            .ok_or_else(|| integrity("citation payload is missing"))?;
                     total = add_proof_bytes(total, bytes.len(), &limits)?;
-                    assets.insert(path, bytes);
+                    entry.insert(bytes);
                 }
             }
             presentations.push(CitationPresentation {
@@ -614,7 +615,7 @@ pub(crate) fn rebase_source_citation_links(
             .find("](")
             .ok_or_else(|| WikiError::invalid("generated source link is not inline Markdown"))?
             + 2;
-        if !raw.ends_with(')') || &raw[at..raw.len() - 1] != link.destination {
+        if !raw.ends_with(')') || raw[at..raw.len() - 1] != link.destination {
             return Err(WikiError::invalid(
                 "generated source link cannot be safely rebased",
             ));

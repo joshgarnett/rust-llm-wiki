@@ -251,7 +251,7 @@ fn raw_ids_fields_duplicates_and_truncation_fail_without_salvage() {
     }
     let raw = serde_json::to_string(&base).unwrap();
     for bytes in [
-        raw[..raw.len() - 1].as_bytes().to_vec(),
+        raw.as_bytes()[..raw.len() - 1].to_vec(),
         format!("{raw} {{}}").into_bytes(),
         format!("```json\n{raw}\n```").into_bytes(),
         raw.replacen("\"schema\":", "\"schema\":\"x\",\"schema\":", 1)

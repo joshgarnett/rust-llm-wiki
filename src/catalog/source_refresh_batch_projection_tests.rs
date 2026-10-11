@@ -1008,7 +1008,7 @@ fn batch_recover_exact_once(
         .unwrap();
     assert_eq!(QueryCatalog::snapshot(&reader), &proof.intended);
     let source_files: BTreeMap<_, _> = batch_recovery_targets(&proof)
-        .into_iter()
+        .iter()
         .map(|target| {
             let row = reader.record(&target.source_id).unwrap().unwrap();
             assert_eq!(row.record.id(), &target.source_id);
@@ -1907,9 +1907,7 @@ fn refresh_batch_recovery_third_hash_in_pointer_asset_or_noop_guard_preserves_fo
                 .collect();
             drop(reader);
             let (fixture, result) = batch_public_apply(fixture, &proof.change);
-            let error = result
-                .err()
-                .expect("public indexed third-hash replay must refuse");
+            let error = result.expect_err("public indexed third-hash replay must refuse");
             assert!(
                 matches!(
                     error.code,

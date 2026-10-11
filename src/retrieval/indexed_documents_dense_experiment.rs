@@ -145,13 +145,12 @@ fn run(
     let retained = if dense {
         Some(
             vectors::RetainedMembershipReader::open(catalog.fs(), None, meter.remaining_ms())
-                .map_err(|error| {
+                .inspect_err(|error| {
                     if let Ok(usage) =
                         serde_json::from_value(error.details["retained_work"].clone())
                     {
                         stats.retained_work = usage;
                     }
-                    error
                 })?,
         )
     } else {

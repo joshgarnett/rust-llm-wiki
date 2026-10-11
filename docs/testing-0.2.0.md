@@ -397,6 +397,19 @@ and launch free-space observations were unavailable; this comparison does not
 qualify resource bounds.
 
 The [scale protocol](testing-large-vaults.md) and retrieval evaluation retain
-their own acceptance gates. Strict Clippy remains failing. Native returned-error
-reopen tests do not establish power-loss safety, and local fixtures do not
-qualify a live provider.
+their own acceptance gates. The October 11 release-check milestone passes Cargo
+formatting and strict release-profile Clippy for all targets, with both default
+features and `maintenance-diagnostic029` (`--locked --offline`, `-D warnings`).
+The cleanup retains proof and accounting fields, gates test-only helpers, and
+removes unused private code. Independent source review found no behavior
+regression in the inspected changes.
+
+The same optimized native library binary passes 46 affected regressions covering
+Page citations, original-source selection, source-note lookup, relation accounting
+and snapshot context. This combines 35 earlier passes, one completed snapshot
+test before a log-cap interruption, and ten remaining snapshot tests run with
+normal test-output capture. The original count/filter mistakes and interrupted
+run are preserved; no evidence cap was raised. This is focused Cargo validation,
+not a full-suite, Bazel, platform or retrieval-quality acceptance result. Native
+returned-error reopen tests do not establish power-loss safety, and local fixtures
+do not qualify a live provider.

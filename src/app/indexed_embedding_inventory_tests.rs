@@ -903,7 +903,7 @@ fn owner_with_identity_guard_count(
     .unwrap();
     assert_eq!(proof.owner_dependencies().unwrap()[0].1.len(), guards);
     assert!(
-        proof.units.len() > 0,
+        !proof.units.is_empty(),
         "current supported Page must remain eligible"
     );
     owner

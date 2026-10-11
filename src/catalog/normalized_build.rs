@@ -125,8 +125,22 @@ pub(crate) struct BuildStats {
 pub(crate) struct CompletedCatalog {
     pub identity: BuildIdentity,
     pub snapshot: ReadSnapshot,
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "Retained publication and audit metadata is inspected by focused contract tests."
+        )
+    )]
     pub dependency_hash: Blake3Hash,
     pub stats: BuildStats,
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "Retained publication and audit metadata is inspected by focused contract tests."
+        )
+    )]
     pub path: PathBuf,
 }
 
@@ -642,6 +656,7 @@ impl<'a> NormalizedBuilder<'a> {
         super::normalized_metadata::visit_refresh_rows(projection, self)
     }
 
+    #[cfg(test)]
     pub fn finish(self, projection: &ValidationProjection) -> Result<CompletedCatalog> {
         self.finish_with_facts(projection, None)
     }
@@ -928,6 +943,10 @@ pub(super) struct CopyStats {
     pub delta: super::normalized_delta::DeltaStats,
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Keep distinct proof, scope and budget authorities explicit at this boundary."
+)]
 pub(super) fn copy_selected_and_apply(
     fs: &VaultFs,
     writer: &WriterPermit,

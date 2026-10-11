@@ -236,7 +236,7 @@ fn dense_mechanics_02_title_and_content_refresh_reprepare() {
     let before = selected_documents::authenticate(
         &fixture.catalog,
         &before_reader,
-        &[fixture.hidden_path.clone()],
+        std::slice::from_ref(&fixture.hidden_path),
         &pinned_request().verification_budget,
     )
     .unwrap();
@@ -268,7 +268,7 @@ fn dense_mechanics_02_title_and_content_refresh_reprepare() {
     let after = selected_documents::authenticate(
         &fixture.catalog,
         &after_reader,
-        &[fixture.hidden_path.clone()],
+        std::slice::from_ref(&fixture.hidden_path),
         &pinned_request().verification_budget,
     )
     .unwrap();

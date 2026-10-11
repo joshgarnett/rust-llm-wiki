@@ -667,10 +667,10 @@ fn adoption_integrity(
             let Some(record) = note.canonical.as_ref().filter(|r| r.id() == &id) else {
                 continue;
             };
-            if record.kind() == RecordKind::Source {
-                if let Some(head) = record.string("wiki_current_revision") {
-                    pending.push_back(RecordId::new(head)?);
-                }
+            if record.kind() == RecordKind::Source
+                && let Some(head) = record.string("wiki_current_revision")
+            {
+                pending.push_back(RecordId::new(head)?);
             }
             if record.kind() == RecordKind::Revision {
                 pending.push_back(super::source_projection::record_id(

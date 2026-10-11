@@ -766,7 +766,7 @@ pub(crate) fn assemble(
                 if ranked.len()==80 { draft.omissions.push(ContextOmission { record_id:None,path:None,reason:"ranked_record80_cap; further_match_count_unavailable".into(),count:1 }); }
                 if hits.truncated || hits.omitted_candidates>0 { draft.omissions.push(ContextOmission { record_id:None,path:None,reason:"unchanged_hybrid_discovery_is_bounded".into(),count:hits.omitted_candidates.max(1) }); }
                 draft.usage.rendered_bytes=draft.text.len(); draft.usage.estimated_tokens=draft.text.len().div_ceil(4);
-                draft.truncated=!draft.omissions.is_empty();
+                draft.truncated = !draft.omissions.is_empty();
                 draft.warnings.push(format!("025 {} contextual records loaded; {} ranked once; {} exact support passages; omissions are explicit coverage gaps",records.len(),ranked.len(),draft.passages.len()));
                 selected.check_query_budget()?; Ok(draft)
             }

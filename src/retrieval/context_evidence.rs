@@ -19,6 +19,13 @@ use std::{
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Policy {
     Baseline,
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "Only the test-scoped policy override enables the retained unpromoted evidence-set arms"
+        )
+    )]
     Candidate(Arm),
 }
 

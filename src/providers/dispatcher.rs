@@ -376,13 +376,12 @@ impl Dispatcher {
                     }
                 };
                 let attempt = reservation.attempt().clone();
-                if let (Some(budget), Some(slot)) = (invocation, invocation_slot) {
-                    if let Err(error) = budget.bind(slot, &attempt) {
+                if let (Some(budget), Some(slot)) = (invocation, invocation_slot)
+                    && let Err(error) = budget.bind(slot, &attempt) {
                         budget.block();
                         let _ = ledger.release_not_sent(&attempt, NotSentObservation { reason: NotSentReason::TransportNotEntered });
                         return Err(failure(error, Some(attempt)));
                     }
-                }
                 let permit = match ledger.dispatch_intent(reservation) {
                     Ok(p) => p,
                     Err(e) => {
@@ -987,6 +986,10 @@ async fn wait(delay_ms: u64, options: &JobOptions, deadline: i64) -> Result<()> 
         tokio::time::sleep(Duration::from_millis(5)).await;
     }
 }
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Keep receipt identity, publication mode, deadline and retained change explicit at the accounting boundary."
+)]
 fn commit_receipt(
     ledger: &JobLedger,
     fs: &VaultFs,
@@ -1465,63 +1468,6 @@ fn pause_running(ledger: &JobLedger, reason: StopReason) -> Result<()> {
     Ok(())
 }
 
-#[cfg(test)]
-mod diagnostic_redaction_tests {
-    use super::*;
-
-    #[test]
-    fn setup_reasons_preserve_only_closed_local_diagnostics() {
-        let mut local = WikiError::new(
-            ErrorCode::ProviderAuth,
-            "credential file unavailable or invalid",
-        );
-        local.details = serde_json::json!({"path":"secret-marker", "next_action":"secret-marker"});
-        let safe = redacted(local);
-        assert_eq!(
-            safe.details["reason"],
-            "credential_file_unavailable_or_invalid"
-        );
-        assert!(
-            safe.details["next_action"]
-                .as_str()
-                .unwrap()
-                .contains("0600")
-        );
-        assert!(!format!("{safe:?}").contains("secret-marker"));
-
-        for message in [
-            "credential file unavailable or invalid: secret-marker",
-            "secret-marker",
-        ] {
-            let mut untrusted = WikiError::new(ErrorCode::ProviderAuth, message);
-            untrusted.details = serde_json::json!({"reason":"secret-marker", "next_action":"secret-marker", "token":"secret-marker"});
-            let safe = redacted(untrusted);
-            assert_eq!(safe.message, "bounded provider operation failed");
-            assert!(!format!("{safe:?}").contains("secret-marker"));
-        }
-        let wrong_code = redacted(WikiError::new(
-            ErrorCode::ProviderResponse,
-            "credential file unavailable or invalid",
-        ));
-        assert_eq!(wrong_code.message, "bounded provider operation failed");
-
-        let mut exhausted = WikiError::new(ErrorCode::BudgetExceeded, "secret-marker");
-        exhausted.details = serde_json::json!({
-            "budget_scope": "invocation", "next_action": "secret-marker"
-        });
-        let safe = redacted(exhausted);
-        assert_eq!(safe.details["budget_scope"], "invocation");
-        assert_eq!(safe.hint.as_deref(), safe.details["next_action"].as_str());
-        assert!(
-            safe.hint
-                .as_deref()
-                .unwrap()
-                .contains("Continue explicitly")
-        );
-        assert!(!format!("{safe:?}").contains("secret-marker"));
-    }
-}
-
 /// Decode an already locked and authenticated attempt without acquiring the Run
 /// lock again or consulting a live service. Publication callers retain the lock
 /// and supply exact bounded spool reads; source freshness is their separate proof.
@@ -1615,4 +1561,61 @@ fn decode_authenticated_spool(
         )));
     }
     decode(prepared, &reply).map_err(RetainedDecodeFailure::InvalidResponse)
+}
+
+#[cfg(test)]
+mod diagnostic_redaction_tests {
+    use super::*;
+
+    #[test]
+    fn setup_reasons_preserve_only_closed_local_diagnostics() {
+        let mut local = WikiError::new(
+            ErrorCode::ProviderAuth,
+            "credential file unavailable or invalid",
+        );
+        local.details = serde_json::json!({"path":"secret-marker", "next_action":"secret-marker"});
+        let safe = redacted(local);
+        assert_eq!(
+            safe.details["reason"],
+            "credential_file_unavailable_or_invalid"
+        );
+        assert!(
+            safe.details["next_action"]
+                .as_str()
+                .unwrap()
+                .contains("0600")
+        );
+        assert!(!format!("{safe:?}").contains("secret-marker"));
+
+        for message in [
+            "credential file unavailable or invalid: secret-marker",
+            "secret-marker",
+        ] {
+            let mut untrusted = WikiError::new(ErrorCode::ProviderAuth, message);
+            untrusted.details = serde_json::json!({"reason":"secret-marker", "next_action":"secret-marker", "token":"secret-marker"});
+            let safe = redacted(untrusted);
+            assert_eq!(safe.message, "bounded provider operation failed");
+            assert!(!format!("{safe:?}").contains("secret-marker"));
+        }
+        let wrong_code = redacted(WikiError::new(
+            ErrorCode::ProviderResponse,
+            "credential file unavailable or invalid",
+        ));
+        assert_eq!(wrong_code.message, "bounded provider operation failed");
+
+        let mut exhausted = WikiError::new(ErrorCode::BudgetExceeded, "secret-marker");
+        exhausted.details = serde_json::json!({
+            "budget_scope": "invocation", "next_action": "secret-marker"
+        });
+        let safe = redacted(exhausted);
+        assert_eq!(safe.details["budget_scope"], "invocation");
+        assert_eq!(safe.hint.as_deref(), safe.details["next_action"].as_str());
+        assert!(
+            safe.hint
+                .as_deref()
+                .unwrap()
+                .contains("Continue explicitly")
+        );
+        assert!(!format!("{safe:?}").contains("secret-marker"));
+    }
 }

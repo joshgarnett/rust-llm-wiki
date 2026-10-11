@@ -754,8 +754,10 @@ fn affected_owner_pair_limit_refuses_in_delta_savepoint_without_partial_publicat
     // 2048 paths in two registered policies reach 4096 distinct pairs.
     // The limit must count policy/owner bindings rather than owner paths.
     let parser = Blake3Hash::digest(b"in-memory parser");
-    let mut settings = EmbeddingSettings::default();
-    settings.quality_target_bytes = Some(1000);
+    let settings = EmbeddingSettings {
+        quality_target_bytes: Some(1000),
+        ..Default::default()
+    };
     let second_policy = RenderPolicyId::for_settings(&parser, &settings).unwrap();
     fixture.c.execute("INSERT INTO unit_policies(policy,version,parser_hash,settings_json,complete,after_owner) VALUES(?1,1,?2,?3,1,NULL)", params![second_policy.as_str(), parser.as_str(), sql::json(&settings).unwrap()]).unwrap();
     for policy in [&fixture.policy, &second_policy] {

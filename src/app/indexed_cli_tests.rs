@@ -1,5 +1,9 @@
 //! Public CLI acceptance over a disposable normalized vault. Internals are used
 //! only to seed the not-yet-public normalized rebuild layout.
+#[allow(
+    clippy::duplicate_mod,
+    reason = "Instantiate shared fixture code in independent test namespaces; sharing module state would change the test contract."
+)]
 #[path = "../../test_support/paths.rs"]
 mod test_paths;
 use crate::{

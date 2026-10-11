@@ -694,12 +694,12 @@ fn owned_sigkill_during_retained_staging_and_manifest_prepared_cuts_both_layouts
             let marker = root.path().join(".wiki/retention-cut-ready.json");
             let deadline = Instant::now() + Duration::from_secs(15);
             let reached = loop {
-                if let Ok(raw) = fs::read(&marker) {
-                    if let Ok(v) = serde_json::from_slice::<serde_json::Value>(&raw) {
-                        if v["cut"] == cut.name() && v["reached"] == true {
-                            break v;
-                        }
-                    }
+                if let Ok(raw) = fs::read(&marker)
+                    && let Ok(v) = serde_json::from_slice::<serde_json::Value>(&raw)
+                    && v["cut"] == cut.name()
+                    && v["reached"] == true
+                {
+                    break v;
                 }
                 assert!(
                     child.0.try_wait().unwrap().is_none(),

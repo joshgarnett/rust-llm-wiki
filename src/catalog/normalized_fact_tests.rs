@@ -303,7 +303,9 @@ fn normalized_build_indexes_raw_ambiguous_and_missing_links_for_future_membershi
     };
     assert!(fact.keys.contains(&absent));
     assert_eq!(
-        reader.affected_links(&[absent.clone()]).unwrap(),
+        reader
+            .affected_links(std::slice::from_ref(&absent))
+            .unwrap(),
         vec![(owner.clone(), rows[1].1)]
     );
     assert!(

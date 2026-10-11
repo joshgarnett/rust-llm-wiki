@@ -1110,11 +1110,13 @@ pub fn assemble(
 ) -> Result<ContextDraft> {
     assemble_inner(
         reader,
-        Some(reader),
+        AssemblyScope {
+            strict_reader: Some(reader),
+            graph,
+            query: None,
+        },
         request,
         hits,
-        graph,
-        None,
         &ContextSelectionSignals::default(),
         &SelectionAction::Automatic,
     )
@@ -1133,11 +1135,13 @@ pub(crate) fn assemble_for_query(
 ) -> Result<ContextDraft> {
     assemble_inner(
         reader,
-        Some(reader),
+        AssemblyScope {
+            strict_reader: Some(reader),
+            graph,
+            query: Some(query),
+        },
         request,
         hits,
-        graph,
-        Some(query),
         signals,
         selection,
     )
@@ -1171,11 +1175,13 @@ pub(crate) fn assemble_bounded_documents_with_selection_for_query(
     validate_bounded_document_assembly(request, selection)?;
     assemble_inner(
         reader,
-        None,
+        AssemblyScope {
+            strict_reader: None,
+            graph: None,
+            query: Some(query),
+        },
         request,
         hits,
-        None,
-        Some(query),
         &ContextSelectionSignals::default(),
         selection,
     )
@@ -1227,40 +1233,44 @@ pub(crate) fn assemble_bounded_documents_with_signals(
     validate_bounded_document_assembly(request, selection)?;
     assemble_inner(
         reader,
-        None,
+        AssemblyScope {
+            strict_reader: None,
+            graph: None,
+            query: Some(query),
+        },
         request,
         hits,
-        None,
-        Some(query),
         signals,
         selection,
     )
 }
 
+struct AssemblyScope<'a> {
+    strict_reader: Option<&'a ReaderSnapshot>,
+    graph: Option<&'a GraphResult>,
+    query: Option<&'a str>,
+}
+
 fn assemble_inner(
     reader: &dyn QueryCatalog,
-    strict_reader: Option<&ReaderSnapshot>,
+    scope: AssemblyScope<'_>,
     request: &ContextRequest,
     hits: &HitSet,
-    graph: Option<&GraphResult>,
-    query: Option<&str>,
     signals: &ContextSelectionSignals,
     selection_action: &SelectionAction,
 ) -> Result<ContextDraft> {
     assemble_inner_with_evidence(
         reader,
-        strict_reader,
+        scope,
         request,
         hits,
-        graph,
-        query,
         signals,
         selection_action,
         None,
     )
 }
 
-pub(crate) fn assemble_bounded_documents_with_evidence(
+pub(super) fn assemble_bounded_documents_with_evidence(
     reader: &dyn QueryCatalog,
     request: &ContextRequest,
     hits: &HitSet,
@@ -1271,11 +1281,13 @@ pub(crate) fn assemble_bounded_documents_with_evidence(
     validate_bounded_document_assembly(request, &SelectionAction::Automatic)?;
     assemble_inner_with_evidence(
         reader,
-        None,
+        AssemblyScope {
+            strict_reader: None,
+            graph: None,
+            query: Some(query),
+        },
         request,
         hits,
-        None,
-        Some(query),
         signals,
         &SelectionAction::Automatic,
         evidence_sets,
@@ -1284,15 +1296,18 @@ pub(crate) fn assemble_bounded_documents_with_evidence(
 
 fn assemble_inner_with_evidence(
     reader: &dyn QueryCatalog,
-    strict_reader: Option<&ReaderSnapshot>,
+    scope: AssemblyScope<'_>,
     request: &ContextRequest,
     hits: &HitSet,
-    graph: Option<&GraphResult>,
-    query: Option<&str>,
     signals: &ContextSelectionSignals,
     selection_action: &SelectionAction,
     evidence_sets: Option<super::context_evidence::Inputs>,
 ) -> Result<ContextDraft> {
+    let AssemblyScope {
+        strict_reader,
+        graph,
+        query,
+    } = scope;
     let request = normalize_request(request)?;
     if request.scope == ContextScope::IndexedEvidence
         || (request.scope == ContextScope::IndexedDocuments && strict_reader.is_some())
@@ -2118,57 +2133,57 @@ pub(super) fn pack(
             }
         }
     }
-    if let Some(evidence_sets) = evidence_sets {
-        if signals.semantic_complete && packets.iter().all(|p| p.unit_origin.is_some()) {
-            let arm = evidence_sets.arm;
-            match super::context_evidence::allocate(
-                reader,
-                request,
-                &packets,
-                query.expect("evidence-set requires source-aware query"),
-                evidence_sets,
-            )? {
-                super::evidence_set_selection::Outcome::Fallback(reason) => {
-                    selection_warnings.push(format!(
-                        "evidence-set {:?} fallback {:?}; existing allocation retained",
-                        arm, reason
-                    ));
+    if let Some(evidence_sets) = evidence_sets
+        && signals.semantic_complete
+        && packets.iter().all(|p| p.unit_origin.is_some())
+    {
+        let arm = evidence_sets.arm;
+        match super::context_evidence::allocate(
+            reader,
+            request,
+            &packets,
+            query.expect("evidence-set requires source-aware query"),
+            evidence_sets,
+        )? {
+            super::evidence_set_selection::Outcome::Fallback(reason) => {
+                selection_warnings.push(format!(
+                    "evidence-set {:?} fallback {:?}; existing allocation retained",
+                    arm, reason
+                ));
+            }
+            super::evidence_set_selection::Outcome::Selected {
+                choices,
+                state,
+                statistics,
+                ..
+            } => {
+                if let Some(state) = state {
+                    passages = state.passages;
+                    text = state.text;
                 }
-                super::evidence_set_selection::Outcome::Selected {
-                    choices,
-                    state,
-                    statistics,
-                    ..
-                } => {
-                    if let Some(state) = state {
-                        passages = state.passages;
-                        text = state.text;
-                    }
-                    for (origin, packet) in packets.iter().enumerate() {
-                        if let Some(choice) = choices.iter().find(|choice| choice.origin == origin)
+                for (origin, packet) in packets.iter().enumerate() {
+                    if let Some(choice) = choices.iter().find(|choice| choice.origin == origin) {
+                        if choice.variant == super::evidence_set_selection::Variant::Core
+                            && (packet.unit_clipped || packet.fallback.is_some())
                         {
-                            if choice.variant == super::evidence_set_selection::Variant::Core
-                                && (packet.unit_clipped || packet.fallback.is_some())
-                            {
-                                selection_warnings.push("a bounded evidence-unit child was selected because its complete structural parent did not fit; inspect its cited source for omitted text".into());
-                            }
-                        } else {
-                            omissions.push(ContextOmission {
-                                record_id: packet.passages[0]
-                                    .locator
-                                    .record
-                                    .as_ref()
-                                    .map(|r| r.record_id.clone()),
-                                path: Some(packet.passages[0].locator.path.clone()),
-                                reason: "not_selected_by_evidence_set".into(),
-                                count: 1,
-                            });
+                            selection_warnings.push("a bounded evidence-unit child was selected because its complete structural parent did not fit; inspect its cited source for omitted text".into());
                         }
+                    } else {
+                        omissions.push(ContextOmission {
+                            record_id: packet.passages[0]
+                                .locator
+                                .record
+                                .as_ref()
+                                .map(|r| r.record_id.clone()),
+                            path: Some(packet.passages[0].locator.path.clone()),
+                            reason: "not_selected_by_evidence_set".into(),
+                            count: 1,
+                        });
                     }
-                    selection_warnings.push(format!("evidence-set {:?}: {} origins, {} exact rendering trials, representation coverage {:.6}; selection is not proof of answer completeness",
-                        arm, choices.len(), statistics.trials(), statistics.objective_value));
-                    packets.clear();
                 }
+                selection_warnings.push(format!("evidence-set {:?}: {} origins, {} exact rendering trials, representation coverage {:.6}; selection is not proof of answer completeness",
+                        arm, choices.len(), statistics.trials(), statistics.objective_value));
+                packets.clear();
             }
         }
     }

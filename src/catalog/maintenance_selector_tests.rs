@@ -260,8 +260,10 @@ fn begun_candidate(fs: &VaultFs, writer: &WriterPermit, vault: &RecordId) -> Cat
     };
     let candidate = CatalogSelection::new(vault.clone(), 1).unwrap();
     prepare(fs, writer, &candidate).unwrap();
-    let mut limits = BuildLimits::default();
-    limits.max_batch_rows = 1;
+    let limits = BuildLimits {
+        max_batch_rows: 1,
+        ..Default::default()
+    };
     let mut builder = NormalizedBuilder::begin(
         fs,
         writer,

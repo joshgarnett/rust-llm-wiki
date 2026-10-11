@@ -125,6 +125,13 @@ pub(crate) struct ValidatedRelations<'a> {
     original: AdmittedOriginal<'a>,
     nodes: BTreeMap<RecordId, usize>,
     outgoing: BTreeMap<RecordId, Vec<usize>>,
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "Retain validated annotation-size receipt; tests verify exact serialized-byte accounting"
+        )
+    )]
     annotation_bytes: usize,
     validation_hash_bytes: u64,
 }
@@ -285,22 +292,82 @@ pub(crate) enum Assessment {
 #[derive(Debug)]
 pub(crate) struct SpanNomination<'a> {
     pub evidence: SpanBinding,
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "Preserve original-text binding on dependency nominations; tests audit exact source entailment coordinates"
+        )
+    )]
     pub text: &'a str,
 }
 
 #[derive(Debug)]
 pub(crate) struct Dependency {
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "Retain unassessed dependency identity and exact support closure for the default-off relation workflow; tests audit these links"
+        )
+    )]
     pub from: RecordId,
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "Retain unassessed dependency identity and exact support closure for the default-off relation workflow; tests audit these links"
+        )
+    )]
     pub to: RecordId,
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "Retain unassessed dependency identity and exact support closure for the default-off relation workflow; tests audit these links"
+        )
+    )]
     pub kind: RelationKind,
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "Retain unassessed dependency identity and exact support closure for the default-off relation workflow; tests audit these links"
+        )
+    )]
     pub assessment: Assessment,
     /// Indexes into exact-span nominations; no generated label enters evidence.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "Retain unassessed dependency identity and exact support closure for the default-off relation workflow; tests audit these links"
+        )
+    )]
     pub from_candidate: usize,
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "Retain unassessed dependency identity and exact support closure for the default-off relation workflow; tests audit these links"
+        )
+    )]
     pub to_candidate: usize,
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "Retain unassessed dependency identity and exact support closure for the default-off relation workflow; tests audit these links"
+        )
+    )]
     pub relation_candidate: usize,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[expect(
+    clippy::enum_variant_names,
+    reason = "Retain distinct explicit limit reasons and their existing Debug receipt names for the relation workflow"
+)]
 pub(crate) enum OmissionReason {
     CandidateLimit,
     SpanLimit,
@@ -312,6 +379,13 @@ pub(crate) enum OmissionReason {
 
 #[derive(Debug)]
 pub(crate) struct Nominations<'a> {
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "Retain immutable source binding on relation nominations; tests verify source identity"
+        )
+    )]
     pub source: SourceBinding,
     pub spans: Vec<SpanNomination<'a>>,
     pub dependencies: Vec<Dependency>,
@@ -341,6 +415,13 @@ impl<'a> ValidatedRelations<'a> {
     pub(crate) fn envelope(&self) -> &Envelope {
         &self.envelope
     }
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "Expose the retained validation-size receipt to relation accounting tests"
+        )
+    )]
     pub(crate) fn annotation_bytes(&self) -> usize {
         self.annotation_bytes
     }

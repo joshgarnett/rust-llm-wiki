@@ -28,7 +28,7 @@ use serde::Serialize;
 use std::{
     fs::{self, File, Metadata},
     io::Read,
-    path::{Path, PathBuf},
+    path::Path,
 };
 
 const GROUP_BYTES: u64 = 4 * 1024 * 1024;
@@ -1222,7 +1222,7 @@ fn original_bytes(item: &ImportManifestItem) -> Result<Vec<u8>> {
     }
     // Parent symlinks are also refused: frozen paths name actual regular files.
     let canonical = fs::canonicalize(path).map_err(io)?;
-    if canonical != PathBuf::from(path) {
+    if canonical != path {
         return Err(conflict("import original path changed or uses an alias"));
     }
     let mut file = File::open(path).map_err(io)?;

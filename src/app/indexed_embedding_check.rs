@@ -4,30 +4,27 @@ use crate::catalog::query_types::{QueryCatalog, QueryReadLimits};
 use crate::retrieval::vectors::VectorCoverageCheck;
 use std::time::Instant;
 
+type IndexedCoverage = (
+    Option<SpaceSpec>,
+    Option<Blake3Hash>,
+    Option<Blake3Hash>,
+    Coverage,
+);
+
 const MAX_CHECK_OWNERS: usize = 4096;
 
 impl OfflineApp {
     pub(super) fn embeddings_coverage_indexed(
         &self,
         candidate: Option<SpaceSpec>,
-    ) -> Result<(
-        Option<SpaceSpec>,
-        Option<Blake3Hash>,
-        Option<Blake3Hash>,
-        Coverage,
-    )> {
+    ) -> Result<IndexedCoverage> {
         self.embeddings_coverage_indexed_observed(candidate, |_| Ok(()))
     }
     fn embeddings_coverage_indexed_observed(
         &self,
         candidate: Option<SpaceSpec>,
         mut completed_scope: impl FnMut(usize) -> Result<()>,
-    ) -> Result<(
-        Option<SpaceSpec>,
-        Option<Blake3Hash>,
-        Option<Blake3Hash>,
-        Coverage,
-    )> {
+    ) -> Result<IndexedCoverage> {
         let deadline = Instant::now() + Duration::from_secs(120);
         let initial_phase = Self::embedding_phase()?;
         let mut vectors = match VectorCoverageCheck::open(&self.fs, &initial_phase) {
@@ -160,6 +157,10 @@ fn incomplete(owners: usize, units: usize, reason: &str) -> WikiError {
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::duplicate_mod,
+    reason = "Instantiate shared fixture code in independent test namespaces; sharing module state would change the test contract."
+)]
 #[path = "../../tests/fixtures/p17/common.rs"]
 mod check_common;
 

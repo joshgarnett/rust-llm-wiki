@@ -222,12 +222,12 @@ fn exact_193_applying_passes_observe_all_119_paths_and_bytes_in_both_controls_an
             let expected = expected_paths.clone();
             let barrier = Arc::new(PairGate::default());
             let _hook = install(f.root(), move |event| {
-                if retained && !sequential {
-                    if let Event::BeforeRead(path) = &event {
-                        if path.as_str() == "guards/000.bin" || path.as_str() == "guards/001.bin" {
-                            barrier.wait()?;
-                        }
-                    }
+                if retained
+                    && !sequential
+                    && let Event::BeforeRead(path) = &event
+                    && (path.as_str() == "guards/000.bin" || path.as_str() == "guards/001.bin")
+                {
+                    barrier.wait()?;
                 }
                 let mut c = counted.lock().unwrap();
                 match event {
@@ -355,12 +355,11 @@ fn reached_preobservation_and_after_join_edits_refuse_at_next_guard_without_publ
             let held = gate.clone();
             let overlap = Arc::new(PairGate::default());
             let _hook = install(f.root(), move |event| {
-                if when != "held" {
-                    if let Event::BeforeRead(path) = event {
-                        if path.as_str() == "guards/000.bin" || path.as_str() == "guards/001.bin" {
-                            overlap.wait()?;
-                        }
-                    }
+                if when != "held"
+                    && let Event::BeforeRead(path) = event
+                    && (path.as_str() == "guards/000.bin" || path.as_str() == "guards/001.bin")
+                {
+                    overlap.wait()?;
                 }
                 let mut s = recorded.lock().unwrap();
                 match event {
@@ -368,16 +367,16 @@ fn reached_preobservation_and_after_join_edits_refuse_at_next_guard_without_publ
                     Event::PassBegin if s.0 => s.1 += 1,
                     _ => {}
                 }
-                if s.0 {
-                    if let Event::Read(path, hash, bytes) = event {
-                        assert!(
-                            read_trace
-                                .lock()
-                                .unwrap()
-                                .insert((s.1, path.to_string()), (hash, bytes))
-                                .is_none()
-                        );
-                    }
+                if s.0
+                    && let Event::Read(path, hash, bytes) = event
+                {
+                    assert!(
+                        read_trace
+                            .lock()
+                            .unwrap()
+                            .insert((s.1, path.to_string()), (hash, bytes))
+                            .is_none()
+                    );
                 }
                 let injection_pass = if when == "joined" { 2 } else { 1 };
                 if s.0 && s.1 == injection_pass && !s.3 {

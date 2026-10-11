@@ -215,27 +215,26 @@ fn project_selected(
             checkpoint: Some(asset),
             ..
         }) = &job
+            && operation.target == asset.path
         {
-            if operation.target == asset.path {
-                let bytes = operation
-                    .proposed
-                    .as_ref()
-                    .ok_or_else(|| WikiError::invalid("compact asset cannot be deleted"))?;
-                if operation.expected != ExpectedState::Absent
-                    || Blake3Hash::digest(bytes) != asset.hash
-                    || !operation.apply_after.is_empty()
-                    || !paths.insert(operation.target.clone())
-                {
-                    return Err(WikiError::invalid(
-                        "compact asset differs from sealed job draft",
-                    ));
-                }
-                work.charge(bytes.len())?;
-                work.capture(&operation.target, &operation.expected)?;
-                work.overlay.insert(operation.target.clone(), bytes.clone());
-                changed.push(operation.clone());
-                continue;
+            let bytes = operation
+                .proposed
+                .as_ref()
+                .ok_or_else(|| WikiError::invalid("compact asset cannot be deleted"))?;
+            if operation.expected != ExpectedState::Absent
+                || Blake3Hash::digest(bytes) != asset.hash
+                || !operation.apply_after.is_empty()
+                || !paths.insert(operation.target.clone())
+            {
+                return Err(WikiError::invalid(
+                    "compact asset differs from sealed job draft",
+                ));
             }
+            work.charge(bytes.len())?;
+            work.capture(&operation.target, &operation.expected)?;
+            work.overlay.insert(operation.target.clone(), bytes.clone());
+            changed.push(operation.clone());
+            continue;
         }
         if !canonical_path(&operation.target)
             || (job.is_none() && !operation.apply_after.is_empty())

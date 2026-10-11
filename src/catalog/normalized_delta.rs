@@ -607,11 +607,9 @@ impl CatalogDelta {
                 from_hash,
                 row,
             } = document
-            {
-                if c.execute("UPDATE records SET path=?1 WHERE id=?2 AND kind='page' AND path=?3 AND hash=?4",params![row.path.as_str(),row.record_id.as_ref().unwrap().as_str(),from.as_str(),from_hash.as_str()]).map_err(sql::sql_error)? != 1
-                    || c.execute("UPDATE documents SET path=?1 WHERE path=?2 AND file_hash=?3 AND record_id=?4",params![row.path.as_str(),from.as_str(),from_hash.as_str(),row.record_id.as_ref().unwrap().as_str()]).map_err(sql::sql_error)? != 1
+                && (c.execute("UPDATE records SET path=?1 WHERE id=?2 AND kind='page' AND path=?3 AND hash=?4",params![row.path.as_str(),row.record_id.as_ref().unwrap().as_str(),from.as_str(),from_hash.as_str()]).map_err(sql::sql_error)? != 1
+                    || c.execute("UPDATE documents SET path=?1 WHERE path=?2 AND file_hash=?3 AND record_id=?4",params![row.path.as_str(),from.as_str(),from_hash.as_str(),row.record_id.as_ref().unwrap().as_str()]).map_err(sql::sql_error)? != 1)
                 { return Err(conflict("Page move could not retire exact old location")); }
-            }
         }
         for row in &self.records {
             let same: Option<bool> = c

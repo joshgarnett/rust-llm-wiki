@@ -891,7 +891,7 @@ fn run_import_wal_reader_control() -> Result<()> {
         return Err(fail("actual native optimized compiler pin required"));
     }
     let unit = env::current_exe()?;
-    let hashes = sha256(&[unit.clone()])?;
+    let hashes = sha256(std::slice::from_ref(&unit))?;
     if hashes[unit.to_str().ok_or_else(|| fail("unit path nonUTF8"))?] != pin["unit_sha256"] {
         return Err(fail("test executable differs from build pin"));
     }
@@ -998,12 +998,12 @@ fn run_import_wal_reader_control() -> Result<()> {
                 samples.last().unwrap(),
             )?;
         }
-        if let Some(reader) = &old {
-            if reader.snapshot() != &base || reader.connection().is_autocommit() {
-                return Err(fail(
-                    "external reader did not retain its original transaction",
-                ));
-            }
+        if let Some(reader) = &old
+            && (reader.snapshot() != &base || reader.connection().is_autocommit())
+        {
+            return Err(fail(
+                "external reader did not retain its original transaction",
+            ));
         }
         drop(old.take());
         let after_reader_release = quiescent_import_wal(&root, &file_id)?;

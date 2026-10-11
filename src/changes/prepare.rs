@@ -1249,20 +1249,20 @@ impl ChangeEngine {
                                 "retained payload route changed during preparation",
                             ));
                         }
-                        if retained_layout {
-                            if let Some(existing) = crate::storage::layout::raw_read(
+                        if retained_layout
+                            && let Some(existing) = crate::storage::layout::raw_read(
                                 fs.root(),
                                 &reference.path,
                                 bytes.len(),
-                            )? {
-                                if existing != bytes {
-                                    return Err(WikiError::new(
-                                        ErrorCode::ContentConflict,
-                                        "immutable storage bytes changed",
-                                    ));
-                                }
-                                return Ok(None);
+                            )?
+                        {
+                            if existing != bytes {
+                                return Err(WikiError::new(
+                                    ErrorCode::ContentConflict,
+                                    "immutable storage bytes changed",
+                                ));
                             }
+                            return Ok(None);
                         }
                         Ok(Some(prepared.stage(&bytes)?))
                     },

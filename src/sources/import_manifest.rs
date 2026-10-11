@@ -590,7 +590,7 @@ pub(crate) fn read_manifest_batch(
     reader
         .read_exact(&mut byte)
         .map_err(|e| failure("read manifest boundary", e))?;
-    if byte != [b'\n'] {
+    if byte != *b"\n" {
         return Err(failure("manifest batch", "offset is not a line boundary"));
     }
     let mut next_offset = offset;

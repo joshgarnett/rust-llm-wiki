@@ -293,7 +293,7 @@ fn historical_capture_read_preserves_bytes_and_historical_eligibility() {
     let mut historical = authenticate(
         &catalog,
         &reader,
-        &[historical_path.clone()],
+        std::slice::from_ref(&historical_path),
         &VerificationBudget::default(),
     )
     .unwrap();

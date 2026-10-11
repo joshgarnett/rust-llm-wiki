@@ -547,6 +547,7 @@ fn verify_activation_inner(
     memoized_epoch(root, activation, true);
     Ok(())
 }
+#[cfg(test)]
 pub(crate) fn pending_activation_matches(root: &crate::vault::VaultRoot) -> Result<bool> {
     pending_activation_matches_with_reader(&mut |path, max| layout::raw_read(root, path, max))
 }

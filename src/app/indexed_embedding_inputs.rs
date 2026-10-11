@@ -440,6 +440,11 @@ pub(super) struct NormalizedEmbeddingInputs {
     failed: bool,
 }
 impl NormalizedEmbeddingInputs {
+    #[cfg(test)]
+    #[expect(
+        dead_code,
+        reason = "Retained normalized paid-scope proof helper; production uses the detached planning summary."
+    )]
     pub(super) fn paid_scope(
         &self,
         units: &[RenderedUnit],

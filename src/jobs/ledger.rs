@@ -2927,10 +2927,9 @@ impl JobLedger {
                         break;
                     }
                 }
-                let change = found.ok_or_else(|| {
-                    events::corrupt("receipt has no verified committed changeset")
-                })?;
-                change
+
+                found
+                    .ok_or_else(|| events::corrupt("receipt has no verified committed changeset"))?
             };
             self.ack_outputs(
                 g,

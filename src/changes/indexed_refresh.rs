@@ -546,27 +546,25 @@ impl IndexedRefreshProof {
                 return Err(recovery("ordinary job batch has unexpected ordering"));
             }
         }
-        if let Some(IndexedWriteOperation::SourceWithdraw { .. }) = &self.operation {
-            if manifest.operations.len() != 1
+        if let Some(IndexedWriteOperation::SourceWithdraw { .. }) = &self.operation
+            && (manifest.operations.len() != 1
                 || !matches!(manifest.operations[0].before, ExpectedState::Hash(_))
-                || !matches!(manifest.operations[0].after, ExpectedState::Hash(_))
-            {
-                return Err(recovery(
-                    "withdrawal must replace exactly one existing Source",
-                ));
-            }
+                || !matches!(manifest.operations[0].after, ExpectedState::Hash(_)))
+        {
+            return Err(recovery(
+                "withdrawal must replace exactly one existing Source",
+            ));
         }
-        if let Some(IndexedWriteOperation::PageBatch { pages }) = &self.operation {
-            if manifest.operations.len() != pages.len()
+        if let Some(IndexedWriteOperation::PageBatch { pages }) = &self.operation
+            && (manifest.operations.len() != pages.len()
                 || manifest.operations.iter().any(|operation| {
                     !pages.iter().any(|page| page.path == operation.target)
                         || matches!(operation.after, ExpectedState::Absent)
-                })
-            {
-                return Err(recovery(
-                    "page operation targets differ from its retained manifest",
-                ));
-            }
+                }))
+        {
+            return Err(recovery(
+                "page operation targets differ from its retained manifest",
+            ));
         }
         if let Some(IndexedWriteOperation::PageRename {
             from,

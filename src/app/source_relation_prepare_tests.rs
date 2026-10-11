@@ -62,7 +62,14 @@ fn duplicate_missing_oversize_and_expired_inputs_refuse_without_partial_result()
         .is_err()
     );
     assert!(unique_ids(&vec![binding.source_id.clone(); 4097], 1024, until()).is_err());
-    assert!(unique_ids(&[binding.source_id.clone()], 1024, Instant::now()).is_err());
+    assert!(
+        unique_ids(
+            std::slice::from_ref(&binding.source_id),
+            1024,
+            Instant::now()
+        )
+        .is_err()
+    );
     let catalog = app.catalog();
     let reader = catalog
         .cached_query_snapshot(QueryReadLimits::default())
@@ -155,6 +162,10 @@ fn cumulative_allowance_is_enforced_before_large_capture_allocation() {
 
 use crate as library;
 #[allow(dead_code)]
+#[allow(
+    clippy::duplicate_mod,
+    reason = "Instantiate shared fixture code in independent test namespaces; sharing module state would change the test contract."
+)]
 #[path = "../../tests/fixtures/p16c/common.rs"]
 mod quote_fixture;
 use crate::{
@@ -443,10 +454,10 @@ struct QuoteClock {
 impl JobClock for QuoteClock {
     fn read(&self) -> Result<ClockReading> {
         let n = self.count.fetch_add(1, Ordering::SeqCst) + 1;
-        if n == self.at {
-            if let Some(h) = &self.hook {
-                h();
-            }
+        if n == self.at
+            && let Some(h) = &self.hook
+        {
+            h();
         }
         Ok(ClockReading {
             utc_ms: self.base + if n >= self.at { self.jump } else { 0 },

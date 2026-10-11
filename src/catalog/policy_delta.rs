@@ -385,10 +385,10 @@ impl PolicyReplacement {
         result: &Result<Option<T>>,
         trace: crate::graph::policy_inputs::PolicyInputTrace,
     ) -> Result<Self> {
-        if let Err(error) = result {
-            if error.code == ErrorCode::BudgetExceeded {
-                return Err(error.clone());
-            }
+        if let Err(error) = result
+            && error.code == ErrorCode::BudgetExceeded
+        {
+            return Err(error.clone());
         }
         let mut rows = vec![PolicyRow::State {
             kind,

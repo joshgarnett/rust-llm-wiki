@@ -436,6 +436,44 @@ pub(crate) fn entity_identity_invalid(row: &RecordRow) -> bool {
         })
 }
 
+/// Navigation diagnostics do not change assertion support or structural state.
+/// A resolved target comes from the caller's complete registry lookup.
+pub(crate) fn evidence_navigation_reason(
+    assertion: &RecordId,
+    resolution: &crate::records::LinkResolution,
+    target: Option<&CanonicalRecord>,
+) -> Option<&'static str> {
+    compact_evidence_navigation_reason(
+        assertion,
+        &super::navigation_resolution::NavigationResolution::from(resolution),
+        target,
+    )
+}
+
+pub(crate) fn compact_evidence_navigation_reason(
+    assertion: &RecordId,
+    resolution: &super::navigation_resolution::NavigationResolution,
+    target: Option<&CanonicalRecord>,
+) -> Option<&'static str> {
+    match resolution {
+        super::navigation_resolution::NavigationResolution::Resolved { .. } => match target {
+            Some(evidence) if evidence.kind() == RecordKind::Evidence => {
+                if evidence.string("wiki_assertion_id") == Some(assertion.as_str()) {
+                    None
+                } else {
+                    Some("evidence_link_wrong_assertion")
+                }
+            }
+            Some(_) => Some("evidence_link_wrong_kind"),
+            None => Some("evidence_link_missing"),
+        },
+        super::navigation_resolution::NavigationResolution::Ambiguous => {
+            Some("evidence_link_ambiguous")
+        }
+        _ => Some("evidence_link_missing"),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -696,43 +734,5 @@ mod tests {
         let mut value: serde_json::Value = serde_json::from_str(&json).unwrap();
         value["unknown"] = json!(true);
         assert!(serde_json::from_value::<OppositionKey>(value).is_err());
-    }
-}
-
-/// Navigation diagnostics do not change assertion support or structural state.
-/// A resolved target comes from the caller's complete registry lookup.
-pub(crate) fn evidence_navigation_reason(
-    assertion: &RecordId,
-    resolution: &crate::records::LinkResolution,
-    target: Option<&CanonicalRecord>,
-) -> Option<&'static str> {
-    compact_evidence_navigation_reason(
-        assertion,
-        &super::navigation_resolution::NavigationResolution::from(resolution),
-        target,
-    )
-}
-
-pub(crate) fn compact_evidence_navigation_reason(
-    assertion: &RecordId,
-    resolution: &super::navigation_resolution::NavigationResolution,
-    target: Option<&CanonicalRecord>,
-) -> Option<&'static str> {
-    match resolution {
-        super::navigation_resolution::NavigationResolution::Resolved { .. } => match target {
-            Some(evidence) if evidence.kind() == RecordKind::Evidence => {
-                if evidence.string("wiki_assertion_id") == Some(assertion.as_str()) {
-                    None
-                } else {
-                    Some("evidence_link_wrong_assertion")
-                }
-            }
-            Some(_) => Some("evidence_link_wrong_kind"),
-            None => Some("evidence_link_missing"),
-        },
-        super::navigation_resolution::NavigationResolution::Ambiguous => {
-            Some("evidence_link_ambiguous")
-        }
-        _ => Some("evidence_link_missing"),
     }
 }

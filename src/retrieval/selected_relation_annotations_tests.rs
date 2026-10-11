@@ -364,8 +364,10 @@ fn shared_selected_file_budget_is_not_reset_for_artifacts() {
         &VerificationBudget::default(),
     )
     .unwrap();
-    let mut remaining = VerificationBudget::default();
-    remaining.max_files = 0;
+    let remaining = VerificationBudget {
+        max_files: 0,
+        ..Default::default()
+    };
     proof.meter.tighten_remaining(&remaining).unwrap();
     assert_eq!(
         proof

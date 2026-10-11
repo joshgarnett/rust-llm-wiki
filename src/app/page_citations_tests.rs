@@ -207,7 +207,7 @@ fn cited_page_rename_keeps_original_targets_and_exact_refs_at_new_depth() {
                 None,
                 "Cited relocation".into(),
                 "# Answer\nAuthor wording remains unchanged.\n".into(),
-                refs(&[citation.clone()]),
+                refs(std::slice::from_ref(&citation)),
             )
             .unwrap();
         let original = f.bytes(&from);
@@ -252,7 +252,7 @@ fn citation_markers_inside_author_code_or_html_never_grant_ownership() {
                         None,
                         "Literal markers".into(),
                         body.clone(),
-                        refs(&[citation.clone()]),
+                        refs(std::slice::from_ref(&citation)),
                     )
                     .is_err()
             );
@@ -363,7 +363,7 @@ fn typed_citations_guarded_replacement_preserves_author_bytes_and_noop_guards() 
                 None,
                 "Guide".into(),
                 "Original author text.\r\n".into(),
-                refs(&[citation.clone()]),
+                refs(std::slice::from_ref(&citation)),
             )
             .unwrap();
         let initial = f.bytes(&p);
@@ -380,7 +380,7 @@ fn typed_citations_guarded_replacement_preserves_author_bytes_and_noop_guards() 
             p.clone(),
             authored.clone(),
             Some(Blake3Hash::digest(&initial)),
-            refs(&[citation.clone()]),
+            refs(std::slice::from_ref(&citation)),
         );
         assert_eq!(stale.unwrap_err().code, ErrorCode::ContentConflict);
         assert_eq!(f.bytes(&p), authored);
@@ -391,7 +391,7 @@ fn typed_citations_guarded_replacement_preserves_author_bytes_and_noop_guards() 
                 p.clone(),
                 authored.clone(),
                 Some(Blake3Hash::digest(&authored)),
-                refs(&[citation.clone()]),
+                refs(std::slice::from_ref(&citation)),
             )
             .unwrap();
         assert!(no_op.reused && no_op.change.is_none());
@@ -461,7 +461,7 @@ fn typed_citations_html_capture_uses_declared_content_and_exact_unicode_span() {
                 None,
                 "Captured HTML".into(),
                 "Relay uses Cedar.\n".into(),
-                refs(&[citation.clone()]),
+                refs(std::slice::from_ref(&citation)),
             )
             .unwrap();
         let markdown = String::from_utf8(f.bytes(&p)).unwrap();
@@ -487,7 +487,7 @@ fn typed_citations_refresh_and_withdraw_keep_immutable_links_and_exact_refs() {
                 None,
                 "Lifecycle".into(),
                 "Old policy.\n".into(),
-                refs(&[old.clone()]),
+                refs(std::slice::from_ref(&old)),
             )
             .unwrap();
         let first = f.bytes(&p);
@@ -605,7 +605,7 @@ fn typed_citations_duplicate_and_malformed_owned_markers_refuse_without_repair()
                         p.clone(),
                         proposal,
                         Some(Blake3Hash::digest(&original)),
-                        refs(&[citation.clone()])
+                        refs(std::slice::from_ref(&citation))
                     )
                     .is_err()
             );
@@ -718,7 +718,7 @@ fn typed_citations_dry_run_skips_source_verification_and_preserves_entire_fixtur
         let original = f.bytes(&p);
         let preview = f.with_options(OperationOptions {
             dry_run: true,
-            ..f.app.options().clone()
+            ..*f.app.options()
         });
         let before = tree(&f.root);
         let outcome = preview
@@ -767,7 +767,7 @@ fn typed_citations_staged_page_guards_source_changes_and_stale_publication() {
         let original = f.bytes(&p);
         let staged_app = f.with_options(OperationOptions {
             stage_only: true,
-            ..f.app.options().clone()
+            ..*f.app.options()
         });
         let staged = staged_app
             .page_put_with_source_refs(

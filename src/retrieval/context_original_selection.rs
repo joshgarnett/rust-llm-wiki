@@ -605,8 +605,8 @@ pub(super) fn context(
             selection_packet: Some(packet),
         }
     };
-    if reply.is_some() {
-        draft.warnings.push(format!("host nominated {} original ranges; native exact rendering and omissions remain authoritative", reply.expect("reply present").ordered_ranges.len()));
+    if let Some(reply) = reply {
+        draft.warnings.push(format!("host nominated {} original ranges; native exact rendering and omissions remain authoritative", reply.ordered_ranges.len()));
     }
     reader.check_query_budget()?;
     if let Some(fault) = &options.fault {

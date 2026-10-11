@@ -66,6 +66,7 @@ fn attempt_metered<T>(
     }
     Ok(PolicyAttempt::Complete { result, trace })
 }
+#[cfg(test)]
 pub(crate) fn attempt_decision_policy(
     notes: &BTreeMap<VaultRelativePath, ParsedNote>,
     certificates: &BTreeSet<PolicyInputKey>,
@@ -76,6 +77,7 @@ pub(crate) fn attempt_decision_policy(
         remap::verify_decision_policy_scoped,
     )
 }
+#[cfg(test)]
 pub(crate) fn attempt_review_policy(
     notes: &BTreeMap<VaultRelativePath, ParsedNote>,
     certificates: &BTreeSet<PolicyInputKey>,

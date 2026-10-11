@@ -253,16 +253,13 @@ impl FactDelta {
                             ..
                         },
                     ) = operation
+                        && (old.record != row.record || old.hash != row.hash)
+                        && !(old.record.kind() == RecordKind::Page && row.record.id() == page_id)
+                        && !(rewritten_paths.contains(&row.path) && old.record == row.record)
                     {
-                        if (old.record != row.record || old.hash != row.hash)
-                            && !(old.record.kind() == RecordKind::Page
-                                && row.record.id() == page_id)
-                            && !(rewritten_paths.contains(&row.path) && old.record == row.record)
-                        {
-                            return Err(conflict(
-                                "Page rename changes canonical bytes outside its navigation owners",
-                            ));
-                        }
+                        return Err(conflict(
+                            "Page rename changes canonical bytes outside its navigation owners",
+                        ));
                     }
                     let navigation_rewrite = delta.version == 3
                         && old.path == row.path

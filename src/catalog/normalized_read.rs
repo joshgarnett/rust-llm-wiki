@@ -16,6 +16,13 @@ pub(crate) fn corrupt(message: impl Into<String>) -> WikiError {
 
 pub(crate) struct CatalogHeader {
     pub snapshot: ReadSnapshot,
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "Retained publication and audit metadata is inspected by focused contract tests."
+        )
+    )]
     pub audit: Option<AuditObservation>,
     pub origin: Option<ChangeBinding>,
     pub vector_cache_lost: bool,
@@ -25,8 +32,29 @@ pub(crate) struct CatalogHeader {
 /// A full-build/audit observation is historical once its epoch is superseded.
 /// Incremental publication may clear this; it must never relabel it as current.
 pub(crate) struct AuditObservation {
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "Retained publication and audit metadata is inspected by focused contract tests."
+        )
+    )]
     pub epoch: u64,
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "Retained publication and audit metadata is inspected by focused contract tests."
+        )
+    )]
     pub control_hash: Blake3Hash,
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "Retained publication and audit metadata is inspected by focused contract tests."
+        )
+    )]
     pub dependency_hash: Blake3Hash,
 }
 

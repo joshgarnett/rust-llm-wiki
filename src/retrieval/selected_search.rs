@@ -232,7 +232,8 @@ fn coordinate(
     #[cfg(test)] stats: &mut Stats,
 ) -> Result<HitSet> {
     let meter = Meter::new(budget);
-    let result = (|| {
+
+    (|| {
         meter.check()?;
         let plan = lexical::validate_plan(query, plan)?;
         if !matches!(plan.mode, SearchMode::Literal | SearchMode::Lexical)
@@ -296,8 +297,7 @@ fn coordinate(
             stats.catalog_bytes = reader.usage().bytes;
         }
         result
-    })();
-    result
+    })()
 }
 
 /// Validate a request without opening any catalog, proving evidence or producing hits.

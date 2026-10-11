@@ -777,6 +777,7 @@ impl QuerySnapshot {
         }
         Ok(result)
     }
+    #[cfg(test)]
     pub(crate) fn owned_link_facts(
         &self,
         path: &VaultRelativePath,
@@ -1093,6 +1094,7 @@ impl QuerySnapshot {
         }
         Ok(result.into_iter().collect())
     }
+    #[cfg(test)]
     pub(crate) fn registry_candidates_for_key(
         &self,
         key: &super::link_facts::MatchKey,
@@ -1384,6 +1386,7 @@ impl crate::sources::SourceRefreshLookup for QuerySnapshot {
         Ok(Some(record))
     }
 
+    #[cfg(test)]
     fn id_is_claimed(&self, id: &RecordId) -> Result<bool> {
         self.require_refresh_publication()?;
         let mut statement = self.connection.prepare(
@@ -1524,6 +1527,7 @@ impl crate::sources::SourceRefreshLookup for QuerySnapshot {
         }))
     }
 
+    #[cfg(test)]
     fn source_assertions(&self, source: &RecordId) -> Result<Vec<RecordId>> {
         self.require_refresh_publication()?;
         let mut statement = self.connection.prepare(
@@ -1949,6 +1953,152 @@ impl QueryCatalog for QuerySnapshot {
 impl Drop for QuerySnapshot {
     fn drop(&mut self) {
         let _ = self.connection.execute_batch("ROLLBACK");
+    }
+}
+
+impl QuerySnapshot {
+    /// Select current assertions through indexed Entity endpoint keys before
+    /// hydrating records. Both directional streams share the caller's cap.
+    pub(crate) fn incident_assertion_ids(
+        &self,
+        entity: &RecordId,
+        filters: &crate::retrieval::SearchFilters,
+        limit: usize,
+    ) -> Result<BoundedIncidentIds> {
+        use crate::retrieval::filters::{bind, catalog_sql, normalize};
+        use rusqlite::{params_from_iter, types::Value};
+        if limit == 0 || limit > 16 {
+            return Err(WikiError::new(
+                ErrorCode::Usage,
+                "incident selection permits 1–16 assertions",
+            ));
+        }
+        let filters = normalize(filters)?;
+        self.require_fact_layout()?;
+        self.fact_requests(2, true)?;
+        let mut common = filters.clone();
+        common.source_ids.clear();
+        let mut values = vec![Value::Text(entity.as_str().into()), Value::Null];
+        let filter_sql = catalog_sql(&common, &mut values, true);
+        // A source scope requires supporting evidence, rather than merely a
+        // declared Source or a contrary evidence association.
+        let source_sql = if filters.source_ids.is_empty() {
+            "1".into()
+        } else {
+            let ids = filters
+                .source_ids
+                .iter()
+                .map(|id| bind(&mut values, Value::Text(id.as_str().into())))
+                .collect::<Vec<_>>()
+                .join(",");
+            format!(
+                "EXISTS(SELECT 1 FROM source_evidence s INDEXED BY source_assertions \
+                JOIN records er ON er.id=s.evidence_id \
+                WHERE s.source_id IN ({ids}) AND s.assertion_id=e.owner_id \
+                AND er.kind='evidence' AND er.eligibility='current' AND er.authored_status='active' \
+                AND json_extract(er.row_json,'$.record.wiki_stance')='supports')"
+            )
+        };
+        let cap = bind(&mut values, Value::Integer((limit + 1) as i64));
+        for value in &values[2..] {
+            if let Value::Text(text) = value {
+                self.reserve_fact_input(text.len())?;
+            }
+        }
+        let query = format!(
+            "SELECT e.owner_id,e.target_id,e.role_json \
+            FROM semantic_edges e INDEXED BY semantic_dependents \
+            CROSS JOIN records r ON r.id=e.owner_id \
+            CROSS JOIN documents d INDEXED BY document_record_ids ON d.record_id=e.owner_id \
+            WHERE e.target_id=?1 AND e.role_json=?2 AND r.kind='assertion' \
+            AND r.eligibility='current' AND r.authored_status='accepted' \
+            AND ({filter_sql}) AND ({source_sql}) ORDER BY e.owner_id LIMIT {cap}"
+        );
+        let mut statement = self.connection.prepare(&query).map_err(sql::sql_error)?;
+        let mut selected = BTreeSet::new();
+        let mut has_more = false;
+        for field in ["wiki_subject_id", "wiki_object_id"] {
+            let role = super::eligibility_facts::EligibilityRole::TypedReference {
+                field: field.into(),
+            };
+            let encoded = sql::json(&role)?;
+            self.reserve_fact_input(entity.as_str().len() + encoded.len())?;
+            values[1] = Value::Text(encoded.clone());
+            #[cfg(test)]
+            if super::query_diagnostics::active() {
+                let before = super::query_diagnostics::vm_count();
+                let mut explanation = self
+                    .connection
+                    .prepare(&format!("EXPLAIN QUERY PLAN {query}"))
+                    .map_err(sql::sql_error)?;
+                let details = explanation
+                    .query_map(params_from_iter(values.iter()), |row| {
+                        row.get::<_, String>(3)
+                    })
+                    .map_err(sql::sql_error)?
+                    .collect::<std::result::Result<Vec<_>, _>>()
+                    .map_err(sql::sql_error)?;
+                super::query_diagnostics::plan(
+                    &query,
+                    details,
+                    super::query_diagnostics::vm_count() - before,
+                );
+            }
+            let mut rows = statement
+                .query(params_from_iter(values.iter()))
+                .map_err(sql::sql_error)?;
+            let mut count = 0;
+            while let Some(row) = rows.next().map_err(sql::sql_error)? {
+                self.reserve_refresh_row(row, 3)?;
+                if utf8(text_bytes(row, 1)?)? != entity.as_str()
+                    || utf8(text_bytes(row, 2)?)? != encoded
+                {
+                    return Err(corrupt(
+                        "incident endpoint key differs from requested scope",
+                    ));
+                }
+                selected.insert(
+                    RecordId::new(utf8(text_bytes(row, 0)?)?).map_err(|e| corrupt(e.message))?,
+                );
+                count += 1;
+            }
+            has_more |= count > limit;
+        }
+        has_more |= selected.len() > limit;
+        Ok(BoundedIncidentIds {
+            ids: selected.into_iter().take(limit).collect(),
+            has_more,
+        })
+    }
+
+    pub(crate) fn affected_assertion_navigation(
+        &self,
+        keys: &[super::link_facts::MatchKey],
+    ) -> Result<Vec<RecordId>> {
+        self.fact_requests(keys.len(), false)?;
+        self.require_fact_layout()?;
+        let mut statement=self.connection.prepare("SELECT kind,value,assertion_id FROM assertion_navigation_keys WHERE kind=?1 AND value=?2 ORDER BY assertion_id").map_err(sql::sql_error)?;
+        let mut owners = BTreeSet::new();
+        for key in keys {
+            self.reserve_fact_input(key.value.len())?;
+            let mut rows = statement
+                .query(params![fact_key_name(key.kind), key.value])
+                .map_err(sql::sql_error)?;
+            while let Some(row) = rows.next().map_err(sql::sql_error)? {
+                self.reserve_refresh_row(row, 3)?;
+                if utf8(text_bytes(row, 0)?)? != fact_key_name(key.kind)
+                    || utf8(text_bytes(row, 1)?)? != key.value
+                {
+                    return Err(corrupt(
+                        "assertion navigation key differs from requested scope",
+                    ));
+                }
+                owners.insert(
+                    RecordId::new(utf8(text_bytes(row, 2)?)?).map_err(|e| corrupt(e.message))?,
+                );
+            }
+        }
+        Ok(owners.into_iter().collect())
     }
 }
 
@@ -3854,151 +4004,5 @@ mod tests {
             })
             .unwrap_err();
         assert_eq!(sql::sql_error(error).code, ErrorCode::BudgetExceeded);
-    }
-}
-
-impl QuerySnapshot {
-    /// Select current assertions through indexed Entity endpoint keys before
-    /// hydrating records. Both directional streams share the caller's cap.
-    pub(crate) fn incident_assertion_ids(
-        &self,
-        entity: &RecordId,
-        filters: &crate::retrieval::SearchFilters,
-        limit: usize,
-    ) -> Result<BoundedIncidentIds> {
-        use crate::retrieval::filters::{bind, catalog_sql, normalize};
-        use rusqlite::{params_from_iter, types::Value};
-        if limit == 0 || limit > 16 {
-            return Err(WikiError::new(
-                ErrorCode::Usage,
-                "incident selection permits 1–16 assertions",
-            ));
-        }
-        let filters = normalize(filters)?;
-        self.require_fact_layout()?;
-        self.fact_requests(2, true)?;
-        let mut common = filters.clone();
-        common.source_ids.clear();
-        let mut values = vec![Value::Text(entity.as_str().into()), Value::Null];
-        let filter_sql = catalog_sql(&common, &mut values, true);
-        // A source scope requires supporting evidence, rather than merely a
-        // declared Source or a contrary evidence association.
-        let source_sql = if filters.source_ids.is_empty() {
-            "1".into()
-        } else {
-            let ids = filters
-                .source_ids
-                .iter()
-                .map(|id| bind(&mut values, Value::Text(id.as_str().into())))
-                .collect::<Vec<_>>()
-                .join(",");
-            format!(
-                "EXISTS(SELECT 1 FROM source_evidence s INDEXED BY source_assertions \
-                JOIN records er ON er.id=s.evidence_id \
-                WHERE s.source_id IN ({ids}) AND s.assertion_id=e.owner_id \
-                AND er.kind='evidence' AND er.eligibility='current' AND er.authored_status='active' \
-                AND json_extract(er.row_json,'$.record.wiki_stance')='supports')"
-            )
-        };
-        let cap = bind(&mut values, Value::Integer((limit + 1) as i64));
-        for value in &values[2..] {
-            if let Value::Text(text) = value {
-                self.reserve_fact_input(text.len())?;
-            }
-        }
-        let query = format!(
-            "SELECT e.owner_id,e.target_id,e.role_json \
-            FROM semantic_edges e INDEXED BY semantic_dependents \
-            CROSS JOIN records r ON r.id=e.owner_id \
-            CROSS JOIN documents d INDEXED BY document_record_ids ON d.record_id=e.owner_id \
-            WHERE e.target_id=?1 AND e.role_json=?2 AND r.kind='assertion' \
-            AND r.eligibility='current' AND r.authored_status='accepted' \
-            AND ({filter_sql}) AND ({source_sql}) ORDER BY e.owner_id LIMIT {cap}"
-        );
-        let mut statement = self.connection.prepare(&query).map_err(sql::sql_error)?;
-        let mut selected = BTreeSet::new();
-        let mut has_more = false;
-        for field in ["wiki_subject_id", "wiki_object_id"] {
-            let role = super::eligibility_facts::EligibilityRole::TypedReference {
-                field: field.into(),
-            };
-            let encoded = sql::json(&role)?;
-            self.reserve_fact_input(entity.as_str().len() + encoded.len())?;
-            values[1] = Value::Text(encoded.clone());
-            #[cfg(test)]
-            if super::query_diagnostics::active() {
-                let before = super::query_diagnostics::vm_count();
-                let mut explanation = self
-                    .connection
-                    .prepare(&format!("EXPLAIN QUERY PLAN {query}"))
-                    .map_err(sql::sql_error)?;
-                let details = explanation
-                    .query_map(params_from_iter(values.iter()), |row| {
-                        row.get::<_, String>(3)
-                    })
-                    .map_err(sql::sql_error)?
-                    .collect::<std::result::Result<Vec<_>, _>>()
-                    .map_err(sql::sql_error)?;
-                super::query_diagnostics::plan(
-                    &query,
-                    details,
-                    super::query_diagnostics::vm_count() - before,
-                );
-            }
-            let mut rows = statement
-                .query(params_from_iter(values.iter()))
-                .map_err(sql::sql_error)?;
-            let mut count = 0;
-            while let Some(row) = rows.next().map_err(sql::sql_error)? {
-                self.reserve_refresh_row(row, 3)?;
-                if utf8(text_bytes(row, 1)?)? != entity.as_str()
-                    || utf8(text_bytes(row, 2)?)? != encoded
-                {
-                    return Err(corrupt(
-                        "incident endpoint key differs from requested scope",
-                    ));
-                }
-                selected.insert(
-                    RecordId::new(utf8(text_bytes(row, 0)?)?).map_err(|e| corrupt(e.message))?,
-                );
-                count += 1;
-            }
-            has_more |= count > limit;
-        }
-        has_more |= selected.len() > limit;
-        Ok(BoundedIncidentIds {
-            ids: selected.into_iter().take(limit).collect(),
-            has_more,
-        })
-    }
-
-    pub(crate) fn affected_assertion_navigation(
-        &self,
-        keys: &[super::link_facts::MatchKey],
-    ) -> Result<Vec<RecordId>> {
-        self.fact_requests(keys.len(), false)?;
-        self.require_fact_layout()?;
-        let mut statement=self.connection.prepare("SELECT kind,value,assertion_id FROM assertion_navigation_keys WHERE kind=?1 AND value=?2 ORDER BY assertion_id").map_err(sql::sql_error)?;
-        let mut owners = BTreeSet::new();
-        for key in keys {
-            self.reserve_fact_input(key.value.len())?;
-            let mut rows = statement
-                .query(params![fact_key_name(key.kind), key.value])
-                .map_err(sql::sql_error)?;
-            while let Some(row) = rows.next().map_err(sql::sql_error)? {
-                self.reserve_refresh_row(row, 3)?;
-                if utf8(text_bytes(row, 0)?)? != fact_key_name(key.kind)
-                    || utf8(text_bytes(row, 1)?)? != key.value
-                {
-                    return Err(corrupt(
-                        "assertion navigation key differs from requested scope",
-                    ));
-                }
-                owners.insert(
-                    RecordId::new(utf8(text_bytes(row, 2)?)?).map_err(|e| corrupt(e.message))?,
-                );
-            }
-        }
-        Ok(owners.into_iter().collect())
     }
 }

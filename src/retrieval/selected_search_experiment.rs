@@ -109,7 +109,7 @@ fn paired_selected_search_probe() {
     let mut observations = 0;
     let mut times = [Vec::new(), Vec::new()];
     let mut round_times: Vec<[Vec<u128>; 2]> = (0..3).map(|_| [Vec::new(), Vec::new()]).collect();
-    for round in 0..3 {
+    for (round, current_round_times) in round_times.iter_mut().enumerate() {
         for request in &requests {
             let mut pair = [None, None];
             for arm in if round == 1 { [1, 0] } else { [0, 1] } {
@@ -125,7 +125,7 @@ fn paired_selected_search_probe() {
                     )
                 };
                 times[arm].push(stats.elapsed_ns);
-                round_times[round][arm].push(stats.elapsed_ns);
+                current_round_times[arm].push(stats.elapsed_ns);
                 let value = match &result {
                     Ok(hits) => {
                         let changed = pinned
@@ -149,10 +149,10 @@ fn paired_selected_search_probe() {
                 writeln!(output).unwrap();
                 observations += 1;
             }
-            if let [Some(base), Some(verified)] = pair {
-                if base != verified {
-                    mismatches += 1;
-                }
+            if let [Some(base), Some(verified)] = pair
+                && base != verified
+            {
+                mismatches += 1;
             }
         }
     }
@@ -474,7 +474,7 @@ mod tests {
         let mut proof = selected_documents::authenticate(
             &fixture.catalog,
             &reader,
-            &[entity_path.clone()],
+            std::slice::from_ref(&entity_path),
             &VerificationBudget::default(),
         )
         .unwrap();
@@ -885,7 +885,7 @@ mod tests {
         let proof = selected_documents::authenticate(
             &fixture.catalog,
             &reader,
-            &[fixture.content.clone()],
+            std::slice::from_ref(&fixture.content),
             &VerificationBudget::default(),
         )
         .unwrap();

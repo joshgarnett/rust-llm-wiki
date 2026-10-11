@@ -132,6 +132,7 @@ pub(crate) trait SourceRefreshLookup {
     /// only valid record while ignoring other readable declarations of its ID.
     fn unique_record(&self, id: &RecordId) -> Result<Option<RefreshRecord>>;
     fn record_at_path(&self, path: &VaultRelativePath) -> Result<Option<RefreshRecord>>;
+    #[cfg(test)]
     fn id_is_claimed(&self, id: &RecordId) -> Result<bool>;
     /// Generated capture identities cannot adopt a dangling reference. Reserve
     /// both any named structural ID and the exact future canonical path; broad
@@ -148,6 +149,7 @@ pub(crate) trait SourceRefreshLookup {
         source: &RecordId,
         signature: &RevisionSignature,
     ) -> Result<Option<MatchingRevision>>;
+    #[cfg(test)]
     fn source_assertions(&self, source: &RecordId) -> Result<Vec<RecordId>>;
 }
 

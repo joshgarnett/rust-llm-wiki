@@ -1,6 +1,10 @@
 use super::*;
 use crate as library;
 #[allow(dead_code)]
+#[allow(
+    clippy::duplicate_mod,
+    reason = "Instantiate shared fixture code in independent test namespaces; sharing module state would change the test contract."
+)]
 #[path = "../../tests/fixtures/p16c/common.rs"]
 mod provider_fixture;
 use crate::{
@@ -632,8 +636,7 @@ fn oversized_tasks_added_partition_shrinks_with_actual_event_encoder_and_keeps_o
                     .collect(),
             },
         )
-        .err()
-        .expect("the full16-task frame must exceed the encoded byte ceiling")
+        .expect_err("the full16-task frame must exceed the encoded byte ceiling")
         .code,
         ErrorCode::BudgetExceeded
     );

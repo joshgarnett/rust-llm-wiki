@@ -625,8 +625,7 @@ fn page_move_guards_noop_immutable_and_budget_before_staging() {
         }
         let failure = omitted
             .validate()
-            .err()
-            .expect("missing old-owner clear must refuse");
+            .expect_err("missing old-owner clear must refuse");
         assert_eq!(failure.code, ErrorCode::IndexCorrupt, "{category}");
         assert!(
             failure.message.contains("retire old owned rows"),

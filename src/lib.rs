@@ -20,6 +20,10 @@ pub mod retrieval;
 pub mod sources;
 pub mod storage;
 #[cfg(test)]
+#[allow(
+    clippy::duplicate_mod,
+    reason = "Instantiate shared fixture code in independent test namespaces; sharing module state would change the test contract."
+)]
 #[path = "../test_support/paths.rs"]
 mod test_paths;
 mod text_projection;

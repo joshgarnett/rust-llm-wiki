@@ -342,6 +342,7 @@ pub(crate) fn apply_document(c: &Connection, prepared: &ProjectedHint) -> Result
 
 /// Convenience for callers whose enclosing policy already reserves storage.
 /// Build/delta integration uses prepare_document + explicit charge + apply.
+#[cfg(test)]
 pub(crate) fn project_document(c: &Connection, row: &DocumentRow) -> Result<()> {
     if !present(c)? {
         return Ok(());

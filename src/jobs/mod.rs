@@ -13,6 +13,10 @@ pub(crate) use ledger::initial_inspection;
 mod replay;
 pub mod tasks;
 #[cfg(test)]
+#[allow(
+    clippy::duplicate_mod,
+    reason = "Instantiate shared fixture code in independent test namespaces; sharing module state would change the test contract."
+)]
 #[path = "../../tests/fixtures/p15/common.rs"]
 mod test_support;
 

@@ -144,6 +144,8 @@ impl Scope {
 }
 #[inline]
 pub(crate) fn span(phase: Phase) -> Scope {
+    #[cfg(not(any(test, feature = "maintenance-diagnostic029")))]
+    let _ = phase;
     Scope {
         #[cfg(any(test, feature = "maintenance-diagnostic029"))]
         inner: enabled::Scope::start(phase),
@@ -232,6 +234,8 @@ pub(crate) struct Batch {
     inner: Option<enabled::Batch>,
 }
 pub(crate) fn batch(started: std::time::Instant) -> Batch {
+    #[cfg(not(any(test, feature = "maintenance-diagnostic029")))]
+    let _ = started;
     Batch {
         #[cfg(any(test, feature = "maintenance-diagnostic029"))]
         inner: enabled::Batch::start(started),
@@ -568,14 +572,14 @@ mod enabled {
     }
     pub(super) fn witness_bytes(bytes: u64) {
         CURRENT.with(|slot| {
-            if let Some(s) = slot.borrow_mut().as_mut() {
-                if s.witness_depth > 0 {
-                    add(
-                        &mut s.counters[Counter::ActivationWitnessBytes as usize],
-                        bytes,
-                        &mut s.overflow,
-                    );
-                }
+            if let Some(s) = slot.borrow_mut().as_mut()
+                && s.witness_depth > 0
+            {
+                add(
+                    &mut s.counters[Counter::ActivationWitnessBytes as usize],
+                    bytes,
+                    &mut s.overflow,
+                );
             }
         });
     }

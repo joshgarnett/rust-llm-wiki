@@ -100,11 +100,32 @@ pub(crate) struct StoredArtifact {
     pub reference: DurableOutputRef,
     pub write: ExpectedWrite,
     pub hash_bytes: u64,
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "Retain exact store hash-work receipts independently of payload identity; tests audit the counters"
+        )
+    )]
     pub hashes: usize,
 }
 pub(crate) struct LoadedArtifact<T> {
     pub artifact: T,
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "Retain exact store hash-work receipts independently of payload identity; tests audit the counters"
+        )
+    )]
     pub hash_bytes: u64,
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "Retain exact store hash-work receipts independently of payload identity; tests audit the counters"
+        )
+    )]
     pub hashes: usize,
 }
 struct Meter {

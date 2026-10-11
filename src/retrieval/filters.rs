@@ -1,7 +1,7 @@
 //! Bound filters shared by every candidate leg, applied before any cap.
 use super::types::*;
 use crate::{
-    catalog::{DocumentRow, ReaderSnapshot, query_types::QueryCatalog},
+    catalog::{DocumentRow, query_types::QueryCatalog},
     domain::*,
 };
 use rusqlite::types::Value;
@@ -235,13 +235,4 @@ pub(crate) fn context_policy(historical: bool) -> String {
     format!(
         "((d.owner_revision IS NOT NULL AND ({payload})) OR (d.owner_revision IS NULL AND ((r.kind='page' AND ({page})) OR (r.kind='entity' AND ({description})))))"
     )
-}
-pub(crate) fn row<'a>(
-    reader: &'a ReaderSnapshot,
-    document: &DocumentRow,
-) -> Option<&'a crate::catalog::RecordRow> {
-    document
-        .record_id
-        .as_ref()
-        .and_then(|id| reader.projection().records.get(id))
 }

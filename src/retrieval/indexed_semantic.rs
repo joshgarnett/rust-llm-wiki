@@ -46,6 +46,10 @@ fn require_space(store: &VectorStore, state: &SpaceState) -> Result<()> {
 /// Reauthenticate the already frozen proposal owners for an ID-only renderer
 /// witness. This does no discovery, rendering of embedding inputs or scoring.
 #[cfg(test)]
+#[expect(
+    dead_code,
+    reason = "Retain the frozen failed lineage diagnostic entry point; no diagnostic retry is authorized"
+)]
 pub(crate) fn with_lineage_witness_catalog_for_test(
     catalog: &Catalog,
     request: &ContextRequest,
@@ -251,6 +255,10 @@ struct Discovery {
     dense: BTreeMap<VaultRelativePath, Vec<DenseHit>>,
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Discovery keeps pinned catalog, embedding identity, query mode and shared unit budget explicit"
+)]
 fn discover(
     _catalog: &Catalog,
     reader: &QuerySnapshot,

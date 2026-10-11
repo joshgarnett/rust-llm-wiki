@@ -104,7 +104,7 @@ impl WorkerDelta {
             if let Some(phases) = self.phases {
                 crate::app::refresh_path_profile::worker_merge(phases);
             }
-            return result;
+            result
         }
         #[cfg(not(test))]
         Ok(())

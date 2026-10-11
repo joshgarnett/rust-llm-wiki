@@ -207,6 +207,10 @@ fn preserves(location: &Location, passages: &[ContextPassage]) -> bool {
     }
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Frozen diagnostic keeps proposal pool, weights, shared meter and measurement sink explicit"
+)]
 fn locations(
     reader: &dyn QueryCatalog,
     request: &ContextRequest,
@@ -408,6 +412,10 @@ fn locations(
     Ok(retained)
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Frozen diagnostic keeps native draft, retained trace, shared meter and oracle control separate"
+)]
 fn allocate(
     reader: &dyn QueryCatalog,
     request: &ContextRequest,
@@ -800,6 +808,10 @@ fn signals_from_frozen(
     Ok(signals)
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Frozen paired diagnostic keeps request, arm, reference, cache, oracle and measurement inputs explicit"
+)]
 fn run_case(
     catalog: &Catalog,
     query: &str,
@@ -1596,8 +1608,10 @@ mod tests {
             let (pool, weights) = proposals(&trace)?;
             let mut only_page = hits.clone();
             only_page.hits.retain(|h| h.locator.path == path("page.md"));
-            let mut incomplete = Diagnostics::default();
-            incomplete.scanned_bytes = SCAN_CAP - 100;
+            let mut incomplete = Diagnostics {
+                scanned_bytes: SCAN_CAP - 100,
+                ..Default::default()
+            };
             locations(
                 reader,
                 &request,
@@ -1762,7 +1776,7 @@ mod tests {
             }
             assert_eq!(segmented_types,BTreeSet::from([false,true]));
             let source=hits.hits.iter().find(|hit|hit.source_id.is_some()).unwrap();
-            let mut signals=ContextSelectionSignals::default();signals.semantic_complete=true;
+            let mut signals=ContextSelectionSignals { semantic_complete: true, ..Default::default() };
             signals.semantic.push(ContextSemanticCue{owner:source.locator.path.clone(),observed_hash:source.locator.observed_hash.clone(),span:source.excerpt.span,cosine:0.8});
             let (prepared,mut trace)=context::with_candidate_ordering_trace(||context::assemble_bounded_documents_with_signals_for_test(reader,&request,hits,QUERY,&signals,&SelectionAction::Prepare));
             prepared?;let (pool,_)=proposals(&trace)?;assert!(pool.iter().any(|p|p.packet.unit_score.is_some()));

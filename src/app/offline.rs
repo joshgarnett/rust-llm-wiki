@@ -889,7 +889,7 @@ impl OfflineApp {
         #[cfg(test)]
         drop(profile_plan);
         let mut outcome = MutationOutcome {
-            source_capture: plan.plan.capture_state.clone(),
+            source_capture: plan.plan.capture_state,
             plan: summarize("Unchanged source", &plan.plan.dependencies, &[]),
             allocated_ids: BTreeMap::from([
                 ("source".into(), plan.plan.source_id.clone()),
@@ -1455,11 +1455,11 @@ impl OfflineApp {
         let catalog = self.catalog();
         let authority = catalog.operation_state()?;
         let mut pending = self.pending(&engine)?;
-        if let Some(active) = authority.as_ref().and_then(|state| state.active()) {
-            if !pending.contains(&active.change.change_id) {
-                pending.push(active.change.change_id.clone());
-                pending.sort();
-            }
+        if let Some(active) = authority.as_ref().and_then(|state| state.active())
+            && !pending.contains(&active.change.change_id)
+        {
+            pending.push(active.change.change_id.clone());
+            pending.sort();
         }
         if self.options.dry_run {
             return Ok(RecoverOutcome {

@@ -327,7 +327,7 @@ pub(crate) fn validate_job_draft(
                 if op.expected == ExpectedState::Absent {
                     if draft.title != "Create durable planned run"
                         || bytes != run_bytes(&ledger::initial_inspection(&inspection.spec)?)?
-                        || inspection.attempts.len() != 0
+                        || !inspection.attempts.is_empty()
                     {
                         return Err(WikiError::invalid(
                             "planned Run differs from retained genesis",
@@ -1162,19 +1162,18 @@ fn prove_job_candidate_closable(
         }
         allowed.insert(path.clone());
     }
-    if let Some(proof) = engine.load_indexed_refresh_proof(&named.proof.change)? {
-        if proof != named.proof {
-            return Err(events::corrupt("closing job indexed proof differs"));
-        }
+    if let Some(proof) = engine.load_indexed_refresh_proof(&named.proof.change)?
+        && proof != named.proof
+    {
+        return Err(events::corrupt("closing job indexed proof differs"));
     }
     if let Some(bytes) = crate::changes::prepare::read_bounded(
         fs,
         &crate::catalog::source_refresh::delta_path(&named.proof.change)?,
         256 * 1024 * 1024,
-    )? {
-        if Blake3Hash::digest(&bytes) != named.proof.delta_hash {
-            return Err(events::corrupt("closing job delta differs"));
-        }
+    )? && Blake3Hash::digest(&bytes) != named.proof.delta_hash
+    {
+        return Err(events::corrupt("closing job delta differs"));
     }
     engine.require_revision_baseline(&named.manifest)?;
     engine.validate_named_revision_receipt(&named.manifest, &named.proof.change.manifest_hash)?;
@@ -1285,6 +1284,10 @@ fn prove_job_candidate_closable(
 
 /// Admission uses the ordinary selected projection and named engine. The slot
 /// commits this result before preparation and grants no accounting authority.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Keep the publication key, request commitment, generation and prior closure explicit at the admission boundary."
+)]
 fn seal_job_candidate(
     catalog: &Catalog,
     writer: &WriterPermit,
@@ -1527,6 +1530,10 @@ fn job_receipt_downgrade(old: &JobRequestCommitment, new: &JobRequestCommitment)
 pub(crate) fn inspect_for_publication(job: &JobLedger) -> Result<LedgerInspection> {
     job.with(false, |_, l| Ok(l.state.inspection.clone()))
 }
+#[expect(
+    clippy::large_enum_variant,
+    reason = "The pending variant owns the guarded refresh session; boxing changes allocation at this recovery boundary."
+)]
 pub(crate) enum JobPreparation<'a> {
     Committed(PreparedChange),
     Pending(crate::catalog::source_refresh::IndexedRefreshSession<'a>),
@@ -1908,13 +1915,13 @@ pub fn settle_receipt(fs: &VaultFs, job: &JobLedger, plan: MaterializationPlan) 
         job.settle(&plan.attempt)?;
         return Ok(());
     }
-    if normalized {
-        if let Some((change, reference)) = retained_receipt_publication(fs, job, &plan.receipt)? {
-            drop(writer);
-            job.outputs_committed(&plan.attempt, &change, reference, vec![], vec![])?;
-            job.settle(&plan.attempt)?;
-            return Ok(());
-        }
+    if normalized
+        && let Some((change, reference)) = retained_receipt_publication(fs, job, &plan.receipt)?
+    {
+        drop(writer);
+        job.outputs_committed(&plan.attempt, &change, reference, vec![], vec![])?;
+        job.settle(&plan.attempt)?;
+        return Ok(());
     }
     let fresh = receipt_plan(
         job,
@@ -2855,30 +2862,29 @@ fn read_compact(
     let mut job_asset_bound = false;
     if let Some(change) = retained {
         let engine = ChangeEngine::new(fs.clone())?;
-        if let Some(indexed) = &indexed {
-            if let Some(crate::changes::indexed_refresh::IndexedWriteOperation::JobBatch {
+        if let Some(indexed) = &indexed
+            && let Some(crate::changes::indexed_refresh::IndexedWriteOperation::JobBatch {
                 run_id,
                 checkpoint: Some(asset),
                 ..
             }) = &indexed.operation
+        {
+            let (manifest, hash) = engine.load_manifest_structure(&change.change_id)?;
+            if hash != change.manifest_hash
+                || run_id != &note_ref.record.record_id
+                || asset.path != path
+                || asset.hash != asset_hash
+                || asset.run_hash != note_ref.hash
             {
-                let (manifest, hash) = engine.load_manifest_structure(&change.change_id)?;
-                if hash != change.manifest_hash
-                    || run_id != &note_ref.record.record_id
-                    || asset.path != path
-                    || asset.hash != asset_hash
-                    || asset.run_hash != note_ref.hash
-                {
-                    return Err(events::corrupt(
-                        "compact asset differs from exact committed JobBatch",
-                    ));
-                }
-                indexed.validate_manifest(&manifest)?;
-                // The committed JobBatch binds either its immutable asset create
-                // or exact original existing-asset guard. Neither requires
-                // discovery of an unrelated asset publication in history.
-                job_asset_bound = true;
+                return Err(events::corrupt(
+                    "compact asset differs from exact committed JobBatch",
+                ));
             }
+            indexed.validate_manifest(&manifest)?;
+            // The committed JobBatch binds either its immutable asset create
+            // or exact original existing-asset guard. Neither requires
+            // discovery of an unrelated asset publication in history.
+            job_asset_bound = true;
         }
     }
     if !job_asset_bound {

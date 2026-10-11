@@ -258,7 +258,9 @@ impl HtmlScanner {
 mod tests {
     use super::*;
 
-    fn projected(raw: &str) -> (String, Vec<(Range<usize>, String, bool)>, usize) {
+    type Projected = (String, Vec<(Range<usize>, String, bool)>, usize);
+
+    fn projected(raw: &str) -> Projected {
         let mut text = String::new();
         let mut spans = Vec::new();
         let mut headings = 0;

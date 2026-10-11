@@ -377,7 +377,7 @@ fn execute_inner_diagnostic_body(args: &Arguments) -> Result<Envelope> {
                     "selector": {"id": selector.id, "path": selector.path},
                     "requested_range": match from {
                         Some(start) => json!({"start": start, "end": null}),
-                        None => value(&request.range)?,
+                        None => value(request.range)?,
                     },
                     "max_bytes": request.max_bytes,
                     "mode": if *no_sync { "cached" } else { "verified" },
@@ -1930,10 +1930,10 @@ fn cached_query_read(
         }
         Some(row.record)
     } else {
-        if let Some(claim) = &claim {
-            if reader.record(&claim.id)?.is_some() {
-                return Err(corrupt("adopted cached record is absent from its document"));
-            }
+        if let Some(claim) = &claim
+            && reader.record(&claim.id)?.is_some()
+        {
+            return Err(corrupt("adopted cached record is absent from its document"));
         }
         None
     };

@@ -55,6 +55,13 @@ fn fixture() -> (tempfile::TempDir, VaultFs) {
     let handle = VaultFs::new(VaultRoot::explicit(temp.path()).unwrap());
     (temp, handle)
 }
+type SinkKey = (
+    RecordId,
+    RecordKind,
+    VaultRelativePath,
+    Vec<String>,
+    Vec<super::super::link_facts::MatchKey>,
+);
 #[derive(Default, Debug, PartialEq)]
 struct Sink {
     events: Vec<String>,
@@ -63,13 +70,7 @@ struct Sink {
     graph: Vec<GraphRow>,
     links: Vec<LinkRow>,
     facts: Vec<super::super::link_facts::OwnedLinkFact>,
-    keys: Vec<(
-        RecordId,
-        RecordKind,
-        VaultRelativePath,
-        Vec<String>,
-        Vec<super::super::link_facts::MatchKey>,
-    )>,
+    keys: Vec<SinkKey>,
 }
 impl RetrievalSink for Sink {
     fn identity_claim(&mut self, row: IdentityClaimRow) -> Result<()> {

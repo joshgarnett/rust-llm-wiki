@@ -2182,6 +2182,10 @@ fn fixed_response_diagnostics_are_spooled_without_provider_text() {
 
 // Exercise invocation composition against the real durable ledger arithmetic.
 use crate as lwiki;
+#[allow(
+    clippy::duplicate_mod,
+    reason = "Instantiate shared fixture code in independent test namespaces; sharing module state would change the test contract."
+)]
 #[path = "../../tests/fixtures/p15/common.rs"]
 mod invocation_ledger_fixture;
 use super::invocation_budget::InvocationBudget;

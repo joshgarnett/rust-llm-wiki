@@ -17,9 +17,11 @@ use crate::{
     changes::ReadDependency,
     domain::*,
 };
+#[cfg(test)]
+use std::collections::VecDeque;
 use std::{
     cell::Cell,
-    collections::{BTreeSet, VecDeque},
+    collections::BTreeSet,
     time::{Duration, Instant},
 };
 
@@ -94,9 +96,6 @@ impl UnitBudget {
     }
     pub(crate) fn usage(&self) -> UnitUsage {
         self.usage.get()
-    }
-    pub(crate) fn deadline(&self) -> Instant {
-        self.deadline
     }
     fn check(&self) -> Result<()> {
         if Instant::now() >= self.deadline {
@@ -439,10 +438,12 @@ impl Iterator for InventoryUnitIter<'_> {
 }
 
 /// Legacy diagnostic replay factory; it cannot authenticate corpus membership.
+#[cfg(test)]
 pub(crate) struct CachedDocumentUnits<'a> {
     reader: &'a QuerySnapshot,
     settings: &'a EmbeddingSettings,
 }
+#[cfg(test)]
 impl<'a> CachedDocumentUnits<'a> {
     pub(crate) fn new(reader: &'a QuerySnapshot, settings: &'a EmbeddingSettings) -> Result<Self> {
         settings.validate()?;
@@ -468,6 +469,7 @@ impl<'a> CachedDocumentUnits<'a> {
         })
     }
 }
+#[cfg(test)]
 pub(crate) struct CachedUnitIter<'a> {
     reader: &'a QuerySnapshot,
     settings: &'a EmbeddingSettings,
@@ -478,6 +480,7 @@ pub(crate) struct CachedUnitIter<'a> {
     owner: std::vec::IntoIter<RenderedUnit>,
     failed: bool,
 }
+#[cfg(test)]
 impl CachedUnitIter<'_> {
     fn next_unit(&mut self) -> Result<Option<RenderedUnit>> {
         loop {
@@ -523,6 +526,7 @@ impl CachedUnitIter<'_> {
         }
     }
 }
+#[cfg(test)]
 impl Iterator for CachedUnitIter<'_> {
     type Item = Result<RenderedUnit>;
     fn next(&mut self) -> Option<Self::Item> {
@@ -556,6 +560,7 @@ impl AuthenticatedDocument {
     pub(crate) fn verification_work(&self) -> (usize, usize, usize) {
         self.proof.meter().work()
     }
+    #[cfg(test)]
     pub(crate) fn bind_cached_unit(&self, cached: &RenderedUnit) -> Result<RenderedUnit> {
         let current = self
             .units
@@ -799,7 +804,7 @@ mod tests {
             path,
             settings,
             &VerificationBudget::default(),
-            &mut budget(),
+            &budget(),
         )
         .unwrap()
     }
@@ -874,7 +879,7 @@ mod tests {
                     &path(excluded),
                     &settings(),
                     &VerificationBudget::default(),
-                    &mut budget()
+                    &budget()
                 )),
                 ErrorCode::CapabilityUnavailable
             );
@@ -893,7 +898,7 @@ mod tests {
         let settings = settings();
         let factory = CachedDocumentUnits::new(&reader, &settings).unwrap();
         let units = factory
-            .replay(&mut budget())
+            .replay(&budget())
             .unwrap()
             .collect::<Result<Vec<_>>>()
             .unwrap();
@@ -905,7 +910,7 @@ mod tests {
                 &captured,
                 &settings,
                 &VerificationBudget::default(),
-                &mut budget()
+                &budget()
             )),
             ErrorCode::CapabilityUnavailable
         );
@@ -992,7 +997,7 @@ mod tests {
         let settings = settings();
         let factory = CachedDocumentUnits::new(&reader, &settings).unwrap();
         let units = factory
-            .replay(&mut budget())
+            .replay(&budget())
             .unwrap()
             .collect::<Result<Vec<_>>>()
             .unwrap();
@@ -1035,13 +1040,13 @@ mod tests {
                 &captured,
                 &settings,
                 &VerificationBudget::default(),
-                &mut budget()
+                &budget()
             )),
             ErrorCode::FreshnessConflict
         );
         // Cache discovery still returns old bytes, making its lack of authority observable.
         let cached_again = factory
-            .replay(&mut budget())
+            .replay(&budget())
             .unwrap()
             .collect::<Result<Vec<_>>>()
             .unwrap();
@@ -1153,7 +1158,7 @@ mod tests {
         assert_eq!(
             code(
                 factory
-                    .replay(&mut budget())
+                    .replay(&budget())
                     .unwrap()
                     .collect::<Result<Vec<_>>>()
             ),
@@ -1166,9 +1171,9 @@ mod tests {
             })
             .unwrap();
         let replay_factory = CachedDocumentUnits::new(&replay_reader, &settings).unwrap();
-        let mut replay_budget = budget();
+        let replay_budget = budget();
         replay_factory
-            .replay(&mut replay_budget)
+            .replay(&replay_budget)
             .unwrap()
             .collect::<Result<Vec<_>>>()
             .unwrap();
@@ -1176,7 +1181,7 @@ mod tests {
         assert_eq!(
             code(
                 replay_factory
-                    .replay(&mut replay_budget)
+                    .replay(&replay_budget)
                     .unwrap()
                     .collect::<Result<Vec<_>>>()
             ),
@@ -1187,7 +1192,7 @@ mod tests {
             .cached_query_snapshot(QueryReadLimits::default())
             .unwrap();
         let factory = CachedDocumentUnits::new(&reader, &settings).unwrap();
-        let mut render_budget = UnitBudget::new(UnitLimits {
+        let render_budget = UnitBudget::new(UnitLimits {
             max_render_bytes: 1,
             ..Default::default()
         })
@@ -1195,7 +1200,7 @@ mod tests {
         assert_eq!(
             code(
                 factory
-                    .replay(&mut render_budget)
+                    .replay(&render_budget)
                     .unwrap()
                     .collect::<Result<Vec<_>>>()
             ),
@@ -1203,7 +1208,7 @@ mod tests {
         );
         let mut shared = budget();
         let first = factory
-            .replay(&mut shared)
+            .replay(&shared)
             .unwrap()
             .collect::<Result<Vec<_>>>()
             .unwrap();
@@ -1211,18 +1216,13 @@ mod tests {
         let source = reader.usage();
         shared.limits.max_units = first.len();
         assert_eq!(
-            code(
-                factory
-                    .replay(&mut shared)
-                    .unwrap()
-                    .collect::<Result<Vec<_>>>()
-            ),
+            code(factory.replay(&shared).unwrap().collect::<Result<Vec<_>>>()),
             ErrorCode::BudgetExceeded
         );
         assert!(reader.usage().rows > source.rows);
         assert!(shared.usage().source_rows > work.source_rows);
         assert_eq!(shared.usage().units, work.units);
-        let mut owner_budget = UnitBudget::new(UnitLimits {
+        let owner_budget = UnitBudget::new(UnitLimits {
             max_owner_render_bytes: 1,
             ..Default::default()
         })
@@ -1234,7 +1234,7 @@ mod tests {
                 &path("page.md"),
                 &settings,
                 &VerificationBudget::default(),
-                &mut owner_budget
+                &owner_budget
             )),
             ErrorCode::BudgetExceeded
         );

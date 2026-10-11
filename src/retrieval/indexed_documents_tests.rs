@@ -1012,7 +1012,7 @@ impl IntervalCoveragePool {
                         .into_candidate();
                 assert_eq!(lexical.span, card.passage.span);
                 assert_eq!(card.passage.text.len() as u64, lexical.span.len());
-                assert!(lexical.span.len() > 0);
+                assert!(!lexical.span.is_empty());
                 assert!(
                     card.passage
                         .rank_contributions
@@ -1572,13 +1572,13 @@ fn coverage_context(
     let mut prepared = prepared?;
     stats.original_prepare_native_packet_calls = 1;
     meter.check()?;
-    if let Some(expected) = expected_pool {
-        if trace_stage(&trace, "candidate_pool") != expected {
-            return Err(WikiError::new(
-                ErrorCode::FreshnessConflict,
-                "development retained pool differs from the pinned control",
-            ));
-        }
+    if let Some(expected) = expected_pool
+        && trace_stage(&trace, "candidate_pool") != expected
+    {
+        return Err(WikiError::new(
+            ErrorCode::FreshnessConflict,
+            "development retained pool differs from the pinned control",
+        ));
     }
     let pool = IntervalCoveragePool::from_trace(&trace);
     stats.pool = pool.metadata();

@@ -33,6 +33,13 @@ pub(crate) struct InputLimits {
 #[derive(Debug)]
 pub(crate) struct AuthenticatedRelationSource {
     pub binding: SourceBinding,
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "Retained proof and accounting metadata is inspected by focused contract tests."
+        )
+    )]
     pub selected_binding: SelectedSourceBinding,
     pub text: String,
     pub dependencies: Vec<ReadDependency>,
@@ -42,6 +49,13 @@ pub(crate) struct AuthenticatedRelationSource {
     /// Only the known digest pass performed by this module; excludes the opaque
     /// selected validator. Do not report this as the operation's total usage.
     pub known_hash_bytes: u64,
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "Retained proof and accounting metadata is inspected by focused contract tests."
+        )
+    )]
     pub known_hashes: usize,
 }
 fn integrity(message: impl Into<String>) -> WikiError {

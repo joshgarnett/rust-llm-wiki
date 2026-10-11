@@ -1,6 +1,10 @@
 use crate as library;
 use crate::test_paths;
 #[allow(dead_code)]
+#[allow(
+    clippy::duplicate_mod,
+    reason = "Instantiate shared fixture code in independent test namespaces; sharing module state would change the test contract."
+)]
 #[path = "../../tests/fixtures/p16c/common.rs"]
 pub(crate) mod common;
 use super::{embedding_wire as embed, generation_wire as genwire, types::*, wire_json};

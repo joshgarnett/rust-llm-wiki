@@ -281,7 +281,7 @@ fn normalized_page_rename_preview_and_external_edit_preserve_owned_state() {
         fixture.app.fs().clone(),
         OperationOptions {
             dry_run: true,
-            ..fixture.app.options().clone()
+            ..*fixture.app.options()
         },
     )
     .unwrap();

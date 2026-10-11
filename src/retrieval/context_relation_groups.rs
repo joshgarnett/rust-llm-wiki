@@ -59,6 +59,10 @@ fn omit(omissions: &mut Vec<ContextOmission>, owner: &DocumentOwner, reason: &st
 /// The 64 MiB parse allowance is local assembly work, not new canonical proof
 /// authority. It is cumulative across owners. Traversal work is also cumulative
 /// across anchors, including groups later rejected. No source/catalog reads.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Relation nomination keeps authenticated owners, request limits, query signal and omission sink explicit"
+)]
 pub(super) fn nominate_groups(
     reader: &dyn QueryCatalog,
     request: &ContextRequest,
@@ -280,7 +284,7 @@ fn assemble(
             .1;
         let nomination = relations
             .nominate(
-                &[anchor.node_id.clone()],
+                std::slice::from_ref(&anchor.node_id),
                 NominationLimits {
                     max_candidates: OWNER_SPANS,
                     max_span_bytes: request.documents.limits.excerpt_bytes.min(1024),

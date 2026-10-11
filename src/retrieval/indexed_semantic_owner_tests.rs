@@ -1,5 +1,9 @@
 //! Owner reuse checks use real normalized SQL and disposable canonical pages.
 use super::*;
+#[allow(
+    clippy::duplicate_mod,
+    reason = "Instantiate shared fixture code in independent test namespaces; sharing module state would change the test contract."
+)]
 #[path = "../../tests/fixtures/p17/common.rs"]
 mod common;
 use common::Fixture;

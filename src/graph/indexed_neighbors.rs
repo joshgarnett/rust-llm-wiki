@@ -518,15 +518,15 @@ fn entity(
         None
     };
     let mut description_truncated = false;
-    if let Some(text) = &mut description {
-        if text.len() > plan.limits.excerpt_bytes {
-            let mut end = plan.limits.excerpt_bytes;
-            while !text.is_char_boundary(end) {
-                end -= 1;
-            }
-            text.truncate(end);
-            description_truncated = true;
+    if let Some(text) = &mut description
+        && text.len() > plan.limits.excerpt_bytes
+    {
+        let mut end = plan.limits.excerpt_bytes;
+        while !text.is_char_boundary(end) {
+            end -= 1;
         }
+        text.truncate(end);
+        description_truncated = true;
     }
     Ok(GraphEntity {
         record_ref: reference(reader, row),

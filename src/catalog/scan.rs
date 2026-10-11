@@ -197,6 +197,7 @@ pub(crate) fn project_with_sink(
 
 /// A complete normalized build avoids constructing legacy transitive proof
 /// copies. Its separate result type must not authorize legacy proof consumers.
+#[cfg(test)]
 pub(crate) fn project_normalized_with_sink(
     fs: &VaultFs,
     input: &ValidationInput,

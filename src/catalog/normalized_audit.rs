@@ -1,14 +1,18 @@
 //! Audit the actual pinned database, using a bounded private native copy.
 //! Ordinary-row/canonical equality is the caller's separate responsibility.
 use super::{normalized_read::corrupt, normalized_schema, sql};
-use crate::domain::{ErrorCode, Result, WikiError};
+use crate::domain::Result;
+#[cfg(test)]
+use crate::domain::{ErrorCode, WikiError};
+use rusqlite::{Connection, types::ValueRef};
+#[cfg(test)]
 use rusqlite::{
-    Connection,
     backup::{Backup, StepResult},
     limits::Limit,
-    types::ValueRef,
 };
+#[cfg(test)]
 use serde::Serialize;
+#[cfg(test)]
 use std::{
     sync::{
         Arc,
@@ -17,6 +21,7 @@ use std::{
     time::{Duration, Instant},
 };
 
+#[cfg(test)]
 #[derive(Debug, Clone)]
 pub(crate) struct AuditLimits {
     pub max_copy_bytes: u64,
@@ -25,6 +30,7 @@ pub(crate) struct AuditLimits {
     pub max_backup_steps: u64,
     pub max_vm_steps: u64,
 }
+#[cfg(test)]
 impl Default for AuditLimits {
     fn default() -> Self {
         Self {
@@ -36,6 +42,7 @@ impl Default for AuditLimits {
         }
     }
 }
+#[cfg(test)]
 #[derive(Debug, Default, Serialize)]
 pub(crate) struct AuditStats {
     pub database_bytes: u64,
@@ -43,6 +50,7 @@ pub(crate) struct AuditStats {
     pub backup_steps: u64,
     pub elapsed_ms: u64,
 }
+#[cfg(test)]
 fn budget(message: &str) -> WikiError {
     WikiError::new(ErrorCode::BudgetExceeded, message)
 }
@@ -52,6 +60,7 @@ fn budget(message: &str) -> WikiError {
 /// No source settings/handlers are changed and no filesystem scratch is used.
 /// The deadline is cooperative: checked between bounded native backup steps
 /// and via the private connection's VM progress handler, not a hard OS timeout.
+#[cfg(test)]
 pub(crate) fn validate_index(source: &Connection, limits: &AuditLimits) -> Result<AuditStats> {
     let started = Instant::now();
     if limits.max_copy_bytes < 4096
@@ -231,6 +240,7 @@ pub(crate) fn validate_index(source: &Connection, limits: &AuditLimits) -> Resul
 // Skip the six indexed-column SQLite varints (at most nine bytes each), then
 // require the exact two zero bytes emitted for UNINDEXED columns. Indexed
 // counts and full docsize decoding remain the native check's responsibility.
+#[cfg(test)]
 fn graph_unindexed_sizes_are_zero(mut blob: &[u8]) -> bool {
     if blob.len() > 72 {
         return false;

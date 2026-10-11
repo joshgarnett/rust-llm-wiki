@@ -477,7 +477,7 @@ fn paired_real_builders_preserve_authored_captured_distant_and_budget_context() 
     small.budget.max_tokens = 195;
     small.budget.instruction_bytes = 80;
     small.budget.instruction_tokens = 20;
-    let cases = vec![
+    let cases = [
         ("authoredneedle", request()),
         ("authoredneedle", filtered),
         ("operationsprobe blue retry exception", sources),

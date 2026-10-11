@@ -18,6 +18,13 @@ pub(super) struct Candidate<'a> {
 pub(super) enum Arm {
     L,
     F0,
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "The retained exchange arm is enabled only by the test-scoped policy override"
+        )
+    )]
     F1,
 }
 
@@ -87,6 +94,13 @@ pub(super) enum Outcome<State> {
         choices: Vec<Choice>,
         /// None means the caller's existing initial scope-only rendering.
         state: Option<State>,
+        #[cfg_attr(
+            not(test),
+            expect(
+                dead_code,
+                reason = "Decision provenance is retained for the unpromoted selector and audited in tests"
+            )
+        )]
         decisions: Vec<Decision>,
         statistics: Statistics,
     },

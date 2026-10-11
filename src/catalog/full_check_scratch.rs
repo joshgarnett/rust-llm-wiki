@@ -175,11 +175,11 @@ impl CheckScratch {
             return Ok(());
         }
         // Statements are owned by the caller's completed inner scope.
-        if let Some(connection) = self.connection.take() {
-            if let Err((connection, error)) = connection.close() {
-                drop(connection);
-                return Err(io("close SQLite", error));
-            }
+        if let Some(connection) = self.connection.take()
+            && let Err((connection, error)) = connection.close()
+        {
+            drop(connection);
+            return Err(io("close SQLite", error));
         }
         self.verify()?;
         fs::remove_file(&self.database).map_err(|e| io("remove owned file", e))?;

@@ -657,8 +657,10 @@ fn source_projector_scope_and_budget_refuse_before_canonical_mutation() {
     );
     assert_eq!(fs::read(&source).unwrap(), bytes);
     let (reader, plan) = fixture.plan(Fixture::request(b"changed"), None);
-    let mut limits = RefreshProjectionLimits::default();
-    limits.max_rows = 1;
+    let limits = RefreshProjectionLimits {
+        max_rows: 1,
+        ..Default::default()
+    };
     assert!(project_refresh(&fixture.fs, &reader, plan, &limits).is_err());
     assert_eq!(fs::read(&source).unwrap(), bytes);
 }

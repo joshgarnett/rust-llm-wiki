@@ -3,12 +3,12 @@ use crate::{
     domain::{RecordId, RecordKind, VaultRelativePath},
     records::{LinkResolution, ParsedNote, RegistryEntry, links::IndexedRegistry},
 };
-use std::{collections::BTreeMap, ops::Deref, sync::Arc};
+use std::{collections::BTreeMap, ops::Deref, rc::Rc};
 
 /// Notes and indexes move together. No mutable dereference is exposed: callers
 /// construct a new view after applying an overlay, so indexes cannot go stale.
 pub(crate) struct SourceNotes {
-    inner: Arc<SourceNotesInner>,
+    inner: Rc<SourceNotesInner>,
 }
 
 struct SourceNotesInner {
@@ -23,7 +23,7 @@ impl SourceNotes {
     /// because it needs a separate mutable projection.
     pub(crate) fn shared(&self) -> Self {
         Self {
-            inner: Arc::clone(&self.inner),
+            inner: Rc::clone(&self.inner),
         }
     }
 
@@ -61,7 +61,7 @@ impl From<BTreeMap<VaultRelativePath, ParsedNote>> for SourceNotes {
             }
         }
         Self {
-            inner: Arc::new(SourceNotesInner {
+            inner: Rc::new(SourceNotesInner {
                 notes,
                 claims,
                 registry: IndexedRegistry::new(entries),

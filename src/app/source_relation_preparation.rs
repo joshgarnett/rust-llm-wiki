@@ -9,6 +9,8 @@ use super::{
     source_relation_planning::{RelationTaskPlan, plan_captured},
     source_relation_preparation_types::*,
 };
+#[cfg(test)]
+use crate::sources::selected::SelectedSourceBinding;
 use crate::{
     changes::{
         ReadDependency,
@@ -24,7 +26,7 @@ use crate::{
         types::{DispatchPurpose, ValidatedOutput},
     },
     retrieval::source_relation_packet as packet,
-    sources::{revision::canonical_path, selected::SelectedSourceBinding},
+    sources::revision::canonical_path,
     vault::{ExpectedState, VaultFs, WriterPermit},
 };
 use std::{
@@ -67,6 +69,7 @@ fn input_limits(until: Instant) -> InputLimits {
 
 /// Captures are explicit caller-owned bounded maps, never a global SourceView.
 /// Complete preflight has no descriptor/job/provider/credential write effects.
+#[cfg(test)]
 pub(crate) fn plan_manifest(
     fs: &VaultFs,
     vault: &RecordId,
@@ -745,7 +748,7 @@ impl OfflineApp {
             ledger.create(&writer, spec)?;
             drop(writer);
             check(until)?;
-            inspection = Some(ledger.inspect()?);
+            ledger.inspect()?;
         }
         let mut invocation: Option<InvocationBudget> = None;
         let mut processed = 0usize;

@@ -22,9 +22,30 @@ pub(crate) struct MaterializedRelations {
     pub raw: store::StoredArtifact,
     pub annotation: store::StoredArtifact,
     /// Charged work: opaque input reservation plus known downstream digests.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "Retained proof and accounting metadata is inspected by focused contract tests."
+        )
+    )]
     pub reserved_hash_bytes: u64,
     /// Known actual work only; selected-source verification is opaque.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "Retained proof and accounting metadata is inspected by focused contract tests."
+        )
+    )]
     pub known_hash_bytes: u64,
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "Retained proof and accounting metadata is inspected by focused contract tests."
+        )
+    )]
     pub captured_bytes: u64,
 }
 struct Meter {
@@ -74,7 +95,7 @@ impl Meter {
         Ok(hash)
     }
     fn child<T>(&mut self, result: Result<T>) -> Result<T> {
-        result.map_err(|error| {
+        result.inspect_err(|error| {
             // Child codecs retain consumed work even on rejection/deadline.
             let reservation = error
                 .details
@@ -95,7 +116,6 @@ impl Meter {
             .unwrap_or(0);
             self.charged = self.charged.saturating_add(reservation.unwrap_or(consumed));
             self.known = self.known.saturating_add(known.unwrap_or(consumed));
-            error
         })
     }
 }
@@ -132,6 +152,10 @@ fn bounded_envelope(envelope: &relations::Envelope) -> Result<Vec<u8>> {
 
 /// Descriptor and response are exact sealed input and decoded Generated text.
 /// Caller supplies authenticated task authority, not proposed artifact metadata.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Keep distinct proof, scope and budget authorities explicit at this boundary."
+)]
 pub(crate) fn materialize(
     fs: &VaultFs,
     vault: &RecordId,

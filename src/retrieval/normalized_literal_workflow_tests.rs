@@ -309,7 +309,7 @@ fn literal_wrong_owner_revision_and_non_utf8_spans_cannot_escape_closed_binding(
     let proof = selected_documents::authenticate(
         &fixture.catalog,
         &reader,
-        &[fixture.content.clone()],
+        std::slice::from_ref(&fixture.content),
         &VerificationBudget::default(),
     )
     .unwrap();

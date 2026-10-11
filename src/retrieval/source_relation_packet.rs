@@ -235,6 +235,13 @@ pub(crate) struct AssembledEnvelope {
     /// Distinct referenced fragments hashed once each by this adapter. Separate
     /// from the original+occurrence hashes performed later by the validator.
     pub span_hash_bytes: u64,
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "Retain separate span-hash operation accounting; assembly tests verify this receipt"
+        )
+    )]
     pub span_hashes: usize,
 }
 impl<'a> SourceRelationPacket<'a> {

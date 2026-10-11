@@ -838,7 +838,7 @@ fn compute_inner(
             rules::mark_opposition(row);
         }
     }
-    if let Some(facts) = facts.as_deref_mut() {
+    if let Some(facts) = facts {
         facts.install_structural(recorder.finish())?;
         facts.capture_direct(records)?;
     } else {

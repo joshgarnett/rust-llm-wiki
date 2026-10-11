@@ -365,7 +365,7 @@ fn source_title_hash_updates_central_state_without_changing_historical_fact() {
         .unwrap();
     let old = held.eligibility_fact(&f.historical).unwrap().unwrap();
     let own = f.before.validation.records[&f.source].path.clone();
-    let old_state = held.direct_path_states(&[own.clone()]).unwrap();
+    let old_state = held.direct_path_states(std::slice::from_ref(&own)).unwrap();
     let delta = title_delta(&f);
     assert!(
         delta
@@ -383,7 +383,12 @@ fn source_title_hash_updates_central_state_without_changing_historical_fact() {
         .query_snapshot(QueryReadLimits::default())
         .unwrap();
     assert_eq!(fresh.eligibility_fact(&f.historical).unwrap(), Some(old));
-    assert_ne!(fresh.direct_path_states(&[own.clone()]).unwrap(), old_state);
+    assert_ne!(
+        fresh
+            .direct_path_states(std::slice::from_ref(&own))
+            .unwrap(),
+        old_state
+    );
     assert_eq!(held.direct_path_states(&[own]).unwrap(), old_state);
     assert_eq!(
         fresh.record(&f.source).unwrap().unwrap().record.title(),

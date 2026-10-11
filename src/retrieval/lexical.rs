@@ -905,20 +905,19 @@ fn normalized_literal_candidates(
                 "selected literal document lacks its adopted record",
             ));
         }
-        if let Some(record) = record {
-            if record.path != document.path
+        if let Some(record) = record
+            && (record.path != document.path
                 || record.hash != document.hash
                 || Some(record.record.kind()) != document.kind
                 || record.record.title() != document.title
                 || crate::catalog::scan::list(&record.record, "aliases") != document.aliases
                 || crate::catalog::scan::list(&record.record, "tags") != document.tags
-                || record.eligibility != document.eligibility
-            {
-                return Err(WikiError::new(
-                    ErrorCode::IndexCorrupt,
-                    "selected literal document differs from its adopted record",
-                ));
-            }
+                || record.eligibility != document.eligibility)
+        {
+            return Err(WikiError::new(
+                ErrorCode::IndexCorrupt,
+                "selected literal document differs from its adopted record",
+            ));
         }
         if literal_matches(&document.raw_text, query).is_empty() {
             return Err(WikiError::new(
@@ -1010,20 +1009,19 @@ fn normalized_candidates(
                     "selected document lacks its adopted record",
                 ));
             }
-            if let Some(record) = &record {
-                if record.path != document.path
+            if let Some(record) = &record
+                && (record.path != document.path
                     || record.hash != document.hash
                     || Some(record.record.kind()) != document.kind
                     || record.record.title() != document.title
                     || crate::catalog::scan::list(&record.record, "aliases") != document.aliases
                     || crate::catalog::scan::list(&record.record, "tags") != document.tags
-                    || record.eligibility != document.eligibility
-                {
-                    return Err(WikiError::new(
-                        ErrorCode::IndexCorrupt,
-                        "selected document differs from its adopted record",
-                    ));
-                }
+                    || record.eligibility != document.eligibility)
+            {
+                return Err(WikiError::new(
+                    ErrorCode::IndexCorrupt,
+                    "selected document differs from its adopted record",
+                ));
             }
             let identity = leg == 4
                 || (!plan.filters.include_historical
@@ -1580,13 +1578,12 @@ fn query_matches(
 ) -> Result<Vec<Range<usize>>> {
     let map = SourceMap::markdown(&raw[..bounds.end], bounds.start);
     let tokens = tokenizer.tokens(&map.text)?;
-    let mut matches = Vec::new();
     // Prefer the complete query over an early isolated word. Search the full
     // document before the per-term match cap, so roundup pages lead to the
     // named section even when an earlier query word occurs many times.
     let phrase = tokenizer.tokens(query)?;
     if phrase.len() > 1 {
-        matches = complete_query_spans(&map, raw, &tokens, &phrase)
+        let matches: Vec<_> = complete_query_spans(&map, raw, &tokens, &phrase)
             .filter(|original| original.len() <= excerpt_bytes.saturating_mul(2) / 3)
             .take(64)
             .collect();

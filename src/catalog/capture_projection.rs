@@ -210,10 +210,9 @@ fn project_capture_core(
                 "capture differs from the generated ownership envelope",
             ));
         }
-        if revision.field("origin_retrieved_at").is_some()
-            || revision.field("origin_retrieved_at_kind").is_some()
-        {
-            if source.string("wiki_origin_kind") != Some("agent-report")
+        if (revision.field("origin_retrieved_at").is_some()
+            || revision.field("origin_retrieved_at_kind").is_some())
+            && (source.string("wiki_origin_kind") != Some("agent-report")
                 || revision.string("origin_retrieved_at_kind") != Some("agent-claimed")
                 || revision.string("origin_retrieved_at").is_none_or(|value| {
                     time::OffsetDateTime::parse(
@@ -221,12 +220,11 @@ fn project_capture_core(
                         &time::format_description::well_known::Rfc3339,
                     )
                     .is_err()
-                })
-            {
-                return Err(WikiError::invalid(
-                    "capture has invalid agent retrieval provenance",
-                ));
-            }
+                }))
+        {
+            return Err(WikiError::invalid(
+                "capture has invalid agent retrieval provenance",
+            ));
         }
         let complete = revision.string("wiki_extraction_status") == Some("complete");
         let expected_capture_state = if complete {

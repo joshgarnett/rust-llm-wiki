@@ -181,7 +181,8 @@ impl ReadDescriptor {
         let mut hash = blake3::Hasher::new();
         let mut length = 0u64;
         let mut buffer = [0u8; 64 * 1024];
-        let result = (|| {
+
+        (|| {
             // Read exactly the reserved length. A changed length fails the
             // post-read guard, without consuming unadmitted growth bytes.
             while length < opened.len() {
@@ -221,8 +222,7 @@ impl ReadDescriptor {
                 },
                 output,
             ))
-        })();
-        result
+        })()
     }
 }
 

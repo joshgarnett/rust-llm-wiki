@@ -147,6 +147,382 @@ impl<'a> Captured<'a> {
     }
 }
 
+fn unique(
+    lookup: &dyn SourceRefreshLookup,
+    id: &RecordId,
+    kind: RecordKind,
+) -> Result<RefreshRecord> {
+    let row = lookup.unique_record(id)?.ok_or_else(|| {
+        WikiError::new(
+            ErrorCode::RecordNotFound,
+            format!("missing selected {kind} {id}"),
+        )
+    })?;
+    if row.record.id() != id || row.record.kind() != kind {
+        return Err(integrity(
+            "selected lookup returned another identity or kind",
+        ));
+    }
+    Ok(row)
+}
+
+/// Preserve typed navigation semantics: omitted/missing companions are stale,
+/// while an existing different identity at an exact path is a conflict.
+fn companion(
+    lookup: &dyn SourceRefreshLookup,
+    target: &RefreshRecord,
+    value: Option<&str>,
+) -> Result<()> {
+    let mut registry = vec![RegistryEntry {
+        id: target.record.id().clone(),
+        kind: target.record.kind(),
+        path: target.path.clone(),
+        aliases: vec![],
+    }];
+    if let Some(value) = value {
+        let path = value
+            .strip_prefix("[[")
+            .and_then(|value| value.strip_suffix("]]"))
+            .unwrap_or(value)
+            .split(['|', '#'])
+            .next()
+            .unwrap_or_default();
+        if let Ok(path) = VaultRelativePath::new(path) {
+            let direct = lookup.record_at_path(&path)?;
+            if direct.as_ref().is_some_and(|row| row.path != path) {
+                return Err(integrity("companion lookup returned a different path"));
+            }
+            let at_path = match direct {
+                Some(row) => Some(row),
+                None if !path.as_str().ends_with(".md") => {
+                    let extended = VaultRelativePath::new(format!("{path}.md"))?;
+                    let row = lookup.record_at_path(&extended)?;
+                    if row.as_ref().is_some_and(|row| row.path != extended) {
+                        return Err(integrity("companion lookup returned a different path"));
+                    }
+                    row
+                }
+                None => None,
+            };
+            if let Some(row) = at_path {
+                if row.record.id() == target.record.id() {
+                    if row.path != target.path
+                        || row.hash != target.hash
+                        || row.record != target.record
+                    {
+                        return Err(integrity(
+                            "selected companion identity disagrees with index",
+                        ));
+                    }
+                } else {
+                    registry.push(RegistryEntry {
+                        id: row.record.id().clone(),
+                        kind: row.record.kind(),
+                        path: row.path,
+                        aliases: vec![],
+                    });
+                }
+            }
+        }
+    }
+    match resolve_typed(&registry, target.record.id(), target.record.kind(), value) {
+        LinkResolution::Resolved { .. } => Ok(()),
+        _ => Err(integrity(
+            "selected refresh companion conflicts with its identity",
+        )),
+    }
+}
+
+fn revision_matches(
+    captured: &mut Captured<'_>,
+    lookup: &dyn SourceRefreshLookup,
+    source: &RefreshRecord,
+    revision: &RefreshRecord,
+    request: &CaptureRequest,
+    extraction: &Extraction,
+) -> Result<bool> {
+    captured.authenticate(revision, RecordKind::Revision)?;
+    if revision.record.string("wiki_source_id") != Some(source.record.id().as_str()) {
+        return Err(integrity("selected retained revision ownership mismatch"));
+    }
+    companion(lookup, source, revision.record.string("wiki_source"))?;
+    let parent = revision
+        .path
+        .as_str()
+        .rsplit_once('/')
+        .ok_or_else(|| integrity("selected revision has no parent"))?
+        .0;
+    let original = captured.capture(&VaultRelativePath::new(format!(
+        "{parent}/{}",
+        revision
+            .record
+            .string("wiki_original_path")
+            .expect("canonical original path")
+    ))?)?;
+    if Some(original.hash.as_str()) != revision.record.string("wiki_original_hash") {
+        return Err(integrity("selected revision original hash mismatch"));
+    }
+    let original_matches = original.bytes == request.original;
+    let content_matches = if revision.record.string("wiki_extraction_status") == Some("complete") {
+        let content = captured.capture(&VaultRelativePath::new(format!(
+            "{parent}/{}",
+            revision
+                .record
+                .string("wiki_content_path")
+                .expect("canonical content path")
+        ))?)?;
+        if Some(content.hash.as_str()) != revision.record.string("wiki_content_hash") {
+            return Err(integrity("selected revision content hash mismatch"));
+        }
+        std::str::from_utf8(&content.bytes)
+            .map_err(|_| integrity("selected extracted content is not UTF-8"))?;
+        extraction.content.as_deref() == Some(content.bytes.as_slice())
+    } else {
+        extraction.content.is_none()
+    };
+    Ok(original_matches
+        && content_matches
+        && revision.record.string("wiki_extractor_fingerprint")
+            == Some(extraction.fingerprint.as_str()))
+}
+
+impl SourceStore {
+    pub(crate) fn plan_refresh_indexed(
+        &self,
+        lookup: &dyn SourceRefreshLookup,
+        source_id: &RecordId,
+        mut request: CaptureRequest,
+        explicit_title: Option<&str>,
+        limits: &SourceRefreshLimits,
+    ) -> Result<IndexedSourceRefreshPlan> {
+        if limits.max_file_bytes == 0
+            || limits.max_file_bytes > 64 * 1024 * 1024
+            || limits.max_canonical_bytes == 0
+            || limits.max_canonical_bytes > 256 * 1024 * 1024
+            || limits.max_retained_revisions == 0
+            || limits.max_retained_revisions > 100_000
+        {
+            return Err(budget("invalid selected refresh limits"));
+        }
+        if request.original.len() > limits.max_file_bytes
+            || matches!(&request.extraction, ExtractionInput::Supplied { content, .. } if content.len() > limits.max_file_bytes)
+        {
+            return Err(budget(
+                "refresh input exceeds byte ceiling before extraction",
+            ));
+        }
+        if lookup.snapshot().publication().is_none()
+            || lookup.snapshot().parser_fingerprint != crate::catalog::scan::parser_fingerprint()
+        {
+            return Err(WikiError::new(
+                ErrorCode::OfflineUnavailable,
+                "indexed refresh requires a compatible published snapshot",
+            ));
+        }
+        let base_snapshot = lookup.snapshot().clone();
+        let mut captured = Captured {
+            fs: &self.fs,
+            limits,
+            read_bytes: 0,
+            files: BTreeMap::new(),
+        };
+        let vault = unique(lookup, lookup.vault_id(), RecordKind::Vault)?;
+        if vault.path.as_str() != "WIKI.md" {
+            return Err(integrity(
+                "published vault identity is not bound to WIKI.md",
+            ));
+        }
+        captured.authenticate(&vault, RecordKind::Vault)?;
+        let source = unique(lookup, source_id, RecordKind::Source)?;
+        let source_note = captured.authenticate(&source, RecordKind::Source)?;
+        let retained = source
+            .record
+            .field("wiki_revisions")
+            .and_then(serde_json::Value::as_array)
+            .expect("canonical retained list");
+        if retained.len() > limits.max_retained_revisions {
+            return Err(budget("selected source retained revisions exceed ceiling"));
+        }
+        let revision_ids = retained
+            .iter()
+            .map(|value| RecordId::new(value.as_str().expect("canonical revision ID")))
+            .collect::<Result<Vec<_>>>()?;
+        let ids: BTreeSet<_> = revision_ids.iter().cloned().collect();
+        let old_head = RecordId::new(
+            source
+                .record
+                .string("wiki_current_revision")
+                .expect("canonical head"),
+        )?;
+        if ids.len() != retained.len() || !ids.contains(&old_head) {
+            return Err(integrity(
+                "source has duplicate revisions or an unretained head",
+            ));
+        }
+        let title = match explicit_title {
+            Some(title) if title.trim().is_empty() => {
+                return Err(WikiError::invalid("source title must not be empty"));
+            }
+            Some(title) => title,
+            None => source.record.title(),
+        };
+        let title_changed = title != source.record.title();
+        request.title = title.to_owned();
+        let extraction = extract(&request)?;
+        let signature = RevisionSignature {
+            original_hash: Blake3Hash::digest(&request.original),
+            content_hash: extraction.content.as_deref().map(Blake3Hash::digest),
+            extractor_fingerprint: extraction.fingerprint.clone(),
+        };
+        let head = unique(lookup, &old_head, RecordKind::Revision)?;
+        companion(lookup, &head, source.record.string("wiki_revision"))?;
+        let reused =
+            if revision_matches(&mut captured, lookup, &source, &head, &request, &extraction)? {
+                Some(head)
+            } else if let Some(candidate) = lookup.matching_revision(source_id, &signature)? {
+                if revision_ids.get(candidate.retained_ordinal)
+                    != Some(candidate.revision.record.id())
+                {
+                    return Err(integrity(
+                        "matching revision retained ordinal disagrees with canonical source",
+                    ));
+                }
+                let candidate = candidate.revision;
+                if candidate.record.kind() != RecordKind::Revision
+                    || !ids.contains(candidate.record.id())
+                {
+                    return Err(integrity(
+                        "matching revision is not retained by selected source",
+                    ));
+                }
+                let unique_candidate = unique(lookup, candidate.record.id(), RecordKind::Revision)?;
+                if candidate.path != unique_candidate.path
+                    || candidate.hash != unique_candidate.hash
+                    || candidate.record != unique_candidate.record
+                {
+                    return Err(integrity(
+                        "matching revision disagrees with unique indexed identity",
+                    ));
+                }
+                if !revision_matches(
+                    &mut captured,
+                    lookup,
+                    &source,
+                    &candidate,
+                    &request,
+                    &extraction,
+                )? {
+                    return Err(integrity(
+                        "matching revision signature disagrees with authenticated bytes",
+                    ));
+                }
+                Some(candidate)
+            } else {
+                None
+            };
+        let is_reused = reused.is_some();
+        let revision_id =
+            match &reused {
+                Some(revision) => revision.record.id().clone(),
+                None => {
+                    let mut allocated = None;
+                    for _ in 0..16 {
+                        let id = RecordId::generate(RecordKind::Revision)?;
+                        let path = VaultRelativePath::new(format!(
+                            "sources/{source_id}/revisions/{id}/revision.md"
+                        ))?;
+                        if !lookup.revision_identity_is_reserved(&id, &path)? {
+                            allocated = Some(id);
+                            break;
+                        }
+                    }
+                    allocated.ok_or_else(|| WikiError::new(
+                    ErrorCode::ReferenceAmbiguous,
+                    "could not allocate an unreferenced revision identity after 16 attempts",
+                ))?
+                }
+            };
+        let unchanged = is_reused && revision_id == old_head && !title_changed;
+        let (change, invalidation) = if unchanged {
+            (None, InvalidationInputs::default())
+        } else {
+            let mut operations = if is_reused {
+                vec![]
+            } else {
+                revision_writes(source_id, &revision_id, &source.path, &request, &extraction)?
+            };
+            let revision_path =
+                reused
+                    .as_ref()
+                    .map(|row| row.path.clone())
+                    .unwrap_or(VaultRelativePath::new(format!(
+                        "sources/{source_id}/revisions/{revision_id}/revision.md"
+                    ))?);
+            let mut revisions = retained.clone();
+            if !is_reused {
+                revisions.push(revision_id.as_str().into());
+            }
+            let mut changes = BTreeMap::from([
+                ("wiki_current_revision".into(), revision_id.as_str().into()),
+                (
+                    "wiki_revision".into(),
+                    format!("[[{revision_path}]]").into(),
+                ),
+                ("wiki_revisions".into(), serde_json::Value::Array(revisions)),
+            ]);
+            if title_changed {
+                changes.insert("title".into(), title.into());
+            }
+            operations.push(ExpectedWrite {
+                target: source.path.clone(),
+                expected: ExpectedState::Hash(source.hash.clone()),
+                proposed: Some(edit_note(&source_note, &changes, None, &source.hash)?),
+                apply_after: operations.iter().map(|op| op.target.clone()).collect(),
+            });
+            // The semantic projector discovers complete affected groups from
+            // old/new-head relationships. Enumerating all source assertions here
+            // would read unrelated historical support even for a title edit.
+            // Empty is an unpopulated hint, never proof that fanout is empty.
+            let assertions = Vec::new();
+            (
+                Some(draft(
+                    format!("Refresh {}", source.record.title()),
+                    operations,
+                    if is_reused {
+                        BTreeMap::new()
+                    } else {
+                        BTreeMap::from([("revision".into(), revision_id.clone())])
+                    },
+                )),
+                InvalidationInputs {
+                    source_ids: vec![source_id.clone()],
+                    revision_ids,
+                    assertion_ids: assertions,
+                },
+            )
+        };
+        let (captured, deps) = captured.finish()?;
+        let mut change = change;
+        if let Some(change) = &mut change {
+            change.read_preconditions = deps.clone();
+        }
+        Ok(IndexedSourceRefreshPlan {
+            plan: SourcePlan {
+                draft: change,
+                source_id: source_id.clone(),
+                revision_id,
+                reused: is_reused,
+                invalidation,
+                dependencies: deps,
+                capture_state: Some(extraction.capture_state()),
+            },
+            base_snapshot,
+            previous_revision: old_head,
+            captured,
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -722,8 +1098,10 @@ mod tests {
     fn byte_and_identity_list_budgets_precede_payload_allocation() {
         let fixture = Fixture::new(request(&vec![b'x'; 4096]));
         let lookup = fixture.lookup();
-        let mut limits = SourceRefreshLimits::default();
-        limits.max_file_bytes = 2048;
+        let mut limits = SourceRefreshLimits {
+            max_file_bytes: 2048,
+            ..Default::default()
+        };
         assert_eq!(
             fixture
                 .store
@@ -733,8 +1111,10 @@ mod tests {
                 .code,
             ErrorCode::BudgetExceeded
         );
-        limits = SourceRefreshLimits::default();
-        limits.max_canonical_bytes = 1;
+        limits = SourceRefreshLimits {
+            max_canonical_bytes: 1,
+            ..Default::default()
+        };
         assert_eq!(
             fixture
                 .store
@@ -746,8 +1126,10 @@ mod tests {
         );
         fixture.refresh(request(b"second"));
         let lookup = fixture.lookup();
-        limits = SourceRefreshLimits::default();
-        limits.max_retained_revisions = 1;
+        limits = SourceRefreshLimits {
+            max_retained_revisions: 1,
+            ..Default::default()
+        };
         assert_eq!(
             fixture
                 .store
@@ -796,381 +1178,5 @@ mod tests {
                 .code,
             ErrorCode::SourceIntegrity
         );
-    }
-}
-
-fn unique(
-    lookup: &dyn SourceRefreshLookup,
-    id: &RecordId,
-    kind: RecordKind,
-) -> Result<RefreshRecord> {
-    let row = lookup.unique_record(id)?.ok_or_else(|| {
-        WikiError::new(
-            ErrorCode::RecordNotFound,
-            format!("missing selected {kind} {id}"),
-        )
-    })?;
-    if row.record.id() != id || row.record.kind() != kind {
-        return Err(integrity(
-            "selected lookup returned another identity or kind",
-        ));
-    }
-    Ok(row)
-}
-
-/// Preserve typed navigation semantics: omitted/missing companions are stale,
-/// while an existing different identity at an exact path is a conflict.
-fn companion(
-    lookup: &dyn SourceRefreshLookup,
-    target: &RefreshRecord,
-    value: Option<&str>,
-) -> Result<()> {
-    let mut registry = vec![RegistryEntry {
-        id: target.record.id().clone(),
-        kind: target.record.kind(),
-        path: target.path.clone(),
-        aliases: vec![],
-    }];
-    if let Some(value) = value {
-        let path = value
-            .strip_prefix("[[")
-            .and_then(|value| value.strip_suffix("]]"))
-            .unwrap_or(value)
-            .split(['|', '#'])
-            .next()
-            .unwrap_or_default();
-        if let Ok(path) = VaultRelativePath::new(path) {
-            let direct = lookup.record_at_path(&path)?;
-            if direct.as_ref().is_some_and(|row| row.path != path) {
-                return Err(integrity("companion lookup returned a different path"));
-            }
-            let at_path = match direct {
-                Some(row) => Some(row),
-                None if !path.as_str().ends_with(".md") => {
-                    let extended = VaultRelativePath::new(format!("{path}.md"))?;
-                    let row = lookup.record_at_path(&extended)?;
-                    if row.as_ref().is_some_and(|row| row.path != extended) {
-                        return Err(integrity("companion lookup returned a different path"));
-                    }
-                    row
-                }
-                None => None,
-            };
-            if let Some(row) = at_path {
-                if row.record.id() == target.record.id() {
-                    if row.path != target.path
-                        || row.hash != target.hash
-                        || row.record != target.record
-                    {
-                        return Err(integrity(
-                            "selected companion identity disagrees with index",
-                        ));
-                    }
-                } else {
-                    registry.push(RegistryEntry {
-                        id: row.record.id().clone(),
-                        kind: row.record.kind(),
-                        path: row.path,
-                        aliases: vec![],
-                    });
-                }
-            }
-        }
-    }
-    match resolve_typed(&registry, target.record.id(), target.record.kind(), value) {
-        LinkResolution::Resolved { .. } => Ok(()),
-        _ => Err(integrity(
-            "selected refresh companion conflicts with its identity",
-        )),
-    }
-}
-
-fn revision_matches(
-    captured: &mut Captured<'_>,
-    lookup: &dyn SourceRefreshLookup,
-    source: &RefreshRecord,
-    revision: &RefreshRecord,
-    request: &CaptureRequest,
-    extraction: &Extraction,
-) -> Result<bool> {
-    captured.authenticate(revision, RecordKind::Revision)?;
-    if revision.record.string("wiki_source_id") != Some(source.record.id().as_str()) {
-        return Err(integrity("selected retained revision ownership mismatch"));
-    }
-    companion(lookup, source, revision.record.string("wiki_source"))?;
-    let parent = revision
-        .path
-        .as_str()
-        .rsplit_once('/')
-        .ok_or_else(|| integrity("selected revision has no parent"))?
-        .0;
-    let original = captured.capture(&VaultRelativePath::new(format!(
-        "{parent}/{}",
-        revision
-            .record
-            .string("wiki_original_path")
-            .expect("canonical original path")
-    ))?)?;
-    if Some(original.hash.as_str()) != revision.record.string("wiki_original_hash") {
-        return Err(integrity("selected revision original hash mismatch"));
-    }
-    let original_matches = original.bytes == request.original;
-    let content_matches = if revision.record.string("wiki_extraction_status") == Some("complete") {
-        let content = captured.capture(&VaultRelativePath::new(format!(
-            "{parent}/{}",
-            revision
-                .record
-                .string("wiki_content_path")
-                .expect("canonical content path")
-        ))?)?;
-        if Some(content.hash.as_str()) != revision.record.string("wiki_content_hash") {
-            return Err(integrity("selected revision content hash mismatch"));
-        }
-        std::str::from_utf8(&content.bytes)
-            .map_err(|_| integrity("selected extracted content is not UTF-8"))?;
-        extraction.content.as_deref() == Some(content.bytes.as_slice())
-    } else {
-        extraction.content.is_none()
-    };
-    Ok(original_matches
-        && content_matches
-        && revision.record.string("wiki_extractor_fingerprint")
-            == Some(extraction.fingerprint.as_str()))
-}
-
-impl SourceStore {
-    pub(crate) fn plan_refresh_indexed(
-        &self,
-        lookup: &dyn SourceRefreshLookup,
-        source_id: &RecordId,
-        mut request: CaptureRequest,
-        explicit_title: Option<&str>,
-        limits: &SourceRefreshLimits,
-    ) -> Result<IndexedSourceRefreshPlan> {
-        if limits.max_file_bytes == 0
-            || limits.max_file_bytes > 64 * 1024 * 1024
-            || limits.max_canonical_bytes == 0
-            || limits.max_canonical_bytes > 256 * 1024 * 1024
-            || limits.max_retained_revisions == 0
-            || limits.max_retained_revisions > 100_000
-        {
-            return Err(budget("invalid selected refresh limits"));
-        }
-        if request.original.len() > limits.max_file_bytes
-            || matches!(&request.extraction, ExtractionInput::Supplied { content, .. } if content.len() > limits.max_file_bytes)
-        {
-            return Err(budget(
-                "refresh input exceeds byte ceiling before extraction",
-            ));
-        }
-        if lookup.snapshot().publication().is_none()
-            || lookup.snapshot().parser_fingerprint != crate::catalog::scan::parser_fingerprint()
-        {
-            return Err(WikiError::new(
-                ErrorCode::OfflineUnavailable,
-                "indexed refresh requires a compatible published snapshot",
-            ));
-        }
-        let base_snapshot = lookup.snapshot().clone();
-        let mut captured = Captured {
-            fs: &self.fs,
-            limits,
-            read_bytes: 0,
-            files: BTreeMap::new(),
-        };
-        let vault = unique(lookup, lookup.vault_id(), RecordKind::Vault)?;
-        if vault.path.as_str() != "WIKI.md" {
-            return Err(integrity(
-                "published vault identity is not bound to WIKI.md",
-            ));
-        }
-        captured.authenticate(&vault, RecordKind::Vault)?;
-        let source = unique(lookup, source_id, RecordKind::Source)?;
-        let source_note = captured.authenticate(&source, RecordKind::Source)?;
-        let retained = source
-            .record
-            .field("wiki_revisions")
-            .and_then(serde_json::Value::as_array)
-            .expect("canonical retained list");
-        if retained.len() > limits.max_retained_revisions {
-            return Err(budget("selected source retained revisions exceed ceiling"));
-        }
-        let revision_ids = retained
-            .iter()
-            .map(|value| RecordId::new(value.as_str().expect("canonical revision ID")))
-            .collect::<Result<Vec<_>>>()?;
-        let ids: BTreeSet<_> = revision_ids.iter().cloned().collect();
-        let old_head = RecordId::new(
-            source
-                .record
-                .string("wiki_current_revision")
-                .expect("canonical head"),
-        )?;
-        if ids.len() != retained.len() || !ids.contains(&old_head) {
-            return Err(integrity(
-                "source has duplicate revisions or an unretained head",
-            ));
-        }
-        let title = match explicit_title {
-            Some(title) if title.trim().is_empty() => {
-                return Err(WikiError::invalid("source title must not be empty"));
-            }
-            Some(title) => title,
-            None => source.record.title(),
-        };
-        let title_changed = title != source.record.title();
-        request.title = title.to_owned();
-        let extraction = extract(&request)?;
-        let signature = RevisionSignature {
-            original_hash: Blake3Hash::digest(&request.original),
-            content_hash: extraction.content.as_deref().map(Blake3Hash::digest),
-            extractor_fingerprint: extraction.fingerprint.clone(),
-        };
-        let head = unique(lookup, &old_head, RecordKind::Revision)?;
-        companion(lookup, &head, source.record.string("wiki_revision"))?;
-        let reused =
-            if revision_matches(&mut captured, lookup, &source, &head, &request, &extraction)? {
-                Some(head)
-            } else if let Some(candidate) = lookup.matching_revision(source_id, &signature)? {
-                if revision_ids.get(candidate.retained_ordinal)
-                    != Some(candidate.revision.record.id())
-                {
-                    return Err(integrity(
-                        "matching revision retained ordinal disagrees with canonical source",
-                    ));
-                }
-                let candidate = candidate.revision;
-                if candidate.record.kind() != RecordKind::Revision
-                    || !ids.contains(candidate.record.id())
-                {
-                    return Err(integrity(
-                        "matching revision is not retained by selected source",
-                    ));
-                }
-                let unique_candidate = unique(lookup, candidate.record.id(), RecordKind::Revision)?;
-                if candidate.path != unique_candidate.path
-                    || candidate.hash != unique_candidate.hash
-                    || candidate.record != unique_candidate.record
-                {
-                    return Err(integrity(
-                        "matching revision disagrees with unique indexed identity",
-                    ));
-                }
-                if !revision_matches(
-                    &mut captured,
-                    lookup,
-                    &source,
-                    &candidate,
-                    &request,
-                    &extraction,
-                )? {
-                    return Err(integrity(
-                        "matching revision signature disagrees with authenticated bytes",
-                    ));
-                }
-                Some(candidate)
-            } else {
-                None
-            };
-        let is_reused = reused.is_some();
-        let revision_id =
-            match &reused {
-                Some(revision) => revision.record.id().clone(),
-                None => {
-                    let mut allocated = None;
-                    for _ in 0..16 {
-                        let id = RecordId::generate(RecordKind::Revision)?;
-                        let path = VaultRelativePath::new(format!(
-                            "sources/{source_id}/revisions/{id}/revision.md"
-                        ))?;
-                        if !lookup.revision_identity_is_reserved(&id, &path)? {
-                            allocated = Some(id);
-                            break;
-                        }
-                    }
-                    allocated.ok_or_else(|| WikiError::new(
-                    ErrorCode::ReferenceAmbiguous,
-                    "could not allocate an unreferenced revision identity after 16 attempts",
-                ))?
-                }
-            };
-        let unchanged = is_reused && revision_id == old_head && !title_changed;
-        let (change, invalidation) = if unchanged {
-            (None, InvalidationInputs::default())
-        } else {
-            let mut operations = if is_reused {
-                vec![]
-            } else {
-                revision_writes(source_id, &revision_id, &source.path, &request, &extraction)?
-            };
-            let revision_path =
-                reused
-                    .as_ref()
-                    .map(|row| row.path.clone())
-                    .unwrap_or(VaultRelativePath::new(format!(
-                        "sources/{source_id}/revisions/{revision_id}/revision.md"
-                    ))?);
-            let mut revisions = retained.clone();
-            if !is_reused {
-                revisions.push(revision_id.as_str().into());
-            }
-            let mut changes = BTreeMap::from([
-                ("wiki_current_revision".into(), revision_id.as_str().into()),
-                (
-                    "wiki_revision".into(),
-                    format!("[[{revision_path}]]").into(),
-                ),
-                ("wiki_revisions".into(), serde_json::Value::Array(revisions)),
-            ]);
-            if title_changed {
-                changes.insert("title".into(), title.into());
-            }
-            operations.push(ExpectedWrite {
-                target: source.path.clone(),
-                expected: ExpectedState::Hash(source.hash.clone()),
-                proposed: Some(edit_note(&source_note, &changes, None, &source.hash)?),
-                apply_after: operations.iter().map(|op| op.target.clone()).collect(),
-            });
-            // The semantic projector discovers complete affected groups from
-            // old/new-head relationships. Enumerating all source assertions here
-            // would read unrelated historical support even for a title edit.
-            // Empty is an unpopulated hint, never proof that fanout is empty.
-            let assertions = Vec::new();
-            (
-                Some(draft(
-                    format!("Refresh {}", source.record.title()),
-                    operations,
-                    if is_reused {
-                        BTreeMap::new()
-                    } else {
-                        BTreeMap::from([("revision".into(), revision_id.clone())])
-                    },
-                )),
-                InvalidationInputs {
-                    source_ids: vec![source_id.clone()],
-                    revision_ids,
-                    assertion_ids: assertions,
-                },
-            )
-        };
-        let (captured, deps) = captured.finish()?;
-        let mut change = change;
-        if let Some(change) = &mut change {
-            change.read_preconditions = deps.clone();
-        }
-        Ok(IndexedSourceRefreshPlan {
-            plan: SourcePlan {
-                draft: change,
-                source_id: source_id.clone(),
-                revision_id,
-                reused: is_reused,
-                invalidation,
-                dependencies: deps,
-                capture_state: Some(extraction.capture_state()),
-            },
-            base_snapshot,
-            previous_revision: old_head,
-            captured,
-        })
     }
 }

@@ -505,10 +505,10 @@ fn run_batch_with_mode<T: Send + 'static>(
                 Ok((outcome, delta)) => {
                     let diagnostics = delta.merge();
                     if let Err(error) = diagnostics {
-                        if outcome.is_err() {
-                            if let Some(pool) = &pool {
-                                pool.counters.panicked.fetch_add(1, Ordering::Relaxed);
-                            }
+                        if outcome.is_err()
+                            && let Some(pool) = &pool
+                        {
+                            pool.counters.panicked.fetch_add(1, Ordering::Relaxed);
                         }
                         results.push(Err(error));
                         if let Some(pool) = &pool {

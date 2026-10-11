@@ -132,8 +132,10 @@ fn span(start: usize, end: usize) -> ByteSpan {
     ByteSpan::new(start as u64, end as u64).unwrap()
 }
 fn request() -> ContextRequest {
-    let mut request = ContextRequest::default();
-    request.scope = super::super::context_types::ContextScope::IndexedDocuments;
+    let mut request = ContextRequest {
+        scope: super::super::context_types::ContextScope::IndexedDocuments,
+        ..Default::default()
+    };
     request.documents.limits.excerpt_bytes = 128;
     request
 }

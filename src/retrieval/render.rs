@@ -221,6 +221,7 @@ pub(crate) fn render_selected_document_for_test<'a>(
 
 /// Retained membership claims are discovery hints. Only an exact rerender of
 /// an authenticated current owner can bind them to its new selected proof.
+#[cfg(test)]
 pub(crate) fn require_selected_unit_agreement(
     retained: &RenderedUnit,
     current: &RenderedUnit,

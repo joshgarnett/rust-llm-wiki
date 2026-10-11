@@ -410,7 +410,7 @@ impl VectorStore {
         let actual_dimensions: Option<u32> = row.get(2).map_err(sql)?;
         let active: bool = row.get(3).map_err(sql)?;
         let state = (|| -> Result<SpaceState> {
-            let spec: SpaceSpec = serde_json::from_str(&spec).map_err(|_| {
+            let spec: SpaceSpec = serde_json::from_str(spec).map_err(|_| {
                 WikiError::new(ErrorCode::IndexCorrupt, "space configuration corrupt")
             })?;
             let id = Blake3Hash::new(id)?;
@@ -1241,6 +1241,10 @@ impl VectorStore {
 
     /// Stream the pinned compact inventory once, then retrieve descriptors only
     /// for winning owners by indexed lookup. These identities are never proofs.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "Exact scan keeps space identity, targets, requested bound, eligibility and selected-owner proof callbacks explicit"
+    )]
     pub(crate) fn exact_descriptor_stream<I, S, F, G>(
         &self,
         space: &Blake3Hash,
@@ -1923,7 +1927,7 @@ mod incremental_vector_tests {
         store
             .put_batch(
                 space,
-                &[unit.input_hash.clone()],
+                std::slice::from_ref(&unit.input_hash),
                 &[vector],
                 true,
                 &Blake3Hash::digest(b"mock input guard"),
@@ -2273,7 +2277,7 @@ mod incremental_vector_tests {
         store
             .put_batch_staged(
                 &space,
-                &[unit.input_hash.clone()],
+                std::slice::from_ref(&unit.input_hash),
                 &[vec![1.0, 0.0]],
                 true,
                 &Blake3Hash::digest(b"staged"),
@@ -2336,7 +2340,7 @@ mod incremental_vector_tests {
         store
             .put_batch_staged(
                 &space,
-                &[pending.input_hash.clone()],
+                std::slice::from_ref(&pending.input_hash),
                 &[vec![1.0, 0.0]],
                 true,
                 &Blake3Hash::digest(b"pending"),
