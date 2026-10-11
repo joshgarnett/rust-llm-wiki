@@ -18,6 +18,13 @@ Commit coherent, tested milestones as work progresses. Record the commit, valida
 
 Keep working plans, agent notes, reviews, session checkpoints and logs local under gitignored `.work/<task>/`. Preserve existing evidence under ignored execution paths or `.artifacts/`; do not relocate it solely for consistency. Keep user documentation, reusable developer instructions, implementation contracts/decisions and curated validation summaries tracked. Promote stable findings into those maintained documents; never commit working plans, raw logs, per-attempt reports or temporary state. An ignore rule does not untrack existing files: extract enduring guidance before removing old worklogs from the tracked tree, preserve local evidence and Git history, and ensure tracked documentation works in a fresh checkout without ignored files.
 
+## Writing guidelines
+
+Write clear, concise, professional prose. Use plain English when possible so non-native readers can follow it easily. Avoid marketing language, em dashes, emojis, stock AI phrases and formulaic AI grammar. State concrete behavior, evidence and limitations directly. Keep code and quoted evidence exact when wording or bytes matter. Apply these guidelines to user documentation, developer guidance and agent reports.
+
+Keep working plans, agent notes, reviews, session checkpoints and logs local under gitignored `.work/<task>/`. Preserve existing evidence under ignored execution paths or `.artifacts/`; do not relocate it solely for consistency. Keep user documentation, reusable developer instructions, implementation contracts/decisions and curated validation summaries tracked. Promote stable findings into those maintained documents; never commit working plans, raw logs, per-attempt reports or temporary state. An ignore rule does not untrack existing files: extract enduring guidance before removing old worklogs from the tracked tree, preserve local evidence and Git history, and ensure tracked documentation works in a fresh checkout without ignored files.
+
+
 ## Delegate for independent judgment
 
 Use subagents when a task benefits from independent research, a bounded implementation, adversarial testing or a fresh architectural perspective. Give each agent a concrete question, relevant files, exclusive write paths, constraints and a required evidence artifact. Prefer fresh context for critics and broad design reviews; implementation history can anchor their judgment. Respect available slots, serialize shared builds and keep integration with the orchestrator. Do not create parallel workers for tightly dependent edits or let a worker's self-review substitute for independent acceptance.
