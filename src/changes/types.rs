@@ -1,4 +1,4 @@
-//! Retained changeset format v1. Shared definitions are orchestrator-owned.
+//! Versioned retained changesets. Shared definitions are orchestrator-owned.
 use crate::{
     domain::{Blake3Hash, ReadSnapshot, RecordId, Result, VaultRelativePath},
     vault::{ExpectedState, VaultFs, WriterPermit},
@@ -53,6 +53,14 @@ pub struct ChangeOp {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct RevisionTreeGroup {
+    pub root: VaultRelativePath,
+    /// Exact ascending indices into the manifest's per-file operations.
+    pub members: Vec<usize>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ChangeManifest {
     pub version: u32,
     pub vault_id: RecordId,
@@ -66,6 +74,9 @@ pub struct ChangeManifest {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub read_preconditions: Vec<ReadDependency>,
     pub operations: Vec<ChangeOp>,
+    /// Version 3 only; omitted for exact legacy manifest serialization.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub revision_trees: Vec<RevisionTreeGroup>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -207,6 +218,12 @@ pub enum ChangeEvent {
     },
     Done {
         op: usize,
+    },
+    TreeIntent {
+        group: usize,
+    },
+    TreeDone {
+        group: usize,
     },
     FilesApplied,
     Indexed {

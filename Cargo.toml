@@ -18,6 +18,8 @@ path = "src/main.rs"
 default = []
 # Private developer instrumentation; also requires explicit runtime opt-in.
 maintenance-diagnostic029 = []
+# Isolated development writer; complete workflow/performance acceptance is pending.
+experimental-revision-tree-install = []
 
 [dependencies]
 blake3 = "=1.8.5"

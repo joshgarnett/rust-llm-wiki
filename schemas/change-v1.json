@@ -19,9 +19,10 @@
     "version": {
       "enum": [
         1,
-        2
+        2,
+        3
       ],
-      "description": "Version 2 uses shared immutable payload objects and requires vault storage layout 2. Legacy version 1 manifests retain their exact identity."
+      "description": "Versions 2 and 3 use shared immutable payload objects and require vault storage layout 2. Experimental version 3 commits exact complete Revision installation groups; old versions retain their exact identity."
     },
     "vault_id": {
       "$ref": "#/$defs/id"
@@ -85,6 +86,34 @@
           },
           "expected": {
             "$ref": "#/$defs/state"
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "revision_trees": {
+      "type": "array",
+      "maxItems": 16,
+      "description": "Version 3 only. Exact complete three-member Revision groups; engine verifies root identity, payload semantics and contracted dependency ordering. Old manifests omit this field.",
+      "items": {
+        "type": "object",
+        "required": [
+          "root",
+          "members"
+        ],
+        "properties": {
+          "root": {
+            "$ref": "#/$defs/path"
+          },
+          "members": {
+            "type": "array",
+            "minItems": 3,
+            "maxItems": 3,
+            "uniqueItems": true,
+            "items": {
+              "type": "integer",
+              "minimum": 0
+            }
           }
         },
         "additionalProperties": false
@@ -243,5 +272,33 @@
       },
       "additionalProperties": false
     }
-  }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "version": {
+            "const": 3
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "revision_trees"
+        ],
+        "properties": {
+          "revision_trees": {
+            "minItems": 1
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "revision_trees": {
+            "maxItems": 0
+          }
+        }
+      }
+    }
+  ]
 }

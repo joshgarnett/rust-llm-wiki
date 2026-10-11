@@ -11,6 +11,12 @@ use std::{
     sync::Arc,
 };
 
+#[cfg(any(test, feature = "experimental-revision-tree-install"))]
+#[path = "fs_tree.rs"]
+mod tree_install;
+#[cfg(any(test, feature = "experimental-revision-tree-install"))]
+pub(crate) use tree_install::StagedRevisionTree;
+
 /// A bounded regular-file observation with fresh namespace checks on both sides.
 /// Unix nonblocking opens reject raced special files without stranding joined jobs.
 pub(crate) fn read_regular_bounded(
@@ -338,6 +344,12 @@ pub trait DurableIo: Send + Sync {
     fn write_stage(&self, file: &mut File, bytes: &[u8]) -> std::io::Result<()>;
     fn sync_file(&self, file: &File) -> std::io::Result<()>;
     fn replace(&self, staged: &Path, target: &Path) -> std::io::Result<()>;
+    fn supports_directory_install(&self) -> bool {
+        false
+    }
+    fn install_directory_noreplace(&self, _staged: &Path, _target: &Path) -> std::io::Result<()> {
+        Err(std::io::ErrorKind::Unsupported.into())
+    }
     fn remove(&self, target: &Path) -> std::io::Result<()>;
     fn remove_directory(&self, target: &Path) -> std::io::Result<()> {
         fs::remove_dir(target)
@@ -348,6 +360,14 @@ pub trait DurableIo: Send + Sync {
 #[derive(Debug, Default)]
 pub struct NativeIo;
 impl DurableIo for NativeIo {
+    #[cfg(any(test, feature = "experimental-revision-tree-install"))]
+    fn supports_directory_install(&self) -> bool {
+        tree_install::native_directory_install_supported()
+    }
+    #[cfg(any(test, feature = "experimental-revision-tree-install"))]
+    fn install_directory_noreplace(&self, staged: &Path, target: &Path) -> std::io::Result<()> {
+        tree_install::rename_directory_noreplace(staged, target)
+    }
     fn create_stage(&self, path: &Path) -> std::io::Result<File> {
         OpenOptions::new().write(true).create_new(true).open(path)
     }

@@ -1,4 +1,10 @@
 //! Guarded public batch workflows in disposable normalized vaults; no providers.
+#[cfg(all(
+    feature = "experimental-revision-tree-install",
+    any(target_os = "macos", target_os = "linux")
+))]
+#[path = "revision_tree_workflow_tests.rs"]
+mod revision_tree_workflow_tests;
 use super::{
     OfflineApp, OperationOptions, PageSourceRefs, ReadRequest, RecordSelector,
     SourceRefreshBatchItem, SourceRefreshBatchRequest, offline::init,
@@ -664,8 +670,65 @@ fn source_authored_body_and_long_retained_inventory_survive_batch_head_change() 
         fs::write(&source_path, source_bytes).unwrap();
         f.app().index_sync(false).unwrap();
         let history_root = f.physical(format!("sources/{source}/revisions"));
+        // Census canonical roots against the Source's exact retained identity
+        // inventory. Only the scanner-reserved exact .wiki namespace is excluded.
+        let canonical_inventory = || {
+            let head = f.head(source).record.unwrap();
+            let declared = head
+                .field("wiki_revisions")
+                .unwrap()
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|value| RecordId::new(value.as_str().unwrap()).unwrap())
+                .collect::<std::collections::BTreeSet<_>>();
+            assert_eq!(
+                declared.len(),
+                head.field("wiki_revisions")
+                    .unwrap()
+                    .as_array()
+                    .unwrap()
+                    .len(),
+                "Source retained Revision IDs must be distinct"
+            );
+            let mut physical = std::collections::BTreeSet::new();
+            for entry in fs::read_dir(&history_root).unwrap() {
+                let entry = entry.unwrap();
+                if entry.file_name() == std::ffi::OsStr::new(".wiki") {
+                    continue;
+                }
+                let name = entry
+                    .file_name()
+                    .into_string()
+                    .expect("canonical Revision directory must be UTF-8");
+                let metadata = fs::symlink_metadata(entry.path()).unwrap();
+                assert!(
+                    metadata.is_dir() && !metadata.file_type().is_symlink(),
+                    "unfamiliar noncanonical Revision root entry: {name}"
+                );
+                let id = RecordId::new(name.clone())
+                    .expect("canonical Revision root must have valid ID");
+                let record = fs::symlink_metadata(entry.path().join("revision.md")).unwrap_or_else(
+                    |error| panic!("Revision root {name} lacks canonical revision.md: {error}"),
+                );
+                assert!(
+                    record.is_file() && !record.file_type().is_symlink(),
+                    "Revision root {name} requires ordinary revision.md"
+                );
+                assert!(
+                    physical.insert(id),
+                    "duplicate physical Revision identity: {name}"
+                );
+            }
+            assert_eq!(
+                physical, declared,
+                "physical canonical Revision roots must exactly match Source wiki_revisions"
+            );
+            declared
+        };
+        let old_inventory = canonical_inventory();
+        assert_eq!(old_inventory.len(), 13);
         let old_history = canonical_snapshot(&history_root);
-        assert_eq!(fs::read_dir(&history_root).unwrap().count(), 13);
         let result = f
             .app()
             .source_refresh_batch_file(
@@ -679,7 +742,19 @@ fn source_authored_body_and_long_retained_inventory_survive_batch_head_change() 
         for (path, bytes) in old_history {
             assert_eq!(fs::read(history_root.join(path)).unwrap(), bytes);
         }
-        assert_eq!(fs::read_dir(&history_root).unwrap().count(), 14);
+        let new_inventory = canonical_inventory();
+        assert_eq!(new_inventory.len(), 14);
+        let new_revision = result.items[0].revision_id.as_ref().unwrap();
+        assert!(
+            !old_inventory.contains(new_revision),
+            "batch must allocate one fresh Revision"
+        );
+        let mut expected_inventory = old_inventory;
+        assert!(expected_inventory.insert(new_revision.clone()));
+        assert_eq!(
+            new_inventory, expected_inventory,
+            "batch retained inventory must add only its returned Revision allocation"
+        );
         let head = f.head(source).record.unwrap();
         assert_eq!(
             head.field("wiki_revisions")

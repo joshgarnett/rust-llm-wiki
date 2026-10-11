@@ -640,6 +640,12 @@ enum BatchRecoveryCut {
     RetainedBaseline,
     ActiveIntent,
     FirstAsset,
+    TreeIntent,
+    TreeRename,
+    TreeBeforeDone,
+    TreeDone,
+    TreeDoneTorn,
+    FirstHeadBefore,
     FirstSource,
     FilesApplied,
     SqlBeforeCommit,
@@ -652,6 +658,12 @@ impl BatchRecoveryCut {
             Self::RetainedBaseline => "retained_baseline",
             Self::ActiveIntent => "active_intent",
             Self::FirstAsset => "first_asset",
+            Self::TreeIntent => "durable_tree_intent_before_install",
+            Self::TreeRename => "tree_rename_before_parent_syncs",
+            Self::TreeBeforeDone => "both_tree_parents_before_done",
+            Self::TreeDone => "durable_tree_done_before_head",
+            Self::TreeDoneTorn => "torn_tree_done_tail",
+            Self::FirstHeadBefore => "tree_done_before_first_head_replace",
             Self::FirstSource => "between_source_pointers",
             Self::FilesApplied => "files_applied",
             Self::SqlBeforeCommit => "sql_before_commit",
@@ -664,6 +676,12 @@ impl BatchRecoveryCut {
             Self::RetainedBaseline,
             Self::ActiveIntent,
             Self::FirstAsset,
+            Self::TreeIntent,
+            Self::TreeRename,
+            Self::TreeBeforeDone,
+            Self::TreeDone,
+            Self::TreeDoneTorn,
+            Self::FirstHeadBefore,
             Self::FirstSource,
             Self::FilesApplied,
             Self::SqlBeforeCommit,
@@ -677,6 +695,8 @@ impl BatchRecoveryCut {
 }
 struct BatchCutControl {
     cut: BatchRecoveryCut,
+    revision_tree: bool,
+    boundary_edit: Option<(std::path::PathBuf, Vec<u8>)>,
     fired: std::sync::atomic::AtomicBool,
     marker: Option<std::path::PathBuf>,
     proof_file: std::path::PathBuf,
@@ -685,6 +705,10 @@ impl BatchCutControl {
     fn reached(&self) -> std::io::Result<()> {
         use std::sync::atomic::Ordering;
         if self.fired.swap(true, Ordering::SeqCst) {
+            return Ok(());
+        }
+        if let Some((target, bytes)) = &self.boundary_edit {
+            fs::write(target, bytes)?;
             return Ok(());
         }
         if let Some(marker) = &self.marker {
@@ -705,6 +729,25 @@ struct BatchCutIo {
     terminal_parent: std::sync::Mutex<Option<std::path::PathBuf>>,
 }
 impl crate::vault::DurableIo for BatchCutIo {
+    fn supports_directory_install(&self) -> bool {
+        self.control.revision_tree
+            && crate::vault::DurableIo::supports_directory_install(&crate::vault::NativeIo)
+    }
+    fn install_directory_noreplace(
+        &self,
+        staged: &std::path::Path,
+        target: &std::path::Path,
+    ) -> std::io::Result<()> {
+        crate::vault::DurableIo::install_directory_noreplace(
+            &crate::vault::NativeIo,
+            staged,
+            target,
+        )?;
+        if self.control.cut == BatchRecoveryCut::TreeRename {
+            self.control.reached()?;
+        }
+        Ok(())
+    }
     fn create_stage(&self, p: &std::path::Path) -> std::io::Result<fs::File> {
         crate::vault::DurableIo::create_stage(&crate::vault::NativeIo, p)
     }
@@ -721,11 +764,27 @@ impl crate::vault::DurableIo for BatchCutIo {
         crate::vault::DurableIo::truncate_file(&crate::vault::NativeIo, f, n)
     }
     fn write_stage(&self, f: &mut fs::File, b: &[u8]) -> std::io::Result<()> {
+        let is_frame = b.starts_with(b"LWJNL001");
+        let has_event = |name: &str| {
+            let event = format!("\"event\":\"{name}\"");
+            is_frame
+                && b.windows(event.len())
+                    .any(|window| window == event.as_bytes())
+        };
+        if has_event("tree_done") && self.control.cut == BatchRecoveryCut::TreeBeforeDone {
+            self.control.reached()?;
+        }
+        if has_event("tree_done")
+            && self.control.cut == BatchRecoveryCut::TreeDoneTorn
+            && !self.control.fired.load(std::sync::atomic::Ordering::SeqCst)
+        {
+            crate::vault::DurableIo::write_stage(&crate::vault::NativeIo, f, &b[..b.len() / 2])?;
+            self.control.reached()?;
+        }
         crate::vault::DurableIo::write_stage(&crate::vault::NativeIo, f, b)?;
-        let event = b"\"event\":\"files_applied\"";
-        if self.control.cut == BatchRecoveryCut::FilesApplied
-            && b.starts_with(b"LWJNL001")
-            && b.windows(event.len()).any(|window| window == event)
+        if (self.control.cut == BatchRecoveryCut::FilesApplied && has_event("files_applied"))
+            || (self.control.cut == BatchRecoveryCut::TreeIntent && has_event("tree_intent"))
+            || (self.control.cut == BatchRecoveryCut::TreeDone && has_event("tree_done"))
         {
             self.journal_armed
                 .store(true, std::sync::atomic::Ordering::SeqCst);
@@ -743,6 +802,11 @@ impl crate::vault::DurableIo for BatchCutIo {
         Ok(())
     }
     fn replace(&self, staged: &std::path::Path, target: &std::path::Path) -> std::io::Result<()> {
+        if self.control.cut == BatchRecoveryCut::FirstHeadBefore
+            && target.file_name().is_some_and(|name| name == "source.md")
+        {
+            self.control.reached()?;
+        }
         crate::vault::DurableIo::replace(&crate::vault::NativeIo, staged, target)?;
         if self.control.cut == BatchRecoveryCut::TerminalReceipt
             && target
@@ -855,6 +919,8 @@ fn batch_control(
 ) -> std::sync::Arc<BatchCutControl> {
     std::sync::Arc::new(BatchCutControl {
         cut,
+        revision_tree: false,
+        boundary_edit: None,
         fired: std::sync::atomic::AtomicBool::new(false),
         marker: native.then(|| fixture.fs.root().path().join(".wiki/batch-crash-ready")),
         proof_file: fixture
@@ -870,14 +936,40 @@ fn batch_project_two(
     QuerySnapshot,
     super::super::write_projection::ProjectedWrite,
 ) {
+    batch_project_two_mode(fixture, false)
+}
+fn batch_project_two_mode(
+    fixture: &Fixture,
+    revision_tree: bool,
+) -> (
+    QuerySnapshot,
+    super::super::write_projection::ProjectedWrite,
+) {
     let other = batch_other_source(fixture);
-    let (reader, plans) = batch_plans(
-        fixture,
-        &[
-            (&fixture.source, b"new batch first", None),
-            (&other, b"new batch other", None),
-        ],
-    );
+    let reader = fixture
+        .catalog
+        .query_snapshot(QueryReadLimits::default())
+        .unwrap();
+    let store = SourceStore::new(fixture.fs.clone());
+    let plans = [&fixture.source, &other]
+        .into_iter()
+        .zip([b"new batch first".as_slice(), b"new batch other".as_slice()])
+        .map(|(source, bytes)| {
+            let mut request = Fixture::request(bytes);
+            if revision_tree {
+                request.media_type = Some("text/plain".into());
+            }
+            store
+                .plan_refresh_indexed(
+                    &reader,
+                    source,
+                    request,
+                    None,
+                    &SourceRefreshLimits::default(),
+                )
+                .unwrap()
+        })
+        .collect();
     let projected = project_refresh_batch(
         &fixture.fs,
         &reader,
@@ -1214,15 +1306,19 @@ fn refresh_batch_terminal_receipt_before_authority_cleanup_returned_error_both_l
     }
 }
 fn batch_returned_error_cuts(managed: bool, cuts: &[BatchRecoveryCut]) {
+    batch_returned_error_cuts_mode(managed, cuts, false);
+}
+fn batch_returned_error_cuts_mode(managed: bool, cuts: &[BatchRecoveryCut], revision_tree: bool) {
     use crate::changes::indexed_refresh::IndexedRefreshPhase;
     for &cut in cuts {
         let fixture = batch_cut_fixture(managed);
+        let unrelated_page = fs::read(fixture.fs.root().path().join("navigation.md")).unwrap();
         let unknown = b"unindexed unrelated bytes survive bounded recovery";
         fixture.write("unknown.bin", unknown);
-        let (held_reader, projected) = batch_project_two(&fixture);
+        let (held_reader, projected) = batch_project_two_mode(&fixture, revision_tree);
         let old = batch_old_immutable_bytes(&fixture, &held_reader);
         let old_source = held_reader.record(&fixture.source).unwrap().unwrap();
-        let control = batch_control(&fixture, cut, false);
+        let control = batch_control_mode(&fixture, cut, false, revision_tree);
         let faulty = batch_fault_catalog(&fixture, &control);
         let engine = ChangeEngine::new(faulty.fs().clone()).unwrap();
         let proof = if cut == BatchRecoveryCut::RetainedBaseline {
@@ -1259,6 +1355,10 @@ fn batch_returned_error_cuts(managed: bool, cuts: &[BatchRecoveryCut]) {
             control.fired.load(std::sync::atomic::Ordering::SeqCst),
             "cut actually reached {cut:?}"
         );
+        batch_assert_executor(&fixture, &proof, revision_tree);
+        if revision_tree {
+            batch_assert_tree_cut(&fixture, &proof, cut);
+        }
         assert_eq!(
             held_reader.record(&fixture.source).unwrap(),
             Some(old_source)
@@ -1294,8 +1394,16 @@ fn batch_returned_error_cuts(managed: bool, cuts: &[BatchRecoveryCut]) {
             batch_assert_terminal_cut(&fixture, &proof);
         }
         drop(held_reader);
+        let expected = proof.clone();
         let fixture = batch_recover_exact_once(fixture, proof);
         batch_assert_preserved(&fixture, &old, unknown);
+        assert_eq!(
+            fs::read(fixture.fs.root().path().join("navigation.md")).unwrap(),
+            unrelated_page
+        );
+        if revision_tree {
+            batch_assert_tree_oracles(&fixture, &expected, &old);
+        }
     }
 }
 
@@ -1310,8 +1418,12 @@ fn refresh_batch_native_crash_child() {
         expected_layout == "managed"
     );
     let cut = BatchRecoveryCut::parse(&std::env::var("LWIKI_BATCH_CRASH_CUT").unwrap());
+    let revision_tree =
+        std::env::var("LWIKI_BATCH_CRASH_EXECUTOR").is_ok_and(|mode| mode == "tree3");
     let control = std::sync::Arc::new(BatchCutControl {
         cut,
+        revision_tree,
+        boundary_edit: None,
         fired: std::sync::atomic::AtomicBool::new(false),
         marker: Some(root.path().join(".wiki/batch-crash-ready")),
         proof_file: root.path().join(".wiki/batch-crash-proof.json"),
@@ -1328,11 +1440,15 @@ fn refresh_batch_native_crash_child() {
         .iter()
         .zip([b"new batch first".as_slice(), b"new batch other".as_slice()])
         .map(|(source, bytes)| {
+            let mut request = Fixture::request(bytes);
+            if revision_tree {
+                request.media_type = Some("text/plain".into());
+            }
             store
                 .plan_refresh_indexed(
                     &reader,
                     source,
-                    Fixture::request(bytes),
+                    request,
                     None,
                     &SourceRefreshLimits::default(),
                 )
@@ -1397,9 +1513,14 @@ fn refresh_batch_terminal_receipt_before_authority_cleanup_native_sigkill_both_l
 }
 #[cfg(unix)]
 fn batch_native_sigkill_cuts(managed: bool, cuts: &[BatchRecoveryCut]) {
+    batch_native_sigkill_cuts_mode(managed, cuts, false);
+}
+#[cfg(unix)]
+fn batch_native_sigkill_cuts_mode(managed: bool, cuts: &[BatchRecoveryCut], revision_tree: bool) {
     use std::os::unix::process::ExitStatusExt;
     for &cut in cuts {
         let fixture = batch_cut_fixture(managed);
+        let unrelated_page = fs::read(fixture.fs.root().path().join("navigation.md")).unwrap();
         let other = batch_other_source(&fixture);
         let unknown = b"native batch kill preserves unrelated unknown bytes";
         fixture.write("unknown.bin", unknown);
@@ -1435,6 +1556,10 @@ fn batch_native_sigkill_cuts(managed: bool, cuts: &[BatchRecoveryCut]) {
             .args(["--exact", &child_name, "--ignored", "--nocapture"])
             .env("LWIKI_BATCH_CRASH_VAULT", fs_handle.root().path())
             .env("LWIKI_BATCH_CRASH_CUT", cut.name())
+            .env(
+                "LWIKI_BATCH_CRASH_EXECUTOR",
+                if revision_tree { "tree3" } else { "file2" },
+            )
             .env(
                 "LWIKI_BATCH_CRASH_LAYOUT",
                 if managed { "managed" } else { "original" },
@@ -1489,6 +1614,10 @@ fn batch_native_sigkill_cuts(managed: bool, cuts: &[BatchRecoveryCut]) {
             Some(old_source),
             "held reader keeps original publication across {cut:?}"
         );
+        batch_assert_executor(&fixture, &proof, revision_tree);
+        if revision_tree {
+            batch_assert_tree_cut(&fixture, &proof, cut);
+        }
         batch_assert_preserved(&fixture, &old, unknown);
         if cut == BatchRecoveryCut::FirstSource {
             let changed = batch_recovery_targets(&proof)
@@ -1519,8 +1648,16 @@ fn batch_native_sigkill_cuts(managed: bool, cuts: &[BatchRecoveryCut]) {
             batch_assert_terminal_cut(&fixture, &proof);
         }
         drop(held_reader);
+        let expected = proof.clone();
         let fixture = batch_recover_exact_once(fixture, proof);
         batch_assert_preserved(&fixture, &old, unknown);
+        assert_eq!(
+            fs::read(fixture.fs.root().path().join("navigation.md")).unwrap(),
+            unrelated_page
+        );
+        if revision_tree {
+            batch_assert_tree_oracles(&fixture, &expected, &old);
+        }
     }
 }
 
@@ -2536,7 +2673,7 @@ fn refresh_batch_rechecksummed_historical_head_revision_row_owner_path_and_title
 // Frozen prospectively against operator/cli-acceptance-002.py. Only physical
 // SQLite row IDs and publication/build bookkeeping are excluded; cache-unit
 // state is compared in full (this fixture intentionally has no unit policy).
-const BATCH_LOGICAL_TABLES: [&str; 23] = [
+const BATCH_LOGICAL_TABLES: [&str; 25] = [
     "documents",
     "graph_rows",
     "records",
@@ -2544,6 +2681,8 @@ const BATCH_LOGICAL_TABLES: [&str; 23] = [
     "source_revision_identity",
     "source_evidence",
     "revision_tree_owners",
+    "relation_annotations",
+    "relation_dependencies",
     "links",
     "assertion_navigation_keys",
     "opposition_members",
@@ -2634,6 +2773,13 @@ fn batch_complete_projection(
         result.insert(format!("{table}_columns"), vec![columns]);
         result.insert(table.into(), batch_sql_rows(connection, &query));
     }
+    for table in ["relation_annotations", "relation_dependencies"] {
+        result.insert(
+            format!("{table}_schema_full"),
+            batch_sql_rows(connection, &format!("PRAGMA table_info({table})")),
+        );
+    }
+    result.insert("relation_layout_sql".into(), batch_sql_rows(connection, "SELECT type,name,tbl_name,sql FROM sqlite_master WHERE tbl_name IN ('relation_annotations','relation_dependencies') ORDER BY type,name"));
     result.insert("catalog_meta_stable".into(), batch_sql_rows(connection,
         "SELECT schema_version,vault_id,parser_hash,state,vector_cache_lost,vector_loss_unknown,revision_ownership_version,proof_layout_version FROM catalog_meta"));
     result.insert("documents_fts_terms".into(), batch_sql_rows(connection,
@@ -2764,7 +2910,7 @@ fn batch_public_read_citation(
     }
 }
 #[test]
-fn refresh_batch_complete_23_table_oracle_and_public_cited_results() {
+fn refresh_batch_complete_25_table_oracle_and_public_cited_results() {
     use crate::retrieval::{
         ContextRequest, ContextScope, QueryPlan, SearchFilters, lexical, verification,
     };
@@ -3628,4 +3774,1038 @@ fn batch_visible_inventory(fixture: &Fixture) -> BTreeMap<std::path::PathBuf, Ve
         }
     }
     result
+}
+
+// Explicit candidate arm of the established cut protocol. Keeping this bit in
+// the injected adapter makes every original matrix continue exercising v1/v2.
+fn batch_control_mode(
+    fixture: &Fixture,
+    cut: BatchRecoveryCut,
+    native: bool,
+    revision_tree: bool,
+) -> std::sync::Arc<BatchCutControl> {
+    std::sync::Arc::new(BatchCutControl {
+        cut,
+        revision_tree,
+        boundary_edit: None,
+        fired: std::sync::atomic::AtomicBool::new(false),
+        marker: native.then(|| fixture.fs.root().path().join(".wiki/batch-crash-ready")),
+        proof_file: fixture
+            .fs
+            .root()
+            .path()
+            .join(".wiki/batch-crash-proof.json"),
+    })
+}
+fn batch_assert_executor(
+    fixture: &Fixture,
+    proof: &crate::changes::indexed_refresh::IndexedRefreshProof,
+    revision_tree: bool,
+) {
+    let engine = ChangeEngine::new(fixture.fs.clone()).unwrap();
+    let (manifest, hash) = engine
+        .load_manifest_structure(&proof.change.change_id)
+        .unwrap();
+    assert_eq!(
+        hash, proof.change.manifest_hash,
+        "cut preserves original retained allocation binding"
+    );
+    assert_eq!(
+        manifest.version,
+        if revision_tree {
+            3
+        } else if crate::storage::layout::active(fixture.fs.root()).unwrap() {
+            2
+        } else {
+            1
+        },
+        "actual executor manifest version, never silent fallback"
+    );
+    assert_eq!(
+        manifest.revision_trees.len(),
+        if revision_tree { 2 } else { 0 }
+    );
+    let state = crate::changes::journal::load_journal(&fixture.fs, &manifest, &hash).unwrap();
+    assert!(
+        !state.frames.is_empty(),
+        "cut has authenticated lifecycle frames"
+    );
+    assert!(
+        state
+            .frames
+            .iter()
+            .all(|frame| frame.version == if revision_tree { 2 } else { 1 }),
+        "actual typed frame version"
+    );
+}
+fn batch_assert_tree_oracles(
+    fixture: &Fixture,
+    proof: &crate::changes::indexed_refresh::IndexedRefreshProof,
+    old: &BTreeMap<VaultRelativePath, Vec<u8>>,
+) {
+    batch_assert_executor(fixture, proof, true);
+    let engine = ChangeEngine::new(fixture.fs.clone()).unwrap();
+    let (manifest, hash) = engine
+        .load_manifest_structure(&proof.change.change_id)
+        .unwrap();
+    let state = crate::changes::journal::load_journal(&fixture.fs, &manifest, &hash).unwrap();
+    assert!(
+        !state.torn_tail,
+        "ordinary restart repairs the final torn frame"
+    );
+    for group in &manifest.revision_trees {
+        assert_eq!(
+            fs::read_dir(fixture.fs.root().path().join(group.root.as_str()))
+                .unwrap()
+                .count(),
+            3,
+            "original exact complete allocation"
+        );
+        for &member in &group.members {
+            let op = &manifest.operations[member];
+            assert_eq!(
+                crate::vault::ExpectedState::Hash(Blake3Hash::digest(
+                    fs::read(fixture.fs.root().path().join(op.target.as_str())).unwrap()
+                )),
+                op.after
+            );
+        }
+    }
+    for target in batch_recovery_targets(proof) {
+        let current_path = path(&format!(
+            "sources/{}/revisions/{}/content.md",
+            target.source_id, target.revision_id
+        ));
+        let current = fs::read(fixture.fs.root().path().join(current_path.as_str())).unwrap();
+        batch_public_read_citation(
+            fixture,
+            &target.source_id,
+            &target.revision_id,
+            &current,
+            false,
+        );
+        let old_path = path(&format!(
+            "sources/{}/revisions/{}/content.md",
+            target.source_id, target.previous_revision_id
+        ));
+        batch_public_read_citation(
+            fixture,
+            &target.source_id,
+            &target.previous_revision_id,
+            &old[&old_path],
+            true,
+        );
+    }
+    batch_complete_oracle(fixture);
+}
+#[cfg(feature = "experimental-revision-tree-install")]
+const BATCH_TREE_CUTS: [BatchRecoveryCut; 13] = [
+    BatchRecoveryCut::RetainedBaseline,
+    BatchRecoveryCut::ActiveIntent,
+    BatchRecoveryCut::TreeIntent,
+    BatchRecoveryCut::TreeRename,
+    BatchRecoveryCut::TreeBeforeDone,
+    BatchRecoveryCut::TreeDone,
+    BatchRecoveryCut::TreeDoneTorn,
+    BatchRecoveryCut::FirstHeadBefore,
+    BatchRecoveryCut::FirstSource,
+    BatchRecoveryCut::FilesApplied,
+    BatchRecoveryCut::SqlBeforeCommit,
+    BatchRecoveryCut::SqlAfterCommit,
+    BatchRecoveryCut::TerminalReceipt,
+];
+#[cfg(all(
+    feature = "experimental-revision-tree-install",
+    any(target_os = "macos", target_os = "linux")
+))]
+#[test]
+fn refresh_batch_revision_tree_returned_error_recovery_hits_every_declared_semantic_cut() {
+    batch_returned_error_cuts_mode(true, &BATCH_TREE_CUTS, true);
+}
+#[cfg(all(
+    feature = "experimental-revision-tree-install",
+    any(target_os = "macos", target_os = "linux")
+))]
+#[test]
+fn refresh_batch_revision_tree_native_sigkill_recovers_every_declared_semantic_cut() {
+    batch_native_sigkill_cuts_mode(true, &BATCH_TREE_CUTS, true);
+}
+
+fn batch_assert_tree_cut(
+    fixture: &Fixture,
+    proof: &crate::changes::indexed_refresh::IndexedRefreshProof,
+    cut: BatchRecoveryCut,
+) {
+    use crate::changes::ChangeEvent;
+    let engine = ChangeEngine::new(fixture.fs.clone()).unwrap();
+    let (manifest, hash) = engine
+        .load_manifest_structure(&proof.change.change_id)
+        .unwrap();
+    let state = crate::changes::journal::load_journal(&fixture.fs, &manifest, &hash).unwrap();
+    let last = &state.frames.last().unwrap().event;
+    match cut {
+        BatchRecoveryCut::TreeIntent
+        | BatchRecoveryCut::TreeRename
+        | BatchRecoveryCut::TreeBeforeDone
+        | BatchRecoveryCut::TreeDoneTorn => {
+            let ChangeEvent::TreeIntent { group } = last else {
+                panic!("cut {cut:?} must retain exact outstanding tree intent")
+            };
+            assert_eq!(
+                fixture
+                    .fs
+                    .root()
+                    .path()
+                    .join(manifest.revision_trees[*group].root.as_str())
+                    .exists(),
+                cut != BatchRecoveryCut::TreeIntent
+            );
+            assert_eq!(state.torn_tail, cut == BatchRecoveryCut::TreeDoneTorn);
+        }
+        BatchRecoveryCut::TreeDone => assert!(
+            matches!(last, ChangeEvent::TreeDone { .. }),
+            "durable TreeDone boundary before dependent head"
+        ),
+        BatchRecoveryCut::FirstHeadBefore => {
+            assert!(
+                matches!(last, ChangeEvent::Intent { op } if manifest.operations[*op].target.as_str().ends_with("/source.md"))
+            );
+            assert_eq!(
+                batch_recovery_targets(proof)
+                    .iter()
+                    .filter(|target| {
+                        let data = fs::read(
+                            fixture
+                                .fs
+                                .root()
+                                .path()
+                                .join(format!("sources/{}/source.md", target.source_id)),
+                        )
+                        .unwrap();
+                        parse_note(&data)
+                            .canonical
+                            .unwrap()
+                            .string("wiki_current_revision")
+                            == Some(target.revision_id.as_str())
+                    })
+                    .count(),
+                0,
+                "first mutable head has not been replaced"
+            );
+        }
+        _ => {}
+    }
+}
+
+#[cfg(all(
+    feature = "experimental-revision-tree-install",
+    any(target_os = "macos", target_os = "linux")
+))]
+fn batch_interrupted_tree_fixture(
+    cut: BatchRecoveryCut,
+) -> (
+    Fixture,
+    crate::changes::indexed_refresh::IndexedRefreshProof,
+    BTreeMap<VaultRelativePath, Vec<u8>>,
+) {
+    let fixture = batch_cut_fixture(true);
+    fixture.write("unknown.bin", b"unrelated tree replay sentinel");
+    let (reader, projected) = batch_project_two_mode(&fixture, true);
+    let mut old = batch_old_immutable_bytes(&fixture, &reader);
+    old.insert(
+        path("navigation.md"),
+        fs::read(fixture.fs.root().path().join("navigation.md")).unwrap(),
+    );
+    let control = batch_control_mode(&fixture, cut, false, true);
+    let faulty = batch_fault_catalog(&fixture, &control);
+    let engine = ChangeEngine::new(faulty.fs().clone()).unwrap();
+    let mut session =
+        IndexedRefreshSession::prepare_write(&faulty, &fixture.writer, projected).unwrap();
+    let proof = session.proof().clone();
+    assert!(
+        engine
+            .apply_indexed_refresh(&fixture.writer, &mut session)
+            .is_err()
+    );
+    assert!(
+        control.fired.load(std::sync::atomic::Ordering::SeqCst),
+        "actual v3 {cut:?} reached"
+    );
+    batch_assert_executor(&fixture, &proof, true);
+    batch_assert_tree_cut(&fixture, &proof, cut);
+    drop(session);
+    drop(reader);
+    (fixture, proof, old)
+}
+
+#[cfg(all(
+    feature = "experimental-revision-tree-install",
+    any(target_os = "macos", target_os = "linux")
+))]
+#[test]
+fn refresh_batch_revision_tree_reverted_done_replays_historical_intent_and_original_allocation() {
+    use crate::changes::ChangeEvent;
+    let (fixture, proof, old) = batch_interrupted_tree_fixture(BatchRecoveryCut::TreeDone);
+    let engine = ChangeEngine::new(fixture.fs.clone()).unwrap();
+    let (manifest, hash) = engine
+        .load_manifest_structure(&proof.change.change_id)
+        .unwrap();
+    let state = crate::changes::journal::load_journal(&fixture.fs, &manifest, &hash).unwrap();
+    let ChangeEvent::TreeDone { group } = state.frames.last().unwrap().event else {
+        panic!("actual tree completion required")
+    };
+    let tree = &manifest.revision_trees[group];
+    // Simulate loss only after proving the exact fixture membership and bytes.
+    assert_eq!(
+        fs::read_dir(fixture.fs.root().path().join(tree.root.as_str()))
+            .unwrap()
+            .count(),
+        3
+    );
+    for &member in &tree.members {
+        let op = &manifest.operations[member];
+        let absolute = fixture.fs.root().path().join(op.target.as_str());
+        assert_eq!(
+            crate::vault::ExpectedState::Hash(Blake3Hash::digest(fs::read(&absolute).unwrap())),
+            op.after
+        );
+        fs::remove_file(absolute).unwrap();
+    }
+    fs::remove_dir(fixture.fs.root().path().join(tree.root.as_str())).unwrap();
+    let fixture = batch_recover_exact_once(fixture, proof.clone());
+    batch_assert_tree_oracles(&fixture, &proof, &old);
+    batch_assert_preserved(&fixture, &old, b"unrelated tree replay sentinel");
+    let state = crate::changes::journal::load_journal(&fixture.fs, &manifest, &hash).unwrap();
+    assert!(
+        state
+            .frames
+            .iter()
+            .filter(|frame| matches!(frame.event, ChangeEvent::Applying))
+            .count()
+            >= 2,
+        "replay starts a new progress epoch"
+    );
+    assert!(
+        state
+            .frames
+            .iter()
+            .filter(|frame| frame.event == ChangeEvent::TreeIntent { group })
+            .count()
+            >= 2,
+        "original intent remains and rebuilt tree gets typed completion"
+    );
+}
+
+#[cfg(all(
+    feature = "experimental-revision-tree-install",
+    any(target_os = "macos", target_os = "linux")
+))]
+#[test]
+fn refresh_batch_revision_tree_truncated_intent_refuses_complete_root_without_surviving_provenance()
+{
+    use crate::changes::ChangeEvent;
+    let (fixture, proof, old) = batch_interrupted_tree_fixture(BatchRecoveryCut::TreeBeforeDone);
+    let engine = ChangeEngine::new(fixture.fs.clone()).unwrap();
+    let (manifest, hash) = engine
+        .load_manifest_structure(&proof.change.change_id)
+        .unwrap();
+    let state = crate::changes::journal::load_journal(&fixture.fs, &manifest, &hash).unwrap();
+    let intent = state
+        .frames
+        .iter()
+        .rposition(|frame| matches!(frame.event, ChangeEvent::TreeIntent { .. }))
+        .unwrap();
+    let ChangeEvent::TreeIntent { group } = state.frames[intent].event else {
+        unreachable!()
+    };
+    let tree = &manifest.revision_trees[group];
+    let complete = tree
+        .members
+        .iter()
+        .map(|&member| {
+            let target = manifest.operations[member].target.clone();
+            let bytes = fs::read(fixture.fs.root().path().join(target.as_str())).unwrap();
+            (target, bytes)
+        })
+        .collect::<BTreeMap<_, _>>();
+    let prefix = state.frames[..intent]
+        .iter()
+        .flat_map(|frame| crate::changes::journal::encode_frame(frame).unwrap())
+        .collect::<Vec<_>>();
+    let next = crate::changes::journal::encode_frame(&state.frames[intent]).unwrap();
+    let mut truncated = prefix;
+    truncated.extend_from_slice(&next[..next.len() / 2]);
+    fs::write(
+        fixture.fs.root().path().join(
+            crate::changes::journal::journal_path(&proof.change.change_id)
+                .unwrap()
+                .as_str(),
+        ),
+        truncated,
+    )
+    .unwrap();
+    let state = crate::changes::journal::load_journal(&fixture.fs, &manifest, &hash).unwrap();
+    assert!(state.torn_tail);
+    assert!(
+        !state
+            .frames
+            .iter()
+            .any(|frame| frame.event == ChangeEvent::TreeIntent { group })
+    );
+    let (fixture, result) = batch_public_apply(fixture, &proof.change);
+    assert!(
+        result.is_err(),
+        "matching whole tree without surviving intent cannot be adopted"
+    );
+    for (target, bytes) in complete {
+        assert_eq!(
+            fs::read(fixture.fs.root().path().join(target.as_str())).unwrap(),
+            bytes
+        );
+    }
+    batch_assert_preserved(&fixture, &old, b"unrelated tree replay sentinel");
+    assert_eq!(
+        QueryCatalog::snapshot(
+            &fixture
+                .catalog
+                .query_snapshot(QueryReadLimits::default())
+                .unwrap()
+        ),
+        &proof.base,
+        "no publication after lost tree provenance"
+    );
+}
+
+#[cfg(all(
+    feature = "experimental-revision-tree-install",
+    any(target_os = "macos", target_os = "linux")
+))]
+#[test]
+fn refresh_batch_revision_tree_fresh_guards_preserve_source_old_evidence_and_authority_edits() {
+    for edited in ["source", "old_evidence", "authority"] {
+        let fixture = batch_cut_fixture(true);
+        let (reader, projected) = batch_project_two_mode(&fixture, true);
+        let old = batch_old_immutable_bytes(&fixture, &reader);
+        let target = match edited {
+            "source" => path(&format!("sources/{}/source.md", fixture.source)),
+            "old_evidence" => old
+                .keys()
+                .find(|target| target.as_str().ends_with("/content.md"))
+                .unwrap()
+                .clone(),
+            "authority" => path(".wiki/state/operations.json"),
+            _ => unreachable!(),
+        };
+        let foreign = format!("external {edited} edit at durable TreeIntent").into_bytes();
+        let absolute = fixture.fs.root().path().join(target.as_str());
+        let heads = [&fixture.source, &batch_other_source(&fixture)]
+            .into_iter()
+            .map(|source| {
+                let target = path(&format!("sources/{source}/source.md"));
+                let bytes = fs::read(fixture.fs.root().path().join(target.as_str())).unwrap();
+                (target, bytes)
+            })
+            .collect::<BTreeMap<_, _>>();
+        let database = reader
+            .connection()
+            .path()
+            .expect("fixture has a selected database")
+            .to_owned();
+        let selected_sql = {
+            let fresh = rusqlite::Connection::open_with_flags(
+                &database,
+                rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+            )
+            .unwrap();
+            batch_sql_rows(
+                &fresh,
+                "SELECT epoch,publication_hash,origin_change_id,origin_manifest_hash FROM catalog_meta",
+            )
+        };
+        let selectors = [
+            ".wiki/cache/catalog-current.json",
+            ".wiki/cache/catalog-v2-active.json",
+        ]
+        .into_iter()
+        .map(|name| (name, fs::read(fixture.fs.root().path().join(name)).ok()))
+        .collect::<BTreeMap<_, _>>();
+        let page = fs::read(fixture.fs.root().path().join("navigation.md")).unwrap();
+        let control = std::sync::Arc::new(BatchCutControl {
+            cut: BatchRecoveryCut::TreeIntent,
+            revision_tree: true,
+            boundary_edit: Some((absolute.clone(), foreign.clone())),
+            fired: std::sync::atomic::AtomicBool::new(false),
+            marker: None,
+            proof_file: fixture
+                .fs
+                .root()
+                .path()
+                .join(".wiki/batch-crash-proof.json"),
+        });
+        let faulty = batch_fault_catalog(&fixture, &control);
+        let engine = ChangeEngine::new(faulty.fs().clone()).unwrap();
+        let mut session =
+            IndexedRefreshSession::prepare_write(&faulty, &fixture.writer, projected).unwrap();
+        let proof = session.proof().clone();
+        let (manifest, hash) = engine
+            .load_manifest_structure(&proof.change.change_id)
+            .unwrap();
+        assert_eq!(
+            manifest.version, 3,
+            "{edited}: candidate must not silently fall back"
+        );
+        eprintln!(
+            "revision_tree_guard_order cell={edited} units={:?} heads={:?}",
+            crate::changes::revision_tree::execution_order(&manifest).unwrap(),
+            manifest
+                .operations
+                .iter()
+                .enumerate()
+                .filter(|(_, op)| op.target.as_str().ends_with("/source.md"))
+                .map(|(index, op)| (index, op.target.as_str()))
+                .collect::<Vec<_>>()
+        );
+        eprintln!(
+            "revision_tree_guard_cell={edited} selected_source={} other_source={} target={}",
+            fixture.source,
+            batch_other_source(&fixture),
+            target
+        );
+        let failure = engine
+            .apply_indexed_refresh(&fixture.writer, &mut session)
+            .err()
+            .expect("new unit guard must reject external edit before tree/head publication");
+        assert!(
+            control.fired.load(std::sync::atomic::Ordering::SeqCst),
+            "actual v3 fresh guard edit fired: {edited}: {failure:?}"
+        );
+        assert_eq!(
+            fs::read(&absolute).unwrap(),
+            foreign,
+            "external edit preserved: {edited}"
+        );
+        assert_eq!(
+            session.phase(),
+            crate::changes::indexed_refresh::IndexedRefreshPhase::AtBase
+        );
+        assert_eq!(
+            QueryCatalog::snapshot(&reader),
+            &proof.base,
+            "{edited}: pinned reader retains base; independent SQL reader below checks writer publication"
+        );
+        let state = crate::changes::journal::load_journal(&fixture.fs, &manifest, &hash).unwrap();
+        assert!(
+            state.frames.iter().all(|frame| frame.version == 2),
+            "{edited}: actual typed frame2; frames={:?}",
+            state.frames
+        );
+        assert!(
+            state
+                .frames
+                .iter()
+                .any(|frame| matches!(frame.event, crate::changes::ChangeEvent::TreeIntent { .. })),
+            "{edited}: edit fired only after actual typed tree intent; frames={:?}",
+            state.frames
+        );
+        assert!(
+            !state.frames.iter().any(|frame| matches!(
+                frame.event,
+                crate::changes::ChangeEvent::FilesApplied
+                    | crate::changes::ChangeEvent::Indexed { .. }
+                    | crate::changes::ChangeEvent::Committed
+            )),
+            "{edited}: no verified publication after fresh guard failure; frames={:?}",
+            state.frames
+        );
+        batch_assert_guard_failure_trees(&fixture, &manifest, &state, edited);
+        let edited_head = manifest
+            .operations
+            .iter()
+            .position(|op| op.target == target);
+        if let Some(op) = edited_head {
+            assert!(
+                !state
+                    .frames
+                    .iter()
+                    .any(|frame| frame.event == crate::changes::ChangeEvent::Done { op }),
+                "{edited}: edited mutable head never completed; frames={:?}",
+                state.frames
+            );
+        }
+        let fresh = rusqlite::Connection::open_with_flags(
+            &database,
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+        )
+        .unwrap();
+        assert_eq!(
+            batch_sql_rows(
+                &fresh,
+                "SELECT epoch,publication_hash,origin_change_id,origin_manifest_hash FROM catalog_meta"
+            ),
+            selected_sql,
+            "{edited}: new independent SQL reader proves no publication advance"
+        );
+        drop(fresh);
+        for (name, bytes) in &selectors {
+            assert_eq!(
+                fs::read(fixture.fs.root().path().join(name)).ok(),
+                *bytes,
+                "{edited}: selected catalog binding cannot switch after guard failure"
+            );
+        }
+        batch_assert_guard_failure_heads(
+            &fixture, &manifest, &state, &heads, &target, &foreign, edited,
+        );
+        for (name, bytes) in &old {
+            if name != &target {
+                assert_eq!(
+                    fs::read(fixture.fs.root().path().join(name.as_str())).unwrap(),
+                    *bytes
+                );
+            }
+        }
+        assert_eq!(
+            fs::read(fixture.fs.root().path().join("navigation.md")).unwrap(),
+            page
+        );
+        drop(session);
+        drop(reader);
+        // Public restart must still preserve the foreign input, even when an
+        // intentionally malformed authority prevents loading a verified reader.
+        let (fixture, result) = batch_public_apply(fixture, &proof.change);
+        assert!(
+            result.is_err(),
+            "public replay refuses preserved {edited} edit"
+        );
+        assert_eq!(fs::read(absolute).unwrap(), foreign);
+        let replay = crate::changes::journal::load_journal(&fixture.fs, &manifest, &hash).unwrap();
+        batch_assert_guard_failure_trees(&fixture, &manifest, &replay, edited);
+        batch_assert_guard_failure_heads(
+            &fixture, &manifest, &replay, &heads, &target, &foreign, edited,
+        );
+        assert!(
+            !replay.frames.iter().any(|frame| matches!(
+                frame.event,
+                crate::changes::ChangeEvent::FilesApplied
+                    | crate::changes::ChangeEvent::Indexed { .. }
+                    | crate::changes::ChangeEvent::Committed
+            )),
+            "{edited}: public restart does not bypass conflict; frames={:?}",
+            replay.frames
+        );
+        let fresh = rusqlite::Connection::open_with_flags(
+            &database,
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+        )
+        .unwrap();
+        assert_eq!(
+            batch_sql_rows(
+                &fresh,
+                "SELECT epoch,publication_hash,origin_change_id,origin_manifest_hash FROM catalog_meta"
+            ),
+            selected_sql,
+            "{edited}: public restart does not advance SQL"
+        );
+        for (name, bytes) in &selectors {
+            assert_eq!(
+                fs::read(fixture.fs.root().path().join(name)).ok(),
+                *bytes,
+                "{edited}: public restart cannot switch selected catalog binding"
+            );
+        }
+    }
+}
+
+fn batch_assert_guard_failure_trees(
+    fixture: &Fixture,
+    manifest: &crate::changes::ChangeManifest,
+    state: &crate::changes::JournalState,
+    edited: &str,
+) {
+    use crate::changes::ChangeEvent;
+    for (group, tree) in manifest.revision_trees.iter().enumerate() {
+        let root = fixture.fs.root().path().join(tree.root.as_str());
+        let present = crate::changes::revision_tree::observe_group(&fixture.fs, manifest, group).unwrap_or_else(|error| panic!("{edited}: prefix must be absent or exact complete, group={group}: {error:?}; frames={:?}", state.frames));
+        if edited != "source" {
+            assert!(
+                !present,
+                "{edited}: unchanged-input/authority guard rejects before any installation; frames={:?}",
+                state.frames
+            );
+            assert!(
+                !state
+                    .frames
+                    .iter()
+                    .any(|frame| frame.event == ChangeEvent::TreeDone { group }),
+                "{edited}: no tree completion before fresh guard refusal; frames={:?}",
+                state.frames
+            );
+            continue;
+        }
+        if !present {
+            assert!(
+                !state
+                    .frames
+                    .iter()
+                    .any(|frame| frame.event == ChangeEvent::TreeDone { group }),
+                "{edited}: completed prefix cannot silently lose its exact tree in this guard fixture; frames={:?}",
+                state.frames
+            );
+            continue;
+        }
+        assert!(
+            state
+                .frames
+                .iter()
+                .any(|frame| frame.event == ChangeEvent::TreeIntent { group }),
+            "{edited}: existing prefix requires durable group intent; frames={:?}",
+            state.frames
+        );
+        assert!(
+            state
+                .frames
+                .iter()
+                .any(|frame| frame.event == ChangeEvent::TreeDone { group }),
+            "{edited}: installed prefix requires matching durable typed completion; frames={:?}",
+            state.frames
+        );
+        // Canonical citation freshness follows the Source head, independently of SQL
+        // publication. An earlier authorized completed head may make this exact
+        // tree current; the separate SQL/selector oracle forbids publication.
+        assert_eq!(
+            fs::read_dir(&root).unwrap().count(),
+            tree.members.len(),
+            "{edited}: immutable prefix has exact committed membership"
+        );
+        for &member in &tree.members {
+            let op = &manifest.operations[member];
+            assert_eq!(
+                crate::vault::ExpectedState::Hash(Blake3Hash::digest(
+                    fs::read(fixture.fs.root().path().join(op.target.as_str())).unwrap()
+                )),
+                op.after,
+                "{edited}: immutable prefix preserves exact original allocation {}",
+                op.target
+            );
+        }
+    }
+}
+
+// Valid retained annotation bytes exercise projection/rebuild of nonempty cache
+// hints. No model call, generation authenticity or accepted relation fact is
+// inferred from this synthetic descriptor/reference.
+fn batch_seed_relation_oracle_annotation(fixture: &Fixture) {
+    use crate::{
+        changes::ReadDependency,
+        domain::{ByteSpan, RecordRef},
+        jobs::{AttemptRef, BoundedPayloadRef, Capability, DurableOutputRef, TaskSpec, TaskStage},
+        retrieval::{
+            source_relation_store::{PreparationIdentity, StoreLimits, create_annotation},
+            source_relations::{Envelope, Node, NodeKind, SourceBinding, SpanBinding},
+        },
+        vault::ExpectedState,
+    };
+    let revision = path(&format!(
+        "sources/{}/revisions/{}/revision.md",
+        fixture.source, fixture.first
+    ));
+    let original = path(&format!(
+        "sources/{}/revisions/{}/original.bin",
+        fixture.source, fixture.first
+    ));
+    let source_path = path(&format!("sources/{}/source.md", fixture.source));
+    let original_bytes = fs::read(fixture.fs.root().path().join(original.as_str())).unwrap();
+    let source = SourceBinding {
+        source_id: fixture.source.clone(),
+        source_revision: fixture.first.clone(),
+        raw_hash: Blake3Hash::digest(&original_bytes),
+    };
+    let preparation = PreparationIdentity {
+        recipe_id: id("relation_oracle_recipe"),
+        recipe_hash: Blake3Hash::digest(b"recipe"),
+        prompt_hash: Blake3Hash::digest(b"prompt"),
+        schema_hash: Blake3Hash::digest(b"schema"),
+        model_identity_hash: Blake3Hash::digest(b"synthetic-model"),
+        settings_hash: Blake3Hash::digest(b"settings"),
+    };
+    let mut task = TaskSpec {
+        key: Blake3Hash::digest(b"temporary"),
+        stage: TaskStage::PrepareSourceRelations,
+        capability: Some(Capability::Generate),
+        priority: 0,
+        dependencies: vec![],
+        input_hash: Blake3Hash::digest(b"input"),
+        prompt_hash: Some(preparation.prompt_hash.clone()),
+        schema_hash: Some(preparation.schema_hash.clone()),
+        model_hash: Some(preparation.model_identity_hash.clone()),
+        settings_hash: preparation.settings_hash.clone(),
+        source_bindings: [source_path, revision, original, path("WIKI.md")]
+            .into_iter()
+            .map(|target| {
+                let hash = Blake3Hash::digest(
+                    fs::read(fixture.fs.root().path().join(target.as_str())).unwrap(),
+                );
+                ReadDependency {
+                    path: target,
+                    expected: ExpectedState::Hash(hash),
+                }
+            })
+            .collect(),
+        input: BoundedPayloadRef {
+            path: path(".wiki/cache/generation/inputs/relation-oracle.json"),
+            hash: Blake3Hash::digest(b"descriptor"),
+            byte_len: 10,
+        },
+    };
+    task.key = crate::jobs::tasks::task_key(&task).unwrap();
+    let attempt = AttemptRef {
+        run_id: id("relation_oracle_run"),
+        task_key: task.key.clone(),
+        attempt_id: id("relation_oracle_attempt"),
+        number: 1,
+        request_hash: Blake3Hash::digest(b"request"),
+    };
+    let raw_id = RecordId::new(format!(
+        "run_event_relations_{}",
+        Blake3Hash::digest(
+            crate::graph::packet::canonical_json(&(
+                "lwiki.source-relation-generation.v1",
+                &attempt
+            ))
+            .unwrap()
+        )
+        .hex()
+    ))
+    .unwrap();
+    let raw = DurableOutputRef {
+        record: RecordRef {
+            vault_id: id("vault_projector"),
+            record_id: raw_id.clone(),
+            expected_kind: RecordKind::RunEvent,
+        },
+        path: crate::retrieval::source_relation_store::artifact_path(&attempt.run_id, &raw_id)
+            .unwrap(),
+        hash: Blake3Hash::digest(b"synthetic untrusted raw-generation hint"),
+    };
+    let envelope = Envelope {
+        schema: crate::retrieval::source_relations::SCHEMA.into(),
+        source,
+        preparation: preparation.bind(&raw),
+        nodes: vec![Node {
+            id: id("relation_oracle_rule"),
+            kind: NodeKind::Rule,
+            scope: "fixture capture wording".into(),
+            evidence: SpanBinding {
+                span: ByteSpan::new(0, original_bytes.len() as u64).unwrap(),
+                quote_hash: Blake3Hash::digest(&original_bytes),
+            },
+        }],
+        edges: vec![],
+    };
+    let stored = create_annotation(
+        &envelope,
+        &raw,
+        &task,
+        &attempt,
+        "2026-10-11T00:00:00Z",
+        StoreLimits {
+            max_hash_bytes: 4 * 1024 * 1024,
+            deadline: std::time::Instant::now() + Duration::from_secs(10),
+        },
+    )
+    .unwrap();
+    fixture.write(
+        "runs/relation_oracle_run/run.md",
+        &note(
+            "run",
+            attempt.run_id.as_str(),
+            json!({"wiki_status":"completed","wiki_created_at":"2026-10-11T00:00:00Z"}),
+            b"Synthetic relation projection fixture",
+        ),
+    );
+    fixture.write(
+        stored.write.target.as_str(),
+        stored.write.proposed.as_ref().unwrap(),
+    );
+}
+
+#[test]
+fn refresh_batch_complete_25_table_oracle_rebuilds_nonempty_relation_rows() {
+    let fixture = Fixture::with_setup(true, batch_seed_relation_oracle_annotation);
+    let assert_relation_rows = || {
+        let reader = fixture
+            .catalog
+            .query_snapshot(QueryReadLimits::default())
+            .unwrap();
+        let projection = batch_complete_projection(reader.connection());
+        assert_eq!(
+            projection["relation_annotations"].len(),
+            1,
+            "valid retained annotation projects one nonempty hint row"
+        );
+        assert_eq!(
+            projection["relation_dependencies"].len(),
+            4,
+            "all four exact source/revision/original/vault dependencies project"
+        );
+        assert_eq!(
+            projection["relation_annotations_columns"],
+            vec![
+                vec![
+                    "annotation_path",
+                    "annotation_hash",
+                    "source_id",
+                    "revision_id",
+                    "source_raw_hash",
+                    "raw_path",
+                    "generation_hash",
+                    "metadata_json"
+                ]
+                .into_iter()
+                .map(str::to_owned)
+                .collect::<Vec<_>>()
+            ]
+        );
+        assert_eq!(
+            projection["relation_dependencies_columns"],
+            vec![
+                vec!["annotation_path", "path", "expected_hash"]
+                    .into_iter()
+                    .map(str::to_owned)
+                    .collect::<Vec<_>>()
+            ]
+        );
+    };
+    assert_relation_rows();
+    batch_complete_oracle(&fixture);
+    let other = batch_other_source(&fixture);
+    batch_apply(
+        &fixture,
+        &[
+            (&fixture.source, b"relation oracle new first", None),
+            (&other, b"relation oracle new other", None),
+        ],
+    );
+    assert_relation_rows();
+    batch_complete_oracle(&fixture);
+}
+
+#[test]
+fn refresh_batch_complete_25_table_oracle_distinguishes_every_relation_column() {
+    let connection = rusqlite::Connection::open_in_memory().unwrap();
+    connection
+        .execute_batch(super::super::normalized_schema::SCHEMA)
+        .unwrap();
+    connection
+        .execute_batch(super::super::unit_inventory::SCHEMA)
+        .unwrap();
+    connection
+        .execute_batch(super::super::source_relations::SCHEMA)
+        .unwrap();
+    connection
+        .execute(
+            "INSERT INTO relation_annotations VALUES(?1,?2,?3,?4,?5,?6,?7,?8)",
+            rusqlite::params![
+                "annotation.md",
+                "annotation-hash",
+                "source",
+                "revision",
+                "raw-hash",
+                "raw.md",
+                "generation-hash",
+                "{\"metadata\":true}"
+            ],
+        )
+        .unwrap();
+    connection
+        .execute(
+            "INSERT INTO relation_dependencies VALUES(?1,?2,?3)",
+            rusqlite::params!["annotation.md", "source.md", "expected-hash"],
+        )
+        .unwrap();
+    let baseline = batch_complete_projection(&connection);
+    for table in ["relation_annotations", "relation_dependencies"] {
+        assert!(!baseline[table].is_empty());
+        for column in &baseline[&format!("{table}_columns")][0] {
+            connection
+                .execute_batch("SAVEPOINT relation_oracle_column")
+                .unwrap();
+            connection
+                .execute(
+                    &format!("UPDATE {table} SET {column}=?1"),
+                    [format!("different-{column}")],
+                )
+                .unwrap();
+            let changed = batch_complete_projection(&connection);
+            assert_ne!(
+                changed[table], baseline[table],
+                "exact logical oracle must detect {table}.{column}"
+            );
+            connection
+                .execute_batch("ROLLBACK TO relation_oracle_column; RELEASE relation_oracle_column")
+                .unwrap();
+            assert_eq!(batch_complete_projection(&connection), baseline);
+        }
+    }
+}
+
+fn batch_assert_guard_failure_heads(
+    fixture: &Fixture,
+    manifest: &crate::changes::ChangeManifest,
+    state: &crate::changes::JournalState,
+    initial_heads: &BTreeMap<VaultRelativePath, Vec<u8>>,
+    edited_target: &VaultRelativePath,
+    foreign: &[u8],
+    edited: &str,
+) {
+    use crate::changes::ChangeEvent;
+    for (target, before) in initial_heads {
+        let bytes = fs::read(fixture.fs.root().path().join(target.as_str())).unwrap();
+        if target == edited_target {
+            assert_eq!(
+                bytes, foreign,
+                "{edited}: foreign head preserved; frames={:?}",
+                state.frames
+            );
+            continue;
+        }
+        let (op, committed) = manifest
+            .operations
+            .iter()
+            .enumerate()
+            .find(|(_, operation)| &operation.target == target)
+            .expect("fixture head belongs to original manifest");
+        let done = state
+            .frames
+            .iter()
+            .position(|frame| frame.event == ChangeEvent::Done { op });
+        if edited == "source"
+            && let Some(done) = done
+        {
+            assert!(
+                state.frames[..done]
+                    .iter()
+                    .any(|frame| frame.event == ChangeEvent::Intent { op }),
+                "{edited}: completed earlier head requires its own durable typed Intent/Done; target={target}; frames={:?}",
+                state.frames
+            );
+            assert_eq!(
+                crate::vault::ExpectedState::Hash(Blake3Hash::digest(&bytes)),
+                committed.after,
+                "{edited}: completed head prefix must be exact original after-image; target={target}; frames={:?}",
+                state.frames
+            );
+        } else {
+            assert!(
+                done.is_none(),
+                "{edited}: unchanged-input/authority failure cannot complete any head; target={target}; frames={:?}",
+                state.frames
+            );
+            assert_eq!(
+                &bytes, before,
+                "{edited}: every unfinished head remains at its recorded before-image; target={target}; frames={:?}",
+                state.frames
+            );
+        }
+    }
 }

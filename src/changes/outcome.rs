@@ -96,6 +96,23 @@ pub(crate) fn terminal_ever_applying(
     }))
 }
 
+/// Authenticated historical tree intent survives removal of the operational journal.
+pub(crate) fn terminal_tree_intent(
+    fs: &VaultFs,
+    manifest: &ChangeManifest,
+    hash: &Blake3Hash,
+    group: usize,
+) -> Result<bool> {
+    Ok(
+        load_terminal_proof(fs, manifest, hash)?.is_some_and(|proof| {
+            proof
+                .journal
+                .iter()
+                .any(|frame| frame.event == ChangeEvent::TreeIntent { group })
+        }),
+    )
+}
+
 fn load_terminal_proof(
     fs: &VaultFs,
     manifest: &ChangeManifest,
@@ -221,7 +238,7 @@ fn retain(
     let mut transcript = state.frames.clone();
     if append_terminal {
         transcript.push(JournalFrame {
-            version: 1,
+            version: if manifest.version == 3 { 2 } else { 1 },
             sequence: transcript.len() as u64,
             change_id: manifest.change_id.clone(),
             manifest_hash: hash.clone(),

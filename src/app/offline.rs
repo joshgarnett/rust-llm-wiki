@@ -1260,6 +1260,9 @@ impl OfflineApp {
         let catalog = self.catalog();
         let authority = catalog.operation_state()?;
         let (manifest, manifest_hash) = engine.load_manifest_structure(&id)?;
+        if !self.options.dry_run {
+            crate::changes::revision_tree::require_execution(&self.fs, &manifest)?;
+        }
         let change = PreparedChange {
             change_id: id,
             manifest_hash,

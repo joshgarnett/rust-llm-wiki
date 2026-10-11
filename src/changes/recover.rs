@@ -25,6 +25,7 @@ impl ChangeEngine {
         let mut pending = Vec::new();
         for id in self.change_ids()? {
             let (manifest, hash) = self.load_manifest_structure(&id)?;
+            super::revision_tree::require_execution(&self.fs, &manifest)?;
             let change = PreparedChange {
                 change_id: id.clone(),
                 manifest_hash: hash.clone(),
@@ -138,6 +139,7 @@ impl ChangeEngine {
         // Discover every unresolved record before giving any publisher authority.
         for id in self.change_ids()? {
             let (manifest, hash) = self.load_manifest_structure(&id)?;
+            super::revision_tree::require_execution(&self.fs, &manifest)?;
             if let Some(terminal) = outcome::terminal_report(&self.fs, &manifest, &hash)? {
                 outcome::sync_receipt(&self.fs, permit, &manifest.change_id)?;
                 report.changes.push(terminal);

@@ -11,6 +11,7 @@ pub mod prepare;
 pub mod recover;
 pub(crate) mod replay;
 pub mod resolve;
+pub(crate) mod revision_tree;
 pub mod rollback;
 pub mod types;
 pub use types::*;

@@ -27,6 +27,7 @@ impl ChangeEngine {
         permit.require_root(self.fs.root())?;
         self.require_binding()?;
         let (manifest, hash) = self.load_manifest(&change.change_id)?;
+        super::revision_tree::require_execution(&self.fs, &manifest)?;
         if hash != change.manifest_hash {
             return Err(WikiError::invalid("prepared manifest binding changed"));
         }
@@ -48,6 +49,7 @@ impl ChangeEngine {
                 "an applying or conflicted change cannot be aborted",
             ));
         }
+        super::revision_tree::require_abandon_trees_absent(&self.fs, &manifest)?;
         if state.status.is_none() {
             let observations = self.observe(&manifest)?;
             if observations.iter().any(|o| o.observed != o.before) {
@@ -498,6 +500,7 @@ impl ChangeEngine {
             allocated_ids: draft.allocated_ids.clone(),
             read_preconditions: plan.read_preconditions,
             operations,
+            revision_trees: Vec::new(),
         })
     }
     /// Read-only validation for an already retained proposal, including partial recovery.

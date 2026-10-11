@@ -1134,6 +1134,8 @@ impl ChangeEngine {
         change: &PreparedChange,
     ) -> Result<Option<ApplyReport>> {
         writer.require_root(self.fs.root())?;
+        let (manifest, _) = self.load_manifest_structure(&change.change_id)?;
+        super::revision_tree::require_execution(&self.fs, &manifest)?;
         let Some(report) = self.indexed_refresh_terminal_outcome(change)? else {
             return Ok(None);
         };
@@ -1170,13 +1172,22 @@ impl ChangeEngine {
             let proof = session.proof().clone();
             proof.validate(&self.vault_id, &proof.change)?;
             let (manifest, hash) = self.load_manifest_structure(&proof.change.change_id)?;
+            super::revision_tree::require_execution(&self.fs, &manifest)?;
             if hash != proof.change.manifest_hash {
                 return Err(recovery("indexed refresh retained manifest changed"));
             }
             proof.validate_manifest(&manifest)?;
             let terminal = outcome::terminal_report(&self.fs, &manifest, &hash)?;
             let state = journal::load_journal(&self.fs, &manifest, &hash)?;
+            // Authenticate current authority before recording a pre-application
+            // whole-tree conflict against this retained proposal.
             let mut authority = required_authority(self)?;
+            if terminal.is_none()
+                && let Err(error) =
+                    super::revision_tree::require_observations(&self.fs, &manifest, &state, false)
+            {
+                return self.revision_failure(writer, &manifest, &hash, &state, error);
+            }
             let phase = session.phase();
             let allow_create = phase == IndexedRefreshPhase::AtBase
                 && authority.active().is_none()

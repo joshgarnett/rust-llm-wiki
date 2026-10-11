@@ -228,13 +228,38 @@ impl ChangeEngine {
         self.prepare_new(permit, draft)
     }
     fn prepare_new(&self, permit: &WriterPermit, draft: ChangeDraft) -> Result<ChangeInspection> {
+        self.prepare_new_with_revision_trees(permit, draft, false)
+    }
+    /// Development writer for an ordinary selected Source refresh. Eligibility
+    /// is established before retention; unsupported shapes retain the old wire.
+    pub(crate) fn prepare_revision_tree_refresh(
+        &self,
+        permit: &WriterPermit,
+        draft: ChangeDraft,
+    ) -> Result<ChangeInspection> {
+        let enabled = cfg!(feature = "experimental-revision-tree-install")
+            && self.fs.durable_io().supports_directory_install()
+            && draft.origin.is_none()
+            && draft.inverse_of.is_none()
+            && crate::storage::layout::active(self.fs.root())?;
+        if !enabled {
+            return self.prepare(permit, draft);
+        }
+        self.prepare_new_with_revision_trees(permit, draft, true)
+    }
+    fn prepare_new_with_revision_trees(
+        &self,
+        permit: &WriterPermit,
+        draft: ChangeDraft,
+        revision_trees: bool,
+    ) -> Result<ChangeInspection> {
         permit.require_root(self.fs.root())?;
         let plan = self.plan(&draft)?; // all expectations first, before any retained allocation
         let change_id = RecordId::generate(RecordKind::Change)?;
         let created_at = time::OffsetDateTime::now_utc()
             .format(&time::format_description::well_known::Rfc3339)
             .map_err(|e| WikiError::invalid(e.to_string()))?;
-        let sealed = self.seal_plan(
+        let mut sealed = self.seal_plan(
             draft,
             plan,
             NamedChangeIdentity {
@@ -242,6 +267,39 @@ impl ChangeEngine {
                 created_at,
             },
         )?;
+        if revision_trees
+            && super::revision_tree::try_group_refresh(&mut sealed.manifest, &sealed.plan)?
+        {
+            #[cfg(feature = "experimental-revision-tree-install")]
+            {
+                let admitted = sealed.manifest.revision_trees.iter().all(|group| {
+                    self.fs
+                        .admit_revision_tree_input(
+                            &group.root,
+                            group.members.iter().map(|&index| {
+                                let op = &sealed.manifest.operations[index];
+                                // Executor narrows each retained Vec to its exact length.
+                                (
+                                    op.target.owned_capacity(),
+                                    op.after_payload.as_ref().unwrap().byte_len as usize,
+                                )
+                            }),
+                        )
+                        .is_ok()
+                });
+                if !admitted {
+                    // Eligibility failed before retaining any new wire format.
+                    sealed.manifest.version = 2;
+                    sealed.manifest.revision_trees.clear();
+                }
+            }
+            let bytes = serde_json::to_vec(&sealed.manifest)
+                .map_err(|e| WikiError::invalid(e.to_string()))?;
+            if bytes.len() > MAX_MANIFEST_BYTES {
+                return Err(WikiError::invalid("grouped manifest exceeds limit"));
+            }
+            sealed.manifest_hash = Blake3Hash::digest(&bytes);
+        }
         let manifest = sealed.manifest;
         self.retain_plan(permit, &manifest, sealed.plan)?;
         let note = render_prepared_note(&manifest, &sealed.manifest_hash)?;
@@ -351,6 +409,7 @@ impl ChangeEngine {
             allocated_ids: draft.allocated_ids,
             read_preconditions: plan.read_preconditions.clone(),
             operations: Vec::new(),
+            revision_trees: Vec::new(),
         };
         for (index, operation) in plan.operations.iter().enumerate() {
             let reference = |side: &str, bytes: Option<&[u8]>| -> Result<Option<PayloadRef>> {
@@ -935,6 +994,7 @@ impl ChangeEngine {
                 &operation.after,
                 &operation.after_payload,
             )?;
+            super::revision_tree::validate_operation_payload(manifest, index, after.as_deref())?;
             for dependency in source_dependencies(after.as_deref(), &targets) {
                 let required = targets
                     .iter()
@@ -967,7 +1027,7 @@ impl ChangeEngine {
         manifest: &ChangeManifest,
         id: &RecordId,
     ) -> Result<()> {
-        if !matches!(manifest.version, 1 | 2)
+        if !matches!(manifest.version, 1 | 2 | 3)
             || &manifest.change_id != id
             || manifest.vault_id != self.vault_id
             || manifest.operations.len() > MAX_OPS
@@ -978,6 +1038,7 @@ impl ChangeEngine {
                 "invalid manifest identity/version/limits",
             ));
         }
+        super::revision_tree::validate_structure(manifest)?;
         let targets: Vec<_> = manifest
             .operations
             .iter()
@@ -1023,7 +1084,7 @@ impl ChangeEngine {
                     (ExpectedState::Absent, None) => {}
                     (ExpectedState::Hash(hash), Some(payload))
                         if payload.path
-                            == if manifest.version == 2 {
+                            == if matches!(manifest.version, 2 | 3) {
                                 crate::storage::layout::object_path(hash)?
                             } else {
                                 payload_path(id, index, side, &op.target)?
@@ -1099,7 +1160,7 @@ impl ChangeEngine {
         mut plan: ChangePlan,
     ) -> Result<()> {
         let retained_layout = crate::storage::layout::active(self.fs.root())?;
-        if retained_layout != (manifest.version == 2) {
+        if retained_layout != matches!(manifest.version, 2 | 3) {
             return Err(WikiError::invalid(
                 "retained payload route changed during preparation",
             ));

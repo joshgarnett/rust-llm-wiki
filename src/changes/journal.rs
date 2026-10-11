@@ -112,9 +112,10 @@ pub fn append_event(
     event: ChangeEvent,
 ) -> Result<JournalState> {
     permit.require_root(fs.root())?;
+    super::revision_tree::require_execution(fs, manifest)?;
     let mut state = load_journal(fs, manifest, hash)?;
     let frame = JournalFrame {
-        version: 1,
+        version: if manifest.version == 3 { 2 } else { 1 },
         sequence: state.frames.len() as u64,
         change_id: manifest.change_id.clone(),
         manifest_hash: hash.clone(),
@@ -154,11 +155,12 @@ fn validate_frames(
     manifest: &ChangeManifest,
     hash: &crate::domain::Blake3Hash,
 ) -> Result<Option<ChangeStatus>> {
+    super::revision_tree::validate_structure(manifest)?;
     let mut status = None;
     let mut completed = BTreeSet::new();
     let mut intent = None;
     for (sequence, frame) in frames.iter().enumerate() {
-        if frame.version != 1
+        if frame.version != if manifest.version == 3 { 2 } else { 1 }
             || frame.sequence != sequence as u64
             || frame.change_id != manifest.change_id
             || &frame.manifest_hash != hash
@@ -189,15 +191,46 @@ fn validate_frames(
             (ChangeEvent::Intent { op }, Some(ChangeStatus::Applying)) => {
                 let valid = manifest.operations.get(*op).is_some_and(|operation| {
                     operation.apply_after.iter().all(|n| completed.contains(n))
-                }) && !completed.contains(op)
+                }) && super::revision_tree::grouped(manifest, *op).is_none()
+                    && !completed.contains(op)
                     && intent.is_none();
                 if valid {
-                    intent = Some(*op);
+                    intent = Some((false, *op));
                 }
                 valid
             }
-            (ChangeEvent::Done { op }, Some(ChangeStatus::Applying)) if intent == Some(*op) => {
+            (ChangeEvent::Done { op }, Some(ChangeStatus::Applying))
+                if intent == Some((false, *op)) =>
+            {
                 completed.insert(*op);
+                intent = None;
+                true
+            }
+            (ChangeEvent::TreeIntent { group }, Some(ChangeStatus::Applying)) => {
+                let valid = manifest.version == 3
+                    && intent.is_none()
+                    && manifest.revision_trees.get(*group).is_some_and(|tree| {
+                        tree.members.iter().all(|member| {
+                            !completed.contains(member)
+                                && manifest.operations[*member].apply_after.iter().all(
+                                    |dependency| {
+                                        tree.members.contains(dependency)
+                                            || completed.contains(dependency)
+                                    },
+                                )
+                        })
+                    });
+                if valid {
+                    intent = Some((true, *group));
+                }
+                valid
+            }
+            (ChangeEvent::TreeDone { group }, Some(ChangeStatus::Applying))
+                if intent == Some((true, *group)) =>
+            {
+                for &member in &manifest.revision_trees[*group].members {
+                    completed.insert(member);
+                }
                 intent = None;
                 true
             }
@@ -250,6 +283,21 @@ fn validate_frames(
                                     }
                                     ConflictResolutionMode::Abandon => seen.observed == op.before,
                                 }
+                        })
+                    && manifest
+                        .revision_trees
+                        .iter()
+                        .enumerate()
+                        .all(|(group, tree)| {
+                            let first = &observations[tree.members[0]];
+                            tree.members.iter().all(|member| {
+                                (observations[*member].observed == observations[*member].after)
+                                    == (first.observed == first.after)
+                            }) && (first.observed != first.after
+                                || matches!(mode, ConflictResolutionMode::Abandon)
+                                || frames[..sequence]
+                                    .iter()
+                                    .any(|frame| frame.event == ChangeEvent::TreeIntent { group }))
                         });
                 if valid {
                     completed.clear();

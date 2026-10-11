@@ -372,3 +372,29 @@ verified the owned child PID and executable, so the retained profile can inform
 caller-level investigation. It supplies neither a completed update workflow nor
 a speedup measurement. Sampling-window coverage remains unqualified; all effects
 and failure evidence are retained, with no replacement run.
+
+## Experimental complete Revision installation
+
+The default-off `experimental-revision-tree-install` feature prepares each new
+three-file immutable Revision as one guarded directory installation. Source heads
+remain separate guarded writes. Manifest3 and typed frame2 events retain original
+payloads, allocations and historical intent; versions1/2 keep their existing
+execution path. See [the storage contract](technical/storage.md) for compatibility
+and recovery rules. This is a development candidate, not an enabled default.
+
+Release-profile checks on the native macOS host passed 14 versioned-executor,
+19 public batch, 37 catalog and 30 CLI tests. A new projection-oracle fixture
+initially omitted the retrieval-unit schema; after that test-only correction,
+its exact replay passed all eleven relation-column discrimination checks.
+Earlier failed receipts remain preserved. Independent review verified all
+26 candidate interruption cells (13 returned-error and 13 process-death cases),
+three external-edit guard roles, four occupied-root shapes with resume/abandon,
+historical-intent recovery, exact citations and complete 25-table reconstruction.
+Nonempty retained relation rows are included in reconstruction coverage.
+
+Unchanged primitive, default-format and legacy lifecycle results are reused with
+their original source and executable identities, not presented as reruns of the
+corrected binary. Native process-death checks do not establish power-loss or
+other-platform safety. Complete update-speed comparison, the 1,000-update product
+gate and representative 25K qualification remain pending. These correctness
+results establish no retrieval-completeness improvement or release acceptance.

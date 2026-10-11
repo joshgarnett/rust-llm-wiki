@@ -26,6 +26,7 @@ impl ChangeEngine {
         permit.require_root(self.fs.root())?;
         self.require_binding()?;
         let (manifest, hash) = self.load_manifest(&change.change_id)?;
+        super::revision_tree::require_execution(&self.fs, &manifest)?;
         if hash != change.manifest_hash {
             return Err(WikiError::invalid("prepared manifest binding changed"));
         }
@@ -199,6 +200,15 @@ impl ChangeEngine {
         crate::maintenance_diagnostic::observe(
             crate::maintenance_diagnostic::Phase::IntentReplaceDone,
             || {
+                if manifest.version == 3 {
+                    return self.apply_complete_revision_units(
+                        permit,
+                        change,
+                        manifest,
+                        initial,
+                        guard_revision_trees,
+                    );
+                }
                 let mut state = initial.clone();
                 if state.status.is_none() {
                     state = journal::append_event(
@@ -440,13 +450,17 @@ impl ChangeEngine {
         state: &JournalState,
         error: WikiError,
     ) -> Result<T> {
-        if matches!(
+        let recordable = matches!(
             state.status,
             Some(ChangeStatus::Applying | ChangeStatus::FilesApplied | ChangeStatus::Indexed)
-        ) && matches!(
-            error.code,
-            ErrorCode::ContentConflict | ErrorCode::RecordInvalid
-        ) {
+        ) || (manifest.version == 3
+            && state.status == Some(ChangeStatus::Prepared));
+        if recordable
+            && matches!(
+                error.code,
+                ErrorCode::ContentConflict | ErrorCode::RecordInvalid
+            )
+        {
             let phase: String = format!("immutable revision tree: {}", error.message)
                 .chars()
                 .take(240)

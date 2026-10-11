@@ -1733,7 +1733,9 @@ impl<'a> IndexedRefreshSession<'a> {
                 if matches!(&parts.operation, IndexedWriteOperation::JobBatch { .. }) {
                     return Err(recovery("JobBatch requires exact frozen named intent"));
                 }
-                let change = engine.prepare(writer, parts.draft)?.prepared;
+                let change = engine
+                    .prepare_revision_tree_refresh(writer, parts.draft)?
+                    .prepared;
                 let retained_change = change.clone();
                 let result: Result<Self> = (|| {
                     parts.delta.owners = engine.manifest_revision_owners(&change)?;
@@ -2088,6 +2090,8 @@ impl<'a> IndexedRefreshSession<'a> {
         }
         let engine = ChangeEngine::new(catalog.fs.clone())?;
         delta.require_bound(catalog, &engine, &proof)?;
+        let (manifest, _) = engine.load_manifest_structure(&proof.change.change_id)?;
+        crate::changes::revision_tree::require_execution(&catalog.fs, &manifest)?;
         let timeout = Duration::from_millis(catalog.options.busy_timeout_ms);
         let selection = selector::delta_selection(&catalog.fs, writer, &catalog.vault_id, timeout)?;
         selector::ensure_delta_ready(&catalog.fs, writer, &selection, timeout)?;

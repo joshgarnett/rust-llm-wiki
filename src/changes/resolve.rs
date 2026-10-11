@@ -53,6 +53,7 @@ impl ChangeEngine {
         self.require_binding()?;
         let change = &request.change;
         let (manifest, hash) = self.load_manifest(&change.change_id)?;
+        super::revision_tree::require_execution(&self.fs, &manifest)?;
         if hash != change.manifest_hash {
             return Err(WikiError::invalid("resolution manifest binding changed"));
         }
@@ -82,6 +83,7 @@ impl ChangeEngine {
         self.require_no_other_unresolved(change)?;
         match request.mode {
             ConflictResolutionMode::Resume => {
+                super::revision_tree::require_observations(&self.fs, &manifest, &state, false)?;
                 if request
                     .observations
                     .iter()
@@ -144,6 +146,7 @@ impl ChangeEngine {
                 self.continue_apply(permit, change, &manifest, &accepted, validator, publisher)
             }
             ConflictResolutionMode::Abandon => {
+                super::revision_tree::require_abandon_trees_absent(&self.fs, &manifest)?;
                 if request.observations.iter().any(|o| o.observed != o.before) {
                     return Err(conflict(
                         "abandon requires every target restored to its recorded before state; immutable revisions must remain preserved or resolve by resuming",

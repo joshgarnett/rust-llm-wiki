@@ -736,6 +736,33 @@ fn check_members(
     manifest: &ChangeManifest,
     complete: bool,
 ) -> Result<()> {
+    if manifest.version == 3 {
+        let group = manifest
+            .revision_trees
+            .iter()
+            .position(|group| group.root == tree.root)
+            .ok_or_else(|| WikiError::invalid("Revision ownership tree lacks committed group"))?;
+        let present = super::revision_tree::observe_group(&engine.fs, manifest, group)?;
+        if !present {
+            return if complete {
+                Err(conflict("complete Revision root is missing"))
+            } else {
+                Ok(())
+            };
+        }
+        let hash = Blake3Hash::digest(
+            serde_json::to_vec(manifest).map_err(|error| WikiError::invalid(error.to_string()))?,
+        );
+        let state = journal::load_journal(&engine.fs, manifest, &hash)?;
+        if !super::revision_tree::historical_intent(&state, group)
+            && !outcome::terminal_tree_intent(&engine.fs, manifest, &hash, group)?
+        {
+            return Err(conflict(
+                "complete Revision lacks its own historical durable TreeIntent",
+            ));
+        }
+        return Ok(());
+    }
     let root = engine.fs.root().resolve(&tree.root)?;
     match fs::symlink_metadata(&root) {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
