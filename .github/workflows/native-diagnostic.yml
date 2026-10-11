@@ -1,0 +1,117 @@
+name: Native unit test diagnostic
+
+on:
+  workflow_dispatch:
+    inputs:
+      runner:
+        description: 'Native runner'
+        type: choice
+        options: [xcode-27, macos-26, macos-15, ubuntu-24.04]
+        default: xcode-27
+      tests:
+        description: 'Exact Rust unit test names, one per line (at most eight)'
+        type: string
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  diagnostic:
+    runs-on: ${{ inputs.runner }}
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup
+      - name: Build and run exact tests serially with release optimization
+        env:
+          DIAGNOSTIC_TESTS: ${{ inputs.tests }}
+          DIAGNOSTIC_RUNNER: ${{ inputs.runner }}
+        run: |
+          python3 - <<'PY'
+          import json, os, pathlib, re, subprocess, sys, tempfile, time
+          sys.path.insert(0, 'scripts')
+          import qualify_artifact as q
+
+          repo = pathlib.Path.cwd()
+          evidence = pathlib.Path(os.environ['RUNNER_TEMP']) / 'native-diagnostic'
+          evidence.mkdir(mode=0o700)
+          report = {'status': 'running', 'scope': 'Isolated direct serial unit harness; not release qualification or a controlled comparison of scheduling alone',
+                    'observed_start_utc': q.observe(), 'tests': []}
+          q.write_json(evidence / 'diagnostic.json', report)
+          runner = q.Runner(evidence, repo)
+          started = time.monotonic()
+          try:
+              names = [line.strip() for line in os.environ['DIAGNOSTIC_TESTS'].splitlines() if line.strip()]
+              if (not 1 <= len(names) <= 8 or len(set(names)) != len(names)
+                      or any(not re.fullmatch(r'[A-Za-z_][A-Za-z_0-9]*(?:::[A-Za-z_][A-Za-z_0-9]*)+', name) for name in names)):
+                  raise ValueError('supply one to eight unique exact Rust test names')
+              commit = q.source_identity(repo)
+              label = os.environ['DIAGNOSTIC_RUNNER']
+              major = {'macos-15': 15, 'macos-26': 26, 'xcode-27': 27}.get(label)
+              target = q.command_text([sys.executable, 'scripts/bazel.py', '--print-target'], repo)
+              report.update(source_commit=commit, requested_tests=names,
+                            host=q.host_information(target, label, major))
+              q.write_json(evidence / 'diagnostic.json', report)
+              bazel = [sys.executable, 'scripts/bazel.py', '--']
+              profile = evidence / q.PROFILE_FILE
+              runner.run('compiler-profile', bazel + q.PROFILE_FLAGS, timeout=180,
+                         stdout_path=profile, output_limit=q.PROFILE_LIMIT)
+              report['build_profile'] = q.rust_build_profile(profile)
+              runner.run('build', bazel + ['build', '--nofetch', '--config=release', '//:unit_tests'], timeout=2400)
+              binary = (repo / 'bazel-bin/unit_tests').resolve(strict=True)
+              report.update(test_executable=str(binary), test_executable_sha256=q.digest(binary))
+              listed = q.command_text([str(binary), '--list'], repo)
+              (evidence / 'listed-tests.txt').write_text(listed + '\n')
+              available = set(re.findall(r'^(.*): test$', listed, re.M))
+              if not set(names) <= available:
+                  raise ValueError('requested test is absent from the compiled harness')
+              q.write_json(evidence / 'diagnostic.json', report)
+              with tempfile.TemporaryDirectory(prefix='lwiki-native-diagnostic-') as home:
+                  env = {key: value for key, value in os.environ.items()
+                         if key in ['PATH', 'TMPDIR', 'USER', 'LOGNAME', 'SHELL', 'LANG', 'LC_ALL']}
+                  env.update(HOME=home, XDG_CONFIG_HOME=str(pathlib.Path(home) / 'config'),
+                             TEST_WORKSPACE='_main', RUNFILES_DIR=str(binary) + '.runfiles')
+                  report['execution'] = {'cwd': str(repo), 'environment': env,
+                                         'logical_cpu_count': os.cpu_count(), 'test_threads': 1}
+                  q.write_json(evidence / 'diagnostic.json', report)
+                  for index, name in enumerate(names):
+                      argv = [str(binary), name, '--exact', '--test-threads=1', '--nocapture']
+                      test_start = time.monotonic()
+                      log = evidence / ('test-%02d.log' % index)
+                      with log.open('wb') as output:
+                          try:
+                              code = subprocess.run(argv, cwd=repo, env=env, stdout=output,
+                                                    stderr=subprocess.STDOUT, timeout=360).returncode
+                          except subprocess.TimeoutExpired:
+                              code = 124
+                      counts = re.findall(r'test result: \w+\. (\d+) passed; (\d+) failed; (\d+) ignored;', log.read_text(errors='replace'))
+                      if counts != [('1', '0', '0')]:
+                          code = code or 125
+                      report['tests'].append({'name': name, 'argv': argv, 'exit_code': code,
+                                              'elapsed_seconds': time.monotonic() - test_start,
+                                              'log': log.name, 'log_sha256': q.digest(log), 'counts': counts})
+                      q.write_json(evidence / 'diagnostic.json', report)
+              if q.source_identity(repo) != commit or q.digest(binary) != report['test_executable_sha256']:
+                  raise ValueError('source or test executable changed during the diagnostic')
+              report['status'] = 'failed' if any(test['exit_code'] for test in report['tests']) else 'passed'
+          except Exception as error:
+              report.update(status='failed', error=str(error), stage=runner.stage)
+          finally:
+              report['elapsed_seconds'] = time.monotonic() - started
+              q.write_json(evidence / 'diagnostic.json', report)
+          raise SystemExit(0 if report['status'] == 'passed' else 1)
+          PY
+      - name: Retain diagnostic evidence, including failures
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: native-diagnostic-${{ inputs.runner }}-${{ github.sha }}-${{ github.run_id }}
+          path: ${{ runner.temp }}/native-diagnostic/*
+          if-no-files-found: warn
+          retention-days: 30

@@ -759,10 +759,21 @@ fn conflicting_existing_equal_destination_refuses_without_overwriting_immutable_
 #[cfg(unix)]
 fn retention_authority_fifo_and_parent_symlink_races_refuse_without_installing_siblings() {
     use std::os::unix::ffi::OsStrExt;
+    use std::sync::atomic::{AtomicUsize, Ordering};
     for fifo in [true, false] {
         let (temp, engine, writer) = fixture(true, None);
+        // An allowed ancestor alias must select the same canonical wiki root.
+        // The hook uses the exact canonical path that the guarded read opens.
+        let alias_holder = tempfile::tempdir().unwrap();
+        let alias_parent = alias_holder.path().join("parent");
+        std::os::unix::fs::symlink(temp.path().parent().unwrap(), &alias_parent).unwrap();
+        let supplied_root = alias_parent.join(temp.path().file_name().unwrap());
+        let root = VaultRoot::explicit(&supplied_root).unwrap();
+        assert_eq!(root.path(), engine.fs().root().path());
+        assert_ne!(supplied_root.as_path(), root.path());
+        let engine = ChangeEngine::new(VaultFs::new(root)).unwrap();
         let object = crate::storage::layout::object_path(&Blake3Hash::digest(RETAIN_A)).unwrap();
-        let target = temp.path().join(object.as_str());
+        let target = engine.fs().root().path().join(object.as_str());
         fs::create_dir_all(target.parent().unwrap()).unwrap();
         fs::write(&target, RETAIN_A).unwrap();
         let changed = target.clone();
@@ -773,6 +784,8 @@ fn retention_authority_fifo_and_parent_symlink_races_refuse_without_installing_s
             b"unrelated external bytes",
         )
         .unwrap();
+        let fired = Arc::new(AtomicUsize::new(0));
+        let callback_fired = fired.clone();
         let _hook = crate::vault::maintenance_read_tests::install_before_open(target, move || {
             if fifo {
                 fs::remove_file(&changed).unwrap();
@@ -783,9 +796,17 @@ fn retention_authority_fifo_and_parent_symlink_races_refuse_without_installing_s
                 fs::rename(parent, parent.with_extension("saved")).unwrap();
                 std::os::unix::fs::symlink(&external, parent).unwrap();
             }
+            assert_eq!(callback_fired.fetch_add(1, Ordering::SeqCst), 0);
         });
         crate::maintenance_parallel::command_scope(|| {
-            assert!(engine.prepare(&writer, absent_draft()).is_err());
+            let prepared = engine.prepare(&writer, absent_draft());
+            assert_eq!(
+                fired.load(Ordering::SeqCst),
+                1,
+                "the {} mutation must run exactly once before the guarded open",
+                if fifo { "FIFO" } else { "parent symlink" }
+            );
+            assert!(prepared.is_err());
             let metrics = crate::maintenance_parallel::metrics();
             assert_eq!(metrics.completed, 2);
             if fifo {

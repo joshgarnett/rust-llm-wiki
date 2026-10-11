@@ -23,11 +23,23 @@ use std::sync::{
     Arc,
     atomic::{AtomicBool, AtomicUsize, Ordering},
 };
+struct MockTiming {
+    call: usize,
+    entered: Instant,
+    returned: Option<Instant>,
+}
+#[derive(Default)]
+struct MockTimings {
+    samples: Vec<MockTiming>,
+    dropped: usize,
+}
 pub(crate) struct Mock {
     pub(crate) calls: AtomicUsize,
     pub(crate) response_override: std::sync::Mutex<Option<String>>,
     invalid_span: AtomicBool,
     malformed_provider: AtomicBool,
+    // Enabled only by the fixed 17-Source continuation diagnostic below.
+    timings: std::sync::Mutex<Option<MockTimings>>,
 }
 impl Transport for Mock {
     fn execute<'a>(
@@ -36,7 +48,23 @@ impl Transport for Mock {
         _: TransportContext,
     ) -> TransportFuture<'a> {
         assert_eq!(request.summary().role, ServiceRole::Generate);
-        self.calls.fetch_add(1, Ordering::SeqCst);
+        let call = self.calls.fetch_add(1, Ordering::SeqCst) + 1;
+        let timing_index = {
+            let mut timings = self.timings.lock().unwrap_or_else(|e| e.into_inner());
+            timings.as_mut().and_then(|timings| {
+                if timings.samples.len() >= 17 {
+                    timings.dropped += 1;
+                    return None;
+                }
+                let index = timings.samples.len();
+                timings.samples.push(MockTiming {
+                    call,
+                    entered: Instant::now(),
+                    returned: None,
+                });
+                Some(index)
+            })
+        };
         let text=serde_json::to_string(&json!({"schema":"lwiki.source-relation-response.v1","nodes":[{"id":"notice","kind":"rule","scope":"fictional notice","span_id":if self.invalid_span.load(Ordering::SeqCst) {"span_missing"} else {"span_000000"}}],"edges":[]})).unwrap();
         let text = self
             .response_override
@@ -50,7 +78,19 @@ impl Transport for Mock {
         } else {
             body
         };
-        Box::pin(async move { Ok(TransportReply::new(200, vec![], body).unwrap()) })
+        Box::pin(async move {
+            let reply = TransportReply::new(200, vec![], body).unwrap();
+            if let Some(index) = timing_index {
+                let mut timings = self.timings.lock().unwrap_or_else(|e| e.into_inner());
+                if let Some(sample) = timings
+                    .as_mut()
+                    .and_then(|timings| timings.samples.get_mut(index))
+                {
+                    sample.returned = Some(Instant::now());
+                }
+            }
+            Ok(reply)
+        })
     }
 }
 pub(crate) struct Setup {
@@ -164,6 +204,7 @@ pub(crate) fn setup(count: usize) -> Setup {
         calls: AtomicUsize::new(0),
         invalid_span: AtomicBool::new(false),
         malformed_provider: AtomicBool::new(false),
+        timings: std::sync::Mutex::new(None),
     });
     let dispatcher = Dispatcher::new(
         source.fs.clone(),
@@ -271,23 +312,196 @@ fn dry_run_and_new_offline_run_have_no_job_descriptor_or_provider_side_effects()
 }
 #[test]
 fn same_run_continues_across_partition_boundary_without_premature_completion() {
+    let origin = Instant::now();
     let s = setup(17);
-    s.app.index_rebuild_normalized().unwrap();
+    *s.mock.timings.lock().unwrap() = Some(MockTimings::default());
+    fn result_summary<T>(result: &Result<T>) -> serde_json::Value {
+        match result {
+            Ok(_) => json!({"status": "ok"}),
+            Err(error) => json!({
+                "status": "error",
+                "code": error.code,
+                "message": error.message,
+                "reason": error.details.get("reason"),
+            }),
+        }
+    }
+    let observe = |phase: &str,
+                   begin: Instant,
+                   end: Instant,
+                   deadline: Option<Instant>,
+                   calls_before: usize,
+                   result: serde_json::Value| {
+        let mock = &s.mock;
+        let timings = mock.timings.lock().unwrap_or_else(|e| e.into_inner());
+        let samples: Vec<_> = timings
+            .as_ref()
+            .into_iter()
+            .flat_map(|timings| &timings.samples)
+            .filter(|sample| sample.call > calls_before)
+            .map(|sample| {
+                json!({
+                    "call": sample.call,
+                    "entered_us": sample.entered.duration_since(origin).as_micros(),
+                    "returned_us": sample.returned.map(|at| at.duration_since(origin).as_micros()),
+                })
+            })
+            .collect();
+        eprintln!(
+            "relation_continuation_timing {}",
+            json!({
+                "phase": phase,
+                "begin_us": begin.duration_since(origin).as_micros(),
+                "end_us": end.duration_since(origin).as_micros(),
+                "elapsed_us": end.duration_since(begin).as_micros(),
+                "deadline_us": deadline.map(|at| at.duration_since(origin).as_micros()),
+                "remaining_at_begin_us": deadline.map(|at| at.saturating_duration_since(begin).as_micros()),
+                "remaining_at_end_us": deadline.map(|at| at.saturating_duration_since(end).as_micros()),
+                "overrun_at_end_us": deadline.map(|at| end.saturating_duration_since(at).as_micros()),
+                "calls_before": calls_before,
+                "calls_after": mock.calls.load(Ordering::SeqCst),
+                "mock_samples": samples,
+                "dropped_mock_samples": timings.as_ref().map_or(0, |timings| timings.dropped),
+                "result": result,
+            })
+        );
+    };
+    fn observe_ledger(origin: Instant, phase: &str, state: &LedgerInspection) {
+        let completed = state
+            .tasks
+            .values()
+            .filter(|task| task.state == TaskState::Completed)
+            .count();
+        let failed = state
+            .tasks
+            .values()
+            .filter(|task| task.state == TaskState::Failed)
+            .count();
+        let tasks: Vec<_> = state
+            .tasks
+            .iter()
+            .take(17)
+            .map(|(key, task)| json!({"task": key, "state": task.state, "failure_code": task.failure_code}))
+            .collect();
+        let attempts: Vec<_> = state
+            .attempts
+            .iter()
+            .take(17)
+            .map(|attempt| {
+                json!({
+                    "attempt": attempt.attempt.attempt_id,
+                    "task": attempt.attempt.task_key,
+                    "phase": attempt.phase,
+                    "billing": attempt.billing,
+                    "remote_exposure": attempt.remote_exposure,
+                })
+            })
+            .collect();
+        eprintln!(
+            "relation_continuation_ledger {}",
+            json!({
+                "phase": phase,
+                "observed_us": Instant::now().duration_since(origin).as_micros(),
+                "state": state.state,
+                "admitted_tasks": state.tasks.len(),
+                "completed": completed,
+                "failed": failed,
+                "manifest_pending": 17usize.saturating_sub(completed + failed),
+                "attempt_count": state.attempts.len(),
+                "tasks": tasks,
+                "attempts": attempts,
+                "effective_deadline_utc_ms": state.effective_deadline_utc_ms,
+                "utc_high_water_ms": state.utc_high_water_ms,
+                "accounting_completeness": state.completeness,
+                "dispatched_requests": state.budget.dispatched_requests,
+                "settled_requests": state.budget.settled.requests,
+                "outstanding_requests": state.budget.outstanding.requests,
+                "unknown_attempts": state.budget.unknown_attempts.len(),
+                "guarantee_intact": state.budget.guarantee_intact,
+            })
+        );
+    }
+
+    observe(
+        "setup",
+        origin,
+        Instant::now(),
+        None,
+        0,
+        json!({"status": "ok", "sources": 17, "schedule": [1, 8, 8], "invocation_seconds": 60, "provider_timeout_seconds": 1, "lifetime_seconds": 900}),
+    );
+    let begin = Instant::now();
+    let rebuilt = s.app.index_rebuild_normalized();
+    observe(
+        "normalized_rebuild",
+        begin,
+        Instant::now(),
+        None,
+        0,
+        result_summary(&rebuilt),
+    );
+    rebuilt.unwrap();
     assert!(s.app.catalog().operation_state().unwrap().is_some());
     let source_ids: Vec<_> = s
         .inputs
         .iter()
         .map(|(input, _)| input.source_id.clone())
         .collect();
-    let bytes = s
+    let deadline = until();
+    let begin = Instant::now();
+    let manifest = s
         .app
-        .prepare_source_relation_manifest(&source_ids, &s.runtime, 1024, until())
-        .unwrap();
+        .prepare_source_relation_manifest(&source_ids, &s.runtime, 1024, deadline);
+    observe(
+        "manifest",
+        begin,
+        Instant::now(),
+        Some(deadline),
+        0,
+        result_summary(&manifest),
+    );
+    let bytes = manifest.unwrap();
     assert_eq!(s.mock.calls.load(Ordering::SeqCst), 0);
-    let first = s
-        .app
-        .run_source_relation_preparation(&bytes, &run_id(), &s.runtime, until(), 1)
-        .unwrap();
+    let run = |phase, max_tasks| {
+        let calls_before = s.mock.calls.load(Ordering::SeqCst);
+        let deadline = until();
+        let begin = Instant::now();
+        let result = s.app.run_source_relation_preparation(
+            &bytes,
+            &run_id(),
+            &s.runtime,
+            deadline,
+            max_tasks,
+        );
+        let end = Instant::now();
+        let summary = match &result {
+            Ok(report) => {
+                json!({"status": "ok", "completed": report.completed, "pending": report.pending, "failed": report.failed, "admitted_tasks": report.admitted_tasks})
+            }
+            Err(_) => result_summary(&result),
+        };
+        observe(phase, begin, end, Some(deadline), calls_before, summary);
+        if result.is_err() {
+            // This read occurs only after the measured invocation returns.
+            // A diagnostic refusal must not replace its original error.
+            let status = JobLedger::new(
+                s.source.fs.clone(),
+                s.source.vault.clone(),
+                run_id(),
+                s.runtime.job_options.clone(),
+            )
+            .and_then(|ledger| ledger.inspect());
+            match &status {
+                Ok(state) => observe_ledger(origin, phase, state),
+                Err(_) => eprintln!(
+                    "relation_continuation_status_error {}",
+                    json!({"phase": phase, "observed_us": Instant::now().duration_since(origin).as_micros(), "result": result_summary(&status)})
+                ),
+            }
+        }
+        result.unwrap()
+    };
+    let first = run("first", 1);
     assert_eq!(first.completed, 1);
     assert_eq!(first.pending, 16);
     assert_eq!(first.admitted_tasks, 1);
@@ -299,6 +513,7 @@ fn same_run_continues_across_partition_boundary_without_premature_completion() {
     )
     .unwrap();
     let initial = ledger.inspect().unwrap();
+    observe_ledger(origin, "first", &initial);
     assert_eq!(initial.state, RunState::Running);
     assert!(initial.spec.tasks.is_empty());
     assert!(initial.spec.scope.read_preconditions.is_empty());
@@ -306,25 +521,22 @@ fn same_run_continues_across_partition_boundary_without_premature_completion() {
         initial.spec.scope.scope_payload_hash,
         Some(Blake3Hash::digest(&bytes))
     );
-    let second = s
-        .app
-        .run_source_relation_preparation(&bytes, &run_id(), &s.runtime, until(), 8)
-        .unwrap();
+    let second = run("second", 8);
     assert_eq!(second.completed, 9);
     assert_eq!(second.pending, 8);
     assert_eq!(second.admitted_tasks, 9);
-    assert_eq!(ledger.inspect().unwrap().state, RunState::Running);
+    let second_state = ledger.inspect().unwrap();
+    observe_ledger(origin, "second", &second_state);
+    assert_eq!(second_state.state, RunState::Running);
     // This functional gate covers the normalized public frontend's frozen tasks.
     // The legacy 1+16 and 1+8+8 deadline failures remain separate evidence;
     // this fixed schedule and budget do not qualify legacy or production throughput.
-    let third = s
-        .app
-        .run_source_relation_preparation(&bytes, &run_id(), &s.runtime, until(), 8)
-        .unwrap();
+    let third = run("third", 8);
     assert_eq!(third.completed, 17);
     assert_eq!(third.pending, 0);
     assert_eq!(third.admitted_tasks, 17);
     let final_state = ledger.inspect().unwrap();
+    observe_ledger(origin, "third", &final_state);
     assert_eq!(final_state.state, RunState::Completed);
     assert_eq!(final_state.spec_hash, initial.spec_hash);
     assert_eq!(final_state.tasks.len(), 17);
