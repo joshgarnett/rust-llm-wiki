@@ -128,7 +128,11 @@ def linux_session(argv):
             (evidence / "display-ready.stdout").write_bytes(probe.stdout)
             (evidence / "display-ready.stderr").write_bytes(probe.stderr)
             raise RuntimeError("authorized owned Xvfb display did not become ready")
+        controller_started = time.monotonic()
         p = subprocess.run([node, controller, binary, str(evidence), binary_hash], env=display_env, timeout=330)
+        save(evidence / "linux-controller-exit.json", {"returncode": p.returncode,
+             "elapsed_seconds": time.monotonic() - controller_started,
+             "app_before_display_teardown": owned_group_state(evidence, "app")})
         return p.returncode
     except Exception as error:
         status["status"] = "failed"; status["error"] = str(error)
@@ -136,16 +140,29 @@ def linux_session(argv):
         return 1
     finally:
         if display:
+            diagnostic_error = None
+            try:
+                save(evidence / "display-before-teardown.json", {"pid": display.pid,
+                     "display_returncode": display.poll(),
+                     "app": owned_group_state(evidence, "app")})
+            except Exception as error:
+                diagnostic_error = str(error)
+            signals = []
             if group_alive(display.pid):
+                signals.append("SIGTERM")
                 os.killpg(display.pid, signal.SIGTERM)
                 try:
                     display.wait(timeout=2)
                 except subprocess.TimeoutExpired:
+                    signals.append("SIGKILL")
                     os.killpg(display.pid, signal.SIGKILL); display.wait(timeout=2)
             gone = not group_alive(display.pid)
-            save(evidence / "display-cleanup.json", {"owned_process_group_gone": gone, "pid": display.pid})
+            save(evidence / "display-cleanup.json", {"owned_process_group_gone": gone,
+                 "pid": display.pid, "signals": signals, "returncode": display.returncode})
             if not gone:
                 raise RuntimeError("owned Xvfb group survived cleanup")
+            if diagnostic_error:
+                raise RuntimeError("display teardown diagnostics unavailable: " + diagnostic_error)
 
 
 def digest(path):
@@ -165,6 +182,26 @@ def group_alive(pid):
         return False
 
 
+def owned_group_state(evidence, name):
+    """Observe only a group PID explicitly created and recorded by this harness."""
+    pidfile = evidence / (name + "-pid.json")
+    if not pidfile.exists():
+        return {"recorded": False}
+    pid = json.loads(pidfile.read_text())["pid"]
+    if not isinstance(pid, int) or pid <= 1:
+        raise RuntimeError("invalid owned process group PID")
+    state = {"recorded": True, "pid": pid, "group_alive": group_alive(pid)}
+    if sys.platform == "linux":
+        try:
+            with Path("/proc/%d/status" % pid).open() as status:
+                rows = status.read(8192).splitlines()
+            state["process_status"] = {row.split(":", 1)[0]: row.split(":", 1)[1].strip()
+                 for row in rows if row.split(":", 1)[0] in {"Name", "State", "PPid", "Uid", "Gid", "NSpid"}}
+        except OSError as error:
+            state["process_status_error"] = {"errno": error.errno, "message": str(error)}
+    return state
+
+
 def cleanup_groups(evidence, info):
     """Signal only process groups explicitly created and recorded by this harness."""
     for name in ["app", "display", "namespace-session"]:
@@ -174,17 +211,22 @@ def cleanup_groups(evidence, info):
         pid = json.loads(pidfile.read_text())["pid"]
         if not isinstance(pid, int) or pid <= 1:
             raise RuntimeError("invalid owned process group PID")
-        if group_alive(pid):
+        observation = {"name": name, **owned_group_state(evidence, name), "signals": []}
+        info.setdefault("owned_group_cleanup", []).append(observation)
+        if observation["group_alive"]:
+            observation["signals"].append("SIGKILL")
             os.killpg(pid, signal.SIGKILL)
             info["status"] = "failed"
-            info["error"] = "controller left an owned " + name + " process group; supervisor killed it"
+            info["cleanup_error"] = "controller left an owned " + name + " process group; supervisor killed it"
+            info.setdefault("error", info["cleanup_error"])
             until = time.monotonic() + 2
             while group_alive(pid) and time.monotonic() < until:
                 time.sleep(0.1)
         info[name + "_process_group_gone"] = not group_alive(pid)
         if not info[name + "_process_group_gone"]:
             info["status"] = "failed"
-            info["error"] = "owned " + name + " process group survived supervisor cleanup"
+            info["cleanup_error"] = "owned " + name + " process group survived supervisor cleanup"
+            info.setdefault("error", info["cleanup_error"])
     if "app_process_group_gone" in info:
         info["owned_process_group_gone"] = info["app_process_group_gone"]
 
@@ -315,6 +357,10 @@ def main():
         with (evidence / "controller.stdout").open("wb") as out, (evidence / "controller.stderr").open("wb") as err:
             p = subprocess.Popen(argv, env=controller_env, stdout=out, stderr=err)
             controller_started = time.monotonic()
+            def record_controller_exit():
+                info["controller_exit_code"] = p.returncode
+                save(evidence / "outer-controller-exit.json", {"returncode": p.returncode,
+                     "elapsed_seconds": time.monotonic() - controller_started})
             app_observed = None
             while p.poll() is None:
                 now = time.monotonic()
@@ -325,8 +371,10 @@ def main():
                     cleanup_groups(evidence, info)
                     p.kill()
                     p.wait(timeout=5)
+                    record_controller_exit()
                     raise RuntimeError("independent controller/app watchdog expired")
                 time.sleep(0.2)
+            record_controller_exit()
         if p.returncode:
             raise RuntimeError("real editor roundtrip failed; inspect result.json and controller logs")
         if digest(binary) != args.binary_sha256:

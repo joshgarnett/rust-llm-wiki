@@ -33,6 +33,76 @@ const file = relative => {
 let child, appStarted, deadlineTimer, session;
 const requests = new Map();
 let nextId = 1, receive = Buffer.alloc(0);
+const controllerStarted = monotonic();
+let phase = 'preparation', teardownStarted = false, transportError;
+let journalRows = 0, journalBytes = 0;
+function journal(event, details = {}) {
+  if (result.lifecycleLogTruncated || result.lifecycleLogError) return;
+  const row = JSON.stringify({event, phase, elapsedSeconds: monotonic() - controllerStarted,
+    ...(appStarted ? {appElapsedSeconds: monotonic() - appStarted} : {}), ...details}) + '\n';
+  if (journalRows >= 4096 || journalBytes + Buffer.byteLength(row) > 1024 * 1024) {
+    result.lifecycleLogTruncated = true;
+    return;
+  }
+  try {
+    fs.appendFileSync(path.join(root, 'controller-lifecycle.jsonl'), row);
+    journalRows++; journalBytes += Buffer.byteLength(row);
+  } catch (error) {result.lifecycleLogError = String(error);}
+}
+function persistResult() {
+  try {save('result.json', result);} catch (error) {result.evidenceWriteError = String(error);}
+}
+function setPhase(value) {phase = value; result.phase = value; journal('phase'); persistResult();}
+function rememberFailure(error, origin) {
+  result.status = 'failed';
+  if (!result.error) {
+    result.error = String(error); result.stack = error.stack;
+    result.firstFailure = {origin, phase, elapsedSeconds: monotonic() - controllerStarted};
+  }
+  persistResult();
+}
+function rejectPending(error, origin) {
+  for (const [id, request] of requests) {
+    clearTimeout(request.timer);
+    journal('cdp-failed', {id, method: request.method, origin, requestElapsedSeconds: monotonic() - request.started});
+    request.reject(error);
+  }
+  requests.clear();
+}
+function terminalChannel(error, origin) {
+  if (!transportError) {
+    transportError = error;
+    result.transportFailure = {origin, phase, expectedTeardown: teardownStarted,
+      message: String(error).slice(0, 512), exitCode: child?.exitCode, signalCode: child?.signalCode,
+      pending: [...requests].map(([id, request]) => ({id, method: request.method}))};
+    if (!teardownStarted) rememberFailure(error, origin);
+    else persistResult();
+  }
+  rejectPending(transportError, origin);
+}
+function monitorApp() {
+  child.on('spawn', () => journal('app-spawn', {pid: child.pid}));
+  child.on('error', error => {
+    result.spawnError = String(error);
+    journal('app-error', {code: error.code, message: String(error).slice(0, 512)});
+    terminalChannel(error, 'app-error');
+  });
+  for (const event of ['exit', 'close']) child.on(event, (code, signal) => {
+    journal('app-' + event, {code, signal, expectedTeardown: teardownStarted});
+    terminalChannel(new Error(`app ${event}: code=${code} signal=${signal}`), 'app-' + event);
+  });
+  for (const fd of [3, 4]) {
+    child.stdio[fd].on('error', error => {
+      journal('pipe-error', {fd, code: error.code, errno: error.errno, syscall: error.syscall,
+        message: String(error).slice(0, 512), expectedTeardown: teardownStarted});
+      terminalChannel(error, 'fd' + fd + '-error');
+    });
+    for (const event of ['end', 'close']) child.stdio[fd].on(event, () => {
+      journal('pipe-' + event, {fd, expectedTeardown: teardownStarted});
+      terminalChannel(new Error(`CDP fd${fd} ${event}`), 'fd' + fd + '-' + event);
+    });
+  }
+}
 const appEnv = {PATH: '/usr/bin:/bin', HOME: path.join(root, 'home'), TMPDIR: path.join(root, 'temp') + '/', XDG_CONFIG_HOME: profile, XDG_CACHE_HOME: path.join(root, 'cache'), LANG: 'en_US.UTF-8', TZ: 'UTC'};
 if (linux) Object.assign(appEnv, {DISPLAY: process.env.DISPLAY, XAUTHORITY: process.env.XAUTHORITY, LANG: 'C.UTF-8'});
 const config = path.join(root, 'preferences.toml');
@@ -76,11 +146,22 @@ async function cli(name, args, expectedOk = true) {
 }
 function cdp(method, params = {}, sid, timeout = 10000) {
   must(!appStarted || monotonic() - appStarted < 280, 'app CDP deadline reached');
+  if (transportError) return Promise.reject(transportError);
   const id = nextId++;
   return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => {requests.delete(id); reject(new Error(method + ' timed out'));}, timeout);
-    requests.set(id, {resolve, reject, timer});
-    child.stdio[3].write(JSON.stringify({id, method, params, ...(sid ? {sessionId: sid} : {})}) + '\0');
+    const started = monotonic();
+    journal('cdp-start', {id, method, sessionId: sid, timeoutMs: timeout});
+    const timer = setTimeout(() => {
+      requests.delete(id);
+      journal('cdp-timeout', {id, method, requestElapsedSeconds: monotonic() - started});
+      reject(new Error(method + ' timed out'));
+    }, timeout);
+    requests.set(id, {resolve, reject, timer, method, started});
+    try {
+      child.stdio[3].write(JSON.stringify({id, method, params, ...(sid ? {sessionId: sid} : {})}) + '\0', error => {
+        if (error) terminalChannel(error, 'fd3-write');
+      });
+    } catch (error) {terminalChannel(error, 'fd3-write');}
   });
 }
 async function evaluate(expression, sid = session) {
@@ -203,24 +284,43 @@ async function workflow() {
   const log = fs.openSync(path.join(root, 'app.log'), 'w');
   const executable = linux ? '/opt/Obsidian/obsidian' : path.join(root, 'Obsidian.app', 'Contents', 'MacOS', 'Obsidian');
   const argv = ['--user-data-dir=' + profile, '--disk-cache-dir=' + path.join(root, 'cache'), '--log-file=' + path.join(root, 'chromium.log'), '--remote-debugging-pipe', '--disable-background-networking', '--disable-component-update', '--disable-geolocation'];
+  setPhase('startup');
   appStarted = monotonic();
   child = spawn(executable, argv, {cwd: root, env: appEnv, detached: true, stdio: ['ignore', log, log, 'pipe', 'pipe']});
+  monitorApp();
   fs.closeSync(log); save('app-pid.json', {pid: child.pid, executable, argv, env: appEnv, ...(linux ? {uid: process.getuid(), gid: process.getgid(), networkNamespace: fs.readlinkSync('/proc/self/ns/net')} : {network: 'allowed by normal macOS app launch'})});
-  child.on('error', error => {result.spawnError = String(error);});
-  deadlineTimer = setTimeout(() => {result.deadlineExceeded = true; try {process.kill(-child.pid, 'SIGKILL');} catch {} for (const request of requests.values()) {clearTimeout(request.timer); request.reject(new Error('app hard deadline'));} requests.clear();}, 285000);
+  deadlineTimer = setTimeout(() => {
+    result.deadlineExceeded = true;
+    rememberFailure(new Error('app hard deadline'), 'deadline');
+    journal('app-signal', {signal: 'SIGKILL', origin: 'deadline'});
+    try {process.kill(-child.pid, 'SIGKILL');} catch {}
+    terminalChannel(new Error('app hard deadline'), 'deadline');
+  }, 285000);
   child.stdio[4].on('data', data => {
-    receive = Buffer.concat([receive, data]);
-    for (let at; (at = receive.indexOf(0)) >= 0;) {
-      const row = JSON.parse(receive.subarray(0, at)); receive = receive.subarray(at + 1);
-      const request = requests.get(row.id);
-      if (request) {clearTimeout(request.timer); requests.delete(row.id); row.error ? request.reject(new Error(JSON.stringify(row.error))) : request.resolve(row.result);}
-    }
+    if (transportError) return;
+    try {
+      if (receive.length + data.length > 8 * 1024 * 1024) throw new Error('CDP frame exceeds 8 MiB diagnostic bound');
+      receive = Buffer.concat([receive, data]);
+      for (let at; (at = receive.indexOf(0)) >= 0;) {
+        const row = JSON.parse(receive.subarray(0, at)); receive = receive.subarray(at + 1);
+        if (!row || typeof row !== 'object') throw new Error('invalid CDP reply object');
+        const request = requests.get(row.id);
+        if (request) {
+          clearTimeout(request.timer); requests.delete(row.id);
+          journal('cdp-end', {id: row.id, method: request.method, replyBytes: at,
+            errorCode: row.error?.code, requestElapsedSeconds: monotonic() - request.started});
+          row.error ? request.reject(new Error(JSON.stringify(row.error))) : request.resolve(row.result);
+        } else journal('cdp-event', {id: row.id, method: typeof row.method === 'string' ? row.method.slice(0, 128) : undefined, replyBytes: at});
+      }
+    } catch (error) {journal('cdp-decode-error', {message: String(error).slice(0, 512)}); terminalChannel(error, 'fd4-decode');}
   });
   const manager = await renderer(false);
   must(Object.keys(manager.vaults).length === 0, 'new profile unexpectedly contains a vault');
+  setPhase('opening-vault');
   must(await evaluate(`require('electron').ipcRenderer.sendSync('disable-update')`) === true, 'app updates are not disabled');
   must(await evaluate(`require('electron').ipcRenderer.sendSync('vault-open',${JSON.stringify(vault)},false)`) === true, 'app refused fixture vault');
   await renderer(true);
+  setPhase('editor');
   await open('WIKI.md'); await screenshot('landing');
   await replace('WIKI.md', [['Browse [Pages](pages/) and [Sources](sources/).', '[Editor summary](pages/editor-summary.md)\n\nBrowse your Pages and Sources.']]);
   await evaluate("app.workspace.openLinkText('pages/editor-summary.md','WIKI.md',false)");
@@ -297,22 +397,27 @@ async function workflow() {
 
 try {
   await workflow();
-  result.status = result.checks.every(row => !row.required || row.passed) && !result.deadlineExceeded ? 'passed' : 'failed';
+  result.status = result.checks.every(row => !row.required || row.passed) && !result.deadlineExceeded
+    && !result.error && !result.lifecycleLogTruncated && !result.lifecycleLogError && !result.evidenceWriteError ? 'passed' : 'failed';
 } catch (error) {
-  result.status = 'failed'; result.error = String(error); result.stack = error.stack;
+  rememberFailure(error, 'workflow');
 } finally {
+  teardownStarted = true; setPhase('teardown');
   if (child) {
+    journal('app-quit-request');
     try {await cdp('Runtime.evaluate', {expression: "require('@electron/remote').app.quit()"}, session, 1000);} catch {}
     await sleep(1000);
     const alive = () => {try {process.kill(-child.pid, 0); return true;} catch {return false;}};
-    if (alive()) {try {process.kill(-child.pid, 'SIGTERM');} catch {} await sleep(1000);}
-    if (alive()) {try {process.kill(-child.pid, 'SIGKILL');} catch {} await sleep(500);}
+    if (alive()) {journal('app-signal', {signal: 'SIGTERM', origin: 'teardown'}); try {process.kill(-child.pid, 'SIGTERM');} catch {} await sleep(1000);}
+    if (alive()) {journal('app-signal', {signal: 'SIGKILL', origin: 'teardown'}); try {process.kill(-child.pid, 'SIGKILL');} catch {} await sleep(500);}
     result.ownedProcessGroupGone = !alive();
     result.appElapsedSeconds = monotonic() - appStarted;
     if (!result.ownedProcessGroupGone || result.appElapsedSeconds > 300) result.status = 'failed';
   }
   clearTimeout(deadlineTimer);
-  for (const request of requests.values()) {clearTimeout(request.timer); request.reject(new Error('controller cleanup'));}
+  rejectPending(new Error('controller cleanup'), 'cleanup');
+  if (result.lifecycleLogTruncated || result.lifecycleLogError || result.evidenceWriteError) result.status = 'failed';
+  setPhase('finished');
   save('result.json', result);
 }
 console.log(JSON.stringify({status: result.status, checks: result.checks.length}));
