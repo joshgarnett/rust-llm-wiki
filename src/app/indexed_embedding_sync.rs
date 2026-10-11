@@ -229,7 +229,9 @@ impl OfflineApp {
                         Some(&scope.source_bindings),
                         &[],
                     )?;
-                    let (ledger, tasks) = self.embedding_job_with_bindings(
+                    // Freeze the whole page's task guards once, including the
+                    // aggregate bound, before any partition dispatches work.
+                    let tasks = self.embedding_tasks_with_bindings(
                         &spec,
                         &batches,
                         &scope.units,
@@ -238,27 +240,17 @@ impl OfflineApp {
                         false,
                         Some(&scope.source_bindings),
                     )?;
-                    report.run_id = Some(ledger.inspect()?.spec.run_id.clone());
-                    for task in tasks {
-                        if ledger
-                            .inspect()?
-                            .tasks
-                            .get(&task.key)
-                            .is_some_and(|t| t.state == TaskState::Completed)
-                        {
-                            continue;
-                        }
-                        let generated = self
-                            .dispatch_embedding_task(
-                                &ledger,
-                                &task,
+                    let mut next = 0;
+                    while next < tasks.len() {
+                        #[cfg(test)]
+                        cost_probe::checkpoint()?;
+                        let (ledger, admitted, admitted_units) = self
+                            .embedding_job_partition(
                                 &spec,
+                                &batches[next..],
+                                &tasks[next..],
                                 &scope.units,
                                 runtime,
-                                TaskMaterialization {
-                                    probe: false,
-                                    corpus: true,
-                                },
                             )
                             .map_err(|error| {
                                 with_embedding_context(
@@ -269,11 +261,57 @@ impl OfflineApp {
                                     }),
                                 )
                             })?;
-                        report.generated_inputs += generated;
-                        report.network_used |= generated > 0;
-                    }
-                    if let Some(warning) = self.finish_embedding_job(&ledger)? {
-                        report.warnings.push(warning)
+                        report.run_id = Some(ledger.inspect()?.spec.run_id.clone());
+                        for task in &admitted {
+                            #[cfg(test)]
+                            cost_probe::checkpoint()?;
+                            if ledger
+                                .inspect()?
+                                .tasks
+                                .get(&task.key)
+                                .is_some_and(|t| t.state == TaskState::Completed)
+                            {
+                                continue;
+                            }
+                            let generated = self
+                                .dispatch_embedding_task(
+                                    &ledger,
+                                    task,
+                                    &spec,
+                                    &admitted_units,
+                                    runtime,
+                                    TaskMaterialization {
+                                        probe: false,
+                                        corpus: true,
+                                    },
+                                )
+                                .map_err(|error| {
+                                    with_embedding_context(
+                                        error,
+                                        serde_json::json!({
+                                            "run_id": report.run_id, "space": space,
+                                            "generated_inputs": report.generated_inputs,
+                                        }),
+                                    )
+                                })?;
+                            report.generated_inputs += generated;
+                            report.network_used |= generated > 0;
+                            // Dispatch has durably settled the receipt, finished
+                            // the task and rechecked current target membership.
+                            // A diagnostic stop leaves the owner page pending.
+                            #[cfg(test)]
+                            cost_probe::task_completed(
+                                &task.key,
+                                generated,
+                                report.run_id.as_ref().ok_or_else(|| {
+                                    WikiError::invalid("diagnostic task lost its Run")
+                                })?,
+                            )?;
+                        }
+                        if let Some(warning) = self.finish_embedding_job(&ledger)? {
+                            report.warnings.push(warning)
+                        }
+                        next += admitted.len();
                     }
                 } else {
                     if prepared

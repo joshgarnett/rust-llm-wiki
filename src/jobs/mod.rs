@@ -7,6 +7,8 @@ mod accounting_tests;
 pub mod budgets;
 pub(crate) mod checkpoint;
 pub mod diagnostics;
+#[cfg(test)]
+pub(crate) mod embedding_cost_probe;
 pub mod events;
 mod ledger;
 mod replay;

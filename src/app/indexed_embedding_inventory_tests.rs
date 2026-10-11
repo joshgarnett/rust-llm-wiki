@@ -1,8 +1,9 @@
 //! Public app workflows for compact, incremental preparation on disposable vaults.
 use super::*;
 use crate::{
-    app::indexed_embedding_inputs::attribution,
+    app::{embeddings::EmbeddingRuntime, indexed_embedding_inputs::attribution},
     catalog::query_types::{QueryCatalog, QueryReadLimits},
+    retrieval::spaces::SpaceSpec,
     retrieval::unit_inventory_types::{RenderPolicyId, UnitDescriptor, UnitOwnerBinding},
 };
 use std::{collections::BTreeMap, fs, sync::atomic::AtomicUsize};
@@ -1672,7 +1673,12 @@ fn inventory_automatic_guard_packing_reserved_scope_conflicts_and_encoded_single
     assert_eq!(
         fixture
             .app
-            .embedding_guard_batches(&runtime, &[inputs[0].clone(), escaped], None, &[])
+            .embedding_guard_batches::<Vec<ReadDependency>>(
+                &runtime,
+                &[inputs[0].clone(), escaped],
+                None,
+                &[]
+            )
             .err()
             .expect("packing must reject the invalid scope or input")
             .code,
@@ -2441,4 +2447,316 @@ fn inventory_mixed_stale_budget_pause_preserves_siblings_for_same_run_continuati
     assert_eq!(after.budget.unknown_attempts.len(), 3);
     assert_eq!(after.spec, before.spec);
     assert_eq!(retained_marker_count(&fixture), 2);
+}
+
+#[test]
+fn inventory_partition_invocation_ceiling_and_received_replay_keep_complete_owner_proofs() {
+    struct NextPartitionReceived {
+        calls: AtomicUsize,
+        cut_at: usize,
+    }
+    impl LedgerFault for NextPartitionReceived {
+        fn check(&self, point: LedgerCheckpoint) -> Result<()> {
+            if point == LedgerCheckpoint::AfterReceived
+                && self.calls.fetch_add(1, Ordering::SeqCst) + 1 == self.cut_at
+            {
+                Err(WikiError::new(
+                    ErrorCode::Internal,
+                    "retain the next partition response",
+                ))
+            } else {
+                Ok(())
+            }
+        }
+    }
+    for received in [false, true] {
+        let fixture = normalized();
+        let body = (0..12)
+            .map(|index| {
+                let mut paragraph = format!(
+                    "Partition fixture paragraph {index:02} records exact supported bytes. "
+                );
+                paragraph.push_str(&"x".repeat(598 - paragraph.len()));
+                paragraph.push_str("\n\n");
+                paragraph
+            })
+            .collect::<String>();
+        // Exact guards are retained under legal longer paths so thirteen real
+        // task descriptors exceed the unchanged Genesis/Run encoding bound.
+        let prefix = format!("partition_guard_{}", "x".repeat(48));
+        assert_eq!(prefix.len(), 64);
+        let owner = owner_with_identity_guard_count(&fixture, &prefix, 127, &body);
+        let settings = EmbeddingSettings {
+            max_input_bytes: 8000,
+            quality_target_bytes: Some(1000),
+            ..Default::default()
+        };
+        let catalog = Catalog::new(fixture.fs.clone(), fixture.app.vault_id().clone());
+        let prepared = super::super::indexed_embedding_inputs::materialize(
+            &catalog,
+            &settings,
+            None,
+            &crate::retrieval::context_types::VerificationBudget::default(),
+        )
+        .unwrap();
+        assert_eq!(
+            prepared.units.len(),
+            13,
+            "twelve Page chunks and one support Source"
+        );
+        let mut seen = std::collections::BTreeSet::new();
+        let missing = prepared
+            .units
+            .iter()
+            .filter(|unit| seen.insert(unit.input_hash.clone()))
+            .map(|unit| unit.input())
+            .collect::<Vec<_>>();
+        assert_eq!(missing.len(), 13);
+        let scope = prepared.paid_scope(&prepared.units, &missing, 127).unwrap();
+        let responses = Arc::new(Responses::new());
+        let dispatch = dispatcher(&fixture.fs, responses.clone());
+        let mut invocation = runtime(&fixture.service, &dispatch);
+        invocation.limits.requests = 16;
+        let spec = SpaceSpec::from_service(&fixture.service, settings.clone()).unwrap();
+        let batches = fixture
+            .app
+            .embedding_guard_batches(&invocation, &missing, Some(&scope.source_bindings), &[])
+            .unwrap();
+        let tasks = fixture
+            .app
+            .embedding_tasks_with_bindings(
+                &spec,
+                &batches,
+                &scope.units,
+                &invocation,
+                "embeddings_sync",
+                false,
+                Some(&scope.source_bindings),
+            )
+            .unwrap();
+        assert_eq!(tasks.len(), 13);
+        // Determine the real first-prefix boundary without creating a Run or
+        // changing the corpus; the public workflow must obey the same limit.
+        let fitting_prefix = |runtime: &EmbeddingRuntime<'_>| {
+            let scoped_runtime = runtime.scoped_for_operation().unwrap();
+            let mut fitting = 0;
+            for count in 1..=tasks.len() {
+                let run = fixture
+                    .app
+                    .embedding_run_spec(
+                        tasks[..count].to_vec(),
+                        Blake3Hash::digest([]),
+                        &scoped_runtime,
+                        "embeddings_sync",
+                        PriorAccounting::None,
+                        RecordId::new("run_00000000-0000-7000-8000-000000000000").unwrap(),
+                    )
+                    .unwrap();
+                match JobLedger::validate_bootstrap_size(&run) {
+                    Ok(()) => fitting = count,
+                    Err(error) if error.code == ErrorCode::BudgetExceeded => break,
+                    Err(error) => panic!("unexpected prefix refusal: {error:?}"),
+                }
+            }
+            fitting
+        };
+        let first_prefix = fitting_prefix(&invocation);
+        assert!(first_prefix > 0 && first_prefix < tasks.len());
+        if !received {
+            // Even one ordinary task must refuse an intrinsically oversized
+            // retained-accounting header without creating a run or sending.
+            let scoped = invocation.scoped_for_operation().unwrap();
+            let prior = PriorAccounting::Unknown {
+                prior_run_ids: (0..4096)
+                    .map(|index| {
+                        RecordId::new(format!("run_prior_{index:04}_{}", "x".repeat(80))).unwrap()
+                    })
+                    .collect(),
+                reason: "Retained accounting cannot be omitted to fit a job".into(),
+            };
+            let singleton = fixture
+                .app
+                .embedding_run_spec(
+                    tasks[..1].to_vec(),
+                    Blake3Hash::digest([]),
+                    &scoped,
+                    "embeddings_sync",
+                    prior,
+                    RecordId::new("run_00000000-0000-7000-8000-000000000000").unwrap(),
+                )
+                .unwrap();
+            assert_eq!(
+                JobLedger::validate_bootstrap_size(&singleton)
+                    .unwrap_err()
+                    .code,
+                ErrorCode::BudgetExceeded
+            );
+            assert!(
+                crate::vault::operational::RunStore::discover_existing(
+                    &fixture.fs,
+                    fixture.app.vault_id(),
+                    4096,
+                    &mut || Ok(())
+                )
+                .unwrap()
+                .is_empty()
+            );
+            assert_eq!(responses.calls.load(Ordering::SeqCst), 0);
+        }
+        if received {
+            invocation.job_options.fault = Some(Arc::new(NextPartitionReceived {
+                calls: AtomicUsize::new(0),
+                cut_at: first_prefix + 1,
+            }));
+        } else {
+            invocation.limits.requests = first_prefix as u64;
+            assert_eq!(fitting_prefix(&invocation), first_prefix);
+        }
+        let stopped = fixture
+            .app
+            .embeddings_sync(&settings, &invocation)
+            .unwrap_err();
+        assert_eq!(
+            stopped.code,
+            if received {
+                ErrorCode::Internal
+            } else {
+                ErrorCode::BudgetExceeded
+            }
+        );
+        assert_eq!(
+            responses.calls.load(Ordering::SeqCst),
+            first_prefix + usize::from(received)
+        );
+        let stopped_ids = crate::vault::operational::RunStore::discover_existing(
+            &fixture.fs,
+            fixture.app.vault_id(),
+            4096,
+            &mut || Ok(()),
+        )
+        .unwrap();
+        assert!(stopped_ids.len() >= 2);
+        let stopped_runs = stopped_ids
+            .iter()
+            .map(|run| {
+                JobLedger::new(
+                    fixture.fs.clone(),
+                    fixture.app.vault_id().clone(),
+                    run.clone(),
+                    options(),
+                )
+                .unwrap()
+                .inspect()
+                .unwrap()
+            })
+            .collect::<Vec<_>>();
+        let completed = stopped_runs
+            .iter()
+            .filter(|run| run.state == RunState::Completed)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            completed.len(),
+            1,
+            "one partition completed before the next stopped"
+        );
+        assert_eq!(completed[0].budget.dispatched_requests, first_prefix as u64);
+        assert_eq!(completed[0].budget.unknown_attempts.len(), first_prefix);
+        for run in &stopped_runs {
+            assert_eq!(run.spec.scope.operation, "embeddings_sync");
+            assert_eq!(run.spec.deadline_utc_ms, invocation.deadline_utc_ms);
+        }
+        let (binding, _) = owner_state(&fixture, &settings, &owner);
+        assert!(
+            !VectorStore::open(&fixture.fs, None)
+                .unwrap()
+                .owner_binding_ready(&spec.id().unwrap(), &binding)
+                .unwrap(),
+            "a partially paid owner must not be acknowledged"
+        );
+        if !received {
+            assert_eq!(
+                stopped_runs
+                    .iter()
+                    .map(|run| run.budget.dispatched_requests)
+                    .sum::<u64>(),
+                first_prefix as u64
+            );
+            assert!(
+                stopped_runs
+                    .iter()
+                    .filter(|run| run.state != RunState::Completed)
+                    .all(|run| run.attempts.is_empty()),
+                "new job cannot reset the invocation allowance"
+            );
+            continue;
+        }
+        let retained = stopped_runs
+            .iter()
+            .flat_map(|run| &run.attempts)
+            .find(|attempt| attempt.phase == AttemptPhase::Received)
+            .unwrap()
+            .clone();
+        let spool = retained.spool.as_ref().unwrap();
+        for reference in [&spool.response, &spool.metadata] {
+            let bytes = fs::read(fixture.fs.root().path().join(reference.path.as_str())).unwrap();
+            assert_eq!(bytes.len() as u64, reference.byte_len);
+            assert_eq!(Blake3Hash::digest(&bytes), reference.hash);
+        }
+        invocation.job_options.fault = None;
+        let resumed = fixture.app.embeddings_sync(&settings, &invocation).unwrap();
+        complete(&resumed, 13);
+        assert_eq!(
+            responses.calls.load(Ordering::SeqCst),
+            13,
+            "Received response must never be resent"
+        );
+        let final_ids = crate::vault::operational::RunStore::discover_existing(
+            &fixture.fs,
+            fixture.app.vault_id(),
+            4096,
+            &mut || Ok(()),
+        )
+        .unwrap();
+        let mut replayed = 0;
+        for run in final_ids {
+            let inspection = JobLedger::new(
+                fixture.fs.clone(),
+                fixture.app.vault_id().clone(),
+                run,
+                options(),
+            )
+            .unwrap()
+            .inspect()
+            .unwrap();
+            assert_eq!(inspection.state, RunState::Completed);
+            assert!(
+                inspection
+                    .tasks
+                    .values()
+                    .all(|task| task.state == TaskState::Completed)
+            );
+            assert_receipt_guards(&fixture, &inspection);
+            if let Some(original) = completed
+                .iter()
+                .find(|before| before.spec.run_id == inspection.spec.run_id)
+            {
+                assert_eq!(inspection.attempts, original.attempts);
+                assert_eq!(inspection.budget.outstanding, original.budget.outstanding);
+                assert_eq!(
+                    inspection.budget.unknown_attempts,
+                    original.budget.unknown_attempts
+                );
+            }
+            for attempt in &inspection.attempts {
+                if attempt.attempt == retained.attempt {
+                    replayed += 1;
+                    assert_eq!(attempt.phase, AttemptPhase::Settled);
+                    assert_eq!(attempt.spool, retained.spool);
+                }
+            }
+        }
+        assert_eq!(replayed, 1);
+        cached_noop(&fixture, &settings, 13);
+        assert_eq!(responses.calls.load(Ordering::SeqCst), 13);
+    }
 }

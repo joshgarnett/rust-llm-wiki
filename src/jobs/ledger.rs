@@ -1,5 +1,7 @@
 //! Durable admission never holds a run lock across transport.
 use super::{budgets, checkpoint, events, replay, tasks, types::*};
+#[cfg(test)]
+use super::embedding_cost_probe::{self as cost_probe, Counter as CostCounter, Stage as CostStage};
 use crate::vault::operational::{RunFile, RunLedgerGuard, RunStore, SpoolPart};
 use crate::{
     catalog::{Catalog, CatalogGraphValidator},
@@ -321,6 +323,10 @@ impl JobLedger {
         outputs: &[DurableOutputRef],
         cache_outputs: &[VectorCacheRef],
     ) -> Result<bool> {
+        #[cfg(test)]
+        let _cost_history_receipt = cost_probe::enter(CostStage::HistoricalReceipts);
+        #[cfg(test)]
+        cost_probe::count(CostCounter::HistoricalReceiptVisits, 1);
         let task = loaded
             .state
             .inspection
@@ -607,10 +613,17 @@ impl JobLedger {
             }
             Ok(())
         };
-        let guard = store.lock(
-            Duration::from_millis(self.options.lock_timeout_ms),
-            &mut check,
-        )?;
+        let guard = {
+            #[cfg(test)]
+            let _cost_lock = cost_probe::enter(CostStage::LockWait);
+            let guard = store.lock(
+                Duration::from_millis(self.options.lock_timeout_ms),
+                &mut check,
+            )?;
+            #[cfg(test)]
+            cost_probe::count(CostCounter::LockAcquisitions, 1);
+            guard
+        };
         let mut loaded = self.load(&guard, bind)?;
         f(&guard, &mut loaded).map_err(|mut e| {
             let old = std::mem::replace(&mut e.details, serde_json::Value::Null);
@@ -619,10 +632,18 @@ impl JobLedger {
         })
     }
     fn load(&self, g: &RunLedgerGuard<'_>, bind: bool) -> Result<Loaded> {
+        #[cfg(test)]
+        let _cost_history = cost_probe::enter(CostStage::CurrentHistory);
+        #[cfg(test)]
+        cost_probe::count(CostCounter::HistoryLoads, 1);
         let before = g.read_journal()?.ok_or_else(|| {
             events::corrupt("operational journal missing; old lifetime budget cannot resume")
         })?;
+        #[cfg(test)]
+        cost_probe::count(CostCounter::JournalBytesLoaded, before.bytes.len());
         let decoded = events::decode(&before.bytes, &self.run_id)?;
+        #[cfg(test)]
+        cost_probe::count(CostCounter::JournalFramesLoaded, decoded.frames.len());
         if decoded.frames.is_empty() {
             return Err(events::corrupt("complete operational genesis missing"));
         }
@@ -656,6 +677,8 @@ impl JobLedger {
                 "history head no longer matches complete prefix",
             ));
         }
+        #[cfg(test)]
+        cost_probe::count(CostCounter::JournalFramesReplayed, decoded.frames.len());
         let mut state = replay::replay(&decoded.frames, decoded.safe_offset)?;
         if state.inspection.spec_hash != h.spec_hash
             || state.inspection.spec.vault_id != self.vault_id
@@ -708,6 +731,10 @@ impl JobLedger {
         enrich_observations(&mut state, &decoded.frames)?;
         replay::recount(&mut state)?;
         if bind {
+            #[cfg(test)]
+            let _cost_canonical = cost_probe::enter(CostStage::Other);
+            #[cfg(test)]
+            cost_probe::count(CostCounter::CanonicalBindingVisits, 1);
             let run = state
                 .inspection
                 .run_note
@@ -747,6 +774,8 @@ impl JobLedger {
         loaded: &mut Loaded,
         payload: EventPayload,
     ) -> Result<EventRef> {
+        #[cfg(test)]
+        let _cost_append = cost_probe::enter(CostStage::CurrentHistory);
         self.local_write()?;
         if loaded.torn_tail {
             g.truncate_torn_tail(loaded.physical_length, loaded.length)?;
@@ -767,6 +796,8 @@ impl JobLedger {
             .length
             .checked_add(encoded.len() as u64)
             .ok_or_else(|| events::corrupt("journal length overflow"))?;
+        #[cfg(test)]
+        cost_probe::count(CostCounter::JournalFramesReplayed, proposed.len());
         let mut next = replay::replay(&proposed, new_len)?;
         next.received_meta = loaded.state.received_meta.clone();
         for a in &mut next.inspection.attempts {
@@ -983,6 +1014,20 @@ impl JobLedger {
                 }
             };
             if !historical {
+                #[cfg(test)]
+                let _cost_binding = cost_probe::enter(CostStage::PendingBindings);
+                #[cfg(test)]
+                {
+                    cost_probe::count(CostCounter::PendingTaskBindVisits, 1);
+                    cost_probe::count(
+                        CostCounter::PendingGuardOccurrences,
+                        task.spec.source_bindings.len(),
+                    );
+                    cost_probe::count(
+                        CostCounter::PendingDescriptorLogicalBytes,
+                        usize::try_from(task.spec.input.byte_len).unwrap_or(usize::MAX),
+                    );
+                }
                 tasks::bind(&self.fs, &task.spec)?;
             }
             for output in &task.outputs {
@@ -1260,10 +1305,17 @@ impl JobLedgerApi for JobLedger {
             RunStore::bootstrap(&self.fs, writer, &self.vault_id, &self.run_id)?
         };
         let mut check = || Ok(());
-        let g = store.lock(
-            Duration::from_millis(self.options.lock_timeout_ms),
-            &mut check,
-        )?;
+        let g = {
+            #[cfg(test)]
+            let _cost_lock = cost_probe::enter(CostStage::LockWait);
+            let guard = store.lock(
+                Duration::from_millis(self.options.lock_timeout_ms),
+                &mut check,
+            )?;
+            #[cfg(test)]
+            cost_probe::count(CostCounter::LockAcquisitions, 1);
+            guard
+        };
         let journal = g
             .read_journal()?
             .ok_or_else(|| events::corrupt("bootstrap journal missing"))?;
@@ -2007,6 +2059,13 @@ pub(super) fn find_or_prepare(
     Ok(engine.prepare(writer, draft.clone())?.prepared)
 }
 impl JobLedger {
+    /// Pure size admission for a prospective immutable job. This confers no
+    /// freshness or send authority; create checks those bindings separately.
+    pub(crate) fn validate_bootstrap_size(spec: &RunSpec) -> Result<()> {
+        checkpoint::run_bytes(&initial_inspection(spec)?)?;
+        Ok(())
+    }
+
     fn load_pristine(&self, g: &RunLedgerGuard<'_>, spec: &RunSpec) -> Result<Loaded> {
         if g.read_checkpoint(METADATA_MAX_BYTES as u64)?.is_some() {
             return self.load(g, false);

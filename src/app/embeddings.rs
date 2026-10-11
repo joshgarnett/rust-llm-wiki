@@ -1,11 +1,13 @@
 //! Explicit remote embedding work; all paid requests use production dispatcher and ledger.
 use super::{
     OfflineApp,
-    indexed_embedding_inputs::{self, NormalizedEmbeddingInputs},
+    indexed_embedding_inputs::{self, InputBindings, NormalizedEmbeddingInputs},
 };
 #[path = "indexed_embedding_sync.rs"]
 mod indexed_sync;
 use crate::config::providers::TrustedService;
+#[cfg(test)]
+use crate::jobs::embedding_cost_probe as cost_probe;
 use crate::{
     catalog::{Catalog, CatalogGraphValidator, ReaderSnapshot},
     changes::{ChangeEngine, ReadDependency},
@@ -124,7 +126,7 @@ impl<'a> EmbeddingRuntime<'a> {
             invocation: None,
         }
     }
-    fn scoped_for_operation(&self) -> Result<Self> {
+    pub(super) fn scoped_for_operation(&self) -> Result<Self> {
         let mut scoped = self.clone();
         if scoped.invocation.is_none() {
             // Honor caller changes made before operation entry, then freeze.
@@ -328,6 +330,10 @@ impl OfflineApp {
         }
     }
     fn embedding_writer(&self) -> Result<WriterPermit> {
+        #[cfg(test)]
+        let _wait = cost_probe::enter(cost_probe::Stage::LockWait);
+        #[cfg(test)]
+        cost_probe::count(cost_probe::Counter::LockAcquisitions, 1);
         WriterPermit::acquire(
             self.fs.root(),
             Duration::from_millis(self.options.lock_timeout_ms),
@@ -1221,16 +1227,16 @@ impl OfflineApp {
         runtime: &EmbeddingRuntime<'_>,
         inputs: &[EmbeddingInput],
     ) -> Result<Vec<Vec<EmbeddingInput>>> {
-        self.embedding_guard_batches(runtime, inputs, None, &[])
+        self.embedding_guard_batches::<std::sync::Arc<[ReadDependency]>>(runtime, inputs, None, &[])
     }
     /// Count the complete receipt union: supplier guards, declared scope guards
     /// and the current Run guard added by receipt_plan_locked. Scope guards are
     /// never removed to make a task fit; current embedding Runs declare none.
-    pub(super) fn embedding_guard_batches(
+    pub(super) fn embedding_guard_batches<T: AsRef<[ReadDependency]>>(
         &self,
         runtime: &EmbeddingRuntime<'_>,
         inputs: &[EmbeddingInput],
-        bindings: Option<&BTreeMap<Blake3Hash, Vec<ReadDependency>>>,
+        bindings: Option<&BTreeMap<Blake3Hash, T>>,
         scope_guards: &[ReadDependency],
     ) -> Result<Vec<Vec<EmbeddingInput>>> {
         let max_items =
@@ -1247,6 +1253,7 @@ impl OfflineApp {
         for guard in scope_guards.iter().chain(inputs.iter().flat_map(|input| {
             bindings
                 .and_then(|b| b.get(&input.input_hash))
+                .map(AsRef::as_ref)
                 .into_iter()
                 .flatten()
         })) {
@@ -1265,6 +1272,7 @@ impl OfflineApp {
             for guard in scope_guards.iter().chain(batch.iter().flat_map(|input| {
                 bindings
                     .and_then(|b| b.get(&input.input_hash))
+                    .map(AsRef::as_ref)
                     .into_iter()
                     .flatten()
             })) {
@@ -1338,6 +1346,10 @@ impl OfflineApp {
     }
     pub(crate) fn prior_accounting_for_new_run(&self) -> Result<PriorAccounting> {
         #[cfg(test)]
+        let _discovery = cost_probe::enter(cost_probe::Stage::PriorDiscovery);
+        #[cfg(test)]
+        cost_probe::count(cost_probe::Counter::PriorDiscoveries, 1);
+        #[cfg(test)]
         indexed_embedding_inputs::attribution::prior_accounting_discovery();
         let mut prior = BTreeSet::new();
         let mut entries = 0;
@@ -1384,6 +1396,8 @@ impl OfflineApp {
             4096,
             &mut || Ok(()),
         )?);
+        #[cfg(test)]
+        cost_probe::count(cost_probe::Counter::PriorRuns, prior.len());
         if prior.is_empty() {
             Ok(PriorAccounting::None)
         } else {
@@ -1432,8 +1446,29 @@ impl OfflineApp {
         runtime: &EmbeddingRuntime<'_>,
         operation: &str,
         probe: bool,
-        paid_bindings: Option<&BTreeMap<Blake3Hash, Vec<ReadDependency>>>,
+        paid_bindings: Option<&InputBindings>,
     ) -> Result<(JobLedger, Vec<TaskSpec>)> {
+        let tasks = self.embedding_tasks_with_bindings(
+            spec,
+            batches,
+            units,
+            runtime,
+            operation,
+            probe,
+            paid_bindings,
+        )?;
+        self.embedding_job_from_tasks(spec, tasks, units, runtime, operation, probe, None, None)
+    }
+    pub(super) fn embedding_tasks_with_bindings(
+        &self,
+        spec: &SpaceSpec,
+        batches: &[Vec<EmbeddingInput>],
+        units: &[RenderedUnit],
+        runtime: &EmbeddingRuntime<'_>,
+        operation: &str,
+        probe: bool,
+        paid_bindings: Option<&InputBindings>,
+    ) -> Result<Vec<TaskSpec>> {
         self.remote_gate(runtime)?;
         let writer = self.embedding_writer()?;
         let catalog = Catalog::new(self.fs.clone(), self.vault_id.clone());
@@ -1492,53 +1527,65 @@ impl OfflineApp {
             let fp = crate::providers::wire::task_fingerprints(runtime.service, &remote)?;
             let hashes = batch.iter().map(|i| &i.input_hash).collect::<BTreeSet<_>>();
             let mut guards = BTreeMap::new();
-            if let Some(source_bindings) = paid_bindings.or_else(|| {
-                normalized_inputs
-                    .as_ref()
-                    .map(|inputs| &inputs.source_bindings)
-            }) {
-                for hash in &hashes {
-                    for guard in source_bindings.get(*hash).ok_or_else(|| {
-                        fail(
-                            ErrorCode::FreshnessConflict,
-                            "embedding input lost its authenticated owner guards",
-                        )
-                    })? {
-                        if let Some(old) = guards.get(&guard.path) {
-                            if old != &guard.expected {
-                                return Err(fail(
-                                    ErrorCode::FreshnessConflict,
-                                    "embedding batch has conflicting source guards",
-                                ));
-                            }
-                            continue;
+            // Ordinary paid scope shares supplier guards. The normalized
+            // fallback expands only this batch's complete all-owner union.
+            let fallback_guards = normalized_inputs
+                .as_ref()
+                .map(|inputs| inputs.batch_bindings(&hashes))
+                .transpose()?;
+            if paid_bindings.is_some() || fallback_guards.is_some() {
+                if let Some(bindings) = paid_bindings {
+                    for hash in &hashes {
+                        if !bindings.contains_key(*hash) {
+                            return Err(fail(
+                                ErrorCode::FreshnessConflict,
+                                "embedding input lost its authenticated owner guards",
+                            ));
                         }
-                        let bytes = std::mem::size_of::<ReadDependency>()
-                            + guard.path.as_str().len()
-                            + match &guard.expected {
-                                ExpectedState::Absent => 0,
-                                ExpectedState::Hash(hash) => hash.as_str().len(),
-                            };
-                        guard_entries = guard_entries
-                            .checked_add(1)
-                            .filter(|n| *n <= 65_536)
-                            .ok_or_else(|| {
-                                fail(
-                                    ErrorCode::BudgetExceeded,
-                                    "embedding task guard count exhausted",
-                                )
-                            })?;
-                        guard_bytes = guard_bytes
-                            .checked_add(bytes)
-                            .filter(|n| *n <= 64 * 1024 * 1024)
-                            .ok_or_else(|| {
-                                fail(
-                                    ErrorCode::BudgetExceeded,
-                                    "embedding task guard bytes exhausted",
-                                )
-                            })?;
-                        guards.insert(guard.path.clone(), guard.expected.clone());
                     }
+                }
+                let paid_guards = hashes.iter().flat_map(|hash| {
+                    paid_bindings
+                        .and_then(|bindings| bindings.get(*hash))
+                        .map(|guards| guards.as_ref())
+                        .into_iter()
+                        .flatten()
+                });
+                for guard in fallback_guards.iter().flatten().chain(paid_guards) {
+                    if let Some(old) = guards.get(&guard.path) {
+                        if old != &guard.expected {
+                            return Err(fail(
+                                ErrorCode::FreshnessConflict,
+                                "embedding batch has conflicting source guards",
+                            ));
+                        }
+                        continue;
+                    }
+                    let bytes = std::mem::size_of::<ReadDependency>()
+                        + guard.path.as_str().len()
+                        + match &guard.expected {
+                            ExpectedState::Absent => 0,
+                            ExpectedState::Hash(hash) => hash.as_str().len(),
+                        };
+                    guard_entries = guard_entries
+                        .checked_add(1)
+                        .filter(|n| *n <= 65_536)
+                        .ok_or_else(|| {
+                            fail(
+                                ErrorCode::BudgetExceeded,
+                                "embedding task guard count exhausted",
+                            )
+                        })?;
+                    guard_bytes = guard_bytes
+                        .checked_add(bytes)
+                        .filter(|n| *n <= 64 * 1024 * 1024)
+                        .ok_or_else(|| {
+                            fail(
+                                ErrorCode::BudgetExceeded,
+                                "embedding task guard bytes exhausted",
+                            )
+                        })?;
+                    guards.insert(guard.path.clone(), guard.expected.clone());
                 }
             } else {
                 for unit in units.iter().filter(|u| hashes.contains(&u.input_hash)) {
@@ -1590,6 +1637,199 @@ impl OfflineApp {
             task.key = jobs::tasks::task_key(&task)?;
             tasks.push(task);
         }
+        Ok(tasks)
+    }
+    pub(super) fn embedding_run_spec(
+        &self,
+        tasks: Vec<TaskSpec>,
+        scope_payload_hash: Blake3Hash,
+        runtime: &EmbeddingRuntime<'_>,
+        operation: &str,
+        prior_accounting: PriorAccounting,
+        run_id: RecordId,
+    ) -> Result<RunSpec> {
+        let invocation = runtime
+            .invocation
+            .as_ref()
+            .ok_or_else(|| WikiError::invalid("embedding operation allowance missing"))?;
+        let mut run = RunSpec {
+            version: 1,
+            run_id,
+            vault_id: self.vault_id.clone(),
+            title: format!("Explicit {operation}"),
+            created_at_utc_ms: invocation.started_at_utc_ms(),
+            deadline_utc_ms: invocation.deadline_utc_ms(),
+            scope: RunScope {
+                operation: operation.into(),
+                question: None,
+                exclusions: Vec::new(),
+                source_snapshot: None,
+                input_records: Vec::new(),
+                read_preconditions: Vec::new(),
+                profile_fingerprints: BTreeMap::from([(
+                    runtime.service.summary().profile_id,
+                    runtime.service.summary().profile_fingerprint,
+                )]),
+                scope_payload_hash: Some(scope_payload_hash),
+            },
+            config_fingerprint: runtime.service.summary().config_fingerprint,
+            input_fingerprint: Blake3Hash::digest([]),
+            limits: runtime.limits.clone(),
+            tasks,
+            prior_accounting,
+        };
+        run.input_fingerprint = jobs::tasks::input_fingerprint(&run)?;
+        Ok(run)
+    }
+    // Task order is frozen for the page. Admit the largest prefix against the
+    // actual immutable spec, Genesis and Run encoding limits, without writes.
+    fn embedding_job_partition(
+        &self,
+        spec: &SpaceSpec,
+        batches: &[Vec<EmbeddingInput>],
+        tasks: &[TaskSpec],
+        units: &[RenderedUnit],
+        runtime: &EmbeddingRuntime<'_>,
+    ) -> Result<(JobLedger, Vec<TaskSpec>, Vec<RenderedUnit>)> {
+        if tasks.is_empty() || batches.len() != tasks.len() {
+            return Err(WikiError::invalid(
+                "embedding job partition lost its batches",
+            ));
+        }
+        // Keep accounting discovery and admission under one managed writer.
+        let writer = self.embedding_writer()?;
+        let prior = self.prior_accounting_for_new_run()?;
+        #[cfg(test)]
+        let prefix_stage = cost_probe::enter(cost_probe::Stage::PrefixAdmission);
+        // The occurrence bound exists only in the frozen diagnostic arm. The
+        // normal allocator continues to use its exact immutable byte limits.
+        #[cfg(not(test))]
+        let max_prefix = tasks.len();
+        #[cfg(test)]
+        let max_prefix = match cost_probe::guard_occurrence_limit() {
+            None => tasks.len(),
+            Some(limit) => {
+                let mut occurrences = 0usize;
+                let mut count = 0;
+                for task in tasks {
+                    if task.source_bindings.is_empty() {
+                        return Err(WikiError::invalid(
+                            "guard-cost diagnostic requires authenticated task guards",
+                        ));
+                    }
+                    let next = occurrences
+                        .checked_add(task.source_bindings.len())
+                        .ok_or_else(|| WikiError::invalid("guard occurrence count overflow"))?;
+                    if next > limit {
+                        break;
+                    }
+                    occurrences = next;
+                    count += 1;
+                }
+                if count == 0 {
+                    return Err(fail(
+                        ErrorCode::BudgetExceeded,
+                        "one diagnostic task exceeds guard occurrence allowance",
+                    ));
+                }
+                count
+            }
+        };
+        let run_id = RecordId::new(format!("run_{}", uuid::Uuid::now_v7()))?;
+        let template = self.embedding_run_spec(
+            Vec::new(),
+            Blake3Hash::digest([]),
+            runtime,
+            "embeddings_sync",
+            prior,
+            run_id,
+        )?;
+        let candidate = |count: usize| -> Result<RunSpec> {
+            #[cfg(test)]
+            cost_probe::count(cost_probe::Counter::PrefixCandidates, 1);
+            let mut run = template.clone();
+            run.tasks = tasks[..count].to_vec();
+            run.input_fingerprint = jobs::tasks::input_fingerprint(&run)?;
+            JobLedger::validate_bootstrap_size(&run)?;
+            Ok(run)
+        };
+        // A singleton failure is intrinsic: splitting cannot erase its guards
+        // or the retained accounting header.
+        let mut run = candidate(1)?;
+        let mut low = 1;
+        let mut high = max_prefix;
+        while low < high {
+            let mid = low + (high - low).div_ceil(2);
+            match candidate(mid) {
+                Ok(next) => {
+                    low = mid;
+                    run = next;
+                }
+                Err(error) if error.code == ErrorCode::BudgetExceeded => {
+                    high = mid - 1;
+                }
+                Err(error) => return Err(error),
+            }
+        }
+        let hashes = batches[..low]
+            .iter()
+            .flatten()
+            .map(|input| &input.input_hash)
+            .collect::<BTreeSet<_>>();
+        let admitted_units = units
+            .iter()
+            .filter(|unit| hashes.contains(&unit.input_hash))
+            .cloned()
+            .collect::<Vec<_>>();
+        run.scope.scope_payload_hash = Some(proof(&admitted_units)?);
+        let admitted_tasks = run.tasks.clone();
+        #[cfg(test)]
+        if cost_probe::is_active() {
+            let encoded_bytes = serde_json::to_vec(&run)
+                .map_err(|_| WikiError::invalid("diagnostic Run spec encoding"))?
+                .len();
+            cost_probe::job_admitted(
+                admitted_tasks.len(),
+                admitted_tasks
+                    .iter()
+                    .map(|task| task.source_bindings.len())
+                    .sum(),
+                encoded_bytes,
+            )?;
+        }
+        #[cfg(test)]
+        drop(prefix_stage);
+        let (ledger, tasks) = self.embedding_job_from_tasks(
+            spec,
+            admitted_tasks,
+            &admitted_units,
+            runtime,
+            "embeddings_sync",
+            false,
+            Some(run),
+            Some(writer),
+        )?;
+        Ok((ledger, tasks, admitted_units))
+    }
+    fn embedding_job_from_tasks(
+        &self,
+        spec: &SpaceSpec,
+        tasks: Vec<TaskSpec>,
+        units: &[RenderedUnit],
+        runtime: &EmbeddingRuntime<'_>,
+        operation: &str,
+        probe: bool,
+        prepared_run: Option<RunSpec>,
+        prepared_writer: Option<WriterPermit>,
+    ) -> Result<(JobLedger, Vec<TaskSpec>)> {
+        #[cfg(test)]
+        let _creation = cost_probe::enter(cost_probe::Stage::JobCreation);
+        self.remote_gate(runtime)?;
+        let writer = match prepared_writer {
+            Some(writer) => writer,
+            None => self.embedding_writer()?,
+        };
+        let space = spec.id()?;
         let legacy_identity = (
             operation,
             &space,
@@ -1701,46 +1941,24 @@ impl OfflineApp {
                 return Ok((ledger, tasks));
             }
         }
-        let invocation = runtime
-            .invocation
-            .as_ref()
-            .ok_or_else(|| WikiError::invalid("embedding operation allowance missing"))?;
-        let now = invocation.started_at_utc_ms();
-        let run_id = RecordId::new(format!("run_{}", uuid::Uuid::now_v7()))?;
-        let mut run = RunSpec {
-            version: 1,
-            run_id: run_id.clone(),
-            vault_id: self.vault_id.clone(),
-            title: format!("Explicit {operation}"),
-            created_at_utc_ms: now,
-            deadline_utc_ms: invocation.deadline_utc_ms(),
-            scope: RunScope {
-                operation: operation.into(),
-                question: None,
-                exclusions: Vec::new(),
-                source_snapshot: None,
-                input_records: Vec::new(),
-                read_preconditions: Vec::new(),
-                profile_fingerprints: BTreeMap::from([(
-                    runtime.service.summary().profile_id,
-                    runtime.service.summary().profile_fingerprint,
-                )]),
-                scope_payload_hash: Some(proof(units)?),
-            },
-            config_fingerprint: runtime.service.summary().config_fingerprint,
-            input_fingerprint: Blake3Hash::digest([]),
-            limits: runtime.limits.clone(),
-            tasks: tasks.clone(),
-            prior_accounting: self.prior_accounting_for_new_run()?,
+        let run = match prepared_run {
+            Some(run) => run,
+            None => self.embedding_run_spec(
+                tasks.clone(),
+                proof(units)?,
+                runtime,
+                operation,
+                self.prior_accounting_for_new_run()?,
+                RecordId::new(format!("run_{}", uuid::Uuid::now_v7()))?,
+            )?,
         };
-        run.input_fingerprint = jobs::tasks::input_fingerprint(&run)?;
+        let run_id = run.run_id.clone();
         let ledger = JobLedger::new(
             self.fs.clone(),
             self.vault_id.clone(),
             run_id.clone(),
             runtime.job_options.clone(),
         )?;
-        ledger.create(&writer, run)?;
         let marker = RunMarker {
             version: self.embedding_marker_version()?,
             space,
@@ -1757,6 +1975,9 @@ impl OfflineApp {
                 "embedding recovery descriptor exceeds local bound",
             ));
         }
+        ledger.create(&writer, run)?;
+        #[cfg(test)]
+        cost_probe::count(cost_probe::Counter::JobsCreated, 1);
         self.immutable_operational(&marker_path, &marker_bytes, &writer)?;
         drop(writer);
         ledger.start()?;

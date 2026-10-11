@@ -3,6 +3,10 @@ use crate::{
     domain::*,
     jobs::{self, *},
 };
+#[cfg(test)]
+use crate::jobs::embedding_cost_probe::{
+    self as cost_probe, Counter as CostCounter, Stage as CostStage,
+};
 use std::{
     collections::BTreeMap,
     sync::{Arc, Mutex, MutexGuard},
@@ -129,6 +133,19 @@ impl InvocationBudget {
             let mut outstanding = jobs::budgets::zero();
             let mut concurrency = 0u32;
             for projection in projections {
+                #[cfg(test)]
+                let _cost_projection = cost_probe::invocation_projection(
+                    projection.attempts.first().is_some_and(|attempt| attempt.run_id != run),
+                );
+                #[cfg(test)]
+                let _cost_history = cost_probe::enter(CostStage::CurrentHistory);
+                #[cfg(test)]
+                {
+                    cost_probe::count(CostCounter::InvocationRunLoads, 1);
+                    if projection.attempts.first().is_some_and(|attempt| attempt.run_id != run) {
+                        cost_probe::count(CostCounter::PriorRuns, 1);
+                    }
+                }
                 let budget = projection
                     .ledger
                     .invocation_accounting(&projection.attempts)?;
