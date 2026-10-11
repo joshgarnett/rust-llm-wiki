@@ -140,13 +140,24 @@ fn maintenance_explicit_rebuild_repairs_missing_owned_database_from_authority_fl
 
 #[test]
 fn maintenance_sync_rebuilds_incompatible_layout_without_input_changes() {
+    // A previous parser may omit answer-bearing HTML while canonical bytes
+    // remain unchanged. Rebuild the projection, not just FTS over stale rows.
+    let old_parser = format!(
+        "UPDATE catalog_meta SET parser_hash='{}'; UPDATE documents SET body='' WHERE path='page.md'; INSERT INTO documents_fts(documents_fts) VALUES('rebuild')",
+        crate::domain::Blake3Hash::digest(b"old-markdown-without-readable-html")
+    );
     for mutation in [
         "UPDATE catalog_meta SET proof_layout_version=1",
         "UPDATE catalog_meta SET revision_ownership_version=0",
         "DROP INDEX document_candidate_metadata",
         "DROP INDEX document_titles",
+        old_parser.as_str(),
     ] {
         let (temp, catalog) = fixture();
+        if mutation == old_parser {
+            fs::write(temp.path().join("page.md"), "# First\n\noriginal content\n\n<dl><dt>Launch setting</dt><dd>htmlrebuildneedle requires safe mode.</dd></dl>\n").unwrap();
+        }
+        let canonical_before = fs::read(temp.path().join("page.md")).unwrap();
         let writer = WriterPermit::acquire(catalog.fs.root(), Duration::from_secs(1)).unwrap();
         catalog.rebuild_normalized(&writer).unwrap();
         let (selected, _) =
@@ -161,9 +172,21 @@ fn maintenance_sync_rebuilds_incompatible_layout_without_input_changes() {
         selector::configure_wal(&database).unwrap();
         database.execute_batch(mutation).unwrap();
         drop(database);
+        if mutation == old_parser {
+            let error = match catalog.cached_query_snapshot(QueryReadLimits::default()) {
+                Ok(_) => panic!("old parser must be unavailable before derived reconstruction"),
+                Err(error) => error,
+            };
+            assert_eq!(error.code, ErrorCode::OfflineUnavailable);
+        }
         let synced = catalog.sync_normalized(&writer).unwrap();
         assert!(!synced.report.reused, "{mutation}");
         assert_eq!(synced.report.snapshot.generation, 2);
+        assert!(synced.build.is_some(), "{mutation}");
+        assert_eq!(
+            fs::read(temp.path().join("page.md")).unwrap(),
+            canonical_before
+        );
         let reader = catalog
             .cached_query_snapshot(QueryReadLimits::default())
             .unwrap();
@@ -176,6 +199,22 @@ fn maintenance_sync_rebuilds_incompatible_layout_without_input_changes() {
         )
         .unwrap();
         assert_eq!(hits.hits.len(), 1);
+        if mutation == old_parser {
+            assert_eq!(
+                reader.snapshot().parser_fingerprint,
+                scan::parser_fingerprint()
+            );
+            assert_ne!(reader.publication_id(), Some(selected.file_id.as_str()));
+            let html = crate::retrieval::lexical::search_catalog(
+                &reader,
+                "htmlrebuildneedle",
+                &crate::retrieval::QueryPlan::default(),
+            )
+            .unwrap();
+            assert_eq!(html.hits.len(), 1);
+            assert_eq!(html.hits[0].locator.path.as_str(), "page.md");
+            assert!(html.hits[0].excerpt.text.contains("htmlrebuildneedle"));
+        }
     }
 }
 

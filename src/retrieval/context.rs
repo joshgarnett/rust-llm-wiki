@@ -473,6 +473,32 @@ std::thread_local! {
     static CANDIDATE_ORDERING_TRACE: std::cell::RefCell<Option<Vec<serde_json::Value>>> = const {
         std::cell::RefCell::new(None)
     };
+    static SOURCE_SELECTION_TRACE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+#[cfg(test)]
+pub(crate) fn with_source_selection_trace<T>(
+    run: impl FnOnce() -> T,
+) -> (T, Vec<serde_json::Value>) {
+    struct Reset;
+    impl Drop for Reset {
+        fn drop(&mut self) {
+            SOURCE_SELECTION_TRACE.with(|active| active.set(false));
+        }
+    }
+    SOURCE_SELECTION_TRACE.with(|active| assert!(!active.replace(true)));
+    let _reset = Reset;
+    with_candidate_ordering_trace(run)
+}
+
+#[cfg(test)]
+fn trace_stage_enabled(stage: &str) -> bool {
+    let source = SOURCE_SELECTION_TRACE.with(std::cell::Cell::get);
+    match stage {
+        "source_blocks" | "source_candidates_generated" | "source_candidates_retained" => source,
+        _ if source => stage == "document_hits",
+        _ => true,
+    }
 }
 
 #[cfg(test)]
@@ -502,6 +528,9 @@ pub(super) fn record_candidate_ordering_trace(
     stage: &str,
     rows: impl FnOnce() -> serde_json::Value,
 ) {
+    if !trace_stage_enabled(stage) {
+        return;
+    }
     CANDIDATE_ORDERING_TRACE.with(|trace| {
         if let Some(trace) = trace.borrow_mut().as_mut() {
             assert!(trace.len() < 16, "bounded ordering trace stage count");
@@ -537,6 +566,9 @@ fn check_lineage_bounds(trace: &[serde_json::Value]) {
 // collector owns these development-only rows; no new observer runtime exists.
 #[cfg(test)]
 pub(super) fn record_lineage_event(stage: &str, row: impl FnOnce() -> serde_json::Value) {
+    if !trace_stage_enabled(stage) {
+        return;
+    }
     CANDIDATE_ORDERING_TRACE.with(|trace| {
         if let Some(trace) = trace.borrow_mut().as_mut() {
             let position = trace.iter().position(|entry| entry["stage"] == stage);
@@ -1203,6 +1235,8 @@ fn assemble_inner_with_evidence(
             "context candidates are from another pinned snapshot",
         ));
     }
+    #[cfg(test)]
+    record_candidate_ordering_trace("document_hits", || serde_json::json!(hits.hits));
     let document_owners = if request.target != ContextTarget::Graph {
         hits.hits
             .iter()
@@ -1684,6 +1718,7 @@ pub(super) fn packet_utility(
     total_weight: f64,
     rendered_cost: usize,
     best_affinity: f64,
+    lexical_only: bool,
 ) -> f64 {
     if let Some(score) = packet.unit_score {
         return score;
@@ -1699,10 +1734,16 @@ pub(super) fn packet_utility(
         .sum::<u64>() as f64
         / total_weight;
     let local = candidate.local_relevance as f64 / total_weight;
-    // Include the actual standalone reference/header cost. Tiny
-    // fragments must not gain priority merely by being short. Final
-    // admission still measures the fully coalesced rendered result.
-    let density = candidate.span.len() as f64 / rendered_cost.max(1) as f64;
+    // Charge native lexical evidence its actual standalone reference/header
+    // cost without rewarding surrounding payload that adds no query evidence.
+    // Complete command/list teaching units are retained by generation. Preserve
+    // the existing density preference for semantic and mixed candidate pools.
+    // Final admission still measures the fully coalesced rendered result.
+    let density = if lexical_only && candidate.semantic_affinity.is_none() {
+        1.0 / rendered_cost.max(1) as f64
+    } else {
+        candidate.span.len() as f64 / rendered_cost.max(1) as f64
+    };
     let relevance = if let Some(affinity) = candidate.semantic_affinity {
         // A monotone preference within this cached query/space, not a
         // calibrated relevance probability. Lexical coverage breaks
@@ -1978,6 +2019,9 @@ pub(super) fn pack(
                 total_weight,
                 rendered_costs.get(&packet.key).copied().unwrap_or(1),
                 best_affinity,
+                request.documents.mode == SearchMode::Lexical
+                    && signals.semantic.is_empty()
+                    && !signals.semantic_complete,
             )
         };
         let best = (0..packets.len())

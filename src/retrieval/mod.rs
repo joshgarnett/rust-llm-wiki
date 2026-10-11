@@ -6,6 +6,8 @@ pub(crate) mod context_selection;
 pub mod context_selection_packet;
 pub mod context_types;
 pub(crate) mod context_units;
+#[cfg(test)]
+mod contextual_passage_experiment;
 pub mod cursor;
 mod evidence_set_selection;
 pub mod excerpts;

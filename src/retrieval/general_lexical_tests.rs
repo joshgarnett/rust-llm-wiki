@@ -1153,6 +1153,186 @@ fn paired_unicode_normalization_preserves_raw_spans_and_exact_alias_bytes() {
         assert!(folded.hits[0].reasons.contains(&RetrievalReason::Lexical));
     }
 }
+
+#[test]
+fn html_capture_discovery_and_native_context_preserve_exact_definition_evidence() {
+    use crate::{
+        catalog::query_types::QueryCatalog,
+        retrieval::{context_types::*, verification},
+    };
+
+    let temp = tempfile::tempdir().unwrap();
+    write(
+        temp.path(),
+        "WIKI.md",
+        &note("vault", "vault_html_public", "HTML fixture", json!({}), ""),
+    );
+    let vault = id("vault_html_public");
+    let fs_handle = VaultFs::new(VaultRoot::explicit(temp.path()).unwrap());
+    let catalog = Catalog::new(fs_handle.clone(), vault.clone());
+    let definition = "<dt>Café launch setting: confirm reviewed configuration and retain the operator approval receipt.</dt>\n<dd>Safetyneedle requires 安全 mode before launch. Record the successful checks before opening the approved release window.</dd>";
+    assert!(
+        (224..=256).contains(&definition.len()),
+        "fixture must leave little excerpt headroom"
+    );
+    let raw_owned = format!(
+        "# Operations\n\nOrdinary Markdown explains the procedure.\n\n<dl>\n<dt>Archive overview</dt><dd>{}</dd>\n{definition}\n<dt>Additional background</dt><dd>{}</dd>\n</dl>\n\nInline words: joinleft<b>joinright</b>.\n\n<div title='attributeghost > stillhidden'>Visible aside.</div>\n\n<!-- commentghost -->\n\n<script>scriptghost</script>\n\n<style>styleghost</style>\n",
+        "Historical observations supply background. ".repeat(20),
+        "Unrelated operational history remains archived. ".repeat(20),
+    );
+    let raw = raw_owned.as_str();
+    let capture = SourceStore::new(fs_handle.clone())
+        .plan_capture(CaptureRequest {
+            title: "Captured operating instructions".into(),
+            origin_kind: SourceOrigin::LocalFile,
+            origin: "operations.md".into(),
+            original: raw.as_bytes().to_vec(),
+            extraction: ExtractionInput::Utf8Preserve,
+            media_type: None,
+        })
+        .unwrap();
+    seed(temp.path(), capture.draft.unwrap());
+    let writer = WriterPermit::acquire(fs_handle.root(), Duration::ZERO).unwrap();
+    catalog.sync(&writer).unwrap();
+    let plan = QueryPlan {
+        filters: SearchFilters {
+            source_ids: vec![capture.source_id.clone()],
+            ..Default::default()
+        },
+        limits: SearchLimits {
+            hits: 1,
+            excerpt_bytes: 256,
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let definition_start = raw.find(definition).unwrap();
+    let definition_span = ByteSpan::new(
+        definition_start as u64,
+        (definition_start + definition.len()) as u64,
+    )
+    .unwrap();
+    let anchor = raw.find("Safetyneedle").unwrap();
+    // A normal query-centered excerpt would omit the label's beginning. The
+    // complete pair must survive this smaller, value-matching competitor.
+    assert!(definition_start < anchor.saturating_sub(plan.limits.excerpt_bytes / 3));
+    let check_search = |reader: &dyn QueryCatalog| {
+        for (query, expected) in [
+            ("Safetyneedle", "Safetyneedle"),
+            ("cafe", "Café"),
+            ("安全", "安全"),
+            ("joinleft", "joinleft"),
+            ("joinright", "joinright"),
+        ] {
+            let hits = search_catalog(reader, query, &plan).unwrap();
+            assert_eq!(hits.hits.len(), 1, "{query}");
+            let hit = &hits.hits[0];
+            assert_eq!(hit.source_id.as_ref(), Some(&capture.source_id));
+            assert_eq!(hit.owner_revision.as_ref(), Some(&capture.revision_id));
+            assert_eq!(hit.excerpt.span.slice(raw).unwrap(), hit.excerpt.text);
+            assert!(hit.excerpt.text.len() <= plan.limits.excerpt_bytes);
+            assert!(
+                hit.excerpt
+                    .matched_spans
+                    .iter()
+                    .any(|span| { span.slice(raw).unwrap() == expected }),
+                "{query}: {:?}",
+                hit.excerpt
+            );
+        }
+        for hidden in [
+            "attributeghost",
+            "stillhidden",
+            "commentghost",
+            "scriptghost",
+            "styleghost",
+            "joinleftjoinright",
+        ] {
+            assert!(
+                search_catalog(reader, hidden, &plan)
+                    .unwrap()
+                    .hits
+                    .is_empty(),
+                "{hidden}"
+            );
+        }
+    };
+    let check_context = |scope| {
+        let request = ContextRequest {
+            scope,
+            documents: plan.clone(),
+            budget: ContextBudget {
+                max_bytes: 2000,
+                max_tokens: 500,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let result =
+            verification::context(&catalog, Some(&writer), "Safetyneedle", &request).unwrap();
+        assert!(!result.network_used);
+        assert!(result.usage().rendered_bytes <= request.budget.max_bytes);
+        assert!(result.usage().estimated_tokens <= request.budget.max_tokens);
+        let complete = result
+            .passages()
+            .iter()
+            .find(|passage| passage.text.contains(definition))
+            .expect("native context must retain the definition label and its value together");
+        assert_eq!(
+            complete.span, definition_span,
+            "the near-ceiling pair must be returned as its exact complete core"
+        );
+        assert_eq!(complete.text, definition);
+        assert_eq!(complete.span.slice(raw).unwrap(), complete.text);
+        for passage in result.passages() {
+            assert!(passage.text.len() <= plan.limits.excerpt_bytes);
+            assert_eq!(passage.span.slice(raw).unwrap(), passage.text);
+            assert!(!passage.citations.is_empty());
+            for citation in &passage.citations {
+                let CitationRef::Source(reference) = citation else {
+                    panic!("captured-source passage must carry a source citation")
+                };
+                assert_eq!(reference.source_id, capture.source_id);
+                assert_eq!(reference.source_revision, capture.revision_id);
+                assert_eq!(reference.span, passage.span);
+                assert_eq!(
+                    reference.quote_hash,
+                    Blake3Hash::digest(reference.span.slice(raw).unwrap())
+                );
+            }
+        }
+    };
+    check_search(&catalog.index_snapshot().unwrap());
+    check_context(ContextScope::Current);
+
+    let identity = BuildIdentity {
+        selection: CatalogSelection::new(vault.clone(), 2).unwrap(),
+        origin: None,
+        vector_cache_lost: false,
+        vector_loss_unknown: false,
+    };
+    selector::prepare(&fs_handle, &writer, &identity.selection).unwrap();
+    let mut builder =
+        NormalizedBuilder::begin(&fs_handle, &writer, identity, BuildLimits::default()).unwrap();
+    let input = scan::scan_input(&fs_handle, &vault).unwrap();
+    let projection =
+        scan::project_normalized_with_sink(&fs_handle, &input, false, &mut builder).unwrap();
+    let completed = builder.finish_normalized(&projection).unwrap();
+    selector::publish(
+        &fs_handle,
+        &writer,
+        &completed.identity.selection,
+        Duration::ZERO,
+    )
+    .unwrap();
+    check_search(
+        &catalog
+            .cached_query_snapshot(QueryReadLimits::default())
+            .unwrap(),
+    );
+    check_context(ContextScope::IndexedDocuments);
+}
+
 #[test]
 fn paired_duplicate_id_search_keeps_invalid_discovery_without_identity_privilege() {
     let f = Fixture::new(0);

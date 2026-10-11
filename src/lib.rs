@@ -9,6 +9,7 @@ pub mod config;
 pub mod domain;
 pub mod graph;
 pub mod jobs;
+mod markdown_text;
 pub mod output;
 pub mod providers;
 pub mod records;
@@ -19,5 +20,4 @@ pub mod storage;
 #[cfg(test)]
 #[path = "../test_support/paths.rs"]
 mod test_paths;
-mod text_projection;
 pub mod vault;

@@ -9,6 +9,10 @@ pub mod embeddings;
 mod indexed_embedding_inputs;
 #[cfg(test)]
 mod indexed_embedding_workflow_tests;
+#[cfg(test)]
+mod normalized_context_evidence_probe;
+#[cfg(test)]
+mod normalized_context_lineage_probe;
 pub mod remote;
 mod review;
 

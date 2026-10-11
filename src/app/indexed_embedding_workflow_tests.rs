@@ -432,6 +432,180 @@ fn normalized_cached_semantic_and_hybrid_filter_before_cap_emit_exact_utf8_sourc
 }
 
 #[test]
+fn normalized_html_parser_migration_rebuilds_inventory_and_reuses_retained_vectors_offline() {
+    use crate::{
+        catalog::query_types::{QueryCatalog, QueryReadLimits},
+        retrieval::unit_inventory_types::RenderPolicyId,
+    };
+    let fixture = normalized();
+    let body = "# Retained capture\n\n<dl><dt>Signalneedle</dt><dd>Stores 17 amber tokens. Unicode café 東京 🦀.</dd></dl>\n";
+    let query = "Signalneedle";
+    let (source, revision) = add(&fixture, TITLE, "retained-html.md", body);
+    let owner = content_path(&source, &revision);
+    let settings = EmbeddingSettings::default();
+    let responses = Arc::new(Responses::new());
+    let dispatch = dispatcher(&fixture.fs, responses.clone());
+    let runtime = runtime(&fixture.service, &dispatch);
+    let initial = fixture.app.embeddings_sync(&settings, &runtime).unwrap();
+    complete(&initial, 1);
+    let inputs = paid_inputs(&fixture, &ledger(&fixture, &initial).inspect().unwrap());
+    assert_eq!(inputs.len(), 1);
+    assert!(
+        inputs[0].utf8.contains(body),
+        "embedding input retains raw HTML"
+    );
+    let space = initial.space.clone().unwrap();
+    let spec = fixture.spec();
+    assert_eq!(space, spec.id().unwrap());
+    fixture.query_seed(&spec, query, vec![1.0, 0.0]);
+    let query_hash = spec.query(query).unwrap().input_hash;
+    let catalog = Catalog::new(fixture.fs.clone(), fixture.app.vault_id().clone());
+    let reader = catalog
+        .cached_query_snapshot(QueryReadLimits::default())
+        .unwrap();
+    let initial_snapshot = reader.snapshot().clone();
+    let policy =
+        RenderPolicyId::for_settings(&initial_snapshot.parser_fingerprint, &settings).unwrap();
+    let old_binding = reader.unit_owner_binding(&policy, &owner).unwrap().unwrap();
+    let old_descriptors = reader
+        .unit_descriptors_for_owner(&policy, &owner, 8)
+        .unwrap();
+    assert_eq!(old_descriptors.len(), 1);
+    assert_eq!(old_descriptors[0].input_hash, inputs[0].input_hash);
+    let SnapshotBinding::PublishedEpoch { publication } = &initial_snapshot.binding else {
+        panic!("normalized fixture needs a physical catalog publication");
+    };
+    let database = fixture.fs.root().path().join(format!(
+        ".wiki/cache/catalogs/{}.sqlite",
+        publication.file_id
+    ));
+    drop(reader);
+    let store = VectorStore::open(&fixture.fs, None).unwrap();
+    assert!(store.owner_binding_ready(&space, &old_binding).unwrap());
+    let document_vector = store
+        .vector(&space, &inputs[0].input_hash)
+        .unwrap()
+        .unwrap();
+    let query_vector = store.vector(&space, &query_hash).unwrap().unwrap();
+    drop(store);
+
+    // Model predecessor parser metadata without rewriting immutable captures
+    // or paid inputs. Historical projection bytes are not reconstructed here.
+    let old_parser = Blake3Hash::digest(b"pre-readable-html catalog parser");
+    assert_ne!(
+        RenderPolicyId::for_settings(&old_parser, &settings).unwrap(),
+        policy
+    );
+    let writer = fixture.writer();
+    let connection = rusqlite::Connection::open(&database).unwrap();
+    // Direct fixture mutations must preserve the selected catalog's WAL/SHM
+    // ownership contract, as ordinary catalog writers do.
+    crate::catalog::selector::configure_wal(&connection).unwrap();
+    connection
+        .execute(
+            "UPDATE catalog_meta SET parser_hash=?1",
+            [old_parser.as_str()],
+        )
+        .unwrap();
+    drop(connection);
+    drop(writer);
+    let incompatible = catalog.doctor_cache_metadata();
+    assert!(incompatible.error.is_none(), "{:?}", incompatible.error);
+    assert_eq!(incompatible.state, "header_available");
+    assert_eq!(incompatible.parser_compatible, Some(false));
+    let offline = fixture.offline();
+    std::fs::remove_file(&fixture.config).unwrap();
+    let request = plan(SearchMode::Semantic, vec![source.clone()], 1);
+    let refused = offline
+        .semantic_search_selected(query, &request, None, false)
+        .unwrap_err();
+    assert_eq!(refused.code, ErrorCode::OfflineUnavailable);
+    assert!(refused.message.contains("parser fingerprint changed"));
+    assert_eq!(responses.calls.load(Ordering::SeqCst), 1);
+
+    offline.index_rebuild_normalized().unwrap();
+    assert_eq!(
+        catalog.doctor_cache_metadata().parser_compatible,
+        Some(true)
+    );
+    let reader = catalog
+        .cached_query_snapshot(QueryReadLimits::default())
+        .unwrap();
+    assert_ne!(reader.snapshot().binding, initial_snapshot.binding);
+    let current_policy =
+        RenderPolicyId::for_settings(&reader.snapshot().parser_fingerprint, &settings).unwrap();
+    assert!(
+        reader
+            .unit_inventory_state(&current_policy)
+            .unwrap()
+            .is_none()
+    );
+    drop(reader);
+    assert_eq!(
+        offline
+            .semantic_search_selected(query, &request, None, false)
+            .unwrap_err()
+            .code,
+        ErrorCode::OfflineUnavailable,
+        "retained vectors alone cannot supply current inventory"
+    );
+    let cached = offline.embeddings_sync_cached(&settings).unwrap();
+    complete(&cached, 1);
+    assert_eq!(cached.generated_inputs, 0);
+    assert_eq!(cached.reused_inputs, 1);
+    assert!(!cached.network_used);
+    assert!(cached.run_id.is_none());
+    assert_eq!(cached.space.as_ref(), Some(&space));
+    assert_eq!(cached.active_space.as_ref(), Some(&space));
+    let reader = catalog
+        .cached_query_snapshot(QueryReadLimits::default())
+        .unwrap();
+    assert!(
+        reader
+            .unit_inventory_state(&current_policy)
+            .unwrap()
+            .unwrap()
+            .complete
+    );
+    let current_binding = reader
+        .unit_owner_binding(&current_policy, &owner)
+        .unwrap()
+        .unwrap();
+    assert_ne!(current_binding.incarnation, old_binding.incarnation);
+    let current = reader
+        .unit_descriptors_for_owner(&current_policy, &owner, 8)
+        .unwrap();
+    assert_eq!(current.len(), 1);
+    assert_eq!(current[0].unit_id, old_descriptors[0].unit_id);
+    assert_eq!(current[0].input_hash, inputs[0].input_hash);
+    assert_eq!(current[0].source_span, old_descriptors[0].source_span);
+    drop(reader);
+    let store = VectorStore::open(&fixture.fs, None).unwrap();
+    assert!(!store.owner_binding_ready(&space, &old_binding).unwrap());
+    assert!(store.owner_binding_ready(&space, &current_binding).unwrap());
+    assert_eq!(
+        store.vector(&space, &inputs[0].input_hash).unwrap(),
+        Some(document_vector)
+    );
+    assert_eq!(
+        store.vector(&space, &query_hash).unwrap(),
+        Some(query_vector)
+    );
+    drop(store);
+    let hits = offline
+        .semantic_search_selected(query, &request, None, false)
+        .unwrap();
+    selected_verification(&hits);
+    assert_eq!(hits.hits.len(), 1);
+    exact_source_hit(&hits.hits[0], &source, &revision, body);
+    assert_eq!(
+        std::fs::read(fixture.fs.root().path().join(owner.as_str())).unwrap(),
+        body.as_bytes()
+    );
+    assert_eq!(responses.calls.load(Ordering::SeqCst), 1);
+}
+
+#[test]
 fn normalized_cache_only_sync_needs_no_runtime_and_missing_query_or_cache_is_explicit() {
     let fixture = normalized();
     add(&fixture, TITLE, "cached.txt", FIRST);

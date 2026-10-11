@@ -1,6 +1,9 @@
 //! Original-byte excerpt mapping; FTS snippets are never citation spans.
-use crate::domain::{ErrorCode, Result, WikiError};
-use crate::text_projection::{TextEvent, visit};
+use crate::{
+    domain::{ErrorCode, Result, WikiError},
+    markdown_text::HtmlScanner,
+};
+use pulldown_cmark::{Event, Parser, TagEnd};
 use rusqlite::{Connection, ffi};
 use std::{ffi::c_void, ops::Range, ptr};
 
@@ -223,24 +226,56 @@ impl SourceMap {
             text: String::new(),
             segments: vec![],
         };
-        visit(&raw[body_offset..], |event| match event {
-            TextEvent::Text {
-                value,
-                original,
-                exact,
-            } => {
-                let original = original.start + body_offset..original.end + body_offset;
-                let start = map.text.len();
-                map.text.push_str(&value);
-                map.segments.push(Segment {
-                    normalized: start..map.text.len(),
-                    original,
-                    exact,
-                });
+        let mut html = HtmlScanner::default();
+        for (event, range) in Parser::new(&raw[body_offset..]).into_offset_iter() {
+            match event {
+                Event::Text(value) | Event::Code(value) => {
+                    if html.suppressing_text() {
+                        continue;
+                    }
+                    let original = range.start + body_offset..range.end + body_offset;
+                    let exact = raw.get(original.clone()) == Some(value.as_ref());
+                    let original = if exact {
+                        original
+                    } else if let Some(relative) = raw
+                        .get(original.clone())
+                        .and_then(|slice| slice.find(value.as_ref()))
+                    {
+                        original.start + relative..original.start + relative + value.len()
+                    } else {
+                        original
+                    };
+                    let exact = raw.get(original.clone()) == Some(value.as_ref());
+                    let start = map.text.len();
+                    map.text.push_str(&value);
+                    map.segments.push(Segment {
+                        normalized: start..map.text.len(),
+                        original,
+                        exact,
+                    });
+                }
+                Event::Html(_) | Event::InlineHtml(_) => {
+                    map.text.push('\n');
+                    let range = range.start + body_offset..range.end + body_offset;
+                    for original in html.scan(raw, range).spans {
+                        let start = map.text.len();
+                        map.text.push_str(&raw[original.clone()]);
+                        map.segments.push(Segment {
+                            normalized: start..map.text.len(),
+                            original,
+                            exact: true,
+                        });
+                        map.text.push('\n');
+                    }
+                }
+                Event::SoftBreak
+                | Event::HardBreak
+                | Event::End(
+                    TagEnd::Heading(_) | TagEnd::Paragraph | TagEnd::CodeBlock | TagEnd::Item,
+                ) => map.text.push('\n'),
+                _ => {}
             }
-            TextEvent::Break => map.text.push('\n'),
-            TextEvent::HeadingStart | TextEvent::HeadingEnd => {}
-        });
+        }
         map
     }
     pub(crate) fn original_span(&self, span: Range<usize>) -> Option<Range<usize>> {
@@ -270,5 +305,23 @@ impl SourceMap {
             last.original.end
         };
         Some(start..end)
+    }
+}
+
+#[cfg(test)]
+mod readable_html_tests {
+    use super::*;
+
+    #[test]
+    fn readable_html_keeps_exact_unicode_tokens_and_tag_boundaries() {
+        let raw = "# Heading\n\n前<div data-hidden='hiddenmarker > attribute'>安全<b>éclair</b>後</div>\n\n<script>hiddenmarker</script>\n";
+        let map = SourceMap::markdown(raw, 0);
+        assert!(!map.text.contains("hiddenmarker"));
+        assert!(!map.text.contains("安全éclair"));
+        for value in ["安全", "éclair", "後"] {
+            let start = map.text.find(value).unwrap();
+            let span = map.original_span(start..start + value.len()).unwrap();
+            assert_eq!(&raw[span], value);
+        }
     }
 }

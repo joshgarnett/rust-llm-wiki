@@ -7,9 +7,10 @@ use super::{
 use crate::{
     catalog::{DocumentRow, query_types::QueryCatalog},
     domain::*,
+    markdown_text::HtmlScanner,
     records::parse_note,
 };
-use pulldown_cmark::{Event, Parser, Tag};
+use pulldown_cmark::{Event, Parser, Tag, TagEnd};
 use std::{
     collections::{BTreeMap, BTreeSet},
     ops::Range,
@@ -62,6 +63,8 @@ enum BlockKind {
     Prose,
     Code,
     List,
+    Html,
+    HtmlCore,
     Other,
 }
 struct Block {
@@ -398,20 +401,53 @@ fn structural_blocks(
     start: usize,
     end: usize,
     limit: usize,
+    bytes: usize,
 ) -> (Vec<Block>, bool, usize) {
     let mut spans = BTreeMap::<(usize, usize), BlockKind>::new();
     let mut limited = false;
     let mut scanned = 0;
+    let mut html = HtmlScanner::default();
+    let mut html_block = None::<Range<usize>>;
     for (event, range) in Parser::new(&raw[start..end]).into_offset_iter() {
+        let range = range.start + start..range.end + start;
+        match &event {
+            Event::Html(_) | Event::InlineHtml(_) => {
+                for pair in html.scan(raw, range.clone()).definition_pairs {
+                    if html_block.as_ref().is_some_and(|block| {
+                        block.len() > bytes && block.start <= pair.start && pair.end <= block.end
+                    }) && pair.len() <= bytes
+                    {
+                        if scanned == limit {
+                            limited = true;
+                            break;
+                        }
+                        scanned += 1;
+                        spans.insert((pair.start, pair.end), BlockKind::HtmlCore);
+                    }
+                }
+                if limited {
+                    break;
+                }
+                continue;
+            }
+            Event::End(TagEnd::HtmlBlock) => {
+                html_block = None;
+                continue;
+            }
+            _ => {}
+        }
         let kind = match event {
             Event::Start(Tag::Heading { .. }) => BlockKind::Heading,
             Event::Start(Tag::Paragraph) => BlockKind::Prose,
             Event::Start(Tag::CodeBlock(_)) => BlockKind::Code,
             Event::Start(Tag::List(_)) => BlockKind::List,
             Event::Start(Tag::Item) => BlockKind::Other,
+            Event::Start(Tag::HtmlBlock) => {
+                html_block = Some(range.clone());
+                BlockKind::Html
+            }
             _ => continue,
         };
-        let range = range.start + start..range.end + start;
         if range.is_empty() {
             continue;
         }
@@ -431,9 +467,10 @@ fn structural_blocks(
     });
     for ((begin, finish), kind) in spans {
         // A list/item already contains its nested paragraphs and commands.
-        if blocks
-            .last()
-            .is_some_and(|previous| previous.range.end >= finish)
+        if kind != BlockKind::HtmlCore
+            && blocks
+                .last()
+                .is_some_and(|previous| previous.range.end >= finish)
         {
             continue;
         }
@@ -441,7 +478,7 @@ fn structural_blocks(
             range: begin..finish,
             kind,
             terms: vec![],
-            clipped: finish == end && end < raw.len(),
+            clipped: kind != BlockKind::HtmlCore && finish == end && end < raw.len(),
         });
     }
     if blocks.is_empty() && start < end && limit > 0 {
@@ -652,7 +689,7 @@ fn select(
         let end = boundary_before(parent.raw, parent.body.saturating_add(body_capacity));
         let remaining = MAX_BLOCKS.saturating_sub(result.scanned_blocks);
         let (blocks, block_limit, scanned_blocks) =
-            structural_blocks(parent.raw, parent.body, end, remaining);
+            structural_blocks(parent.raw, parent.body, end, remaining, bytes);
         result.scanned_bytes += end - parent.body;
         result.scanned_blocks += scanned_blocks;
         if end < parent.raw.len() {
@@ -674,6 +711,17 @@ fn select(
                 frequencies[term] += 1;
             }
         }
+        #[cfg(test)]
+        super::context::record_lineage_event("source_blocks", || {
+            serde_json::json!({
+                "owner_index": parent.owner,
+                "scanned_end": end,
+                "blocks": blocks.iter().map(|block| serde_json::json!({
+                    "start": block.range.start, "end": block.range.end,
+                    "clipped": block.clipped,
+                })).collect::<Vec<_>>(),
+            })
+        });
         let mut fallback_windows = Vec::new();
         let mut owner_usage = end - parent.body;
         if parent.anchors.len() > 2 {
@@ -721,10 +769,26 @@ fn select(
         .collect();
     for owner in owners {
         let parent = owner.parent;
+        let html_cores = owner
+            .blocks
+            .iter()
+            .filter(|block| block.kind == BlockKind::HtmlCore)
+            .collect::<Vec<_>>();
         let mut proposals = BTreeMap::<(usize, usize), SelectionCandidate>::new();
         let mut propose =
             |range: Range<usize>, covered_terms: Vec<usize>, clipped: bool| -> Result<()> {
                 if range.is_empty() || range.end - range.start > bytes {
+                    return Ok(());
+                }
+                // A known complete definition pair is atomic. Query windows
+                // and discovery fallbacks must not compete with a clipped
+                // label/value fragment when the complete core is available.
+                let first = html_cores.partition_point(|core| core.range.end <= range.start);
+                if html_cores[first..]
+                    .iter()
+                    .take_while(|core| core.range.start < range.end)
+                    .any(|core| range.start > core.range.start || range.end < core.range.end)
+                {
                     return Ok(());
                 }
                 // HTML anchors and markup-only windows have exact bytes but
@@ -850,6 +914,15 @@ fn select(
                     || candidate.semantic_affinity.is_some()
             })
             .collect::<Vec<_>>();
+        #[cfg(test)]
+        super::context::record_lineage_event("source_candidates_generated", || {
+            serde_json::json!({
+                "owner_index": parent.owner,
+                "candidates": candidates.iter().map(|candidate| serde_json::json!({
+                    "span": candidate.span, "clipped": candidate.clipped,
+                })).collect::<Vec<_>>(),
+            })
+        });
         candidates.sort_by(|a, b| {
             semantic_strength(b).total_cmp(&semantic_strength(a)).then(
                 b.local_relevance
@@ -930,6 +1003,13 @@ fn select(
                 reason: "context_source_candidate_cap",
             });
         }
+        #[cfg(test)]
+        super::context::record_lineage_event("source_candidates_retained", || {
+            serde_json::json!({
+                "owner_index": parent.owner,
+                "spans": kept.iter().map(|candidate| candidate.span).collect::<Vec<_>>(),
+            })
+        });
         result.candidates.extend(kept);
     }
     Ok(result)
@@ -955,6 +1035,38 @@ mod tests {
         )
         .unwrap()
     }
+    #[test]
+    fn mixed_markdown_html_retains_complete_definition_core_and_unicode() {
+        let raw = format!(
+            "# Guide\n\nUnrelated introductory material.\n\n<dl>\n{}<dt>Pressure 安全 label</dt><dd>Tensor pressure uses an exact bounded setting.</dd>\n</dl>\n",
+            "<dt>Unrelated label</dt><dd>Background material without the requested terms.</dd>\n"
+                .repeat(24)
+        );
+        let selected = selection(&raw, "tensor pressure", 160, &[]);
+        assert!(selected.candidates.iter().any(|candidate| {
+            let text = candidate.span.slice(&raw).unwrap();
+            !candidate.clipped
+                && text.starts_with("<dt>Pressure 安全 label</dt>")
+                && text.contains("<dd>Tensor pressure uses an exact bounded setting.</dd>")
+        }));
+        for candidate in selected.candidates {
+            assert!(candidate.span.slice(&raw).unwrap().len() <= 160);
+        }
+        assert!(selected.scanned_bytes <= OWNER_SCAN_BYTES);
+        assert!(selected.scanned_blocks <= MAX_BLOCKS);
+    }
+
+    #[test]
+    fn html_markup_comments_and_script_terms_do_not_propose_evidence() {
+        let raw = "# Guide\n\nOrdinary visible prose.\n\n<div title='hiddenmarker > hiddenmarker'><!-- hiddenmarker --><script>hiddenmarker</script><style>hiddenmarker</style><p>安全 pressure</p></div>\n";
+        assert!(
+            selection(raw, "hiddenmarker", 256, &[])
+                .candidates
+                .is_empty()
+        );
+        assert!(!selection(raw, "pressure", 256, &[]).candidates.is_empty());
+    }
+
     #[test]
     fn finds_late_source_block_and_keeps_explanation_with_commands() {
         let raw = "# General\n\nEarly unrelated material.\n\n# Special operation\n\nIgnore expensive cases during ordinary execution.\n\n```sh\nrunner test --ignored\nrunner test --include-ignored\n```\n";

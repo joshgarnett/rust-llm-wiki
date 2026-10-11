@@ -74,6 +74,116 @@ fn omission_aggregation_preserves_exact_keys_counts_and_first_order() {
 }
 
 #[test]
+fn native_lexical_packing_keeps_complete_list_core_ahead_of_equal_evidence_padding() {
+    let temp = tempfile::tempdir().unwrap();
+    copy(
+        &Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/bootstrap/vault"),
+        temp.path(),
+    );
+    let vaultfs = VaultFs::new(VaultRoot::explicit(temp.path()).unwrap());
+    let store = SourceStore::new(vaultfs.clone());
+    let core = "For restartneedle, apply these settings in the documented order:\n\n- Command options\n- Environment variables\n- Local file\n- Global file\n";
+    let body = format!(
+        "# Restart procedure\n\nThe maintenance background describes ordinary scheduling and historical operations.\n\n{core}\nThe neighboring commentary describes routine observations and administrative history.\n"
+    );
+    let plan = store
+        .plan_capture(capture("Restart procedure", &body))
+        .unwrap();
+    let source = plan.source_id.clone();
+    apply_fixture(temp.path(), plan.draft.unwrap());
+    let catalog = Catalog::new(vaultfs, id(VAULT));
+    let writer = WriterPermit::acquire(catalog.fs().root(), Duration::from_secs(1)).unwrap();
+    catalog.sync(&writer).unwrap();
+    let mut request = ContextRequest::default();
+    request.documents.filters.source_ids = vec![source];
+    request.documents.limits.excerpt_bytes = 1024;
+    request.verification_budget.max_elapsed_ms = 30_000;
+    let prepare = ContextOptions {
+        selection: SelectionAction::Prepare,
+        ..Default::default()
+    };
+    let (prepared, preparation_trace) = with_candidate_ordering_trace(|| {
+        verification::context_with_options(
+            &catalog,
+            Some(&writer),
+            "restartneedle",
+            &request,
+            &prepare,
+        )
+        .unwrap()
+    });
+    let packet = prepared.selection_packet().unwrap();
+    let core_card = packet
+        .cards
+        .iter()
+        .find(|card| card.passage.text.trim() == core.trim())
+        .expect("generator must retain the complete intro-plus-list core");
+    let proposals = preparation_trace
+        .iter()
+        .find(|stage| stage["stage"] == "candidate_pool")
+        .unwrap()["rows"]["proposals"]
+        .as_array()
+        .unwrap();
+    let core_proposal = proposals
+        .iter()
+        .find(|proposal| {
+            proposal["passages"][0]["span"] == serde_json::json!(core_card.passage.span)
+        })
+        .unwrap();
+    let padded = proposals
+        .iter()
+        .find(|proposal| {
+            let span = &proposal["passages"][0]["span"];
+            span["start"].as_u64().unwrap() <= core_card.passage.span.start()
+                && span["end"].as_u64().unwrap() >= core_card.passage.span.end()
+                && span != &serde_json::json!(core_card.passage.span)
+                && proposal["lexical_candidate"]["covered_terms"]
+                    == core_proposal["lexical_candidate"]["covered_terms"]
+                && proposal["lexical_candidate"]["seed_overlap"]
+                    == core_proposal["lexical_candidate"]["seed_overlap"]
+        })
+        .expect("fixture must offer a contained core and an equally evidenced expansion");
+    assert_eq!(padded["score"], core_proposal["score"]);
+    assert_eq!(
+        padded["lexical_candidate"]["local_relevance"],
+        core_proposal["lexical_candidate"]["local_relevance"]
+    );
+    assert_eq!(padded["lexical_candidate"]["clipped"], false);
+    assert_eq!(core_proposal["lexical_candidate"]["clipped"], false);
+    assert!(proposals.iter().all(|proposal| {
+        proposal["unit_score"].is_null()
+            && proposal["lexical_candidate"]["semantic_affinity"].is_null()
+    }));
+
+    // Use the real standalone rendering to permit the whole teaching unit,
+    // while leaving no room for surrounding prose with identical query gain.
+    request.budget.max_bytes = core_card.rendered_bytes;
+    request.budget.max_tokens = core_card.rendered_bytes.div_ceil(4);
+    let (actual, packing_trace) = with_candidate_ordering_trace(|| {
+        verification::context(&catalog, Some(&writer), "restartneedle", &request).unwrap()
+    });
+    let trials = packing_trace
+        .iter()
+        .find(|stage| stage["stage"] == "packing_trials")
+        .unwrap()["rows"]
+        .as_array()
+        .unwrap();
+    assert_eq!(trials[0]["identity"]["key"], core_proposal["key"]);
+    assert_eq!(trials[0]["outcome"], "accepted");
+    assert_eq!(actual.passages().len(), 1);
+    let passage = &actual.passages()[0];
+    assert_eq!(passage.text.trim(), core.trim());
+    assert_eq!(passage.span.slice(&body).unwrap(), passage.text);
+    assert!(!passage.citations.is_empty());
+    assert!(actual.usage().rendered_bytes <= request.budget.max_bytes);
+    assert!(actual.usage().estimated_tokens <= request.budget.max_tokens);
+    eprintln!(
+        "lexical_core_cost_lineage={}",
+        serde_json::json!({"preparation": preparation_trace, "packing": packing_trace})
+    );
+}
+
+#[test]
 fn complementary_lexical_priority_survives_host_packet_card_cap() {
     // Five real owners each produce the bounded 32-proposal pool. Forty short
     // early paragraphs create many overlapping windows; one distant rare term
