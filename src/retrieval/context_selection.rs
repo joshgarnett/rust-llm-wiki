@@ -100,6 +100,15 @@ pub(crate) fn select_candidates_with_semantics(
             };
             let semantic =
                 validated_cues(&input.document.path, &input.document.hash, raw, body, cues)?;
+            #[cfg(test)]
+            if super::context::preflight_lineage_capture(1 + input.seed_spans.len(), 1280 + input.document.path.as_str().len()) {
+                assert!(input.seed_spans.len() <= 2, "finite diagnostic owner seeds");
+                super::context::record_lineage_event("owner_inputs", || serde_json::json!({
+                    "owner_index": input.owner_index, "path": input.document.path, "hash": input.document.hash,
+                    "source_id": input.document.source_id, "owner_revision": input.document.owner_revision,
+                    "eligibility": input.document.eligibility, "body_start": body, "raw_bytes": raw.len(), "seed_spans": input.seed_spans,
+                }));
+            }
             Ok(Parent {
                 owner: input.owner_index,
                 raw,
@@ -653,6 +662,16 @@ fn select(
         let remaining = MAX_BLOCKS.saturating_sub(result.scanned_blocks);
         let (blocks, block_limit, scanned_blocks) =
             structural_blocks(parent.raw, parent.body, end, remaining);
+        #[cfg(test)]
+        if super::context::preflight_lineage_capture(1, 512) {
+            super::context::record_lineage_event("structural_blocks", || {
+                serde_json::json!({
+                    "owner_index": parent.owner, "scan": {"start": parent.body, "end": end},
+                    "parser_events": scanned_blocks, "block_limit": block_limit, "scan_byte_cap": end < parent.raw.len(),
+                })
+            });
+            trace_blocks("structural_blocks", parent.owner, &blocks);
+        }
         result.scanned_bytes += end - parent.body;
         result.scanned_blocks += scanned_blocks;
         if end < parent.raw.len() {
@@ -674,6 +693,8 @@ fn select(
                 frequencies[term] += 1;
             }
         }
+        #[cfg(test)]
+        trace_blocks("teaching_blocks", parent.owner, &blocks);
         let mut fallback_windows = Vec::new();
         let mut owner_usage = end - parent.body;
         if parent.anchors.len() > 2 {
@@ -850,6 +871,8 @@ fn select(
                     || candidate.semantic_affinity.is_some()
             })
             .collect::<Vec<_>>();
+        #[cfg(test)]
+        trace_candidates("eligible_pre_cap", &candidates);
         candidates.sort_by(|a, b| {
             semantic_strength(b).total_cmp(&semantic_strength(a)).then(
                 b.local_relevance
@@ -930,9 +953,52 @@ fn select(
                 reason: "context_source_candidate_cap",
             });
         }
+        #[cfg(test)]
+        trace_candidates("retained_post32", &kept);
         result.candidates.extend(kept);
     }
     Ok(result)
+}
+
+#[cfg(test)]
+fn trace_blocks(stage: &str, owner: usize, blocks: &[Block]) {
+    if !super::context::preflight_lineage_capture(blocks.len(), 256 + 192 * blocks.len()) {
+        return;
+    }
+    let rows = blocks.iter().map(|block| {
+        let kind = match block.kind {
+            BlockKind::Heading => "heading",
+            BlockKind::Prose => "prose",
+            BlockKind::Code => "code",
+            BlockKind::List => "list",
+            BlockKind::Other => "other",
+        };
+        serde_json::json!({
+                "owner_index": owner, "span": {"start": block.range.start, "end": block.range.end},
+                "kind": kind, "clipped": block.clipped,
+        })
+    }).collect();
+    super::context::record_lineage_rows(stage, rows);
+}
+
+#[cfg(test)]
+fn trace_candidates(stage: &str, candidates: &[SelectionCandidate]) {
+    let bytes = candidates
+        .iter()
+        .map(|candidate| 512 + 24 * candidate.covered_terms.len())
+        .sum::<usize>();
+    if !super::context::preflight_lineage_capture(candidates.len(), 256 + bytes) {
+        return;
+    }
+    let rows = candidates.iter().map(|candidate| {
+        assert!(candidate.covered_terms.len() <= MAX_CONTEXT_QUERY_TERMS);
+        serde_json::json!({
+                "owner_index": candidate.owner_index, "span": candidate.span, "covered_terms": candidate.covered_terms,
+                "local_relevance": candidate.local_relevance, "seed_overlap": candidate.seed_overlap,
+                "clipped": candidate.clipped, "semantic_affinity": candidate.semantic_affinity,
+        })
+    }).collect();
+    super::context::record_lineage_rows(stage, rows);
 }
 
 #[cfg(test)]

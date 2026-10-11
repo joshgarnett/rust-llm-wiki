@@ -519,16 +519,7 @@ pub(super) fn record_candidate_ordering_trace(
 
 #[cfg(test)]
 fn check_lineage_bounds(trace: &[serde_json::Value]) {
-    let rows = trace
-        .iter()
-        .map(|stage| {
-            stage["rows"]
-                .as_array()
-                .map(Vec::len)
-                .or_else(|| stage["rows"]["proposals"].as_array().map(Vec::len))
-                .unwrap_or(1)
-        })
-        .sum::<usize>();
+    let rows = trace.iter().map(lineage_row_units).sum::<usize>();
     assert!(
         trace.len() <= 16 && rows <= 4096,
         "bounded lineage envelopes/rows"
@@ -537,6 +528,73 @@ fn check_lineage_bounds(trace: &[serde_json::Value]) {
         serde_json::to_vec(trace).unwrap().len() <= 2 * 1024 * 1024,
         "bounded compact lineage; complete pretty envelope checked by leaf"
     );
+}
+
+// Count every object row in nested observations. Query-term integers are
+// bounded fields of a candidate, while accepted proposal IDs are observations.
+#[cfg(test)]
+pub(super) fn lineage_row_units(value: &serde_json::Value) -> usize {
+    match value {
+        serde_json::Value::Array(values) => {
+            values.iter().filter(|v| v.is_object()).count()
+                + values.iter().map(lineage_row_units).sum::<usize>()
+        }
+        serde_json::Value::Object(fields) => fields
+            .iter()
+            .map(|(key, value)| {
+                if matches!(
+                    key.as_str(),
+                    "accepted_proposal_ids" | "accepted_proposal_ids_before"
+                ) {
+                    value.as_array().map_or(0, Vec::len)
+                } else {
+                    lineage_row_units(value)
+                }
+            })
+            .sum(),
+        _ => 0,
+    }
+}
+
+#[cfg(test)]
+pub(super) fn preflight_lineage_capture(additional_rows: usize, additional_bytes: usize) -> bool {
+    CANDIDATE_ORDERING_TRACE.with(|trace| {
+        let trace = trace.borrow();
+        let Some(trace) = trace.as_ref() else {
+            return false;
+        };
+        let rows = trace.iter().map(lineage_row_units).sum::<usize>();
+        let bytes = serde_json::to_vec(trace).unwrap().len();
+        assert!(
+            rows.checked_add(additional_rows).is_some_and(|n| n <= 4096),
+            "complete lineage row allowance"
+        );
+        assert!(
+            bytes
+                .checked_add(additional_bytes)
+                .is_some_and(|n| n <= 2 * 1024 * 1024),
+            "complete lineage byte allowance"
+        );
+        true
+    })
+}
+
+// Batch new structural observations so instrumentation does not serialize the
+// complete accumulated trace once for every source block or proposal.
+#[cfg(test)]
+pub(super) fn record_lineage_rows(stage: &str, rows: Vec<serde_json::Value>) {
+    CANDIDATE_ORDERING_TRACE.with(|trace| {
+        if let Some(trace) = trace.borrow_mut().as_mut() {
+            let position = trace.iter().position(|entry| entry["stage"] == stage);
+            let position = position.unwrap_or_else(|| {
+                assert!(trace.len() < 16, "bounded ordering trace stage count");
+                trace.push(serde_json::json!({"stage": stage, "rows": []}));
+                trace.len() - 1
+            });
+            trace[position]["rows"].as_array_mut().unwrap().extend(rows);
+            check_lineage_bounds(trace);
+        }
+    });
 }
 
 // Append only values already computed by the production path. The existing

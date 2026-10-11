@@ -159,3 +159,7 @@ mod tests;
 #[cfg(test)]
 #[path = "indexed_documents_dense_experiment.rs"]
 mod dense_experiment;
+
+#[cfg(test)]
+#[path = "indexed_documents_lineage_probe.rs"]
+mod lineage_probe;
