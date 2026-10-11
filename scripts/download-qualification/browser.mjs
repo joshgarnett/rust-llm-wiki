@@ -292,7 +292,8 @@ function downloadsVisibleText() {
 }
 function downloadsModelObservation() {
   const limits = {maxNodes: 4096, maxDepth: 32, maxItems: 64, maxStringCharacters: 2048};
-  const observation = {url: location.href, ready: document.readyState, records: [], truncated: false, limits};
+  const visibilityState = document.visibilityState;
+  const observation = {url: location.href, ready: document.readyState, visibilityState: typeof visibilityState === 'string' ? visibilityState.slice(0, limits.maxStringCharacters) : null, records: [], truncated: typeof visibilityState === 'string' && visibilityState.length > limits.maxStringCharacters, limits};
   const managers = document.querySelectorAll('downloads-manager');
   observation.managerCount = managers.length;
   if (managers.length !== 1) return observation;
@@ -371,6 +372,7 @@ function classifyDownload(observation, identity, expectedPath, expectedURL) {
   if (row.fileExternallyRemoved || row.isInsecure || (row.state !== 7 && (row.isDangerous || row.dangerType !== 0))) throw Error('Downloads item has a danger, insecurity or removal flag');
   if (row.state !== 2) return {status: 'pending', reason: row.state === 7 ? 'passive asynchronous scanning' : 'download is active', item: row};
   if (!fullIdentity || row.isDangerous || row.dangerType !== 0 || total !== '37470') throw Error('Downloads completion identity, flags or total differs from pinned installer');
+  if (observation.visibilityState !== 'visible') throw Error('Downloads completion was not observed in a visible page');
   return {status: 'complete', item: row};
 }
 async function createDownloadsObserver(until) {
@@ -378,7 +380,7 @@ async function createDownloadsObserver(until) {
   downloadUIAttempted = true;
   const evidence = result.downloadUI = {url: 'chrome://downloads/', role: 'downloads-observer', sourceTargetId, sourceSessionId: sourceSession, approvals: 'none attempted', setupBeginElapsedSeconds: elapsed(), deadlineElapsedSeconds: until};
   try {
-    const target = await cdp('Target.createTarget', {url: evidence.url, background: true, newWindow: false}, undefined, windowTimeout(until));
+    const target = await cdp('Target.createTarget', {url: evidence.url, background: false, newWindow: false}, undefined, windowTimeout(until));
     windowTimeout(until);
     if (typeof target.targetId !== 'string' || !target.targetId || target.targetId === sourceTargetId) throw Error('Downloads observer target is absent or reuses source target');
     observerTargetId = evidence.targetId = target.targetId;
@@ -394,16 +396,6 @@ async function createDownloadsObserver(until) {
     windowTimeout(until);
   } catch (error) {evidence.error = String(error); throw error;}
   finally {evidence.setupEndElapsedSeconds = elapsed(); save('browser-download-ui.json', evidence);}
-}
-async function activateDownloads(until) {
-  const evidence = result.downloadUI;
-  if (result.downloadCompletion?.eligibleElapsedSeconds === undefined || evidence.activationBeginElapsedSeconds !== undefined) throw Error('Downloads activation requires one eligible completion observation');
-  evidence.activationBeginElapsedSeconds = elapsed();
-  try {
-    await cdp('Target.activateTarget', {targetId: observerTargetId}, undefined, windowTimeout(until));
-    windowTimeout(until);
-    evidence.activationEndElapsedSeconds = elapsed();
-  } finally {save('browser-download-ui.json', evidence);}
 }
 async function verifySourceDocument(until) {
   const evidence = result.sourcePreservation = {targetId: sourceTargetId, sessionId: sourceSession, role: 'source', beginElapsedSeconds: elapsed(), deadlineElapsedSeconds: until};
@@ -483,7 +475,6 @@ async function waitForDownload(until, installer) {
       if (state.status === 'complete') {
         verifyFile();
         evidence.eligibleElapsedSeconds = elapsed();
-        await activateDownloads(until);
         await captureDownloads(until);
         const nextSample = evidence.samples[evidence.samples.length - 1].beginElapsedSeconds + 0.25;
         if (elapsed() < nextSample) {if (nextSample >= until) throw Error('download completion deadline exhausted before final sample'); await sleep((nextSample - elapsed()) * 1000);}
