@@ -1164,7 +1164,7 @@ fn execute_selected(
                 "sync":sync,"cache_state_unknown":true,"network_used":false});
                 super::human_status::attach_provider_summary(
                     &mut envelope,
-                    &remote,
+                    remote,
                     &remote_context,
                 );
                 envelope
