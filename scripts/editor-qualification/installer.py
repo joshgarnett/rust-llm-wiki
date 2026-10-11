@@ -87,6 +87,7 @@ def main():
 
     def run(name, argv, expected=0, timeout=45, cwd=None):
         before = time.monotonic()
+        expected_codes = expected if isinstance(expected, tuple) else (expected,)
         timed_out = False
         with (evidence / (name + ".stdout")).open("wb") as stdout, (evidence / (name + ".stderr")).open("wb") as stderr:
             child = subprocess.Popen(list(map(str, argv)), cwd=cwd or home, env=env, stdout=stdout, stderr=stderr, start_new_session=True)
@@ -97,9 +98,9 @@ def main():
                 os.killpg(child.pid, signal.SIGKILL)
                 code = child.wait(timeout=5)
         result["operations"].append({"name": name, "argv": list(map(str, argv)), "cwd": str(cwd or home), "exit_code": code,
-                                     "timed_out": timed_out, "elapsed_seconds": time.monotonic() - before})
+                                     "expected_exit_codes": list(expected_codes), "timed_out": timed_out, "elapsed_seconds": time.monotonic() - before})
         save("installer-result.json", result)
-        if timed_out or code != expected:
+        if timed_out or code not in expected_codes:
             raise RuntimeError(name + " failed; inspect retained stdout/stderr")
         return (evidence / (name + ".stdout")).read_bytes()
 
@@ -128,7 +129,7 @@ def main():
         sentinel_bytes = b"Keep this unrelated user file.\x00\r\n"
         sentinel.write_bytes(sentinel_bytes)
         install = ["/bin/sh", str(installer), "--version", version, "--from-dir", str(release)]
-        shell("initial-command-absent", "command -v lwiki", expected=1)
+        check("initial PATH lookup is absent with empty stdout", shell("initial-command-absent", "command -v lwiki", expected=(1, 127)) == b"")
         run("initial-install", install, timeout=180)
         installed = prefix / "bin/lwiki"
         path_version("initial")
@@ -156,7 +157,7 @@ def main():
         path_version("reinstalled")
         check("same-version reinstall preserves all user data and retained generation", snapshot("after-reinstall") == preserved)
         run("uninstall", ["/bin/sh", str(installer), "--uninstall"], timeout=180)
-        shell("removed-command-v", "command -v lwiki", expected=1, cwd=evidence / "elsewhere")
+        check("removed PATH lookup is absent with empty stdout", shell("removed-command-v", "command -v lwiki", expected=(1, 127), cwd=evidence / "elsewhere") == b"")
         check("uninstall removes launch and current activation", not installed.exists() and not installed.is_symlink() and not (prefix / ".lwiki-install/current").exists() and not (prefix / ".lwiki-install/current").is_symlink())
         check("uninstall preserves all user data and retained generation", snapshot("after-uninstall") == preserved)
         installed = None

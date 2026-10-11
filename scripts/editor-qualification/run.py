@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """One pinned real-editor attempt on a fresh GitHub-hosted macOS or Ubuntu VM."""
 import argparse
+import errno
 import hashlib
 import json
 import os
@@ -80,8 +81,11 @@ def linux_session(argv):
                     status["network_probes"][name] = "allowed"
                 except OSError as error:
                     status["network_probes"][name] = {"errno": error.errno, "error": str(error)}
-            if not isinstance(status["network_probes"][name], dict) or status["network_probes"][name].get("errno") != 101:
-                raise RuntimeError("private namespace did not reject " + name + " routing with ENETUNREACH")
+            probe_errno = status["network_probes"][name].get("errno") if isinstance(status["network_probes"][name], dict) else None
+            no_ipv6_address = not any(address.get("family") == "inet6" for interface in status["interfaces"] for address in interface.get("addr_info", []))
+            denied = probe_errno == errno.ENETUNREACH or (name == "ipv6" and probe_errno == errno.EADDRNOTAVAIL and no_ipv6_address)
+            if not denied:
+                raise RuntimeError("private namespace did not reject " + name + " routing with the required no-route/no-address error")
         endpoint = str(evidence / "namespace-probe.sock")
         try:
             with socket.socket(socket.AF_UNIX) as server, socket.socket(socket.AF_UNIX) as client:

@@ -45,6 +45,10 @@ gh workflow run qualification.yml --ref BRANCH \
   -f archive-run-id=RUN_ID -f source-commit=FULL_COMMIT
 ```
 
+To repeat only a failed check, add `-f platform=macos` or `-f platform=linux`
+and choose `-f checks=editor`, `-f checks=installer` or `-f checks=download`.
+The download check requires macOS. The defaults run all checks on both platforms.
+
 Each job downloads and verifies the existing archive, then opens a test wiki in a
 pinned official Obsidian build on a fresh GitHub-hosted runner. It checks real editor
 saves, capture and refresh, old and new citations, Page moves and stale-edit

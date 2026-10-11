@@ -22,7 +22,31 @@ def save(path, value):
 
 
 def attrs(path):
-    return {name: os.getxattr(path, name).hex() for name in os.listxattr(path)}
+    # macOS's stock Python does not expose the Linux-only os xattr helpers.
+    # Use the native read-only tool; -px represents arbitrary values as hex.
+    path = Path(path).absolute()
+    deadline = time.monotonic() + 2
+    env = {'PATH': '/usr/bin:/bin', 'LC_ALL': 'C', 'LANG': 'C'}
+
+    def read(arguments):
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise RuntimeError('native xattr observation exceeded its deadline')
+        response = subprocess.run(['/usr/bin/xattr', *arguments], env=env,
+                                  stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                  timeout=remaining, check=False)
+        if response.returncode:
+            # Short-lived installer staging files may disappear between samples.
+            if not path.exists():
+                raise FileNotFoundError(path)
+            raise RuntimeError('native xattr read failed: ' + response.stderr.decode(errors='replace').strip())
+        return response.stdout
+
+    names = read(['--', str(path)]).decode('utf-8').splitlines()
+    if len(names) > 256 or len(set(names)) != len(names):
+        raise RuntimeError('native xattr returned too many or duplicate names')
+    return {name: bytes.fromhex(read(['-px', '--', name, str(path)]).decode('ascii')).hex()
+            for name in names}
 
 
 def main():
