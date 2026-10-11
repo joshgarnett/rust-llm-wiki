@@ -1,11 +1,14 @@
-//! Published lexical discovery with one bounded proof of the displayed document page.
+//! Published literal/lexical discovery with one bounded proof of the displayed document page.
 use super::{
     ExcerptLabel, HitSet, QueryPlan, RetrievalReason, SearchExcerpt, SearchHit, SearchMode,
     context_types::VerificationBudget, indexed_documents, lexical, selected_documents,
     verification::Meter,
 };
 use crate::{
-    catalog::{Catalog, query_types::QueryReadLimits},
+    catalog::{
+        Catalog,
+        query_types::{QueryCatalog, QueryReadLimits},
+    },
     domain::*,
 };
 #[cfg(test)]
@@ -191,10 +194,12 @@ fn coordinate(
     let result = (|| {
         meter.check()?;
         let plan = lexical::validate_plan(query, plan)?;
-        if plan.mode != SearchMode::Lexical || catalog.operation_state()?.is_none() {
+        if !matches!(plan.mode, SearchMode::Literal | SearchMode::Lexical)
+            || catalog.operation_state()?.is_none()
+        {
             return Err(WikiError::new(
                 ErrorCode::CapabilityUnavailable,
-                "selected search requires normalized lexical discovery",
+                "selected search requires normalized literal or lexical discovery",
             ));
         }
         catalog.guard_query()?;
@@ -226,9 +231,11 @@ fn coordinate(
                 hits.warnings.push(SCOPE_WARNING.into());
                 // Formatting belongs to the same deadline, before the final canonical recheck.
                 serde_json::to_vec(&hits).map_err(serialization)?;
+                reader.check_query_budget()?;
                 #[cfg(test)]
                 before_final()?;
                 proof.recheck(catalog, &reader)?;
+                reader.check_query_budget()?;
                 meter.check()?;
                 Ok(hits)
             })();
@@ -253,11 +260,11 @@ pub fn preview(query: &str, plan: &QueryPlan) -> Result<serde_json::Value> {
     let plan = lexical::validate_plan(query, plan)?;
     if !matches!(
         plan.mode,
-        SearchMode::Lexical | SearchMode::Semantic | SearchMode::Hybrid
+        SearchMode::Literal | SearchMode::Lexical | SearchMode::Semantic | SearchMode::Hybrid
     ) {
         return Err(WikiError::new(
             ErrorCode::CapabilityUnavailable,
-            "selected search planning requires lexical, semantic or hybrid document mode",
+            "selected search planning requires literal, lexical, semantic or hybrid document mode",
         ));
     }
     Ok(

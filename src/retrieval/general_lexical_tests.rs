@@ -120,6 +120,18 @@ impl Fixture {
         layout2: bool,
         metadata_bytes: usize,
     ) -> Self {
+        Self::build_extra(extra_rows, matching_rows, layout2, metadata_bytes, None)
+    }
+    fn literal(raw: &str) -> Self {
+        Self::build_extra(0, 0, true, 0, Some(raw))
+    }
+    fn build_extra(
+        extra_rows: usize,
+        matching_rows: usize,
+        layout2: bool,
+        metadata_bytes: usize,
+        literal: Option<&str>,
+    ) -> Self {
         let temp = tempfile::tempdir().unwrap();
         let root = temp.path();
         write(
@@ -313,6 +325,30 @@ impl Fixture {
                     "Exact commonword",
                     fields,
                     "commonword repeated fact\n",
+                ),
+            );
+        }
+        if let Some(raw) = literal {
+            let captured = store
+                .plan_capture(CaptureRequest {
+                    title: "Literal diagnostics".into(),
+                    origin_kind: SourceOrigin::LocalFile,
+                    origin: "literal-diagnostics.md".into(),
+                    original: raw.as_bytes().to_vec(),
+                    extraction: ExtractionInput::Utf8Preserve,
+                    media_type: Some("text/markdown".into()),
+                })
+                .unwrap();
+            seed(root, captured.draft.unwrap());
+            write(
+                root,
+                "literal-symbols.md",
+                &note(
+                    "page",
+                    "page_literal_symbols",
+                    "Literal symbols",
+                    json!({"wiki_status":"reviewed","tags":["literal"]}),
+                    raw,
                 ),
             );
         }
@@ -622,13 +658,16 @@ fn selected_cache_validation_and_read_only_capability_fences() {
     );
     let literal = QueryPlan {
         mode: SearchMode::Literal,
+        filters: plan.filters.clone(),
         ..Default::default()
     };
     assert_eq!(
         search_catalog(&f.query(), "commonword", &literal)
-            .unwrap_err()
-            .code,
-        ErrorCode::CapabilityUnavailable
+            .unwrap()
+            .hits[0]
+            .locator
+            .path,
+        path("alpha.md")
     );
     assert_eq!(
         search_catalog(&f.query(), "***", &QueryPlan::default())
@@ -1201,4 +1240,402 @@ fn paired_withdrawn_source_and_deprecated_page_preserve_lifecycle_filters() {
     let hits = f.paired("lifecycledeprecatedneedle", &deprecated, None);
     assert_eq!(hits.hits.len(), 1);
     assert_eq!(hits.hits[0].authored_status.as_deref(), Some("deprecated"));
+}
+
+#[test]
+fn paired_literal_symbols_case_unicode_frontmatter_and_nonoverlapping_spans() {
+    let raw = format!(
+        "---\ncapture_flag: CAPTURE_HEADER\n---\nα🙂 Vec<T> E0308 :: % _ \\ \" OR \" 'quoted'\nCaseNeedle Café e\u{301} 東京 aaaaa\n{}",
+        "repeatmark ".repeat(70)
+    );
+    let f = Fixture::literal(&raw);
+    let mut plan = QueryPlan {
+        mode: SearchMode::Literal,
+        filters: SearchFilters {
+            path_prefix: Some("literal-symbols.md".into()),
+            ..Default::default()
+        },
+        limits: SearchLimits {
+            excerpt_bytes: 2048,
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let authored = fs::read_to_string(f._temp.path().join("literal-symbols.md")).unwrap();
+    for query in [
+        "::",
+        "Vec<T>",
+        "E0308",
+        "%",
+        "_",
+        "\\",
+        "\" OR \"",
+        "'quoted'",
+        "🙂",
+        "α🙂",
+        "Café",
+        "e\u{301}",
+        "東京",
+        "CaseNeedle",
+        "page_literal_symbols",
+    ] {
+        let hits = f.paired(query, &plan, None);
+        assert_eq!(hits.hits.len(), 1, "{query}");
+        let hit = &hits.hits[0];
+        assert_eq!(hit.reasons, vec![RetrievalReason::Literal]);
+        assert_eq!(
+            hit.rank_contributions,
+            vec![RankContribution {
+                channel: "literal".into(),
+                rank: 1,
+                score: None
+            }]
+        );
+        assert_eq!(hit.excerpt.span.slice(&authored).unwrap(), hit.excerpt.text);
+        assert!(!hit.excerpt.matched_spans.is_empty(), "{query}");
+        for span in &hit.excerpt.matched_spans {
+            assert_eq!(span.slice(&authored).unwrap(), query, "{query}");
+        }
+    }
+    for absent in [
+        "vec<T>",
+        "e0308",
+        "caseneedle",
+        "Cafe",
+        "CAFÉ",
+        "needle OR absent",
+        "a*",
+        "[🙂]",
+    ] {
+        assert!(f.paired(absent, &plan, None).hits.is_empty(), "{absent}");
+    }
+    assert!(
+        f.paired(&"absent ".repeat(MAX_LEXICAL_TERMS + 1), &plan, None)
+            .hits
+            .is_empty(),
+        "literal input is not subject to the lexical phrase ceiling"
+    );
+    assert!(
+        f.paired(&"x".repeat(MAX_QUERY_BYTES), &plan, None)
+            .hits
+            .is_empty(),
+        "the exact literal query byte ceiling remains accepted"
+    );
+    let header = f.paired("page_literal_symbols", &plan, None);
+    let authored_note = parse_note(authored.as_bytes());
+    let body_start = authored_note.raw.len() - authored_note.body().len();
+    assert!(header.hits[0].excerpt.matched_spans[0].start() < body_start as u64);
+
+    plan.filters.path_prefix = None;
+    let captured = f
+        .paired("CAPTURE_HEADER", &plan, None)
+        .hits
+        .into_iter()
+        .find(|hit| hit.owner_revision.is_some())
+        .unwrap();
+    plan.filters.source_ids = vec![captured.source_id.unwrap()];
+    plan.filters.path_prefix = Some("sources/".into());
+    for query in ["α🙂", "Vec<T>", "CAPTURE_HEADER", "repeatmark", "aa"] {
+        let hits = f.paired(query, &plan, None);
+        assert_eq!(hits.hits.len(), 1);
+        let hit = &hits.hits[0];
+        assert_eq!(hit.excerpt.span.slice(&raw).unwrap(), hit.excerpt.text);
+        assert_eq!(
+            hit.locator.observed_hash,
+            Blake3Hash::digest(raw.as_bytes())
+        );
+        for span in &hit.excerpt.matched_spans {
+            assert_eq!(span.slice(&raw).unwrap(), query);
+        }
+        if query == "repeatmark" {
+            assert_eq!(hit.excerpt.matched_spans.len(), 64);
+        }
+        if query == "aa" {
+            let start = raw.find("aaaaa").unwrap() as u64;
+            assert_eq!(
+                hit.excerpt.matched_spans,
+                vec![
+                    ByteSpan::new(start, start + 2).unwrap(),
+                    ByteSpan::new(start + 2, start + 4).unwrap()
+                ]
+            );
+        }
+    }
+    for bad in [
+        String::new(),
+        " \n".into(),
+        "nul\0query".into(),
+        "x".repeat(MAX_QUERY_BYTES + 1),
+    ] {
+        assert_eq!(
+            search_catalog(&f.query(), &bad, &plan).unwrap_err().code,
+            ErrorCode::Usage
+        );
+    }
+}
+
+#[test]
+fn paired_literal_filters_exact_totals_caps_and_cursor_pool() {
+    let f = Fixture::configured(0, 83);
+    let plan = QueryPlan {
+        mode: SearchMode::Literal,
+        filters: SearchFilters {
+            path_prefix: Some("matching/".into()),
+            ..Default::default()
+        },
+        limits: SearchLimits {
+            hits: 2,
+            candidates: 3,
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let first = f.paired("commonword", &plan, None);
+    assert_eq!((first.candidate_count, first.omitted_candidates), (83, 80));
+    assert_eq!(
+        first
+            .hits
+            .iter()
+            .map(|hit| hit.locator.path.clone())
+            .collect::<Vec<_>>(),
+        vec![path("matching/00000.md"), path("matching/00001.md")]
+    );
+    let reader = f.query();
+    for catalog in [&f.legacy as &dyn QueryCatalog, &reader as &dyn QueryCatalog] {
+        let first = search_catalog(catalog, "commonword", &plan).unwrap();
+        let next = QueryPlan {
+            cursor: first.next_cursor,
+            ..plan.clone()
+        };
+        let second = search_catalog(catalog, "commonword", &next).unwrap();
+        assert_eq!(
+            (second.candidate_count, second.omitted_candidates),
+            (83, 80)
+        );
+        assert_eq!(second.hits.len(), 1);
+        assert_eq!(second.hits[0].locator.path, path("matching/00002.md"));
+        assert_eq!(second.hits[0].rank_contributions[0].rank, 3);
+        assert!(second.next_cursor.is_none());
+        let changed = QueryPlan {
+            filters: SearchFilters {
+                tags: vec!["bulk".into()],
+                ..next.filters.clone()
+            },
+            ..next
+        };
+        assert_eq!(
+            search_catalog(catalog, "commonword", &changed)
+                .unwrap_err()
+                .code,
+            ErrorCode::CursorStale
+        );
+    }
+    let filtered = QueryPlan {
+        filters: SearchFilters {
+            kinds: vec![RecordKind::Page],
+            tags: vec!["bulk".into()],
+            authored_statuses: vec!["reviewed".into()],
+            path_prefix: Some("matching/00082.md".into()),
+            ..Default::default()
+        },
+        limits: SearchLimits {
+            hits: 1,
+            candidates: 1,
+            ..Default::default()
+        },
+        ..plan.clone()
+    };
+    let hits = f.paired("commonword", &filtered, None);
+    assert_eq!((hits.candidate_count, hits.omitted_candidates), (1, 0));
+    assert_eq!(hits.hits[0].locator.path, path("matching/00082.md"));
+    let source = QueryPlan {
+        filters: SearchFilters {
+            source_ids: vec![f.source.clone()],
+            ..Default::default()
+        },
+        ..plan.clone()
+    };
+    let current = f.paired("currentpayload", &source, None);
+    let content_path = path(&format!(
+        "sources/{}/revisions/{}/content.md",
+        f.source, f.head
+    ));
+    assert!(current.hits.iter().any(|hit| {
+        hit.locator.path == content_path
+            && hit.source_id.as_ref() == Some(&f.source)
+            && hit.owner_revision.as_ref() == Some(&f.head)
+    }));
+    assert!(current.hits.iter().any(|hit| {
+        hit.locator.path == path("evidence.md")
+            && hit.kind == Some(RecordKind::Evidence)
+            && hit.excerpt.text.contains("currentpayload")
+    }));
+    assert_eq!(current.hits.len(), 2);
+    assert!(f.paired("oldpayload", &source, None).hits.is_empty());
+    let historical = QueryPlan {
+        filters: SearchFilters {
+            include_historical: true,
+            ..source.filters.clone()
+        },
+        ..source
+    };
+    assert_eq!(f.paired("oldpayload", &historical, None).hits.len(), 1);
+    let ordinary = QueryPlan {
+        mode: SearchMode::Literal,
+        ..Default::default()
+    };
+    assert!(
+        f.paired("SecretUnsupportedDescription", &ordinary, None)
+            .hits
+            .is_empty()
+    );
+    assert!(
+        f.paired("duplicateidentityneedle", &ordinary, Some(false))
+            .hits
+            .is_empty()
+    );
+    assert_eq!(
+        f.paired("duplicateidentityneedle", &ordinary, None)
+            .hits
+            .len(),
+        2
+    );
+    assert!(
+        f.paired("lifecyclewithdrawnneedle", &ordinary, None)
+            .hits
+            .is_empty()
+    );
+    let history = QueryPlan {
+        filters: SearchFilters {
+            include_historical: true,
+            ..Default::default()
+        },
+        ..ordinary
+    };
+    assert_eq!(
+        f.paired("lifecyclewithdrawnneedle", &history, None)
+            .hits
+            .len(),
+        1
+    );
+    let proposed = QueryPlan {
+        mode: SearchMode::Literal,
+        filters: SearchFilters {
+            include_proposed: true,
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    assert_eq!(f.paired("proposedtext", &proposed, None).hits.len(), 1);
+}
+
+#[test]
+fn normalized_literal_selected_corruption_and_bounded_payload_decoding() {
+    let plan = QueryPlan {
+        mode: SearchMode::Literal,
+        filters: SearchFilters {
+            path_prefix: Some("matching/".into()),
+            ..Default::default()
+        },
+        limits: SearchLimits {
+            hits: 1,
+            candidates: 2,
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let f = Fixture::configured(0, 83);
+    let reader = f
+        .catalog
+        .cached_query_snapshot(QueryReadLimits {
+            max_rows: 6,
+            ..Default::default()
+        })
+        .unwrap();
+    let hits = search_catalog(&reader, "commonword", &plan).unwrap();
+    assert_eq!((hits.candidate_count, hits.omitted_candidates), (83, 81));
+    assert!(
+        reader.usage().rows <= 6,
+        "only capped candidates/hit metadata decoded, not all83 matches: {:?}",
+        reader.usage()
+    );
+    for limits in [
+        QueryReadLimits {
+            max_rows: 1,
+            ..Default::default()
+        },
+        QueryReadLimits {
+            max_bytes: 1,
+            ..Default::default()
+        },
+        QueryReadLimits {
+            max_row_bytes: 1,
+            ..Default::default()
+        },
+    ] {
+        let reader = f.catalog.cached_query_snapshot(limits).unwrap();
+        let error = search_catalog(&reader, "commonword", &plan).unwrap_err();
+        assert_eq!(error.code, ErrorCode::BudgetExceeded);
+        assert!(error.hint.unwrap().contains("--path-prefix"));
+    }
+    let vm_limited = f
+        .catalog
+        .cached_query_snapshot(QueryReadLimits {
+            max_vm_steps: 1000,
+            ..Default::default()
+        })
+        .and_then(|reader| search_catalog(&reader, "commonword", &plan));
+    assert_eq!(vm_limited.unwrap_err().code, ErrorCode::BudgetExceeded);
+    for mutation in [
+        "UPDATE documents SET raw_text=raw_text||' corruption' WHERE path='alpha.md'",
+        "UPDATE documents SET aliases_text='wrong' WHERE path='alpha.md'",
+        "UPDATE documents SET tags_json='{' WHERE path='alpha.md'",
+        "UPDATE records SET row_json='{' WHERE id='page_alpha'",
+    ] {
+        let f = Fixture::new(0);
+        let db = Connection::open(&f.completed.path).unwrap();
+        selector::configure_wal(&db).unwrap();
+        db.execute_batch(mutation).unwrap();
+        drop(db);
+        let selected = QueryPlan {
+            mode: SearchMode::Literal,
+            filters: SearchFilters {
+                path_prefix: Some("alpha.md".into()),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        assert_eq!(
+            search_catalog(&f.query(), "commonword", &selected)
+                .unwrap_err()
+                .code,
+            ErrorCode::IndexCorrupt,
+            "{mutation}"
+        );
+    }
+}
+
+#[test]
+fn normalized_literal_long_prefix_nonmatch_refuses_exhausted_native_scan() {
+    let raw = "a".repeat(1024 * 1024);
+    let f = Fixture::literal(&raw);
+    let query = format!("{}Z", "a".repeat(MAX_QUERY_BYTES - 1));
+    let plan = QueryPlan {
+        mode: SearchMode::Literal,
+        filters: SearchFilters {
+            path_prefix: Some("literal-symbols.md".into()),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    // VM callbacks cannot interrupt inside instr itself. The shared reader
+    // clock must still refuse after that native call, never report absence.
+    let result = f
+        .catalog
+        .cached_query_snapshot(QueryReadLimits {
+            max_elapsed_ms: 1,
+            ..Default::default()
+        })
+        .and_then(|reader| search_catalog(&reader, &query, &plan));
+    assert_eq!(result.unwrap_err().code, ErrorCode::BudgetExceeded);
 }

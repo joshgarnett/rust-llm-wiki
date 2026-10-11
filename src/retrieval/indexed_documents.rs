@@ -32,6 +32,9 @@ impl QueryCatalog for SelectedCatalog<'_> {
     fn connection(&self) -> &Connection {
         self.reader.connection()
     }
+    fn check_query_budget(&self) -> Result<()> {
+        self.reader.check_query_budget()
+    }
     fn snapshot(&self) -> &ReadSnapshot {
         self.reader.snapshot()
     }
@@ -90,12 +93,15 @@ pub(crate) fn context(
     let request = context::validate_request(query, request)?;
     context::validate_selection_action(&request, &options.selection)?;
     if request.scope != ContextScope::IndexedDocuments
-        || request.documents.mode != super::SearchMode::Lexical
+        || !matches!(
+            request.documents.mode,
+            super::SearchMode::Literal | super::SearchMode::Lexical
+        )
         || catalog.operation_state()?.is_none()
     {
         return Err(WikiError::new(
             ErrorCode::CapabilityUnavailable,
-            "lexical indexed-documents requires a selected normalized index; semantic modes use their selected vector coordinator",
+            "literal/lexical indexed-documents requires a selected normalized index; semantic modes use their selected vector coordinator",
         ));
     }
     meter.check()?;
@@ -129,11 +135,13 @@ pub(crate) fn context(
         query,
         &options.selection,
     )?;
+    reader.check_query_budget()?;
     draft.warnings.push("Discovery uses the published generation; selected document dependencies are verified. Global membership, identity uniqueness, completeness and unselected freshness are not verified. Use index sync to discover external edits.".into());
     if let Some(fault) = &options.fault {
         fault.check(ContextCheckpoint::BeforeFinalVerification { attempt: 0 })?;
     }
     proof.recheck(catalog, &reader)?;
+    reader.check_query_budget()?;
     let verification = verification(&reader)?;
     meter.check()?;
     Ok(seal(draft, verification, proof.meter()))

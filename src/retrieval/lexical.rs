@@ -169,12 +169,6 @@ fn search_inner(
             "semantic and hybrid retrieval require the embedding application",
         ));
     }
-    if reader.normalized_layout() && plan.mode == SearchMode::Literal {
-        return Err(WikiError::new(
-            ErrorCode::CapabilityUnavailable,
-            "normalized literal retrieval requires an exact substring access path",
-        ));
-    }
     let plan = validate_plan(query, plan)?;
     let base_fingerprint = cursor::fingerprint(query, &plan)?;
     let base_fingerprint = if reader.query_scope() == "strict_catalog" {
@@ -239,6 +233,10 @@ fn search_inner(
             expression.as_deref().expect("indexed lexical expression"),
             &plan,
         )?;
+    } else if reader.normalized_layout() && plan.mode == SearchMode::Literal {
+        (candidates, literal_count) =
+            normalized_literal_candidates(reader, query, &plan, &context_policy)
+                .map_err(literal_budget_error)?;
     } else if reader.normalized_layout() {
         (candidates, overflow) = normalized_candidates(
             reader,
@@ -556,6 +554,9 @@ fn search_inner(
         }
     }
     let dependency_fingerprint = reader.dependency_fingerprint()?;
+    if plan.mode == SearchMode::Literal {
+        reader.check_query_budget().map_err(literal_budget_error)?;
+    }
     Ok(HitSet {
         network_used: false,
         graph: None,
@@ -770,6 +771,122 @@ fn validate_general_document(
         ));
     }
     Ok(())
+}
+
+fn literal_budget_error(mut error: WikiError) -> WikiError {
+    if error.code == ErrorCode::BudgetExceeded && error.hint.is_none() {
+        error.hint = Some(
+            "Narrow literal discovery with --source-id or --path-prefix; substring scanning is bounded separately from returned hits".into(),
+        );
+    }
+    error
+}
+
+/// Substring presence is SQL data, never an FTS expression or a character
+/// offset. COUNT and capped key selection share this reader's transaction and
+/// cumulative meter. LIMIT bounds decoding, not the native substring scan.
+fn normalized_literal_candidates(
+    reader: &dyn QueryCatalog,
+    query: &str,
+    plan: &QueryPlan,
+    context_policy: &str,
+) -> Result<(BTreeMap<VaultRelativePath, Candidate>, usize)> {
+    let mut values = vec![Value::Text(query.into())];
+    let common = filters::catalog_sql(&plan.filters, &mut values, true);
+    let policy = filters::catalog_normal_policy(&plan.filters, true);
+    let predicate =
+        format!("({common}) AND ({policy}) AND ({context_policy}) AND instr(d.raw_text,?1)>0");
+    let count_sql = format!(
+        "SELECT count(*) FROM documents d LEFT JOIN records r ON r.id=d.record_id WHERE {predicate}"
+    );
+    let count: i64 = reader
+        .connection()
+        .query_row(&count_sql, params_from_iter(values.iter()), |row| {
+            row.get(0)
+        })
+        .map_err(sql_error)?;
+    reader.check_query_budget()?;
+    let count = usize::try_from(count).map_err(|_| {
+        WikiError::new(ErrorCode::IndexCorrupt, "literal match count outside range")
+    })?;
+    let limit = filters::bind(&mut values, Value::Integer(plan.limits.candidates as i64));
+    let columns = crate::catalog::normalized_schema::DOCUMENT_COLUMNS
+        .split(',')
+        .map(|column| format!("d.{column}"))
+        .collect::<Vec<_>>()
+        .join(",");
+    let sql = format!(
+        "WITH candidate_ids AS MATERIALIZED (\
+         SELECT d.doc_row,coalesce(d.record_id,d.path) AS tie,d.path \
+         FROM documents d LEFT JOIN records r ON r.id=d.record_id \
+         WHERE {predicate} ORDER BY tie COLLATE BINARY,d.path COLLATE BINARY LIMIT {limit}) \
+         SELECT {columns},NULL,d.aliases_text,d.tags_text \
+         FROM candidate_ids c JOIN documents d ON d.doc_row=c.doc_row \
+         ORDER BY c.tie COLLATE BINARY,c.path COLLATE BINARY"
+    );
+    let mut statement = reader.connection().prepare(&sql).map_err(sql_error)?;
+    let mut rows = statement
+        .query(params_from_iter(values))
+        .map_err(sql_error)?;
+    let mut candidates = BTreeMap::new();
+    while let Some(row) = rows.next().map_err(sql_error)? {
+        let document = reader.decode_document(row, 0)?;
+        validate_general_document(reader, row, &document, false)?;
+        // The decoder checks typed columns; these checks additionally preserve
+        // adopted-record integrity without granting an identity-ranking tier.
+        let record = record_for(reader, &document)?;
+        if document.record_id.is_some() && record.is_none() {
+            return Err(WikiError::new(
+                ErrorCode::IndexCorrupt,
+                "selected literal document lacks its adopted record",
+            ));
+        }
+        if let Some(record) = record {
+            if record.path != document.path
+                || record.hash != document.hash
+                || Some(record.record.kind()) != document.kind
+                || record.record.title() != document.title
+                || crate::catalog::scan::list(&record.record, "aliases") != document.aliases
+                || crate::catalog::scan::list(&record.record, "tags") != document.tags
+                || record.eligibility != document.eligibility
+            {
+                return Err(WikiError::new(
+                    ErrorCode::IndexCorrupt,
+                    "selected literal document differs from its adopted record",
+                ));
+            }
+        }
+        if literal_matches(&document.raw_text, query).is_empty() {
+            return Err(WikiError::new(
+                ErrorCode::IndexCorrupt,
+                "selected literal document does not contain the exact query",
+            ));
+        }
+        let rank = candidates.len() + 1;
+        candidates.insert(
+            document.path.clone(),
+            Candidate {
+                document,
+                tier: 0,
+                score: None,
+                reasons: vec![RetrievalReason::Literal],
+                ranks: vec![RankContribution {
+                    channel: "literal".into(),
+                    rank,
+                    score: None,
+                }],
+                identity: false,
+            },
+        );
+    }
+    reader.check_query_budget()?;
+    if candidates.len() != count.min(plan.limits.candidates) {
+        return Err(WikiError::new(
+            ErrorCode::IndexCorrupt,
+            "literal candidate count differs within its pinned snapshot",
+        ));
+    }
+    Ok((candidates, count))
 }
 
 fn normalized_candidates(

@@ -151,7 +151,7 @@ fn export_native_import_failure_cuts() {
 }
 
 #[derive(Default, Clone, Serialize)]
-struct Calls {
+pub(super) struct Calls {
     calls: u64,
     completed: u64,
     errors: u64,
@@ -160,16 +160,16 @@ struct Calls {
     elapsed_ns: u128,
 }
 #[derive(Default)]
-struct CountingNativeIo {
+pub(super) struct CountingNativeIo {
     active: Mutex<Option<BTreeMap<&'static str, Calls>>>,
 }
 impl CountingNativeIo {
-    fn begin(&self) {
+    pub(super) fn begin(&self) {
         let mut state = self.active.lock().unwrap();
         assert!(state.is_none());
         *state = Some(BTreeMap::new());
     }
-    fn finish(&self) -> BTreeMap<&'static str, Calls> {
+    pub(super) fn finish(&self) -> BTreeMap<&'static str, Calls> {
         self.active
             .lock()
             .unwrap()
@@ -391,7 +391,7 @@ fn sha256(paths: &[PathBuf]) -> Result<Value> {
     }
     Ok(Value::Object(hashes))
 }
-fn counts_and_snapshot(root: &Path) -> Result<Value> {
+pub(super) fn counts_and_snapshot(root: &Path) -> Result<Value> {
     let app = OfflineApp::new(VaultFs::new(VaultRoot::explicit(root)?), options())?;
     let catalog = Catalog::new(app.fs().clone(), app.vault_id().clone());
     let authority = catalog
@@ -417,8 +417,13 @@ fn counts_and_snapshot(root: &Path) -> Result<Value> {
         }
         Ok(total)
     };
+    let objects = if crate::storage::layout::active(app.fs().root())? {
+        count(rel(".wiki/retained/objects/blake3"), false)?
+    } else {
+        0
+    };
     Ok(
-        json!({"sources":count(rel("sources"),true)?,"changes":count(rel(".wiki/retained/changes"),true)?,"canonical_changes":count(rel("changes"),false)?,"objects":count(rel(".wiki/retained/objects/blake3"),false)?,"snapshot":reader.snapshot(),"idle":true,"normalized":true}),
+        json!({"sources":count(rel("sources"),true)?,"changes":count(rel("changes"),true)?,"canonical_changes":count(rel("changes"),false)?,"objects":objects,"snapshot":reader.snapshot(),"idle":true,"normalized":true}),
     )
 }
 fn cited_readiness(app: &OfflineApp, items: &[Value], bodies: &[Vec<u8>]) -> Result<Value> {

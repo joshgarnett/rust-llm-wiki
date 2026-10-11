@@ -60,6 +60,11 @@ pub(crate) struct QueryReadUsage {
 /// Returning owned rows keeps bounded reads fallible instead of hiding a full
 /// projection behind a borrowed reference. The interface makes no freshness claim.
 pub(crate) trait QueryCatalog {
+    /// Check cooperative elapsed work after native SQL and Rust assembly.
+    /// Strict projection adapters have no generation-scoped query clock.
+    fn check_query_budget(&self) -> Result<()> {
+        Ok(())
+    }
     /// SQL layout for direct bounded retrieval. Legacy adapters keep returning
     /// false because their private connection retains the original SQL shape.
     fn normalized_layout(&self) -> bool {

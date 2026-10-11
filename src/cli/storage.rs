@@ -1,5 +1,5 @@
 //! Read-only storage plans and explicit guarded cleanup.
-use crate::{app::OfflineApp, domain::*, storage, vault::WriterPermit};
+use crate::{app::OfflineApp, catalog::Catalog, domain::*, storage, vault::WriterPermit};
 use clap::{Args, Subcommand};
 use serde_json::Value;
 use std::time::Duration;
@@ -74,8 +74,49 @@ pub fn execute(command: &StorageCommand, app: &OfflineApp) -> Result<Value> {
                 app.fs().root(),
                 Duration::from_millis(app.options().lock_timeout_ms),
             )?;
-            serde_json::to_value(storage::cleanup(app.fs(), &writer, &options)?)
-                .map_err(|_| WikiError::invalid("storage result encoding"))
+            let mut report = storage::cleanup(app.fs(), &writer, &options)?;
+            // Migration changes canonical identity inputs, including WIKI.md.
+            // Publish their derived rows before returning command success.
+            let mut completion_phase = "catalog_publication";
+            let mut publication_completed = false;
+            let publication = (|| -> Result<()> {
+                let catalog = Catalog::new(app.fs().clone(), app.vault_id().clone());
+                if catalog.operation_state()?.is_some() {
+                    catalog.sync_normalized(&writer)?;
+                    publication_completed = true;
+                    completion_phase = "storage_inventory";
+                    let after = storage::inventory(app.fs(), &options)?;
+                    if !after.complete {
+                        return Err(WikiError::new(
+                            ErrorCode::BudgetExceeded,
+                            "post-publication storage inventory exceeds its bounds",
+                        ));
+                    }
+                    report.after = after.totals;
+                }
+                Ok(())
+            })();
+            if let Err(mut error) = publication {
+                error.message = format!(
+                    "Storage cleanup committed; {completion_phase} failed: {}",
+                    error.message
+                );
+                error.details = serde_json::json!({
+                    "cleanup_committed": true,
+                    "cleanup_operation_id": report.operation_id,
+                    "layout_version": report.layout_version,
+                    "completion_phase": completion_phase,
+                    "catalog_publication_completed": publication_completed,
+                    "publication_error": error.details,
+                });
+                error.hint = Some(if publication_completed {
+                    "Inspect storage inventory with larger scan bounds; catalog publication already completed.".into()
+                } else {
+                    "Run index sync to finish catalog publication; back up the entire vault including .wiki.".into()
+                });
+                return Err(error);
+            }
+            serde_json::to_value(report).map_err(|_| WikiError::invalid("storage result encoding"))
         }
     }
 }

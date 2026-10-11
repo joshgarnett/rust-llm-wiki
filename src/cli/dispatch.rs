@@ -200,7 +200,7 @@ fn execute_inner(args: &Arguments) -> Result<Envelope> {
         Command::Capabilities => {
             return Ok(Envelope::success(
                 command,
-                json!({"version":env!("CARGO_PKG_VERSION"),"commands":COMMANDS,"schemas":SCHEMAS,"network":true,"search_modes":["literal","lexical","semantic","hybrid"],"selected_search":{"flag":"--verify-selected","layout":"normalized","modes":["lexical","semantic","hybrid"],"no_sync_compatible":true,"scope":"displayed document dependencies","global_membership_verified":false,"dry_run":"request validation only","budget":{"max_bytes":67108864,"max_files":4096,"max_entries":16384,"max_elapsed_ms":2000}},"selected_neighbors":{"command":"graph neighbors","layout":"normalized","root_kind":"entity","default_verification":true,"explicit_verification_flag":"--verify-selected","no_sync":"cached_uncited","scope":"selected_graph_neighbors","global_membership_verified":false,"current_only":true,"navigation":false,"cursor":false,"dry_run":"request validation only","limits":{"depth":2,"incident_per_seed":16,"assertions":128,"candidates":80,"hits":50,"support":2,"contrary":1},"budget":{"max_bytes":67108864,"max_files":4096,"max_entries":16384,"max_elapsed_ms":2000}},"graph_seed_modes":["lexical","semantic"],"extraction_executors":["agent","api"],"research_executor":"agent-handoff","jsonl_commands":["index sync","index rebuild","recover","changes apply","source add","source refresh","research run","research resume","research import","doctor --probe"]}),
+                json!({"version":env!("CARGO_PKG_VERSION"),"commands":COMMANDS,"schemas":SCHEMAS,"network":true,"search_modes":["literal","lexical","semantic","hybrid"],"selected_search":{"flag":"--verify-selected","layout":"normalized","modes":["literal","lexical","semantic","hybrid"],"no_sync_compatible":true,"scope":"displayed document dependencies","global_membership_verified":false,"dry_run":"request validation only","budget":{"max_bytes":67108864,"max_files":4096,"max_entries":16384,"max_elapsed_ms":2000}},"selected_neighbors":{"command":"graph neighbors","layout":"normalized","root_kind":"entity","default_verification":true,"explicit_verification_flag":"--verify-selected","no_sync":"cached_uncited","scope":"selected_graph_neighbors","global_membership_verified":false,"current_only":true,"navigation":false,"cursor":false,"dry_run":"request validation only","limits":{"depth":2,"incident_per_seed":16,"assertions":128,"candidates":80,"hits":50,"support":2,"contrary":1},"budget":{"max_bytes":67108864,"max_files":4096,"max_entries":16384,"max_elapsed_ms":2000}},"graph_seed_modes":["lexical","semantic"],"extraction_executors":["agent","api"],"research_executor":"agent-handoff","jsonl_commands":["index sync","index rebuild","recover","changes apply","source add","source refresh","research run","research resume","research import","doctor --probe"]}),
             ));
         }
         Command::Schema { name } => {
@@ -663,14 +663,15 @@ fn execute_inner(args: &Arguments) -> Result<Envelope> {
             if command.verify_selected {
                 if !matches!(
                     plan.mode,
-                    retrieval::SearchMode::Lexical
+                    retrieval::SearchMode::Literal
+                        | retrieval::SearchMode::Lexical
                         | retrieval::SearchMode::Semantic
                         | retrieval::SearchMode::Hybrid
                 ) || search.graph.is_some()
                 {
                     return Err(WikiError::new(
                         ErrorCode::CapabilityUnavailable,
-                        "--verify-selected supports normalized lexical, semantic and hybrid search without graph expansion",
+                        "--verify-selected supports normalized literal, lexical, semantic and hybrid search without graph expansion",
                     ));
                 }
                 if args.dry_run {
@@ -685,7 +686,7 @@ fn execute_inner(args: &Arguments) -> Result<Envelope> {
                             fault: None,
                         },
                     );
-                    let hits = if plan.mode == retrieval::SearchMode::Lexical {
+                    let hits = if matches!(plan.mode, retrieval::SearchMode::Literal | retrieval::SearchMode::Lexical) {
                         retrieval::selected_search::search(&catalog, &search.query, &plan,
                             &retrieval::VerificationBudget::default())
                     } else {
@@ -725,19 +726,22 @@ fn execute_inner(args: &Arguments) -> Result<Envelope> {
                 },
             );
             if catalog.operation_state()?.is_some() {
-                if plan.mode == retrieval::SearchMode::Literal || search.graph.is_some() {
+                if search.graph.is_some() {
                     return Err(WikiError::new(
                         ErrorCode::CapabilityUnavailable,
-                        "normalized general search supports lexical, semantic and hybrid documents without graph expansion; discovery uses the published index, and index sync discovers external edits",
+                        "normalized general search supports literal, lexical, semantic and hybrid documents without graph expansion; discovery uses the published index, and index sync discovers external edits",
                     ));
                 }
                 if args.dry_run && plan.mode != retrieval::SearchMode::Lexical {
                     envelope.data = retrieval::selected_search::preview(&search.query, &plan)?;
-                    envelope.warnings.push("Semantic search preview validates the plan; cache availability and evidence remain unknown.".into());
+                    envelope.warnings.push("Search preview validates the request only; index access, cache availability and evidence verification are unperformed.".into());
                     return Ok(envelope);
                 }
                 catalog.guard_query()?;
-                let hits = if plan.mode == retrieval::SearchMode::Lexical {
+                let hits = if matches!(
+                    plan.mode,
+                    retrieval::SearchMode::Literal | retrieval::SearchMode::Lexical
+                ) {
                     let reader = catalog.cached_query_snapshot(QueryReadLimits::default())?;
                     if !reader.normalized_layout() {
                         return Err(WikiError::new(
@@ -1068,7 +1072,7 @@ fn execute_inner(args: &Arguments) -> Result<Envelope> {
             {
                 return Err(WikiError::new(
                     ErrorCode::CapabilityUnavailable,
-                    "normalized context supports lexical, semantic and hybrid indexed-documents, plus lexical indexed-evidence and snapshot; omit --scope for selected document verification. Strict current/historical context is not yet available on normalized vaults; check performs a separate full audit",
+                    "normalized context supports literal, lexical, semantic and hybrid indexed-documents, plus lexical indexed-evidence and snapshot; omit --scope for selected document verification. Strict current/historical context is not yet available on normalized vaults; check performs a separate full audit",
                 ));
             }
             let cached_dry_run =

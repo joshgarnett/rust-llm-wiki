@@ -17,7 +17,12 @@ fn numeric_source_component(component: &str) -> bool {
 /// Aggregate diagnostics only; no path policy or filesystem operations change.
 #[cfg(test)]
 pub(crate) mod profile {
-    use std::{cell::RefCell, collections::BTreeMap, path::Path, time::Instant};
+    use std::{
+        cell::{Cell, RefCell},
+        collections::BTreeMap,
+        path::Path,
+        time::Instant,
+    };
 
     #[derive(Debug, Default, Clone, serde::Serialize)]
     pub(crate) struct Enumeration {
@@ -30,18 +35,23 @@ pub(crate) mod profile {
     pub(crate) struct PathProfile {
         pub portable_calls: u64,
         pub portable_elapsed_ns: u128,
+        pub portable_outer_calls: u64,
+        pub portable_outer_elapsed_ns: u128,
         pub enumerations: BTreeMap<String, Enumeration>,
     }
     std::thread_local! {
         static ACTIVE: RefCell<Option<PathProfile>> = const { RefCell::new(None) };
+        static PORTABLE_DEPTH: Cell<usize> = const { Cell::new(0) };
     }
     pub(crate) fn begin() {
+        PORTABLE_DEPTH.with(|depth| assert_eq!(depth.get(), 0, "path profile scope still active"));
         ACTIVE.with(|value| {
             assert!(value.borrow().is_none(), "path profile already active");
             *value.borrow_mut() = Some(PathProfile::default());
         });
     }
     pub(crate) fn finish() -> PathProfile {
+        PORTABLE_DEPTH.with(|depth| assert_eq!(depth.get(), 0, "path profile scope still active"));
         ACTIVE.with(|value| value.borrow_mut().take().expect("path profile inactive"))
     }
     #[derive(Clone, Copy)]
@@ -136,25 +146,54 @@ pub(crate) mod profile {
             }
         }
     }
-    pub(crate) struct PortableGuard(Option<Instant>);
+    pub(crate) struct PortableGuard(Option<Instant>, bool);
     pub(crate) fn portable() -> PortableGuard {
-        PortableGuard(
-            ACTIVE
-                .with(|value| value.borrow().is_some())
-                .then(Instant::now),
-        )
+        let enabled = ACTIVE.with(|value| value.borrow().is_some());
+        let outer = enabled
+            && PORTABLE_DEPTH.with(|depth| {
+                let previous = depth.get();
+                depth.set(previous + 1);
+                previous == 0
+            });
+        PortableGuard(enabled.then(Instant::now), outer)
     }
     impl Drop for PortableGuard {
         fn drop(&mut self) {
             if let Some(start) = self.0 {
+                let elapsed = start.elapsed().as_nanos();
+                PORTABLE_DEPTH.with(|depth| {
+                    depth.set(
+                        depth
+                            .get()
+                            .checked_sub(1)
+                            .expect("path profile nesting underflow"),
+                    )
+                });
                 ACTIVE.with(|value| {
                     if let Some(profile) = value.borrow_mut().as_mut() {
                         profile.portable_calls += 1;
-                        profile.portable_elapsed_ns += start.elapsed().as_nanos();
+                        profile.portable_elapsed_ns += elapsed;
+                        if self.1 {
+                            profile.portable_outer_calls += 1;
+                            profile.portable_outer_elapsed_ns += elapsed;
+                        }
                     }
                 });
             }
         }
+    }
+
+    #[test]
+    fn outer_path_profile_counts_nested_validation_once() {
+        begin();
+        let outer = portable();
+        let nested = portable();
+        drop(nested);
+        drop(outer);
+        let measured = finish();
+        assert_eq!(measured.portable_calls, 2);
+        assert_eq!(measured.portable_outer_calls, 1);
+        assert!(measured.portable_outer_elapsed_ns <= measured.portable_elapsed_ns);
     }
 }
 

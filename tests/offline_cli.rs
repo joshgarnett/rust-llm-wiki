@@ -64,6 +64,317 @@ fn fixture() -> tempfile::TempDir {
 fn page(id: &str, body: &str) -> Vec<u8> {
     format!("---\nwiki_schema: \"1\"\nwiki_id: {id}\nwiki_kind: page\ntitle: {id}\nwiki_status: reviewed\n---\n{body}").into_bytes()
 }
+
+#[test]
+fn normalized_literal_cited_workflow_survives_cleanup_updates_and_rebuild() {
+    for migrate_storage in [false, true] {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("literal vault with spaces");
+        fs::create_dir(&root).unwrap();
+        fs::write(root.join("WIKI.md"), b"---\nwiki_schema: \"1\"\nwiki_id: Vault.Literal\nwiki_kind: vault\ntitle: Literal workflow\n---\n").unwrap();
+        let input = temp.path().join("source input.md");
+        let original = "# Diagnostic\n\n:: Vec<T> E0308 🦀 \"OR\" literal_% \\path\n";
+        fs::write(&input, original).unwrap();
+        let capture = ok(
+            &root,
+            &[
+                "source",
+                "add",
+                input.to_str().unwrap(),
+                "--title",
+                "Diagnostic",
+                "--media-type",
+                "text/markdown",
+            ],
+            None,
+        );
+        let source = capture["data"]["allocated_ids"]["source"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        ok(&root, &["index", "rebuild", "--normalized"], None);
+        if migrate_storage {
+            let plan = ok(&root, &["storage", "plan"], None);
+            let hash = plan["data"]["plan_hash"].as_str().unwrap();
+            ok(
+                &root,
+                &["storage", "cleanup", "--expected-plan", hash],
+                None,
+            );
+            // Cleanup must publish the changed canonical identities itself.
+            let checked = ok(&root, &["check"], None);
+            assert_eq!(checked["data"]["complete"], true);
+            assert_eq!(checked["data"]["error_count"], 0);
+        }
+        for query in [
+            "::",
+            "Vec<T>",
+            "E0308",
+            "🦀",
+            "\"OR\"",
+            "literal_%",
+            "\\path",
+        ] {
+            let found = ok(
+                &root,
+                &[
+                    "search",
+                    query,
+                    "--mode",
+                    "literal",
+                    "--verify-selected",
+                    "--no-sync",
+                    "--excerpt-bytes",
+                    "1024",
+                ],
+                None,
+            );
+            let hit = &found["data"]["hits"][0];
+            assert_eq!(hit["source_id"], source);
+            assert_eq!(hit["excerpt"]["citation"]["kind"], "source");
+            let span = &hit["excerpt"]["span"];
+            let start = span["start"].as_u64().unwrap().to_string();
+            let end = span["end"].as_u64().unwrap().to_string();
+            let read = ok(
+                &root,
+                &[
+                    "read",
+                    "--path",
+                    hit["path"].as_str().unwrap(),
+                    "--start",
+                    &start,
+                    "--end",
+                    &end,
+                    "--max-bytes",
+                    "1024",
+                ],
+                None,
+            );
+            assert_eq!(read["data"]["body"], hit["excerpt"]["text"]);
+        }
+        let old = ok(
+            &root,
+            &["search", "E0308", "--mode", "literal", "--verify-selected"],
+            None,
+        );
+        let old_path = old["data"]["hits"][0]["path"].as_str().unwrap().to_owned();
+        let context_args = [
+            "context",
+            "E0308",
+            "--mode",
+            "literal",
+            "--no-sync",
+            "--max-bytes",
+            "6000",
+            "--max-tokens",
+            "1500",
+        ];
+        let before = ok(&root, &context_args, None);
+        assert!(!before["data"]["passages"].as_array().unwrap().is_empty());
+        assert!(
+            before["data"]["passages"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|passage| {
+                    passage["text"].as_str().unwrap().contains("E0308")
+                        && !passage["citations"].as_array().unwrap().is_empty()
+                })
+        );
+        let unchanged = tree(&root);
+        ok(
+            &root,
+            &[
+                "--dry-run",
+                "search",
+                "::",
+                "--mode",
+                "literal",
+                "--verify-selected",
+            ],
+            None,
+        );
+        ok(
+            &root,
+            &["--dry-run", "context", "::", "--mode", "literal"],
+            None,
+        );
+        assert_eq!(tree(&root), unchanged);
+        let page_input = temp.path().join("author note.md");
+        fs::write(&page_input, "Author note: preserve this :: symbol.\n").unwrap();
+        ok(
+            &root,
+            &[
+                "page",
+                "init",
+                "--file",
+                page_input.to_str().unwrap(),
+                "--title",
+                "Literal author note",
+                "--path",
+                "pages/author-note.md",
+            ],
+            None,
+        );
+        let author = ok(
+            &root,
+            &[
+                "read",
+                "--path",
+                "pages/author-note.md",
+                "--max-bytes",
+                "4096",
+            ],
+            None,
+        );
+        let guard = author["data"]["hash"].as_str().unwrap();
+        let record = author["data"]["record"].as_object().unwrap();
+        let mut proposal = String::from("---\n");
+        for (key, value) in record {
+            proposal.push_str(&format!(
+                "{}: {}\n",
+                serde_json::to_string(key).unwrap(),
+                value
+            ));
+        }
+        proposal
+            .push_str("---\nAuthor note: preserve this :: symbol.\nAdded Vec<T> clarification.\n");
+        fs::write(&page_input, proposal).unwrap();
+        let update = [
+            "page",
+            "put",
+            "--file",
+            page_input.to_str().unwrap(),
+            "--path",
+            "pages/author-note.md",
+            "--if-match",
+            guard,
+        ];
+        ok(&root, &update, None);
+        let (exit, stale) = invoke(Some(&root), &update, None);
+        assert_ne!(exit, 0);
+        assert_eq!(stale["error"]["code"], "CONTENT_CONFLICT");
+        let author_hits = ok(
+            &root,
+            &[
+                "search",
+                "Vec<T>",
+                "--mode",
+                "literal",
+                "--kind",
+                "page",
+                "--verify-selected",
+                "--no-sync",
+            ],
+            None,
+        );
+        assert!(
+            author_hits["data"]["hits"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|hit| hit["path"] == "pages/author-note.md")
+        );
+        let author = ok(
+            &root,
+            &[
+                "read",
+                "--path",
+                "pages/author-note.md",
+                "--max-bytes",
+                "4096",
+            ],
+            None,
+        );
+        assert!(
+            author["data"]["body"]
+                .as_str()
+                .unwrap()
+                .contains("Author note: preserve this :: symbol.")
+        );
+        let refreshed = original.replace("E0308", "E0425");
+        fs::write(&input, &refreshed).unwrap();
+        ok(
+            &root,
+            &[
+                "source",
+                "refresh",
+                &source,
+                "--file",
+                input.to_str().unwrap(),
+                "--media-type",
+                "text/markdown",
+            ],
+            None,
+        );
+        let current = ok(
+            &root,
+            &[
+                "search",
+                "E0425",
+                "--mode",
+                "literal",
+                "--verify-selected",
+                "--no-sync",
+            ],
+            None,
+        );
+        assert_eq!(current["data"]["hits"][0]["source_id"], source);
+        let historical = ok(
+            &root,
+            &["read", "--path", &old_path, "--max-bytes", "1024"],
+            None,
+        );
+        assert_eq!(historical["data"]["body"], original);
+        fs::rename(root.join(".wiki/cache"), temp.path().join("retained cache")).unwrap();
+        ok(&root, &["index", "rebuild", "--normalized"], None);
+        let rebuilt = ok(
+            &root,
+            &[
+                "search",
+                "E0425",
+                "--mode",
+                "literal",
+                "--verify-selected",
+                "--no-sync",
+            ],
+            None,
+        );
+        assert_eq!(rebuilt["data"]["hits"], current["data"]["hits"]);
+        ok(
+            &root,
+            &[
+                "source",
+                "withdraw",
+                &source,
+                "--reason",
+                "Owned literal fixture",
+            ],
+            None,
+        );
+        let absent = ok(
+            &root,
+            &[
+                "search",
+                "E0425",
+                "--mode",
+                "literal",
+                "--verify-selected",
+                "--no-sync",
+            ],
+            None,
+        );
+        assert!(absent["data"]["hits"].as_array().unwrap().is_empty());
+        let historical = ok(
+            &root,
+            &["read", "--path", &old_path, "--max-bytes", "1024"],
+            None,
+        );
+        assert_eq!(historical["data"]["body"], original);
+        let checked = ok(&root, &["check"], None);
+        assert_eq!(checked["data"]["error_count"], 0);
+    }
+}
 fn tree(root: &Path) -> BTreeMap<PathBuf, (Vec<u8>, std::time::SystemTime)> {
     fn walk(root: &Path, at: &Path, out: &mut BTreeMap<PathBuf, (Vec<u8>, std::time::SystemTime)>) {
         for entry in fs::read_dir(at).unwrap() {

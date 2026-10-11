@@ -45,6 +45,7 @@ pub(crate) struct QuerySnapshot {
     usage: Cell<QueryReadUsage>,
     pub(super) policy_layout_verified: Cell<bool>,
     limits: QueryReadLimits,
+    query_started: Instant,
     operation_authority: Option<Authority>,
     scope: QueryScope,
 }
@@ -113,7 +114,7 @@ impl Catalog {
                         | OpenFlags::SQLITE_OPEN_NOFOLLOW,
                 )
                 .map_err(sql::sql_error)?;
-                configure_query(&connection, &limits)?;
+                let query_started = configure_query(&connection, &limits)?;
                 sql::configure(&connection, timeout, false)?;
                 connection
                     .execute_batch("BEGIN DEFERRED")
@@ -125,11 +126,12 @@ impl Catalog {
                         "catalog parser fingerprint changed; run index sync or rebuild",
                     ));
                 }
-                selected_header = Some(header.snapshot);
+                selected_header = Some((header.snapshot, query_started));
                 Ok(connection)
             },
         )? {
-            let snapshot = selected_header.expect("successful selection reads its header");
+            let (snapshot, query_started) =
+                selected_header.expect("successful selection reads its header");
             let authority = operation_authority.as_ref().ok_or_else(|| {
                 WikiError::new(
                     ErrorCode::RecoveryRequired,
@@ -154,6 +156,7 @@ impl Catalog {
                 usage: Cell::new(QueryReadUsage::default()),
                 policy_layout_verified: Cell::new(false),
                 limits,
+                query_started,
                 operation_authority,
                 scope,
             });
@@ -178,7 +181,7 @@ impl Catalog {
             OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
         )
         .map_err(sql::sql_error)?;
-        configure_query(&connection, &limits)?;
+        let query_started = configure_query(&connection, &limits)?;
         sql::configure(
             &connection,
             self.options.busy_timeout_ms.min(limits.max_elapsed_ms),
@@ -228,13 +231,14 @@ impl Catalog {
             usage: Cell::new(QueryReadUsage::default()),
             policy_layout_verified: Cell::new(false),
             limits,
+            query_started,
             operation_authority: None,
             scope,
         })
     }
 }
 
-fn configure_query(connection: &Connection, limits: &QueryReadLimits) -> Result<()> {
+fn configure_query(connection: &Connection, limits: &QueryReadLimits) -> Result<Instant> {
     let start = Instant::now();
     let elapsed = Duration::from_millis(limits.max_elapsed_ms);
     // SQLite may do substantial work inside a native FTS operation between
@@ -268,7 +272,7 @@ fn configure_query(connection: &Connection, limits: &QueryReadLimits) -> Result<
     connection
         .execute_batch("PRAGMA mmap_size=0; PRAGMA cache_size=-8192; PRAGMA temp_store=FILE;")
         .map_err(sql::sql_error)?;
-    Ok(())
+    Ok(start)
 }
 
 fn corrupt(message: impl Into<String>) -> WikiError {
@@ -1548,6 +1552,15 @@ impl crate::changes::RevisionOwnershipLookup for QuerySnapshot {
 }
 
 impl QueryCatalog for QuerySnapshot {
+    fn check_query_budget(&self) -> Result<()> {
+        if self.query_started.elapsed() >= Duration::from_millis(self.limits.max_elapsed_ms) {
+            return Err(WikiError::new(
+                ErrorCode::BudgetExceeded,
+                "catalog read elapsed budget exhausted; narrow the source or path filters",
+            ));
+        }
+        Ok(())
+    }
     fn publication_id(&self) -> Option<&str> {
         match &self.connection {
             QueryConnection::Normalized(selected) => Some(&selected.selection().file_id),
@@ -3600,6 +3613,28 @@ mod tests {
             &SnapshotVerification::IndexSnapshot
         );
     }
+    #[test]
+    fn elapsed_query_clock_survives_return_to_rust() {
+        let (_temp, _root, catalog) = fixture();
+        let reader = catalog
+            .cached_query_snapshot(QueryReadLimits {
+                max_elapsed_ms: 100,
+                ..Default::default()
+            })
+            .unwrap();
+        reader.check_query_budget().unwrap();
+        std::thread::sleep(Duration::from_millis(110));
+        assert_eq!(
+            reader.check_query_budget().unwrap_err().code,
+            ErrorCode::BudgetExceeded
+        );
+        let error = reader
+            .connection()
+            .query_row("SELECT 42", [], |row| row.get::<_, i64>(0))
+            .unwrap_err();
+        assert_eq!(sql::sql_error(error).code, ErrorCode::BudgetExceeded);
+    }
+
     #[test]
     fn sql_work_budget_interrupts_even_when_query_would_return_no_rows() {
         let connection = Connection::open_in_memory().unwrap();
