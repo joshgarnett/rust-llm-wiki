@@ -324,6 +324,8 @@ impl Dispatcher {
         purpose: DispatchPurpose,
         invocation: Option<&super::invocation_budget::InvocationBudget>,
     ) -> std::result::Result<DispatchOutcome, Box<DispatchFailure>> {
+        #[cfg(test)]
+        crate::catalog::query_diagnostics::access("provider_dispatch");
         if tokio::runtime::Handle::try_current().is_ok() {
             return Err(failure(
                 WikiError::new(

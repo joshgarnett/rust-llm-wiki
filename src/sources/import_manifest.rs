@@ -85,27 +85,9 @@ fn normalized_absolute(path: &Path) -> bool {
         && path.file_name().is_some()
 }
 fn text_candidate(path: &Path) -> bool {
-    path.extension().is_none()
-        || path
-            .extension()
-            .and_then(|value| value.to_str())
-            .is_some_and(|value| {
-                matches!(
-                    value.to_ascii_lowercase().as_str(),
-                    "txt"
-                        | "md"
-                        | "markdown"
-                        | "csv"
-                        | "tsv"
-                        | "json"
-                        | "yaml"
-                        | "yml"
-                        | "rs"
-                        | "toml"
-                        | "log"
-                )
-            })
+    super::local_text::local_text_candidate(path)
 }
+
 fn item_metadata(item: &ImportManifestItem, ordinal: u64) -> Result<()> {
     if item.ordinal != ordinal || ordinal >= MAX_IMPORT_ITEMS {
         return Err(failure(

@@ -5,7 +5,7 @@ use super::{
     journal,
     operation_authority::{self as operations, Authority, Presence, Publication},
     outcome,
-    prepare::{MAX_JOURNAL_BYTES, MAX_OPS, read_bounded, strict_json},
+    prepare::{MAX_JOURNAL_BYTES, MAX_OPS, MAX_PAYLOAD_BYTES, read_bounded, strict_json},
     types::*,
 };
 use crate::{
@@ -24,6 +24,11 @@ use std::collections::BTreeMap;
 pub(crate) enum IndexedWriteOperation {
     SourceRefresh {
         source_id: RecordId,
+    },
+    SourceRefreshBatch {
+        refreshes: Vec<IndexedRefreshTarget>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        dependent_sources: Vec<IndexedRefreshSourceDependency>,
     },
     SourceWithdraw {
         source_id: RecordId,
@@ -82,6 +87,28 @@ pub(crate) struct IndexedCaptureTarget {
     pub revision_id: RecordId,
 }
 
+/// Includes unchanged members so their guards remain part of a mixed request.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct IndexedRefreshTarget {
+    pub source_id: RecordId,
+    pub previous_revision_id: RecordId,
+    pub revision_id: RecordId,
+    pub reused: bool,
+    pub no_op: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unchanged_source: Option<String>,
+}
+
+/// Exact unchanged canonical bytes for Source rows whose eligibility changes
+/// through the joint dependency closure. They are not refreshed members.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct IndexedRefreshSourceDependency {
+    pub source_id: RecordId,
+    pub source_bytes: String,
+}
+
 impl IndexedWriteOperation {
     pub(crate) fn validate(&self) -> Result<()> {
         match self {
@@ -119,6 +146,56 @@ impl IndexedWriteOperation {
                 Ok(())
             }
             Self::SourceRefresh { .. } | Self::SourceWithdraw { .. } => Ok(()),
+            Self::SourceRefreshBatch {
+                refreshes,
+                dependent_sources,
+            } => {
+                let mut revision_owners = BTreeMap::new();
+                let mut sources: std::collections::BTreeSet<_> =
+                    refreshes.iter().map(|r| &r.source_id).collect();
+                for dependency in dependent_sources {
+                    if !sources.insert(&dependency.source_id)
+                        || dependency.source_bytes.len() > MAX_PAYLOAD_BYTES
+                    {
+                        return Err(recovery(
+                            "refresh batch dependent Source witnesses repeat a Source or exceed its byte ceiling",
+                        ));
+                    }
+                }
+                if refreshes.is_empty()
+                    || refreshes.len() > 16
+                    || refreshes.iter().all(|r| r.no_op)
+                    || dependent_sources.len() > 4096
+                    || !dependent_sources
+                        .windows(2)
+                        .all(|p| p[0].source_id < p[1].source_id)
+                    || !refreshes
+                        .windows(2)
+                        .all(|p| p[0].source_id < p[1].source_id)
+                    || refreshes.iter().any(|r| {
+                        (r.no_op && (!r.reused || r.previous_revision_id != r.revision_id))
+                            || r.no_op != r.unchanged_source.is_some()
+                            || r.unchanged_source
+                                .as_ref()
+                                .is_some_and(|bytes| bytes.len() > MAX_PAYLOAD_BYTES)
+                            || (!r.reused && r.previous_revision_id == r.revision_id)
+                            || sources.contains(&r.previous_revision_id)
+                            || sources.contains(&r.revision_id)
+                            || [&r.previous_revision_id, &r.revision_id]
+                                .into_iter()
+                                .any(|id| {
+                                    revision_owners
+                                        .insert(id.clone(), r.source_id.clone())
+                                        .is_some_and(|prior| prior != r.source_id)
+                                })
+                    })
+                {
+                    return Err(recovery(
+                        "refresh batch requires 1–16 sorted distinct guarded existing Sources with at least one change",
+                    ));
+                }
+                Ok(())
+            }
             Self::SourceCapture {
                 source_id,
                 revision_id,

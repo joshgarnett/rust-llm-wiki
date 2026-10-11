@@ -607,6 +607,8 @@ impl OfflineApp {
                 });
             }
         }
+        destination_bytes =
+            super::page_citations::rebase_source_citation_links(&destination_bytes, &from, &to)?;
         operations.push(ExpectedWrite {
             target: to.clone(),
             expected: ExpectedState::Absent,
@@ -979,6 +981,7 @@ impl OfflineApp {
             maintenance: Some(serde_json::json!({
                 "layout":"normalized", "resumed":result.resumed,
                 "input":result.input, "build":result.build,
+                "page_sync": result.page_sync,
                 "retirement_deferred":result.retirement_deferred,
                 "cleanup_errors":result.cleanup_errors,
                 "abandoned_rebuild_candidates": result.abandoned_rebuild_candidates,
@@ -1570,7 +1573,7 @@ fn capture_bounds(request: &CaptureRequest) -> Result<()> {
     Ok(())
 }
 
-fn retained_error(mut error: WikiError, change: &PreparedChange) -> WikiError {
+pub(super) fn retained_error(mut error: WikiError, change: &PreparedChange) -> WikiError {
     let reference =
         serde_json::json!({"change_id": change.change_id, "manifest_hash": change.manifest_hash});
     if let Some(details) = error.details.as_object_mut() {

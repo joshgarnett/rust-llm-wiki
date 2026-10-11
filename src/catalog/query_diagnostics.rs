@@ -25,6 +25,68 @@ pub(crate) struct CacheRow {
 thread_local! {
     static ACTIVE: RefCell<Option<Observation>> = const { RefCell::new(None) };
     static BEFORE_FINAL: RefCell<Option<Box<dyn FnOnce()>>> = const { RefCell::new(None) };
+    static FORBIDDEN_ACCESS: RefCell<Option<AccessObservation>> = const { RefCell::new(None) };
+}
+
+struct AccessObservation {
+    forbidden: Vec<&'static str>,
+    attempted: Vec<&'static str>,
+}
+
+/// Observes named maintenance boundaries on the invoking thread, not OS syscalls.
+pub(crate) struct ForbiddenAccessGuard {
+    finished: bool,
+    _thread_bound: std::marker::PhantomData<std::rc::Rc<()>>,
+}
+
+pub(crate) fn forbid_access(boundaries: &[&'static str]) -> ForbiddenAccessGuard {
+    FORBIDDEN_ACCESS.with(|slot| {
+        let mut slot = slot.borrow_mut();
+        assert!(slot.is_none(), "nested forbidden-access observation");
+        *slot = Some(AccessObservation {
+            forbidden: boundaries.to_vec(),
+            attempted: Vec::new(),
+        });
+    });
+    ForbiddenAccessGuard {
+        finished: false,
+        _thread_bound: std::marker::PhantomData,
+    }
+}
+
+pub(crate) fn access(boundary: &'static str) {
+    let forbidden = FORBIDDEN_ACCESS.with(|slot| {
+        let mut slot = slot.borrow_mut();
+        let Some(observation) = slot.as_mut() else {
+            return false;
+        };
+        observation.attempted.push(boundary);
+        observation.forbidden.contains(&boundary)
+    });
+    // Release the RefCell borrow before unwinding through the observed code.
+    assert!(!forbidden, "forbidden maintenance access: {boundary}");
+}
+
+impl ForbiddenAccessGuard {
+    pub(crate) fn finish(mut self) -> Vec<&'static str> {
+        let observation = FORBIDDEN_ACCESS.with(|slot| {
+            slot.borrow_mut()
+                .take()
+                .expect("active forbidden-access observation")
+        });
+        self.finished = true;
+        observation.attempted
+    }
+}
+
+impl Drop for ForbiddenAccessGuard {
+    fn drop(&mut self) {
+        if !self.finished {
+            FORBIDDEN_ACCESS.with(|slot| {
+                slot.borrow_mut().take();
+            });
+        }
+    }
 }
 pub(crate) fn begin() {
     ACTIVE.with(|slot| assert!(slot.borrow_mut().replace(Observation::default()).is_none()));

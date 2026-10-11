@@ -208,7 +208,9 @@ pub(super) fn recompute(
     // Page replacements own only declared structural references. Install the
     // overlay relation before discovering either additions or removed edges.
     for id in &seeds {
-        let row = &work.now[id];
+        let Some(row) = work.now.get(id) else {
+            continue;
+        };
         if row.record.kind() != RecordKind::Page || !work.overlay.contains_key(&row.path) {
             continue;
         }
@@ -474,10 +476,11 @@ pub(super) fn recompute(
         rows.remove(&id);
     }
     let mut emitted = recorder.finish();
-    let adopted = work
-        .overlay
-        .keys()
-        .any(|path| !work.old.values().any(|row| &row.path == path));
+    let adopted = !work.removed_paths.is_empty()
+        || work
+            .overlay
+            .keys()
+            .any(|path| !work.old.values().any(|row| &row.path == path));
     let mut integrity = if adopted {
         adoption_integrity(work, &active)?
     } else {
@@ -651,6 +654,9 @@ fn adoption_integrity(
             continue;
         }
         for claim in work.reader.identity_claims_for_id(&id)? {
+            if work.removed_paths.contains(&claim.path) {
+                continue;
+            }
             work.capture(&claim.path, &ExpectedState::Hash(claim.hash))?;
             paths.insert(claim.path);
         }

@@ -19,6 +19,113 @@ use std::{
     time::{Duration, Instant},
 };
 const GOOD:&[u8]=br#"{"ok":true,"usage":{"input_tokens":1,"cached_input_tokens":0},"model":"test-model","id":"request-1"}"#;
+
+#[test]
+fn external_page_provider_dispatch_sentinel_reaches_real_entry() {
+    use crate::catalog::query_diagnostics::forbid_access;
+    use std::panic::{AssertUnwindSafe, catch_unwind};
+
+    let c = case(
+        "https://gateway.example/v1/embeddings",
+        false,
+        ExecutionPolicy::default(),
+        |_| {},
+        None,
+    );
+    let mock = Mock::new(vec![]);
+    let d = dispatch(&c, mock.clone());
+    let before = tree(c.fs.root().path());
+    let guard = forbid_access(&["provider_dispatch"]);
+    assert!(
+        catch_unwind(AssertUnwindSafe(|| {
+            let _ = d.execute(
+                &c.job,
+                &c.trusted,
+                &c.spec.tasks[0].key,
+                DispatchPurpose::Task,
+            );
+        }))
+        .is_err()
+    );
+    assert_eq!(guard.finish(), vec!["provider_dispatch"]);
+    assert_eq!(mock.calls.load(Ordering::SeqCst), 0);
+    assert_eq!(c.inputs.0.load(Ordering::SeqCst), 0);
+    assert_eq!(c.runner.calls.load(Ordering::SeqCst), 0);
+    assert!(!d.network_used());
+    assert_eq!(tree(c.fs.root().path()), before);
+}
+
+#[test]
+fn external_page_provider_send_sentinel_reaches_real_entry_before_future() {
+    use super::credentials::CredentialContext;
+    use crate::catalog::query_diagnostics::forbid_access;
+    use std::panic::{AssertUnwindSafe, catch_unwind};
+
+    let c = case(
+        "https://gateway.example/v1/embeddings",
+        false,
+        ExecutionPolicy::default(),
+        |_| {},
+        None,
+    );
+    let task = &c.spec.tasks[0];
+    let prepared = fixture_prepare(
+        &c.trusted,
+        task,
+        serde_json::from_slice(
+            &std::fs::read(c.fs.root().resolve(&task.input.path).unwrap()).unwrap(),
+        )
+        .unwrap(),
+        ServiceRole::Embed,
+        DispatchPurpose::Task,
+        Capability::Embed,
+    )
+    .unwrap();
+    let (_, _, _, options) = c.job.dispatcher_bindings();
+    let credential_context = CredentialContext {
+        policy: options.policy,
+        cancel: options.cancel.clone(),
+        deadline_utc_ms: c.spec.deadline_utc_ms,
+    };
+    let reservation = c.job.reserve(&task.key, prepared.bound.clone()).unwrap();
+    let permit = c.job.dispatch_intent(reservation).unwrap();
+    // This broker uses only the existing in-memory fixture-token input.
+    let lease = c
+        .broker
+        .resolve(&c.trusted, &c.fs, &credential_context)
+        .unwrap();
+    let authorization = c.job.begin_send(permit).unwrap();
+    let request = AuthenticatedRequest {
+        authorization,
+        prepared: &prepared,
+        lease,
+        tls_ca: None,
+        service: &c.trusted,
+        fs: c.fs.clone(),
+        broker: c.broker.clone(),
+        credential_context,
+    };
+    let context = TransportContext {
+        clock: c.clock.clone(),
+        cancel: options.cancel.clone(),
+        deadline_utc_ms: c.spec.deadline_utc_ms,
+        timeout_ms: 1000,
+        connect_timeout_ms: 1000,
+        response_bytes: prepared.bound.response_bytes,
+    };
+    let guard = forbid_access(&["provider_send", "credential_input", "credential_helper"]);
+    assert!(
+        catch_unwind(AssertUnwindSafe(|| {
+            // No runtime or polling: the real native entry must refuse synchronously.
+            drop(NativeTransport.execute(request, context));
+        }))
+        .is_err()
+    );
+    assert_eq!(guard.finish(), vec!["provider_send"]);
+    assert_eq!(c.inputs.0.load(Ordering::SeqCst), 1);
+    assert_eq!(c.runner.calls.load(Ordering::SeqCst), 0);
+}
+
 struct Mock {
     calls: AtomicUsize,
     attempts: Mutex<Vec<AttemptRef>>,

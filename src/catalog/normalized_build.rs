@@ -29,6 +29,7 @@ fn link_key_kind(kind: super::link_facts::MatchKeyKind) -> &'static str {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum BuildCheckpoint {
     AfterHeader,
+    AfterCopyStep,
     AfterOrdinaryRow,
     AfterFtsRow,
     BeforeBatchCommit,
@@ -855,6 +856,273 @@ impl<'a> NormalizedBuilder<'a> {
         })
     }
 }
+/// One coherent SQLite backup of a pinned selected transaction, followed only
+/// by a bounded selected Page projection. Counters describe logical pages/bytes.
+#[derive(Debug, Clone, Default)]
+pub(super) struct CopyStats {
+    pub pages: u64,
+    pub bytes: u64,
+    pub elapsed_ms: u64,
+    pub delta_elapsed_ms: u64,
+    pub seal_elapsed_ms: u64,
+    pub delta: super::normalized_delta::DeltaStats,
+}
+
+pub(super) fn copy_selected_and_apply(
+    fs: &VaultFs,
+    writer: &WriterPermit,
+    identity: BuildIdentity,
+    source: &Connection,
+    base: &ReadSnapshot,
+    delta: &super::normalized_delta::CatalogDelta,
+    page_commitments: &[(VaultRelativePath, ExpectedState, ExpectedState)],
+    mut limits: BuildLimits,
+) -> Result<(CompletedCatalog, CopyStats)> {
+    use rusqlite::backup::{Backup, StepResult};
+    let helper_started = Instant::now();
+    limits.validate()?;
+    if source.is_autocommit()
+        || identity.origin.is_some()
+        || page_commitments.is_empty()
+        || page_commitments.len() > 16
+        || identity.selection.creation_epoch
+            != base
+                .generation
+                .checked_add(1)
+                .ok_or_else(|| budget("catalog epoch exhausted"))?
+    {
+        return Err(WikiError::invalid(
+            "Page sibling requires a pinned predecessor and closed Page commitments",
+        ));
+    }
+    let publication = base
+        .publication()
+        .ok_or_else(|| WikiError::invalid("Page predecessor is not a publication"))?;
+    let same:bool=source.query_row("SELECT file_id=?1 AND epoch=?2 AND publication_hash=?3 AND parser_hash=?4 AND state='complete' FROM catalog_meta WHERE singleton=1",params![publication.file_id,sql::integer(base.generation)?,publication.publication_hash.as_str(),base.parser_fingerprint.as_str()],|r|r.get(0)).map_err(build_sql_error)?;
+    if !same {
+        return Err(WikiError::new(
+            ErrorCode::FreshnessConflict,
+            "Page backup source publication changed",
+        ));
+    }
+    let page_count: i64 = source
+        .pragma_query_value(None, "page_count", |r| r.get(0))
+        .map_err(build_sql_error)?;
+    let page_size: i64 = source
+        .pragma_query_value(None, "page_size", |r| r.get(0))
+        .map_err(build_sql_error)?;
+    let database_bytes = (page_count as u64)
+        .checked_mul(page_size as u64)
+        .ok_or_else(|| budget("Page backup size overflow"))?;
+    if page_count <= 0
+        || page_count > i32::MAX as i64
+        || page_size < 512
+        || database_bytes > limits.max_database_bytes
+    {
+        return Err(budget("Page backup exceeds database allowance"));
+    }
+    delta.validate()?;
+    limits.max_elapsed = limits
+        .max_elapsed
+        .checked_sub(helper_started.elapsed())
+        .filter(|time| !time.is_zero())
+        .ok_or_else(|| budget("Page candidate admission deadline exceeded"))?;
+    let seal_started = helper_started;
+    let fault = limits.fault.take();
+    let mut builder = NormalizedBuilder::begin(fs, writer, identity, limits)?;
+    builder.limits.fault = fault;
+    let candidate = builder.identity.selection.clone();
+    let owned_metadata = std::fs::metadata(&builder.path)
+        .map_err(|error| io_error("inspect exclusively created Page sibling", error))?;
+    #[cfg(unix)]
+    let owned_file_identity = {
+        use std::os::unix::fs::MetadataExt;
+        serde_json::json!({"device":owned_metadata.dev(),"inode":owned_metadata.ino(),"bytes_before_copy":owned_metadata.len()})
+    };
+    #[cfg(not(unix))]
+    let owned_file_identity = serde_json::json!({"bytes_before_copy":owned_metadata.len(),"platform_file_identity":"unavailable"});
+    let result = (|| {
+        builder.step(BuildCheckpoint::AfterHeader)?;
+        // The backup writes into the exclusively created sibling and includes
+        // committed WAL frames from this exact read transaction.
+        let initial_seal_elapsed = seal_started.elapsed();
+        let started = Instant::now();
+        let mut connection = builder.connection.take().expect("fresh copy connection");
+        {
+            let backup = Backup::new(source, &mut connection).map_err(build_sql_error)?;
+            let max_steps = (page_count as u64).div_ceil(256) + 1;
+            let mut steps = 0u64;
+            loop {
+                builder.guard()?;
+                if steps >= max_steps {
+                    return Err(budget("Page backup step allowance exhausted"));
+                }
+                steps += 1;
+                let outcome = backup.step(256).map_err(build_sql_error)?;
+                let progress = backup.progress();
+                if progress.pagecount != page_count as i32
+                    || progress.remaining < 0
+                    || progress.remaining > progress.pagecount
+                {
+                    return Err(WikiError::new(
+                        ErrorCode::IndexCorrupt,
+                        "pinned Page backup snapshot changed",
+                    ));
+                }
+                builder.step(BuildCheckpoint::AfterCopyStep)?;
+                match outcome {
+                    StepResult::Done => break,
+                    StepResult::More => {
+                        builder.guard()?;
+                    }
+                    StepResult::Busy | StepResult::Locked => {
+                        return Err(WikiError::new(
+                            ErrorCode::LockTimeout,
+                            "Page backup busy or locked; no retry performed",
+                        ));
+                    }
+                    _ => {
+                        return Err(WikiError::new(
+                            ErrorCode::IndexCorrupt,
+                            "unknown Page backup result",
+                        ));
+                    }
+                }
+            }
+        }
+        let mut stats = CopyStats {
+            pages: page_count as u64,
+            bytes: database_bytes,
+            elapsed_ms: started.elapsed().as_millis().min(u64::MAX as u128) as u64,
+            delta_elapsed_ms: 0,
+            seal_elapsed_ms: 0,
+            delta: Default::default(),
+        };
+        let seal_started = Instant::now();
+        builder.connection = Some(connection);
+        // Commit the new building identity before selected DML. SQLite may
+        // roll back the entire delta transaction on interruption; it must not
+        // restore the predecessor identity into this exclusively owned file.
+        builder
+            .connection()
+            .progress_handler(0, None::<fn() -> bool>)
+            .map_err(build_sql_error)?;
+        builder
+            .connection()
+            .execute_batch("BEGIN IMMEDIATE")
+            .map_err(build_sql_error)?;
+        builder.transaction_open = true;
+        let selection = &builder.identity.selection;
+        builder.connection().execute("UPDATE catalog_meta SET file_id=?1,creation_epoch=?2,creation_header_hash=?3,epoch=?2,state='building',origin_change_id=NULL,origin_manifest_hash=NULL,audit_epoch=NULL,control_hash=NULL,dependency_hash=NULL WHERE singleton=1",params![selection.file_id,sql::integer(selection.creation_epoch)?,selection.creation_header_hash.as_str()]).map_err(build_sql_error)?;
+        builder
+            .connection()
+            .execute_batch("COMMIT")
+            .map_err(build_sql_error)?;
+        builder.transaction_open = false;
+        builder.guard()?;
+        super::source_refresh::configure_delta(builder.connection())?;
+        builder
+            .connection()
+            .execute_batch("BEGIN IMMEDIATE")
+            .map_err(build_sql_error)?;
+        builder.transaction_open = true;
+        let delta_started = Instant::now();
+        stats.delta = delta.apply(builder.connection())?;
+        let delta_elapsed = delta_started.elapsed();
+        stats.delta_elapsed_ms = delta_elapsed.as_millis().min(u64::MAX as u128) as u64;
+        builder.step(BuildCheckpoint::AfterOrdinaryRow)?;
+        builder.step(BuildCheckpoint::AfterFtsRow)?;
+        builder.step(BuildCheckpoint::BeforeComplete)?;
+        let layout:(i64,i64)=builder.connection().query_row("SELECT proof_layout_version,revision_ownership_version FROM catalog_meta WHERE singleton=1",[],|r|Ok((r.get(0)?,r.get(1)?))).map_err(build_sql_error)?;
+        let publication_hash = Blake3Hash::digest(sql::json(&(
+            "lwiki.catalog-publication.v3.external-pages.sibling",
+            base,
+            &builder.identity.selection,
+            delta,
+            page_commitments,
+            &base.parser_fingerprint,
+            layout,
+            builder.identity.vector_cache_lost,
+            builder.identity.vector_loss_unknown,
+        ))?);
+        builder.connection().execute("UPDATE catalog_meta SET publication_hash=?1,state='complete' WHERE singleton=1 AND state='building'",[publication_hash.as_str()]).map_err(build_sql_error)?;
+        builder.step(BuildCheckpoint::AfterComplete)?;
+        builder.step(BuildCheckpoint::BeforeBatchCommit)?;
+        builder
+            .connection()
+            .execute_batch("COMMIT")
+            .map_err(build_sql_error)?;
+        builder.transaction_open = false;
+        checkpoint(builder.connection())?;
+        builder.step(BuildCheckpoint::AfterBatchCheckpoint)?;
+        builder.step(BuildCheckpoint::BeforeSeal)?;
+        super::selector::configure_wal(builder.connection())?;
+        let connection = builder
+            .connection
+            .take()
+            .expect("sealed Page copy connection");
+        connection
+            .close()
+            .map_err(|(_, error)| build_sql_error(error))?;
+        builder.step(BuildCheckpoint::BeforeSync)?;
+        let relative = VaultRelativePath::new(format!(
+            ".wiki/cache/catalogs/{}.sqlite",
+            builder.identity.selection.file_id
+        ))?;
+        if fs.root().resolve(&relative)? != builder.path {
+            return Err(WikiError::invalid("Page candidate binding changed"));
+        }
+        let file =
+            File::open(&builder.path).map_err(|e| io_error("open sealed Page sibling", e))?;
+        let actual = file
+            .metadata()
+            .map_err(|e| io_error("inspect sealed Page sibling", e))?
+            .len();
+        if actual > builder.limits.max_database_bytes {
+            return Err(budget("Page sibling exceeds database limit"));
+        }
+        fs.durable_io()
+            .sync_file(&file)
+            .map_err(|e| io_error("sync sealed Page sibling", e))?;
+        require_sync(
+            fs.durable_io()
+                .sync_directory(builder.path.parent().expect("Page sibling parent"))
+                .map_err(|e| io_error("sync Page sibling parent", e))?,
+        )?;
+        builder.step(BuildCheckpoint::AfterSync)?;
+        stats.seal_elapsed_ms = initial_seal_elapsed
+            .saturating_add(seal_started.elapsed().saturating_sub(delta_elapsed))
+            .as_millis()
+            .min(u64::MAX as u128) as u64;
+        Ok((
+            CompletedCatalog {
+                identity: builder.identity.clone(),
+                snapshot: ReadSnapshot::published(
+                    builder.identity.selection.creation_epoch,
+                    base.parser_fingerprint.clone(),
+                    builder.identity.selection.file_id.clone(),
+                    publication_hash.clone(),
+                )?,
+                dependency_hash: publication_hash,
+                stats: BuildStats {
+                    database_bytes: actual,
+                    ..Default::default()
+                },
+                path: builder.path.clone(),
+            },
+            stats,
+        ))
+    })();
+    if result.is_err() {
+        builder.failed();
+    }
+    drop(builder);
+    result.map_err(|mut error:WikiError| {
+        if let Err(cleanup)=super::selector::retire_unpublished(fs,writer,&candidate.vault_id,&candidate,Duration::ZERO) { error.details=serde_json::json!({"original_details":error.details,"maintenance_cleanup_error":cleanup,"exclusively_created_candidate":candidate,"owned_file_identity_before_copy":owned_file_identity}); }
+        error
+    })
+}
+
 impl super::normalized_metadata::MetadataSink for NormalizedBuilder<'_> {
     fn progress(&mut self) -> Result<()> {
         self.guard()

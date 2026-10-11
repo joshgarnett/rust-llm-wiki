@@ -212,10 +212,10 @@ struct Fixture {
 impl Fixture {
     fn new() -> Self {
         let c = Connection::open_in_memory().unwrap();
-        c.execute_batch("CREATE TABLE catalog_meta(singleton INTEGER PRIMARY KEY,epoch INTEGER NOT NULL,publication_hash TEXT NOT NULL); CREATE TABLE records(id TEXT PRIMARY KEY,path TEXT NOT NULL,hash TEXT NOT NULL,row_json TEXT NOT NULL); CREATE TABLE dependencies(path TEXT PRIMARY KEY,expected_hash TEXT); CREATE TABLE record_eligibility_facts(record_id TEXT PRIMARY KEY,baseline_json TEXT NOT NULL,structural_json TEXT NOT NULL); CREATE TABLE record_direct_paths(owner_id TEXT NOT NULL,path TEXT NOT NULL,PRIMARY KEY(owner_id,path)); CREATE TABLE semantic_edges(owner_id TEXT NOT NULL,target_id TEXT NOT NULL,role_json TEXT NOT NULL,PRIMARY KEY(owner_id,target_id,role_json)); CREATE TABLE documents(path TEXT PRIMARY KEY,file_hash TEXT NOT NULL,record_id TEXT,kind TEXT,title TEXT NOT NULL,aliases_json TEXT NOT NULL,headings TEXT NOT NULL,tags_json TEXT NOT NULL,body TEXT NOT NULL,raw_text TEXT NOT NULL,source_id TEXT,owner_revision TEXT,eligibility TEXT NOT NULL,reasons_json TEXT NOT NULL); CREATE TABLE publication_attempts(value TEXT PRIMARY KEY);").unwrap();
+        c.execute_batch("CREATE TABLE catalog_meta(singleton INTEGER PRIMARY KEY,epoch INTEGER NOT NULL,publication_hash TEXT NOT NULL,state TEXT NOT NULL); CREATE TABLE records(id TEXT PRIMARY KEY,path TEXT NOT NULL,hash TEXT NOT NULL,row_json TEXT NOT NULL); CREATE TABLE dependencies(path TEXT PRIMARY KEY,expected_hash TEXT); CREATE TABLE record_eligibility_facts(record_id TEXT PRIMARY KEY,baseline_json TEXT NOT NULL,structural_json TEXT NOT NULL); CREATE TABLE record_direct_paths(owner_id TEXT NOT NULL,path TEXT NOT NULL,PRIMARY KEY(owner_id,path)); CREATE TABLE semantic_edges(owner_id TEXT NOT NULL,target_id TEXT NOT NULL,role_json TEXT NOT NULL,PRIMARY KEY(owner_id,target_id,role_json)); CREATE TABLE documents(path TEXT PRIMARY KEY,file_hash TEXT NOT NULL,record_id TEXT,kind TEXT,title TEXT NOT NULL,aliases_json TEXT NOT NULL,headings TEXT NOT NULL,tags_json TEXT NOT NULL,body TEXT NOT NULL,raw_text TEXT NOT NULL,source_id TEXT,owner_revision TEXT,eligibility TEXT NOT NULL,reasons_json TEXT NOT NULL); CREATE TABLE publication_attempts(value TEXT PRIMARY KEY);").unwrap();
         c.execute_batch(SCHEMA).unwrap();
         c.execute(
-            "INSERT INTO catalog_meta VALUES(1,?1,?2)",
+            "INSERT INTO catalog_meta VALUES(1,?1,?2,'complete')",
             params![EPOCH, Blake3Hash::digest(b"coherent old header").as_str()],
         )
         .unwrap();
@@ -323,6 +323,29 @@ impl Fixture {
             unrelated
         );
         assert_eq!(maps(&self.c), reverse); // dirty proofs keep the old reverse map
+    }
+}
+
+#[test]
+fn complete_base_and_building_successor_use_the_same_next_unit_sequence() {
+    for building in [false, true] {
+        let fixture = Fixture::new();
+        if building {
+            // A copied candidate binds the successor epoch before selected SQL;
+            // a complete selected base still carries the predecessor epoch.
+            fixture
+                .c
+                .execute("UPDATE catalog_meta SET state='building',epoch=epoch+1", [])
+                .unwrap();
+        }
+        let mut delta = empty_delta();
+        delta.dependencies.push(dependency(
+            fixture.support.path.as_str(),
+            ExpectedState::Hash(Blake3Hash::digest(b"changed support bytes")),
+        ));
+        // Both contexts publish at EPOCH+1. Dirty proof invalidation preserves
+        // descriptors, reverse witnesses and unrelated registered owners.
+        fixture.expect_proof_only(&delta);
     }
 }
 
@@ -701,7 +724,7 @@ fn snapshot(c: &Connection) -> Vec<String> {
     // snapshot serializer participates in the implementation under test.
     let mut out = Vec::new();
     for query in [
-        "SELECT json_array(singleton,epoch,publication_hash) FROM catalog_meta ORDER BY singleton",
+        "SELECT json_array(singleton,epoch,publication_hash,state) FROM catalog_meta ORDER BY singleton",
         "SELECT json_array(path,file_hash,eligibility,raw_text) FROM documents ORDER BY path",
         "SELECT json_array(id,path,hash,row_json) FROM records ORDER BY id",
         "SELECT json_array(path,expected_hash) FROM dependencies ORDER BY path",

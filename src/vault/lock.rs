@@ -21,6 +21,8 @@ pub struct WriterPermit {
 }
 impl WriterPermit {
     pub fn acquire(root: &VaultRoot, timeout: Duration) -> Result<Self> {
+        #[cfg(test)]
+        crate::catalog::query_diagnostics::access("writer_acquire");
         // Bootstrap state without following any managed symlink. Never remove the lock file.
         for relative in [".wiki", ".wiki/state"] {
             let relative = VaultRelativePath::new(relative)?;

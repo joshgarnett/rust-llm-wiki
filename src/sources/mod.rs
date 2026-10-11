@@ -6,6 +6,7 @@ pub(crate) mod import_manifest;
 pub(crate) mod import_manifest_types;
 pub(crate) mod indexed_refresh;
 pub mod lifecycle;
+pub(crate) mod local_text;
 mod lookup;
 pub(crate) use lookup::SourceNotes;
 pub mod revision;

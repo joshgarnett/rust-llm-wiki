@@ -673,6 +673,9 @@ pub(crate) fn affected_before(c: &Connection, delta: &CatalogDelta) -> Result<Af
                     out.documents.insert(row.path.clone());
                 }
             }
+            DocumentMutation::DeletePage { path, .. } => {
+                out.documents.insert(path.clone());
+            }
             DocumentMutation::MovePage { from, row, .. } => {
                 out.documents.insert(from.clone());
                 out.documents.insert(row.path.clone());
@@ -774,7 +777,7 @@ pub(crate) fn affected_before(c: &Connection, delta: &CatalogDelta) -> Result<Af
 /// owners are rendered; dependency-only changes preserve exact unit identities.
 pub(crate) fn apply_after(
     c: &Connection,
-    _delta: &CatalogDelta,
+    delta: &CatalogDelta,
     affected: &AffectedUnits,
 ) -> Result<()> {
     if !present(c)? {
@@ -782,7 +785,7 @@ pub(crate) fn apply_after(
     }
     let seq: i64 = c
         .query_row(
-            "SELECT epoch+1 FROM catalog_meta WHERE singleton=1",
+            "SELECT CASE WHEN state='building' THEN epoch ELSE epoch+1 END FROM catalog_meta WHERE singleton=1",
             [],
             |r| r.get(0),
         )
@@ -817,6 +820,17 @@ pub(crate) fn apply_after(
         for path in paths {
             let doc = load_document(c, path, &mut bytes)?;
             replace_owner(c, policy, settings, doc.as_ref(), path, seq as u64, &budget)?;
+        }
+    }
+    // Retired Page owners keep the ordinary tombstone notification but no
+    // selected-proof enrollment or rendered unit data from the absent file.
+    for document in &delta.documents {
+        if let DocumentMutation::DeletePage { path, .. } = document {
+            c.execute(
+                "DELETE FROM unit_owner_dependencies WHERE owner=?1",
+                [path.as_str()],
+            )
+            .map_err(sql::sql_error)?;
         }
     }
     for (policy, owner) in &affected.owners {

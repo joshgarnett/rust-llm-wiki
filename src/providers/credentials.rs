@@ -80,6 +80,8 @@ pub trait SecretInputs: Send + Sync {
 pub struct NativeSecretInputs;
 impl SecretInputs for NativeSecretInputs {
     fn environment(&self, name: &str, max_bytes: usize) -> Result<Option<SecretBytes>> {
+        #[cfg(test)]
+        crate::catalog::query_diagnostics::access("credential_input");
         let Some(value) = std::env::var_os(name) else {
             return Ok(None);
         };
@@ -92,6 +94,8 @@ impl SecretInputs for NativeSecretInputs {
         SecretBytes::new(value.into_bytes()).map(Some)
     }
     fn file(&self, path: &Path, max_bytes: usize) -> Result<SecretBytes> {
+        #[cfg(test)]
+        crate::catalog::query_diagnostics::access("credential_input");
         let mut bytes =
             providers::checked_file(path, max_bytes.min(providers::MAX_SECRET_BYTES), true)
                 .map_err(|_| auth_error("credential file unavailable or invalid"))?;
@@ -680,6 +684,8 @@ impl HelperRunner for NativeHelperRunner {
         clock: &dyn JobClock,
         cancel: &CancellationToken,
     ) -> Result<HelperOutput> {
+        #[cfg(test)]
+        crate::catalog::query_diagnostics::access("credential_helper");
         let timer = HelperTimer::new(limits, clock)?;
         timer.check(clock, cancel)?;
         native_run(invocation, limits, clock, cancel, &timer)

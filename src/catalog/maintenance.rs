@@ -11,7 +11,7 @@ use crate::{
     domain::{ErrorCode, Result, WikiError},
     vault::WriterPermit,
 };
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 #[cfg(test)]
 #[path = "maintenance_tests.rs"]
@@ -21,6 +21,7 @@ pub(crate) struct MaintenanceReport {
     pub report: SyncReport,
     pub input: MaintenanceUsage,
     pub build: Option<BuildStats>,
+    pub page_sync: Option<super::maintenance_page_delta::PageSyncStats>,
     pub resumed: bool,
     pub retirement_deferred: bool,
     pub cleanup_errors: Vec<WikiError>,
@@ -74,6 +75,8 @@ impl Catalog {
         input_limits: MaintenanceLimits,
         build_limits: BuildLimits,
     ) -> Result<MaintenanceReport> {
+        #[cfg(test)]
+        super::query_diagnostics::access("catalog_maintenance");
         writer.require_root(self.fs.root())?;
         self.fs.require_storage_ready()?;
         if self.options.busy_timeout_ms > 30_000 {
@@ -140,20 +143,64 @@ impl Catalog {
         }
         let mut input = None;
         if previous.is_some() && (!force || resumed) {
+            let comparison_started = Instant::now();
             let captured =
                 MaintenanceInput::capture(&self.fs, &self.vault_id, input_limits.clone())?;
-            if let Some(report) = super::maintenance_match::unchanged(self, &captured)? {
-                let (retirement_deferred, cleanup_errors) =
-                    self.retire_maintenance_predecessor(writer, &predecessors, &report.snapshot);
-                return Ok(MaintenanceReport {
-                    retirement_deferred,
-                    cleanup_errors,
-                    report,
-                    input: captured.usage(),
-                    build: None,
-                    resumed,
-                    abandoned_rebuild_candidates: reconstruction.abandoned.clone(),
-                });
+            let comparison = super::maintenance_match::compare(self, &captured)?;
+            let comparison_elapsed_ms = comparison_started
+                .elapsed()
+                .as_millis()
+                .min(u64::MAX as u128) as u64;
+            let comparison_io_bytes = captured.usage().io_bytes;
+            match comparison {
+                super::maintenance_match::Comparison::Unchanged(report) => {
+                    let (retirement_deferred, cleanup_errors) = self
+                        .retire_maintenance_predecessor(writer, &predecessors, &report.snapshot);
+                    return Ok(MaintenanceReport {
+                        retirement_deferred,
+                        cleanup_errors,
+                        report,
+                        input: captured.usage(),
+                        build: None,
+                        page_sync: None,
+                        resumed,
+                        abandoned_rebuild_candidates: reconstruction.abandoned.clone(),
+                    });
+                }
+                super::maintenance_match::Comparison::Changed {
+                    base,
+                    paths,
+                    page_only: true,
+                } if !force => {
+                    if let Some((report, mut page_sync)) = super::maintenance_page_delta::reconcile(
+                        self,
+                        writer,
+                        &captured,
+                        &base,
+                        &paths,
+                        build_limits.clone(),
+                    )? {
+                        page_sync.comparison_elapsed_ms = comparison_elapsed_ms;
+                        page_sync.comparison_io_bytes = comparison_io_bytes;
+                        let (retirement_deferred, cleanup_errors) = self
+                            .retire_maintenance_predecessor(
+                                writer,
+                                &predecessors,
+                                &report.snapshot,
+                            );
+                        return Ok(MaintenanceReport {
+                            retirement_deferred,
+                            cleanup_errors,
+                            report,
+                            input: captured.usage(),
+                            build: None,
+                            page_sync: Some(page_sync),
+                            resumed,
+                            abandoned_rebuild_candidates: reconstruction.abandoned.clone(),
+                        });
+                    }
+                }
+                _ => {}
             }
             input = Some(captured);
         }
@@ -256,6 +303,7 @@ impl Catalog {
                 },
                 input: input.usage(),
                 build: Some(completed.stats),
+                page_sync: None,
                 resumed,
                 abandoned_rebuild_candidates,
             })

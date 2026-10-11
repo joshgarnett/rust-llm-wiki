@@ -4,6 +4,8 @@
 
 #[path = "source_import_experiment.rs"]
 mod source_import_experiment;
+#[path = "source_import_html_workflow_tests.rs"]
+mod source_import_html_workflow_tests;
 #[path = "source_import_replay_guard_tests.rs"]
 mod source_import_replay_guard_tests;
 

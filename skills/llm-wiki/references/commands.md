@@ -285,14 +285,17 @@ Options:
 
           [possible values: human, json, jsonl]
 
+      --source-refs <FILE>
+          Replace the generated provenance block using exact SourceRefs (empty removes it)
+
+      --json
+          Emit one structured JSON envelope
+
       --path <PATH>
           Destination path; existing IDs preserve their indexed path. Omit in dry-run to leave destination and author-guard checks unresolved
 
       --if-match <IF_MATCH>
           Required current BLAKE3 hash when replacing an existing page
-
-      --json
-          Emit one structured JSON envelope
 
       --jsonl
           Emit JSON Lines events for supported streaming commands
@@ -339,23 +342,26 @@ Options:
 
           [possible values: human, json, jsonl]
 
+      --source-refs <FILE>
+          Versioned exact SourceRefs; generate verified Page-relative provenance links
+
+      --json
+          Emit one structured JSON envelope
+
       --title <TITLE>
           Human-readable title for the new draft page
 
       --id <ID>
           Stable page identity; omit to allocate one
 
-      --json
-          Emit one structured JSON envelope
-
       --jsonl
           Emit JSON Lines events for supported streaming commands
 
-      --path <PATH>
-          New vault-relative path; defaults to pages/<record-id>.md
-
       --offline
           Prevent provider requests and credential helper calls; local operations remain available
+
+      --path <PATH>
+          New vault-relative path; defaults to pages/<record-id>.md
 
       --dry-run
           Preview without writes, provider requests or credential resolution
@@ -1375,7 +1381,7 @@ Options:
           Use published discovery without synchronization; context scope determines evidence verification
 
       --verify-selected
-          Verify displayed dependencies and cite captured excerpts (normalized lexical search only). Compatible with --no-sync. Uses a 64 MiB/4096-file/16384-entry/2-second bound. Dry-run validates the plan without opening the index or verifying evidence
+          Verify displayed dependencies and cite captured excerpts (normalized literal, lexical, semantic or hybrid search). Compatible with --no-sync. Uses a 64 MiB/4096-file/16384-entry/2-second bound. Dry-run validates the plan without opening the index or verifying evidence
 
   -h, --help
           Print help
@@ -3715,6 +3721,7 @@ Options:
 - `lwiki --json schema record`
 - `lwiki --json schema page`
 - `lwiki --json schema page-batch`
+- `lwiki --json schema page-source-refs`
 - `lwiki --json schema stream`
 - `lwiki --json schema extraction`
 - `lwiki --json schema extraction-packet`

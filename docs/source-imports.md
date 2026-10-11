@@ -27,6 +27,13 @@ choose an absent output in an existing directory.
 
 Add `--dry-run` to compute the proposed manifest without creating a file.
 Supported text formats retain exact UTF-8 bytes, as ordinary `source add` does.
+Valid UTF-8 `.html` and `.htm` files, including case variants, also preserve their
+original bytes as captured text. Ordinary lexical retrieval reads text between
+HTML tags while excluding attributes, comments, script and style. Quotes remain
+raw HTML byte slices; literal search can match markup. This does not render a
+browser page or convert encodings. Explicit media type is metadata and does not
+override filename admission. Invalid UTF-8 remains original-only.
+
 Empty inputs are captured without nonempty citations. Unsupported formats retain
 original bytes without citable extracted text. No extractor is run.
 
@@ -102,3 +109,17 @@ the owned manifest, naming commitments and results are operational state, not
 rebuildable cache. The manifest admission limits are 128 MiB, 200,000 items and
 64 GiB aggregate original input. These limits do not establish practical capacity;
 the [large-vault gates](testing-large-vaults.md) remain separate.
+
+
+## Upgrade the readable-text projection
+
+Finish retained, unapplied indexed Changes with the binary that prepared them
+before upgrading and rebuilding the normalized catalog. Keep its operation
+state, staging bytes and receipts; an obsolete parser proof must not be silently
+reprepared or discarded. After completion, explicitly rebuild with the new
+binary. Old complete receipts remain historical records.
+
+A manifest freezes its extraction policy. Resuming a previously prepared HTML
+manifest with `unsupported` policy preserves that policy. An old original-only
+HTML revision remains original-only; `source refresh` under the new filename
+policy creates a new complete revision without adding content to old history.

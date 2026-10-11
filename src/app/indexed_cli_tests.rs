@@ -1397,8 +1397,27 @@ fn indexed_cli_general_search_preserves_authored_results_filters_and_cached_dry_
     assert_eq!(stale["data"]["hits"][0]["title"], "PlanningSignal Handbook");
     let plain = normalized.cli(&["search", "page_general_a"]);
     assert_eq!(plain["data"], stale["data"]);
+    // Normalized literal discovery is now supported; a cached read must still
+    // expose the pinned old bytes without manufacturing verified citations.
+    let literal = normalized.cli(&["search", "PlanningSignal", "--no-sync", "--mode", "literal"]);
+    assert_eq!(literal["meta"]["freshness"], "index_snapshot");
+    let hits = literal["data"]["hits"].as_array().unwrap();
+    assert_eq!(hits.len(), 4);
+    let first = hits.iter().find(|hit| hit["path"] == "pages/a.md").unwrap();
+    assert!(
+        first["excerpt"]["text"]
+            .as_str()
+            .unwrap()
+            .contains("amber checklist")
+    );
+    assert!(
+        !first["excerpt"]["text"]
+            .as_str()
+            .unwrap()
+            .contains("external replacement")
+    );
+    assert!(hits.iter().all(|hit| hit["excerpt"]["citation"].is_null()));
     for words in [
-        vec!["search", "PlanningSignal", "--no-sync", "--mode", "literal"],
         vec![
             "search",
             "PlanningSignal",
@@ -1408,7 +1427,8 @@ fn indexed_cli_general_search_preserves_authored_results_filters_and_cached_dry_
         ],
         vec!["search", "PlanningSignal", "--no-sync", "--mode", "hybrid"],
     ] {
-        normalized.cli_error(&words, "CAPABILITY_UNAVAILABLE");
+        // These modes are supported, but this offline fixture has no embeddings.
+        normalized.cli_error(&words, "OFFLINE_UNAVAILABLE");
     }
 }
 

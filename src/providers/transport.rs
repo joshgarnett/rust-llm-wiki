@@ -178,6 +178,8 @@ impl Transport for NativeTransport {
         request: AuthenticatedRequest<'a>,
         context: TransportContext,
     ) -> TransportFuture<'a> {
+        #[cfg(test)]
+        crate::catalog::query_diagnostics::access("provider_send");
         Box::pin(async move {
             let mut request = request;
             let mut entered = false;

@@ -29,12 +29,21 @@ mod refresh_fixture_export;
 #[cfg(test)]
 mod refresh_path_profile;
 
+pub(crate) mod page_citations;
 mod page_rename;
 mod pages;
+pub use page_citations::PageSourceRefs;
+#[cfg(test)]
+mod page_citations_tests;
 pub mod probe;
 pub use pages::{PageBatchRequest, PageUpdate};
 
 mod source_import;
+mod source_refresh_batch;
+mod source_refresh_batch_types;
+pub use source_refresh_batch_types::*;
+#[cfg(test)]
+mod source_refresh_batch_tests;
 mod source_import_state;
 mod source_import_types;
 pub use source_import::{
