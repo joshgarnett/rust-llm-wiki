@@ -22,6 +22,13 @@ class QualificationError(ValueError):
     pass
 
 
+PROFILE_FILE = "native-rust-actions.json"
+PROFILE_QUERY = 'mnemonic("Rustc", filter("^//:", deps(//:test_build)))'
+PROFILE_LIMIT = 32 * 1024 * 1024
+PROFILE_FLAGS = ["aquery", "--nofetch", "--config=release", "--output=jsonproto",
+                 "--include_commandline", "--include_param_files", "--noinclude_artifacts", PROFILE_QUERY]
+
+
 def digest(path):
     with Path(path).open("rb") as source:
         return verifier.sha256_stream(source)
@@ -148,18 +155,98 @@ def file_hashes(root):
     return {str(path.relative_to(root)): digest(path) for path in root.rglob("*") if path.is_file()}
 
 
+def rust_build_profile(path):
+    """Derive the observed compiler profile from bounded native aquery evidence."""
+    if path.is_symlink() or path.stat().st_size > PROFILE_LIMIT:
+        raise QualificationError("native compiler profile is not a bounded regular JSON file")
+    graph = verifier.strict_json(path.read_bytes())
+    if not isinstance(graph, dict):
+        raise QualificationError("invalid native compiler action graph")
+    targets = {row["id"]: row["label"] for row in graph["targets"]}
+    configurations = {row["id"]: row for row in graph["configuration"]}
+    observations = []
+    for action in graph["actions"]:
+        label = targets[action["targetId"]]
+        config = configurations[action["configurationId"]]
+        if (action.get("mnemonic") != "Rustc" or not label.startswith("//:")
+                or not config.get("mnemonic", "").endswith("-opt")
+                or not re.fullmatch("[0-9a-f]{64}", config.get("checksum", ""))
+                or not re.fullmatch("[0-9a-f]{64}", action.get("actionKey", ""))):
+            raise QualificationError("native compiler action is not a root release configuration")
+        param_files = {}
+        for row in action.get("paramFiles", []):
+            name, arguments = row["execPath"], row["arguments"]
+            if name in param_files or not isinstance(name, str) or not isinstance(arguments, list) or not all(isinstance(value, str) for value in arguments):
+                raise QualificationError("invalid native compiler parameter file")
+            param_files[name] = arguments
+
+        def expand(arguments, stack=()):
+            if not isinstance(arguments, list) or not all(isinstance(value, str) for value in arguments):
+                raise QualificationError("invalid native compiler arguments")
+            output = []
+            for value in arguments:
+                if value.startswith("@"):
+                    name = value[1:]
+                    if name not in param_files or name in stack or len(stack) >= 8:
+                        raise QualificationError("missing or recursive native compiler parameter file")
+                    output.extend(expand(param_files[name], stack + (name,)))
+                else:
+                    output.append(value)
+                if len(output) > 100000:
+                    raise QualificationError("native compiler arguments exceed observation limit")
+            return output
+
+        arguments = expand(action["arguments"])
+        compiler = next((index for index, value in enumerate(arguments) if Path(value).name == "rustc"), None)
+        if compiler is None:
+            raise QualificationError("native Rustc action omitted its compiler command")
+        arguments = arguments[compiler + 1:]
+        levels = []
+        for index, value in enumerate(arguments):
+            option = arguments[index + 1] if value in ("-C", "--codegen") and index + 1 < len(arguments) else None
+            if option is None:
+                match = re.fullmatch(r"(?:-C=?|--codegen=)(opt-level=.*)", value)
+                option = match[1] if match else None
+            if option and option.startswith("opt-level="):
+                levels.append(option.removeprefix("opt-level="))
+        if not levels or any(value != "3" for value in levels):
+            raise QualificationError("native Rustc action must explicitly use only opt-level 3")
+        observations.append({"target": label, "action_key": action["actionKey"],
+                             "configuration_mnemonic": config["mnemonic"], "configuration_checksum": config["checksum"],
+                             "opt_level": "3", "test_harness": "--test" in arguments})
+    labels = {row["target"] for row in observations}
+    if not {"//:lwiki_lib", "//:unit_tests"} <= labels or not any(row["target"] == "//:unit_tests" and row["test_harness"] for row in observations):
+        raise QualificationError("native compiler profile omitted the library or unit test harness")
+    return {"schema_version": "lwiki.native-build-profile.v1", "configuration": "release", "rust_opt_level": "3",
+            "aquery_file": path.name, "aquery_sha256": digest(path),
+            "actions": sorted(observations, key=lambda row: (row["target"], row["action_key"]))}
+
+
 class Runner:
     def __init__(self, evidence, repo):
         self.evidence = evidence
         self.repo = repo
         self.stage = "toolchain"
 
-    def run(self, stage, command, env=None, cwd=None, timeout=5400):
+    def run(self, stage, command, env=None, cwd=None, timeout=5400, stdout_path=None, output_limit=None):
         self.stage = stage
         started = time.monotonic()
+        limit_output = None
+        if output_limit is not None:
+            # Qualification runs only on native macOS/Linux. Import locally so
+            # read-only tool tests remain importable on compile-only Windows.
+            import resource
+
+            def limit_output():
+                resource.setrlimit(resource.RLIMIT_FSIZE, (output_limit, output_limit))
         with (self.evidence / (stage + ".log")).open("wb") as output:
-            result = subprocess.run(command, cwd=cwd or self.repo, env=env,
-                                    stdout=output, stderr=subprocess.STDOUT, timeout=timeout, check=False)
+            if stdout_path is None:
+                result = subprocess.run(command, cwd=cwd or self.repo, env=env,
+                                        stdout=output, stderr=subprocess.STDOUT, timeout=timeout, check=False)
+            else:
+                with stdout_path.open("xb") as stdout:
+                    result = subprocess.run(command, cwd=cwd or self.repo, env=env,
+                                            stdout=stdout, stderr=output, timeout=timeout, check=False, preexec_fn=limit_output)
         with (self.evidence / "stages.jsonl").open("a", encoding="utf-8") as output:
             output.write(json.dumps({"stage": stage, "argv": list(map(str, command)),
                                      "exit_code": result.returncode,
@@ -334,11 +421,15 @@ def qualify(args, repo=None):
         report.update(artifact=record, archive_path=str(archive), binary_path=str(binary))
         write_json(evidence / "qualification.json", report)
         override = "--test_env=LWIKI_QUALIFY_BINARY=" + str(binary)
-        runner.run("test-build", bazel + ["build", "--nofetch", "//:test_build"])
-        runner.run("tests", bazel + ["test", "--nofetch", "--nocache_test_results", "--test_strategy=standalone",
+        profile = evidence / PROFILE_FILE
+        runner.run("compiler-profile", bazel + PROFILE_FLAGS, timeout=180, stdout_path=profile, output_limit=PROFILE_LIMIT)
+        report["build_profile"] = rust_build_profile(profile)
+        write_json(evidence / "qualification.json", report)
+        runner.run("test-build", bazel + ["build", "--nofetch", "--config=release", "//:test_build"])
+        runner.run("tests", bazel + ["test", "--nofetch", "--config=release", "--nocache_test_results", "--test_strategy=standalone",
                                      override, "--zip_undeclared_test_outputs", "//:test"])
         runner.stage = "retrieval-evidence"
-        testlogs = command_text(bazel + ["info", "--nofetch", "bazel-testlogs"], repo)
+        testlogs = command_text(bazel + ["info", "--nofetch", "--config=release", "bazel-testlogs"], repo)
         shutil.copy2(Path(testlogs) / "retrieval_baseline_test/test.outputs/outputs.zip", evidence / "retrieval-baseline.zip")
         runner.run("release-skill", bazel + ["test", "--nofetch", "--config=release", "--nocache_test_results",
                                              "--test_strategy=standalone", override, "//:skill_export_test", "--test_arg=--test-threads=1"])

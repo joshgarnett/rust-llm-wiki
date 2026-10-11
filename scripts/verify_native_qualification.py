@@ -18,7 +18,7 @@ RUNNERS = {
     "xcode-27": ("aarch64-apple-darwin", "Darwin", "arm64", 27),
 }
 REQUIRED_STAGES = {
-    "fmt", "clippy", "test-build", "tests", "release-skill", "metadata", "artifact-tests",
+    "fmt", "clippy", "compiler-profile", "test-build", "tests", "release-skill", "metadata", "artifact-tests",
     "install-preview", "install", "version", "capabilities", "setup", "capture", "search",
     "context", "recover", "rebuild", "check", "config-show", "skill-export", "linkage",
     "agent-preview", "agent-install", "agent-status", "agent-install-repeat", "agent-remove", "agent-status-removed",
@@ -72,6 +72,9 @@ def verify(root, release_directory, commit, version):
             raise qualification.QualificationError("native runner version does not meet its declared row: " + label)
         if major is None and 'VERSION_ID="24.04"' not in host.get("os_release", ""):
             raise qualification.QualificationError("Linux qualification must run on Ubuntu 24.04")
+        profile = qualification.rust_build_profile(path.parent / qualification.PROFILE_FILE)
+        if report.get("build_profile") != profile:
+            raise qualification.QualificationError("native compiler optimization provenance mismatch: " + label)
         stages = [verifier.strict_json(line) for line in (path.parent / "stages.jsonl").read_bytes().splitlines()]
         if (any(not isinstance(stage, dict) for stage in stages)
                 or {stage.get("stage") for stage in stages} != REQUIRED_STAGES
@@ -84,10 +87,30 @@ def verify(root, release_directory, commit, version):
                 raise qualification.QualificationError("invalid native stage command: " + label)
             if stage["stage"] in BAZEL_TARGETS and BAZEL_TARGETS[stage["stage"]] not in arguments:
                 raise qualification.QualificationError("native suite target is missing: " + label)
+            if stage["stage"] in ("compiler-profile", "test-build", "tests", "release-skill", "artifact-tests") and "--config=release" not in arguments:
+                raise qualification.QualificationError("native suite release configuration is missing: " + label)
+            if stage["stage"] == "compiler-profile" and arguments[-len(qualification.PROFILE_FLAGS):] != qualification.PROFILE_FLAGS:
+                raise qualification.QualificationError("native compiler profile query changed: " + label)
             if stage["stage"] in ("tests", "release-skill", "artifact-tests"):
                 if ("--test_env=LWIKI_QUALIFY_BINARY=" + report["binary_path"] not in arguments
                         or "--test_strategy=standalone" not in arguments or "--nocache_test_results" not in arguments):
                     raise qualification.QualificationError("native CLI tests did not pin the archived executable: " + label)
+            if stage["stage"] in ("test-build", "tests", "release-skill", "artifact-tests"):
+                expected_options = ["--nofetch", "--config=release"]
+                if stage["stage"] != "test-build":
+                    expected_options += ["--nocache_test_results", "--test_strategy=standalone",
+                                         "--test_env=LWIKI_QUALIFY_BINARY=" + report["binary_path"]]
+                if stage["stage"] == "tests":
+                    expected_options.append("--zip_undeclared_test_outputs")
+                if stage["stage"] == "release-skill":
+                    expected_options.append("--test_arg=--test-threads=1")
+                for index, value in enumerate(arguments):
+                    if value == "--" and (index != 2 or arguments[1] != "scripts/bazel.py"
+                                          or arguments[3:4] != ["build" if stage["stage"] == "test-build" else "test"]):
+                        raise qualification.QualificationError("native release stage options contain an unexpected separator: " + label)
+                actual_options = [value for value in arguments if value.startswith("-") and value != "--"]
+                if sorted(actual_options) != sorted(expected_options):
+                    raise qualification.QualificationError("native release stage options differ from the qualified profile: " + label)
             if stage["stage"] in CLI_COMMANDS:
                 expected = ([report.get("installed_binary_path")] + (["--json", "--offline"]
                             if stage["stage"] != "version" else []) + CLI_COMMANDS[stage["stage"]])
@@ -97,7 +120,8 @@ def verify(root, release_directory, commit, version):
                         "archive_sha256": record["archive_sha256"], "binary_sha256": record["binary_sha256"],
                         "platform_requirements": record["platform_requirements"],
                         "qualification_report_sha256": qualification.digest(path),
-                        "stage_report_sha256": qualification.digest(path.parent / "stages.jsonl")})
+                        "stage_report_sha256": qualification.digest(path.parent / "stages.jsonl"),
+                        "build_profile": profile})
     if seen != set(RUNNERS):
         raise qualification.QualificationError("missing required native runner")
     return {"schema_version": "lwiki.release-native-qualification.v1", "source_commit": commit,

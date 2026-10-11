@@ -87,6 +87,11 @@ replay. Container-only changes retain correctness evidence only after identical
 extracted executable bytes are proved; rerun extraction/trust checks as applicable.
 Windows remains build/capability-only; power-loss remains distinct from process kill.
 
+Build and run the native Rust test harnesses with `--config=release`, using the
+same optimization level as the shipped command. The qualification report retains
+Bazel's compiler arguments and verifies `opt-level=3`. Keep all test limits in
+place; an unoptimized diagnostic run does not establish release performance.
+
 Release archives are built in GitHub Actions. Build the macOS archive on the oldest
 supported version, then run the same archive on each supported version. The macOS
 support policy covers the current major release and the previous two, on their

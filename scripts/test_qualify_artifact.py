@@ -3,7 +3,10 @@
 import argparse
 import copy
 import json
+import os
 from pathlib import Path
+import subprocess
+import sys
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -28,6 +31,87 @@ def artifact_record(target, archive=b"fixture archive", binary=b"fixture executa
 def release_manifest(records):
     return {"schema_version": "lwiki.release-manifest.v2", "package_version": VERSION,
             "source_commit": COMMIT, "targets": records}
+
+
+def compiler_graph():
+    return {"targets": [{"id": 1, "label": "//:lwiki_lib"}, {"id": 2, "label": "//:unit_tests"}],
+            "configuration": [{"id": 1, "mnemonic": "darwin_arm64-opt", "checksum": "c" * 64}],
+            "actions": [{"targetId": index, "configurationId": 1, "mnemonic": "Rustc",
+                         "actionKey": key * 64, "arguments": ["/wrapper", "--", "/toolchain/rustc",
+                         "--codegen=opt-level=3"] + (["--test"] if index == 2 else [])}
+                        for index, key in [(1, "d"), (2, "e")]]}
+
+
+class CompilerProfileTests(unittest.TestCase):
+    def profile(self, graph):
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / qualification.PROFILE_FILE
+            qualification.write_json(path, graph)
+            return qualification.rust_build_profile(path)
+
+    def test_actual_long_codegen_form_and_test_harness_are_observed(self):
+        result = self.profile(compiler_graph())
+        self.assertEqual(result["configuration"], "release")
+        self.assertEqual({row["opt_level"] for row in result["actions"]}, {"3"})
+        self.assertEqual([row["target"] for row in result["actions"] if row["test_harness"]], ["//:unit_tests"])
+        self.assertRegex(result["aquery_sha256"], r"^[0-9a-f]{64}$")
+
+    def test_short_split_and_parameter_file_codegen_forms(self):
+        for option in [["-C", "opt-level=3"], ["-Copt-level=3"], ["--codegen", "opt-level=3"], ["-C=opt-level=3"]]:
+            with self.subTest(option=option):
+                graph = compiler_graph()
+                for action in graph["actions"]:
+                    action["arguments"][3:4] = option
+                self.profile(graph)
+        graph = compiler_graph()
+        action = graph["actions"][1]
+        action["arguments"][3:] = ["@rustc.params"]
+        action["paramFiles"] = [{"execPath": "rustc.params", "arguments": ["--test", "-C", "opt-level=3"]}]
+        self.profile(graph)
+
+    def test_missing_unoptimized_conflicting_or_wrapper_only_level_is_rejected(self):
+        for arguments in [["--test"], ["-Copt-level=0", "--test"], ["--codegen=opt-level=3", "-C", "opt-level=1", "--test"]]:
+            with self.subTest(arguments=arguments):
+                graph = compiler_graph()
+                graph["actions"][1]["arguments"][3:] = arguments
+                with self.assertRaisesRegex(qualification.QualificationError, "opt-level"):
+                    self.profile(graph)
+        graph = compiler_graph()
+        graph["actions"][1]["arguments"] = ["/wrapper", "--codegen=opt-level=3", "--", "/toolchain/rustc", "--test"]
+        with self.assertRaisesRegex(qualification.QualificationError, "opt-level"):
+            self.profile(graph)
+
+    def test_missing_library_harness_configuration_and_recursive_params_are_rejected(self):
+        for mutation in ["library", "harness", "configuration", "parameter"]:
+            with self.subTest(mutation=mutation):
+                graph = compiler_graph()
+                if mutation == "library":
+                    graph["actions"].pop(0)
+                elif mutation == "harness":
+                    graph["actions"][1]["arguments"].remove("--test")
+                elif mutation == "configuration":
+                    graph["configuration"][0]["mnemonic"] = "darwin_arm64-fastbuild"
+                else:
+                    graph["actions"][0]["arguments"].append("@cycle")
+                    graph["actions"][0]["paramFiles"] = [{"execPath": "cycle", "arguments": ["@cycle"]}]
+                with self.assertRaises(qualification.QualificationError):
+                    self.profile(graph)
+
+    @unittest.skipUnless(os.name == "posix", "native capture requires macOS/Linux resource limits")
+    def test_capture_separates_diagnostics_and_enforces_file_limit(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            evidence = Path(temporary)
+            runner = qualification.Runner(evidence, evidence)
+            raw = evidence / "actions.json"
+            runner.run("profile", [sys.executable, "-c", "import sys; print('{}'); print('diagnostic', file=sys.stderr)"],
+                       timeout=10, stdout_path=raw, output_limit=4096)
+            self.assertEqual(json.loads(raw.read_text()), {})
+            self.assertIn("diagnostic", (evidence / "profile.log").read_text())
+            raw = evidence / "too-large.json"
+            with self.assertRaises(subprocess.CalledProcessError):
+                runner.run("oversized", [sys.executable, "-c", "print('x' * 8192)"],
+                           timeout=10, stdout_path=raw, output_limit=4096)
+            self.assertLessEqual(raw.stat().st_size, 4096)
 
 
 class ArchiveTests(unittest.TestCase):
@@ -135,11 +219,15 @@ class ExistingArchiveTests(unittest.TestCase):
             record = artifact_record(MAC)
             calls = []
 
-            def run(runner, stage, command, env=None, cwd=None, timeout=5400):
+            def run(runner, stage, command, env=None, cwd=None, timeout=5400, stdout_path=None, output_limit=None):
                 runner.stage = stage
                 calls.append((stage, command))
                 path = runner.evidence / (stage + ".log")
                 path.write_text("{}\n")
+                if stage == "compiler-profile":
+                    self.assertEqual(timeout, 180)
+                    self.assertEqual(output_limit, qualification.PROFILE_LIMIT)
+                    qualification.write_json(stdout_path, compiler_graph())
                 return path
 
             def prepare(archive, evidence, *args):
@@ -165,8 +253,11 @@ class ExistingArchiveTests(unittest.TestCase):
                 self.assertIn("--test_env=LWIKI_QUALIFY_BINARY=" + str(evidence / "lwiki"), command)
                 self.assertIn("--nocache_test_results", command)
                 self.assertIn("--test_strategy=standalone", command)
+            for stage in ("compiler-profile", "test-build", "tests", "release-skill", "artifact-tests"):
+                self.assertIn("--config=release", next(command for name, command in calls if name == stage))
             report = json.loads((evidence / "qualification.json").read_text())
             self.assertEqual(report["status"], "passed")
+            self.assertEqual(report["build_profile"], qualification.rust_build_profile(evidence / qualification.PROFILE_FILE))
             self.assertTrue(report["source_clean_after"])
             self.assertEqual(report["binary_sha256_after"], record["binary_sha256"])
             self.assertEqual(report["installed_binary_sha256"], record["binary_sha256"])

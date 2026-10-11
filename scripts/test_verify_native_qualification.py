@@ -6,7 +6,7 @@ import tempfile
 import unittest
 
 import qualify_artifact as qualification
-from test_qualify_artifact import COMMIT, VERSION, MAC, LINUX, artifact_record, release_manifest
+from test_qualify_artifact import COMMIT, VERSION, MAC, LINUX, artifact_record, release_manifest, compiler_graph
 import verify_native_qualification as gate
 import verify_release as verifier
 
@@ -43,14 +43,25 @@ class NativeGateTests(unittest.TestCase):
             self.reports[label] = report
             directory = self.evidence / label
             directory.mkdir()
+            raw = directory / qualification.PROFILE_FILE
+            qualification.write_json(raw, compiler_graph())
+            report["build_profile"] = qualification.rust_build_profile(raw)
             self.save(label)
             stages = []
             for name in sorted(gate.REQUIRED_STAGES):
                 command = ["fixture"]
                 if name in gate.BAZEL_TARGETS:
                     command += [gate.BAZEL_TARGETS[name]]
+                if name == "compiler-profile":
+                    command += qualification.PROFILE_FLAGS
+                elif name in ("test-build", "tests", "release-skill", "artifact-tests"):
+                    command += ["--nofetch", "--config=release"]
                 if name in ("tests", "release-skill", "artifact-tests"):
                     command += ["--test_env=LWIKI_QUALIFY_BINARY=/fixture/lwiki", "--test_strategy=standalone", "--nocache_test_results"]
+                if name == "tests":
+                    command += ["--zip_undeclared_test_outputs"]
+                if name == "release-skill":
+                    command += ["--test_arg=--test-threads=1"]
                 if name in gate.CLI_COMMANDS:
                     command = [report["installed_binary_path"]] + (["--json", "--offline"] if name != "version" else []) + gate.CLI_COMMANDS[name]
                 stages.append({"stage": name, "argv": command, "exit_code": 0})
@@ -72,6 +83,21 @@ class NativeGateTests(unittest.TestCase):
         mac = [row for row in result["runners"] if row["target"] == MAC]
         self.assertEqual(len({row["archive_sha256"] for row in mac}), 1)
         self.assertEqual(len({row["binary_sha256"] for row in mac}), 1)
+
+    def test_appended_release_overrides_block_staging(self):
+        import json
+        path = self.evidence / "macos-15/stages.jsonl"
+        original = path.read_text()
+        for name in ("test-build", "tests", "release-skill", "artifact-tests"):
+            for extra in (["--compilation_mode=fastbuild"], ["-c", "fastbuild"],
+                          ["--config=unreviewed"], ["--config=release"], ["--"],
+                          ["--@rules_rust//rust/settings:rustc_flag=-Copt-level=0"]):
+                with self.subTest(stage=name, extra=extra):
+                    stages = [json.loads(line) for line in original.splitlines()]
+                    next(stage for stage in stages if stage["stage"] == name)["argv"] += extra
+                    path.write_text("".join(json.dumps(stage) + "\n" for stage in stages))
+                    with self.assertRaisesRegex(qualification.QualificationError, "stage options"):
+                        self.verify()
 
     def test_missing_and_failed_rows_block_staging(self):
         path = self.evidence / "xcode-27/qualification.json"
@@ -132,6 +158,40 @@ class NativeGateTests(unittest.TestCase):
                 path.write_text(original.replace("--test_strategy=standalone", "--test_strategy=" + strategy))
                 with self.assertRaisesRegex(qualification.QualificationError, "pin"):
                     self.verify()
+
+    def test_missing_release_configuration_blocks_staging(self):
+        path = self.evidence / "macos-15/stages.jsonl"
+        original = path.read_text()
+        for stage in ("compiler-profile", "test-build", "tests", "release-skill", "artifact-tests"):
+            import json
+            rows = [json.loads(line) for line in original.splitlines()]
+            next(row for row in rows if row["stage"] == stage)["argv"].remove("--config=release")
+            path.write_text("".join(json.dumps(row) + "\n" for row in rows))
+            with self.subTest(stage=stage), self.assertRaisesRegex(qualification.QualificationError, "release configuration"):
+                self.verify()
+
+    def test_missing_or_declared_only_optimization_provenance_is_rejected(self):
+        report = self.reports["macos-26"]
+        original = copy.deepcopy(report["build_profile"])
+        for value in [None, dict(original, rust_opt_level="0"), dict(original, aquery_sha256="f" * 64)]:
+            with self.subTest(value=value):
+                report["build_profile"] = value
+                self.save("macos-26")
+                with self.assertRaisesRegex(qualification.QualificationError, "provenance"):
+                    self.verify()
+        report["build_profile"] = original
+        self.save("macos-26")
+        (self.evidence / "macos-26" / qualification.PROFILE_FILE).unlink()
+        with self.assertRaises(OSError):
+            self.verify()
+
+    def test_raw_unoptimized_arguments_override_a_passing_declaration(self):
+        raw = self.evidence / "ubuntu-24.04" / qualification.PROFILE_FILE
+        graph = compiler_graph()
+        graph["actions"][1]["arguments"].append("-Copt-level=0")
+        qualification.write_json(raw, graph)
+        with self.assertRaisesRegex(qualification.QualificationError, "opt-level"):
+            self.verify()
 
 
 if __name__ == "__main__":
