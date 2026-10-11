@@ -33,7 +33,7 @@ child.stdout.pipe(fs.createWriteStream(path.join(root, 'browser.stdout')));
 child.stderr.pipe(fs.createWriteStream(path.join(root, 'browser.stderr')));
 const begin = process.hrtime.bigint();
 const elapsed = () => Number(process.hrtime.bigint() - begin) / 1e9;
-let next = 1, pending = new Map(), commands = new Map(), receive = Buffer.alloc(0), session, spawnError, mainNavigation, explicitRefusal, downloadUIAttempted = false, desktopFailureAttempted = false, closing = false, childExit, childClose;
+let next = 1, pending = new Map(), commands = new Map(), receive = Buffer.alloc(0), sourceSession, sourceTargetId, observerSession, observerTargetId, spawnError, mainNavigation, explicitRefusal, downloadUIAttempted = false, desktopFailureAttempted = false, closing = false, childExit, childClose;
 const trace = (name, value) => fs.appendFileSync(path.join(root, name + '.jsonl'), JSON.stringify({elapsedSeconds: elapsed(), ...value}) + '\n');
 const phase = name => {result.phase = name; save('browser-result.json', result);};
 function fail(error, failurePhase = result.phase) {
@@ -64,10 +64,12 @@ child.on('exit', (code, signal) => {
 child.on('close', (code, signal) => {childClose = {code, signal, elapsedSeconds: elapsed(), phase: result.phase}; result.childClose = childClose; trace('browser-lifecycle', {event: 'child-close', ...childClose});});
 function cdp(method, params = {}, sid, timeout = 10000) {
   if (closing && method !== 'Browser.close') return Promise.reject(Error('browser work after close request is forbidden'));
+  if (result.downloadGesture?.mouseReleased && ((sid === sourceSession && ['Page.navigate', 'Page.reload', 'Page.stopLoading'].includes(method)) || (params.targetId === sourceTargetId && method === 'Target.closeTarget') || (params.sessionId === sourceSession && method === 'Target.detachFromTarget'))) return Promise.reject(Error('initiating source document must remain attached and unchanged until browser teardown'));
   timeout = Math.max(1, Math.min(timeout, (105 - elapsed()) * 1000));
   const id = next++;
-  commands.set(id, {method, sessionId: sid});
-  trace('browser-cdp', {event: 'command', id, method, sessionId: sid, ...(params.url ? {url: params.url} : {})});
+  const role = sid ? sid === sourceSession ? 'source' : sid === observerSession ? 'downloads-observer' : 'unknown' : 'browser';
+  commands.set(id, {method, sessionId: sid, role});
+  trace('browser-cdp', {event: 'command', id, method, sessionId: sid, role, ...(params.url ? {url: params.url} : {}), ...(params.targetId ? {targetId: params.targetId} : {}), ...(typeof params.background === 'boolean' ? {background: params.background, newWindow: params.newWindow} : {})});
   return new Promise((resolve, reject) => {
     if (spawnError) return reject(Error(spawnError));
     const timer = setTimeout(() => {pending.delete(id); trace('browser-cdp', {event: 'timeout', id, method}); reject(Error(method + ' timed out'));}, timeout);
@@ -93,29 +95,31 @@ child.stdio[4].on('data', bytes => {
     if (message.id && pending.has(message.id)) {
       const item = pending.get(message.id); pending.delete(message.id); clearTimeout(item.timer);
       if (message.error) item.reject(Error(JSON.stringify(message.error))); else item.resolve(message.result);
-    } else if (message.sessionId === session && message.method) {
+    } else if (message.sessionId && [sourceSession, observerSession].includes(message.sessionId) && message.method) {
       const p = message.params, method = message.method;
-      if (method === 'Network.requestWillBeSent') {
-        trace('browser-network', {method, requestId: p.requestId, loaderId: p.loaderId, frameId: p.frameId, type: p.type, url: p.request.url, requestMethod: p.request.method, timestamp: p.timestamp, redirectURL: p.redirectResponse?.url, redirectStatus: p.redirectResponse?.status});
+      const fromSource = message.sessionId === sourceSession;
+      const label = {sessionId: message.sessionId, role: fromSource ? 'source' : 'downloads-observer'};
+      if (fromSource && method === 'Network.requestWillBeSent') {
+        trace('browser-network', {...label, method, requestId: p.requestId, loaderId: p.loaderId, frameId: p.frameId, type: p.type, url: p.request.url, requestMethod: p.request.method, timestamp: p.timestamp, redirectURL: p.redirectResponse?.url, redirectStatus: p.redirectResponse?.status});
         if (mainNavigation && p.frameId === mainNavigation.frameId && p.type === 'Document' && (p.request.url === pageURL || p.requestId === mainNavigation.requestId)) Object.assign(mainNavigation, {requestId: p.requestId, loaderId: p.loaderId, requestObserved: true, currentURL: p.request.url});
-      } else if (method === 'Network.responseReceived') {
+      } else if (fromSource && method === 'Network.responseReceived') {
         const r = p.response;
-        trace('browser-network', {method, requestId: p.requestId, loaderId: p.loaderId, frameId: p.frameId, type: p.type, url: r.url, status: r.status, mimeType: r.mimeType, protocol: r.protocol, securityState: r.securityState, timestamp: p.timestamp});
+        trace('browser-network', {...label, method, requestId: p.requestId, loaderId: p.loaderId, frameId: p.frameId, type: p.type, url: r.url, status: r.status, mimeType: r.mimeType, protocol: r.protocol, securityState: r.securityState, timestamp: p.timestamp});
         if (mainNavigation?.requestId === p.requestId) {
           Object.assign(mainNavigation, {responseObserved: true, responseStatus: r.status});
           if (r.status >= 400) explicitRefusal ||= 'main document HTTP refusal: ' + r.status;
         }
-      } else if (method === 'Network.loadingFailed' || method === 'Network.loadingFinished') {
-        trace('browser-network', {method, requestId: p.requestId, type: p.type, timestamp: p.timestamp, errorText: p.errorText, canceled: p.canceled, blockedReason: p.blockedReason, corsErrorStatus: p.corsErrorStatus});
+      } else if (fromSource && (method === 'Network.loadingFailed' || method === 'Network.loadingFinished')) {
+        trace('browser-network', {...label, method, requestId: p.requestId, type: p.type, timestamp: p.timestamp, errorText: p.errorText, canceled: p.canceled, blockedReason: p.blockedReason, corsErrorStatus: p.corsErrorStatus});
         if (mainNavigation?.requestId === p.requestId) {
           mainNavigation[method === 'Network.loadingFailed' ? 'failed' : 'finished'] = true;
           if (method === 'Network.loadingFailed') explicitRefusal ||= 'main document loading failed: ' + p.errorText;
         }
       } else if (['Page.frameStartedNavigating', 'Page.frameStartedLoading', 'Page.frameStoppedLoading', 'Page.frameNavigated', 'Page.lifecycleEvent', 'Page.interstitialShown', 'Page.javascriptDialogOpening'].includes(method)) {
-        trace('browser-page', {method, ...p});
+        trace('browser-page', {...label, method, ...p});
         if (method === 'Page.interstitialShown' || method === 'Page.javascriptDialogOpening') explicitRefusal ||= method + ': no approval or dialog handling attempted';
-        if (mainNavigation && method === 'Page.frameStartedNavigating' && p.frameId === mainNavigation.frameId && p.url === pageURL) mainNavigation.frameProgressObserved = true;
-        if (mainNavigation && method === 'Page.frameNavigated' && p.frame.id === mainNavigation.frameId && p.frame.url === pageURL) mainNavigation.commitObserved = true;
+        if (fromSource && mainNavigation && method === 'Page.frameStartedNavigating' && p.frameId === mainNavigation.frameId && p.url === pageURL) mainNavigation.frameProgressObserved = true;
+        if (fromSource && mainNavigation && method === 'Page.frameNavigated' && p.frame.id === mainNavigation.frameId && p.frame.url === pageURL) mainNavigation.commitObserved = true;
       }
     }
   }
@@ -140,13 +144,18 @@ async function snapshot(name, until = 105, strict = false) {
     ['screenshot', 'Page.captureScreenshot', {format: 'png'}],
   ];
   const rows = await Promise.allSettled(operations.map(async ([key, method, params]) => {
-    const value = await cdp(method, params, session, windowTimeout(until));
+    const value = await cdp(method, params, sourceSession, windowTimeout(until));
     if (key === 'screenshot') {fs.writeFileSync(path.join(root, name + '.png'), Buffer.from(value.data, 'base64')); return {key, captured: true};}
     return {key, value};
   }));
-  save(name + '.json', {mainNavigation, explicitRefusal, inspections: rows.map((row, i) => row.status === 'fulfilled' ? row.value : {key: operations[i][0], error: String(row.reason)})});
+  save(name + '.json', {targetId: sourceTargetId, sessionId: sourceSession, role: 'source', mainNavigation, explicitRefusal, inspections: rows.map((row, i) => row.status === 'fulfilled' ? row.value : {key: operations[i][0], error: String(row.reason)})});
   if (strict && rows.some(row => row.status === 'rejected')) throw Error('source-page completion diagnostic failed');
-  if (strict) windowTimeout(until);
+  if (strict) {
+    const frame = rows[0].value.value.frameTree?.frame, document = rows[1].value.value.result?.value;
+    if (frame?.id !== mainNavigation.frameId || frame.url !== pageURL || typeof frame.loaderId !== 'string' || !frame.loaderId || document?.url !== pageURL) throw Error('initiating source frame/document identity is unavailable');
+    result.sourceDocument = {targetId: sourceTargetId, sessionId: sourceSession, frameId: frame.id, loaderId: frame.loaderId, url: document.url};
+    windowTimeout(until);
+  }
 }
 async function desktopFailure() {
   if (desktopFailureAttempted) return;
@@ -162,8 +171,8 @@ async function desktopFailure() {
   save('browser-failure-desktop.json', state);
 }
 async function navigatePublic() {
-  mainNavigation = {url: pageURL, frameId: (await cdp('Page.getFrameTree', {}, session)).frameTree.frame.id};
-  const navigation = cdp('Page.navigate', {url: pageURL}, session, 30000);
+  mainNavigation = {url: pageURL, frameId: (await cdp('Page.getFrameTree', {}, sourceSession)).frameTree.frame.id};
+  const navigation = cdp('Page.navigate', {url: pageURL}, sourceSession, 30000);
   let outcome;
   const observe = navigation.then(value => {outcome = {value};}, error => {outcome = {error: String(error)};});
   const until = elapsed() + 10;
@@ -217,7 +226,7 @@ async function relocateRawLink(originalControl) {
       save('browser-raw-link-relocation.json', evidence);
       let response;
       try {
-        response = await cdp('Runtime.evaluate', {expression: `(${rawLinkObservation.toString()})(${JSON.stringify(downloadURL)},false)`, returnByValue: true}, session, Math.max(1, (until - elapsed()) * 1000));
+        response = await cdp('Runtime.evaluate', {expression: `(${rawLinkObservation.toString()})(${JSON.stringify(downloadURL)},false)`, returnByValue: true}, sourceSession, Math.max(1, (until - elapsed()) * 1000));
       } catch (error) {
         sample.error = String(error);
         throw error;
@@ -331,10 +340,10 @@ function downloadsModelObservation() {
   observation.truncated ||= stack.length > 0;
   return observation;
 }
-function classifyDownload(observation, identity, expectedPath, expectedURL, sourceURL) {
+function classifyDownload(observation, identity, expectedPath, expectedURL) {
   if (!observation || observation.truncated || !Array.isArray(observation.records) || !Number.isInteger(observation.managerCount)) throw Error('Downloads model observation is unavailable or truncated');
   if (observation.url !== 'chrome://downloads/') {
-    if (!identity.pageObserved && observation.url === sourceURL && observation.managerCount === 0 && observation.records.length === 0) return {status: 'pending', reason: 'Downloads navigation has not committed'};
+    if (!identity.pageObserved && observation.url === 'about:blank' && observation.managerCount === 0 && observation.records.length === 0) return {status: 'pending', reason: 'Downloads observer navigation has not committed'};
     throw Error('Downloads model has another page URL');
   }
   identity.pageObserved = true;
@@ -364,15 +373,53 @@ function classifyDownload(observation, identity, expectedPath, expectedURL, sour
   if (!fullIdentity || row.isDangerous || row.dangerType !== 0 || total !== '37470') throw Error('Downloads completion identity, flags or total differs from pinned installer');
   return {status: 'complete', item: row};
 }
-async function navigateDownloads(until) {
+async function createDownloadsObserver(until) {
+  if (downloadUIAttempted) throw Error('Downloads observer creation was already attempted');
   downloadUIAttempted = true;
-  const evidence = result.downloadUI = {url: 'chrome://downloads/', approvals: 'none attempted', navigationBeginElapsedSeconds: elapsed()};
+  const evidence = result.downloadUI = {url: 'chrome://downloads/', role: 'downloads-observer', sourceTargetId, sourceSessionId: sourceSession, approvals: 'none attempted', setupBeginElapsedSeconds: elapsed(), deadlineElapsedSeconds: until};
   try {
-    evidence.navigation = await cdp('Page.navigate', {url: evidence.url}, session, windowTimeout(until));
-    if (evidence.navigation.errorText) throw Error(evidence.navigation.errorText);
+    const target = await cdp('Target.createTarget', {url: evidence.url, background: true, newWindow: false}, undefined, windowTimeout(until));
+    windowTimeout(until);
+    if (typeof target.targetId !== 'string' || !target.targetId || target.targetId === sourceTargetId) throw Error('Downloads observer target is absent or reuses source target');
+    observerTargetId = evidence.targetId = target.targetId;
+    evidence.createdElapsedSeconds = elapsed();
+    const attached = await cdp('Target.attachToTarget', {targetId: observerTargetId, flatten: true}, undefined, windowTimeout(until));
+    windowTimeout(until);
+    if (typeof attached.sessionId !== 'string' || !attached.sessionId || attached.sessionId === sourceSession) throw Error('Downloads observer session is absent or reuses source session');
+    observerSession = evidence.sessionId = attached.sessionId;
+    result.sessions.observer = {targetId: observerTargetId, sessionId: observerSession};
+    evidence.attachedElapsedSeconds = elapsed();
+    await cdp('Page.enable', {}, observerSession, windowTimeout(until));
+    await cdp('Runtime.enable', {}, observerSession, windowTimeout(until));
     windowTimeout(until);
   } catch (error) {evidence.error = String(error); throw error;}
-  finally {evidence.navigationEndElapsedSeconds = elapsed(); save('browser-download-ui.json', evidence);}
+  finally {evidence.setupEndElapsedSeconds = elapsed(); save('browser-download-ui.json', evidence);}
+}
+async function activateDownloads(until) {
+  const evidence = result.downloadUI;
+  if (result.downloadCompletion?.eligibleElapsedSeconds === undefined || evidence.activationBeginElapsedSeconds !== undefined) throw Error('Downloads activation requires one eligible completion observation');
+  evidence.activationBeginElapsedSeconds = elapsed();
+  try {
+    await cdp('Target.activateTarget', {targetId: observerTargetId}, undefined, windowTimeout(until));
+    windowTimeout(until);
+    evidence.activationEndElapsedSeconds = elapsed();
+  } finally {save('browser-download-ui.json', evidence);}
+}
+async function verifySourceDocument(until) {
+  const evidence = result.sourcePreservation = {targetId: sourceTargetId, sessionId: sourceSession, role: 'source', beginElapsedSeconds: elapsed(), deadlineElapsedSeconds: until};
+  try {
+    const rows = await Promise.allSettled([
+      cdp('Page.getFrameTree', {}, sourceSession, windowTimeout(until)),
+      cdp('Runtime.evaluate', {expression: '({url:location.href,ready:document.readyState})', returnByValue: true}, sourceSession, windowTimeout(until)),
+    ]);
+    evidence.inspections = rows.map(row => row.status === 'fulfilled' ? {value: row.value} : {error: String(row.reason)});
+    if (rows.some(row => row.status === 'rejected')) throw Error('final source document observation failed');
+    const frame = rows[0].value.frameTree?.frame, document = rows[1].value.result?.value, original = result.sourceDocument;
+    if (rows[1].value.exceptionDetails || !original || original.targetId !== sourceTargetId || original.sessionId !== sourceSession || frame?.id !== original.frameId || frame.loaderId !== original.loaderId || frame.url !== original.url || document?.url !== original.url) throw Error('initiating source frame/loader/URL did not survive completion');
+    windowTimeout(until);
+    evidence.preserved = true;
+  } catch (error) {evidence.error = String(error); throw error;}
+  finally {evidence.endElapsedSeconds = elapsed(); save('browser-source-preservation.json', evidence);}
 }
 async function captureDownloads(until) {
   const evidence = result.downloadUI;
@@ -383,7 +430,7 @@ async function captureDownloads(until) {
       ['Runtime.evaluate', {expression: `(${downloadsVisibleText.toString()})()`, returnByValue: true}],
     ];
     const observations = await Promise.allSettled(operations.map(async ([method, params]) => {
-      const rows = await cdp(method, params, session, windowTimeout(until));
+      const rows = await cdp(method, params, observerSession, windowTimeout(until));
       if (method === 'Page.captureScreenshot') {fs.writeFileSync(path.join(root, 'browser-downloads.png'), Buffer.from(rows.data, 'base64')); return {captured: true};}
       if (rows.exceptionDetails) throw Error(JSON.stringify(rows.exceptionDetails));
       const value = rows.result?.value;
@@ -411,11 +458,14 @@ async function waitForDownload(until, installer) {
     const current = {index: evidence.samples.length, final, beginElapsedSeconds: elapsed()};
     evidence.samples.push(current);
     try {
-      const response = await cdp('Runtime.evaluate', {expression: `(${downloadsModelObservation.toString()})()`, returnByValue: true}, session, windowTimeout(until));
+      const response = await cdp('Runtime.evaluate', {expression: `(${downloadsModelObservation.toString()})()`, returnByValue: true}, observerSession, windowTimeout(until));
       if (response.exceptionDetails) throw Error('Downloads model evaluation failed: ' + JSON.stringify(response.exceptionDetails));
       current.observation = response.result?.value;
       windowTimeout(until);
-      current.classification = classifyDownload(current.observation, evidence.identity, installer, url, pageURL);
+      const populated = current.observation?.records?.filter(row => row.populated);
+      if (!evidence.initiation && populated?.length === 1) evidence.initiation = {sampleIndex: current.index, observedElapsedSeconds: elapsed(), id: populated[0].id ?? null};
+      current.classification = classifyDownload(current.observation, evidence.identity, installer, url);
+      if (evidence.exactIdentity === undefined && evidence.identity.complete) evidence.exactIdentity = {sampleIndex: current.index, observedElapsedSeconds: elapsed(), id: evidence.identity.id};
       return current.classification;
     } catch (error) {current.error = String(error); throw error;}
     finally {current.endElapsedSeconds = elapsed(); save('browser-download-completion.json', evidence);}
@@ -433,11 +483,13 @@ async function waitForDownload(until, installer) {
       if (state.status === 'complete') {
         verifyFile();
         evidence.eligibleElapsedSeconds = elapsed();
+        await activateDownloads(until);
         await captureDownloads(until);
         const nextSample = evidence.samples[evidence.samples.length - 1].beginElapsedSeconds + 0.25;
         if (elapsed() < nextSample) {if (nextSample >= until) throw Error('download completion deadline exhausted before final sample'); await sleep((nextSample - elapsed()) * 1000);}
         if ((await sample(true)).status !== 'complete') throw Error('Downloads completion changed while evidence was captured');
         verifyFile();
+        await verifySourceDocument(until);
         if (result.error || explicitRefusal) throw Error(result.error || explicitRefusal);
         evidence.status = 'complete';
         evidence.completedElapsedSeconds = elapsed();
@@ -451,9 +503,9 @@ async function waitForDownload(until, installer) {
   } catch (error) {evidence.status = 'failed'; evidence.error = String(error); throw error;}
   finally {evidence.endElapsedSeconds = elapsed(); save('browser-download-completion.json', evidence);}
 }
-function processGroupPresent() {
-  try {process.kill(-child.pid, 0); return true;}
-  catch (error) {if (error.code === 'ESRCH') return false; throw error;}
+function processGroupPresent(probe) {
+  try {process.kill(-child.pid, 0); probe.code = 'success'; return true;}
+  catch (error) {probe.code = error.code; if (error.code === 'ESRCH') return false; if (error.code === 'EPERM') return true; throw error;}
 }
 async function closeBrowser() {
   phase('browser normal shutdown');
@@ -465,9 +517,10 @@ async function closeBrowser() {
   let normal = false, groupPresent;
   try {
     while (true) {
-      groupPresent = processGroupPresent();
+      const probe = {};
+      groupPresent = processGroupPresent(probe);
       const observedAt = elapsed();
-      evidence.observations.push({elapsedSeconds: observedAt, groupPresent, childExit: childExit || null});
+      evidence.observations.push({elapsedSeconds: observedAt, groupPresent, groupProbeCode: probe.code, childExit: childExit || null});
       if (observedAt > evidence.deadlineElapsedSeconds) break;
       if (childExit?.code === 0 && childExit.signal === null && !groupPresent) {normal = true; break;}
       const remaining = evidence.deadlineElapsedSeconds - elapsed();
@@ -498,19 +551,22 @@ try {
   phase('browser setup');
   result.version = await cdp('Browser.getVersion');
   const target = await cdp('Target.createTarget', {url: 'about:blank'});
-  session = (await cdp('Target.attachToTarget', {targetId: target.targetId, flatten: true})).sessionId;
-  await cdp('Page.enable', {}, session);
-  await cdp('Runtime.enable', {}, session);
-  await cdp('Network.enable', {}, session);
-  await cdp('Page.setLifecycleEventsEnabled', {enabled: true}, session);
+  sourceTargetId = target.targetId;
+  sourceSession = (await cdp('Target.attachToTarget', {targetId: sourceTargetId, flatten: true})).sessionId;
+  if (typeof sourceTargetId !== 'string' || !sourceTargetId || typeof sourceSession !== 'string' || !sourceSession) throw Error('source target/session identity is unavailable');
+  result.sessions = {source: {targetId: sourceTargetId, sessionId: sourceSession}};
+  await cdp('Page.enable', {}, sourceSession);
+  await cdp('Runtime.enable', {}, sourceSession);
+  await cdp('Network.enable', {}, sourceSession);
+  await cdp('Page.setLifecycleEventsEnabled', {enabled: true}, sourceSession);
   phase('network-free navigation control');
   const controlURL = 'data:text/html,<title>lwiki navigation control</title><p>owned browser control</p>';
-  const controlNavigation = await cdp('Page.navigate', {url: controlURL}, session);
+  const controlNavigation = await cdp('Page.navigate', {url: controlURL}, sourceSession);
   if (controlNavigation.errorText) throw Error('network-free navigation refused: ' + controlNavigation.errorText);
   const controlReady = elapsed() + 3;
   do {
     if (explicitRefusal) throw Error(explicitRefusal);
-    result.rendererControl = await cdp('Runtime.evaluate', {expression: '({title:document.title,text:document.body?.innerText})', returnByValue: true}, session, 2000);
+    result.rendererControl = await cdp('Runtime.evaluate', {expression: '({title:document.title,text:document.body?.innerText})', returnByValue: true}, sourceSession, 2000);
     if (result.rendererControl.result?.value?.title === 'lwiki navigation control' && result.rendererControl.result?.value?.text === 'owned browser control') break;
     await sleep(100);
   } while (elapsed() < controlReady);
@@ -521,7 +577,7 @@ try {
   const ready = elapsed() + 25;
   do {
     if (explicitRefusal) throw Error(explicitRefusal);
-    state = (await cdp('Runtime.evaluate', {expression: '({url:location.href,ready:document.readyState,raw:document.querySelector("[data-testid=raw-button]")?.href})', returnByValue: true}, session)).result?.value;
+    state = (await cdp('Runtime.evaluate', {expression: '({url:location.href,ready:document.readyState,raw:document.querySelector("[data-testid=raw-button]")?.href})', returnByValue: true}, sourceSession)).result?.value;
     if (state?.url === pageURL && state.ready === 'complete' && state.raw === downloadURL) break;
     await sleep(200);
   } while (elapsed() < ready);
@@ -530,39 +586,34 @@ try {
   phase('normal browser download');
   // Chrome's documented Mac shortcut downloads the existing link with Option.
   // The pinned real control must be visible and its center must hit that anchor.
-  const link = await cdp('Runtime.evaluate', {expression: `(${rawLinkObservation.toString()})(${JSON.stringify(downloadURL)},true)`, returnByValue: true}, session);
+  const link = await cdp('Runtime.evaluate', {expression: `(${rawLinkObservation.toString()})(${JSON.stringify(downloadURL)},true)`, returnByValue: true}, sourceSession);
   if (link.exceptionDetails) throw Error('Raw link inspection failed: ' + JSON.stringify(link.exceptionDetails));
   const control = link.result?.value;
   save('browser-raw-link.json', control || {error: 'Raw link observation absent'});
   if (!control || control.error || control.url !== pageURL) throw Error(control?.error || 'pinned Raw link observation unavailable');
-  const beforeGesture = await cdp('Page.captureScreenshot', {format: 'png'}, session);
+  const beforeGesture = await cdp('Page.captureScreenshot', {format: 'png'}, sourceSession);
   fs.writeFileSync(path.join(root, 'browser-raw-link.png'), Buffer.from(beforeGesture.data, 'base64'));
   const finalControl = await relocateRawLink(control);
   result.rawLinkRecheck = finalControl;
   if (explicitRefusal) throw Error(explicitRefusal);
   result.downloadGesture = {kind: 'one real Raw-link Option-click', href: finalControl.href, point: finalControl.point, button: 'left', modifiers: 1, clickCount: 1, mousePressed: false, mouseReleased: false};
   save('browser-result.json', result);
-  await cdp('Input.dispatchMouseEvent', {type: 'mousePressed', ...finalControl.point, button: 'left', modifiers: 1, clickCount: 1}, session);
+  await cdp('Input.dispatchMouseEvent', {type: 'mousePressed', ...finalControl.point, button: 'left', modifiers: 1, clickCount: 1}, sourceSession);
   result.downloadGesture.mousePressed = true;
   save('browser-result.json', result);
-  await cdp('Input.dispatchMouseEvent', {type: 'mouseReleased', ...finalControl.point, button: 'left', modifiers: 1, clickCount: 1}, session);
+  await cdp('Input.dispatchMouseEvent', {type: 'mouseReleased', ...finalControl.point, button: 'left', modifiers: 1, clickCount: 1}, sourceSession);
   const until = Math.min(95, elapsed() + 50);
   result.downloadGesture.mouseReleased = true;
   result.completionDeadlineElapsedSeconds = until;
   save('browser-result.json', result);
   phase('browser download completion');
   await snapshot('browser-download-attempt-page', until, true);
-  await navigateDownloads(until);
+  await createDownloadsObserver(until);
   await waitForDownload(until, path.join(downloads, 'install.sh'));
   result.status = 'passed';
 } catch (error) {
   fail(error);
-  if (session && elapsed() < 105) await Promise.allSettled([snapshot('browser-failure-page'), desktopFailure()]);
-  if (session && !downloadUIAttempted && elapsed() < 105) {
-    try {await navigateDownloads(105); await captureDownloads(105);} catch (observationError) {result.downloadUIError = String(observationError);}
-  } else if (session && result.downloadUI && !result.downloadUI.captureEndElapsedSeconds && elapsed() < 105) {
-    try {await captureDownloads(105);} catch (observationError) {result.downloadUIError = String(observationError);}
-  }
+  if (sourceSession && elapsed() < 105) await Promise.allSettled([snapshot('browser-failure-page'), desktopFailure()]);
 } finally {
   result.mainNavigation = mainNavigation;
   result.explicitRefusal = explicitRefusal;
