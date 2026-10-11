@@ -38,6 +38,9 @@ pub struct SourceRelationsPrepareArguments {
     /// Maximum generated output tokens for each prepared Source task.
     #[arg(long, default_value_t = 4096)]
     pub max_output_tokens: u64,
+    /// Seal every actual request and report finite costs without sending it.
+    #[arg(long)]
+    pub quote: bool,
 }
 #[derive(Debug, Args)]
 pub struct SourceRelationsRunArguments {

@@ -1811,3 +1811,221 @@ fn rejected_probe_corrupt_receipt_and_unresolved_probe_refuse_before_corpus_paym
         assert_eq!(after.budget.dispatched_requests, 1);
     }
 }
+
+#[test]
+fn native_source_relations_offline_quote_seals_actual_input_without_writes_or_credentials() {
+    use lwiki::{domain::Blake3Hash, jobs::*};
+    let f = Fixture::new();
+    let config_dir = tempfile::tempdir().unwrap();
+    let config = config_dir.path().join("providers.toml");
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as i64;
+    let mut card = RateCard {
+        id: "native-mini-quote-fixture".into(),
+        version: 1,
+        fingerprint: provider::hash([]),
+        currency: Currency::new("USD").unwrap(),
+        validity: PriceValidity::DispatchLocked {
+            valid_from_utc_ms: now - 1000,
+            valid_until_utc_ms: now + 86_400_000,
+        },
+        request_fee_nanounits: 0,
+        rates: BTreeMap::from(
+            [
+                (BillableClass::Input, 400_000_000),
+                (BillableClass::CachedInput, 100_000_000),
+                (BillableClass::Output, 1_600_000_000),
+                (BillableClass::Reasoning, 0),
+            ]
+            .map(|(class, price_nanounits)| {
+                (
+                    class,
+                    Rate {
+                        price_nanounits,
+                        per_units: std::num::NonZeroU64::new(1_000_000).unwrap(),
+                    },
+                )
+            }),
+        ),
+    };
+    card.fingerprint = budgets::rate_card_fingerprint(&card).unwrap();
+    let mut prices = format!(
+        "[services.mini.rate_card]\nid={}\nversion=1\nfingerprint={}\ncurrency=\"USD\"\nrequest_fee_nanounits=0\n[services.mini.rate_card.validity]\npricing=\"dispatch_locked\"\nvalid_from_utc_ms={}\nvalid_until_utc_ms={}\n",
+        provider::quote(&card.id),
+        provider::quote(card.fingerprint.as_str()),
+        now - 1000,
+        now + 86_400_000
+    );
+    for (class, rate) in &card.rates {
+        let name = match class {
+            BillableClass::Input => "input",
+            BillableClass::CachedInput => "cached_input",
+            BillableClass::Output => "output",
+            BillableClass::Reasoning => "reasoning",
+        };
+        prices.push_str(&format!(
+            "[services.mini.rate_card.rates.{name}]\nprice_nanounits={}\nper_units={}\n",
+            rate.price_nanounits, rate.per_units
+        ));
+    }
+    let write_config = |model: &str, priced: bool| {
+        provider::private(
+            &config,
+            format!(
+                "version=1\n[profiles.primary]\ngeneration=\"mini\"\n[services.mini]\nadapter=\"responses-v1\"\nurl=\"https://api.openai.com/v1/responses\"\nmodel={}\nrevision=\"native-mini-quote-v1\"\nresponse_mode=\"json-schema\"\nmax_output_tokens=4096\ntimeout_seconds=10\n[services.mini.auth]\nkind=\"static\"\nkey_env=\"EXPLICIT_FIXTURE_TOKEN\"\n{}\n[vault_bindings.test]\nroot={}\nwiki_id=\"vault_test\"\nallowed_profiles=[\"primary\"]\n",
+                provider::quote(model),
+                if priced { prices.as_str() } else { "" },
+                provider::quote(f.temp.path().to_str().unwrap())
+            ),
+        );
+    };
+    write_config("gpt-4.1-mini-2025-04-14", true);
+    let invoke = |args: &[&str], remote: bool, expect_success: bool| -> Value {
+        let mut command =
+            std::process::Command::new(test_paths::binary(env!("CARGO_BIN_EXE_lwiki")));
+        command.args([
+            "--wiki",
+            f.temp.path().to_str().unwrap(),
+            "--json",
+            "--offline",
+        ]);
+        command.env_remove("EXPLICIT_FIXTURE_TOKEN");
+        if remote {
+            command.args(["--profile", "primary"]);
+        }
+        command.args(args);
+        if remote {
+            command.args([
+                "--providers-config",
+                config.to_str().unwrap(),
+                "--max-requests",
+                "1",
+                "--attempts-per-task",
+                "1",
+                "--concurrency",
+                "1",
+                "--deadline-ms",
+                "20000",
+            ]);
+        }
+        let output = command.output().unwrap();
+        let value: Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(
+            output.status.success(),
+            expect_success,
+            "{args:?}: {value}; {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(value["meta"]["network_used"], false);
+        if !expect_success {
+            assert!(!value["error"].is_null(), "{value}");
+            assert!(
+                value["data"]["quote"].is_null(),
+                "partial quote leaked: {value}"
+            );
+        }
+        value
+    };
+    invoke(&["index", "rebuild", "--normalized"], false, true);
+    let before = files(f.temp.path());
+    let source = f.request.export.source_id.as_str();
+    let base = [
+        "relations",
+        "prepare",
+        "--source-id",
+        source,
+        "--max-output-tokens",
+        "4096",
+        "--max-cost",
+        "10",
+    ];
+    let ordinary = invoke(&base, true, true);
+    assert_eq!(files(f.temp.path()), before);
+    let mut quoted_args = base.to_vec();
+    quoted_args.push("--quote");
+    let quoted = invoke(&quoted_args, true, true);
+    assert_eq!(files(f.temp.path()), before);
+    assert_eq!(
+        quoted["data"]["manifest_json"],
+        ordinary["data"]["manifest_json"]
+    );
+    assert_eq!(
+        quoted["data"]["manifest_hash"],
+        ordinary["data"]["manifest_hash"]
+    );
+    assert_eq!(quoted["data"]["sources"], 1);
+    assert_eq!(quoted["data"]["provider_calls"], 0);
+    assert_eq!(quoted["data"]["persisted"], false);
+    let manifest: Value =
+        serde_json::from_str(quoted["data"]["manifest_json"].as_str().unwrap()).unwrap();
+    let quote = &quoted["data"]["quote"];
+    assert_eq!(
+        quote["manifest_hash"],
+        json!(Blake3Hash::digest(
+            quoted["data"]["manifest_json"].as_str().unwrap().as_bytes()
+        ))
+    );
+    assert_eq!(quote["entries"].as_array().unwrap().len(), 1);
+    let entry = &quote["entries"][0];
+    let task = &manifest["entries"][0]["task"];
+    assert_eq!(entry["source_id"], json!(source));
+    assert_eq!(entry["task_key"], task["key"]);
+    assert_eq!(entry["input_descriptor"], task["input"]);
+    assert_eq!(entry["bound"]["input_hash"], task["input_hash"]);
+    assert_eq!(
+        entry["bound"]["config_fingerprint"],
+        manifest["config_fingerprint"]
+    );
+    let bound: AttemptBound = serde_json::from_value(entry["bound"].clone()).unwrap();
+    assert_eq!(
+        bound.bounds_fingerprint,
+        budgets::bound_fingerprint(&bound).unwrap()
+    );
+    assert_ne!(bound.wire_hash, provider::hash([]));
+    assert_eq!(
+        bound.requested_model.as_deref(),
+        Some("gpt-4.1-mini-2025-04-14")
+    );
+    assert!(bound.request_bytes > 0 && bound.request_bytes <= 256 * 1024);
+    assert_eq!(bound.response_bytes, GENERATION_SPOOL_MAX_BYTES);
+    assert_eq!(bound.timeout_ms, 10_000);
+    assert_eq!(
+        bound.quoted_allowance.as_ref().unwrap().nanounits(),
+        530_341_600
+    );
+    assert_eq!(entry["allowance"]["cost"]["nanounits"], 530_341_600);
+    assert_eq!(quote["aggregate_worst_case"]["requests"], 1);
+    assert_eq!(
+        quote["aggregate_worst_case"]["request_bytes"],
+        bound.request_bytes
+    );
+    assert_eq!(
+        quote["aggregate_worst_case"]["response_bytes"],
+        GENERATION_SPOOL_MAX_BYTES
+    );
+    assert_eq!(
+        quote["aggregate_worst_case"]["cost"]["nanounits"],
+        530_341_600
+    );
+    assert_eq!(quote["complete_acquisition_guaranteed"], false);
+    assert_eq!(quote["bound_identity_stage"], "prepared_wire");
+    assert_eq!(quote["aggregate_fits_lifetime_limits"], true);
+    let mut low_cap = quoted_args.clone();
+    let cap = low_cap.iter().position(|v| *v == "--max-cost").unwrap() + 1;
+    low_cap[cap] = "0.5";
+    invoke(&low_cap, true, false);
+    assert_eq!(files(f.temp.path()), before);
+    write_config("gpt-4.1-mini", true);
+    invoke(&quoted_args, true, false);
+    assert_eq!(files(f.temp.path()), before);
+    write_config("gpt-4.1-mini-2025-04-14", false);
+    invoke(&quoted_args, true, false);
+    assert_eq!(files(f.temp.path()), before);
+    write_config("gpt-4.1-mini-2025-04-14", true);
+    let mut missing = quoted_args.clone();
+    missing.extend(["--source-id", "source_missing"]);
+    invoke(&missing, true, false);
+    assert_eq!(files(f.temp.path()), before);
+}

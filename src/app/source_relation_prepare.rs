@@ -9,6 +9,7 @@ use super::{
     source_relation_planning::plan_captured,
     source_relation_preparation::recipe_hash,
     source_relation_preparation_types::*,
+    source_relation_quote::{QuoteBuilder, SourceRelationQuote},
 };
 use crate::{
     catalog::query_types::{QueryCatalog, QueryReadLimits},
@@ -24,6 +25,10 @@ use std::{
     time::Instant,
 };
 const TOTAL_CAPTURE_BYTES: usize = 64 * 1024 * 1024;
+pub(crate) struct PreparedSourceRelations {
+    pub manifest: Vec<u8>,
+    pub quote: Option<SourceRelationQuote>,
+}
 fn check(deadline: Instant) -> Result<()> {
     if Instant::now() >= deadline {
         return Err(WikiError::new(
@@ -234,6 +239,7 @@ fn verify_guards(
     check(deadline)
 }
 impl OfflineApp {
+    #[cfg(test)]
     pub(crate) fn prepare_source_relation_manifest(
         &self,
         source_ids: &[RecordId],
@@ -241,7 +247,22 @@ impl OfflineApp {
         max_output_tokens: u64,
         deadline: Instant,
     ) -> Result<Vec<u8>> {
+        self.prepare_source_relations(source_ids, runtime, max_output_tokens, false, deadline)
+            .map(|prepared| prepared.manifest)
+    }
+
+    pub(crate) fn prepare_source_relations(
+        &self,
+        source_ids: &[RecordId],
+        runtime: &RemoteRuntime,
+        max_output_tokens: u64,
+        quote: bool,
+        deadline: Instant,
+    ) -> Result<PreparedSourceRelations> {
         let ids = unique_ids(source_ids, max_output_tokens, deadline)?;
+        let mut quoting = quote
+            .then(|| QuoteBuilder::new(runtime, deadline))
+            .transpose()?;
         let catalog = self.catalog();
         if catalog.operation_state()?.is_none() {
             return Err(WikiError::new(
@@ -309,6 +330,9 @@ impl OfflineApp {
             }
             reader.check_query_budget()?;
             reader.verify_operations(&catalog)?;
+            if let Some(quoting) = &mut quoting {
+                quoting.push(&source.source_id, &plan.generation, runtime, deadline)?;
+            }
             entries.push(SourceRelationManifestEntry {
                 source,
                 task: plan.generation.task,
@@ -329,8 +353,19 @@ impl OfflineApp {
         // cumulative read allowance and never scans unrelated canonical bodies.
         verify_guards(&self.fs, guards, &mut remaining, deadline)?;
         catalog.guard_query()?;
+        let quote = if let Some(quoting) = quoting {
+            runtime.service.recheck(&self.fs)?;
+            let quote = quoting.finish(runtime, Blake3Hash::digest(&bytes), deadline)?;
+            runtime.service.recheck(&self.fs)?;
+            Some(quote)
+        } else {
+            None
+        };
         check(deadline)?;
-        Ok(bytes)
+        Ok(PreparedSourceRelations {
+            manifest: bytes,
+            quote,
+        })
     }
 }
 #[cfg(test)]

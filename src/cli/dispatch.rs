@@ -710,19 +710,30 @@ fn execute_inner_diagnostic_body(args: &Arguments) -> Result<Envelope> {
             let runtime = remote.runtime(&app, args.profile.as_deref(), Capability::Generate)?;
             match &options.command {
                 SourceRelationsCommand::Prepare(o) => {
-                    let bytes = app.prepare_source_relation_manifest(
+                    let prepared = app.prepare_source_relations(
                         &o.source_ids,
                         &runtime,
                         o.max_output_tokens,
+                        o.quote,
                         deadline,
                     )?;
+                    let bytes = prepared.manifest;
                     let hash = Blake3Hash::digest(&bytes);
                     let text = String::from_utf8(bytes).map_err(|_| {
                         WikiError::new(ErrorCode::Internal, "manifest encoding differs")
                     })?;
                     envelope.data = json!({"manifest_json":text,"manifest_hash":hash,
                         "sources":o.source_ids.len(),"provider_calls":0,"persisted":false});
+                    if let Some(quote) = prepared.quote {
+                        envelope.data["quote"] = value(quote)?;
+                        envelope.warnings.push("Quotes describe one fresh attempt per Source and do not reserve money or grant send authority. A serial lifetime cap can stop acquisition before every Source completes.".into());
+                    }
                     envelope.warnings.push("Save manifest_json verbatim and supply that file with the same --run identity for every resume. Preparation does not send provider requests.".into());
+                    if o.quote {
+                        crate::app::source_relation_quote::check_response_size(
+                            &envelope, deadline,
+                        )?;
+                    }
                 }
                 SourceRelationsCommand::Run(o) => {
                     let bytes = o.manifest_bytes(deadline)?;

@@ -22,6 +22,7 @@ fn prepare_collects_repeated_sources_and_trusted_remote_options() {
         "1024",
         "--max-requests",
         "4",
+        "--quote",
     ])
     .unwrap();
     let SourceRelationsCommand::Prepare(args) = parsed.args.command else {
@@ -30,6 +31,7 @@ fn prepare_collects_repeated_sources_and_trusted_remote_options() {
     assert_eq!(args.source_ids.len(), 2);
     assert_eq!(args.max_output_tokens, 1024);
     assert_eq!(args.remote.max_requests, Some(4));
+    assert!(args.quote);
     assert!(Harness::try_parse_from(["relations", "prepare"]).is_err());
 }
 #[test]

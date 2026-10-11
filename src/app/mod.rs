@@ -63,5 +63,6 @@ pub(crate) mod source_relation_preparation;
 pub(crate) mod source_relation_preparation_types;
 
 pub(crate) mod source_relation_prepare;
+pub(crate) mod source_relation_quote;
 #[cfg(test)]
 mod source_relation_workflow_tests;
