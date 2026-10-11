@@ -100,8 +100,8 @@ and runs the offline smoke workflow with a minimal system PATH. See
 
 - `CI` runs on pull requests, pushes to `main`, and manual dispatch. Linux and
   macOS run the short gate and build candidate archives. Windows compiles the
-  source and test targets and checks build tools. It produces no release archive
-  and does not qualify durable writes or crash recovery.
+  source and test targets. It produces no release archive and does not qualify
+  durable writes or crash recovery.
 - The short Unix gate includes `just test-regressions`: provider, source,
   graph/context, research, shared workflow and storage cases, plus bounded
   conflict-resolution/checkpoint regressions. `just qualify` adds the full

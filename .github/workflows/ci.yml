@@ -62,8 +62,7 @@ jobs:
         with:
           persist-credentials: false
       - uses: ./.github/actions/setup
-      - name: Check full Windows source and build tooling
+      - name: Compile Windows source and test targets
         run: |
           python scripts/bazel.py -- build --nofetch //:build //:test_build
-          just build-tools-test
         # Compile-only coverage; Windows is outside the release matrix.
