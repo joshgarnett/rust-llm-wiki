@@ -42,7 +42,7 @@ fn invoke(root: Option<&Path>, args: &[&str], stdin: Option<&[u8]>) -> (i32, Val
             serde_json::from_str(stream.lines().last().expect("terminal JSONL event")).unwrap();
         terminal["data"].clone()
     });
-    let schema: Value = serde_json::from_str(include_str!("../schemas/output-v1.json")).unwrap();
+    let schema: Value = serde_json::from_str(include_str!("../schemas/output-v2.json")).unwrap();
     jsonschema::validator_for(&schema)
         .unwrap()
         .validate(&envelope)
@@ -1313,7 +1313,15 @@ fn human_search_pagination_and_input_errors_offer_executable_recovery() {
         String::from_utf8_lossy(&next.stderr)
     );
     let next = String::from_utf8(next.stdout).unwrap();
-    assert_ne!(text.lines().nth(1), next.lines().nth(1));
+    let hit_path = |output: &str| {
+        let paths: Vec<_> = output
+            .lines()
+            .filter_map(|line| line.split_once(" — ").map(|(path, _)| path.to_owned()))
+            .collect();
+        assert_eq!(paths.len(), 1, "expected one search hit: {output}");
+        paths.into_iter().next().unwrap()
+    };
+    assert_ne!(hit_path(&text), hit_path(&next));
     let bounded = human(&["search", "irrigation", "--candidates", "1", "--limit", "10"]);
     assert!(bounded.status.success());
     let text = String::from_utf8(bounded.stdout).unwrap();
@@ -1553,6 +1561,33 @@ fn doctor_fixture(normalized: bool) -> tempfile::TempDir {
     temp
 }
 
+fn checkpoint_legacy_cache_without_sidecars(root: &Path) {
+    let database = root.join(".wiki/cache/index.sqlite");
+    // Ordinary catalog connections preserve WAL sidecars. Construct the missing
+    // sidecar case explicitly after flushing every committed fixture frame.
+    let connection = rusqlite::Connection::open(&database).unwrap();
+    let checkpoint: (i64, i64, i64) = connection
+        .query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |row| {
+            Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+        })
+        .unwrap();
+    assert_eq!(checkpoint.0, 0, "fixture checkpoint was busy");
+    assert_eq!(
+        checkpoint.1, checkpoint.2,
+        "fixture checkpoint was incomplete"
+    );
+    connection.close().unwrap();
+    for suffix in ["-wal", "-shm"] {
+        let sidecar = root.join(format!(".wiki/cache/index.sqlite{suffix}"));
+        if sidecar.exists() {
+            if suffix == "-wal" {
+                assert_eq!(fs::metadata(&sidecar).unwrap().len(), 0);
+            }
+            fs::remove_file(sidecar).unwrap();
+        }
+    }
+}
+
 fn assert_doctor_has_no_audit(doctor: &Value) {
     assert!(doctor["check"].is_null(), "{doctor}");
     for field in [
@@ -1688,6 +1723,7 @@ fn doctor_cli_dry_run_probe_preserves_absent_legacy_and_normalized_trees() {
 fn doctor_cli_legacy_wal_without_sidecars_is_present_uninspected_and_read_only() {
     let temp = doctor_fixture(false);
     let root = temp.path();
+    checkpoint_legacy_cache_without_sidecars(root);
     let database = root.join(".wiki/cache/index.sqlite");
     let bytes = fs::read(&database).unwrap();
     assert_eq!(&bytes[..16], b"SQLite format 3\0");
@@ -1811,6 +1847,7 @@ fn doctor_cli_human_summary_states_unperformed_checks_and_quotes_selected_vault(
     )
     .unwrap();
     ok(&root, &["index", "sync"], None);
+    checkpoint_legacy_cache_without_sidecars(&root);
     let output = Command::new(test_paths::binary(env!("CARGO_BIN_EXE_lwiki")))
         .args(["--offline", "--wiki"])
         .arg(&root)

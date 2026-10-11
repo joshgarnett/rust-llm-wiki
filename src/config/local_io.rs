@@ -5,6 +5,24 @@ use std::{
     path::{Component, Path, PathBuf},
 };
 
+#[cfg(test)]
+pub(super) type SyncHook = Box<dyn FnMut(&str, &Path) -> Result<()>>;
+#[cfg(test)]
+std::thread_local! { pub(super) static SYNC_HOOK: std::cell::RefCell<Option<SyncHook>> = const { std::cell::RefCell::new(None) }; }
+fn sync_checkpoint(phase: &str, path: &Path) -> Result<()> {
+    #[cfg(test)]
+    return SYNC_HOOK.with(|hook| {
+        hook.borrow_mut()
+            .as_mut()
+            .map_or(Ok(()), |hook| hook(phase, path))
+    });
+    #[cfg(not(test))]
+    {
+        let _ = (phase, path);
+        Ok(())
+    }
+}
+
 pub(super) fn error(path: &Path, action: &str, error: impl std::fmt::Display) -> WikiError {
     let mut result = WikiError::new(
         ErrorCode::ConfigInvalid,
@@ -286,6 +304,95 @@ mod native {
             }
             Ok(())
         }
+        pub(in crate::config) fn sync(&self) -> Result<()> {
+            self.verify_writable()?;
+            sync_checkpoint("directory", &self.path)?;
+            self.file
+                .sync_all()
+                .map_err(|e| error(&self.path, "sync configuration publication", e))?;
+            self.verify()
+        }
+        /// Confirm an existing publication through held descriptors, including
+        /// its bytes, file identity, ownership and parent-directory durability.
+        pub(in crate::config) fn sync_existing(
+            &self,
+            name: &std::ffi::OsStr,
+            max: usize,
+            expected: &[u8],
+            private: bool,
+        ) -> Result<()> {
+            self.verify_writable()?;
+            let mut file = self.open_file(name, libc::O_RDONLY, 0)?;
+            let before = file
+                .metadata()
+                .map_err(|e| error(&self.path, "inspect existing publication", e))?;
+            if !before.is_file()
+                || before.uid() != unsafe { libc::geteuid() }
+                || before.nlink() != 1
+                || before.len() > max as u64
+                || (private && !protect(&before))
+            {
+                return Err(error(
+                    &self.path,
+                    "sync existing publication",
+                    "bounded owned regular file required; private files must remain private",
+                ));
+            }
+            let mut bytes = Vec::new();
+            Read::by_ref(&mut file)
+                .take(max as u64 + 1)
+                .read_to_end(&mut bytes)
+                .map_err(|e| error(&self.path, "read existing publication", e))?;
+            if bytes != expected {
+                return Err(error(
+                    &self.path,
+                    "sync existing publication",
+                    "file bytes changed",
+                ));
+            }
+            let verify_file = || -> Result<()> {
+                let held = file
+                    .metadata()
+                    .map_err(|e| error(&self.path, "verify existing publication", e))?;
+                let current = self
+                    .open_file(name, libc::O_RDONLY, 0)?
+                    .metadata()
+                    .map_err(|e| error(&self.path, "verify existing publication", e))?;
+                for observed in [&held, &current] {
+                    if !same(&before, observed)
+                        || before.len() != observed.len()
+                        || before.mtime() != observed.mtime()
+                        || before.mtime_nsec() != observed.mtime_nsec()
+                        || before.ctime() != observed.ctime()
+                        || before.ctime_nsec() != observed.ctime_nsec()
+                        || observed.uid() != unsafe { libc::geteuid() }
+                        || observed.nlink() != 1
+                        || (private && !protect(observed))
+                    {
+                        return Err(error(
+                            &self.path,
+                            "sync existing publication",
+                            "file binding changed",
+                        ));
+                    }
+                }
+                if self.read(name, max)?.as_deref() != Some(expected) {
+                    return Err(error(
+                        &self.path,
+                        "sync existing publication",
+                        "file bytes changed",
+                    ));
+                }
+                self.verify()
+            };
+            verify_file()?;
+            sync_checkpoint("existing_file", &self.path)?;
+            file.sync_all()
+                .map_err(|e| error(&self.path, "sync existing file", e))?;
+            verify_file()?;
+            self.sync()?;
+            verify_file()
+        }
         fn open_file(
             &self,
             name: &std::ffi::OsStr,
@@ -313,7 +420,7 @@ mod native {
                 return Err(error(
                     &self.path,
                     "read configuration file",
-                    "bounded regular JSON file required (maximum 64 KiB)",
+                    "bounded regular file required",
                 ));
             }
             let mut bytes = Vec::new();
@@ -346,6 +453,49 @@ mod native {
             }
             self.verify()?;
             Ok(Some(bytes))
+        }
+        pub(in crate::config) fn read_private(
+            &self,
+            name: &std::ffi::OsStr,
+            max: usize,
+        ) -> Result<Option<Vec<u8>>> {
+            let bytes = self.read(name, max)?;
+            if bytes.is_some() {
+                let metadata = self
+                    .open_file(name, libc::O_RDONLY, 0)?
+                    .metadata()
+                    .map_err(|e| error(&self.path, "inspect private file", e))?;
+                if !protect(&metadata) {
+                    return Err(error(
+                        &self.path,
+                        "inspect private file",
+                        "file must be private, owned, regular and unlinked elsewhere",
+                    ));
+                }
+            }
+            Ok(bytes)
+        }
+        pub(in crate::config) fn verify_owned_target(&self) -> Result<()> {
+            let name = self.path.file_name().expect("validated file name");
+            let file = match opened(&self.file, name, libc::O_RDONLY, 0) {
+                Ok(file) => file,
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+                Err(e) => return Err(error(&self.path, "inspect update target", e)),
+            };
+            let metadata = file
+                .metadata()
+                .map_err(|e| error(&self.path, "inspect update target", e))?;
+            if !metadata.is_file()
+                || metadata.uid() != unsafe { libc::geteuid() }
+                || metadata.nlink() != 1
+            {
+                return Err(error(
+                    &self.path,
+                    "inspect update target",
+                    "target must be owned, regular and unlinked elsewhere",
+                ));
+            }
+            Ok(())
         }
         pub(in crate::config) fn lock(&self, timeout_ms: u64) -> Result<Guard> {
             self.verify_writable()?;
@@ -433,7 +583,7 @@ mod native {
                 .map_err(|e| error(&self.path, "sync staged configuration", e))?;
             Ok(stage)
         }
-        fn verify_writable(&self) -> Result<()> {
+        pub(in crate::config) fn verify_writable(&self) -> Result<()> {
             self.verify()?;
             let metadata = self
                 .file
@@ -448,25 +598,34 @@ mod native {
             }
             Ok(())
         }
-        pub(in crate::config) fn preserve_v1(&self, bytes: &[u8], max: usize) -> Result<PathBuf> {
-            let backup = suffixed_name(&self.path, ".v1.bak")?;
+        pub(in crate::config) fn preserve(
+            &self,
+            bytes: &[u8],
+            max: usize,
+            suffix: &str,
+        ) -> Result<PathBuf> {
+            let backup = suffixed_name(&self.path, suffix)?;
             if let Some(existing) = self.read(&backup, max)? {
                 if existing != bytes {
                     return Err(WikiError::new(
                         ErrorCode::ContentConflict,
                         format!(
-                            "v1 configuration preservation file differs: {}",
+                            "configuration preservation file differs: {}",
                             self.path.with_file_name(&backup).display()
                         ),
                     ));
                 }
+                self.open_file(&backup, libc::O_RDONLY, 0)?
+                    .sync_all()
+                    .map_err(|e| error(&self.path, "sync existing configuration backup", e))?;
+                self.sync()?;
                 return Ok(self.path.with_file_name(backup));
             }
             let stage = self.stage(bytes)?;
             let source =
-                name(&stage.name).map_err(|e| error(&self.path, "preserve v1 configuration", e))?;
+                name(&stage.name).map_err(|e| error(&self.path, "preserve configuration", e))?;
             let target =
-                name(&backup).map_err(|e| error(&self.path, "preserve v1 configuration", e))?;
+                name(&backup).map_err(|e| error(&self.path, "preserve configuration", e))?;
             stage.verify()?;
             if unsafe {
                 libc::linkat(
@@ -484,45 +643,79 @@ mod native {
                 {
                     return Err(error(
                         &self.path,
-                        "preserve v1 configuration without overwrite",
+                        "preserve configuration without overwrite",
                         e,
                     ));
                 }
             }
             self.file
                 .sync_all()
-                .map_err(|e| error(&self.path, "sync v1 configuration preservation", e))?;
+                .map_err(|e| error(&self.path, "sync configuration preservation", e))?;
             drop(stage);
             Ok(self.path.with_file_name(backup))
         }
-        pub(in crate::config) fn publish(&self, stage: &mut Stage<'_>) -> Result<()> {
+        pub(in crate::config) fn publish_tracked(
+            &self,
+            stage: &mut Stage<'_>,
+            overwrite: bool,
+            state: &mut PublicationState,
+        ) -> Result<()> {
             stage.verify()?;
             let source =
                 name(&stage.name).map_err(|e| error(&self.path, "replace configuration", e))?;
             let target = name(self.path.file_name().expect("validated file name"))
                 .map_err(|e| error(&self.path, "replace configuration", e))?;
-            if unsafe {
-                libc::renameat(
-                    self.file.as_raw_fd(),
-                    source.as_ptr(),
-                    self.file.as_raw_fd(),
-                    target.as_ptr(),
-                )
-            } < 0
-            {
+            let status = if overwrite {
+                unsafe {
+                    libc::renameat(
+                        self.file.as_raw_fd(),
+                        source.as_ptr(),
+                        self.file.as_raw_fd(),
+                        target.as_ptr(),
+                    )
+                }
+            } else {
+                unsafe {
+                    libc::linkat(
+                        self.file.as_raw_fd(),
+                        source.as_ptr(),
+                        self.file.as_raw_fd(),
+                        target.as_ptr(),
+                        0,
+                    )
+                }
+            };
+            if status < 0 {
                 return Err(error(
                     &self.path,
                     "replace configuration",
                     std::io::Error::last_os_error(),
                 ));
             }
+            state.applied = true;
+            if !overwrite
+                && unsafe { libc::unlinkat(self.file.as_raw_fd(), source.as_ptr(), 0) } < 0
+            {
+                return Err(error(
+                    &self.path,
+                    "remove publication staging name",
+                    std::io::Error::last_os_error(),
+                ));
+            }
             stage.published = true;
+            sync_checkpoint("publication_directory", &self.path)?;
             self.file
                 .sync_all()
                 .map_err(|e| error(&self.path, "sync configuration publication", e))?;
+            state.durable = true;
             self.verify()?;
             Ok(())
         }
+    }
+    #[derive(Default)]
+    pub(in crate::config) struct PublicationState {
+        pub(in crate::config) applied: bool,
+        pub(in crate::config) durable: bool,
     }
     pub(in crate::config) struct Guard {
         pub(in crate::config) file: File,
@@ -593,7 +786,7 @@ mod native {
 }
 
 #[cfg(unix)]
-pub(super) use native::Directory;
+pub(super) use native::{Directory, PublicationState};
 
 #[cfg(not(unix))]
 pub(super) fn unsupported(path: &Path) -> WikiError {

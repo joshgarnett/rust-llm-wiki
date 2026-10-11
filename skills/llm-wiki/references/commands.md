@@ -1,4 +1,4 @@
-# Implemented lwiki 0.2.0 commands
+# Implemented lwiki 0.3.0 commands
 
 Generated from the release command registry and argument parser. Run `lwiki --json capabilities` before use.
 
@@ -11,7 +11,7 @@ Usage: lwiki capabilities [OPTIONS]
 
 Options:
       --wiki <WIKI>
-          Wiki root containing WIKI.md; defaults to discovery from the current directory
+          Wiki root; otherwise select the nearest ancestor WIKI.md, then the saved default
 
       --format <FORMAT>
           Output format: human-readable text, a JSON envelope or JSON Lines events
@@ -34,7 +34,195 @@ Options:
           Retain a guarded preparation for a later explicit changes apply
 
       --preferences <PREFERENCES>
-          Explicit trusted local JSON preferences; never read ambient credentials
+          Select a user configuration file (TOML or legacy JSON)
+
+          [alias: --config]
+
+      --no-user-config
+          Disable ambient user configuration; explicit --preferences still applies
+
+      --expect-wiki-id <EXPECT_WIKI_ID>
+          Refuse a selected wiki whose stable identity differs from this value
+
+      --profile <PROFILE>
+          Trusted provider profile name from the private provider configuration
+
+      --lock-timeout-ms <LOCK_TIMEOUT_MS>
+          Maximum writer-lock wait in milliseconds (default: 5000; preferences may override)
+
+  -h, --help
+          Print help
+
+```
+
+## setup
+
+```text
+Set up your wiki, saved settings and agent support
+
+Usage: lwiki setup [OPTIONS] [PATH]
+
+Arguments:
+  [PATH]
+          Folder for your wiki. An existing wiki is selected safely on repeated runs
+
+Options:
+      --title <TITLE>
+          Title for a new wiki
+
+      --wiki <WIKI>
+          Wiki root; otherwise select the nearest ancestor WIKI.md, then the saved default
+
+      --existing
+          Deliberately initialize an existing notes folder without changing its notes
+
+      --format <FORMAT>
+          Output format: human-readable text, a JSON envelope or JSON Lines events
+
+          [possible values: human, json, jsonl]
+
+      --json
+          Emit one structured JSON envelope
+
+      --select
+          Select an initialized wiki; never create one
+
+      --jsonl
+          Emit JSON Lines events for supported streaming commands
+
+      --no-default
+          Keep the current saved default instead of selecting this wiki
+
+      --non-interactive
+          Use supplied choices without prompts. Optional agent and model setup default to skipped
+
+      --offline
+          Prevent provider requests and credential helper calls; local operations remain available
+
+      --agent <AGENT>
+          Install wiki instructions for codex, claude-code or cursor
+
+          [possible values: codex, claude-code, cursor]
+
+      --dry-run
+          Preview without writes, provider requests or credential resolution
+
+      --agent-scope <AGENT_SCOPE>
+          Install for your user account (default) or one project
+
+          [possible values: user, project]
+
+      --stage
+          Retain a guarded preparation for a later explicit changes apply
+
+      --agent-directory <AGENT_DIRECTORY>
+          Agent home or project folder. Defaults to HOME or the current folder for project scope
+
+      --preferences <PREFERENCES>
+          Select a user configuration file (TOML or legacy JSON)
+
+          [alias: --config]
+
+      --embedding-model <EMBEDDING_MODEL>
+          Optional embedding model name supplied by your provider; makes no requests
+
+      --no-user-config
+          Disable ambient user configuration; explicit --preferences still applies
+
+      --embedding-url <EMBEDDING_URL>
+          Your provider's full embeddings-v1 endpoint URL
+
+      --expect-wiki-id <EXPECT_WIKI_ID>
+          Refuse a selected wiki whose stable identity differs from this value
+
+      --embedding-dimensions <EMBEDDING_DIMENSIONS>
+          Requested vector dimensions, from 1 to 65536, or auto
+
+      --profile <PROFILE>
+          Trusted provider profile name from the private provider configuration
+
+      --key-env <KEY_ENV>
+          Environment variable holding your key. Setup does not read its value
+
+      --lock-timeout-ms <LOCK_TIMEOUT_MS>
+          Maximum writer-lock wait in milliseconds (default: 5000; preferences may override)
+
+      --key-file <KEY_FILE>
+          Existing private key file. Setup stores only its absolute path
+
+      --prompt-key
+          Read your key without displaying it and save it in a private file. Requires a terminal
+
+      --credential-file <CREDENTIAL_FILE>
+          Private file destination for --prompt-key; defaults beside the provider configuration
+
+      --replace-key
+          Deliberately replace an existing key file when using --prompt-key
+
+      --providers-file <PROVIDERS_FILE>
+          Private provider configuration destination; defaults beside your user configuration
+
+      --grant-embed
+          Permit explicit future embedding requests for this wiki and chosen model
+
+      --embedding-document-prefix <EMBEDDING_DOCUMENT_PREFIX>
+          Text added before documents sent for embedding
+
+      --embedding-query-prefix <EMBEDDING_QUERY_PREFIX>
+          Text added before search queries sent for embedding
+
+      --embedding-max-input-bytes <EMBEDDING_MAX_INPUT_BYTES>
+          Maximum UTF-8 input bytes per embedding request
+
+      --embedding-quality-target-bytes <EMBEDDING_QUALITY_TARGET_BYTES>
+          Preferred UTF-8 byte size for splitting long documents into embedding inputs
+
+  -h, --help
+          Print help
+
+```
+
+## config show
+
+```text
+Show configuration paths, effective preferences and provider settings
+
+Usage: lwiki config show [OPTIONS]
+
+Options:
+      --wiki <WIKI>
+          Wiki root; otherwise select the nearest ancestor WIKI.md, then the saved default
+
+      --format <FORMAT>
+          Output format: human-readable text, a JSON envelope or JSON Lines events
+
+          [possible values: human, json, jsonl]
+
+      --json
+          Emit one structured JSON envelope
+
+      --jsonl
+          Emit JSON Lines events for supported streaming commands
+
+      --offline
+          Prevent provider requests and credential helper calls; local operations remain available
+
+      --dry-run
+          Preview without writes, provider requests or credential resolution
+
+      --stage
+          Retain a guarded preparation for a later explicit changes apply
+
+      --preferences <PREFERENCES>
+          Select a user configuration file (TOML or legacy JSON)
+
+          [alias: --config]
+
+      --no-user-config
+          Disable ambient user configuration; explicit --preferences still applies
+
+      --expect-wiki-id <EXPECT_WIKI_ID>
+          Refuse a selected wiki whose stable identity differs from this value
 
       --profile <PROFILE>
           Trusted provider profile name from the private provider configuration
@@ -61,7 +249,7 @@ Options:
           [possible values: codex, claude-code, cursor]
 
       --wiki <WIKI>
-          Wiki root containing WIKI.md; defaults to discovery from the current directory
+          Wiki root; otherwise select the nearest ancestor WIKI.md, then the saved default
 
       --format <FORMAT>
           Output format: human-readable text, a JSON envelope or JSON Lines events
@@ -87,7 +275,283 @@ Options:
           Retain a guarded preparation for a later explicit changes apply
 
       --preferences <PREFERENCES>
-          Explicit trusted local JSON preferences; never read ambient credentials
+          Select a user configuration file (TOML or legacy JSON)
+
+          [alias: --config]
+
+      --no-user-config
+          Disable ambient user configuration; explicit --preferences still applies
+
+      --expect-wiki-id <EXPECT_WIKI_ID>
+          Refuse a selected wiki whose stable identity differs from this value
+
+      --profile <PROFILE>
+          Trusted provider profile name from the private provider configuration
+
+      --lock-timeout-ms <LOCK_TIMEOUT_MS>
+          Maximum writer-lock wait in milliseconds (default: 5000; preferences may override)
+
+  -h, --help
+          Print help
+
+```
+
+## skill install
+
+```text
+Install wiki instructions for an agent
+
+Usage: lwiki skill install [OPTIONS] --target <TARGET>
+
+Options:
+      --target <TARGET>
+          Agent to connect to your wiki
+
+          [possible values: codex, claude-code, cursor]
+
+      --wiki <WIKI>
+          Wiki root; otherwise select the nearest ancestor WIKI.md, then the saved default
+
+      --format <FORMAT>
+          Output format: human-readable text, a JSON envelope or JSON Lines events
+
+          [possible values: human, json, jsonl]
+
+      --scope <SCOPE>
+          Install for your user account or one project
+
+          [default: user]
+          [possible values: user, project]
+
+      --directory <DIRECTORY>
+          Agent home or project folder; defaults to HOME or the current folder for project scope
+
+      --json
+          Emit one structured JSON envelope
+
+      --jsonl
+          Emit JSON Lines events for supported streaming commands
+
+      --offline
+          Prevent provider requests and credential helper calls; local operations remain available
+
+      --dry-run
+          Preview without writes, provider requests or credential resolution
+
+      --stage
+          Retain a guarded preparation for a later explicit changes apply
+
+      --preferences <PREFERENCES>
+          Select a user configuration file (TOML or legacy JSON)
+
+          [alias: --config]
+
+      --no-user-config
+          Disable ambient user configuration; explicit --preferences still applies
+
+      --expect-wiki-id <EXPECT_WIKI_ID>
+          Refuse a selected wiki whose stable identity differs from this value
+
+      --profile <PROFILE>
+          Trusted provider profile name from the private provider configuration
+
+      --lock-timeout-ms <LOCK_TIMEOUT_MS>
+          Maximum writer-lock wait in milliseconds (default: 5000; preferences may override)
+
+  -h, --help
+          Print help
+
+```
+
+## skill status
+
+```text
+Show where an agent's wiki instructions are installed
+
+Usage: lwiki skill status [OPTIONS] --target <TARGET>
+
+Options:
+      --target <TARGET>
+          Agent to connect to your wiki
+
+          [possible values: codex, claude-code, cursor]
+
+      --wiki <WIKI>
+          Wiki root; otherwise select the nearest ancestor WIKI.md, then the saved default
+
+      --format <FORMAT>
+          Output format: human-readable text, a JSON envelope or JSON Lines events
+
+          [possible values: human, json, jsonl]
+
+      --scope <SCOPE>
+          Install for your user account or one project
+
+          [default: user]
+          [possible values: user, project]
+
+      --directory <DIRECTORY>
+          Agent home or project folder; defaults to HOME or the current folder for project scope
+
+      --json
+          Emit one structured JSON envelope
+
+      --jsonl
+          Emit JSON Lines events for supported streaming commands
+
+      --offline
+          Prevent provider requests and credential helper calls; local operations remain available
+
+      --dry-run
+          Preview without writes, provider requests or credential resolution
+
+      --stage
+          Retain a guarded preparation for a later explicit changes apply
+
+      --preferences <PREFERENCES>
+          Select a user configuration file (TOML or legacy JSON)
+
+          [alias: --config]
+
+      --no-user-config
+          Disable ambient user configuration; explicit --preferences still applies
+
+      --expect-wiki-id <EXPECT_WIKI_ID>
+          Refuse a selected wiki whose stable identity differs from this value
+
+      --profile <PROFILE>
+          Trusted provider profile name from the private provider configuration
+
+      --lock-timeout-ms <LOCK_TIMEOUT_MS>
+          Maximum writer-lock wait in milliseconds (default: 5000; preferences may override)
+
+  -h, --help
+          Print help
+
+```
+
+## skill update
+
+```text
+Update installed wiki instructions to this lwiki version
+
+Usage: lwiki skill update [OPTIONS] --target <TARGET>
+
+Options:
+      --target <TARGET>
+          Agent to connect to your wiki
+
+          [possible values: codex, claude-code, cursor]
+
+      --wiki <WIKI>
+          Wiki root; otherwise select the nearest ancestor WIKI.md, then the saved default
+
+      --format <FORMAT>
+          Output format: human-readable text, a JSON envelope or JSON Lines events
+
+          [possible values: human, json, jsonl]
+
+      --scope <SCOPE>
+          Install for your user account or one project
+
+          [default: user]
+          [possible values: user, project]
+
+      --directory <DIRECTORY>
+          Agent home or project folder; defaults to HOME or the current folder for project scope
+
+      --json
+          Emit one structured JSON envelope
+
+      --jsonl
+          Emit JSON Lines events for supported streaming commands
+
+      --offline
+          Prevent provider requests and credential helper calls; local operations remain available
+
+      --dry-run
+          Preview without writes, provider requests or credential resolution
+
+      --stage
+          Retain a guarded preparation for a later explicit changes apply
+
+      --preferences <PREFERENCES>
+          Select a user configuration file (TOML or legacy JSON)
+
+          [alias: --config]
+
+      --no-user-config
+          Disable ambient user configuration; explicit --preferences still applies
+
+      --expect-wiki-id <EXPECT_WIKI_ID>
+          Refuse a selected wiki whose stable identity differs from this value
+
+      --profile <PROFILE>
+          Trusted provider profile name from the private provider configuration
+
+      --lock-timeout-ms <LOCK_TIMEOUT_MS>
+          Maximum writer-lock wait in milliseconds (default: 5000; preferences may override)
+
+  -h, --help
+          Print help
+
+```
+
+## skill remove
+
+```text
+Disconnect an agent while preserving your wiki and unrelated files
+
+Usage: lwiki skill remove [OPTIONS] --target <TARGET>
+
+Options:
+      --target <TARGET>
+          Agent to connect to your wiki
+
+          [possible values: codex, claude-code, cursor]
+
+      --wiki <WIKI>
+          Wiki root; otherwise select the nearest ancestor WIKI.md, then the saved default
+
+      --format <FORMAT>
+          Output format: human-readable text, a JSON envelope or JSON Lines events
+
+          [possible values: human, json, jsonl]
+
+      --scope <SCOPE>
+          Install for your user account or one project
+
+          [default: user]
+          [possible values: user, project]
+
+      --directory <DIRECTORY>
+          Agent home or project folder; defaults to HOME or the current folder for project scope
+
+      --json
+          Emit one structured JSON envelope
+
+      --jsonl
+          Emit JSON Lines events for supported streaming commands
+
+      --offline
+          Prevent provider requests and credential helper calls; local operations remain available
+
+      --dry-run
+          Preview without writes, provider requests or credential resolution
+
+      --stage
+          Retain a guarded preparation for a later explicit changes apply
+
+      --preferences <PREFERENCES>
+          Select a user configuration file (TOML or legacy JSON)
+
+          [alias: --config]
+
+      --no-user-config
+          Disable ambient user configuration; explicit --preferences still applies
+
+      --expect-wiki-id <EXPECT_WIKI_ID>
+          Refuse a selected wiki whose stable identity differs from this value
 
       --profile <PROFILE>
           Trusted provider profile name from the private provider configuration
@@ -113,7 +577,7 @@ Arguments:
 
 Options:
       --wiki <WIKI>
-          Wiki root containing WIKI.md; defaults to discovery from the current directory
+          Wiki root; otherwise select the nearest ancestor WIKI.md, then the saved default
 
       --format <FORMAT>
           Output format: human-readable text, a JSON envelope or JSON Lines events
@@ -136,7 +600,15 @@ Options:
           Retain a guarded preparation for a later explicit changes apply
 
       --preferences <PREFERENCES>
-          Explicit trusted local JSON preferences; never read ambient credentials
+          Select a user configuration file (TOML or legacy JSON)
+
+          [alias: --config]
+
+      --no-user-config
+          Disable ambient user configuration; explicit --preferences still applies
+
+      --expect-wiki-id <EXPECT_WIKI_ID>
+          Refuse a selected wiki whose stable identity differs from this value
 
       --profile <PROFILE>
           Trusted provider profile name from the private provider configuration
@@ -152,13 +624,13 @@ Options:
 ## init
 
 ```text
-Create a new Markdown wiki in a directory that does not exist
+Create a Markdown wiki; existing folders require --existing
 
 Usage: lwiki init [OPTIONS] <PATH>
 
 Arguments:
   <PATH>
-          New wiki directory; initialization refuses an existing path
+          Wiki directory; existing folders require --existing
 
 Options:
       --title <TITLE>
@@ -167,7 +639,66 @@ Options:
           [default: "Local wiki"]
 
       --wiki <WIKI>
-          Wiki root containing WIKI.md; defaults to discovery from the current directory
+          Wiki root; otherwise select the nearest ancestor WIKI.md, then the saved default
+
+      --existing
+          Initialize an existing folder without adopting its notes
+
+      --format <FORMAT>
+          Output format: human-readable text, a JSON envelope or JSON Lines events
+
+          [possible values: human, json, jsonl]
+
+      --json
+          Emit one structured JSON envelope
+
+      --set-default
+          Save this wiki as the fallback for unrelated working directories
+
+      --jsonl
+          Emit JSON Lines events for supported streaming commands
+
+      --offline
+          Prevent provider requests and credential helper calls; local operations remain available
+
+      --dry-run
+          Preview without writes, provider requests or credential resolution
+
+      --stage
+          Retain a guarded preparation for a later explicit changes apply
+
+      --preferences <PREFERENCES>
+          Select a user configuration file (TOML or legacy JSON)
+
+          [alias: --config]
+
+      --no-user-config
+          Disable ambient user configuration; explicit --preferences still applies
+
+      --expect-wiki-id <EXPECT_WIKI_ID>
+          Refuse a selected wiki whose stable identity differs from this value
+
+      --profile <PROFILE>
+          Trusted provider profile name from the private provider configuration
+
+      --lock-timeout-ms <LOCK_TIMEOUT_MS>
+          Maximum writer-lock wait in milliseconds (default: 5000; preferences may override)
+
+  -h, --help
+          Print help
+
+```
+
+## wiki show
+
+```text
+Show canonical root, identity, selection origin and configuration origins
+
+Usage: lwiki wiki show [OPTIONS]
+
+Options:
+      --wiki <WIKI>
+          Wiki root; otherwise select the nearest ancestor WIKI.md, then the saved default
 
       --format <FORMAT>
           Output format: human-readable text, a JSON envelope or JSON Lines events
@@ -190,7 +721,125 @@ Options:
           Retain a guarded preparation for a later explicit changes apply
 
       --preferences <PREFERENCES>
-          Explicit trusted local JSON preferences; never read ambient credentials
+          Select a user configuration file (TOML or legacy JSON)
+
+          [alias: --config]
+
+      --no-user-config
+          Disable ambient user configuration; explicit --preferences still applies
+
+      --expect-wiki-id <EXPECT_WIKI_ID>
+          Refuse a selected wiki whose stable identity differs from this value
+
+      --profile <PROFILE>
+          Trusted provider profile name from the private provider configuration
+
+      --lock-timeout-ms <LOCK_TIMEOUT_MS>
+          Maximum writer-lock wait in milliseconds (default: 5000; preferences may override)
+
+  -h, --help
+          Print help
+
+```
+
+## wiki default set
+
+```text
+Verify and save a wiki path and its current identity
+
+Usage: lwiki wiki default set [OPTIONS] <PATH>
+
+Arguments:
+  <PATH>
+          Existing wiki directory to verify and save as the fallback
+
+Options:
+      --wiki <WIKI>
+          Wiki root; otherwise select the nearest ancestor WIKI.md, then the saved default
+
+      --format <FORMAT>
+          Output format: human-readable text, a JSON envelope or JSON Lines events
+
+          [possible values: human, json, jsonl]
+
+      --json
+          Emit one structured JSON envelope
+
+      --jsonl
+          Emit JSON Lines events for supported streaming commands
+
+      --offline
+          Prevent provider requests and credential helper calls; local operations remain available
+
+      --dry-run
+          Preview without writes, provider requests or credential resolution
+
+      --stage
+          Retain a guarded preparation for a later explicit changes apply
+
+      --preferences <PREFERENCES>
+          Select a user configuration file (TOML or legacy JSON)
+
+          [alias: --config]
+
+      --no-user-config
+          Disable ambient user configuration; explicit --preferences still applies
+
+      --expect-wiki-id <EXPECT_WIKI_ID>
+          Refuse a selected wiki whose stable identity differs from this value
+
+      --profile <PROFILE>
+          Trusted provider profile name from the private provider configuration
+
+      --lock-timeout-ms <LOCK_TIMEOUT_MS>
+          Maximum writer-lock wait in milliseconds (default: 5000; preferences may override)
+
+  -h, --help
+          Print help
+
+```
+
+## wiki default clear
+
+```text
+Clear the saved fallback; preserve other preferences
+
+Usage: lwiki wiki default clear [OPTIONS]
+
+Options:
+      --wiki <WIKI>
+          Wiki root; otherwise select the nearest ancestor WIKI.md, then the saved default
+
+      --format <FORMAT>
+          Output format: human-readable text, a JSON envelope or JSON Lines events
+
+          [possible values: human, json, jsonl]
+
+      --json
+          Emit one structured JSON envelope
+
+      --jsonl
+          Emit JSON Lines events for supported streaming commands
+
+      --offline
+          Prevent provider requests and credential helper calls; local operations remain available
+
+      --dry-run
+          Preview without writes, provider requests or credential resolution
+
+      --stage
+          Retain a guarded preparation for a later explicit changes apply
+
+      --preferences <PREFERENCES>
+          Select a user configuration file (TOML or legacy JSON)
+
+          [alias: --config]
+
+      --no-user-config
+          Disable ambient user configuration; explicit --preferences still applies
+
+      --expect-wiki-id <EXPECT_WIKI_ID>
+          Refuse a selected wiki whose stable identity differs from this value
 
       --profile <PROFILE>
           Trusted provider profile name from the private provider configuration
@@ -215,7 +864,7 @@ Options:
           Select a record by its stable ID
 
       --wiki <WIKI>
-          Wiki root containing WIKI.md; defaults to discovery from the current directory
+          Wiki root; otherwise select the nearest ancestor WIKI.md, then the saved default
 
       --format <FORMAT>
           Output format: human-readable text, a JSON envelope or JSON Lines events
@@ -253,7 +902,144 @@ Options:
           Retain a guarded preparation for a later explicit changes apply
 
       --preferences <PREFERENCES>
-          Explicit trusted local JSON preferences; never read ambient credentials
+          Select a user configuration file (TOML or legacy JSON)
+
+          [alias: --config]
+
+      --no-user-config
+          Disable ambient user configuration; explicit --preferences still applies
+
+      --expect-wiki-id <EXPECT_WIKI_ID>
+          Refuse a selected wiki whose stable identity differs from this value
+
+      --profile <PROFILE>
+          Trusted provider profile name from the private provider configuration
+
+      --lock-timeout-ms <LOCK_TIMEOUT_MS>
+          Maximum writer-lock wait in milliseconds (default: 5000; preferences may override)
+
+  -h, --help
+          Print help
+
+```
+
+## inspect
+
+```text
+Inspect physical bytes and parse diagnostics without an index or evidence claims
+
+Usage: lwiki inspect [OPTIONS] --path <PATH>
+
+Options:
+      --path <PATH>
+          Vault-relative regular file to inspect
+
+      --wiki <WIKI>
+          Wiki root; otherwise select the nearest ancestor WIKI.md, then the saved default
+
+      --format <FORMAT>
+          Output format: human-readable text, a JSON envelope or JSON Lines events
+
+          [possible values: human, json, jsonl]
+
+      --max-bytes <MAX_BYTES>
+          Maximum physical bytes returned (default 65536)
+
+          [default: 65536]
+
+      --json
+          Emit one structured JSON envelope
+
+      --start <START>
+          Start of the zero-based physical byte range
+
+      --end <END>
+          Exclusive end of the physical byte range
+
+      --jsonl
+          Emit JSON Lines events for supported streaming commands
+
+      --offline
+          Prevent provider requests and credential helper calls; local operations remain available
+
+      --dry-run
+          Preview without writes, provider requests or credential resolution
+
+      --stage
+          Retain a guarded preparation for a later explicit changes apply
+
+      --preferences <PREFERENCES>
+          Select a user configuration file (TOML or legacy JSON)
+
+          [alias: --config]
+
+      --no-user-config
+          Disable ambient user configuration; explicit --preferences still applies
+
+      --expect-wiki-id <EXPECT_WIKI_ID>
+          Refuse a selected wiki whose stable identity differs from this value
+
+      --profile <PROFILE>
+          Trusted provider profile name from the private provider configuration
+
+      --lock-timeout-ms <LOCK_TIMEOUT_MS>
+          Maximum writer-lock wait in milliseconds (default: 5000; preferences may override)
+
+  -h, --help
+          Print help
+
+```
+
+## edit
+
+```text
+Apply a reviewed exact-byte patch to an ordinary note or valid Page
+
+Usage: lwiki edit [OPTIONS] --path <PATH> --patch <PATCH> --if-match <IF_MATCH>
+
+Options:
+      --path <PATH>
+          Vault-relative editable note path
+
+      --wiki <WIKI>
+          Wiki root; otherwise select the nearest ancestor WIKI.md, then the saved default
+
+      --format <FORMAT>
+          Output format: human-readable text, a JSON envelope or JSON Lines events
+
+          [possible values: human, json, jsonl]
+
+      --patch <PATCH>
+          Versioned literal-edit JSON patch; inspect schema literal-edit
+
+      --if-match <IF_MATCH>
+          Expected whole-file BLAKE3 hash from inspect; refuses stale edits
+
+      --json
+          Emit one structured JSON envelope
+
+      --jsonl
+          Emit JSON Lines events for supported streaming commands
+
+      --offline
+          Prevent provider requests and credential helper calls; local operations remain available
+
+      --dry-run
+          Preview without writes, provider requests or credential resolution
+
+      --stage
+          Retain a guarded preparation for a later explicit changes apply
+
+      --preferences <PREFERENCES>
+          Select a user configuration file (TOML or legacy JSON)
+
+          [alias: --config]
+
+      --no-user-config
+          Disable ambient user configuration; explicit --preferences still applies
+
+      --expect-wiki-id <EXPECT_WIKI_ID>
+          Refuse a selected wiki whose stable identity differs from this value
 
       --profile <PROFILE>
           Trusted provider profile name from the private provider configuration
@@ -278,7 +1064,7 @@ Options:
           Markdown page file with a valid page envelope; use - for stdin
 
       --wiki <WIKI>
-          Wiki root containing WIKI.md; defaults to discovery from the current directory
+          Wiki root; otherwise select the nearest ancestor WIKI.md, then the saved default
 
       --format <FORMAT>
           Output format: human-readable text, a JSON envelope or JSON Lines events
@@ -310,7 +1096,15 @@ Options:
           Retain a guarded preparation for a later explicit changes apply
 
       --preferences <PREFERENCES>
-          Explicit trusted local JSON preferences; never read ambient credentials
+          Select a user configuration file (TOML or legacy JSON)
+
+          [alias: --config]
+
+      --no-user-config
+          Disable ambient user configuration; explicit --preferences still applies
+
+      --expect-wiki-id <EXPECT_WIKI_ID>
+          Refuse a selected wiki whose stable identity differs from this value
 
       --profile <PROFILE>
           Trusted provider profile name from the private provider configuration
@@ -335,7 +1129,7 @@ Options:
           Plain UTF-8 Markdown body; use - for bounded standard input
 
       --wiki <WIKI>
-          Wiki root containing WIKI.md; defaults to discovery from the current directory
+          Wiki root; otherwise select the nearest ancestor WIKI.md, then the saved default
 
       --format <FORMAT>
           Output format: human-readable text, a JSON envelope or JSON Lines events
@@ -370,7 +1164,15 @@ Options:
           Retain a guarded preparation for a later explicit changes apply
 
       --preferences <PREFERENCES>
-          Explicit trusted local JSON preferences; never read ambient credentials
+          Select a user configuration file (TOML or legacy JSON)
+
+          [alias: --config]
+
+      --no-user-config
+          Disable ambient user configuration; explicit --preferences still applies
+
+      --expect-wiki-id <EXPECT_WIKI_ID>
+          Refuse a selected wiki whose stable identity differs from this value
 
       --profile <PROFILE>
           Trusted provider profile name from the private provider configuration
@@ -395,7 +1197,7 @@ Options:
           JSON request matching schema page-batch; use - for stdin
 
       --wiki <WIKI>
-          Wiki root containing WIKI.md; defaults to discovery from the current directory
+          Wiki root; otherwise select the nearest ancestor WIKI.md, then the saved default
 
       --format <FORMAT>
           Output format: human-readable text, a JSON envelope or JSON Lines events
@@ -418,7 +1220,15 @@ Options:
           Retain a guarded preparation for a later explicit changes apply
 
       --preferences <PREFERENCES>
-          Explicit trusted local JSON preferences; never read ambient credentials
+          Select a user configuration file (TOML or legacy JSON)
+
+          [alias: --config]
+
+      --no-user-config
+          Disable ambient user configuration; explicit --preferences still applies
+
+      --expect-wiki-id <EXPECT_WIKI_ID>
+          Refuse a selected wiki whose stable identity differs from this value
 
       --profile <PROFILE>
           Trusted provider profile name from the private provider configuration
@@ -447,7 +1257,7 @@ Options:
           New vault-relative page path
 
       --wiki <WIKI>
-          Wiki root containing WIKI.md; defaults to discovery from the current directory
+          Wiki root; otherwise select the nearest ancestor WIKI.md, then the saved default
 
       --format <FORMAT>
           Output format: human-readable text, a JSON envelope or JSON Lines events
@@ -473,7 +1283,15 @@ Options:
           Retain a guarded preparation for a later explicit changes apply
 
       --preferences <PREFERENCES>
-          Explicit trusted local JSON preferences; never read ambient credentials
+          Select a user configuration file (TOML or legacy JSON)
+
+          [alias: --config]
+
+      --no-user-config
+          Disable ambient user configuration; explicit --preferences still applies
+
+      --expect-wiki-id <EXPECT_WIKI_ID>
+          Refuse a selected wiki whose stable identity differs from this value
 
       --profile <PROFILE>
           Trusted provider profile name from the private provider configuration
@@ -502,7 +1320,7 @@ Options:
           Human-readable title
 
       --wiki <WIKI>
-          Wiki root containing WIKI.md; defaults to discovery from the current directory
+          Wiki root; otherwise select the nearest ancestor WIKI.md, then the saved default
 
       --format <FORMAT>
           Output format: human-readable text, a JSON envelope or JSON Lines events
@@ -528,7 +1346,15 @@ Options:
           Retain a guarded preparation for a later explicit changes apply
 
       --preferences <PREFERENCES>
-          Explicit trusted local JSON preferences; never read ambient credentials
+          Select a user configuration file (TOML or legacy JSON)
+
+          [alias: --config]
+
+      --no-user-config
+          Disable ambient user configuration; explicit --preferences still applies
+
+      --expect-wiki-id <EXPECT_WIKI_ID>
+          Refuse a selected wiki whose stable identity differs from this value
 
       --profile <PROFILE>
           Trusted provider profile name from the private provider configuration
@@ -546,35 +1372,41 @@ Options:
 ```text
 Capture changed content as a new revision of an existing source
 
-Usage: lwiki source refresh [OPTIONS] --file <FILE> <ID>
+Usage: lwiki source refresh [OPTIONS] --file <FILE> [ID]
 
 Arguments:
-  <ID>
-          Stable record or changeset ID returned by an earlier command
+  [ID]
+          Stable Source ID; alternatively select the managed Source with --path
 
 Options:
-      --file <FILE>
-          Input file; use - to read bounded standard input
+      --path <PATH>
+          Managed Source author path returned by source add (not the editable original)
 
       --wiki <WIKI>
-          Wiki root containing WIKI.md; defaults to discovery from the current directory
+          Wiki root; otherwise select the nearest ancestor WIKI.md, then the saved default
 
       --format <FORMAT>
           Output format: human-readable text, a JSON envelope or JSON Lines events
 
           [possible values: human, json, jsonl]
 
-      --title <TITLE>
-          Human-readable title
+      --input-if-match <INPUT_IF_MATCH>
+          Expected BLAKE3 hash of the explicit input file; required with --path
+
+      --file <FILE>
+          Input file; use - to read bounded standard input
 
       --json
           Emit one structured JSON envelope
 
-      --media-type <MEDIA_TYPE>
-          Explicit media type for the captured input
-
       --jsonl
           Emit JSON Lines events for supported streaming commands
+
+      --title <TITLE>
+          Human-readable title
+
+      --media-type <MEDIA_TYPE>
+          Explicit media type for the captured input
 
       --offline
           Prevent provider requests and credential helper calls; local operations remain available
@@ -586,7 +1418,15 @@ Options:
           Retain a guarded preparation for a later explicit changes apply
 
       --preferences <PREFERENCES>
-          Explicit trusted local JSON preferences; never read ambient credentials
+          Select a user configuration file (TOML or legacy JSON)
+
+          [alias: --config]
+
+      --no-user-config
+          Disable ambient user configuration; explicit --preferences still applies
+
+      --expect-wiki-id <EXPECT_WIKI_ID>
+          Refuse a selected wiki whose stable identity differs from this value
 
       --profile <PROFILE>
           Trusted provider profile name from the private provider configuration
@@ -611,7 +1451,7 @@ Options:
           JSON request; relative member files resolve from its directory
 
       --wiki <WIKI>
-          Wiki root containing WIKI.md; defaults to discovery from the current directory
+          Wiki root; otherwise select the nearest ancestor WIKI.md, then the saved default
 
       --format <FORMAT>
           Output format: human-readable text, a JSON envelope or JSON Lines events
@@ -634,7 +1474,15 @@ Options:
           Retain a guarded preparation for a later explicit changes apply
 
       --preferences <PREFERENCES>
-          Explicit trusted local JSON preferences; never read ambient credentials
+          Select a user configuration file (TOML or legacy JSON)
+
+          [alias: --config]
+
+      --no-user-config
+          Disable ambient user configuration; explicit --preferences still applies
+
+      --expect-wiki-id <EXPECT_WIKI_ID>
+          Refuse a selected wiki whose stable identity differs from this value
 
       --profile <PROFILE>
           Trusted provider profile name from the private provider configuration
@@ -663,7 +1511,7 @@ Options:
           Reason recorded with the withdrawal
 
       --wiki <WIKI>
-          Wiki root containing WIKI.md; defaults to discovery from the current directory
+          Wiki root; otherwise select the nearest ancestor WIKI.md, then the saved default
 
       --format <FORMAT>
           Output format: human-readable text, a JSON envelope or JSON Lines events
@@ -686,7 +1534,15 @@ Options:
           Retain a guarded preparation for a later explicit changes apply
 
       --preferences <PREFERENCES>
-          Explicit trusted local JSON preferences; never read ambient credentials
+          Select a user configuration file (TOML or legacy JSON)
+
+          [alias: --config]
+
+      --no-user-config
+          Disable ambient user configuration; explicit --preferences still applies
+
+      --expect-wiki-id <EXPECT_WIKI_ID>
+          Refuse a selected wiki whose stable identity differs from this value
 
       --profile <PROFILE>
           Trusted provider profile name from the private provider configuration
@@ -711,7 +1567,7 @@ Options:
           JSON Lines local input declarations; relative paths use this list's directory
 
       --wiki <WIKI>
-          Wiki root containing WIKI.md; defaults to discovery from the current directory
+          Wiki root; otherwise select the nearest ancestor WIKI.md, then the saved default
 
       --format <FORMAT>
           Output format: human-readable text, a JSON envelope or JSON Lines events
@@ -737,7 +1593,15 @@ Options:
           Retain a guarded preparation for a later explicit changes apply
 
       --preferences <PREFERENCES>
-          Explicit trusted local JSON preferences; never read ambient credentials
+          Select a user configuration file (TOML or legacy JSON)
+
+          [alias: --config]
+
+      --no-user-config
+          Disable ambient user configuration; explicit --preferences still applies
+
+      --expect-wiki-id <EXPECT_WIKI_ID>
+          Refuse a selected wiki whose stable identity differs from this value
 
       --profile <PROFILE>
           Trusted provider profile name from the private provider configuration
@@ -762,7 +1626,7 @@ Options:
           Immutable manifest produced by source import prepare
 
       --wiki <WIKI>
-          Wiki root containing WIKI.md; defaults to discovery from the current directory
+          Wiki root; otherwise select the nearest ancestor WIKI.md, then the saved default
 
       --format <FORMAT>
           Output format: human-readable text, a JSON envelope or JSON Lines events
@@ -798,7 +1662,15 @@ Options:
           Retain a guarded preparation for a later explicit changes apply
 
       --preferences <PREFERENCES>
-          Explicit trusted local JSON preferences; never read ambient credentials
+          Select a user configuration file (TOML or legacy JSON)
+
+          [alias: --config]
+
+      --no-user-config
+          Disable ambient user configuration; explicit --preferences still applies
+
+      --expect-wiki-id <EXPECT_WIKI_ID>
+          Refuse a selected wiki whose stable identity differs from this value
 
       --profile <PROFILE>
           Trusted provider profile name from the private provider configuration
@@ -823,7 +1695,7 @@ Options:
           Caller-chosen identity supplied to source import run
 
       --wiki <WIKI>
-          Wiki root containing WIKI.md; defaults to discovery from the current directory
+          Wiki root; otherwise select the nearest ancestor WIKI.md, then the saved default
 
       --format <FORMAT>
           Output format: human-readable text, a JSON envelope or JSON Lines events
@@ -851,7 +1723,15 @@ Options:
           Retain a guarded preparation for a later explicit changes apply
 
       --preferences <PREFERENCES>
-          Explicit trusted local JSON preferences; never read ambient credentials
+          Select a user configuration file (TOML or legacy JSON)
+
+          [alias: --config]
+
+      --no-user-config
+          Disable ambient user configuration; explicit --preferences still applies
+
+      --expect-wiki-id <EXPECT_WIKI_ID>
+          Refuse a selected wiki whose stable identity differs from this value
 
       --profile <PROFILE>
           Trusted provider profile name from the private provider configuration
@@ -876,7 +1756,7 @@ Options:
           Caller-chosen identity supplied to source import run
 
       --wiki <WIKI>
-          Wiki root containing WIKI.md; defaults to discovery from the current directory
+          Wiki root; otherwise select the nearest ancestor WIKI.md, then the saved default
 
       --format <FORMAT>
           Output format: human-readable text, a JSON envelope or JSON Lines events
@@ -899,7 +1779,15 @@ Options:
           Retain a guarded preparation for a later explicit changes apply
 
       --preferences <PREFERENCES>
-          Explicit trusted local JSON preferences; never read ambient credentials
+          Select a user configuration file (TOML or legacy JSON)
+
+          [alias: --config]
+
+      --no-user-config
+          Disable ambient user configuration; explicit --preferences still applies
+
+      --expect-wiki-id <EXPECT_WIKI_ID>
+          Refuse a selected wiki whose stable identity differs from this value
 
       --profile <PROFILE>
           Trusted provider profile name from the private provider configuration
@@ -928,7 +1816,7 @@ Options:
           Target immutable source revision ID
 
       --wiki <WIKI>
-          Wiki root containing WIKI.md; defaults to discovery from the current directory
+          Wiki root; otherwise select the nearest ancestor WIKI.md, then the saved default
 
       --format <FORMAT>
           Output format: human-readable text, a JSON envelope or JSON Lines events
@@ -954,7 +1842,15 @@ Options:
           Retain a guarded preparation for a later explicit changes apply
 
       --preferences <PREFERENCES>
-          Explicit trusted local JSON preferences; never read ambient credentials
+          Select a user configuration file (TOML or legacy JSON)
+
+          [alias: --config]
+
+      --no-user-config
+          Disable ambient user configuration; explicit --preferences still applies
+
+      --expect-wiki-id <EXPECT_WIKI_ID>
+          Refuse a selected wiki whose stable identity differs from this value
 
       --profile <PROFILE>
           Trusted provider profile name from the private provider configuration
@@ -976,7 +1872,7 @@ Usage: lwiki index sync [OPTIONS]
 
 Options:
       --wiki <WIKI>
-          Wiki root containing WIKI.md; defaults to discovery from the current directory
+          Wiki root; otherwise select the nearest ancestor WIKI.md, then the saved default
 
       --format <FORMAT>
           Output format: human-readable text, a JSON envelope or JSON Lines events
@@ -999,7 +1895,15 @@ Options:
           Retain a guarded preparation for a later explicit changes apply
 
       --preferences <PREFERENCES>
-          Explicit trusted local JSON preferences; never read ambient credentials
+          Select a user configuration file (TOML or legacy JSON)
+
+          [alias: --config]
+
+      --no-user-config
+          Disable ambient user configuration; explicit --preferences still applies
+
+      --expect-wiki-id <EXPECT_WIKI_ID>
+          Refuse a selected wiki whose stable identity differs from this value
 
       --profile <PROFILE>
           Trusted provider profile name from the private provider configuration
@@ -1024,7 +1928,7 @@ Options:
           Use the normalized catalog; currently supports cached lexical reads and source refresh
 
       --wiki <WIKI>
-          Wiki root containing WIKI.md; defaults to discovery from the current directory
+          Wiki root; otherwise select the nearest ancestor WIKI.md, then the saved default
 
       --format <FORMAT>
           Output format: human-readable text, a JSON envelope or JSON Lines events
@@ -1047,7 +1951,15 @@ Options:
           Retain a guarded preparation for a later explicit changes apply
 
       --preferences <PREFERENCES>
-          Explicit trusted local JSON preferences; never read ambient credentials
+          Select a user configuration file (TOML or legacy JSON)
+
+          [alias: --config]
+
+      --no-user-config
+          Disable ambient user configuration; explicit --preferences still applies
+
+      --expect-wiki-id <EXPECT_WIKI_ID>
+          Refuse a selected wiki whose stable identity differs from this value
 
       --profile <PROFILE>
           Trusted provider profile name from the private provider configuration
@@ -1072,7 +1984,7 @@ Options:
           Private TOML configuration; never discover provider files inside a vault
 
       --wiki <WIKI>
-          Wiki root containing WIKI.md; defaults to discovery from the current directory
+          Wiki root; otherwise select the nearest ancestor WIKI.md, then the saved default
 
       --format <FORMAT>
           Output format: human-readable text, a JSON envelope or JSON Lines events
@@ -1116,16 +2028,18 @@ Options:
           Lifetime ceiling for each input and cached-input billable class
 
       --preferences <PREFERENCES>
-          Explicit trusted local JSON preferences; never read ambient credentials
+          Select a user configuration file (TOML or legacy JSON)
+
+          [alias: --config]
 
       --max-output-units <MAX_OUTPUT_UNITS>
           Lifetime ceiling for each output and reasoning billable class
 
-      --profile <PROFILE>
-          Trusted provider profile name from the private provider configuration
+      --no-user-config
+          Disable ambient user configuration; explicit --preferences still applies
 
-      --lock-timeout-ms <LOCK_TIMEOUT_MS>
-          Maximum writer-lock wait in milliseconds (default: 5000; preferences may override)
+      --expect-wiki-id <EXPECT_WIKI_ID>
+          Refuse a selected wiki whose stable identity differs from this value
 
       --max-cost <MAX_COST>
           Checked decimal ceiling; requires a complete provable provider bound
@@ -1133,7 +2047,11 @@ Options:
       --currency <CURRENCY>
           Currency code used with --max-cost
 
-          [default: USD]
+      --profile <PROFILE>
+          Trusted provider profile name from the private provider configuration
+
+      --lock-timeout-ms <LOCK_TIMEOUT_MS>
+          Maximum writer-lock wait in milliseconds (default: 5000; preferences may override)
 
       --requests-per-minute <REQUESTS_PER_MINUTE>
           Maximum provider requests dispatched per minute
@@ -1155,6 +2073,9 @@ Options:
 
           [default: 4096]
 
+      --quote
+          Seal every actual request and report finite costs without sending it
+
   -h, --help
           Print help
 
@@ -1172,7 +2093,7 @@ Options:
           Private TOML configuration; never discover provider files inside a vault
 
       --wiki <WIKI>
-          Wiki root containing WIKI.md; defaults to discovery from the current directory
+          Wiki root; otherwise select the nearest ancestor WIKI.md, then the saved default
 
       --format <FORMAT>
           Output format: human-readable text, a JSON envelope or JSON Lines events
@@ -1216,16 +2137,18 @@ Options:
           Lifetime ceiling for each input and cached-input billable class
 
       --preferences <PREFERENCES>
-          Explicit trusted local JSON preferences; never read ambient credentials
+          Select a user configuration file (TOML or legacy JSON)
+
+          [alias: --config]
 
       --max-output-units <MAX_OUTPUT_UNITS>
           Lifetime ceiling for each output and reasoning billable class
 
-      --profile <PROFILE>
-          Trusted provider profile name from the private provider configuration
+      --no-user-config
+          Disable ambient user configuration; explicit --preferences still applies
 
-      --lock-timeout-ms <LOCK_TIMEOUT_MS>
-          Maximum writer-lock wait in milliseconds (default: 5000; preferences may override)
+      --expect-wiki-id <EXPECT_WIKI_ID>
+          Refuse a selected wiki whose stable identity differs from this value
 
       --max-cost <MAX_COST>
           Checked decimal ceiling; requires a complete provable provider bound
@@ -1233,7 +2156,11 @@ Options:
       --currency <CURRENCY>
           Currency code used with --max-cost
 
-          [default: USD]
+      --profile <PROFILE>
+          Trusted provider profile name from the private provider configuration
+
+      --lock-timeout-ms <LOCK_TIMEOUT_MS>
+          Maximum writer-lock wait in milliseconds (default: 5000; preferences may override)
 
       --requests-per-minute <REQUESTS_PER_MINUTE>
           Maximum provider requests dispatched per minute
@@ -1274,10 +2201,8 @@ Options:
       --document-prefix <DOCUMENT_PREFIX>
           Text prepended to document embedding inputs; part of the embedding space identity
 
-          [default: ""]
-
       --wiki <WIKI>
-          Wiki root containing WIKI.md; defaults to discovery from the current directory
+          Wiki root; otherwise select the nearest ancestor WIKI.md, then the saved default
 
       --format <FORMAT>
           Output format: human-readable text, a JSON envelope or JSON Lines events
@@ -1287,15 +2212,11 @@ Options:
       --query-prefix <QUERY_PREFIX>
           Text prepended to query embedding inputs; part of the embedding space identity
 
-          [default: ""]
-
       --json
           Emit one structured JSON envelope
 
       --max-input-bytes <MAX_INPUT_BYTES>
           Maximum UTF-8 bytes per embedding input
-
-          [default: 12000]
 
       --jsonl
           Emit JSON Lines events for supported streaming commands
@@ -1325,22 +2246,30 @@ Options:
           Maximum attempts for an individual provider task
 
       --preferences <PREFERENCES>
-          Explicit trusted local JSON preferences; never read ambient credentials
+          Select a user configuration file (TOML or legacy JSON)
+
+          [alias: --config]
 
       --deadline-ms <DEADLINE_MS>
           Overall remote operation deadline in milliseconds from startup
 
-      --profile <PROFILE>
-          Trusted provider profile name from the private provider configuration
+      --no-user-config
+          Disable ambient user configuration; explicit --preferences still applies
 
-      --lock-timeout-ms <LOCK_TIMEOUT_MS>
-          Maximum writer-lock wait in milliseconds (default: 5000; preferences may override)
+      --expect-wiki-id <EXPECT_WIKI_ID>
+          Refuse a selected wiki whose stable identity differs from this value
 
       --max-request-bytes <MAX_REQUEST_BYTES>
           Lifetime ceiling on outgoing request bytes
 
       --max-response-bytes <MAX_RESPONSE_BYTES>
           Lifetime ceiling on incoming response bytes
+
+      --profile <PROFILE>
+          Trusted provider profile name from the private provider configuration
+
+      --lock-timeout-ms <LOCK_TIMEOUT_MS>
+          Maximum writer-lock wait in milliseconds (default: 5000; preferences may override)
 
       --max-input-units <MAX_INPUT_UNITS>
           Lifetime ceiling for each input and cached-input billable class
@@ -1353,8 +2282,6 @@ Options:
 
       --currency <CURRENCY>
           Currency code used with --max-cost
-
-          [default: USD]
 
       --requests-per-minute <REQUESTS_PER_MINUTE>
           Maximum provider requests dispatched per minute
@@ -1387,10 +2314,8 @@ Options:
       --document-prefix <DOCUMENT_PREFIX>
           Text prepended to document embedding inputs; part of the embedding space identity
 
-          [default: ""]
-
       --wiki <WIKI>
-          Wiki root containing WIKI.md; defaults to discovery from the current directory
+          Wiki root; otherwise select the nearest ancestor WIKI.md, then the saved default
 
       --format <FORMAT>
           Output format: human-readable text, a JSON envelope or JSON Lines events
@@ -1400,15 +2325,11 @@ Options:
       --query-prefix <QUERY_PREFIX>
           Text prepended to query embedding inputs; part of the embedding space identity
 
-          [default: ""]
-
       --json
           Emit one structured JSON envelope
 
       --max-input-bytes <MAX_INPUT_BYTES>
           Maximum UTF-8 bytes per embedding input
-
-          [default: 12000]
 
       --jsonl
           Emit JSON Lines events for supported streaming commands
@@ -1438,22 +2359,30 @@ Options:
           Maximum attempts for an individual provider task
 
       --preferences <PREFERENCES>
-          Explicit trusted local JSON preferences; never read ambient credentials
+          Select a user configuration file (TOML or legacy JSON)
+
+          [alias: --config]
 
       --deadline-ms <DEADLINE_MS>
           Overall remote operation deadline in milliseconds from startup
 
-      --profile <PROFILE>
-          Trusted provider profile name from the private provider configuration
+      --no-user-config
+          Disable ambient user configuration; explicit --preferences still applies
 
-      --lock-timeout-ms <LOCK_TIMEOUT_MS>
-          Maximum writer-lock wait in milliseconds (default: 5000; preferences may override)
+      --expect-wiki-id <EXPECT_WIKI_ID>
+          Refuse a selected wiki whose stable identity differs from this value
 
       --max-request-bytes <MAX_REQUEST_BYTES>
           Lifetime ceiling on outgoing request bytes
 
       --max-response-bytes <MAX_RESPONSE_BYTES>
           Lifetime ceiling on incoming response bytes
+
+      --profile <PROFILE>
+          Trusted provider profile name from the private provider configuration
+
+      --lock-timeout-ms <LOCK_TIMEOUT_MS>
+          Maximum writer-lock wait in milliseconds (default: 5000; preferences may override)
 
       --max-input-units <MAX_INPUT_UNITS>
           Lifetime ceiling for each input and cached-input billable class
@@ -1466,8 +2395,6 @@ Options:
 
       --currency <CURRENCY>
           Currency code used with --max-cost
-
-          [default: USD]
 
       --requests-per-minute <REQUESTS_PER_MINUTE>
           Maximum provider requests dispatched per minute
@@ -1504,7 +2431,7 @@ Options:
           [possible values: entities]
 
       --wiki <WIKI>
-          Wiki root containing WIKI.md; defaults to discovery from the current directory
+          Wiki root; otherwise select the nearest ancestor WIKI.md, then the saved default
 
       --format <FORMAT>
           Output format: human-readable text, a JSON envelope or JSON Lines events
@@ -1548,16 +2475,18 @@ Options:
           Lifetime ceiling on incoming response bytes
 
       --preferences <PREFERENCES>
-          Explicit trusted local JSON preferences; never read ambient credentials
+          Select a user configuration file (TOML or legacy JSON)
+
+          [alias: --config]
 
       --max-input-units <MAX_INPUT_UNITS>
           Lifetime ceiling for each input and cached-input billable class
 
-      --profile <PROFILE>
-          Trusted provider profile name from the private provider configuration
+      --no-user-config
+          Disable ambient user configuration; explicit --preferences still applies
 
-      --lock-timeout-ms <LOCK_TIMEOUT_MS>
-          Maximum writer-lock wait in milliseconds (default: 5000; preferences may override)
+      --expect-wiki-id <EXPECT_WIKI_ID>
+          Refuse a selected wiki whose stable identity differs from this value
 
       --max-output-units <MAX_OUTPUT_UNITS>
           Lifetime ceiling for each output and reasoning billable class
@@ -1565,10 +2494,14 @@ Options:
       --max-cost <MAX_COST>
           Checked decimal ceiling; requires a complete provable provider bound
 
+      --profile <PROFILE>
+          Trusted provider profile name from the private provider configuration
+
       --currency <CURRENCY>
           Currency code used with --max-cost
 
-          [default: USD]
+      --lock-timeout-ms <LOCK_TIMEOUT_MS>
+          Maximum writer-lock wait in milliseconds (default: 5000; preferences may override)
 
       --requests-per-minute <REQUESTS_PER_MINUTE>
           Maximum provider requests dispatched per minute
@@ -1657,7 +2590,7 @@ Options:
           [possible values: entities]
 
       --wiki <WIKI>
-          Wiki root containing WIKI.md; defaults to discovery from the current directory
+          Wiki root; otherwise select the nearest ancestor WIKI.md, then the saved default
 
       --format <FORMAT>
           Output format: human-readable text, a JSON envelope or JSON Lines events
@@ -1701,16 +2634,18 @@ Options:
           Lifetime ceiling on incoming response bytes
 
       --preferences <PREFERENCES>
-          Explicit trusted local JSON preferences; never read ambient credentials
+          Select a user configuration file (TOML or legacy JSON)
+
+          [alias: --config]
 
       --max-input-units <MAX_INPUT_UNITS>
           Lifetime ceiling for each input and cached-input billable class
 
-      --profile <PROFILE>
-          Trusted provider profile name from the private provider configuration
+      --no-user-config
+          Disable ambient user configuration; explicit --preferences still applies
 
-      --lock-timeout-ms <LOCK_TIMEOUT_MS>
-          Maximum writer-lock wait in milliseconds (default: 5000; preferences may override)
+      --expect-wiki-id <EXPECT_WIKI_ID>
+          Refuse a selected wiki whose stable identity differs from this value
 
       --max-output-units <MAX_OUTPUT_UNITS>
           Lifetime ceiling for each output and reasoning billable class
@@ -1718,10 +2653,14 @@ Options:
       --max-cost <MAX_COST>
           Checked decimal ceiling; requires a complete provable provider bound
 
+      --profile <PROFILE>
+          Trusted provider profile name from the private provider configuration
+
       --currency <CURRENCY>
           Currency code used with --max-cost
 
-          [default: USD]
+      --lock-timeout-ms <LOCK_TIMEOUT_MS>
+          Maximum writer-lock wait in milliseconds (default: 5000; preferences may override)
 
       --requests-per-minute <REQUESTS_PER_MINUTE>
           Maximum provider requests dispatched per minute
@@ -1915,7 +2854,7 @@ Options:
           Private TOML configuration; never discover provider files inside a vault
 
       --wiki <WIKI>
-          Wiki root containing WIKI.md; defaults to discovery from the current directory
+          Wiki root; otherwise select the nearest ancestor WIKI.md, then the saved default
 
       --format <FORMAT>
           Output format: human-readable text, a JSON envelope or JSON Lines events
@@ -1959,16 +2898,18 @@ Options:
           Lifetime ceiling for each input and cached-input billable class
 
       --preferences <PREFERENCES>
-          Explicit trusted local JSON preferences; never read ambient credentials
+          Select a user configuration file (TOML or legacy JSON)
+
+          [alias: --config]
 
       --max-output-units <MAX_OUTPUT_UNITS>
           Lifetime ceiling for each output and reasoning billable class
 
-      --profile <PROFILE>
-          Trusted provider profile name from the private provider configuration
+      --no-user-config
+          Disable ambient user configuration; explicit --preferences still applies
 
-      --lock-timeout-ms <LOCK_TIMEOUT_MS>
-          Maximum writer-lock wait in milliseconds (default: 5000; preferences may override)
+      --expect-wiki-id <EXPECT_WIKI_ID>
+          Refuse a selected wiki whose stable identity differs from this value
 
       --max-cost <MAX_COST>
           Checked decimal ceiling; requires a complete provable provider bound
@@ -1976,7 +2917,11 @@ Options:
       --currency <CURRENCY>
           Currency code used with --max-cost
 
-          [default: USD]
+      --profile <PROFILE>
+          Trusted provider profile name from the private provider configuration
+
+      --lock-timeout-ms <LOCK_TIMEOUT_MS>
+          Maximum writer-lock wait in milliseconds (default: 5000; preferences may override)
 
       --requests-per-minute <REQUESTS_PER_MINUTE>
           Maximum provider requests dispatched per minute
@@ -2051,7 +2996,7 @@ Options:
           Packet-bound extraction response JSON; use - for stdin
 
       --wiki <WIKI>
-          Wiki root containing WIKI.md; defaults to discovery from the current directory
+          Wiki root; otherwise select the nearest ancestor WIKI.md, then the saved default
 
       --format <FORMAT>
           Output format: human-readable text, a JSON envelope or JSON Lines events
@@ -2077,7 +3022,15 @@ Options:
           Retain a guarded preparation for a later explicit changes apply
 
       --preferences <PREFERENCES>
-          Explicit trusted local JSON preferences; never read ambient credentials
+          Select a user configuration file (TOML or legacy JSON)
+
+          [alias: --config]
+
+      --no-user-config
+          Disable ambient user configuration; explicit --preferences still applies
+
+      --expect-wiki-id <EXPECT_WIKI_ID>
+          Refuse a selected wiki whose stable identity differs from this value
 
       --profile <PROFILE>
           Trusted provider profile name from the private provider configuration
@@ -2102,7 +3055,7 @@ Options:
           Strict lwiki.graph-resolution.v1 JSON; use - for stdin
 
       --wiki <WIKI>
-          Wiki root containing WIKI.md; defaults to discovery from the current directory
+          Wiki root; otherwise select the nearest ancestor WIKI.md, then the saved default
 
       --format <FORMAT>
           Output format: human-readable text, a JSON envelope or JSON Lines events
@@ -2125,7 +3078,15 @@ Options:
           Retain a guarded preparation for a later explicit changes apply
 
       --preferences <PREFERENCES>
-          Explicit trusted local JSON preferences; never read ambient credentials
+          Select a user configuration file (TOML or legacy JSON)
+
+          [alias: --config]
+
+      --no-user-config
+          Disable ambient user configuration; explicit --preferences still applies
+
+      --expect-wiki-id <EXPECT_WIKI_ID>
+          Refuse a selected wiki whose stable identity differs from this value
 
       --profile <PROFILE>
           Trusted provider profile name from the private provider configuration
@@ -2150,7 +3111,7 @@ Options:
           Strict lwiki.entity-decisions.v1 JSON; use - for stdin
 
       --wiki <WIKI>
-          Wiki root containing WIKI.md; defaults to discovery from the current directory
+          Wiki root; otherwise select the nearest ancestor WIKI.md, then the saved default
 
       --format <FORMAT>
           Output format: human-readable text, a JSON envelope or JSON Lines events
@@ -2173,7 +3134,15 @@ Options:
           Retain a guarded preparation for a later explicit changes apply
 
       --preferences <PREFERENCES>
-          Explicit trusted local JSON preferences; never read ambient credentials
+          Select a user configuration file (TOML or legacy JSON)
+
+          [alias: --config]
+
+      --no-user-config
+          Disable ambient user configuration; explicit --preferences still applies
+
+      --expect-wiki-id <EXPECT_WIKI_ID>
+          Refuse a selected wiki whose stable identity differs from this value
 
       --profile <PROFILE>
           Trusted provider profile name from the private provider configuration
@@ -2198,7 +3167,7 @@ Options:
           Strict lwiki.graph-review.v1 JSON; use - for stdin
 
       --wiki <WIKI>
-          Wiki root containing WIKI.md; defaults to discovery from the current directory
+          Wiki root; otherwise select the nearest ancestor WIKI.md, then the saved default
 
       --format <FORMAT>
           Output format: human-readable text, a JSON envelope or JSON Lines events
@@ -2221,7 +3190,15 @@ Options:
           Retain a guarded preparation for a later explicit changes apply
 
       --preferences <PREFERENCES>
-          Explicit trusted local JSON preferences; never read ambient credentials
+          Select a user configuration file (TOML or legacy JSON)
+
+          [alias: --config]
+
+      --no-user-config
+          Disable ambient user configuration; explicit --preferences still applies
+
+      --expect-wiki-id <EXPECT_WIKI_ID>
+          Refuse a selected wiki whose stable identity differs from this value
 
       --profile <PROFILE>
           Trusted provider profile name from the private provider configuration
@@ -2250,7 +3227,7 @@ Options:
           Private TOML configuration; never discover provider files inside a vault
 
       --wiki <WIKI>
-          Wiki root containing WIKI.md; defaults to discovery from the current directory
+          Wiki root; otherwise select the nearest ancestor WIKI.md, then the saved default
 
       --format <FORMAT>
           Output format: human-readable text, a JSON envelope or JSON Lines events
@@ -2294,16 +3271,18 @@ Options:
           Lifetime ceiling for each input and cached-input billable class
 
       --preferences <PREFERENCES>
-          Explicit trusted local JSON preferences; never read ambient credentials
+          Select a user configuration file (TOML or legacy JSON)
+
+          [alias: --config]
 
       --max-output-units <MAX_OUTPUT_UNITS>
           Lifetime ceiling for each output and reasoning billable class
 
-      --profile <PROFILE>
-          Trusted provider profile name from the private provider configuration
+      --no-user-config
+          Disable ambient user configuration; explicit --preferences still applies
 
-      --lock-timeout-ms <LOCK_TIMEOUT_MS>
-          Maximum writer-lock wait in milliseconds (default: 5000; preferences may override)
+      --expect-wiki-id <EXPECT_WIKI_ID>
+          Refuse a selected wiki whose stable identity differs from this value
 
       --max-cost <MAX_COST>
           Checked decimal ceiling; requires a complete provable provider bound
@@ -2311,7 +3290,11 @@ Options:
       --currency <CURRENCY>
           Currency code used with --max-cost
 
-          [default: USD]
+      --profile <PROFILE>
+          Trusted provider profile name from the private provider configuration
+
+      --lock-timeout-ms <LOCK_TIMEOUT_MS>
+          Maximum writer-lock wait in milliseconds (default: 5000; preferences may override)
 
       --requests-per-minute <REQUESTS_PER_MINUTE>
           Maximum provider requests dispatched per minute
@@ -2439,7 +3422,7 @@ Options:
           Private TOML configuration; never discover provider files inside a vault
 
       --wiki <WIKI>
-          Wiki root containing WIKI.md; defaults to discovery from the current directory
+          Wiki root; otherwise select the nearest ancestor WIKI.md, then the saved default
 
       --format <FORMAT>
           Output format: human-readable text, a JSON envelope or JSON Lines events
@@ -2483,16 +3466,18 @@ Options:
           Lifetime ceiling for each input and cached-input billable class
 
       --preferences <PREFERENCES>
-          Explicit trusted local JSON preferences; never read ambient credentials
+          Select a user configuration file (TOML or legacy JSON)
+
+          [alias: --config]
 
       --max-output-units <MAX_OUTPUT_UNITS>
           Lifetime ceiling for each output and reasoning billable class
 
-      --profile <PROFILE>
-          Trusted provider profile name from the private provider configuration
+      --no-user-config
+          Disable ambient user configuration; explicit --preferences still applies
 
-      --lock-timeout-ms <LOCK_TIMEOUT_MS>
-          Maximum writer-lock wait in milliseconds (default: 5000; preferences may override)
+      --expect-wiki-id <EXPECT_WIKI_ID>
+          Refuse a selected wiki whose stable identity differs from this value
 
       --max-cost <MAX_COST>
           Checked decimal ceiling; requires a complete provable provider bound
@@ -2500,7 +3485,11 @@ Options:
       --currency <CURRENCY>
           Currency code used with --max-cost
 
-          [default: USD]
+      --profile <PROFILE>
+          Trusted provider profile name from the private provider configuration
+
+      --lock-timeout-ms <LOCK_TIMEOUT_MS>
+          Maximum writer-lock wait in milliseconds (default: 5000; preferences may override)
 
       --requests-per-minute <REQUESTS_PER_MINUTE>
           Maximum provider requests dispatched per minute
@@ -2621,7 +3610,7 @@ Usage: lwiki check [OPTIONS]
 
 Options:
       --wiki <WIKI>
-          Wiki root containing WIKI.md; defaults to discovery from the current directory
+          Wiki root; otherwise select the nearest ancestor WIKI.md, then the saved default
 
       --format <FORMAT>
           Output format: human-readable text, a JSON envelope or JSON Lines events
@@ -2644,7 +3633,15 @@ Options:
           Retain a guarded preparation for a later explicit changes apply
 
       --preferences <PREFERENCES>
-          Explicit trusted local JSON preferences; never read ambient credentials
+          Select a user configuration file (TOML or legacy JSON)
+
+          [alias: --config]
+
+      --no-user-config
+          Disable ambient user configuration; explicit --preferences still applies
+
+      --expect-wiki-id <EXPECT_WIKI_ID>
+          Refuse a selected wiki whose stable identity differs from this value
 
       --profile <PROFILE>
           Trusted provider profile name from the private provider configuration
@@ -2665,25 +3662,22 @@ Inspect local status without a full audit; probe providers only with --probe
 Usage: lwiki doctor [OPTIONS]
 
 Options:
-      --probe
-          Explicitly contact the selected provider within the supplied request limits
+      --diagnostics
+          Show bounded diagnostics retained in the published index, without a new audit
 
       --wiki <WIKI>
-          Wiki root containing WIKI.md; defaults to discovery from the current directory
+          Wiki root; otherwise select the nearest ancestor WIKI.md, then the saved default
+
+      --diagnostic-limit <DIAGNOSTIC_LIMIT>
+          Maximum diagnostic rows (1..=100; default 50)
 
       --format <FORMAT>
           Output format: human-readable text, a JSON envelope or JSON Lines events
 
           [possible values: human, json, jsonl]
 
-      --role <ROLE>
-          Provider capability to probe: embed or generate
-
-          [default: embed]
-          [possible values: embed, generate]
-
-      --extraction-schema
-          Probe the real extraction JSON schema; requires --probe --role generate
+      --diagnostic-cursor <DIAGNOSTIC_CURSOR>
+          Continue the same published generation's diagnostic page
 
       --json
           Emit one structured JSON envelope
@@ -2691,41 +3685,61 @@ Options:
       --jsonl
           Emit JSON Lines events for supported streaming commands
 
-      --providers-config <PROVIDERS_CONFIG>
-          Private TOML configuration; never discover provider files inside a vault
-
-      --max-requests <MAX_REQUESTS>
-          Lifetime request-attempt ceiling, including retries
+      --probe
+          Explicitly contact the selected provider within the supplied request limits
 
       --offline
           Prevent provider requests and credential helper calls; local operations remain available
 
-      --concurrency <CONCURRENCY>
-          Maximum simultaneous provider requests
+      --role <ROLE>
+          Provider capability to probe: embed or generate
+
+          [default: embed]
+          [possible values: embed, generate]
 
       --dry-run
           Preview without writes, provider requests or credential resolution
 
-      --attempts-per-task <ATTEMPTS_PER_TASK>
-          Maximum attempts for an individual provider task
+      --extraction-schema
+          Probe the real extraction JSON schema; requires --probe --role generate
+
+      --providers-config <PROVIDERS_CONFIG>
+          Private TOML configuration; never discover provider files inside a vault
 
       --stage
           Retain a guarded preparation for a later explicit changes apply
 
-      --deadline-ms <DEADLINE_MS>
-          Overall remote operation deadline in milliseconds from startup
+      --max-requests <MAX_REQUESTS>
+          Lifetime request-attempt ceiling, including retries
 
       --preferences <PREFERENCES>
-          Explicit trusted local JSON preferences; never read ambient credentials
+          Select a user configuration file (TOML or legacy JSON)
 
-      --max-request-bytes <MAX_REQUEST_BYTES>
-          Lifetime ceiling on outgoing request bytes
+          [alias: --config]
+
+      --concurrency <CONCURRENCY>
+          Maximum simultaneous provider requests
+
+      --no-user-config
+          Disable ambient user configuration; explicit --preferences still applies
+
+      --attempts-per-task <ATTEMPTS_PER_TASK>
+          Maximum attempts for an individual provider task
+
+      --expect-wiki-id <EXPECT_WIKI_ID>
+          Refuse a selected wiki whose stable identity differs from this value
+
+      --deadline-ms <DEADLINE_MS>
+          Overall remote operation deadline in milliseconds from startup
 
       --profile <PROFILE>
           Trusted provider profile name from the private provider configuration
 
       --lock-timeout-ms <LOCK_TIMEOUT_MS>
           Maximum writer-lock wait in milliseconds (default: 5000; preferences may override)
+
+      --max-request-bytes <MAX_REQUEST_BYTES>
+          Lifetime ceiling on outgoing request bytes
 
       --max-response-bytes <MAX_RESPONSE_BYTES>
           Lifetime ceiling on incoming response bytes
@@ -2741,8 +3755,6 @@ Options:
 
       --currency <CURRENCY>
           Currency code used with --max-cost
-
-          [default: USD]
 
       --requests-per-minute <REQUESTS_PER_MINUTE>
           Maximum provider requests dispatched per minute
@@ -2777,7 +3789,7 @@ Options:
           Suggested origin for the host agent; lwiki does not fetch it
 
       --wiki <WIKI>
-          Wiki root containing WIKI.md; defaults to discovery from the current directory
+          Wiki root; otherwise select the nearest ancestor WIKI.md, then the saved default
 
       --exclude <EXCLUSIONS>
           Scope exclusion to include in the agent packet
@@ -2824,10 +3836,18 @@ Options:
           Retain a guarded preparation for a later explicit changes apply
 
       --preferences <PREFERENCES>
-          Explicit trusted local JSON preferences; never read ambient credentials
+          Select a user configuration file (TOML or legacy JSON)
+
+          [alias: --config]
 
       --run-id <RUN_ID>
           New run ID; omit to allocate one. Existing IDs require resume
+
+      --no-user-config
+          Disable ambient user configuration; explicit --preferences still applies
+
+      --expect-wiki-id <EXPECT_WIKI_ID>
+          Refuse a selected wiki whose stable identity differs from this value
 
       --profile <PROFILE>
           Trusted provider profile name from the private provider configuration
@@ -2856,7 +3876,7 @@ Options:
           Suggested origin for the host agent; lwiki does not fetch it
 
       --wiki <WIKI>
-          Wiki root containing WIKI.md; defaults to discovery from the current directory
+          Wiki root; otherwise select the nearest ancestor WIKI.md, then the saved default
 
       --exclude <EXCLUSIONS>
           Scope exclusion to include in the agent packet
@@ -2903,10 +3923,18 @@ Options:
           Retain a guarded preparation for a later explicit changes apply
 
       --preferences <PREFERENCES>
-          Explicit trusted local JSON preferences; never read ambient credentials
+          Select a user configuration file (TOML or legacy JSON)
+
+          [alias: --config]
 
       --run-id <RUN_ID>
           New run ID; omit to allocate one. Existing IDs require resume
+
+      --no-user-config
+          Disable ambient user configuration; explicit --preferences still applies
+
+      --expect-wiki-id <EXPECT_WIKI_ID>
+          Refuse a selected wiki whose stable identity differs from this value
 
       --profile <PROFILE>
           Trusted provider profile name from the private provider configuration
@@ -2935,7 +3963,7 @@ Options:
           Replace a stale packet using current sources; invalidate its old fingerprint
 
       --wiki <WIKI>
-          Wiki root containing WIKI.md; defaults to discovery from the current directory
+          Wiki root; otherwise select the nearest ancestor WIKI.md, then the saved default
 
       --format <FORMAT>
           Output format: human-readable text, a JSON envelope or JSON Lines events
@@ -2958,7 +3986,15 @@ Options:
           Retain a guarded preparation for a later explicit changes apply
 
       --preferences <PREFERENCES>
-          Explicit trusted local JSON preferences; never read ambient credentials
+          Select a user configuration file (TOML or legacy JSON)
+
+          [alias: --config]
+
+      --no-user-config
+          Disable ambient user configuration; explicit --preferences still applies
+
+      --expect-wiki-id <EXPECT_WIKI_ID>
+          Refuse a selected wiki whose stable identity differs from this value
 
       --profile <PROFILE>
           Trusted provider profile name from the private provider configuration
@@ -2983,7 +4019,7 @@ Options:
           JSON submission path, or - for standard input
 
       --wiki <WIKI>
-          Wiki root containing WIKI.md; defaults to discovery from the current directory
+          Wiki root; otherwise select the nearest ancestor WIKI.md, then the saved default
 
       --format <FORMAT>
           Output format: human-readable text, a JSON envelope or JSON Lines events
@@ -3006,7 +4042,15 @@ Options:
           Retain a guarded preparation for a later explicit changes apply
 
       --preferences <PREFERENCES>
-          Explicit trusted local JSON preferences; never read ambient credentials
+          Select a user configuration file (TOML or legacy JSON)
+
+          [alias: --config]
+
+      --no-user-config
+          Disable ambient user configuration; explicit --preferences still applies
+
+      --expect-wiki-id <EXPECT_WIKI_ID>
+          Refuse a selected wiki whose stable identity differs from this value
 
       --profile <PROFILE>
           Trusted provider profile name from the private provider configuration
@@ -3032,7 +4076,7 @@ Arguments:
 
 Options:
       --wiki <WIKI>
-          Wiki root containing WIKI.md; defaults to discovery from the current directory
+          Wiki root; otherwise select the nearest ancestor WIKI.md, then the saved default
 
       --format <FORMAT>
           Output format: human-readable text, a JSON envelope or JSON Lines events
@@ -3055,7 +4099,15 @@ Options:
           Retain a guarded preparation for a later explicit changes apply
 
       --preferences <PREFERENCES>
-          Explicit trusted local JSON preferences; never read ambient credentials
+          Select a user configuration file (TOML or legacy JSON)
+
+          [alias: --config]
+
+      --no-user-config
+          Disable ambient user configuration; explicit --preferences still applies
+
+      --expect-wiki-id <EXPECT_WIKI_ID>
+          Refuse a selected wiki whose stable identity differs from this value
 
       --profile <PROFILE>
           Trusted provider profile name from the private provider configuration
@@ -3081,7 +4133,7 @@ Arguments:
 
 Options:
       --wiki <WIKI>
-          Wiki root containing WIKI.md; defaults to discovery from the current directory
+          Wiki root; otherwise select the nearest ancestor WIKI.md, then the saved default
 
       --format <FORMAT>
           Output format: human-readable text, a JSON envelope or JSON Lines events
@@ -3104,7 +4156,15 @@ Options:
           Retain a guarded preparation for a later explicit changes apply
 
       --preferences <PREFERENCES>
-          Explicit trusted local JSON preferences; never read ambient credentials
+          Select a user configuration file (TOML or legacy JSON)
+
+          [alias: --config]
+
+      --no-user-config
+          Disable ambient user configuration; explicit --preferences still applies
+
+      --expect-wiki-id <EXPECT_WIKI_ID>
+          Refuse a selected wiki whose stable identity differs from this value
 
       --profile <PROFILE>
           Trusted provider profile name from the private provider configuration
@@ -3130,7 +4190,7 @@ Arguments:
 
 Options:
       --wiki <WIKI>
-          Wiki root containing WIKI.md; defaults to discovery from the current directory
+          Wiki root; otherwise select the nearest ancestor WIKI.md, then the saved default
 
       --format <FORMAT>
           Output format: human-readable text, a JSON envelope or JSON Lines events
@@ -3153,7 +4213,15 @@ Options:
           Retain a guarded preparation for a later explicit changes apply
 
       --preferences <PREFERENCES>
-          Explicit trusted local JSON preferences; never read ambient credentials
+          Select a user configuration file (TOML or legacy JSON)
+
+          [alias: --config]
+
+      --no-user-config
+          Disable ambient user configuration; explicit --preferences still applies
+
+      --expect-wiki-id <EXPECT_WIKI_ID>
+          Refuse a selected wiki whose stable identity differs from this value
 
       --profile <PROFILE>
           Trusted provider profile name from the private provider configuration
@@ -3180,7 +4248,7 @@ Options:
           [default: 20]
 
       --wiki <WIKI>
-          Wiki root containing WIKI.md; defaults to discovery from the current directory
+          Wiki root; otherwise select the nearest ancestor WIKI.md, then the saved default
 
       --format <FORMAT>
           Output format: human-readable text, a JSON envelope or JSON Lines events
@@ -3216,7 +4284,15 @@ Options:
           Retain a guarded preparation for a later explicit changes apply
 
       --preferences <PREFERENCES>
-          Explicit trusted local JSON preferences; never read ambient credentials
+          Select a user configuration file (TOML or legacy JSON)
+
+          [alias: --config]
+
+      --no-user-config
+          Disable ambient user configuration; explicit --preferences still applies
+
+      --expect-wiki-id <EXPECT_WIKI_ID>
+          Refuse a selected wiki whose stable identity differs from this value
 
       --profile <PROFILE>
           Trusted provider profile name from the private provider configuration
@@ -3243,7 +4319,7 @@ Options:
           [default: 20]
 
       --wiki <WIKI>
-          Wiki root containing WIKI.md; defaults to discovery from the current directory
+          Wiki root; otherwise select the nearest ancestor WIKI.md, then the saved default
 
       --format <FORMAT>
           Output format: human-readable text, a JSON envelope or JSON Lines events
@@ -3279,7 +4355,15 @@ Options:
           Retain a guarded preparation for a later explicit changes apply
 
       --preferences <PREFERENCES>
-          Explicit trusted local JSON preferences; never read ambient credentials
+          Select a user configuration file (TOML or legacy JSON)
+
+          [alias: --config]
+
+      --no-user-config
+          Disable ambient user configuration; explicit --preferences still applies
+
+      --expect-wiki-id <EXPECT_WIKI_ID>
+          Refuse a selected wiki whose stable identity differs from this value
 
       --profile <PROFILE>
           Trusted provider profile name from the private provider configuration
@@ -3306,7 +4390,7 @@ Options:
           [default: 20]
 
       --wiki <WIKI>
-          Wiki root containing WIKI.md; defaults to discovery from the current directory
+          Wiki root; otherwise select the nearest ancestor WIKI.md, then the saved default
 
       --format <FORMAT>
           Output format: human-readable text, a JSON envelope or JSON Lines events
@@ -3342,7 +4426,15 @@ Options:
           Retain a guarded preparation for a later explicit changes apply
 
       --preferences <PREFERENCES>
-          Explicit trusted local JSON preferences; never read ambient credentials
+          Select a user configuration file (TOML or legacy JSON)
+
+          [alias: --config]
+
+      --no-user-config
+          Disable ambient user configuration; explicit --preferences still applies
+
+      --expect-wiki-id <EXPECT_WIKI_ID>
+          Refuse a selected wiki whose stable identity differs from this value
 
       --profile <PROFILE>
           Trusted provider profile name from the private provider configuration
@@ -3371,7 +4463,7 @@ Options:
           Zero-based operation index to inspect within the changeset
 
       --wiki <WIKI>
-          Wiki root containing WIKI.md; defaults to discovery from the current directory
+          Wiki root; otherwise select the nearest ancestor WIKI.md, then the saved default
 
       --format <FORMAT>
           Output format: human-readable text, a JSON envelope or JSON Lines events
@@ -3397,7 +4489,15 @@ Options:
           Retain a guarded preparation for a later explicit changes apply
 
       --preferences <PREFERENCES>
-          Explicit trusted local JSON preferences; never read ambient credentials
+          Select a user configuration file (TOML or legacy JSON)
+
+          [alias: --config]
+
+      --no-user-config
+          Disable ambient user configuration; explicit --preferences still applies
+
+      --expect-wiki-id <EXPECT_WIKI_ID>
+          Refuse a selected wiki whose stable identity differs from this value
 
       --profile <PROFILE>
           Trusted provider profile name from the private provider configuration
@@ -3423,7 +4523,7 @@ Arguments:
 
 Options:
       --wiki <WIKI>
-          Wiki root containing WIKI.md; defaults to discovery from the current directory
+          Wiki root; otherwise select the nearest ancestor WIKI.md, then the saved default
 
       --format <FORMAT>
           Output format: human-readable text, a JSON envelope or JSON Lines events
@@ -3446,7 +4546,15 @@ Options:
           Retain a guarded preparation for a later explicit changes apply
 
       --preferences <PREFERENCES>
-          Explicit trusted local JSON preferences; never read ambient credentials
+          Select a user configuration file (TOML or legacy JSON)
+
+          [alias: --config]
+
+      --no-user-config
+          Disable ambient user configuration; explicit --preferences still applies
+
+      --expect-wiki-id <EXPECT_WIKI_ID>
+          Refuse a selected wiki whose stable identity differs from this value
 
       --profile <PROFILE>
           Trusted provider profile name from the private provider configuration
@@ -3472,7 +4580,7 @@ Arguments:
 
 Options:
       --wiki <WIKI>
-          Wiki root containing WIKI.md; defaults to discovery from the current directory
+          Wiki root; otherwise select the nearest ancestor WIKI.md, then the saved default
 
       --format <FORMAT>
           Output format: human-readable text, a JSON envelope or JSON Lines events
@@ -3495,7 +4603,15 @@ Options:
           Retain a guarded preparation for a later explicit changes apply
 
       --preferences <PREFERENCES>
-          Explicit trusted local JSON preferences; never read ambient credentials
+          Select a user configuration file (TOML or legacy JSON)
+
+          [alias: --config]
+
+      --no-user-config
+          Disable ambient user configuration; explicit --preferences still applies
+
+      --expect-wiki-id <EXPECT_WIKI_ID>
+          Refuse a selected wiki whose stable identity differs from this value
 
       --profile <PROFILE>
           Trusted provider profile name from the private provider configuration
@@ -3521,7 +4637,7 @@ Arguments:
 
 Options:
       --wiki <WIKI>
-          Wiki root containing WIKI.md; defaults to discovery from the current directory
+          Wiki root; otherwise select the nearest ancestor WIKI.md, then the saved default
 
       --format <FORMAT>
           Output format: human-readable text, a JSON envelope or JSON Lines events
@@ -3544,7 +4660,15 @@ Options:
           Retain a guarded preparation for a later explicit changes apply
 
       --preferences <PREFERENCES>
-          Explicit trusted local JSON preferences; never read ambient credentials
+          Select a user configuration file (TOML or legacy JSON)
+
+          [alias: --config]
+
+      --no-user-config
+          Disable ambient user configuration; explicit --preferences still applies
+
+      --expect-wiki-id <EXPECT_WIKI_ID>
+          Refuse a selected wiki whose stable identity differs from this value
 
       --profile <PROFILE>
           Trusted provider profile name from the private provider configuration
@@ -3576,7 +4700,7 @@ Options:
           [possible values: resume, abandon]
 
       --wiki <WIKI>
-          Wiki root containing WIKI.md; defaults to discovery from the current directory
+          Wiki root; otherwise select the nearest ancestor WIKI.md, then the saved default
 
       --file <FILE>
           JSON request returned by changes resolve --dry-run; use - for stdin
@@ -3602,7 +4726,15 @@ Options:
           Retain a guarded preparation for a later explicit changes apply
 
       --preferences <PREFERENCES>
-          Explicit trusted local JSON preferences; never read ambient credentials
+          Select a user configuration file (TOML or legacy JSON)
+
+          [alias: --config]
+
+      --no-user-config
+          Disable ambient user configuration; explicit --preferences still applies
+
+      --expect-wiki-id <EXPECT_WIKI_ID>
+          Refuse a selected wiki whose stable identity differs from this value
 
       --profile <PROFILE>
           Trusted provider profile name from the private provider configuration
@@ -3627,7 +4759,7 @@ Options:
           Retained provider run ID whose cumulative limits will be raised
 
       --wiki <WIKI>
-          Wiki root containing WIKI.md; defaults to discovery from the current directory
+          Wiki root; otherwise select the nearest ancestor WIKI.md, then the saved default
 
       --format <FORMAT>
           Output format: human-readable text, a JSON envelope or JSON Lines events
@@ -3671,16 +4803,18 @@ Options:
           Lifetime ceiling on outgoing request bytes
 
       --preferences <PREFERENCES>
-          Explicit trusted local JSON preferences; never read ambient credentials
+          Select a user configuration file (TOML or legacy JSON)
+
+          [alias: --config]
 
       --max-response-bytes <MAX_RESPONSE_BYTES>
           Lifetime ceiling on incoming response bytes
 
-      --profile <PROFILE>
-          Trusted provider profile name from the private provider configuration
+      --no-user-config
+          Disable ambient user configuration; explicit --preferences still applies
 
-      --lock-timeout-ms <LOCK_TIMEOUT_MS>
-          Maximum writer-lock wait in milliseconds (default: 5000; preferences may override)
+      --expect-wiki-id <EXPECT_WIKI_ID>
+          Refuse a selected wiki whose stable identity differs from this value
 
       --max-input-units <MAX_INPUT_UNITS>
           Lifetime ceiling for each input and cached-input billable class
@@ -3688,13 +4822,17 @@ Options:
       --max-output-units <MAX_OUTPUT_UNITS>
           Lifetime ceiling for each output and reasoning billable class
 
+      --profile <PROFILE>
+          Trusted provider profile name from the private provider configuration
+
+      --lock-timeout-ms <LOCK_TIMEOUT_MS>
+          Maximum writer-lock wait in milliseconds (default: 5000; preferences may override)
+
       --max-cost <MAX_COST>
           Checked decimal ceiling; requires a complete provable provider bound
 
       --currency <CURRENCY>
           Currency code used with --max-cost
-
-          [default: USD]
 
       --requests-per-minute <REQUESTS_PER_MINUTE>
           Maximum provider requests dispatched per minute
@@ -3725,7 +4863,7 @@ Options:
           Retained provider run ID returned by the original operation
 
       --wiki <WIKI>
-          Wiki root containing WIKI.md; defaults to discovery from the current directory
+          Wiki root; otherwise select the nearest ancestor WIKI.md, then the saved default
 
       --format <FORMAT>
           Output format: human-readable text, a JSON envelope or JSON Lines events
@@ -3748,7 +4886,15 @@ Options:
           Retain a guarded preparation for a later explicit changes apply
 
       --preferences <PREFERENCES>
-          Explicit trusted local JSON preferences; never read ambient credentials
+          Select a user configuration file (TOML or legacy JSON)
+
+          [alias: --config]
+
+      --no-user-config
+          Disable ambient user configuration; explicit --preferences still applies
+
+      --expect-wiki-id <EXPECT_WIKI_ID>
+          Refuse a selected wiki whose stable identity differs from this value
 
       --profile <PROFILE>
           Trusted provider profile name from the private provider configuration
@@ -3773,7 +4919,7 @@ Options:
           Retained provider run ID
 
       --wiki <WIKI>
-          Wiki root containing WIKI.md; defaults to discovery from the current directory
+          Wiki root; otherwise select the nearest ancestor WIKI.md, then the saved default
 
       --attempt <ATTEMPT>
           Attempt ID from jobs status; identifies the private diagnostic
@@ -3807,7 +4953,15 @@ Options:
           Retain a guarded preparation for a later explicit changes apply
 
       --preferences <PREFERENCES>
-          Explicit trusted local JSON preferences; never read ambient credentials
+          Select a user configuration file (TOML or legacy JSON)
+
+          [alias: --config]
+
+      --no-user-config
+          Disable ambient user configuration; explicit --preferences still applies
+
+      --expect-wiki-id <EXPECT_WIKI_ID>
+          Refuse a selected wiki whose stable identity differs from this value
 
       --profile <PROFILE>
           Trusted provider profile name from the private provider configuration
@@ -3832,7 +4986,7 @@ Options:
           Retained provider run ID
 
       --wiki <WIKI>
-          Wiki root containing WIKI.md; defaults to discovery from the current directory
+          Wiki root; otherwise select the nearest ancestor WIKI.md, then the saved default
 
       --attempt <ATTEMPT>
           Settled, known-billing attempt ID from jobs status
@@ -3863,7 +5017,15 @@ Options:
           Retain a guarded preparation for a later explicit changes apply
 
       --preferences <PREFERENCES>
-          Explicit trusted local JSON preferences; never read ambient credentials
+          Select a user configuration file (TOML or legacy JSON)
+
+          [alias: --config]
+
+      --no-user-config
+          Disable ambient user configuration; explicit --preferences still applies
+
+      --expect-wiki-id <EXPECT_WIKI_ID>
+          Refuse a selected wiki whose stable identity differs from this value
 
       --profile <PROFILE>
           Trusted provider profile name from the private provider configuration
@@ -3885,7 +5047,7 @@ Usage: lwiki recover [OPTIONS]
 
 Options:
       --wiki <WIKI>
-          Wiki root containing WIKI.md; defaults to discovery from the current directory
+          Wiki root; otherwise select the nearest ancestor WIKI.md, then the saved default
 
       --format <FORMAT>
           Output format: human-readable text, a JSON envelope or JSON Lines events
@@ -3908,7 +5070,15 @@ Options:
           Retain a guarded preparation for a later explicit changes apply
 
       --preferences <PREFERENCES>
-          Explicit trusted local JSON preferences; never read ambient credentials
+          Select a user configuration file (TOML or legacy JSON)
+
+          [alias: --config]
+
+      --no-user-config
+          Disable ambient user configuration; explicit --preferences still applies
+
+      --expect-wiki-id <EXPECT_WIKI_ID>
+          Refuse a selected wiki whose stable identity differs from this value
 
       --profile <PROFILE>
           Trusted provider profile name from the private provider configuration
@@ -3933,7 +5103,7 @@ Options:
           Select a record by its stable ID
 
       --wiki <WIKI>
-          Wiki root containing WIKI.md; defaults to discovery from the current directory
+          Wiki root; otherwise select the nearest ancestor WIKI.md, then the saved default
 
       --format <FORMAT>
           Output format: human-readable text, a JSON envelope or JSON Lines events
@@ -3967,7 +5137,15 @@ Options:
           Retain a guarded preparation for a later explicit changes apply
 
       --preferences <PREFERENCES>
-          Explicit trusted local JSON preferences; never read ambient credentials
+          Select a user configuration file (TOML or legacy JSON)
+
+          [alias: --config]
+
+      --no-user-config
+          Disable ambient user configuration; explicit --preferences still applies
+
+      --expect-wiki-id <EXPECT_WIKI_ID>
+          Refuse a selected wiki whose stable identity differs from this value
 
       --profile <PROFILE>
           Trusted provider profile name from the private provider configuration
@@ -3986,6 +5164,8 @@ Options:
 - `lwiki --json schema context-original-selection-auto`
 - `lwiki --json schema context-selection`
 - `lwiki --json schema output`
+- `lwiki --json schema output-v1`
+- `lwiki --json schema literal-edit`
 - `lwiki --json schema record`
 - `lwiki --json schema page`
 - `lwiki --json schema page-batch`

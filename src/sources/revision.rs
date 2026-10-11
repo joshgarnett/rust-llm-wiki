@@ -165,7 +165,7 @@ impl<'a> SourceView<'a> {
         }
         Ok(Self {
             fs,
-            notes: notes.into(),
+            notes: notes.try_into()?,
             overlay: BTreeMap::new(),
             closed: false,
             observed_reads: None,
@@ -185,7 +185,7 @@ impl<'a> SourceView<'a> {
         }
         Ok(SourceView {
             fs,
-            notes: notes.into(),
+            notes: notes.try_into()?,
             overlay: BTreeMap::new(),
             closed: false,
             observed_reads: None,
@@ -232,7 +232,7 @@ impl<'a> SourceView<'a> {
         }
         Ok(SourceView {
             fs,
-            notes: notes.into(),
+            notes: notes.try_into()?,
             overlay,
             closed: false,
             observed_reads: None,

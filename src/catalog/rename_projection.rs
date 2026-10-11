@@ -370,11 +370,11 @@ pub(crate) fn project_page_rename(
     for path in &plain {
         let note = work.note(path)?;
         delta.documents.push(DocumentMutation::Put {
-            row: row_projection::canonical_document(path, &note, None),
+            row: row_projection::canonical_document(path, &note, None)?,
         });
         delta.claims.push(OwnedClaims {
             path: path.clone(),
-            rows: crate::sources::identity::readable_ids(&note)
+            rows: crate::sources::identity::readable_ids(&note)?
                 .into_iter()
                 .map(|id| IdentityClaimRow {
                     id,
@@ -401,7 +401,7 @@ pub(crate) fn project_page_rename(
     delta.documents[position] = DocumentMutation::MovePage {
         from: from.clone(),
         from_hash: if_match.clone(),
-        row: row_projection::canonical_document(&to, &work.note(&to)?, Some(&row)),
+        row: row_projection::canonical_document(&to, &work.note(&to)?, Some(&row))?,
     };
     // Retire rows owned by the old note. References whose lookup values still
     // mention this path belong to their incoming owners and remain intact.

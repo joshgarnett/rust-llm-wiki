@@ -229,7 +229,7 @@ pub(crate) fn verify_captured_source(
         .collect();
     let view = SourceView {
         fs,
-        notes: notes.into(),
+        notes: notes.try_into()?,
         overlay,
         closed: true,
         observed_reads: None,

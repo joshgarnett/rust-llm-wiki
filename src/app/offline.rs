@@ -1424,7 +1424,18 @@ impl OfflineApp {
     pub fn changes_rollback(&self, id: RecordId) -> Result<MutationOutcome> {
         let engine = self.engine()?;
         let i = engine.inspect(&id)?;
-        if self.catalog().operation_state()?.is_some() {
+        if let Some(authority) = self.catalog().operation_state()? {
+            let proof = engine.indexed_replay_proof(&i.manifest, &i.prepared, Some(&authority))?;
+            if proof.as_ref().is_some_and(|proof| {
+                matches!(
+                    proof.operation,
+                    Some(
+                        crate::changes::indexed_refresh::IndexedWriteOperation::LiteralEdit { .. }
+                    )
+                )
+            }) {
+                return self.literal_rollback(&i.prepared);
+            }
             return self.execute_page_input(
                 PageWriteInput::Inverse(engine.page_inverse_plan(&i.prepared)?),
                 true,
@@ -1565,10 +1576,25 @@ pub(super) fn summarize(
     }
 }
 
-/// Bootstrap is the sole pre-engine mutation. The guarded marker commits last.
+/// Bootstrap publishes identity before exposing a partially initialized layout.
 pub fn init(path: &std::path::Path, title: &str, options: OperationOptions) -> Result<InitOutcome> {
-    use crate::vault::{DurableIo, NativeIo, VaultRoot};
-    let io = NativeIo;
+    init_with_existing(path, title, false, options)
+}
+
+/// Confirm an existing wiki's marker and directory durability without changing its layout.
+pub(crate) fn verify_init_durability(path: &std::path::Path) -> Result<()> {
+    super::init_recovery::verify_init_durability(path)
+}
+
+/// Deliberate initialization of an author folder still requires every reserved
+/// top-level name to be absent, including empty directories and hidden state.
+pub fn init_with_existing(
+    path: &std::path::Path,
+    title: &str,
+    existing: bool,
+    options: OperationOptions,
+) -> Result<InitOutcome> {
+    use crate::vault::VaultRoot;
     if options.lock_timeout_ms > 30_000 {
         return Err(WikiError::new(
             ErrorCode::ConfigInvalid,
@@ -1590,6 +1616,18 @@ pub fn init(path: &std::path::Path, title: &str, options: OperationOptions) -> R
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => false,
         Err(e) => return Err(WikiError::new(ErrorCode::Internal, e.to_string())),
     };
+    if exists && !existing {
+        let mut error = WikiError::new(
+            ErrorCode::ContentConflict,
+            format!(
+                "initialization target already exists: {}; use --existing to deliberately initialize an author folder",
+                path.display()
+            ),
+        );
+        error.details =
+            serde_json::json!({"path":path,"reason":"existing_directory_requires_intent"});
+        return Err(error);
+    }
     let (parent, final_name) = if exists {
         (None, None)
     } else {
@@ -1610,12 +1648,6 @@ pub fn init(path: &std::path::Path, title: &str, options: OperationOptions) -> R
     } else {
         VaultRoot::for_initialization(path)?.path().to_path_buf()
     };
-    if std::fs::symlink_metadata(resolved.join("WIKI.md")).is_ok() {
-        return Err(WikiError::new(
-            ErrorCode::ContentConflict,
-            "initialization refuses existing WIKI.md",
-        ));
-    }
     let directories = vec![
         "pages",
         "knowledge/entities",
@@ -1626,6 +1658,89 @@ pub fn init(path: &std::path::Path, title: &str, options: OperationOptions) -> R
         "changes",
         ".wiki/cache",
     ];
+    let mut planned: Vec<_> = directories
+        .iter()
+        .map(|d| VaultRelativePath::new(*d))
+        .collect::<Result<_>>()?;
+    planned.extend([
+        VaultRelativePath::new("WIKI.md")?,
+        VaultRelativePath::new(".wiki/.gitignore")?,
+        VaultRelativePath::new(".wiki/state/writer.lock")?,
+    ]);
+    // This observation must precede even WriterPermit::acquire: the permit
+    // creates hidden state and changes the persistent lock's diagnostic bytes.
+    let reserved = [
+        "WIKI.md",
+        "pages",
+        "knowledge",
+        "sources",
+        "changes",
+        ".wiki",
+    ];
+    let collision = |target: &std::path::Path| {
+        let mut error = WikiError::new(
+            ErrorCode::ContentConflict,
+            format!(
+                "initialization refuses occupied managed path: {}",
+                target.display()
+            ),
+        );
+        error.hint = Some(
+            "Use a different wiki folder, or deliberately rename the author folder that occupies this reserved name before retrying.".into(),
+        );
+        error.details = serde_json::json!({"path":target,"reason":"managed_path_collision"});
+        error
+    };
+    let check_absent = |names: &[&str]| -> Result<()> {
+        for name in names {
+            let target = resolved.join(name);
+            match std::fs::symlink_metadata(&target) {
+                Ok(_) => return Err(collision(&target)),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e) => {
+                    return Err(WikiError::new(
+                        ErrorCode::Internal,
+                        format!(
+                            "inspect initialization managed path {}: {e}",
+                            target.display()
+                        ),
+                    ));
+                }
+            }
+        }
+        // On a case-sensitive host these aliases do not satisfy the exact
+        // metadata probes, but would collide when this wiki is copied elsewhere.
+        let entries = match std::fs::read_dir(&resolved) {
+            Ok(entries) => entries,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(e) => {
+                return Err(WikiError::new(
+                    ErrorCode::Internal,
+                    format!(
+                        "inspect initialization directory {}: {e}",
+                        resolved.display()
+                    ),
+                ));
+            }
+        };
+        for entry in entries {
+            let entry = entry.map_err(|e| WikiError::new(ErrorCode::Internal, e.to_string()))?;
+            let name = entry.file_name();
+            let name = name
+                .to_str()
+                .ok_or_else(|| WikiError::invalid("non-UTF-8 filesystem path is unsupported"))?;
+            if names.iter().any(|reserved| {
+                unicase::UniCase::unicode(name) == unicase::UniCase::unicode(*reserved)
+            }) {
+                return Err(collision(&entry.path()));
+            }
+        }
+        Ok(())
+    };
+    check_absent(&reserved)?;
+    if exists {
+        VaultRoot::for_initialization(&resolved)?.validate_portable_paths(&planned)?;
+    }
     let id = RecordId::generate(RecordKind::Vault)?;
     if options.dry_run {
         return Ok(InitOutcome {
@@ -1638,68 +1753,34 @@ pub fn init(path: &std::path::Path, title: &str, options: OperationOptions) -> R
             planned_directories: directories.into_iter().map(str::to_owned).collect(),
         });
     }
-    if !exists {
-        io.create_directory(&resolved).map_err(|e| {
-            WikiError::new(ErrorCode::Internal, format!("create vault directory: {e}"))
-        })?;
-        io.sync_directory(parent.as_ref().expect("new parent checked").path())
-            .map_err(|e| {
-                WikiError::new(ErrorCode::Internal, format!("sync new vault parent: {e}"))
-            })?;
-    }
-    let root = VaultRoot::for_initialization(&resolved)?;
-    let fs = VaultFs::new(root.clone());
-    let mut planned: Vec<_> = directories
-        .iter()
-        .map(|d| VaultRelativePath::new(*d))
-        .collect::<Result<_>>()?;
-    planned.extend([
-        VaultRelativePath::new("WIKI.md")?,
-        VaultRelativePath::new(".wiki/.gitignore")?,
-    ]);
-    root.validate_portable_paths(&planned)?;
-    let w = WriterPermit::acquire(&root, Duration::from_millis(options.lock_timeout_ms))?;
-    if fs
-        .read_before(&VaultRelativePath::new("WIKI.md")?)?
-        .is_some()
-    {
-        return Err(WikiError::new(
-            ErrorCode::ContentConflict,
-            "initialization marker appeared",
-        ));
-    }
-    for directory in &directories {
-        fs.ensure_directory(&VaultRelativePath::new(*directory)?, &w)?;
-    }
-    let ignore = VaultRelativePath::new(".wiki/.gitignore")?;
-    let before = crate::changes::prepare::read_bounded(&fs, &ignore, MAX_INPUT_BYTES)?;
-    let expected = before.as_ref().map_or(ExpectedState::Absent, |b| {
-        ExpectedState::Hash(Blake3Hash::digest(b))
-    });
-    let mut bytes = before.unwrap_or_default();
-    if !bytes
-        .split(|b| *b == b'\n')
-        .any(|line| line == b"cache/" || line == b"/cache/")
-    {
-        if !bytes.is_empty() && !bytes.ends_with(b"\n") {
-            bytes.push(b'\n');
-        }
-        bytes.extend_from_slice(b"cache/\n");
-        let staged = fs.stage(&ignore, &bytes, &w)?;
-        fs.replace(staged, &expected, &w)?;
-    }
     let marker = format!(
-        "---\nwiki_schema: \"1\"\nwiki_id: {}\nwiki_kind: vault\ntitle: {}\n---\n",
+        "---\nwiki_schema: \"1\"\nwiki_id: {}\nwiki_kind: vault\ntitle: {}\n---\n\
+         # Your wiki\n\n\
+         Browse [Pages](pages/) and [Sources](sources/).\n\n\
+         Keep writing notes in your editor. Ask your agent to capture the notes you want \
+         to search, or use `lwiki source add`. Capturing saves a copy for cited answers \
+         and leaves your original note unchanged. Existing notes are not captured automatically.\n\n\
+         After editing an original note, ask your agent to refresh its saved copy. \
+         Earlier copies stay available so old citations still work.\n\n\
+         Back up this whole folder, including hidden files. The hidden `.wiki/` folder \
+         contains information needed to recover interrupted changes.\n\n\
+         Open this folder in Obsidian or another Markdown editor. You can edit this \
+         start page; keep its `wiki_*` fields at the top. Your existing notes and \
+         editor settings are kept as they are.\n",
         serde_json::to_string(id.as_str()).map_err(|e| WikiError::invalid(e.to_string()))?,
         serde_json::to_string(title).map_err(|e| WikiError::invalid(e.to_string()))?
     );
-    let target = VaultRelativePath::new("WIKI.md")?;
-    let staged = fs.stage(&target, marker.as_bytes(), &w)?;
-    fs.replace(staged, &ExpectedState::Absent, &w)?;
+    super::init_recovery::initialize(
+        &resolved,
+        &id,
+        marker.as_bytes(),
+        exists,
+        &directories,
+        options.lock_timeout_ms,
+    )?;
     Ok(InitOutcome {
         id,
-        path: root
-            .path()
+        path: resolved
             .to_str()
             .ok_or_else(|| usage("vault path is not UTF-8"))?
             .to_owned(),

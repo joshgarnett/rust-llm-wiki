@@ -32,7 +32,11 @@ Adapters implement pure `encode`, `decode`, and `upper_bound` methods; only disp
 
 ## 2. Private profiles and trust
 
-Load `providers.toml` from the platform's user configuration directory, never by upward traversal from a vault. A profile maps capabilities to endpoint-bound services:
+Choose the private provider file from explicit `--providers-config`, then the
+absolute `providers_config` reference in the loaded user config. Setup writes a
+sibling `providers.toml`. Existing platform defaults remain a compatibility
+fallback when user configuration is enabled. Never discover authority by walking
+upward from a vault. A profile maps capabilities to endpoint-bound services:
 
 ```toml
 version = 1

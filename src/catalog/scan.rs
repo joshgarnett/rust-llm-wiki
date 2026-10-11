@@ -19,7 +19,7 @@ use std::collections::{BTreeMap, BTreeSet};
 /// Cache identity binds every semantic adapter, not merely frontmatter parsing.
 pub fn parser_fingerprint() -> Blake3Hash {
     Blake3Hash::digest(format!(
-        "{};catalog-v1;canonical-membership-bytewise-v1;source-original-content-span-quote-fence-structural-v2;typed-id-companion-v1;decisions-explicit-conflict-cycle-v1;mention-complete-artifact-membership-explicit-scope-v1;entity-explicit-exhaustive-remap-receipt-supersession-v1;receipt-relevant-proof-budget-v2;eligibility-full-note-transitive-v1;packet-source-lifecycle-v2;derived-source-lifecycle-v1;opposing-accepted-assertions-v1;evidence-navigation-diagnostics-v1;bookkeeping-kind-v2;markdown-lexical-events-v2-ordinary-html-span-stream-v1;graph-readable-directed-endpoints-v1;unicode61 remove_diacritics 2;no-stemming",
+        "{};catalog-v1;canonical-unadopted-inspection-only-v2;bounded-envelope-claims-v1;adopted-review-candidates-v1;canonical-membership-bytewise-v1;source-original-content-span-quote-fence-structural-v2;typed-id-companion-v1;decisions-explicit-conflict-cycle-v1;mention-complete-artifact-membership-explicit-scope-v1;entity-explicit-exhaustive-remap-receipt-supersession-v1;receipt-relevant-proof-budget-v2;eligibility-full-note-transitive-v1;packet-source-lifecycle-v2;derived-source-lifecycle-v1;opposing-accepted-assertions-v1;evidence-navigation-diagnostics-v1;bookkeeping-kind-v2;markdown-lexical-events-v2-ordinary-html-span-stream-v1;graph-readable-directed-endpoints-v1;unicode61 remove_diacritics 2;no-stemming",
         crate::records::parser_fingerprint()
     ))
 }
@@ -99,12 +99,12 @@ pub(crate) fn input_notes(
 }
 
 /// A safely delimited scalar ID still reserves identity when later metadata is invalid.
-pub(crate) fn readable_id(note: &ParsedNote) -> Option<RecordId> {
-    let ids = readable_ids(note);
+pub(crate) fn readable_id(note: &ParsedNote) -> Result<Option<RecordId>> {
+    let ids = readable_ids(note)?;
     if ids.len() == 1 {
-        ids.into_iter().next()
+        Ok(ids.into_iter().next())
     } else {
-        None
+        Ok(None)
     }
 }
 
@@ -291,7 +291,7 @@ fn project_notes(
 ) -> Result<ValidationProjection> {
     let mut memberships: BTreeMap<RecordId, Vec<VaultRelativePath>> = BTreeMap::new();
     for (path, note) in notes {
-        for id in readable_ids(note) {
+        for id in readable_ids(note)? {
             if let Some(sink) = retrieval.as_deref_mut() {
                 sink.identity_claim(IdentityClaimRow {
                     id: id.clone(),
@@ -306,8 +306,9 @@ fn project_notes(
     let mut diagnostics = Vec::new();
     let mut records = BTreeMap::new();
     for (path, note) in notes {
-        let id = readable_id(note);
-        for claimed in readable_ids(note) {
+        let id = readable_id(note)?;
+        let has_claim = crate::sources::identity::has_wiki_claim(note)?;
+        for claimed in readable_ids(note)? {
             if let Some(paths) = memberships.get(&claimed).filter(|paths| paths.len() > 1) {
                 diagnostics.push(diagnostic(
                     path,
@@ -317,7 +318,7 @@ fn project_notes(
                 ));
             }
         }
-        for error in &note.diagnostics {
+        for error in note.diagnostics.iter().filter(|_| has_claim) {
             diagnostics.push(diagnostic(
                 path,
                 id.as_ref(),
@@ -407,7 +408,7 @@ fn project_notes(
                 .as_ref()
                 .and_then(|record| records.get(record.id()))
                 .filter(|row| &row.path == path);
-            retrieval.document(super::row_projection::canonical_document(path, note, row))?;
+            retrieval.document(super::row_projection::canonical_document(path, note, row)?)?;
             let body = std::str::from_utf8(note.body()).unwrap_or_default();
             let body_offset = note.raw.len() - note.body().len();
             for link in extract_links(body) {
@@ -924,6 +925,109 @@ mod tests {
                     .iter()
                     .any(|diagnostic| diagnostic.path.as_str() == "malformed.md")
             );
+        }
+    }
+
+    #[test]
+    fn suspected_openers_reserve_identity_without_adoption_in_both_projectors() {
+        for opener in ["", "--\n", "----\n", "\u{feff}--\r\n"] {
+            let (_temp, fs, mut input) = fixture();
+            let damaged = format!("{opener}wiki_schema: '1'\nwiki_kind: entity\nwiki_id: a\nwiki_id: spare_claim\ntitle: Damaged\n---\nBody stays physical.\n").into_bytes();
+            input.overlay.push(ProposedTarget {
+                path: path("damaged-opener.md"),
+                bytes: Some(damaged.clone()),
+            });
+            let full = project_closed(&fs, &input).unwrap();
+            assert!(!full.records.contains_key(&id("a")));
+            assert!(!full.records.contains_key(&id("spare_claim")));
+            assert!(full.records.contains_key(&id("b")));
+            assert!(full.records.contains_key(&id("source_a")));
+            assert!(
+                full.diagnostics
+                    .iter()
+                    .any(|d| d.path == path("damaged-opener.md")
+                        && d.details["details"]["reason"] == "suspected_wiki_envelope")
+            );
+            assert!(full.diagnostics.iter().any(
+                |d| d.path == path("entities/a.md") && d.code == ErrorCode::ReferenceAmbiguous
+            ));
+            let document = full
+                .documents
+                .iter()
+                .find(|d| d.path == path("damaged-opener.md"))
+                .unwrap();
+            assert!(document.record_id.is_none());
+            assert_eq!(document.eligibility, Eligibility::Invalid);
+            assert_eq!(document.raw_text.as_bytes(), &damaged);
+            let mut sink = CollectingRetrievalSink::default();
+            let normalized = project_normalized_with_sink(&fs, &input, true, &mut sink).unwrap();
+            // Normalized serving moves flattened dependencies into observed
+            // facts and direct paths. Compare the same semantic row shape as
+            // the established eligibility_facts differential oracle.
+            let mut comparable_records = full.records.clone();
+            for row in comparable_records.values_mut() {
+                row.dependencies.clear();
+            }
+            assert!(
+                normalized
+                    .validation
+                    .records
+                    .values()
+                    .all(|row| row.dependencies.is_empty())
+            );
+            assert_eq!(normalized.validation.records, comparable_records);
+            assert_eq!(normalized.validation.diagnostics, full.diagnostics);
+            assert_eq!(
+                sink.documents
+                    .iter()
+                    .find(|d| d.path == path("damaged-opener.md")),
+                Some(document)
+            );
+            let view = SourceView::from_closed_input(&fs, &input).unwrap();
+            assert_eq!(
+                view.resolve(&id("a"), RecordKind::Entity, None)
+                    .unwrap_err()
+                    .code,
+                ErrorCode::ReferenceAmbiguous
+            );
+        }
+    }
+
+    #[test]
+    fn leading_example_boundary_prevents_incidental_reservation_or_diagnostics() {
+        let (_temp, fs, mut input) = fixture();
+        let before = project_closed(&fs, &input).unwrap();
+        for (name, bytes) in [
+            (
+                "heading.md",
+                "# Example\nwiki_schema: '1'\nwiki_kind: entity\nwiki_id: a\n",
+            ),
+            (
+                "fence.md",
+                "```yaml\nwiki_schema: '1'\nwiki_kind: entity\nwiki_id: a\n```\n",
+            ),
+            ("lone.md", "wiki_id: a\n"),
+            (
+                "multiline.md",
+                "author: |\n  wiki_schema: '1'\n  wiki_kind: entity\n  wiki_id: a\n",
+            ),
+        ] {
+            input.overlay.push(ProposedTarget {
+                path: path(name),
+                bytes: Some(bytes.as_bytes().to_vec()),
+            });
+        }
+        let after = project_closed(&fs, &input).unwrap();
+        assert_eq!(after.records, before.records);
+        assert_eq!(after.diagnostics, before.diagnostics);
+        for name in ["heading.md", "fence.md", "lone.md", "multiline.md"] {
+            let document = after
+                .documents
+                .iter()
+                .find(|d| d.path == path(name))
+                .unwrap();
+            assert!(document.record_id.is_none());
+            assert_eq!(document.eligibility, Eligibility::Unsupported);
         }
     }
 

@@ -43,7 +43,7 @@ fn invoke(root: &Path, args: &[&str]) -> (i32, Value) {
     assert!(!output.stdout.contains(&0x1b));
     let envelope: Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(envelope["meta"]["network_used"], false);
-    let schema: Value = serde_json::from_str(include_str!("../schemas/output-v1.json")).unwrap();
+    let schema: Value = serde_json::from_str(include_str!("../schemas/output-v2.json")).unwrap();
     jsonschema::validator_for(&schema)
         .unwrap()
         .validate(&envelope)

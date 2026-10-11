@@ -1,6 +1,6 @@
 //! Immutable canonical notes with lookup indexes built once per source view.
 use crate::{
-    domain::{RecordId, RecordKind, VaultRelativePath},
+    domain::{RecordId, RecordKind, Result, VaultRelativePath, WikiError},
     records::{LinkResolution, ParsedNote, RegistryEntry, links::IndexedRegistry},
 };
 use std::{collections::BTreeMap, ops::Deref, rc::Rc};
@@ -41,14 +41,18 @@ impl SourceNotes {
     }
 }
 
-impl From<BTreeMap<VaultRelativePath, ParsedNote>> for SourceNotes {
-    fn from(notes: BTreeMap<VaultRelativePath, ParsedNote>) -> Self {
+impl TryFrom<BTreeMap<VaultRelativePath, ParsedNote>> for SourceNotes {
+    type Error = WikiError;
+    fn try_from(notes: BTreeMap<VaultRelativePath, ParsedNote>) -> Result<Self> {
         let mut claims = BTreeMap::new();
         let mut entries = Vec::new();
         for (path, note) in &notes {
             // readable_ids deduplicates declarations within one note. Identity
             // ambiguity counts distinct claiming paths, including invalid notes.
-            for id in super::identity::readable_ids(note) {
+            for id in super::identity::readable_ids(note).map_err(|mut error| {
+                error.details = serde_json::json!({"path": path, "max_envelope_bytes": super::identity::MAX_RESERVATION_BYTES, "max_candidates": super::identity::MAX_RESERVATION_FIELDS});
+                error
+            })? {
                 *claims.entry(id).or_insert(0) += 1;
             }
             if let Some(record) = &note.canonical {
@@ -60,13 +64,13 @@ impl From<BTreeMap<VaultRelativePath, ParsedNote>> for SourceNotes {
                 });
             }
         }
-        Self {
+        Ok(Self {
             inner: Rc::new(SourceNotesInner {
                 notes,
                 claims,
                 registry: IndexedRegistry::new(entries),
             }),
-        }
+        })
     }
 }
 
@@ -111,14 +115,17 @@ mod tests {
             VaultRelativePath::new("broken.md").unwrap(),
             parse_note(repeated),
         )]);
-        let notes = SourceNotes::from(one.clone());
+        let notes = SourceNotes::try_from(one.clone()).unwrap();
         assert_eq!(notes.inner.claims.get(&id), Some(&1));
         let mut two = one;
         two.insert(
             VaultRelativePath::new("entity.md").unwrap(),
             parse_note(&entity(id.as_str())),
         );
-        assert_eq!(SourceNotes::from(two).inner.claims.get(&id), Some(&2));
+        assert_eq!(
+            SourceNotes::try_from(two).unwrap().inner.claims.get(&id),
+            Some(&2)
+        );
     }
 
     #[test]

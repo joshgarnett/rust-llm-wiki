@@ -56,6 +56,22 @@ pub(crate) enum DocumentMutation {
         reasons: Vec<String>,
     },
 }
+impl DocumentMutation {
+    /// Exact author-note replacements own policy membership, including empty
+    /// membership for ordinary notes. Captured payloads and metadata-only
+    /// changes do not replace an author envelope.
+    pub(super) fn author_note_row(&self) -> Option<&DocumentRow> {
+        match self {
+            Self::Put { row } | Self::MovePage { row, .. }
+                if row.source_id.is_none() && row.owner_revision.is_none() =>
+            {
+                Some(row)
+            }
+            _ => None,
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct OwnedLinks {

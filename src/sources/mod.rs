@@ -17,3 +17,5 @@ pub use types::*;
 #[cfg(test)]
 #[path = "capture_named_tests.rs"]
 mod capture_named_tests;
+
+pub mod path_refresh;

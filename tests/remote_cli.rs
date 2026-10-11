@@ -80,17 +80,21 @@ fn remote_cli_dry_run_needs_no_provider_and_preserves_vault_bytes() {
 }
 #[test]
 fn native_api_cli_stages_proposals_and_offline_reuses_paid_output() {
-    native_api_cli_case(false, false);
+    native_api_cli_case(false, false, false);
 }
 #[test]
 fn native_api_cli_failed_paid_response_reports_actual_network_activity() {
-    native_api_cli_case(true, false);
+    native_api_cli_case(true, false, false);
 }
 #[test]
 fn native_responses_api_cli_stages_and_reuses_projected_schema_output() {
-    native_api_cli_case(false, true);
+    native_api_cli_case(false, true, false);
 }
-fn native_api_cli_case(invalid_response: bool, responses: bool) {
+#[test]
+fn saved_generation_configuration_resumes_without_amending_retained_limits() {
+    native_api_cli_case(false, true, true);
+}
+fn native_api_cli_case(invalid_response: bool, responses: bool, saved: bool) {
     let f = Fixture::new();
     let listener = std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).unwrap();
     let address = listener.local_addr().unwrap();
@@ -190,17 +194,41 @@ fn native_api_cli_case(invalid_response: bool, responses: bool) {
     } else {
         content
     };
+    let content = if saved {
+        // The saved lifetime must admit the complete configured attempt timeout.
+        // This loopback fixture responds immediately and needs no 120s default.
+        content.replace(
+            "model=\"test-model\"",
+            "timeout_seconds=5\nmodel=\"test-model\"",
+        )
+    } else {
+        content
+    };
     std::fs::write(&config, content).unwrap();
+    let preferences = f.temp.path().join("saved-config.toml");
+    let save_preferences = |requests| {
+        let mut document = lwiki::config::LocalConfigDocument {
+            providers_config: Some(config.clone()),
+            ..Default::default()
+        };
+        document.defaults.profile = Some("primary".into());
+        document.allowed_profiles = vec!["primary".into()];
+        document.remote.max_requests = Some(requests);
+        document.remote.deadline_ms = Some(20000 + requests * 100);
+        embedding_fixture::private_write(&preferences, toml::to_string(&document).unwrap());
+    };
+    if saved {
+        save_preferences(3);
+    }
     let invoke = |offline: bool| {
         let mut command =
             std::process::Command::new(test_paths::binary(env!("CARGO_BIN_EXE_lwiki")));
-        command.args([
-            "--wiki",
-            f.temp.path().to_str().unwrap(),
-            "--json",
-            "--profile",
-            "primary",
-        ]);
+        command.args(["--wiki", f.temp.path().to_str().unwrap(), "--json"]);
+        if saved {
+            command.args(["--config", preferences.to_str().unwrap()]);
+        } else {
+            command.args(["--no-user-config", "--profile", "primary"]);
+        }
         if offline {
             command.arg("--offline");
         }
@@ -213,9 +241,10 @@ fn native_api_cli_case(invalid_response: bool, responses: bool) {
             "api",
             "--run",
             "run_cli",
-            "--providers-config",
-            config.to_str().unwrap(),
         ]);
+        if !saved {
+            command.args(["--providers-config", config.to_str().unwrap()]);
+        }
         command.env("EXPLICIT_FIXTURE_TOKEN", "synthetic-cli-secret");
         let result = command.output().unwrap();
         let value: Value = serde_json::from_slice(&result.stdout).unwrap();
@@ -237,7 +266,31 @@ fn native_api_cli_case(invalid_response: bool, responses: bool) {
         return;
     }
     assert!(first["data"]["import"]["prepared"].is_object());
+    if saved {
+        save_preferences(9);
+    }
     let second = invoke(true);
+    if saved {
+        let ledger = lwiki::jobs::JobLedger::new(
+            f.fs.clone(),
+            f.app.vault_id().clone(),
+            id("run_cli"),
+            f.options.clone(),
+        )
+        .unwrap();
+        let retained = ledger.inspect().unwrap();
+        assert_eq!(retained.spec.limits.requests, 3);
+        assert_eq!(retained.effective_limits.requests, 3);
+        assert_eq!(
+            retained.spec.deadline_utc_ms - retained.spec.created_at_utc_ms,
+            20_300
+        );
+        assert_eq!(
+            retained.effective_deadline_utc_ms,
+            retained.spec.deadline_utc_ms
+        );
+        assert_eq!(retained.budget.dispatched_requests, 1);
+    }
     assert_eq!(second["meta"]["network_used"], false);
     assert_eq!(second["data"]["reused"], true);
     assert_eq!(second["data"]["output"], first["data"]["output"]);
@@ -1534,7 +1587,7 @@ fn native_embedding_cli_sync_query_graph_context_and_cached_offline_reuse() {
     let address = listener.local_addr().unwrap();
     listener.set_nonblocking(true).unwrap();
     let server = std::thread::spawn(move || {
-        for _ in 0..2 {
+        for request_number in 0..2 {
             let deadline = Instant::now() + Duration::from_secs(20);
             let mut socket = loop {
                 match listener.accept() {
@@ -1573,6 +1626,14 @@ fn native_embedding_cli_sync_query_graph_context_and_cached_offline_reuse() {
                             serde_json::from_slice(&bytes[end + 4..end + 4 + length]).unwrap();
                         assert_eq!(request["encoding_format"], "float");
                         assert_eq!(request["input"].as_array().unwrap().len(), 1);
+                        assert_eq!(request["model"], "test-model");
+                        assert!(request["input"][0].as_str().unwrap().starts_with(
+                            if request_number == 0 {
+                                "document: "
+                            } else {
+                                "query: "
+                            }
+                        ));
                         break;
                     }
                 }
@@ -1591,6 +1652,18 @@ fn native_embedding_cli_sync_query_graph_context_and_cached_offline_reuse() {
         &format!("url='http://{address}/exact-embedding?retained=yes'\nallow_loopback_http=true"),
     );
     embedding_fixture::private_write(&f.config, content);
+    let preferences = f.fs.root().path().join("saved-config.toml");
+    let mut document = lwiki::config::LocalConfigDocument {
+        providers_config: Some(f.config.clone()),
+        ..Default::default()
+    };
+    document.defaults.profile = Some("primary".into());
+    document.allowed_profiles = vec!["primary".into()];
+    document.embeddings.document_prefix = Some("document: ".into());
+    document.embeddings.query_prefix = Some("query: ".into());
+    document.embeddings.max_input_bytes = Some(4096);
+    document.remote.max_requests = Some(3);
+    embedding_fixture::private_write(&preferences, toml::to_string(&document).unwrap());
     let invoke = |command: &[&str], offline: bool| {
         let mut process =
             std::process::Command::new(test_paths::binary(env!("CARGO_BIN_EXE_lwiki")));
@@ -1598,15 +1671,13 @@ fn native_embedding_cli_sync_query_graph_context_and_cached_offline_reuse() {
             "--wiki",
             f.fs.root().path().to_str().unwrap(),
             "--json",
-            "--profile",
-            "primary",
+            "--config",
+            preferences.to_str().unwrap(),
         ]);
         if offline {
             process.arg("--offline");
         }
-        process
-            .args(command)
-            .args(["--providers-config", f.config.to_str().unwrap()]);
+        process.args(command);
         let result = process.output().unwrap();
         let value: Value = serde_json::from_slice(&result.stdout).unwrap();
         assert!(result.status.success(), "{value}");

@@ -1,6 +1,6 @@
 # CLI and skill technical contract
 
-Status: implementation contract; integrated v0.3.0 recipes need their declared validation gates. `lwiki` remains the working binary name. The library owns behavior; terminal formatting and agent protocols adapt the same operations.
+The library owns command behavior. Terminal output and agent instructions use the same operations.
 
 ## Invocation, scope, and configuration
 
@@ -18,19 +18,34 @@ exists. Invalid explicit/nearer/default targets fail rather than falling through
 Resolve one immutable selection context per command; mutation guards verify
 `--expect-wiki-id` independently of whole-file author hashes.
 
-Load one bounded private JSON preferences snapshot. Ambient configuration uses
-absolute XDG_CONFIG_HOME/lwiki/config.json, otherwise HOME/.config/lwiki/config.json.
-Relative XDG is rejected. Explicit `--preferences FILE` replaces ambient lookup;
-`--no-user-config` bypasses ambient configuration and may coexist with explicit
-preferences. Schema-v1 reads preserve bytes; explicit supported writes migrate to
-v2 with an exact backup, while unknown versions refuse. One default contains the
-canonical root and wiki ID; vault overrides remain keyed by ID. Help/version/schema
-lookup does not require user configuration. Malformed selected config names its exact
-path and bypass. Unused default targets are not opened for an explicit/ancestor choice.
+Load one bounded user configuration snapshot. Ambient discovery checks
+`$XDG_CONFIG_HOME/lwiki/config.toml`, otherwise `$HOME/.config/lwiki/config.toml`.
+Relative XDG is rejected. If TOML is absent, read the sibling legacy `config.json`.
+When both exist, TOML wins and inspection reports the preserved legacy path.
+Invalid winning TOML never falls back. Explicit `--preferences FILE` (`--config`)
+replaces ambient discovery, including with `--no-user-config`. A `.toml` suffix
+selects TOML; historical other filenames select JSON, without parse fallback.
 
-Preference precedence is command options, user-local vault overrides, portable
-WIKI.md preferences, then built-ins. Offline is final. Portable preferences cannot
-authorize provider endpoints/credentials, executable helpers, TLS or host access.
+TOML uses schema3; JSON schemas1,2,3 remain readable. Legacy versions reject new
+provider/default tables. Reads never migrate. Setup can explicitly migrate JSON
+to TOML, preserving the exact original and a versioned backup. Conflicting
+backup/destination bytes refuse untouched. Publication and durable sync are
+separate outcomes; retries verify unchanged files and confirm durability.
+
+Precedence is explicit CLI options, ID-keyed user vault overrides, user defaults,
+portable WIKI.md preferences, then built-ins. Explicit offline is final. Global
+user config can select a private provider file and embedding/new-job defaults;
+portable wiki preferences cannot provide endpoints, credentials, helpers or grants.
+Every remote consumer uses the resolved profile. `--no-user-config` also disables
+ambient provider authority lookup unless an explicit preferences file was selected.
+Retained jobs keep their limits/accounting; configured defaults are not CLI budget
+amendments. Explicit cost overrides use the effective currency; amendments default
+to a retained cost currency before the user-configured currency.
+
+The default wiki contains its canonical path and expected ID. Help/version/schema
+lookup does not require user configuration. An invalid config reports its path and
+a bypass. Unused defaults are not opened for an explicit/ancestor selection.
+
 Init/default registration are separate durable outcomes. Init requires explicit
 existing-folder intent and all reserved top-level entries absent before writer state
 or directory mutation, including preview. Physical inspect/edit and path-selected
@@ -38,38 +53,40 @@ Source refresh follow the [current adapter contracts](../current-contracts.md).
 
 ## Command surface
 
-Commands appear in `capabilities` only when implemented. The following is the implementation target, grouped by milestone rather than a claim of present support.
+`capabilities` is the command registry. This table describes common operations;
+use each command's `--help` for its arguments.
 
-| Command | Input and outcome | Milestone |
-|---|---|---|
-| `init PATH [--existing] [--set-default]` | Preflight reserved names, preserve author/editor files, write authored WIKI.md last; optionally register fallback separately | Implemented |
-| `capabilities`, `schema NAME` | Versioned capability manifest or named JSON schema; no network | Implemented |
-| `read --id ID` or `read --path PATH` | Record metadata and bounded body; optional byte range on verified UTF-8 boundaries. Dry-run returns only a request plan. | Implemented |
-| `page put --file FILE` | Create a page; `--if-match HASH` required to replace an existing page | Implemented |
-| `page rename ID --to PATH --if-match HASH` | Changeset updating the path and known incoming links; ID preserved | Implemented |
-| `source add FILE` | Capture immutable bytes and normalized text for supported local formats | Implemented |
-| `source import prepare/run/resume/status` | Freeze a local JSONL list, publish bounded shared-change groups and retain progress/mappings | Subsequent workflow |
-| `source refresh ID --file FILE` | Add a revision; unchanged capture is idempotent | Implemented |
-| `source refresh-batch --file REQUEST.json` | [Guarded 1–16 existing Source refreshes](../../user/sources-and-providers.md#refresh-a-guarded-batch), one combined publication on a normalized catalog | Subsequent workflow |
-| `source withdraw ID --reason TEXT` | Persist withdrawal and invalidate dependent current evidence | Implemented |
-| `evidence revalidate ID --to-revision REV --if-match HASH` | Stage successor evidence only when the original quote matches uniquely in the target source revision | Implemented |
-| `index sync`, `index rebuild` | Refresh/recreate local projections; never embed or extract | Implemented |
-| `search QUERY` | Ranked discovery, document-first lexical default | Implemented |
-| `graph neighbors ID`, `graph query QUERY` | Page/provenance navigation or typed graph search | Implemented |
-| `context QUERY` | Select verified evidence under byte/token budgets | Implemented |
-| `check`, `doctor` | Knowledge/format diagnostics; installation/index/profile diagnostics | Implemented |
-| `changes show ID`, `changes apply ID` | Inspect exact payloads, then apply with expected hashes and recovery journal | M1–M2 |
-| `changes abort ID`, `changes rollback ID` | Abort an unapplied preparation; or stage a journaled inverse guarded by the original proposed hashes | Implemented |
-| `recover` | Reconcile incomplete local operations; preserve unfamiliar edits | Implemented |
-| `graph extract --executor agent` | Persist a bounded extraction packet and return it to the caller; does not launch a host | Implemented |
-| `graph import --file FILE` | Validate packet-bound extraction output and stage proposed records | Implemented |
-| `graph resolve --file RESOLUTION.json` | Stage explicit bindings from source-local mentions to existing or new entities | Implemented |
-| `graph review --file REVIEW.json` | Stage recorded acceptance/rejection and evidence assessments by an authorized human or agent | Implemented |
-| `graph decide --file DECISION.json` | Stage explicit entity merges, splits, or alias additions with expected hashes and complete reference remaps | Implemented |
-| `skill export --target HOST --output DIR` | Export the maintained portable usage skill for explicit installation | Implemented |
-| `embeddings check`, `embeddings sync` | Validate/probe the configured profile; explicitly generate missing vectors | Implemented |
-| `graph extract --executor api` | Execute the same extraction contract through the generation adapter | Implemented |
-| `research plan`, `run`, `resume`, `import`, `status`, `report` | Local [agent handoffs](research-handoffs.md), guarded imports and cited reports | Implemented |
+| Command | Input and outcome |
+|---|---|
+| `setup [PATH]`, `config show` | Guided persistent wiki/provider/agent setup and safe configuration inspection |
+| `init PATH [--existing] [--set-default]` | Preflight reserved names, preserve author/editor files; publish a complete new root or a complete marker before managed state in an existing folder; register fallback separately |
+| `capabilities`, `schema NAME` | Versioned capability manifest or named JSON schema; no network |
+| `read --id ID` or `read --path PATH` | Record metadata and bounded body; optional byte range on verified UTF-8 boundaries. Dry-run returns only a request plan. |
+| `page put --file FILE` | Create a page; `--if-match HASH` required to replace an existing page |
+| `page rename ID --to PATH --if-match HASH` | Changeset updating the path and known incoming links; ID preserved |
+| `source add FILE` | Capture immutable bytes and normalized text for supported local formats |
+| `source import prepare/run/resume/status` | Freeze a local JSONL list, publish bounded shared-change groups and retain progress/mappings |
+| `source refresh ID --file FILE` | Add a revision; unchanged capture is idempotent |
+| `source refresh-batch --file REQUEST.json` | [Guarded 1–16 existing Source refreshes](../../user/sources-and-providers.md#refresh-a-guarded-batch), one combined publication on a normalized catalog |
+| `source withdraw ID --reason TEXT` | Persist withdrawal and invalidate dependent current evidence |
+| `evidence revalidate ID --to-revision REV --if-match HASH` | Stage successor evidence only when the original quote matches uniquely in the target source revision |
+| `index sync`, `index rebuild` | Refresh/recreate local projections; never embed or extract |
+| `search QUERY` | Ranked discovery, document-first lexical default |
+| `graph neighbors ID`, `graph query QUERY` | Page/provenance navigation or typed graph search |
+| `context QUERY` | Select verified evidence under byte/token budgets |
+| `check`, `doctor` | Knowledge/format diagnostics; installation/index/profile diagnostics |
+| `changes show ID`, `changes apply ID` | Inspect exact payloads, then apply with expected hashes and recovery journal |
+| `changes abort ID`, `changes rollback ID` | Abort an unapplied preparation; or stage a journaled inverse guarded by the original proposed hashes |
+| `recover` | Reconcile incomplete local operations; preserve unfamiliar edits |
+| `graph extract --executor agent` | Persist a bounded extraction packet and return it to the caller; does not launch a host |
+| `graph import --file FILE` | Validate packet-bound extraction output and stage proposed records |
+| `graph resolve --file RESOLUTION.json` | Stage explicit bindings from source-local mentions to existing or new entities |
+| `graph review --file REVIEW.json` | Stage recorded acceptance/rejection and evidence assessments by an authorized human or agent |
+| `graph decide --file DECISION.json` | Stage explicit entity merges, splits, or alias additions with expected hashes and complete reference remaps |
+| `skill export --target HOST --output DIR` | Export the maintained portable usage skill for explicit installation |
+| `embeddings check`, `embeddings sync` | Validate/probe the configured profile; explicitly generate missing vectors |
+| `graph extract --executor api` | Execute the same extraction contract through the generation adapter |
+| `research plan`, `run`, `resume`, `import`, `status`, `report` | Local [agent handoffs](research-handoffs.md), guarded imports and cited reports |
 
 `--file -` reads bounded stdin. Body text, bulk payloads, and secrets are not interpolated into shell strings. No command depends on an editor, pager, `jq`, or `rg`. Editor launching can follow after the deterministic file/stdin write path exists. No default destructive purge command or automatic Git commit is needed for v1.
 
@@ -254,7 +271,32 @@ Cancellation stops scheduling new work and asks active workers to stop. It does 
 
 ## Skill packaging and compatibility
 
-Maintain one release-matched skill source, with a concise `SKILL.md` and on-demand command/research references. M2 generates examples from the implemented command/schema registry; no aspirational command goes into the installed skill. Export explicit target layouts described in [agent integration](../../user/integration.md#export-an-agent-workflow), avoiding duplicate discovery roots. Do not overwrite existing host instruction files.
+Maintain one release-matched skill source, with a concise `SKILL.md` and on-demand command/research references. Generate examples from the implemented command/schema registry; describe only commands the installed binary provides. Export explicit target layouts described in [agent integration](../../user/integration.md#connect-your-agent), avoiding duplicate discovery roots. Do not overwrite existing host instruction files.
+
+`skill install`, `status`, `update` and `remove` select an explicit host and
+`--scope user|project`. User scope defaults to HOME; project scope defaults to
+the current directory. `--directory` selects the scope root, not a final skill
+folder. Setup uses the same operation with `--agent-scope` and `--agent-directory`.
+Neither route edits existing root instruction files such as AGENTS.md or CLAUDE.md.
+
+One immutable package is shared by installed host links. Codex and Cursor share
+`.agents/skills/llm-wiki`; Claude Code uses `.claude/skills/llm-wiki`. User packages
+live under `.local/share/lwiki/skills`; project packages remain inside the hidden
+`.agents/skills/.lwiki` subtree so their agents link resolves within its discovery
+root. Keep host selections separate from physical links: removing Codex must
+preserve the shared link while Cursor is selected, and vice versa.
+
+Ownership records contain only current state and at most one pending operation.
+Before changing a public link, save its staged identity durably. Interrupted
+operations verify recorded file identities and exact bytes or link targets before
+continuing; matching a target string alone does not establish ownership. Cleanup
+uses the exact unchanged files named by that operation. Unknown or edited files
+remain untouched. Successful changes do not accumulate a history that eventually
+blocks updates. Status and preview do not repair or create files.
+
+Installation reports distinguish applied changes, confirmed durability and failed
+or pending work. A successful file installation does not prove that a host has
+loaded or used the instructions. Validate discovery and invocation separately.
 
 The skill checks capabilities, locates `WIKI.md`, retrieves bounded evidence, requests extraction packets, imports results, preserves unresolved identities/contradictions, validates expected hashes, and applies authorized changes. It distinguishes local embedding storage from remote embedding generation, and advisory host-agent spend from CLI-enforced budgets. It does not instruct agents to install Python/Node, host a model, or reread the whole vault.
 

@@ -2,6 +2,7 @@ name: Release build
 
 on:
   workflow_dispatch:
+  workflow_call:
 
 permissions:
   contents: read
@@ -12,25 +13,17 @@ concurrency:
 
 jobs:
   native:
-    name: ${{ matrix.target }}
+    name: Build final ${{ matrix.target }} archive once
     strategy:
       fail-fast: false
       matrix:
         include:
           - runner: ubuntu-24.04
             target: x86_64-unknown-linux-gnu
-          - runner: ubuntu-24.04-arm
-            target: aarch64-unknown-linux-gnu
-          - runner: macos-26-intel
-            target: x86_64-apple-darwin
-          - runner: macos-26
+          - runner: macos-15
             target: aarch64-apple-darwin
-          - runner: windows-2025
-            target: x86_64-pc-windows-msvc
-          - runner: windows-11-arm
-            target: aarch64-pc-windows-msvc
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 60
+    timeout-minutes: 90
     defaults:
       run:
         shell: bash
@@ -39,41 +32,246 @@ jobs:
         with:
           persist-credentials: false
       - uses: ./.github/actions/setup
-      - name: Verify native target and source commit
+      - name: Verify native target and clean source commit
         env:
           EXPECTED_TARGET: ${{ matrix.target }}
           EXPECTED_COMMIT: ${{ github.sha }}
         run: |
           set -euo pipefail
-          task_python=python3
-          if [[ "$RUNNER_OS" = Windows ]]; then task_python=python; fi
-          test "$("$task_python" scripts/bazel.py --print-target)" = "$EXPECTED_TARGET"
+          test "$(python3 scripts/bazel.py --print-target)" = "$EXPECTED_TARGET"
           test "$(git rev-parse HEAD)" = "$EXPECTED_COMMIT"
           test -z "$(git status --porcelain)"
-      - name: Unix format, lint and smoke gate
-        if: runner.os != 'Windows'
-        run: just ci
-      - name: Windows full-source build and tooling tests
-        if: runner.os == 'Windows'
-        run: |
-          python scripts/bazel.py -- build --nofetch //:build //:test_build
-          just build-tools-test
-      - name: Build native release candidate
-        run: just candidate "$RUNNER_TEMP/lwiki-candidate"
-      - name: Native Unix release recipe tests
-        if: runner.os != 'Windows'
-        run: python3 scripts/bazel.py -- test --nofetch --config=release --nocache_test_results //:skill_export_test
-      - name: Retain release archive, checksum and diagnostics
+      - name: Documentation and build-tool checks
+        run: just docs-check build-tools-test
+      - name: Build the final native archive
+        run: python3 scripts/build_artifact.py "$RUNNER_TEMP/final-artifact"
+      - name: Retain the final archive and build diagnostics
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: lwiki-${{ matrix.target }}-${{ github.sha }}
+          name: native-archive-${{ matrix.target }}-${{ github.sha }}
           path: |
-            ${{ runner.temp }}/lwiki-candidate/*.tar.gz
-            ${{ runner.temp }}/lwiki-candidate/*.sha256
-            ${{ runner.temp }}/lwiki-candidate/*.json
-            ${{ runner.temp }}/lwiki-candidate/*.jsonl
-            ${{ runner.temp }}/lwiki-candidate/*.txt
-            ${{ runner.temp }}/lwiki-candidate/*.log
+            ${{ runner.temp }}/final-artifact/*.tar.gz
+            ${{ runner.temp }}/final-artifact/*.sha256
+            ${{ runner.temp }}/final-artifact/*.json
+            ${{ runner.temp }}/final-artifact/*.jsonl
+            ${{ runner.temp }}/final-artifact/*.txt
+            ${{ runner.temp }}/final-artifact/*.log
           if-no-files-found: warn
-          retention-days: 14
+          retention-days: 30
+
+  verify-archives:
+    name: Verify both archives and prepare installation inputs
+    needs: native
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install executable inspection tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes llvm-18 binutils
+          test -x /usr/lib/llvm-18/bin/llvm-otool
+          printf '%s\n' /usr/lib/llvm-18/bin >> "$GITHUB_PATH"
+          command -v readelf
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: native-archive-*-${{ github.sha }}
+          path: ${{ runner.temp }}/native-assets
+      - name: Verify exact source, executable bytes and platform requirements
+        env:
+          EXPECTED_COMMIT: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_COMMIT"
+          test -z "$(git status --porcelain)"
+          task_version=$(python3 scripts/qualify_artifact.py --print-version)
+          python3 scripts/verify_release.py "$RUNNER_TEMP/native-assets" \
+            --commit "$EXPECTED_COMMIT" --version "$task_version" \
+            --manifest-output "$RUNNER_TEMP/qualification-assets" \
+            > "$RUNNER_TEMP/verified-archive-paths.json" \
+            2> "$RUNNER_TEMP/archive-verification.log"
+          python3 - "$RUNNER_TEMP/verified-archive-paths.json" "$RUNNER_TEMP/qualification-assets" <<'PY'
+          import json, pathlib, shutil, sys
+          for source in json.loads(pathlib.Path(sys.argv[1]).read_text()):
+              shutil.copy2(source, sys.argv[2])
+          shutil.copy2("scripts/install.sh", sys.argv[2])
+          PY
+      - name: Retain verified inputs for native installation tests
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: qualification-assets-${{ github.sha }}
+          path: ${{ runner.temp }}/qualification-assets/*
+          if-no-files-found: error
+          retention-days: 30
+      - name: Retain archive verification diagnostics
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: archive-verification-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/archive-verification.log
+            ${{ runner.temp }}/verified-archive-paths.json
+          if-no-files-found: warn
+          retention-days: 30
+
+  qualify:
+    name: Test final executable on ${{ matrix.runner }}
+    needs: verify-archives
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+            macos-major: ''
+          - runner: macos-15
+            target: aarch64-apple-darwin
+            macos-major: '15'
+          - runner: macos-26
+            target: aarch64-apple-darwin
+            macos-major: '26'
+          - runner: xcode-27
+            target: aarch64-apple-darwin
+            macos-major: '27'
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 150
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: qualification-assets-${{ github.sha }}
+          path: ${{ runner.temp }}/qualification-assets
+      - name: Run full native suites and installed own-note workflow
+        env:
+          EXPECTED_TARGET: ${{ matrix.target }}
+          EXPECTED_COMMIT: ${{ github.sha }}
+          RUNNER_LABEL: ${{ matrix.runner }}
+          MACOS_MAJOR: ${{ matrix.macos-major }}
+        run: |
+          set -euo pipefail
+          test "$(python3 scripts/bazel.py --print-target)" = "$EXPECTED_TARGET"
+          test "$(git rev-parse HEAD)" = "$EXPECTED_COMMIT"
+          test -z "$(git status --porcelain)"
+          task_version=$(python3 scripts/qualify_artifact.py --print-version)
+          task_extra=()
+          if [[ -n "$MACOS_MAJOR" ]]; then task_extra+=(--expected-macos-major "$MACOS_MAJOR"); fi
+          scripts/qualify-local.sh "$RUNNER_TEMP/lwiki-qualification" \
+            --archive "$RUNNER_TEMP/qualification-assets/lwiki-$task_version-$EXPECTED_TARGET.tar.gz" \
+            --release-dir "$RUNNER_TEMP/qualification-assets" \
+            --runner-label "$RUNNER_LABEL" "${task_extra[@]}"
+      - name: Retain successful and failed native evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: native-evidence-${{ matrix.runner }}-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/lwiki-qualification/*.log
+            ${{ runner.temp }}/lwiki-qualification/*.json
+            ${{ runner.temp }}/lwiki-qualification/*.jsonl
+            ${{ runner.temp }}/lwiki-qualification/*.txt
+            ${{ runner.temp }}/lwiki-qualification/*.sha256
+            ${{ runner.temp }}/lwiki-qualification/*.zip
+          if-no-files-found: warn
+          retention-days: 30
+
+  verify-assets:
+    name: Require all native results before staging final assets
+    if: always()
+    needs: [native, verify-archives, qualify]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Require every archive and native qualification job to pass
+        env:
+          NATIVE: ${{ needs.native.result }}
+          ARCHIVES: ${{ needs.verify-archives.result }}
+          QUALIFY: ${{ needs.qualify.result }}
+        run: |
+          set -euo pipefail
+          for task_result in "$NATIVE" "$ARCHIVES" "$QUALIFY"; do test "$task_result" = success; done
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install executable inspection tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes llvm-18 binutils
+          test -x /usr/lib/llvm-18/bin/llvm-otool
+          printf '%s\n' /usr/lib/llvm-18/bin >> "$GITHUB_PATH"
+          command -v readelf
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: native-archive-*-${{ github.sha }}
+          path: ${{ runner.temp }}/native-assets
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: qualification-assets-${{ github.sha }}
+          path: ${{ runner.temp }}/qualification-assets
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: native-evidence-*-${{ github.sha }}
+          path: ${{ runner.temp }}/native-evidence
+      - name: Verify both archives and all four native reports before staging
+        env:
+          EXPECTED_COMMIT: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_COMMIT"
+          test -z "$(git status --porcelain)"
+          task_version=$(python3 scripts/qualify_artifact.py --print-version)
+          python3 scripts/verify_release.py "$RUNNER_TEMP/native-assets" \
+            --commit "$EXPECTED_COMMIT" --version "$task_version" \
+            > "$RUNNER_TEMP/verified-archive-paths.json" 2> "$RUNNER_TEMP/final-verification.log"
+          python3 scripts/verify_native_qualification.py "$RUNNER_TEMP/native-evidence" \
+            --release-dir "$RUNNER_TEMP/qualification-assets" \
+            --commit "$EXPECTED_COMMIT" --version "$task_version" \
+            > "$RUNNER_TEMP/native-qualification.json" 2>> "$RUNNER_TEMP/final-verification.log"
+          python3 scripts/verify_release.py "$RUNNER_TEMP/native-assets" \
+            --commit "$EXPECTED_COMMIT" --version "$task_version" \
+            --manifest-output "$RUNNER_TEMP/verified-assets" \
+            > "$RUNNER_TEMP/verified-archive-paths.json" 2>> "$RUNNER_TEMP/final-verification.log"
+          python3 - "$RUNNER_TEMP/verified-archive-paths.json" "$RUNNER_TEMP/verified-assets" "$RUNNER_TEMP/qualification-assets" "$RUNNER_TEMP/native-qualification.json" <<'PY'
+          import json, pathlib, shutil, sys
+          destination, qualified = pathlib.Path(sys.argv[2]), pathlib.Path(sys.argv[3])
+          for name in ("release-manifest.json", "release-manifest.txt"):
+              if (destination / name).read_bytes() != (qualified / name).read_bytes():
+                  raise SystemExit("native reports refer to a different release manifest")
+          for source in json.loads(pathlib.Path(sys.argv[1]).read_text()):
+              shutil.copy2(source, destination)
+          shutil.copy2("scripts/install.sh", destination)
+          shutil.copy2(sys.argv[4], destination)
+          PY
+      - name: Retain final verification diagnostics
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: final-verification-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/final-verification.log
+            ${{ runner.temp }}/verified-archive-paths.json
+            ${{ runner.temp }}/native-qualification.json
+          if-no-files-found: warn
+          retention-days: 30
+      - name: Stage verified release assets
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: lwiki-verified-assets-${{ github.sha }}
+          path: ${{ runner.temp }}/verified-assets/*
+          if-no-files-found: error
+          retention-days: 30
+        # No release is published. All native rows must pass before these assets exist.

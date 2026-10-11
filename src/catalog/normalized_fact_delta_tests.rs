@@ -846,3 +846,275 @@ fn selected_old_record_json_identity_corruption_refuses_before_replacement() {
         f.before.validation.records[&f.source].path.as_str()
     );
 }
+
+// This matrix validates the structural membership domain independently of the
+// guarded operation kind. Sealed projectors still own write authorization.
+fn author_membership_delta() -> CatalogDelta {
+    use super::policy_delta::{PolicyDelta, PolicyMembershipUpdate};
+    let ordinary_path = path("ordinary.md");
+    let ordinary = parse_note(b"---\nauthor: reader\n---\n# Ordinary\n");
+    let adopted_path = path("adopted.md");
+    let adopted = parse_note(b"---\nwiki_schema: '1'\nwiki_id: page_membership\nwiki_kind: page\ntitle: Adopted\nwiki_status: reviewed\n---\nBody\n");
+    let record = RecordRow {
+        record: adopted.canonical.clone().unwrap(),
+        path: adopted_path.clone(),
+        hash: adopted.source_hash.clone(),
+        authored_status: Some("reviewed".into()),
+        eligibility: crate::domain::Eligibility::Current,
+        reasons: vec![],
+        identity_eligibility: None,
+        description_eligibility: None,
+        disputed: false,
+        dependencies: vec![],
+    };
+    let ordinary_row =
+        super::row_projection::canonical_document(&ordinary_path, &ordinary, None).unwrap();
+    let adopted_row =
+        super::row_projection::canonical_document(&adopted_path, &adopted, Some(&record)).unwrap();
+    let mut captured_row = ordinary_row.clone();
+    captured_row.path = path("sources/source_membership/revisions/revision_membership/content.md");
+    captured_row.source_id = Some(id("source_membership"));
+    captured_row.owner_revision = Some(id("revision_membership"));
+    let mut delta = empty();
+    delta.version = 3;
+    delta.records.push(record);
+    delta.documents = vec![
+        DocumentMutation::Put { row: ordinary_row },
+        DocumentMutation::Put { row: adopted_row },
+        DocumentMutation::Put { row: captured_row },
+        DocumentMutation::Metadata {
+            path: path("metadata-only.md"),
+            eligibility: crate::domain::Eligibility::Stale,
+            reasons: vec!["fixture".into()],
+        },
+    ];
+    delta.claims = vec![OwnedClaims {
+        path: ordinary_path.clone(),
+        rows: vec![],
+    }];
+    delta.facts.as_mut().unwrap().policy = Some(PolicyDelta {
+        retired_owners: vec![],
+        replacements: vec![],
+        memberships: [(ordinary_path, ordinary), (adopted_path, adopted)]
+            .into_iter()
+            .map(|(path, note)| PolicyMembershipUpdate {
+                keys: crate::graph::policy_inputs::policy_membership_keys(&path, &note).unwrap(),
+                path,
+                hash: note.source_hash,
+            })
+            .collect(),
+    });
+    delta
+}
+
+#[test]
+fn v3_author_note_membership_domain_is_exact_for_ordinary_and_adopted_puts() {
+    let delta = author_membership_delta();
+    delta.validate().unwrap();
+    for omitted in ["ordinary.md", "adopted.md"] {
+        let mut missing = delta.clone();
+        missing
+            .facts
+            .as_mut()
+            .unwrap()
+            .policy
+            .as_mut()
+            .unwrap()
+            .memberships
+            .retain(|member| member.path != path(omitted));
+        let error = missing.validate().unwrap_err();
+        assert_eq!(error.code, ErrorCode::IndexCorrupt);
+        assert!(
+            error.message.contains("exact policy membership"),
+            "{error:?}"
+        );
+    }
+    for extra in [
+        "sources/source_membership/revisions/revision_membership/content.md",
+        "metadata-only.md",
+        "unwritten.md",
+    ] {
+        let mut bad = delta.clone();
+        bad.facts
+            .as_mut()
+            .unwrap()
+            .policy
+            .as_mut()
+            .unwrap()
+            .memberships
+            .push(super::policy_delta::PolicyMembershipUpdate {
+                path: path(extra),
+                hash: Blake3Hash::digest(b"unowned membership"),
+                keys: BTreeSet::new(),
+            });
+        let error = bad.validate().unwrap_err();
+        assert_eq!(error.code, ErrorCode::IndexCorrupt);
+        assert!(
+            error.message.contains("exact policy membership"),
+            "{error:?}"
+        );
+    }
+    // Ordinary zero-key membership is a required replacement certificate.
+    assert!(
+        delta
+            .facts
+            .as_ref()
+            .unwrap()
+            .policy
+            .as_ref()
+            .unwrap()
+            .memberships
+            .iter()
+            .find(|member| member.path == path("ordinary.md"))
+            .unwrap()
+            .keys
+            .is_empty()
+    );
+}
+
+#[test]
+fn author_note_domain_excludes_every_capture_owner_and_metadata_combination() {
+    let delta = author_membership_delta();
+    let DocumentMutation::Put { row } = &delta.documents[0] else {
+        panic!("ordinary fixture")
+    };
+    for moved in [false, true] {
+        for source in [false, true] {
+            for revision in [false, true] {
+                let mut row = row.clone();
+                row.source_id = source.then(|| id("source_membership"));
+                row.owner_revision = revision.then(|| id("revision_membership"));
+                let mutation = if moved {
+                    DocumentMutation::MovePage {
+                        from: path("before.md"),
+                        from_hash: Blake3Hash::digest(b"before"),
+                        row,
+                    }
+                } else {
+                    DocumentMutation::Put { row }
+                };
+                assert_eq!(mutation.author_note_row().is_some(), !source && !revision);
+            }
+        }
+    }
+    assert!(delta.documents[3].author_note_row().is_none());
+    assert!(
+        DocumentMutation::DeletePage {
+            path: path("deleted.md"),
+            expected_hash: Blake3Hash::digest(b"old")
+        }
+        .author_note_row()
+        .is_none()
+    );
+}
+
+#[test]
+fn v3_author_note_writes_cannot_omit_policy_maintenance() {
+    let mut delta = author_membership_delta();
+    delta.facts.as_mut().unwrap().policy = None;
+    assert_eq!(delta.validate().unwrap_err().code, ErrorCode::IndexCorrupt);
+    assert_eq!(
+        delta
+            .facts
+            .as_ref()
+            .unwrap()
+            .validate(&delta, &mut 0)
+            .unwrap_err()
+            .code,
+        ErrorCode::IndexCorrupt
+    );
+    // Historical v2 fact deltas keep their separate compatibility contract.
+    delta.version = 2;
+    delta.validate().unwrap();
+}
+
+#[test]
+fn page_move_and_ordinary_put_share_membership_coverage_without_operation_exceptions() {
+    let mut delta = author_membership_delta();
+    let DocumentMutation::Put { row } = delta.documents[1].clone() else {
+        panic!("adopted fixture")
+    };
+    let from = path("old-page.md");
+    delta.documents[1] = DocumentMutation::MovePage {
+        from: from.clone(),
+        from_hash: Blake3Hash::digest(b"old Page"),
+        row,
+    };
+    delta.links.push(OwnedLinks {
+        path: from.clone(),
+        rows: vec![],
+    });
+    delta.claims.push(OwnedClaims {
+        path: from.clone(),
+        rows: vec![],
+    });
+    delta.diagnostics.push(OwnedDiagnostics {
+        path: from.clone(),
+        rows: vec![],
+    });
+    let facts = delta.facts.as_mut().unwrap();
+    facts.links.push(OwnedLinkFacts {
+        path: from.clone(),
+        rows: vec![],
+    });
+    facts
+        .policy
+        .as_mut()
+        .unwrap()
+        .retired_owners
+        .push(from.clone());
+    delta.validate().unwrap();
+    for omitted in ["ordinary.md", "adopted.md"] {
+        let mut missing = delta.clone();
+        missing
+            .facts
+            .as_mut()
+            .unwrap()
+            .policy
+            .as_mut()
+            .unwrap()
+            .memberships
+            .retain(|member| member.path != path(omitted));
+        assert!(
+            missing
+                .validate()
+                .unwrap_err()
+                .message
+                .contains("exact policy membership")
+        );
+    }
+    for duplicate in [0, 1] {
+        let mut extra = delta.clone();
+        let members = &mut extra
+            .facts
+            .as_mut()
+            .unwrap()
+            .policy
+            .as_mut()
+            .unwrap()
+            .memberships;
+        members.push(members[duplicate].clone());
+        assert_eq!(extra.validate().unwrap_err().code, ErrorCode::IndexCorrupt);
+    }
+    let mut extra = delta;
+    extra
+        .facts
+        .as_mut()
+        .unwrap()
+        .policy
+        .as_mut()
+        .unwrap()
+        .memberships
+        .push(super::policy_delta::PolicyMembershipUpdate {
+            path: from,
+            hash: Blake3Hash::digest(b"old Page"),
+            keys: BTreeSet::new(),
+        });
+    assert!(
+        extra
+            .validate()
+            .unwrap_err()
+            .message
+            .contains("exact policy membership")
+    );
+}

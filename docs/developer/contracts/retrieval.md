@@ -56,8 +56,8 @@ of 1 MiB each and 16 MiB total. If the complete pass cannot fit, retain the whol
 baseline order and warn `complete_query_preference_work_limit`; hard catalog
 errors propagate. Candidate limits do not bound discovery scans. The cursor
 fingerprint includes this policy. Literal, semantic, hybrid and native context
-retain existing selection. See the [development comparison](../validation-status.md#workflow-and-recovery)
-for actual owner-reading gains and the remaining context-quality boundary.
+retain existing selection. Evaluate source discovery and complete returned
+evidence separately using the [context protocol](../evaluating-context.md).
 
 ## Representations and segmentation
 
@@ -99,8 +99,7 @@ candidate caps; a Source filter requires Current supporting Evidence and scopes
 displayed evidence. Display caps never truncate proof membership. Stable traversal
 order is hop then Assertion ID; sentinel omission counts are lower bounds, marked
 in coverage. Unsupported normalized general-query, semantic, historical/proposed,
-navigation and cursor modes refuse explicitly. The independent workflow/access
-acceptance gates remain pending.
+navigation and cursor modes refuse explicitly.
 
 All values below are **proposed tuning defaults**, not measured quality or provider limits:
 

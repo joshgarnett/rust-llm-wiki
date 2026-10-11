@@ -325,7 +325,7 @@ fn guarded_projection<'a>(
     }
     Ok(SourceView {
         fs: view.fs,
-        notes: notes.into(),
+        notes: notes.try_into()?,
         overlay,
         closed: true,
         observed_reads: None,

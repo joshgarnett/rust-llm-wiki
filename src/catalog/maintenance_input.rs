@@ -286,7 +286,7 @@ impl MaintenanceInput {
         let mut input = Self {
             fs: fs.clone(),
             vault_id: vault_id.clone(),
-            notes: BTreeMap::new().into(),
+            notes: BTreeMap::new().try_into()?,
             scanned: BTreeMap::new(),
             limits,
             started,
@@ -357,7 +357,7 @@ impl MaintenanceInput {
             }
             offset += count;
         }
-        input.notes = notes.into();
+        input.notes = notes.try_into()?;
         input.require_clean()?;
         Ok(self)
     }

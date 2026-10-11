@@ -2,14 +2,27 @@
 import argparse
 import hashlib
 import json
+import importlib.util
 from pathlib import Path
 import tempfile
 import unittest
+import sys
 from unittest.mock import patch
 
 import large_vault_packet as packet
 
 
+class PortabilityTests(unittest.TestCase):
+    def test_missing_resource_has_an_explicit_unsupported_result(self):
+        spec = importlib.util.spec_from_file_location("packet_without_resource", packet.__file__)
+        portable = importlib.util.module_from_spec(spec)
+        with patch.dict(sys.modules, {"resource": None}):
+            spec.loader.exec_module(portable)
+        with self.assertRaisesRegex(ValueError, "requires Unix resource accounting"):
+            portable.PreparationGuard()
+
+
+@unittest.skipIf(packet.resource is None, "requires Unix resource accounting and filesystem allocation")
 class PacketTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()

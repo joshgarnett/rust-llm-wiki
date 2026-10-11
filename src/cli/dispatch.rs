@@ -28,10 +28,21 @@ use std::{
 
 pub const COMMANDS: &[&str] = &[
     "capabilities",
+    "setup",
+    "config show",
     "skill export",
+    "skill install",
+    "skill status",
+    "skill update",
+    "skill remove",
     "schema",
     "init",
+    "wiki show",
+    "wiki default set",
+    "wiki default clear",
     "read",
+    "inspect",
+    "edit",
     "page put",
     "page init",
     "page batch",
@@ -89,6 +100,8 @@ pub const SCHEMAS: &[&str] = &[
     "context-original-selection-auto",
     "context-selection",
     "output",
+    "output-v1",
+    "literal-edit",
     "record",
     "page",
     "page-batch",
@@ -116,9 +129,21 @@ fn usage(message: impl Into<String>) -> WikiError {
 fn value<T: Serialize>(value: T) -> Result<Value> {
     serde_json::to_value(value).map_err(|e| WikiError::new(ErrorCode::Internal, e.to_string()))
 }
+fn has_retained_writes(state: &Value) -> bool {
+    state["applied"] == true
+        || state["changed"] == true
+        || ["retained_paths", "created", "published_paths"]
+            .iter()
+            .any(|key| {
+                state[*key]
+                    .as_array()
+                    .is_some_and(|paths| !paths.is_empty())
+            })
+}
 fn failure(command: &str, error: WikiError) -> Envelope {
     let mut envelope = Envelope::failure(command, &error.code.to_string(), error.message.clone());
     envelope.meta.network_used = error.network_used;
+    envelope.meta.selection = error.details.get("selection").cloned();
     envelope.meta.wiki_id = error
         .details
         .get("wiki_id")
@@ -131,8 +156,21 @@ fn failure(command: &str, error: WikiError) -> Envelope {
     if error.details.get("partial_export").and_then(Value::as_bool) == Some(true) {
         envelope.meta.partial = true;
     }
+    if has_retained_writes(&error.details["initialization"])
+        || has_retained_writes(&error.details["installation"])
+        || error.details["init"]["created"] == true
+    {
+        envelope.meta.partial = true;
+    }
     if command == "check" && error.details.get("complete").and_then(Value::as_bool) == Some(false) {
         envelope.meta.partial = true;
+    }
+    if matches!(command, "index sync" | "index rebuild") {
+        if !envelope.data.is_object() {
+            envelope.data = json!({});
+        }
+        envelope.data["completion"] = json!("failed");
+        envelope.data["health"] = json!({"schema_version":"lwiki.health.v1","discovery_complete":null,"structured_eligibility_complete":null,"membership_freshness":"unknown"});
     }
     envelope.error = Some(error_output(error));
     envelope
@@ -153,24 +191,7 @@ pub fn execute(args: &Arguments) -> (Envelope, u8) {
             crate::maintenance_diagnostic::command_result(exit == 0);
             (envelope, exit)
         }
-        Err(mut error) => {
-            // Retain known local identity even when an operation fails after binding.
-            let local_preparation = matches!(
-                &args.command,
-                Command::Source { command: SourceCommand::Import(arguments) }
-                    if !arguments.command.requires_vault()
-            );
-            if !local_preparation
-                && let Ok(cwd) = std::env::current_dir()
-                && let Ok(root) =
-                    crate::vault::discovery::resolve(args.wiki.as_deref(), &cwd, false)
-                && let Ok(binding) = ChangeEngine::new(VaultFs::new(root))
-            {
-                if !error.details.is_object() {
-                    error.details = json!({"context":error.details});
-                }
-                error.details["wiki_id"] = binding.vault_id().as_str().into();
-            }
+        Err(error) => {
             let exit = error.exit_code();
             (failure(args.command.name(), error), exit)
         }
@@ -233,6 +254,8 @@ fn execute_inner_diagnostic_body(args: &Arguments) -> Result<Envelope> {
                 )?)?,
             ));
         }
+        Command::Setup(setup) => return super::setup::execute(args, setup),
+        Command::Config { .. } => return super::config_show::execute(args),
         Command::Capabilities => {
             return Ok(Envelope::success(
                 command,
@@ -248,7 +271,9 @@ fn execute_inner_diagnostic_body(args: &Arguments) -> Result<Envelope> {
                     include_str!("../../schemas/context-original-selection-v2.json")
                 }
                 "context-selection" => include_str!("../../schemas/context-selection-v1.json"),
-                "output" => include_str!("../../schemas/output-v1.json"),
+                "output" => include_str!("../../schemas/output-v2.json"),
+                "output-v1" => include_str!("../../schemas/output-v1.json"),
+                "literal-edit" => include_str!("../../schemas/literal-edit-v1.json"),
                 "research-packet" => include_str!("../../schemas/research-packet-v1.json"),
                 "research-submission" => include_str!("../../schemas/research-submission-v1.json"),
                 "record" | "page" => include_str!("../../schemas/record-v1.json"),
@@ -289,6 +314,49 @@ fn execute_inner_diagnostic_body(args: &Arguments) -> Result<Envelope> {
                     .map_err(|e| WikiError::new(ErrorCode::Internal, e.to_string()))?,
             ));
         }
+        Command::Skill { command: skill } if !matches!(skill, SkillCommand::Export { .. }) => {
+            if args.stage {
+                return Err(usage(
+                    "agent installation cannot be staged; use --dry-run to preview",
+                ));
+            }
+            let (options, action) = match skill {
+                SkillCommand::Install(options) => (options, "install"),
+                SkillCommand::Status(options) => (options, "status"),
+                SkillCommand::Update(options) => (options, "update"),
+                SkillCommand::Remove(options) => (options, "remove"),
+                SkillCommand::Export { .. } => unreachable!(),
+            };
+            let root = match &options.directory {
+                Some(path) => path.clone(),
+                None if options.scope == "project" => std::env::current_dir()
+                    .map_err(|error| usage(format!("cannot resolve project folder: {error}")))?,
+                None => std::env::var_os("HOME")
+                    .map(std::path::PathBuf::from)
+                    .ok_or_else(|| {
+                        usage("HOME is unavailable; use --directory to choose the agent's home folder")
+                    })?,
+            };
+            let report = super::skill_install::operate(
+                action,
+                &options.target,
+                &root,
+                &options.scope,
+                args.dry_run,
+            )?;
+            if !report["failure"].is_null() {
+                let mut error: WikiError = serde_json::from_value(report["failure"].clone())
+                    .map_err(|_| {
+                        WikiError::new(
+                            ErrorCode::Internal,
+                            "invalid agent installation failure report",
+                        )
+                    })?;
+                error.details = json!({"installation":report});
+                return Err(error);
+            }
+            return Ok(Envelope::success(command, report));
+        }
         Command::Skill {
             command: SkillCommand::Export { target, output },
         } => {
@@ -300,7 +368,51 @@ fn execute_inner_diagnostic_body(args: &Arguments) -> Result<Envelope> {
                 super::skill_export::export_skill(target, output, args.dry_run)?,
             ));
         }
-        Command::Init { path, title } => {
+        Command::Wiki {
+            command: WikiCommand::Default {
+                command: default_command,
+            },
+        } => {
+            if args.stage {
+                return Err(usage("default selection cannot be staged"));
+            }
+            let local =
+                config::local::load_user_config(args.preferences.as_deref(), args.no_user_config)?;
+            let proposed = match default_command {
+                DefaultCommand::Set { path } => {
+                    Some(crate::vault::discovery::default_from_path(path)?)
+                }
+                DefaultCommand::Clear => None,
+            };
+            if let (Some(expected), Some(target)) = (&args.expect_wiki_id, &proposed)
+                && expected != &target.wiki_id
+            {
+                return Err(WikiError::new(
+                    ErrorCode::ContentConflict,
+                    "default target differs from --expect-wiki-id",
+                ));
+            }
+            let report = config::local::update_default(
+                &local,
+                proposed.clone(),
+                args.dry_run,
+                args.lock_timeout_ms.unwrap_or(5000),
+            )?;
+            let mut envelope = Envelope::success(command, value(report)?);
+            if let Some(target) = proposed {
+                envelope.meta.wiki_id = Some(target.wiki_id.to_string());
+                envelope.meta.selection = Some(
+                    json!({"schema_version":"lwiki.selection.v1","root":target.path,"wiki_id":target.wiki_id,"origin":"explicit","requested_path":target.path,"configuration":local.summary(),"preference_origins":{}}),
+                );
+            }
+            return Ok(envelope);
+        }
+        Command::Init {
+            path,
+            title,
+            existing,
+            set_default,
+        } => {
             if args.stage {
                 return Err(usage("initialization cannot be staged"));
             }
@@ -311,27 +423,157 @@ fn execute_inner_diagnostic_body(args: &Arguments) -> Result<Envelope> {
                     return Err(usage("init PATH and --wiki must select the same directory"));
                 }
             }
-            let outcome = crate::app::offline::init(
+            if args.expect_wiki_id.is_some() {
+                return Err(usage(
+                    "init allocates a new identity; --expect-wiki-id applies to existing wikis",
+                ));
+            }
+            let local =
+                config::local::load_user_config(args.preferences.as_deref(), args.no_user_config)?;
+            if *set_default {
+                config::local::require_write_target(&local)?;
+            }
+            let outcome = crate::app::offline::init_with_existing(
                 path,
                 title,
+                *existing,
                 operation_options(args, args.offline, args.lock_timeout_ms.unwrap_or(5000)),
             )?;
             let mut envelope = Envelope::success(command, value(&outcome)?);
             envelope.meta.wiki_id = Some(outcome.id.to_string());
+            envelope.meta.selection = Some(
+                json!({"schema_version":"lwiki.selection.v1", "root":outcome.path,"wiki_id":outcome.id,"origin":"initialization","requested_path":path,"configuration":local.summary(),"preference_origins":{}}),
+            );
+            if *set_default {
+                let proposed = config::DefaultWiki {
+                    path: std::path::PathBuf::from(&outcome.path),
+                    wiki_id: outcome.id.clone(),
+                };
+                match config::local::update_default(
+                    &local,
+                    Some(proposed),
+                    args.dry_run,
+                    args.lock_timeout_ms.unwrap_or(5000),
+                ) {
+                    Ok(report) => envelope.data["default_registration"] = value(report)?,
+                    Err(mut error) => {
+                        let quote = |text: &str| format!("'{}'", text.replace('\'', "'\\''"));
+                        let preferences = local
+                            .path()
+                            .map(|path| {
+                                format!(" --preferences {}", quote(&path.to_string_lossy()))
+                            })
+                            .unwrap_or_default();
+                        let retry = format!(
+                            "lwiki{preferences} wiki default set {}",
+                            quote(&outcome.path)
+                        );
+                        error.details = json!({"init":outcome,"wiki_id":outcome.id,"selection":envelope.meta.selection,"default_registered":false,"configuration":local.summary(),"registration_error":error.details,"retry":retry});
+                        return Err(error);
+                    }
+                }
+            }
             return Ok(envelope);
         }
         _ => {}
     }
     let cwd =
         std::env::current_dir().map_err(|e| WikiError::new(ErrorCode::Internal, e.to_string()))?;
-    let root = crate::vault::discovery::resolve(args.wiki.as_deref(), &cwd, false)?;
-    let fs = VaultFs::new(root);
+    let local = config::local::load_user_config(args.preferences.as_deref(), args.no_user_config)?;
+    if let Command::Inspect {
+        path,
+        max_bytes,
+        start,
+        end,
+    } = &args.command
+    {
+        if args.stage {
+            return Err(usage("physical inspection cannot be staged"));
+        }
+        let (root, identity, origin, requested) = if let Some(explicit) = &args.wiki {
+            let root = crate::vault::VaultRoot::for_initialization(explicit)?;
+            let identity = crate::vault::discovery::identify(&root).ok();
+            (root, identity, "explicit", explicit.clone())
+        } else {
+            let selected = crate::vault::discovery::select(None, &cwd, local.default_wiki())?;
+            let origin = match selected.origin {
+                crate::vault::discovery::SelectionOrigin::Explicit => "explicit",
+                crate::vault::discovery::SelectionOrigin::Ancestor => "ancestor",
+                crate::vault::discovery::SelectionOrigin::Default => "default",
+            };
+            (
+                selected.root,
+                Some(selected.wiki_id),
+                origin,
+                selected.requested_path,
+            )
+        };
+        if args
+            .expect_wiki_id
+            .as_ref()
+            .is_some_and(|expected| Some(expected) != identity.as_ref())
+        {
+            return Err(WikiError::new(
+                ErrorCode::ContentConflict,
+                "physical inspection could not verify --expect-wiki-id",
+            ));
+        }
+        let mut envelope = Envelope::success(command, Value::Null);
+        envelope.meta.wiki_id = identity.as_ref().map(ToString::to_string);
+        envelope.meta.selection = Some(
+            json!({"schema_version":"lwiki.selection.v1","root":root.path(),"wiki_id":identity,"origin":origin,"requested_path":requested,"configuration":local.summary(),"preference_origins":{}}),
+        );
+        if args.dry_run {
+            envelope.data = json!({"dry_run":true,"path":path,"max_bytes":max_bytes,"start":start,"end":end,"target_bytes_inspected":false});
+            return Ok(envelope);
+        }
+        let range = match (start, end) {
+            (Some(start), Some(end)) => Some(ByteSpan::new(*start, *end)?),
+            (None, None) => None,
+            _ => return Err(usage("inspect --start and --end must be supplied together")),
+        };
+        let inspected = crate::app::literal::inspect_literal(
+            &VaultFs::new(root),
+            crate::app::literal::LiteralInspectRequest {
+                path: path.clone(),
+                range,
+                max_bytes: *max_bytes,
+            },
+        )?;
+        envelope.meta.partial = inspected.truncated;
+        envelope.meta.freshness = Some("physical_bytes".into());
+        envelope.data = value(inspected)?;
+        envelope.warnings.push("Physical bytes only; this does not prove committed state, canonical identity, current facts or citation authority.".into());
+        return Ok(envelope);
+    }
+    let selected =
+        crate::vault::discovery::select(args.wiki.as_deref(), &cwd, local.default_wiki())?;
+    let error_selection = json!({"schema_version":"lwiki.selection.v1","root":selected.root.path(),"wiki_id":selected.wiki_id,"origin":selected.origin,"requested_path":selected.requested_path,"configuration":local.summary(),"preference_origins":{}});
+    let result = execute_selected(args, &local, &selected);
+    result.map_err(|mut error| {
+        if !error.details.is_object() {
+            error.details = json!({"context":error.details});
+        }
+        error.details["wiki_id"] = selected.wiki_id.as_str().into();
+        error.details["selection"] = error_selection;
+        error
+    })
+}
+fn execute_selected(
+    args: &Arguments,
+    local: &config::local::LoadedUserConfig,
+    selected: &crate::vault::discovery::SelectedWiki,
+) -> Result<Envelope> {
+    let command = args.command.name();
+    crate::vault::discovery::expect_wiki_id(selected, args.expect_wiki_id.as_ref())?;
+    let selected_root = selected.root.path().to_path_buf();
+    let fs = VaultFs::new(selected.root.clone());
     let binding = ChangeEngine::new(fs.clone())?;
     let read_limit = match &args.command {
         Command::Read { max_bytes, .. } => *max_bytes,
         _ => None,
     };
-    let preferences = config::local::resolve(
+    let preferences = config::local::resolve_loaded(
         &fs,
         binding.vault_id(),
         &PreferenceOptions {
@@ -340,16 +582,52 @@ fn execute_inner_diagnostic_body(args: &Arguments) -> Result<Envelope> {
             lock_timeout_ms: args.lock_timeout_ms,
             profile: args.profile.clone(),
         },
-        args.preferences.as_deref(),
+        local,
     )?;
     let app = OfflineApp::new(
         fs,
         operation_options(args, preferences.offline, preferences.lock_timeout_ms),
     )?;
+    let remote_context = super::remote::RemoteContext {
+        profile: preferences.profile.as_deref(),
+        document: local.document(),
+        allow_ambient_provider: local.summary().origin != config::local::UserConfigOrigin::Disabled,
+    };
+    if app.vault_id() != &selected.wiki_id || binding.vault_id() != &selected.wiki_id {
+        return Err(WikiError::new(
+            ErrorCode::ContentConflict,
+            "wiki identity changed during selection; retry after inspecting WIKI.md",
+        ));
+    }
     let mut envelope = Envelope::success(command, Value::Null);
+    envelope.meta.selection = Some(
+        json!({"schema_version":"lwiki.selection.v1","root":selected_root,"wiki_id":selected.wiki_id,"origin":selected.origin,"requested_path":selected.requested_path,"configuration":local.summary(),"preference_origins":preferences.origins}),
+    );
     envelope.meta.wiki_id = Some(app.vault_id().to_string());
     envelope.warnings = preferences.warnings;
     match &args.command {
+        Command::Wiki {
+            command: WikiCommand::Show,
+        } => {
+            envelope.data = envelope.meta.selection.clone().expect("selection bound");
+        }
+        Command::Edit {
+            path,
+            patch,
+            if_match,
+        } => {
+            let patch = crate::changes::prepare::strict_json(
+                &super::extraction::bounded_json_input(patch, "literal edit patch")?,
+            )?;
+            mutation(
+                &mut envelope,
+                app.edit_literal(crate::app::literal::LiteralEditRequest {
+                    path: path.clone(),
+                    if_match: if_match.clone(),
+                    patch,
+                })?,
+            )?;
+        }
         Command::Read {
             selector,
             start,
@@ -615,20 +893,50 @@ fn execute_inner_diagnostic_body(args: &Arguments) -> Result<Envelope> {
             command:
                 SourceCommand::Refresh {
                     id,
+                    path,
+                    input_if_match,
                     file,
                     title,
                     media_type,
                 },
-        } => source_mutation(
-            &mut envelope,
-            &app,
-            app.source_refresh_with_title(
-                id.clone(),
-                capture(file, title.as_deref(), media_type.clone())?,
-                title.as_deref(),
-            )?,
-            json!({"operation":"refresh", "source_id":id, "file":file, "title":title, "media_type":media_type}),
-        )?,
+        } => {
+            let request = match input_if_match {
+                Some(hash) => crate::sources::path_refresh::guarded_capture_file(
+                    file,
+                    title.as_deref(),
+                    media_type.clone(),
+                    hash,
+                )?,
+                None => capture(file, title.as_deref(), media_type.clone())?,
+            };
+            let (outcome, selection_scope) = match (id, path) {
+                (Some(id), None) => (
+                    app.source_refresh_with_title(id.clone(), request, title.as_deref())?,
+                    None,
+                ),
+                (None, Some(path)) => {
+                    let (outcome, scope) = app.source_refresh_path_with_scope(
+                        path.clone(),
+                        request,
+                        title.as_deref(),
+                    )?;
+                    (outcome, Some(scope))
+                }
+                _ => return Err(usage("source refresh requires one ID or --path")),
+            };
+            source_mutation(
+                &mut envelope,
+                &app,
+                outcome,
+                json!({"operation":"refresh", "source_id":id, "path":path,"file":file,"input_if_match":input_if_match,"title":title,"media_type":media_type}),
+            )?;
+            if let Some(scope) = selection_scope {
+                if scope.selection == "published_index_and_selected_dependencies" {
+                    envelope.warnings.push("Source selection used the published index and verified the selected dependencies. Current global membership is unknown; run index sync to discover external duplicates or other editor changes.".into());
+                }
+                envelope.data["selection_verification"] = value(scope)?;
+            }
+        }
         Command::Source {
             command: SourceCommand::Withdraw { id, reason },
         } => source_mutation(
@@ -690,7 +998,33 @@ fn execute_inner_diagnostic_body(args: &Arguments) -> Result<Envelope> {
                         .push("previous vector cache state is unknown".into());
                 }
             }
+            let completed = outcome.report.is_some();
+            let preview_inspected = outcome
+                .maintenance
+                .as_ref()
+                .and_then(|metadata| metadata["canonical_scan_performed"].as_bool())
+                .unwrap_or(true);
             envelope.data = value(outcome)?;
+            let catalog = Catalog::new(app.fs().clone(), app.vault_id().clone());
+            if completed {
+                let health =
+                    catalog
+                        .published_health(Default::default())
+                        .map_err(|mut error| {
+                            error.details =
+                                json!({"sync_outcome":envelope.data,"health_error":error.details});
+                            error
+                        })?;
+                if Some(health.index_generation) != envelope.meta.index_generation {
+                    return Err(WikiError::new(
+                        ErrorCode::FreshnessConflict,
+                        "published index changed before sync health reporting; inspect doctor --diagnostics",
+                    ));
+                }
+                super::health::attach_sync(&mut envelope, &health, true)?;
+            } else {
+                super::health::attach_preview(&mut envelope, preview_inspected);
+            }
         }
         Command::Relations(options) => {
             use super::source_relations::SourceRelationsCommand;
@@ -705,9 +1039,14 @@ fn execute_inner_diagnostic_body(args: &Arguments) -> Result<Envelope> {
             };
             remote.limits()?;
             let deadline = std::time::Instant::now()
-                .checked_add(Duration::from_millis(remote.deadline_ms.unwrap_or(900_000)))
+                .checked_add(Duration::from_millis(
+                    remote
+                        .effective(&remote_context)
+                        .deadline_ms
+                        .unwrap_or(900_000),
+                ))
                 .ok_or_else(|| usage("relation deadline exceeds clock range"))?;
-            let runtime = remote.runtime(&app, args.profile.as_deref(), Capability::Generate)?;
+            let runtime = remote.runtime(&app, &remote_context, Capability::Generate)?;
             match &options.command {
                 SourceRelationsCommand::Prepare(o) => {
                     let prepared = app.prepare_source_relations(
@@ -723,7 +1062,7 @@ fn execute_inner_diagnostic_body(args: &Arguments) -> Result<Envelope> {
                         WikiError::new(ErrorCode::Internal, "manifest encoding differs")
                     })?;
                     envelope.data = json!({"manifest_json":text,"manifest_hash":hash,
-                        "sources":o.source_ids.len(),"provider_calls":0,"persisted":false});
+                    "sources":o.source_ids.len(),"provider_calls":0,"persisted":false});
                     if let Some(quote) = prepared.quote {
                         envelope.data["quote"] = value(quote)?;
                         envelope.warnings.push("Quotes describe one fresh attempt per Source and do not reserve money or grant send authority. A serial lifetime cap can stop acquisition before every Source completes.".into());
@@ -756,8 +1095,18 @@ fn execute_inner_diagnostic_body(args: &Arguments) -> Result<Envelope> {
         Command::Embeddings(options) => {
             use super::embeddings::EmbeddingCommand;
             let (settings, remote, probe, sync) = match &options.command {
-                EmbeddingCommand::Check(o) => (o.settings.settings(), &o.remote, o.probe, false),
-                EmbeddingCommand::Sync(o) => (o.settings.settings(), &o.remote, false, true),
+                EmbeddingCommand::Check(o) => (
+                    o.settings.settings(&local.document().embeddings),
+                    &o.remote,
+                    o.probe,
+                    false,
+                ),
+                EmbeddingCommand::Sync(o) => (
+                    o.settings.settings(&local.document().embeddings),
+                    &o.remote,
+                    false,
+                    true,
+                ),
             };
             remote.limits()?;
             if args.stage {
@@ -765,9 +1114,9 @@ fn execute_inner_diagnostic_body(args: &Arguments) -> Result<Envelope> {
             }
             let runtime = if !args.dry_run
                 && !app.options().offline
-                && (sync || probe || args.profile.is_some())
+                && (sync || probe || remote_context.profile.is_some())
             {
-                Some(remote.runtime(&app, args.profile.as_deref(), Capability::Embed)?)
+                Some(remote.runtime(&app, &remote_context, Capability::Embed)?)
             } else {
                 None
             };
@@ -775,7 +1124,7 @@ fn execute_inner_diagnostic_body(args: &Arguments) -> Result<Envelope> {
             if args.dry_run {
                 settings.validate()?;
                 envelope.data = json!({"settings":settings,"dry_run":true,"probe":probe,
-                    "sync":sync,"cache_state_unknown":true,"network_used":false});
+                "sync":sync,"cache_state_unknown":true,"network_used":false});
                 envelope
                     .warnings
                     .push("embedding coverage is unknown during dry-run".into());
@@ -837,28 +1186,29 @@ fn execute_inner_diagnostic_body(args: &Arguments) -> Result<Envelope> {
                         },
                     );
                     let hits = if plan.mode == retrieval::SearchMode::Lexical {
-                        retrieval::selected_search::search_ordinary_lexical(&catalog, &search.query, &plan,
-                            &retrieval::VerificationBudget::default())
-                    } else if plan.mode == retrieval::SearchMode::Literal {
-                        retrieval::selected_search::search(&catalog, &search.query, &plan,
-                            &retrieval::VerificationBudget::default())
-                    } else {
-                        search.remote.limits()?;
-                        with_embedding_runtime(&app, args, &search.remote, search.lexical_fallback,
-                            |runtime, fallback| app.semantic_search_selected(&search.query,
-                                &plan, runtime, fallback))
-                    }.map_err(|mut error| {
-                        if matches!(error.code, ErrorCode::FreshnessConflict | ErrorCode::BudgetExceeded) {
-                            error.hint = Some("Inspect selected source changes and run index sync when appropriate; reduce --limit or use plain search for explicitly unverified cached discovery.".into());
-                        }
-                        error
-                    })?;
+                    retrieval::selected_search::search_ordinary_lexical(&catalog, &search.query, &plan,
+                        &retrieval::VerificationBudget::default())
+                } else if plan.mode == retrieval::SearchMode::Literal {
+                    retrieval::selected_search::search(&catalog, &search.query, &plan,
+                        &retrieval::VerificationBudget::default())
+                } else {
+                    search.remote.limits()?;
+                    with_embedding_runtime(&app, &remote_context, &search.remote, search.lexical_fallback,
+                        |runtime, fallback| app.semantic_search_selected(&search.query,
+                            &plan, runtime, fallback))
+                }.map_err(|mut error| {
+                    if matches!(error.code, ErrorCode::FreshnessConflict | ErrorCode::BudgetExceeded) {
+                        error.hint = Some("Inspect selected source changes and run index sync when appropriate; reduce --limit or use plain search for explicitly unverified cached discovery.".into());
+                    }
+                    error
+                })?;
                     result_metadata(&mut envelope.meta, &hits.snapshot, &hits.verification);
                     envelope.meta.network_used = hits.network_used;
                     envelope.meta.partial = hits.truncated;
                     envelope.warnings.extend(hits.warnings.iter().cloned());
                     envelope.data = value(hits)?;
                 }
+                attach_read_health(args, &app, &mut envelope)?;
                 return Ok(envelope);
             }
             if matches!(
@@ -916,7 +1266,7 @@ fn execute_inner_diagnostic_body(args: &Arguments) -> Result<Envelope> {
                 } else {
                     with_embedding_runtime(
                         &app,
-                        args,
+                        &remote_context,
                         &search.remote,
                         search.lexical_fallback,
                         |runtime, fallback| {
@@ -959,7 +1309,7 @@ fn execute_inner_diagnostic_body(args: &Arguments) -> Result<Envelope> {
                     });
                     with_embedding_runtime(
                         &app,
-                        args,
+                        &remote_context,
                         &search.remote,
                         search.lexical_fallback,
                         |runtime, fallback| {
@@ -1018,7 +1368,7 @@ fn execute_inner_diagnostic_body(args: &Arguments) -> Result<Envelope> {
                 let runtime =
                     options
                         .remote
-                        .runtime(&app, args.profile.as_deref(), Capability::Generate)?;
+                        .runtime(&app, &remote_context, Capability::Generate)?;
                 let run_id = options.run.clone().map(Ok).unwrap_or_else(|| {
                     app.default_api_extraction_run_id(
                         &request,
@@ -1109,12 +1459,12 @@ fn execute_inner_diagnostic_body(args: &Arguments) -> Result<Envelope> {
                     plan.include_navigation = options.navigation;
                 }
                 envelope.data = json!({"plan":plan,"dry_run":true,"cache_state_unknown":true,
-                    "layout_unknown":true,"target_resolution_performed":false,
-                    "canonical_scan_performed":false,"verification_performed":false,
-                    "legacy_default_navigation":neighbors,"results":null});
+                "layout_unknown":true,"target_resolution_performed":false,
+                "canonical_scan_performed":false,"verification_performed":false,
+                "legacy_default_navigation":neighbors,"results":null});
                 envelope
-                    .warnings
-                    .push("Dry-run validates the graph request; target existence, layout capabilities, results and freshness remain unknown. Normalized named neighbors verify selected dependencies by default; --no-sync is cached unless --verify-selected is explicit.".into());
+                .warnings
+                .push("Dry-run validates the graph request; target existence, layout capabilities, results and freshness remain unknown. Normalized named neighbors verify selected dependencies by default; --no-sync is cached unless --verify-selected is explicit.".into());
             } else {
                 let catalog = Catalog::with_options(
                     app.fs().clone(),
@@ -1151,7 +1501,7 @@ fn execute_inner_diagnostic_body(args: &Arguments) -> Result<Envelope> {
                     };
                     with_embedding_runtime(
                         &app,
-                        args,
+                        &remote_context,
                         &options.remote,
                         options.lexical_fallback,
                         |runtime, fallback| {
@@ -1278,7 +1628,7 @@ fn execute_inner_diagnostic_body(args: &Arguments) -> Result<Envelope> {
                 {
                     with_embedding_runtime(
                         &app,
-                        args,
+                        &remote_context,
                         &context.search.remote,
                         context.search.lexical_fallback,
                         |runtime, fallback| {
@@ -1381,6 +1731,9 @@ fn execute_inner_diagnostic_body(args: &Arguments) -> Result<Envelope> {
             role,
             remote,
             extraction_schema,
+            diagnostics,
+            diagnostic_limit,
+            diagnostic_cursor,
         } => {
             if *extraction_schema && !matches!(role, super::remote::ProbeRole::Generate) {
                 return Err(usage(
@@ -1400,11 +1753,8 @@ fn execute_inner_diagnostic_body(args: &Arguments) -> Result<Envelope> {
                 if args.dry_run {
                     envelope.data = json!({"doctor":doctor,"probe":{"dry_run":true,"role":service_role,"network_used":false,"remote_work":"unknown"}});
                 } else {
-                    let runtime = remote.runtime(
-                        &app,
-                        preferences.profile.as_deref(),
-                        service_role.capability(),
-                    )?;
+                    let runtime =
+                        remote.runtime(&app, &remote_context, service_role.capability())?;
                     let result = if *extraction_schema {
                         app.probe_extraction_schema(&runtime)?
                     } else {
@@ -1416,6 +1766,21 @@ fn execute_inner_diagnostic_body(args: &Arguments) -> Result<Envelope> {
                 }
             } else {
                 envelope.data = value(doctor)?;
+            }
+            if *diagnostics {
+                if args.dry_run {
+                    super::health::attach_preview(&mut envelope, false);
+                } else {
+                    let catalog = Catalog::new(app.fs().clone(), app.vault_id().clone());
+                    let health = catalog.published_health(
+                        crate::catalog::health::DiagnosticPageRequest {
+                            limit: diagnostic_limit.unwrap_or(50),
+                            cursor: diagnostic_cursor.clone(),
+                            max_bytes: 65_536,
+                        },
+                    )?;
+                    super::health::attach_sync(&mut envelope, &health, false)?;
+                }
             }
         }
         Command::Changes { command } => match command {
@@ -1516,11 +1881,34 @@ fn execute_inner_diagnostic_body(args: &Arguments) -> Result<Envelope> {
             if args.stage {
                 return Err(usage("job limit amendments cannot be staged"));
             }
-            envelope.data = value(app.amend_provider_job_overrides(
-                run,
-                &remote.requested_limits()?,
-                reason,
-            )?)?;
+            let retained_currency = if remote.max_cost.is_some() && remote.currency.is_none() {
+                let ledger = crate::jobs::JobLedger::new(
+                    app.fs().clone(),
+                    app.vault_id().clone(),
+                    run.clone(),
+                    crate::app::remote::native_job_options(
+                        crate::jobs::ExecutionPolicy {
+                            offline: true,
+                            dry_run: args.dry_run,
+                            retry_uncertain: false,
+                        },
+                        app.options().lock_timeout_ms,
+                    ),
+                )?;
+                ledger
+                    .inspect()?
+                    .effective_limits
+                    .max_cost
+                    .map(|cost| cost.currency().as_str().to_owned())
+            } else {
+                None
+            };
+            let requested = remote.requested_limits_with_currency(
+                retained_currency
+                    .as_deref()
+                    .or(local.document().remote.currency.as_deref()),
+            )?;
+            envelope.data = value(app.amend_provider_job_overrides(run, &requested, reason)?)?;
         }
         Command::Jobs {
             command: JobsCommand::Status { run },
@@ -1600,12 +1988,46 @@ fn execute_inner_diagnostic_body(args: &Arguments) -> Result<Envelope> {
             app.migrate(selector.record_selector()?, if_match.clone(), to_schema)?,
         )?,
         Command::Capabilities
+        | Command::Setup(_)
+        | Command::Config { .. }
         | Command::Schema { .. }
         | Command::Init { .. }
+        | Command::Inspect { .. }
+        | Command::Wiki {
+            command: WikiCommand::Default { .. },
+        }
         | Command::Skill { .. } => unreachable!(),
     }
+    attach_read_health(args, &app, &mut envelope)?;
     Ok(envelope)
 }
+
+fn attach_read_health(args: &Arguments, app: &OfflineApp, envelope: &mut Envelope) -> Result<()> {
+    if !args.dry_run
+        && matches!(
+            &args.command,
+            Command::Read { .. } | Command::Search(_) | Command::Context(_)
+        )
+    {
+        let catalog = Catalog::new(app.fs().clone(), app.vault_id().clone());
+        let reader = catalog.cached_query_snapshot(QueryReadLimits::default())?;
+        let health = reader.known_health()?;
+        if envelope
+            .meta
+            .index_generation
+            .is_some_and(|generation| generation != health.index_generation)
+        {
+            return Err(WikiError::new(
+                ErrorCode::FreshnessConflict,
+                "index generation changed before health reporting; retry selected read",
+            ));
+        }
+        reader.verify_operations(&catalog)?;
+        super::health::attach_known_read(envelope, &health)?;
+    }
+    Ok(())
+}
+
 fn error_output(error: WikiError) -> ErrorOutput {
     ErrorOutput {
         code: error.code.to_string(),
@@ -1652,6 +2074,22 @@ fn source_mutation(
     request: Value,
 ) -> Result<()> {
     mutation(envelope, outcome)?;
+    if let Some(source) = envelope.data["allocated_ids"]["source"]
+        .as_str()
+        .map(str::to_owned)
+    {
+        let managed = format!("sources/{source}/source.md");
+        let input = request.get("file").cloned().unwrap_or(Value::Null);
+        let quote = |text: &str| format!("'{}'", text.replace('\'', "'\\''"));
+        let root = app.fs().root().path().to_string_lossy();
+        envelope.data["capture_paths"] = json!({
+            "editable_input":input,
+            "managed_source":managed,
+            "immutable_revisions":format!("sources/{source}/revisions"),
+            "sync_recaptures_input":false,
+            "refresh_template":format!("lwiki --wiki {} --expect-wiki-id {} source refresh --path {} --file {} --input-if-match HASH", quote(&root), quote(app.vault_id().as_str()), quote(&managed), quote(input.as_str().unwrap_or("INPUT")))
+        });
+    }
     if app.options().dry_run
         && Catalog::new(app.fs().clone(), app.vault_id().clone())
             .operation_state()?
@@ -1660,9 +2098,12 @@ fn source_mutation(
         envelope.data["dry_run"] = true.into();
         envelope.data["plan_complete"] = false.into();
         envelope.data["reused"] = Value::Null;
+        let input_guard_checked = request
+            .get("input_if_match")
+            .is_some_and(|value| !value.is_null());
         envelope.data["request"] = request;
         envelope.data["validation"] = json!({
-            "explicit_file_guards_checked":false,
+            "explicit_file_guards_checked":input_guard_checked,
             "target_resolution_checked":false,
             "indexed_admission_checked":false,
             "read_dependencies_checked":false,
@@ -2122,7 +2563,7 @@ pub fn present_with_wiki(
     let _diagnostic_finish = crate::maintenance_diagnostic::Finish;
     crate::maintenance_diagnostic::observe(crate::maintenance_diagnostic::Phase::Output, || {
         if matches!(format, OutputFormat::Human)
-            && !(envelope.ok && matches!(envelope.command.as_str(), "read" | "context"))
+            && !(envelope.ok && matches!(envelope.command.as_str(), "read" | "context" | "inspect"))
         {
             let mut bytes = Vec::new();
             present_inner(envelope, format, &mut bytes, wiki)?;
@@ -2166,6 +2607,64 @@ fn present_inner(
             )
         },
     );
+    if format == OutputFormat::Human
+        && !matches!(envelope.command.as_str(), "read" | "context" | "inspect")
+        && let Some(selection) = &envelope.meta.selection
+    {
+        writeln!(
+            output,
+            "Wiki: {} ({}, selected by {})",
+            selection["root"].as_str().unwrap_or("unknown"),
+            selection["wiki_id"].as_str().unwrap_or("unknown"),
+            selection["origin"].as_str().unwrap_or("unknown")
+        )?;
+    }
+    if format == OutputFormat::Human
+        && !matches!(envelope.command.as_str(), "read" | "context" | "inspect")
+        && let Some(health) = envelope.data.get("health")
+    {
+        if let Some(completion) = envelope.data["completion"].as_str() {
+            let message = match completion {
+                "completed" => "The index update finished.",
+                "completed_with_issues" => "The index update finished. Some files need attention.",
+                "failed" => "The index update did not finish.",
+                _ => "The index update status is unavailable.",
+            };
+            writeln!(output, "{message}")?;
+        }
+        if let Some(known) = health["known_issues"].as_bool() {
+            if known {
+                writeln!(
+                    output,
+                    "Some indexed files need attention. Run {command_prefix} doctor --diagnostics to see them."
+                )?;
+            }
+            if health["membership_freshness"] == "unknown" {
+                writeln!(
+                    output,
+                    "These results use the saved index. Changes in other files may not be included."
+                )?;
+            }
+        }
+        if let Some(diagnostics) = health["diagnostics"].as_array() {
+            for diagnostic in diagnostics {
+                writeln!(
+                    output,
+                    "{}: {} {}",
+                    diagnostic["path"].as_str().unwrap_or_default(),
+                    diagnostic["code"].as_str().unwrap_or_default(),
+                    diagnostic["message"].as_str().unwrap_or_default()
+                )?;
+            }
+        }
+        if let Some(cursor) = health["diagnostic_continuation"].as_str() {
+            writeln!(
+                output,
+                "More diagnostics: {command_prefix} doctor --diagnostics --diagnostic-cursor '{}'",
+                cursor.replace('\'', "'\\''")
+            )?;
+        }
+    }
     match format {
         OutputFormat::Json => {
             serde_json::to_writer(&mut *output, envelope)?;
@@ -2174,6 +2673,57 @@ fn present_inner(
         OutputFormat::Jsonl => {
             serde_json::to_writer(&mut *output, envelope)?;
             writeln!(output)
+        }
+        OutputFormat::Human
+            if envelope.ok
+                && envelope.command == "inspect"
+                && envelope.data["bytes"].is_array() =>
+        {
+            let bytes: Vec<u8> =
+                serde_json::from_value(envelope.data["bytes"].clone()).map_err(io::Error::other)?;
+            output.write_all(&bytes)
+        }
+        OutputFormat::Human if envelope.command == "setup" => {
+            super::setup::present_report(envelope, output)
+        }
+        OutputFormat::Human if envelope.ok && envelope.command == "config show" => {
+            super::config_show::present(envelope, output)
+        }
+        OutputFormat::Human
+            if envelope.ok
+                && matches!(
+                    envelope.command.as_str(),
+                    "skill install" | "skill status" | "skill update" | "skill remove"
+                ) =>
+        {
+            let data = &envelope.data;
+            if let Some(message) = data["message"].as_str() {
+                writeln!(output, "{message}")?;
+            }
+            if let Some(destination) = data["destination"].as_str() {
+                writeln!(output, "Agent instructions: {destination}")?;
+            }
+            if data["dry_run"] == true {
+                writeln!(output, "Preview only. No files were changed.")?;
+                if let Some(operations) = data["operations"].as_array() {
+                    for operation in operations {
+                        if let (Some(action), Some(path)) =
+                            (operation["operation"].as_str(), operation["path"].as_str())
+                        {
+                            writeln!(output, "  {action}: {path}")?;
+                        }
+                    }
+                }
+            } else if data["changed"] == true {
+                writeln!(output, "Restart your agent to use this change.")?;
+            }
+            if data["shared_link_retained"] == true {
+                writeln!(
+                    output,
+                    "The instructions are still used by another installed agent."
+                )?;
+            }
+            Ok(())
         }
         OutputFormat::Human if !envelope.ok => {
             if let Some(error) = &envelope.error {
@@ -2184,7 +2734,10 @@ fn present_inner(
                 human_error_guidance(output, &error.details)?;
                 if envelope.command.starts_with("source import ") {
                     human_import_error_guidance(output, &error.details)?;
-                } else if error.code == "CONTENT_CONFLICT" {
+                } else if error.code == "CONTENT_CONFLICT"
+                    && !envelope.command.starts_with("skill ")
+                    && envelope.command != "init"
+                {
                     writeln!(
                         output,
                         "Inspect the current record and retained change before retrying. For an author edit, reconcile the current content and prepare a new change with its observed hash. If recovery reports a durable conflict, inspect changes resolve --help."
@@ -2511,6 +3064,29 @@ fn present_inner(
                     envelope.data["citable"]
                 )?;
             }
+            if let Some(paths) = envelope.data.get("capture_paths") {
+                writeln!(
+                    output,
+                    "Editable input: {}",
+                    paths["editable_input"]
+                        .as_str()
+                        .unwrap_or("standard input (no editable file)")
+                )?;
+                writeln!(
+                    output,
+                    "Managed Source: {}",
+                    paths["managed_source"].as_str().unwrap_or_default()
+                )?;
+                writeln!(
+                    output,
+                    "Snapshots are immutable. After editing the input, explicitly refresh; sync does not recapture it."
+                )?;
+                writeln!(
+                    output,
+                    "Refresh with the new input hash: {}",
+                    paths["refresh_template"].as_str().unwrap_or_default()
+                )?;
+            }
             for operation in envelope.data["plan"]["operations"].as_array().unwrap() {
                 writeln!(
                     output,
@@ -2541,6 +3117,44 @@ fn present_inner(
 }
 
 fn human_error_guidance(output: &mut impl Write, details: &Value) -> io::Result<()> {
+    for (key, label) in [
+        ("initialization", "Wiki setup"),
+        ("installation", "Agent installation"),
+    ] {
+        let state = &details[key];
+        if has_retained_writes(state) {
+            writeln!(output, "{label} stopped after changing files.")?;
+            if state["durable"] == false {
+                writeln!(
+                    output,
+                    "lwiki could not confirm that these changes were fully saved."
+                )?;
+            }
+            let mut shown = std::collections::BTreeSet::new();
+            for key in ["retained_paths", "created", "published_paths"] {
+                if let Some(paths) = state[key].as_array() {
+                    for path in paths.iter().filter_map(Value::as_str) {
+                        if shown.insert(path) {
+                            writeln!(output, "Reported path: {}", terminal_text(path, false))?;
+                        }
+                    }
+                }
+            }
+            if let Some(retry) = state["pending_operation"]["retry_command"].as_str() {
+                writeln!(output, "Retry: {}", terminal_text(retry, false))?;
+            }
+        }
+    }
+    if details["init"]["created"] == true {
+        writeln!(
+            output,
+            "Wiki creation succeeded at {}. Default registration failed; the wiki is retained.",
+            details["init"]["path"].as_str().unwrap_or_default()
+        )?;
+        if let Some(retry) = details["retry"].as_str() {
+            writeln!(output, "Retry: {retry}")?;
+        }
+    }
     if let Some(object) = details.as_object() {
         for (key, item) in object {
             if matches!(
@@ -2611,6 +3225,53 @@ fn human_import_error_guidance(output: &mut impl Write, details: &Value) -> io::
 #[cfg(test)]
 mod import_error_presentation_tests {
     use super::*;
+
+    #[test]
+    fn interrupted_setup_and_installation_report_retained_writes() {
+        for (command, field) in [
+            ("init", "initialization"),
+            ("skill install", "installation"),
+        ] {
+            let mut error = WikiError::new(ErrorCode::ContentConflict, "publication interrupted");
+            error.details = json!({field:{"applied":true,"durable":false,
+                "retained_paths":["/chosen folder/kept\nname"]}});
+            let envelope = failure(command, error);
+            assert!(envelope.meta.partial);
+            let mut bytes = Vec::new();
+            present(&envelope, OutputFormat::Human, &mut bytes).unwrap();
+            let text = String::from_utf8(bytes).unwrap();
+            assert!(text.contains("Reported path: /chosen folder/kept\\nname"));
+            assert!(!text.contains("changes resolve"));
+        }
+        let mut error = WikiError::new(ErrorCode::ConfigInvalid, "default registration failed");
+        error.details = json!({"init":{"created":true,"path":"/retained wiki"}});
+        assert!(failure("init", error).meta.partial);
+        assert!(
+            !failure(
+                "init",
+                WikiError::new(ErrorCode::Usage, "preflight refused")
+            )
+            .meta
+            .partial
+        );
+    }
+
+    #[test]
+    fn interrupted_link_publication_is_partial_before_the_operation_finishes() {
+        let mut error = WikiError::new(ErrorCode::ContentConflict, "second link changed");
+        error.details = json!({"installation":{"applied":false,"durable":false,
+            "changed":true,"created":[],"published_paths":["/project/.agents/skills/llm-wiki"],
+            "pending_operation":{"retry_command":"lwiki skill update --target codex --scope project --directory '/project'"}}});
+        let envelope = failure("skill update", error);
+        assert!(envelope.meta.partial);
+        let mut bytes = Vec::new();
+        present(&envelope, OutputFormat::Human, &mut bytes).unwrap();
+        let text = String::from_utf8(bytes).unwrap();
+        assert!(text.contains("stopped after changing files"));
+        assert!(text.contains("Reported path: /project/.agents/skills/llm-wiki"));
+        assert!(text.contains("--scope project --directory '/project'"));
+        assert!(text.contains("could not confirm"));
+    }
 
     #[test]
     fn plain_import_error_identifies_input_progress_and_continuation() {
@@ -2692,7 +3353,7 @@ impl EmbeddingNetworkResult for crate::retrieval::ContextResult {
 }
 fn with_embedding_runtime<T: EmbeddingNetworkResult>(
     app: &OfflineApp,
-    args: &Arguments,
+    context: &super::remote::RemoteContext<'_>,
     remote: &super::remote::RemoteArguments,
     fallback: bool,
     mut operation: impl FnMut(Option<&crate::app::embeddings::EmbeddingRuntime<'_>>, bool) -> Result<T>,
@@ -2705,8 +3366,8 @@ fn with_embedding_runtime<T: EmbeddingNetworkResult>(
                 ErrorCode::CapabilityUnavailable | ErrorCode::OfflineUnavailable
             ) =>
         {
-            if !app.options().offline && args.profile.is_some() {
-                let runtime = remote.runtime(app, args.profile.as_deref(), Capability::Embed)?;
+            if !app.options().offline && context.profile.is_some() {
+                let runtime = remote.runtime(app, context, Capability::Embed)?;
                 let embedding = embedding_runtime(&runtime);
                 let mut result = with_network_activity(
                     Some(&runtime.dispatcher),

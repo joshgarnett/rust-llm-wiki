@@ -1,222 +1,210 @@
-# Sources and providers reference
+# Sources and providers
 
-Use [everyday capture/refresh](everyday-use.md#capture-and-refresh-notes) for one
-note. This reference covers collections, guarded batches and optional remote work.
-Offline capture needs no credentials. Guided setup and consolidated provider/agent
-configuration are requested work, not an available setup route yet. The following
-private provider file is the current interface.
+Use [capture and refresh](everyday-use.md#capture-and-refresh-notes) for one
+note. This guide covers collections, batch updates and optional remote services.
+Capturing and searching by words work offline without credentials.
 
 ## Import a collection
 
-Create a JSON Lines input list. Relative paths resolve from the list's directory;
-title and media_type are optional. Choose an absent output in an existing directory.
+Make an input list with one JSON object per line. Each object names a file;
+its title and media type are optional. Relative paths start from the input
+list's folder. For example, `inputs.jsonl` might contain:
 
-~~~json
-{"path":"deployment-notes.md","title":"Atlas deployment notes"}
-{"path":"runbooks/rollback.txt","title":"Atlas rollback","media_type":"text/plain"}
-~~~
+```json
+{"path":"project-notes.md","title":"Project notes"}
+{"path":"meeting-notes/decisions.txt","title":"Meeting decisions","media_type":"text/plain"}
+```
 
-Set DEMO to that input directory and WIKI to your wiki's absolute root:
+Use your own filenames. Prepare an import manifest, choosing an output file that
+does not already exist:
 
-~~~sh
-lwiki --offline --json source import prepare --input-list "$DEMO/inputs.jsonl" --output "$DEMO/import.jsonl"
-lwiki --wiki "$WIKI" --offline index rebuild --normalized
-lwiki --wiki "$WIKI" --offline --json source import run --manifest "$DEMO/import.jsonl" --key atlas-notes --group-size 4 --max-groups 64
-lwiki --wiki "$WIKI" --offline --json source import status --key atlas-notes
-lwiki --wiki "$WIKI" --offline --json source import resume --key atlas-notes --max-groups 64
-~~~
+```sh
+lwiki --offline source import prepare --input-list "/absolute/path/to/inputs.jsonl" --output "/absolute/path/to/import.jsonl"
+```
 
-Import requires explicit normalized activation; the rebuild above changes layout,
-so first back up an existing wiki and finish pending changes with their preparing
-binary. Preparation needs no wiki and freezes original hashes, paths and extraction
-policy. Reuse a key only with the same manifest/group size. Another key creates
-new identities even for identical bytes. One invocation processes at most
-max-groups; inspect `meta.partial` and `data.completed`. Resume uses the owned
-manifest once retained; a failure before retention can require the hinted same-key
-run with the original manifest.
+Preparation checks the files and records their hashes. It does not capture them
+yet. [Back up an existing wiki](recovery.md#backup-and-restore), then prepare the
+search index and run the import:
 
-Groups contain 1–8 items (default four), with 4 MiB aggregate bytes for multi-item
-groups and 64 MiB per input. Larger inputs form size-one groups. Each group shares
-one Change/publication; rollback affects the whole group. `--stage` is unsupported.
-Manifest ceilings are 128 MiB, 200,000 items and 64 GiB total input, not measured
-practical capacity. Progress, owned manifests and results are durable operational
-state, not cache. See [storage](../developer/contracts/storage.md#capture-and-lifecycle).
+```sh
+lwiki --offline index rebuild --normalized
+lwiki --offline source import run --manifest "/absolute/path/to/import.jsonl" --key project-notes --group-size 4 --max-groups 64
+lwiki --offline source import status --key project-notes
+```
 
-UTF-8 text/Markdown retains exact bytes. HTML/HTM captures retain raw UTF-8 too;
-lexical retrieval omits tags, attributes, comments, script/style, while citations
-remain raw slices. Literal search can match markup. No browser rendering,
-encoding conversion or external extractor occurs. Empty inputs have no nonempty
-citation; unsupported formats retain originals without citable text. Media type
-does not override filename admission. Frozen older extraction policy remains
-unchanged on resume; refresh creates new extraction history rather than filling
-an old original-only revision.
+Choose a key that names this import. The default group size is four files; each
+group is saved as one change. The invocation processes at most 64 groups in
+this example. If status says the import is incomplete, continue it:
+
+```sh
+lwiki --offline source import resume --key project-notes --max-groups 64
+```
+
+Reuse the same key only for the same manifest and group size. A different key
+creates separate captured sources, even when files are identical. If an import
+fails before retaining its manifest, follow the error's instruction to rerun
+with that manifest. Status reports the result file with the saved source IDs.
+
+Markdown and plain UTF-8 text remain citable. HTML captures keep the raw HTML;
+word search omits tags, comments, scripts and styles, while literal search can
+match markup. No browser rendering or encoding conversion takes place. Other
+formats can retain the original without searchable text. Check the capture
+result before expecting a citation. Individual inputs are limited to 64 MiB;
+large inputs use their own group.
 
 ## Maintain imported Sources
 
-`results_path` from import status names the append-only JSONL mapping artifact.
-Join every `group_committed` event's `result.items` to original manifest items by
-zero-based ordinal. Require complete unique coverage and count agreement;
-`last_group` alone omits earlier groups. Status success does not certify every
-mapping byte. Preserve inconsistent artifacts instead of editing operational state.
+Keep the import's result file so you can match originals to source IDs. In its
+JSON Lines output, each `group_committed` event contains `result.items` with
+zero-based manifest positions. Use all groups when building the mapping;
+`last_group` contains only the last one.
 
-Inspect each returned Source/Revision ID and current head. Compare proposed input
-with the current capture and extraction/title policy, not just the import's old
-hash. Skip/report missing inputs and withdrawn Sources unless another action was
-intended. Equal bytes or paths do not establish common identity.
+To refresh an imported note, inspect its source and stage an update:
 
-~~~sh
-lwiki --wiki "$WIKI" --offline --json read --id "$SOURCE_ID"
-lwiki --wiki "$WIKI" --offline --json --stage source refresh "$SOURCE_ID" --file "$INPUT"
-lwiki --wiki "$WIKI" --offline changes show "$CHANGE_ID" --operation 0
-lwiki --wiki "$WIKI" --offline changes apply "$CHANGE_ID"
-~~~
+```sh
+lwiki --offline --json read --id SOURCE_ID
+lwiki --offline --stage source refresh SOURCE_ID --file "/absolute/path/to/updated-note.md"
+lwiki --offline changes show CHANGE_ID --operation 0
+lwiki --offline changes apply CHANGE_ID
+```
 
-Use actual IDs/input paths. Review complete before/proposed bytes and dependencies;
-a prior read/preview does not constrain a later stage. The retained reviewed input,
-not a subsequently changed external file, is applied. An unchanged refresh can
-reuse its revision without a Change. Keep unresolved outcomes for recovery.
-Refresh never rewrites an authored Page. Read fresh cited context, reconcile its
-actual facts and gaps, then use a guarded full-Page update as described in
-[everyday use](everyday-use.md#create-edit-and-move-a-page).
+Replace the IDs with the actual source ID and returned change ID. Review the
+before and proposed text before applying. Apply uses the staged copy, so a later
+change to the external input does not silently alter the reviewed update.
+An unchanged refresh can reuse the existing captured version.
 
-`source withdraw ID --reason REASON` retains history, disables current support and
-does not alter Page prose or immutable bytes. Refresh does not reactivate a withdrawn
-Source. Historical access stays labeled; titles/origins never justify merging IDs.
-Managed normalized capture/refresh publishes discovery; external wiki edits require
-sync. Neither publication nor verified selected reads establish global completeness.
+To stop treating a source as current support:
+
+```sh
+lwiki --offline source withdraw SOURCE_ID --reason 'why this note is no longer current'
+```
+
+Withdrawal keeps its history and earlier citations. It does not rewrite a page
+that used the note, and refresh does not reactivate it. Ask your agent to review
+affected pages against the new evidence, then save a draft update.
 
 ## Refresh a guarded batch
 
-Normalized `source refresh-batch` refreshes 1–16 distinct active Sources in one
-retained Change/publication. Inspect `schema source-refresh-batch`. For each member,
-use the current Source read's `data.hash` and `wiki_current_revision`, and compute
-the exact new input's BLAKE3 digest. Replace all placeholders:
+For an automated update of several sources, `source refresh-batch` updates up
+to 16 distinct active sources in one reviewed change. It requires a normalized
+index. Inspect the request format first:
 
-~~~json
+```sh
+lwiki schema source-refresh-batch
+```
+
+Each item names the source, new input file, current source hash, current revision
+ID and new input's BLAKE3 hash. For example:
+
+```json
 {
   "items": [{
     "source_id": "SOURCE_ID",
-    "file": "updated.md",
-    "if_match": "blake3:<64 lowercase hexadecimal digits>",
+    "file": "updated-note.md",
+    "if_match": "blake3:CURRENT_SOURCE_HASH",
     "expected_revision": "REVISION_ID",
-    "input_hash": "blake3:<64 lowercase hexadecimal digits>",
+    "input_hash": "blake3:NEW_INPUT_HASH",
     "media_type": "text/markdown"
   }]
 }
-~~~
+```
 
-Member files resolve relative to the request file. Inputs must be distinct regular
-UTF-8 files; duplicate Sources/paths, symlinks, stdin, unknown fields and stale
-guards refuse. Request JSON caps 1 MiB and total input 4 MiB. Optional title/media
-metadata overrides are explicit. Unchanged members still authenticate guards;
-a wholly unchanged batch creates no Change/publication. Historical reuse and no-op
-are separately reported.
+Replace every placeholder. Source `read` returns the current `data.hash` and
+`wiki_current_revision`. Replace each whole hash string with `blake3:` followed
+by the actual 64 lowercase hexadecimal digits.
+To calculate the new input hash with the `b3sum` tool, run
+`b3sum /absolute/path/to/updated-note.md` and use the first value it prints.
+Member file paths start from the request file's directory. The total input limit
+is 4 MiB. Stale hashes, repeated sources and symlink inputs are rejected.
 
-~~~sh
-lwiki --wiki "$WIKI" --offline --json --dry-run source refresh-batch --file REQUEST.json
-lwiki --wiki "$WIKI" --offline --json --stage source refresh-batch --file REQUEST.json
-lwiki --wiki "$WIKI" --offline changes show "$CHANGE_ID" --summary
-lwiki --wiki "$WIKI" --offline --json changes show "$CHANGE_ID" --operation 0
-lwiki --wiki "$WIKI" --offline changes apply "$CHANGE_ID"
-~~~
+```sh
+lwiki --offline --dry-run source refresh-batch --file REQUEST.json
+lwiki --offline --stage source refresh-batch --file REQUEST.json
+lwiki --offline changes show CHANGE_ID --summary
+lwiki --offline changes show CHANGE_ID --operation 0
+lwiki --offline changes apply CHANGE_ID
+```
 
-Dry-run validates inputs but leaves Source/head/guard admission unresolved.
-Summary verifies operation metadata, not payload availability/integrity or current
-freshness; it proves neither apply readiness nor undo availability. Review selected
-exact operations or full inspection, then apply. Summary and operation flags
-conflict. Apply rechecks retained guards, can resume an interrupted exact intent,
-and reuses a completed outcome. It does not prepare embeddings or revise a Page.
+A dry run checks the request inputs but does not check every source guard.
+The summary helps you choose operations to inspect; review their exact before
+and proposed text before applying. Batch refresh does not update wiki page
+prose or prepare embeddings.
 
 ## Optional remote providers
 
-Remote embeddings/extraction/probes require explicit task authorization and finite
-limits. They are separate from host-agent research. `--providers-config` requires
-an absolute path outside the wiki; the config and credential files must be private
-regular files (for example owner-only 0600). Obtain the actual ID with `wiki show`
-and replace all root/ID/credential placeholders:
+Search by meaning uses an embedding model: a remote service turns note text and
+questions into numerical vectors that lwiki stores locally. It sends that text
+to your chosen provider and can cost money. Keep using literal or word search
+if you do not want those calls.
 
-~~~toml
-version = 1
-[profiles.primary]
-embedding = "embed-small"
+To configure a model, rerun setup for your wiki:
 
-[services.embed-small]
-adapter = "embeddings-v1"
-url = "https://api.openai.com/v1/embeddings"
-model = "text-embedding-3-small"
-revision = "my-embedding-policy-v1"
-dimensions = 1536
-max_batch_items = 32
-max_batch_bytes = 131072
+```sh
+lwiki setup "/absolute/path/to/Wiki" --select
+```
 
-[services.embed-small.auth]
-kind = "static"
-key_file = "/absolute/private/token"
+When asked about an embedding model, answer yes. Supply the model name and full
+embeddings endpoint URL from your provider. Set vector dimensions only if your
+provider requires them. Choose how to provide your API key:
 
-[vault_bindings.personal]
-root = "/absolute/wiki"
-wiki_id = "paste-your-actual-wiki-id"
-allowed_profiles = ["primary"]
-~~~
+- **Save privately:** enter the key at the hidden terminal prompt. Setup saves it
+  in a private file outside your wiki, so later terminals can use it.
+- **Private file:** supply an existing private key file; setup records its path.
+- **Environment:** supply the variable name. That variable must also be available
+  in every terminal or agent process that makes requests.
 
-Alternatively use key_env and provide that key in the process environment. Never
-put secrets in notes, command arguments or public reports. Root/ID binding authorizes
-that exact wiki; a copied wiki needs its own explicit binding. With WIKI and
-PROVIDERS set to absolute paths, these commands make bounded paid requests:
+Setup shows the files it will use and asks whether to permit future embedding
+requests for this wiki. It makes no network request. `config show` displays the
+model and key source without showing the secret:
 
-~~~sh
-lwiki --wiki "$WIKI" --json doctor --probe --role embed --providers-config "$PROVIDERS" --profile primary --max-requests 1
-lwiki --wiki "$WIKI" --json embeddings sync --providers-config "$PROVIDERS" --profile primary --max-requests 20 --quality-target-bytes 3000 --max-input-bytes 8000
-lwiki --wiki "$WIKI" search 'recover from a failed deployment' --mode semantic --providers-config "$PROVIDERS" --profile primary --max-requests 1
-~~~
+```sh
+lwiki config show
+```
 
-Sync reports coverage. Compatible inputs can reuse retained vectors. An identical
-cached query can later run offline; a new query cannot. Dry-run sends no text and
-opens no credentials, but authorization/cache state can remain unchecked. Hard
-rendered embedding input defaults to 12,000 UTF-8 bytes including prefixes; quality
-targets split long text while retaining exact byte mapping and can increase calls.
-`embeddings check --offline --json` reports active settings/coverage, or null settings
-without active cache. Deleting cache loses reusable vectors.
+After granting access, test the selected provider with a single paid request,
+then prepare embeddings with a finite request limit:
 
-Request ceilings include retries; each embedding attempt reserves 8 MiB response
-allowance. Limits compose with retained Run lifetime usage and unknown charges.
-Unknown monetary cost is not zero. Inspect `jobs status --run RUN_ID` before an
-explicit `jobs amend --run RUN_ID --reason REASON --max-requests N`. Repeating a
-command can continue after its invocation allowance ends, but cannot reset retained
-Run limits/deadlines/unknown holds. Retry an uncertain send only explicitly with
-`--retry-uncertain`. Changed inputs refuse resend. Preserve accounting in backups.
+```sh
+lwiki doctor --probe --role embed --max-requests 1
+lwiki embeddings sync --max-requests 20 --quality-target-bytes 3000 --max-input-bytes 8000
+lwiki search 'your question in different words' --mode semantic --max-requests 1
+```
 
-Generation profiles name a separate service. New generation uses explicit
-`adapter = "responses-v1"` with its exact Responses URL; embeddings use
-`embeddings-v1`. Existing `chat-completions-v1` remains explicit. Responses sends
-store:false, no tools and a user input. JSON-schema mode uses a bounded provider
-grammar plus the complete local validator; text-json accepts bare JSON or one JSON
-fence, without surrounding prose. Unsupported fields/schema fail rather than
-converting endpoints. HTTP success can still contain refused/incomplete/invalid
-output, and paid failures remain accounted for. Simple probes do not qualify
-extraction schemas, live gateways or ranking quality. Full configuration, adapter,
-limits and private diagnostics are in the [provider contract](../developer/contracts/providers-jobs.md).
+The sync result reports how much text has embeddings. A request limit can leave
+work incomplete; check coverage before increasing it. Saved provider choices
+apply to new commands, so you do not need to repeat their paths or profile name.
+The full provider configuration remains a separate private file.
+
+A new semantic question needs a query embedding. An identical cached question
+can later run offline, but offline mode cannot create a missing embedding.
+Use `lwiki --offline embeddings check` to inspect coverage. Long notes may be
+split into multiple inputs, increasing requests. Removing the cache loses those
+reusable vectors.
+
+Retries count toward request limits. If a send has an uncertain result, inspect
+`jobs status --run RUN_ID` before retrying. Unknown cost is not zero, and repeating
+a command does not reset an existing run's limits. Use `jobs amend --help` when
+you deliberately want to increase a retained run's allowance.
+
+For a manually maintained provider file, pass
+`--providers-config "/absolute/private/providers.toml" --profile PROFILE`.
+Keep credentials outside notes, command arguments and public reports. Generation
+services use a separate model and adapter; configuring embeddings does not
+configure generation. The [provider reference](../developer/contracts/providers-jobs.md)
+covers advanced adapters, rate cards and accounting.
 
 ## Experimental Source relations
 
-Relation preparation is explicitly enabled, normalized-only and disabled by default.
-No demonstrated development-corpus completeness improvement qualifies it. Generated
-links are unassessed navigation, not accepted assertions; returned evidence remains
-exact original Source spans. Refresh/withdrawal invalidates current navigation while
-historical preparation survives.
+Generated relationships between source notes are optional suggestions for
+navigation. They are disabled by default and are not reviewed facts. Preparing
+them needs a normalized index and a configured generation service.
 
-`relations prepare` authenticates complete current Sources and binds a configured
-generation profile even offline. `--quote` seals requests with a finite allowance
-without credentials, sending or persistent Runs, and requires supported bounds and
-a complete valid rate card. A quote is not guaranteed acquisition: attempts or
-unknown charges can stop an incomplete batch. Review actual input coverage and
-accounting before paid `relations run`. Use exact manifest bytes, the same Run/config
-and lifetime limits for continuation. Querying requires explicit
-`--experimental-source-relations` with supported lexical indexed-document context;
-this does not qualify default context, other modes or automatic answers.
+Inspect `relations prepare --help` for input and limit options. `--quote` shows
+a bounded cost estimate without sending requests. Review that estimate and input
+coverage before `relations run`. Queries must explicitly pass
+`--experimental-source-relations`. Refreshing or withdrawing a source removes
+its current generated navigation while keeping the older history.
 
-The [relation protocol](../developer/contracts/retrieval.md#experimental-source-relation-preparation)
-contains exact opt-in prepare/run/query commands and quote ceilings. Raw responses,
-descriptors and receipts remain immutable Run records for offline reconstruction.
-Inspect actual citations/coverage warnings; local functional tests do not establish
-retrieval completeness, large-wiki capacity or release qualification.
+Use cited source passages to support an answer, rather than treating a generated
+relationship as proof. The [advanced relation reference](../developer/contracts/retrieval.md#experimental-source-relation-preparation)
+contains the full prepare, run and query formats.

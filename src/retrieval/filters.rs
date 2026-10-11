@@ -62,7 +62,13 @@ pub(crate) fn catalog_sql(
     values: &mut Vec<Value>,
     normalized: bool,
 ) -> String {
-    let mut clauses = Vec::new();
+    // Ordinary editor notes have no adopted owner. Physical inspection remains
+    // available, but only explicit canonical adoption/capture admits retrieval.
+    // This predicate runs before candidate limits, including historical modes.
+    let mut clauses = vec![
+        "(d.record_id IS NOT NULL OR d.source_id IS NOT NULL OR d.owner_revision IS NOT NULL)"
+            .to_owned(),
+    ];
     if !filters.kinds.is_empty() {
         let placeholders: Vec<_> = filters
             .kinds
@@ -235,4 +241,45 @@ pub(crate) fn context_policy(historical: bool) -> String {
     format!(
         "((d.owner_revision IS NOT NULL AND ({payload})) OR (d.owner_revision IS NULL AND ((r.kind='page' AND ({page})) OR (r.kind='entity' AND ({description})))))"
     )
+}
+
+#[cfg(test)]
+mod adoption_tests {
+    use super::*;
+    #[test]
+    fn unadopted_plain_and_unknown_yaml_never_consume_retrieval_caps() {
+        let connection = rusqlite::Connection::open_in_memory().unwrap();
+        connection.execute_batch("CREATE TABLE documents(path TEXT,record_id TEXT,kind TEXT,source_id TEXT,owner_revision TEXT,eligibility TEXT); CREATE TABLE records(id TEXT,kind TEXT,authored_status TEXT,row_json TEXT,description_eligibility TEXT);
+            INSERT INTO records VALUES('Page.Good','page','reviewed','{}',NULL);
+            INSERT INTO documents VALUES('pages/good.md','Page.Good','page',NULL,NULL,'current');
+            INSERT INTO documents VALUES('notes/plain.md',NULL,NULL,NULL,NULL,'unsupported');
+            INSERT INTO documents VALUES('notes/unknown-yaml.md',NULL,NULL,NULL,NULL,'invalid');
+            INSERT INTO documents VALUES('sources/captured-current/content.md',NULL,NULL,'Source.Current','Revision.Current','current');
+            INSERT INTO documents VALUES('sources/captured-historical/content.md',NULL,NULL,'Source.Current','Revision.Old','historical');").unwrap();
+        for historical in [false, true] {
+            let filters = SearchFilters {
+                include_historical: historical,
+                ..Default::default()
+            };
+            let common = catalog_sql(&filters, &mut Vec::new(), true);
+            let policy = catalog_normal_policy(&filters, true);
+            let sql = format!(
+                "SELECT d.path FROM documents d LEFT JOIN records r ON r.id=d.record_id WHERE ({common}) AND ({policy}) ORDER BY d.path LIMIT 10"
+            );
+            let actual = connection
+                .prepare(&sql)
+                .unwrap()
+                .query_map([], |row| row.get::<_, String>(0))
+                .unwrap()
+                .collect::<std::result::Result<Vec<_>, _>>()
+                .unwrap();
+            assert!(actual.contains(&"pages/good.md".to_owned()));
+            assert!(actual.contains(&"sources/captured-current/content.md".to_owned()));
+            assert_eq!(
+                actual.contains(&"sources/captured-historical/content.md".to_owned()),
+                historical
+            );
+            assert!(!actual.iter().any(|path| path.starts_with("notes/")));
+        }
+    }
 }

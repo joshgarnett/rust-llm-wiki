@@ -2,11 +2,14 @@
 """Mocked tool tests: these do not demonstrate real Bazel/provider qualification."""
 
 import hashlib
+import contextlib
 import importlib.util
+import io
 import json
 import os
 from pathlib import Path
 import subprocess
+import shutil
 import sys
 import tarfile
 import tempfile
@@ -37,16 +40,17 @@ class MockTools:
         self.version = "lwiki 0.1.0\n"
         self.capabilities = {"ok": True, "command": "capabilities", "schema_version": "1", "data": {"mock": True}}
         self.status_reads = 0
+        self.dirty = False
 
     def run(self, command, cwd, stdout, stderr, check):
         self.calls.append(command)
         assert cwd == self.repo and check is False
         code = 0
         if command[:2] == ["git", "rev-parse"]:
-            content = "abc123\n"
+            content = "a" * 40 + "\n"
         elif command[:2] == ["git", "status"]:
             self.status_reads += 1
-            content = " M src/main.rs\n" if self.change_source and self.status_reads == 2 else ""
+            content = " M src/main.rs\n" if self.dirty or self.change_source and self.status_reads == 2 else ""
         elif command[:2] == ["cargo", "metadata"]:
             content = json.dumps({"packages": [{"name": "rust-llm-wiki", "id": "correct-package", "version": self.package_version,
                                    "manifest_path": str(self.repo / "Cargo.toml")}]})
@@ -104,6 +108,9 @@ class BuildArtifactTests(unittest.TestCase):
             "rust-toolchain.toml": '[toolchain]\nchannel = "1.98.0"\n',
             "scripts/bazel.py": '# mock wrapper\n',
         }
+        for name in helper.BUILD_CONTRACT_FILES:
+            if name not in ("Cargo.toml", "Cargo.lock"):
+                contract_contents.setdefault(name, "fixture contract\n")
         for name, contents in contract_contents.items():
             path = self.repo / name
             path.parent.mkdir(parents=True, exist_ok=True)
@@ -122,7 +129,7 @@ class BuildArtifactTests(unittest.TestCase):
         self.tools = MockTools(self.repo, self.executable)
 
     def build(self):
-        with patch.object(helper.subprocess, "run", self.tools.run):
+        with patch.object(helper.subprocess, "run", self.tools.run), patch.object(helper.notices, "generate", return_value=(self.repo / "THIRD-PARTY-NOTICES").read_bytes()), patch.object(helper.verifier.platforms, "inspect_file", return_value={"kind":"macos","minimum_version":"15.0.0"}):
             return helper.build(self.output, self.repo)
 
     def archive_path(self):
@@ -144,6 +151,8 @@ class BuildArtifactTests(unittest.TestCase):
         if os.name != "nt":
             self.assertEqual(observed_mode, 0o755)
         info = json.loads((self.output / "build-info.json").read_text())
+        self.assertEqual(info["platform_requirements"], {"kind":"macos","minimum_version":"15.0.0"})
+        self.assertIn("Requires macOS 15.0.0 or newer.", (self.output / "INSTALL.txt").read_text())
         self.assertEqual(info["binary_sha256"], hashlib.sha256(copied.read_bytes()).hexdigest())
         self.assertEqual(info["cargo_lock_sha256"], hashlib.sha256(b"mock lock\n").hexdigest())
         self.assertEqual(info["host"], self.tools.host)
@@ -158,7 +167,7 @@ class BuildArtifactTests(unittest.TestCase):
             name: hashlib.sha256((self.repo / name).read_bytes()).hexdigest()
             for name in helper.BUILD_CONTRACT_FILES
         })
-        self.assertEqual(info["source"]["commit"], "abc123")
+        self.assertEqual(info["source"]["commit"], "a" * 40)
         self.assertFalse(info["source"]["dirty"])
         self.assertIn("not qualified provenance", info["source"]["note"])
         self.assertIn("not full qualification", info["scope"])
@@ -168,7 +177,7 @@ class BuildArtifactTests(unittest.TestCase):
         self.assertEqual((self.output / (archive.name + ".sha256")).read_text(encoding="utf-8"),
                          hashlib.sha256(archive.read_bytes()).hexdigest() + "  " + archive.name + "\n")
         with tarfile.open(archive) as bundle:
-            self.assertEqual(set(bundle.getnames()), {"lwiki", "version.txt", "capabilities.json", "build-info.json"})
+            self.assertEqual(set(bundle.getnames()), set(helper.verifier.MEMBERS))
             self.assertEqual(bundle.getmember("lwiki").mode & 0o777, observed_mode)
             self.assertEqual(hashlib.sha256(bundle.extractfile("lwiki").read()).hexdigest(), info["binary_sha256"])
             self.assertEqual(json.load(bundle.extractfile("build-info.json")), info)
@@ -294,7 +303,7 @@ class BuildArtifactTests(unittest.TestCase):
         self.assert_failed_candidate()
 
     def test_packaging_failure_removes_success_info(self):
-        def fail_archive(path, mode):
+        def fail_archive(path, mode, **kwargs):
             Path(path).write_bytes(b"partial archive")
             (self.output / "unrelated.tar.gz").write_bytes(b"preserve unrelated output")
             raise OSError("mock packaging failure")
@@ -329,24 +338,145 @@ class BuildArtifactTests(unittest.TestCase):
         self.assertTrue(self.archive_path().exists())
         self.assertEqual(json.loads((self.output / "build-info.json").read_text())["package_version"], "0.2.3")
 
-    def test_windows_host_names_binary_with_exe(self):
+    def test_unsupported_native_target_refused_before_build(self):
         self.tools.host = "x86_64-pc-windows-msvc"
-        renamed = self.executable.with_suffix(".exe")
-        self.executable.rename(renamed)
-        self.executable = renamed
-        self.tools.executable = renamed
+        with self.assertRaisesRegex(helper.BuildError, "supported two-target"):
+            self.build()
+        self.assertFalse(any("build" in call for call in self.tools.calls))
+        self.assert_failed_candidate()
+
+    def test_candidate_archive_passes_release_member_verifier(self):
         self.build()
-        self.assertTrue((self.output / "lwiki.exe").exists())
+        contents = helper.verifier.read_ustar(self.archive_path())
+        self.assertEqual(set(contents), set(helper.verifier.MEMBERS))
+        checksum = self.output / (self.archive_path().name + ".sha256")
+        with patch.object(helper.verifier.platforms, "inspect_bytes", return_value={"kind":"macos","minimum_version":"15.0.0"}):
+            record = helper.verifier.verify_archive(self.archive_path(), checksum, "a" * 40,
+                                                    self.tools.package_version, self.tools.host)
+        self.assertEqual(record["binary_sha256"], helper.sha256(self.output / "lwiki"))
+
+    def test_floor_inspection_failure_refuses_before_any_binary_smoke_execution(self):
+        with patch.object(helper.subprocess, "run", self.tools.run), patch.object(helper.notices, "generate", return_value=(self.repo / "THIRD-PARTY-NOTICES").read_bytes()), patch.object(helper.verifier.platforms, "inspect_file", side_effect=helper.verifier.platforms.PlatformError("missing deployment version")):
+            with self.assertRaisesRegex(helper.verifier.platforms.PlatformError, "missing deployment"):
+                helper.build(self.output, self.repo)
+        self.assertFalse(any(call[1:]==["--version"] for call in self.tools.calls))
+        self.assert_failed_candidate()
+
+    def test_stale_notices_refused_before_native_build(self):
+        with patch.object(helper.subprocess, "run", self.tools.run), patch.object(helper.notices, "generate", return_value=b"stale"):
+            with self.assertRaisesRegex(helper.BuildError, "NOTICES is stale"):
+                helper.build(self.output, self.repo)
+        self.assertFalse(any("build" in call for call in self.tools.calls))
+        self.assert_failed_candidate()
+
+    def test_informational_dirty_candidate_never_asserts_clean_source(self):
+        self.tools.dirty = True
+        self.build()
         info = json.loads((self.output / "build-info.json").read_text())
-        self.assertEqual(info["binary"], "lwiki.exe")
-        self.assertEqual(info["target"], "x86_64-pc-windows-msvc")
-        archive = self.archive_path()
-        self.assertEqual(archive.name, "lwiki-0.1.0-x86_64-pc-windows-msvc.tar.gz")
-        checksum = self.output / (archive.name + ".sha256")
-        self.assertEqual(checksum.read_text(encoding="utf-8"),
-                         hashlib.sha256(archive.read_bytes()).hexdigest() + "  " + archive.name + "\n")
-        with tarfile.open(archive) as bundle:
-            self.assertEqual(set(bundle.getnames()), {"lwiki.exe", "version.txt", "capabilities.json", "build-info.json"})
+        self.assertTrue(info["source"]["dirty"])
+        self.assertIn("source_clean false\n", (self.output / "artifact-info.txt").read_text())
+        with self.assertRaises(helper.verifier.VerificationError):
+            helper.verifier.verify_archive(self.archive_path(),
+                self.output / (self.archive_path().name + ".sha256"), "a" * 40,
+                self.tools.package_version, self.tools.host)
+
+
+class NoticeGenerationTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.repo = Path(self.temp.name) / "repo"; self.repo.mkdir()
+        self.cache = Path(self.temp.name) / "cache"; (self.cache / "registry").mkdir(parents=True)
+        (self.repo / "licenses").mkdir()
+        (self.repo / "licenses/provenance.json").write_text('{"schema_version":1,"packages":[]}')
+        self.archive = self.cache / "registry/example-1.0.0.crate"
+        self.make_crate()
+
+    def make_crate(self, license_text=b"Verbatim synthetic license text\n", vcs_commit=None):
+        with tarfile.open(self.archive, "w:gz") as bundle:
+            files = {"Cargo.toml": b'[package]\nname="example"\nversion="1.0.0"\nlicense = "MIT"\nrepository = "https://github.com/example/example"\n'}
+            if license_text is not None: files["LICENSE"] = license_text
+            if vcs_commit is not None:
+                files[".cargo_vcs_info.json"] = json.dumps({"git": {"sha1": vcs_commit}}).encode()
+            for name, data in files.items():
+                member = tarfile.TarInfo("example-1.0.0/" + name); member.size = len(data)
+                bundle.addfile(member, io.BytesIO(data))
+        checksum = hashlib.sha256(self.archive.read_bytes()).hexdigest()
+        (self.repo / "Cargo.lock").write_text('version = 4\n[[package]]\nname = "example"\nversion = "1.0.0"\nsource = "registry+https://github.com/rust-lang/crates.io-index"\nchecksum = "' + checksum + '"\n')
+
+    def test_exact_text_and_crate_provenance_retained(self):
+        result = helper.notices.generate(self.repo, self.cache)
+        self.assertIn(b"Verbatim synthetic license text\n", result)
+        self.assertIn(hashlib.sha256(self.archive.read_bytes()).hexdigest().encode(), result)
+        self.assertIn(b"conservative superset", result)
+
+    def test_missing_license_and_bad_crate_checksum_block_generation(self):
+        self.make_crate(None)
+        with self.assertRaisesRegex(helper.notices.NoticeError, "missing upstream license text"):
+            helper.notices.generate(self.repo, self.cache)
+        self.make_crate()
+        self.archive.write_bytes(self.archive.read_bytes() + b"changed")
+        with self.assertRaisesRegex(helper.notices.NoticeError, "missing checksum-verified"):
+            helper.notices.generate(self.repo, self.cache)
+
+    def supplement(self, license_text=b"Verbatim supplemental license\n"):
+        commit = "b" * 40
+        self.make_crate(None, vcs_commit=commit)
+        filename = "example-1.0.0-LICENSE"
+        (self.repo / "licenses" / filename).write_bytes(license_text)
+        item = {"package": "example", "version": "1.0.0",
+                "crate_sha256": hashlib.sha256(self.archive.read_bytes()).hexdigest(),
+                "upstream_commit": commit, "commit_evidence": "archive .cargo_vcs_info.json",
+                "files": [{"file": filename, "upstream_path": "LICENSE",
+                           "url": "https://raw.githubusercontent.com/example/example/" + commit + "/LICENSE",
+                           "sha256": hashlib.sha256(license_text).hexdigest()}]}
+        self.write_supplement(item)
+        return item
+
+    def write_supplement(self, item):
+        (self.repo / "licenses/provenance.json").write_text(json.dumps({"schema_version": 1, "packages": [item]}))
+
+    def test_empty_missing_malformed_and_duplicate_supplement_lists_refuse(self):
+        original = self.supplement()
+        self.assertIn(b"Verbatim supplemental license", helper.notices.generate(self.repo, self.cache))
+        for files in ([], None, "LICENSE", [{}], [original["files"][0], original["files"][0]]):
+            with self.subTest(files=files):
+                item = dict(original); item["files"] = files; self.write_supplement(item)
+                with self.assertRaises(helper.notices.NoticeError): helper.notices.generate(self.repo, self.cache)
+        item = dict(original); del item["files"]; self.write_supplement(item)
+        with self.assertRaises(helper.notices.NoticeError): helper.notices.generate(self.repo, self.cache)
+
+    def test_empty_or_missing_actual_supplement_license_refuses(self):
+        for material in (b"", b" \n\t", b"\x00"):
+            with self.subTest(material=material):
+                self.supplement(material)
+                with self.assertRaises(helper.notices.NoticeError): helper.notices.generate(self.repo, self.cache)
+        item = self.supplement(); (self.repo / "licenses" / item["files"][0]["file"]).unlink()
+        with self.assertRaises(OSError): helper.notices.generate(self.repo, self.cache)
+
+    def test_supplement_revision_is_bound_to_actual_pinned_crate_metadata(self):
+        item = self.supplement()
+        item["upstream_commit"] = "c" * 40
+        item["files"][0]["url"] = item["files"][0]["url"].replace("b" * 40, "c" * 40)
+        self.write_supplement(item)
+        with self.assertRaisesRegex(helper.notices.NoticeError, "does not match the pinned crate"):
+            helper.notices.generate(self.repo, self.cache)
+
+    def test_cli_missing_license_failure_is_nonzero_without_replacing_notices(self):
+        item = self.supplement(); item["files"] = []; self.write_supplement(item)
+        notices = self.repo / "THIRD-PARTY-NOTICES"; notices.write_bytes(b"preserve existing notices")
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr):
+            status = helper.notices.main(["--repo", str(self.repo), "--cache", str(self.cache)])
+        self.assertEqual(status, 1)
+        self.assertIn("nonempty validated file list", stderr.getvalue())
+        self.assertEqual(notices.read_bytes(), b"preserve existing notices")
+
+    def test_explicit_cargo_home_matches_registry_cache_location(self):
+        cargo_home = self.repo / "cargo-home"
+        shutil.copytree(self.cache, cargo_home / "registry/cache")
+        with patch.dict(helper.notices.os.environ, {"CARGO_HOME": str(cargo_home)}):
+            self.assertIn(b"Verbatim synthetic license", helper.notices.generate(self.repo))
 
 
 if __name__ == "__main__":

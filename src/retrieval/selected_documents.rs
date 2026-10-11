@@ -653,7 +653,7 @@ fn authenticate_inner(
             if row.is_some_and(|r| r.path != document.path) {
                 return Err(conflict("selected document record path differs"));
             }
-            row_projection::canonical_document(&document.path, &note, row)
+            row_projection::canonical_document(&document.path, &note, row)?
         };
         if &expected != document {
             return Err(conflict(

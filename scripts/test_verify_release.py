@@ -3,6 +3,7 @@
 
 import contextlib
 import hashlib
+import gzip
 import importlib.util
 import io
 import json
@@ -11,6 +12,7 @@ import shutil
 import tarfile
 import tempfile
 import unittest
+from unittest.mock import patch
 
 
 SPEC = importlib.util.spec_from_file_location("verify_release", Path(__file__).with_name("verify_release.py"))
@@ -23,6 +25,9 @@ class VerifyReleaseTests(unittest.TestCase):
     VERSION = "0.1.0"
 
     def setUp(self):
+        self.inspection = patch.object(verifier.platforms, "inspect_bytes", side_effect=lambda data, target: {"kind":"macos","minimum_version":"15.0.0"} if "apple" in target else {"kind":"glibc","minimum_version":"2.17"})
+        self.inspection.start()
+        self.addCleanup(self.inspection.stop)
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name) / "downloaded artifacts café"
@@ -47,7 +52,7 @@ class VerifyReleaseTests(unittest.TestCase):
         binary = "lwiki.exe" if "windows" in target else "lwiki"
         executable = ("synthetic executable for " + target).encode("utf-8")
         info = {
-            "schema_version": 1, "source": {"commit": self.COMMIT, "dirty": False},
+            "schema_version": 2, "platform_requirements": {"kind":"macos","minimum_version":"15.0.0"} if "apple" in target else {"kind":"glibc","minimum_version":"2.17"}, "build_command": ["bazel", "build", "--config=release"], "source": {"commit": self.COMMIT, "dirty": False},
             "host": target, "target": target, "package_version": self.VERSION,
             "binary": binary, "binary_sha256": hashlib.sha256(executable).hexdigest(),
         }
@@ -61,7 +66,9 @@ class VerifyReleaseTests(unittest.TestCase):
             }).encode("utf-8"),
             "build-info.json": json.dumps(info).encode("utf-8"),
         }
-        with tarfile.open(self.archive(target), "w:gz") as bundle:
+        contents.update({"LICENSE": b"MIT fixture license\n", "THIRD-PARTY-NOTICES": b"fixture dependency notices\n", "INSTALL.txt": b"fixture installation instructions\n"})
+        contents["artifact-info.txt"] = verifier.artifact_text(contents, self.COMMIT, self.VERSION, target).encode("ascii")
+        with tarfile.open(self.archive(target), "w:gz", format=tarfile.USTAR_FORMAT) as bundle:
             for name, data in contents.items():
                 member = tarfile.TarInfo(name)
                 member.size = len(data)
@@ -89,12 +96,12 @@ class VerifyReleaseTests(unittest.TestCase):
     def verify(self):
         return verifier.verify_release(self.root, self.COMMIT, self.VERSION)
 
-    def test_all_six_targets_return_only_archive_and_checksum_assets(self):
+    def test_both_supported_targets_return_only_archive_and_checksum_assets(self):
         assets = self.verify()
         expected = [str(path.resolve()) for target in verifier.TARGETS
                     for path in (self.archive(target), self.checksum(target))]
         self.assertEqual(assets, expected)
-        self.assertEqual(len(assets), 12)
+        self.assertEqual(len(assets), 4)
         self.assertFalse(any(path.name in {"lwiki", "lwiki.exe"} for path in self.root.rglob("*")))
 
     def test_cli_emits_json_only_after_all_targets_pass(self):
@@ -107,7 +114,7 @@ class VerifyReleaseTests(unittest.TestCase):
 
     def test_missing_platform_rejected(self):
         shutil.rmtree(self.directory(verifier.TARGETS[-1]))
-        with self.assertRaisesRegex(verifier.VerificationError, "six artifact directories"):
+        with self.assertRaisesRegex(verifier.VerificationError, "two artifact directories"):
             self.verify()
 
     def test_duplicate_platform_rejected(self):
@@ -161,7 +168,7 @@ class VerifyReleaseTests(unittest.TestCase):
         for name in ("lwiki", "../outside", "/absolute", "nested/file"):
             with self.subTest(name=name):
                 self.write_artifact(target, extra_member=name)
-                with self.assertRaisesRegex(verifier.VerificationError, "four unique regular files"):
+                with self.assertRaisesRegex(verifier.VerificationError, "eight unique regular root files"):
                     self.verify()
 
     def test_nonregular_binary_entries_rejected(self):
@@ -169,7 +176,7 @@ class VerifyReleaseTests(unittest.TestCase):
         for kind in (tarfile.SYMTYPE, tarfile.LNKTYPE, tarfile.DIRTYPE, tarfile.FIFOTYPE):
             with self.subTest(kind=kind):
                 self.write_artifact(target, binary_type=kind)
-                with self.assertRaisesRegex(verifier.VerificationError, "four unique regular files"):
+                with self.assertRaisesRegex(verifier.VerificationError, "unsupported tar type"):
                     self.verify()
 
     def test_unix_binary_without_execute_bit_rejected(self):
@@ -197,6 +204,59 @@ class VerifyReleaseTests(unittest.TestCase):
         self.assertEqual(result, 1)
         self.assertEqual(stdout.getvalue(), "")
         self.assertIn("release verification failed", stderr.getvalue())
+
+    def test_manifests_are_generated_from_one_verified_object(self):
+        destination = Path(self.temp.name) / "manifest output"
+        assets = verifier.verify_release(self.root, self.COMMIT, self.VERSION, destination)
+        self.assertEqual(len(assets), 4)
+        manifest = json.loads((destination / "release-manifest.json").read_text())
+        self.assertEqual((destination / "release-manifest.txt").read_text(), verifier.manifest_text(manifest))
+        self.assertEqual([record["target"] for record in manifest["targets"]], list(verifier.TARGETS))
+        for record in manifest["targets"]:
+            archive = self.archive(record["target"])
+            self.assertEqual(record["archive_sha256"], verifier.digest(archive.read_bytes()))
+            self.assertEqual(record["archive_bytes"], archive.stat().st_size)
+            self.assertEqual(record["platform_requirements"], {"kind":"macos","minimum_version":"15.0.0"} if "apple" in record["target"] else {"kind":"glibc","minimum_version":"2.17"})
+            self.assertEqual(set(record["files"]), set(verifier.MEMBERS))
+        with self.assertRaisesRegex(verifier.VerificationError, "fresh directory"):
+            verifier.verify_release(self.root, self.COMMIT, self.VERSION, destination)
+
+    def test_packaged_floor_cannot_disagree_with_consistent_rewritten_metadata(self):
+        target = verifier.TARGETS[0]
+        self.write_artifact(target, info_updates={"platform_requirements": {"kind":"macos","minimum_version":"26.5.0"}})
+        with self.assertRaisesRegex(verifier.VerificationError, "platform requirements disagree"):
+            self.verify()
+
+    def test_requirements_missing_invalid_or_for_other_target_are_refused(self):
+        target = verifier.TARGETS[0]
+        for requirements in (None, {"kind":"glibc","minimum_version":"2.39"},
+                             {"kind":"macos","minimum_version":"26.x.0"},
+                             {"kind":"macos","minimum_version":"15.0.0","extra":True}):
+            with self.subTest(requirements=requirements), self.assertRaises(verifier.platforms.PlatformError):
+                self.write_artifact(target, info_updates={"platform_requirements":requirements})
+
+    def test_pax_physical_header_trailing_archive_and_bad_padding_refused(self):
+        target = verifier.TARGETS[0]
+        archive = self.archive(target)
+        original = archive.read_bytes()
+        raw = gzip.decompress(original)
+        variants = [raw + raw]
+        header = bytearray(raw)
+        header[156] = ord("x")
+        header[148:156] = b"        "
+        header[148:156] = ("{:06o}\0 ".format(sum(header[:512]))).encode()
+        variants.append(header)
+        header = bytearray(raw)
+        size = int(raw[124:136].rstrip(b"\x00 "), 8)
+        header[512 + size] = 1
+        variants.append(header)
+        for variant in variants:
+            archive.write_bytes(gzip.compress(variant)); self.write_checksum(target)
+            with self.assertRaises(verifier.VerificationError): self.verify()
+
+    def test_duplicate_json_keys_are_not_silently_adopted(self):
+        with self.assertRaisesRegex(verifier.VerificationError, "duplicate JSON"):
+            verifier.strict_json(b'{"ok":false,"ok":true}')
 
 
 if __name__ == "__main__":

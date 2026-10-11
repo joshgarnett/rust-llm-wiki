@@ -1,192 +1,199 @@
 # Everyday use
 
+Use your agent for these tasks or run the commands yourself. The examples use
+placeholder paths, IDs and questions; replace them with your own. Run
+`lwiki wiki show` first if you are unsure which wiki a command will use.
+
 ## Choose the wiki
 
-`lwiki wiki show` reports the canonical root, stable ID and selection origin.
-Selection uses explicit `--wiki DIR` first, then the nearest ancestor with
-WIKI.md, then the saved default. An invalid explicit root or nearer marker fails
-without falling through. Nested wikis stay independent. Defaults bind both the
-absolute path and observed ID, so replacement with another wiki fails validation.
+Your saved default lets you use the wiki from any folder:
 
-~~~sh
-lwiki init "/path/to/Personal Wiki" --set-default
+```sh
 lwiki wiki show
-lwiki wiki default set "/path/to/Another Wiki"
+```
+
+The result shows the selected folder and its ID. A command with `--wiki` uses
+that folder. Otherwise, lwiki uses the nearest wiki containing your current
+folder, then your saved default. If the selected folder is damaged or has been
+replaced with another wiki, lwiki reports an error instead of choosing a different
+one.
+
+To change the saved default or stop using one:
+
+```sh
+lwiki wiki default set "/absolute/path/to/Another Wiki"
 lwiki wiki default clear
-~~~
+```
 
-After deliberately moving a wiki, set its new location. Clear preserves other
-preferences. Init and default registration are separate durable outcomes: if
-registration fails, keep the created wiki and fix configuration before setting it.
-For automation, copy the actual ID from `wiki show` into WIKI_ID and pin mutations:
-
-~~~sh
-lwiki --wiki "/path/to/Personal Wiki" --expect-wiki-id "$WIKI_ID" --offline index sync
-~~~
-
-The wiki ID guards the target; a whole-file hash separately guards author edits.
+After moving a wiki, set its new location as the default. For a single command,
+use `lwiki --wiki "/absolute/path/to/Wiki" COMMAND`. Agents can also pass
+`--expect-wiki-id ID` to ensure a write goes to the wiki they inspected.
 
 ## Initialize an existing editor folder
 
-~~~sh
-lwiki --dry-run init "/path/to/Obsidian Vault" --existing
-lwiki init "/path/to/Obsidian Vault" --existing --set-default
-~~~
+Use [setup](getting-started.md#set-up-your-wiki) to choose a folder and connect
+an agent. For direct initialization of an existing notes folder:
 
-Ordinary init requires an absent final directory with an existing parent.
-`--existing` preserves author notes and .obsidian, and requires all reserved
-top-level entries absent: WIKI.md, pages, knowledge, sources, changes and .wiki.
-Files, empty directories, symlinks and Unicode case-fold aliases collide, including
-in dry-run before any mutation. Choose another wiki folder or deliberately rename
-the author folder occupying a reserved name. Init never deletes it. Select an
-already initialized wiki with `--wiki`.
+```sh
+lwiki --dry-run init "/absolute/path/to/My Notes" --existing
+lwiki init "/absolute/path/to/My Notes" --existing --set-default
+```
+
+The first command checks whether lwiki can use the folder. The second creates
+its wiki files and saves the default. Existing notes and `.obsidian` settings
+stay in place.
+
+The names `WIKI.md`, `pages`, `sources`, `knowledge`, `changes` and `.wiki` must
+be unused. If initialization reports a collision, preserve that item and choose
+a new wiki folder, or rename the item deliberately before trying again. A new
+folder still lets you capture notes from your existing editor folder.
 
 ## Capture and refresh notes
 
-Capture an ordinary note without adopting or rewriting its author properties:
+Save a copy of a note for the agent to cite:
 
-~~~sh
-lwiki --offline source add "/path/to/deployment.md" --title "Atlas deployment"
-~~~
+```sh
+lwiki --offline source add "/absolute/path/to/project-notes.md" --title "Project notes"
+```
 
-Keep the returned Source path/ID. Sync discovers external canonical edits but
-never recaptures an edited original. After an editor change, inspect its current
-whole-file hash and explicitly name the Source and new input:
+The result includes a source ID and its managed path. Keep the ID for later
+updates. The original stays unchanged. Open the captured copy from `sources/`
+in your wiki to see the saved text.
 
-~~~sh
-lwiki --offline --json inspect --path notes/deployment.md --max-bytes 6000
-INPUT_HASH='blake3:paste-the-actual-whole-file-hash'
-SOURCE_PATH='sources/paste-the-actual-source-directory/source.md'
-lwiki --offline source refresh --path "$SOURCE_PATH" --file "$WIKI/notes/deployment.md" --input-if-match "$INPUT_HASH"
-lwiki --offline index sync
-lwiki --offline context 'Atlas deployment' --max-bytes 6000 --max-tokens 1500
-~~~
+After editing the original, capture its updated version under the same ID:
 
-Set WIKI to your selected root, and replace placeholders with returned values.
-Path refresh requires `--input-if-match` and unique Source identity; stale input
-or competing identity claims refuse. Refresh retains identity and adds immutable
-history. New current citations refer to the new revision; old citations still
-refer to old bytes. Never edit a captured revision to update a fact. ID-selected
-refresh is also available; see [collection maintenance](sources-and-providers.md).
+```sh
+lwiki --offline source refresh SOURCE_ID --file "/absolute/path/to/project-notes.md"
+lwiki --offline context 'your question about the project'
+```
+
+Replace `SOURCE_ID` with the ID from capture. Refresh keeps the earlier copies
+so existing citations still point to their original text. Use refresh rather
+than adding the same note again, which would create a separate source.
+
+If you have the managed source path instead of its ID, you can use the guarded
+path route. Inspect the input note inside your wiki, then copy the returned
+whole-file `data.hash` into the command:
+
+```sh
+lwiki --offline --json inspect --path notes/project-notes.md --max-bytes 6000
+lwiki --offline source refresh --path sources/SOURCE_ID/source.md --file "/absolute/path/to/Wiki/notes/project-notes.md" --input-if-match INPUT_HASH
+```
+
+Replace both `SOURCE_ID` and `INPUT_HASH` with actual returned values. The hash
+check stops the command if the input changed after inspection.
+
+`index sync` picks up edits to wiki pages and other files in the wiki. It does
+not capture a new copy of an edited original. Refresh explicitly when you want
+the agent to cite the update. See [collection maintenance](sources-and-providers.md#maintain-imported-sources)
+for imported notes.
 
 ## Inspect and edit exact bytes
 
-~~~sh
-lwiki --offline --json inspect --path notes/deployment.md --max-bytes 65536
-lwiki --offline inspect --path notes/deployment.md --start 0 --end 128 --max-bytes 128
-~~~
+For normal writing, use your editor. Agents and scripts can inspect a file and
+make a guarded edit:
 
-Use ranges within `file_bytes`. Inspection coordinates are zero-based, half-open
-physical whole-file bytes, including BOM, frontmatter and CRLF. `data.hash` covers
-the whole file; `data.bytes` is exact, and `data.text` requires valid UTF-8.
-A damaged envelope can leave `body_range` unknown. Inspection neither establishes
-committed currentness nor gives bytes canonical identity or citation authority.
-Structured `read` uses its returned body coordinates instead.
-
-For an exact-byte edit, keep a backup such as `cp -p NOTE /path/to/new-backup.md`
-with an absent destination. This example inserts a line at byte zero in a plain
-UTF-8 note whose first byte is body text. For BOM/frontmatter, choose an observed
-body location instead. Replace FILE_HASH with the actual `data.hash`:
-
-~~~sh
-cat > insert-review.json <<'PATCH'
-{
-  "version": "lwiki.literal-edit.v1",
-  "edits": [
-    {"range": {"start": 0, "end": 0}, "replacement_utf8": "Reviewed locally.\n"}
-  ]
-}
-PATCH
+```sh
+lwiki --offline --json inspect --path notes/project-notes.md --max-bytes 65536
 lwiki schema literal-edit
-FILE_HASH='blake3:paste-the-actual-whole-file-hash'
-lwiki --offline --dry-run edit --path notes/deployment.md --patch insert-review.json --if-match "$FILE_HASH"
-lwiki --offline --stage edit --path notes/deployment.md --patch insert-review.json --if-match "$FILE_HASH"
-~~~
+```
 
-Use the returned change ID to review exact before/proposed bytes, then apply:
+Inspection returns the file's bytes and whole-file hash, even when its metadata
+cannot be parsed. Edit ranges use physical byte positions, starting at zero;
+the end position is excluded. Include frontmatter and line endings when counting
+positions. Use `read` when you want the note's text instead.
 
-~~~sh
-lwiki --offline changes show "$CHANGE_ID" --operation 0
-lwiki --offline changes apply "$CHANGE_ID"
-lwiki --offline index sync
-~~~
+Create a patch file in the format shown by `schema literal-edit`, then replace
+`FILE_HASH` with the inspected `data.hash`:
 
-Omit `--stage` for preparation and application in one command. Edits preserve
-bytes outside their ranges and do not adopt ordinary notes. Valid Pages keep their
-IDs and validated metadata. Stale guards require rereading and merging, rather
-than replacing the hash blindly. Symlinks, traversal, nested-wiki crossings,
-immutable captures and identity/operational files refuse. Invalid envelopes need
-[known-byte restoration](recovery.md#restore-known-author-bytes), not guessed IDs.
-Inspect the schema for range/order/replacement bounds. Identical retries can reuse
-a retained outcome; that does not authorize unrelated edits.
+```sh
+lwiki --offline --dry-run edit --path notes/project-notes.md --patch PATCH.json --if-match FILE_HASH
+lwiki --offline --stage edit --path notes/project-notes.md --patch PATCH.json --if-match FILE_HASH
+```
+
+A staged edit waits for review. Copy its returned change ID into these commands:
+
+```sh
+lwiki --offline changes show CHANGE_ID --operation 0
+lwiki --offline changes apply CHANGE_ID
+```
+
+Review the before and proposed text before applying. A stale hash means the file
+changed; read it again and merge your edit. Do not replace the hash merely to
+force the write. Captured copies and operational files cannot be edited through
+this command. For damaged metadata, [restore a known-good file](recovery.md#restore-known-author-bytes).
 
 ## Create, edit and move a Page
 
-A Page is an authored record, separate from a captured original. Create a new body:
+Ask your agent to save a cited draft, or write the body in your editor and create
+a page from it:
 
-~~~sh
-cat > "$DEMO/checklist.md" <<'PAGE'
-# Atlas release checklist
+```sh
+lwiki --offline page init --file "/absolute/path/to/draft.md" --title "Project summary" --path pages/project-summary.md
+lwiki --offline read --path pages/project-summary.md --max-bytes 6000
+```
 
-Run atlas_migrate before deployment. Review this checklist when the source changes.
-PAGE
-lwiki --offline page init --file "$DEMO/checklist.md" --title "Atlas release checklist" --path pages/checklist.md
-lwiki --offline read --path pages/checklist.md --max-bytes 6000
-lwiki --offline search 'Atlas release checklist' --kind page --status draft
-~~~
+The original draft stays unchanged. The new page appears in `pages/` with its
+own ID and draft status. Drafts can be found by search:
 
-DEMO can be the tutorial's temporary directory or another existing input directory.
-Page init preserves its input, allocates metadata once and refuses an occupied
-path. Drafts are discoverable but excluded from verified current context until
-review/provenance requirements are satisfied. Do not merely relabel unsupported
-text to make it accepted evidence. Unknown-frontmatter originals use Source capture.
+```sh
+lwiki --offline search 'Project summary' --kind page --status draft
+```
 
-Edit through your editor while preserving `wiki_id`, then run `index sync`. For
-guarded whole-Page replacement, `page put --file DRAFT --if-match AUTHOR_HASH`
-requires the full returned envelope plus body and current whole-file hash. Read
-again after a stale guard and reconcile unrelated author work. Managed normalized
-Page updates publish their selected dependencies; external changes require sync.
+Drafts are excluded from default cited context until their review and source
+requirements are met. Keep unsupported claims and missing facts visible during
+review; changing a status label does not supply evidence for them.
 
-On a normalized wiki, move a Page by its actual ID and current read's `data.hash`:
+Open the page in your editor to change its text or title. Preserve its `wiki_id`
+in the frontmatter, then update search:
 
-~~~sh
-lwiki --offline --json read --id "$PAGE_ID"
-lwiki --offline page rename "$PAGE_ID" --to 'handbook/Operations Guide.md' --if-match "$AUTHOR_HASH"
-lwiki --offline read --id "$PAGE_ID"
-~~~
+```sh
+lwiki --offline index sync
+```
 
-The absent portable Markdown destination keeps the ID. Known incoming wiki,
-inline and reference links are updated with their fragments/labels intact;
-ambiguous aliases and required immutable-owner edits refuse. Sync external edits
-before moving. Selected incoming bytes are rechecked; excessive dependency fanout
-refuses rather than omitting links. Use `--stage` and change review for separate
-application. `--dry-run page rename` is an incomplete request preview: it does not
-resolve identity, guards, destination or incoming links. Sequential writes are
-recoverable, not a simultaneous filesystem transaction. Use the retained change
-ID with `recover` after an interrupted apply.
+For guarded replacement, agents use `page put --file FILE --if-match HASH` with
+the full page, including frontmatter, and its current whole-file hash.
+
+To move a page and update known links to it, first prepare the search index,
+then read the page by its actual ID. Back up an existing wiki before changing
+its index layout:
+
+```sh
+lwiki --offline index rebuild --normalized
+lwiki --offline --json read --id PAGE_ID
+lwiki --offline page rename PAGE_ID --to 'handbook/Project summary.md' --if-match PAGE_HASH
+lwiki --offline read --id PAGE_ID
+```
+
+Replace `PAGE_HASH` with `data.hash` from the read. The destination must be a new
+Markdown path. If links are ambiguous or an affected file changed, lwiki stops and reports the
+problem. Resolve it before retrying. You can add `--stage` to review the move
+before applying it.
 
 ## User configuration
 
-Preferences use absolute `$XDG_CONFIG_HOME/lwiki/config.json`, or otherwise
-`$HOME/.config/lwiki/config.json`. Relative XDG_CONFIG_HOME is an error. Preferences
-are separate from provider credentials. Explicit `--preferences FILE` replaces
-ambient lookup, including when combined with `--no-user-config`; that flag alone
-disables ambient preferences/default selection:
+See the saved wiki, model and authentication choices without reading a secret
+or making a network request:
 
-~~~sh
-lwiki --no-user-config --wiki "/path/to/Personal Wiki" wiki show
-lwiki --preferences "/private/path/lwiki-config.json" --wiki "/path/to/Personal Wiki" wiki show
-~~~
+```sh
+lwiki config show
+```
 
-Malformed, unreadable or symlink config fails with its path. Repair that file or
-use the bypass. Help/version/schema discovery needs no valid config. Reading v1
-preferences preserves bytes; a supported explicit write migrates to v2 with an
-exact backup. Unknown versions refuse writes unchanged. Defaults store path and
-wiki_id; vault preference entries remain keyed by ID.
+Run `lwiki setup` to change those choices. Settings live in
+`$XDG_CONFIG_HOME/lwiki/config.toml` when `XDG_CONFIG_HOME` is an absolute path,
+or otherwise in `$HOME/.config/lwiki/config.toml`. Provider settings and any
+saved key file are separate private files. The configuration display tells you
+which files are in use.
 
-Default writes require the immediate config directory to be owned by the current
-user and have no group/other write permission. Reads remain unchanged. Inspect the
-exact reported directory first. If it is yours and intended for configuration,
-`chmod u=rwx,go=rx /exact/configuration/directory` is a supported mode. Do not alter
-an unfamiliar owner or files to force writes. Alternatively use a private directory
-you own with `--preferences FILE`. Writes recheck directory binding and file bytes.
+Explicit command options override saved preferences. For a separate setup or
+automation, choose a configuration file with `--preferences FILE`. To bypass
+saved user settings, supply the wiki explicitly:
+
+```sh
+lwiki --no-user-config --wiki "/absolute/path/to/Wiki" wiki show
+```
+
+If configuration is malformed, fix the reported file or use this bypass to work
+with your notes. Older `config.json` settings are read when no `config.toml` is
+present. Setup can migrate them, preserving the old file and an exact backup.
+Do not delete that backup until you have checked the new settings.

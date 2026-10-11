@@ -134,7 +134,7 @@ pub(crate) fn policy_membership_keys(
 ) -> Result<BTreeSet<PolicyInputKey>> {
     use PolicyInputKey::*;
     let mut keys = BTreeSet::new();
-    if review::has_fence(note) {
+    if review::is_receipt_candidate(note)? {
         keys.insert(ReviewReceiptCandidates);
     }
     // Raw malformed identity claims are retained as witnesses; find still

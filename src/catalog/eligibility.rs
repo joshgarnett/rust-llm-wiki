@@ -4,8 +4,7 @@ use super::{
     eligibility_facts::{EligibilityRole, NormalizedEligibilityFacts},
     eligibility_rules::{self as rules, GenerationContext},
     scan::{
-        diagnostic, input_notes, isolated_fields, list, project_validation,
-        project_validation_closed, readable_id,
+        diagnostic, input_notes, list, project_validation, project_validation_closed, readable_id,
     },
     structural_rules::{self, StructuralRecorder, StructuralStage, invalidate as mark_invalid},
     types::*,
@@ -140,7 +139,7 @@ fn validate_projection(
             let changed = before
                 .get(&target.path)
                 .is_none_or(|old| old.raw != note.raw);
-            let adopted = adopted_marker(note)
+            let adopted = adopted_marker(note)?
                 || note
                     .fields
                     .as_ref()
@@ -152,7 +151,7 @@ fn validate_projection(
                 )));
             }
             if changed
-                && let Some(id) = readable_id(note)
+                && let Some(id) = readable_id(note)?
                 && proposed
                     .records
                     .get(&id)
@@ -264,11 +263,8 @@ fn validate_projection(
     })
 }
 
-fn adopted_marker(note: &ParsedNote) -> bool {
-    readable_id(note).is_some()
-        || isolated_fields(note)
-            .iter()
-            .any(|fields| fields.keys().any(|key| key.starts_with("wiki_")))
+fn adopted_marker(note: &ParsedNote) -> Result<bool> {
+    crate::sources::identity::has_wiki_claim(note)
 }
 
 fn proposition(record: &CanonicalRecord) -> BTreeMap<String, serde_json::Value> {
@@ -494,7 +490,7 @@ fn compute_inner(
             if error.code == ErrorCode::BudgetExceeded {
                 return Err(error);
             }
-            for id in crate::graph::review::relevant_decision_ids(notes) {
+            for id in crate::graph::review::relevant_decision_ids(notes)? {
                 if let Some(row) = records.get_mut(&id) {
                     mark_invalid(
                         row,

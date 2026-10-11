@@ -16,6 +16,9 @@ pub struct Envelope {
 #[derive(Debug, Default, Serialize)]
 pub struct Metadata {
     pub wiki_id: Option<String>,
+    /// Versioned target binding and non-secret effective preference origins.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub selection: Option<Value>,
     pub index_generation: Option<u64>,
     pub freshness: Option<String>,
     pub verified_at: Option<String>,
@@ -43,7 +46,7 @@ pub struct ErrorOutput {
 impl Envelope {
     pub fn success(command: &str, data: Value) -> Self {
         Self {
-            schema_version: "1",
+            schema_version: "2",
             command: command.into(),
             ok: true,
             data,
@@ -55,7 +58,7 @@ impl Envelope {
 
     pub fn failure(command: &str, code: &str, message: String) -> Self {
         Self {
-            schema_version: "1",
+            schema_version: "2",
             command: command.into(),
             ok: false,
             data: Value::Null,

@@ -1,88 +1,90 @@
 # Troubleshoot, back up and restore
 
-Check the selected root before repairing anything:
+Start by checking that you are working with the intended wiki:
 
 ```sh
-lwiki --wiki "/path/to/Personal Wiki" wiki show
-lwiki --wiki "/path/to/Personal Wiki" --offline doctor --diagnostics --diagnostic-limit 20
-lwiki --wiki "/path/to/Personal Wiki" --offline check
+lwiki --wiki "/absolute/path/to/Wiki" wiki show
+lwiki --wiki "/absolute/path/to/Wiki" --offline doctor --diagnostics --diagnostic-limit 20
 ```
 
-Strict check reports malformed metadata, duplicate identities, unsupported schemas
-and other structured damage. Healthy selected evidence can remain usable when an
-unrelated record is damaged. A contained sync must disclose its issues/exclusions;
-its successful observation is not a clean-corpus claim. Failed directory observation
-is nonzero and cannot prove files or answers are absent.
+`doctor` shows known problems and suggested next steps. It uses the latest
+recorded diagnostics. To check all managed files now, run:
 
-Doctor diagnostics page through bounded published issues; they do not perform a
-new full audit. Use a returned cursor with `--diagnostic-cursor` for another page,
-and choose `--diagnostic-limit` from 1 to 100. Sync distinguishes `completed`,
-`completed_with_issues` and `failed`. Published issues, eligible exclusions and
-unknown current membership are separate health facts. Read/search/context warnings
-can disclose known issues without claiming the whole corpus was checked.
+```sh
+lwiki --wiki "/absolute/path/to/Wiki" --offline check
+```
+
+A damaged note can be excluded from results while other notes remain usable.
+Read any warnings so you know what was skipped. A successful search or read does
+not mean every file in the wiki is healthy.
 
 ## Choose the repair for the error
 
-| Symptom | Action |
+| Problem | What to do |
 | --- | --- |
-| Init requires intent | Preview with `init --existing` for an author folder, or select an initialized wiki with `--wiki`. |
-| Init reports a reserved-path collision | Preserve that path. Choose another wiki folder or deliberately rename the author folder occupying the reserved name. |
-| Wiki selection/ID mismatch | Use `wiki show` with the intended explicit root. After a deliberate move, run `wiki default set NEW_PATH`; never replace IDs to satisfy a stale default. |
-| Bad preferences or relative XDG_CONFIG_HOME | Repair the exact reported path/environment. `--no-user-config --wiki DIR` bypasses ambient preferences; `--preferences FILE` replaces them. |
-| Stale author hash | Reinspect current bytes, merge your edit, and prepare with the new whole-file hash. |
-| Malformed Page/Source metadata | Preserve exact bytes, inspect without an index, and restore a known-good editor backup or retained before-image. Do not guess a lost ID. |
-| Interrupted apply | Retain the change ID and run `recover`; inspect any conflict before explicit resolution. |
-| Search misses a new external file/edit | Run `index sync`. Sync does not refresh the captured version of an edited original. |
-| Missing/corrupt derived index | After preserving the wiki, run explicit `index rebuild`; vector regeneration may require authorized remote work. |
-| Verification budget exhausted | Follow the named resource hint after inspecting size and scope. Raising an output limit does not raise the proof allowance. |
-| Missing semantic query/source vectors | Use supported literal/lexical work or explicitly authorize bounded embedding preparation. Offline never creates missing remote embeddings. |
+| Setup or init reports an existing folder | Use `setup PATH --existing` for a notes folder, or `setup PATH --select` for a wiki. |
+| A managed name is already in use | Preserve it and choose a new wiki folder, or deliberately rename the conflicting item. |
+| The saved wiki moved or its ID does not match | Check the intended folder with `--wiki PATH wiki show`. After a deliberate move, set the new path with `wiki default set PATH`. |
+| Configuration cannot be read | Fix the reported file. To work without saved settings, use `--no-user-config --wiki PATH`. |
+| A file changed after you inspected it | Read it again, merge your edit, and use its new hash. |
+| A page has invalid metadata | Keep a copy, inspect the file, and restore a known-good version as described below. |
+| A change was interrupted | Run `recover`, then inspect any reported conflict before resolving it. |
+| A new page or editor change is missing from search | Run `index sync`. For an edited source original, use `source refresh` too. |
+| The search index is missing or corrupt | Back up the wiki, then run `index rebuild`. Remote vectors may need paid regeneration. |
+| A result exceeds a verification limit | Follow the error's size or scope hint. Increasing output size alone does not raise the verification allowance. |
+| Search by meaning has no usable vectors | Use literal or word search, or [prepare embeddings](sources-and-providers.md#optional-remote-providers). Offline commands cannot create missing remote embeddings. |
+
+If diagnostics return a cursor, pass it with `--diagnostic-cursor` to read the
+next page. `--diagnostic-limit` accepts 1 to 100.
 
 ## Restore known author bytes
 
-1. Stop CLI writers and close the editor's pending saves.
-2. Make a complete copy before attempting recovery. Use JSON physical inspect to
-   retain the current whole-file hash, exact bytes and parse diagnostics.
-3. Obtain the intended exact file from an editor backup or `changes show CHANGE_ID
-   --operation N` retained before-image. Verify that it belongs to this file and
-   desired revision; a singleton ID in damaged YAML is not proof of identity.
-4. Restore that known file through your editor or ordinary file tools, preserving
-   BOM/CRLF, unknown properties and intended ID. If a change is still applying,
-   reconcile it through `recover`/documented conflict resolution first.
-5. Run sync, strict check, and a selected read/search for the expected fact. Preserve
-   the failed attempt and verify the actual returned evidence.
+Use an editor backup or a retained before-image when a file's metadata is
+damaged. Keep a complete backup before repairing it.
 
-The CLI refuses unsafe structured writes rather than inventing repairs. Physical
-inspection can expose bytes despite metadata damage; it does not make them
-trusted canonical or immutable evidence.
+1. Stop lwiki writers and close the editor's pending saves.
+2. Preserve the damaged file. `lwiki --offline --json inspect --path PATH` can
+   show its exact bytes, whole-file hash and parse errors without using the index.
+3. Find a known-good copy from your editor or backup. For a change made through
+   lwiki, inspect `lwiki --offline changes show CHANGE_ID --operation N` for its
+   retained before-image. Check that it is the right file and version.
+4. Restore that copy with your editor or file tools. Keep its original ID and
+   metadata. If `recover` reports a change still in progress, resolve that change
+   first so it does not overwrite your repair.
+5. Run `lwiki --offline index sync` and `lwiki --offline check`. Read the restored
+   page or search for a fact you expect to confirm the result.
+
+Do not invent a replacement ID or guess missing metadata to silence an error.
+If you cannot find a trustworthy copy, preserve the damage and report the
+problem with private content removed.
 
 ## Backup and restore
 
-Back up the whole wiki while writers/editors are stopped. Include WIKI.md, ordinary
-notes, Sources, immutable originals/content/revisions, Pages, graph/decision data,
-change history, research reports and **all hidden `.wiki/` retained state**. Keep
-private provider/user configuration separately with its proper access controls.
-Only rebuildable caches may be regenerated; a cache-only backup loses knowledge
-and recovery/accounting authority.
+Stop writers and pending editor saves, then copy the whole wiki, including all
+hidden files. The `.wiki/` folder contains recovery information as well as search
+caches. Keep your private configuration and credentials in a separate protected
+backup.
 
-On macOS/Linux, a simple complete local copy into a new absent backup path is:
+On macOS or Linux, copy the wiki to a new backup path:
 
 ```sh
-cp -a "/path/to/Personal Wiki" "/path/to/new-backup-copy"
+cp -a "/absolute/path/to/Wiki" "/absolute/path/to/new-wiki-backup"
 ```
 
-Verify the copy's inventory and exact source hashes using your backup tooling.
-Test restoration into another **absent** path, leaving the original untouched:
+The destination must not already exist. Verify the backup with your usual backup
+tools. Test restoration to another new folder, leaving the original untouched:
 
 ```sh
-cp -a "/path/to/new-backup-copy" "/path/to/new-restore-copy"
-lwiki --no-user-config --wiki "/path/to/new-restore-copy" --offline index rebuild
-lwiki --no-user-config --wiki "/path/to/new-restore-copy" --offline check
-lwiki --no-user-config --wiki "/path/to/new-restore-copy" --offline context 'Atlas deployment' --max-bytes 6000 --max-tokens 1500
+cp -a "/absolute/path/to/new-wiki-backup" "/absolute/path/to/restored-wiki"
+lwiki --no-user-config --wiki "/absolute/path/to/restored-wiki" --offline index rebuild
+lwiki --no-user-config --wiki "/absolute/path/to/restored-wiki" --offline check
+lwiki --no-user-config --wiki "/absolute/path/to/restored-wiki" --offline context 'a question your notes answer'
 ```
 
-Compare selected facts/citations with the original. The copied wiki retains its
-ID; choose its location explicitly. Refresh a copied Source only with an explicitly
-named input file, never by assuming a remembered external path still belongs to
-this copy. `storage plan` is a separate read-only preview; take a verified complete
-backup before authorized `storage cleanup`. Restoring a pre-upgrade complete copy
-also restores the earlier schema and retained undo/accounting state.
+Replace the paths and question. Check that the restored wiki contains your pages
+and that the answer passages match those from the original. The copy keeps the
+same wiki ID, so select its location explicitly while testing.
+
+When restoring after an incompatible upgrade, use both the earlier executable
+and the complete pre-upgrade backup. Before `storage cleanup`, make and verify
+a complete backup; do not move or delete hidden folders by hand.

@@ -2,8 +2,8 @@
 
 Local disposable fixtures and deterministic providers establish mechanics. External
 qualification checks actual hosts, supported native platforms, live providers,
-representative corpora and final distributed bytes. [Validation status](validation-status.md)
-records open gates; each run needs its own finite protocol and source/executable pins.
+representative corpora and final distributed bytes. Use [validation and limits](validation-status.md) to choose the required checks.
+Each run needs its own finite protocol and source/executable pins.
 
 ## Actual providers
 
@@ -51,11 +51,25 @@ replay. Container-only changes retain correctness evidence only after identical
 extracted executable bytes are proved; rerun extraction/trust checks as applicable.
 Windows remains build/capability-only; power-loss remains distinct from process kill.
 
-The owner chose MIT, GitHub Issues and unsigned macOS without notarization. Verify
-locked dependency notices and selected support intake, unsigned artifact origin/digest
-and normal-user OS trust/quarantine behavior. Do not require global security disabling.
-Check the actual archive layout and installer PATH/conflict/rollback behavior before
-advertising it. No nonexistent installer/download recipe is a ready product surface.
+Release archives are built in GitHub Actions. Build the macOS archive on the oldest
+supported version, then run the same archive on each supported version. The macOS
+support policy covers the current major release and the previous two, on their
+latest updates. The release matrix uses macOS 15, 26 and 27; the macOS 27 runner
+currently has the label `xcode-27`. Check its reported OS version rather than
+inferring it from the label. This follows the recent-version approach in
+[Homebrew's support policy](https://docs.brew.sh/Support-Tiers).
+
+Archive verification reads the minimum OS or glibc version from the executable
+and checks it against the release metadata. It requires `otool` or `llvm-otool`
+for Mach-O files and `readelf` or `llvm-readelf` for ELF files. Native qualification
+checks installation and the installed executable, and compares its hash with the
+archived executable before and after the tests. All native jobs must pass before
+the workflow stages release assets.
+
+The project uses MIT and GitHub Issues for support. macOS releases are unsigned
+and are not notarized. Verify dependency notices, artifact origin and hashes,
+and normal macOS download approval. Do not require global security disabling.
+Check the archive layout and installer PATH, conflict and rollback behavior.
 
 Publication is a distinct authorized action after gates. After any publication,
 download unauthenticated on each advertised target, verify final tag/source/manifest/

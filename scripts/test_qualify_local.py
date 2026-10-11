@@ -1,6 +1,7 @@
 """Qualification orchestration failures, using fake tools and disposable paths."""
 
 import os
+import json
 from pathlib import Path
 import subprocess
 import tempfile
@@ -21,6 +22,7 @@ class QualificationTests(unittest.TestCase):
         self.tools.mkdir()
         for name, source in {
             "bazelisk": "#!/bin/sh\necho 'fixture Bazel failure' >&2\nexit 23\n",
+            "git": "#!/bin/sh\ncase \"$1\" in rev-parse) printf '%040d\\n' 0 ;; status) exit 0 ;; *) exit 2 ;; esac\n",
         }.items():
             path = self.tools / name
             path.write_text(source)
@@ -39,6 +41,9 @@ class QualificationTests(unittest.TestCase):
         self.assertEqual((self.output / "fmt.log").read_text(), "fixture Bazel failure\n")
         self.assertFalse((self.output / "tests.log").exists())
         self.assertFalse((self.output / "qualification.txt").exists())
+        report = json.loads((self.output / "qualification.json").read_text())
+        self.assertEqual(report["status"], "failed")
+        self.assertEqual(report["failed_stage"], "fmt")
 
     def test_existing_evidence_is_preserved(self):
         self.output.mkdir()

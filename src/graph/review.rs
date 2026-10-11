@@ -675,21 +675,28 @@ fn receipt(n: &ParsedNote) -> Result<ReviewReceiptV1> {
 pub(crate) fn has_fence(n: &ParsedNote) -> bool {
     std::str::from_utf8(n.body()).is_ok_and(|s|Parser::new(s).any(|e|matches!(e,Event::Start(Tag::CodeBlock(CodeBlockKind::Fenced(info))) if info.as_ref()==GRAPH_REVIEW_FENCE)))
 }
+pub(crate) fn is_receipt_candidate(note: &ParsedNote) -> Result<bool> {
+    Ok(crate::sources::identity::has_wiki_claim(note)? && has_fence(note))
+}
 pub fn relevant_decision_ids(
     notes: &BTreeMap<VaultRelativePath, ParsedNote>,
-) -> BTreeSet<RecordId> {
-    notes
-        .values()
-        .filter(|n| has_fence(n))
-        .filter_map(|n| {
-            n.fields
-                .as_ref()?
-                .get("wiki_id")?
-                .as_str()
-                .and_then(|s| RecordId::new(s).ok())
-        })
-        .collect()
+) -> Result<BTreeSet<RecordId>> {
+    let mut ids = BTreeSet::new();
+    for note in notes.values() {
+        if is_receipt_candidate(note)? {
+            ids.extend(crate::sources::identity::readable_ids(note)?);
+        }
+    }
+    Ok(ids)
 }
+fn contains_receipt_candidate<'a>(bytes: impl Iterator<Item = &'a [u8]>) -> Result<bool> {
+    let mut found = false;
+    for bytes in bytes {
+        found |= is_receipt_candidate(&parse_note(bytes))?;
+    }
+    Ok(found)
+}
+
 fn receipts(
     notes: &BTreeMap<VaultRelativePath, ParsedNote>,
 ) -> Result<BTreeMap<RecordId, ReviewReceiptV1>> {
@@ -703,7 +710,7 @@ fn receipts_scoped(
     let mut all = BTreeMap::new();
     for (path, n) in notes {
         scope.step()?;
-        if !has_fence(n) {
+        if !is_receipt_candidate(n)? {
             continue;
         }
         scope.admit(path, n)?;
@@ -1389,16 +1396,20 @@ pub fn verify_review_overlay(
     // cannot make a potentially applicable review escape capture/authority checks.
     // Source payloads are not canonical receipts and never enter SourceView.notes.
     if witness.is_none()
-        && !input.documents.iter().any(|document| {
-            canonical_path(&document.path) && has_fence(&parse_note(&document.bytes))
-        })
-        && !input.overlay.iter().any(|target| {
-            canonical_path(&target.path)
-                && target
-                    .bytes
-                    .as_ref()
-                    .is_some_and(|bytes| has_fence(&parse_note(bytes)))
-        })
+        && !contains_receipt_candidate(
+            input
+                .documents
+                .iter()
+                .filter(|document| canonical_path(&document.path))
+                .map(|document| document.bytes.as_slice()),
+        )?
+        && !contains_receipt_candidate(
+            input
+                .overlay
+                .iter()
+                .filter(|target| canonical_path(&target.path))
+                .filter_map(|target| target.bytes.as_deref()),
+        )?
     {
         return Ok(None);
     }
@@ -1414,12 +1425,12 @@ pub fn verify_review_overlay(
                 return Err(e);
             }
             if witness.is_none()
-                && !input
-                    .overlay
-                    .iter()
-                    .filter_map(|o| o.bytes.as_ref())
-                    .map(|b| parse_note(b))
-                    .any(|n| has_fence(&n))
+                && !contains_receipt_candidate(
+                    input
+                        .overlay
+                        .iter()
+                        .filter_map(|target| target.bytes.as_deref()),
+                )?
             {
                 return Ok(None);
             }
@@ -2464,7 +2475,7 @@ fn anchor_receipt(w: &RetainedGraphInverseInput) -> Result<ReviewReceiptV1> {
             && let Some(b) = op.after_bytes()
         {
             let n = parse_note(b);
-            if has_fence(&n) {
+            if is_receipt_candidate(&n)? {
                 let r = receipt(&n)?;
                 shape(&r)?;
                 if found.as_ref().is_some_and(|old| old != &r) {

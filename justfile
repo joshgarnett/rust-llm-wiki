@@ -13,8 +13,9 @@ doctor:
     {{ python }} --version
     {{ python }} scripts/bazel.py -- version --gnu_format
 
-# Fetch the pinned Bazel modules, toolchains and Cargo-derived dependencies.
+# Fetch pinned build dependencies and the crate archives used for license notices.
 deps-fetch:
+    cargo fetch --locked
     {{ python }} scripts/bazel.py -- fetch //...
 
 # Regenerate Bazel's Cargo mapping after intentional Cargo manifest/lock edits.
@@ -58,8 +59,12 @@ test-regressions:
 build-tools-test:
     {{ python }} -m unittest discover -s scripts -p 'test_*.py' -v
 
+# Validate maintained documentation and local links.
+docs-check:
+    {{ python }} scripts/check_docs.py
+
 # Same short gate as Unix PR CI. Full acceptance is `just qualify`.
-ci: check build-tools-test test-smoke test-regressions
+ci: docs-check check build-tools-test test-smoke test-regressions
 
 # Build and smoke a native candidate archive in a new directory; no publication.
 candidate output:

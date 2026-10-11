@@ -46,6 +46,9 @@ pub(crate) enum IndexedWriteOperation {
     PageBatch {
         pages: Vec<IndexedPageTarget>,
     },
+    LiteralEdit {
+        path: VaultRelativePath,
+    },
     JobBatch {
         run_id: RecordId,
         records: Vec<IndexedJobTarget>,
@@ -247,6 +250,9 @@ impl IndexedWriteOperation {
                     ));
                 }
                 Ok(())
+            }
+            Self::LiteralEdit { path } => {
+                crate::catalog::literal_projection::require_literal_path(path)
             }
             Self::PageBatch { pages } => {
                 let ids: std::collections::BTreeSet<_> =
@@ -553,6 +559,20 @@ impl IndexedRefreshProof {
         {
             return Err(recovery(
                 "withdrawal must replace exactly one existing Source",
+            ));
+        }
+        if let Some(IndexedWriteOperation::LiteralEdit { path }) = &self.operation
+            && (manifest.operations.len() != 1
+                || manifest.operations[0].target != *path
+                || manifest.operations[0].role != OperationRole::MutableRecord
+                || !manifest.operations[0].apply_after.is_empty()
+                || !matches!(manifest.operations[0].before, ExpectedState::Hash(_))
+                || !matches!(manifest.operations[0].after, ExpectedState::Hash(_))
+                || manifest.origin.is_some()
+                || !manifest.allocated_ids.is_empty())
+        {
+            return Err(recovery(
+                "literal edit must replace one existing ordinary note without additional write authority",
             ));
         }
         if let Some(IndexedWriteOperation::PageBatch { pages }) = &self.operation

@@ -1,81 +1,73 @@
-# Validation status and limits
+# Validation and limits
 
-The v0.3.0 integrated offline workflow and documentation are under qualification.
-This document records enduring limits extracted from prior maintained results and
-routes new acceptance evidence; it is not a per-attempt log or a passing release claim.
+Choose checks that match the behavior you want to establish. A local fixture can
+verify a transaction or citation, while an installed agent, live provider or
+release archive needs a separate replay with its actual environment. Keep run
+results and unfinished checks in local task evidence; maintain reusable procedures
+and established limits here.
 
 ## Workflow and recovery
 
-Historical scoped checks establish mechanics for capture/refresh/history, verified
-Source reads, typed cited Pages, normalized Page moves, grouped imports, compact
-Change review, retained recovery and reconstruction. Several tiny independent workflows
-passed their own declared gates. These scopes do not qualify every current command,
-new v0.3.0 adapters, unseen retrieval completeness or a final distributed executable.
+Test complete public-command workflows, including capture, refresh, history,
+page editing, change review and restoration. Use disposable wikis and mock
+providers for correctness tests. Inspect the returned text and saved files as
+well as exit codes. A safe refusal must explain how the reader can proceed.
 
-Some earlier host/Page lifecycle attempts remained incomplete because reconciliation,
-mandatory supervision, supplied operator instructions or final saved links failed.
-Later scoped successes did not erase the original failures. Retain exact failed commands
-and bytes in local evidence or Git history, and require independent replay for fixes.
+Native fault, kill and restart tests establish recovery only at the interruption
+points reached on that platform. They do not establish power-loss safety.
+Cross-builds establish compilation, not native filesystem recovery. Windows wiki
+writes are unsupported.
 
-Native fault/kill/restart tests demonstrate reached process-interruption cuts on the
-specified platform. They do not prove power-loss safety. Cross-builds and Windows
-capability smoke checks do not prove native Unix recovery; Windows vault writes remain
-unsupported. Unknown accounting holds and retained apply intent must survive recovery,
-stale responses, conflicts, cleanup and retry.
+Recovery must retain pending apply intent and uncertain remote charges through
+conflicts, cleanup and retry. A complete backup includes hidden retained state;
+visible Markdown alone cannot restore an interrupted operation or its accounting.
+See [storage invariants](contracts/storage.md) and the [recovery guide](../user/recovery.md).
 
 ## Retrieval quality
 
-**Native default completeness remains unqualified.** Historical representative
-mixed development completed only 13/32 positive tasks at its baseline; subsequent
-lexical-unit and task-only query candidates missed their gates or regressed supported
-facts and were not promoted. Other small fixtures completed all facts while difficult
-multisource/distant conditions remained missing. Exact citations frequently authenticated
-even when task completion failed. Ranking, owner hits, relevance and complete evidence
-support must remain separate measurements.
+Measure task completion, citation integrity, relevance and answer completeness
+separately. A correct quote hash establishes the captured bytes, not whether the
+passage answers the question. Search ranking or finding the right source does
+not establish complete evidence for all required facts.
 
-Explicit complete reads, host selection and complete-original range replay have
-functional coverage and some scoped successful tasks. They require additional host
-work/budget and cannot be presented as a native-default quality gain. A private HIGH
-pilot is not passed by development questions, previously exposed upstream test data,
-synthetic vectors or a scoped 9/10 critic score with mandatory failed tasks.
+Freeze the binary, source revisions, cache, budgets, expected facts and error
+policy before exposing unseen acceptance questions. Any question used to guide a
+fix becomes development data. Retain every failure, regression and exclusion.
+See [context evaluation](evaluating-context.md) and [quality targets](rag-quality-targets.md).
 
-A new acceptance run must freeze source revisions, executable/compiler settings,
-protocol, candidate/final context bounds, expected propositions and error policy
-before exposing unseen tasks. Any task guiding a fix becomes development data.
-Preserve every failure, regression and exclusion. See [quality targets](rag-quality-targets.md)
-and [context evaluation](evaluating-context.md).
+Assisted selection and complete-original reading add agent work and budget.
+Evaluate them as separate workflows, including additional input, calls, observed
+latency and known costs. Their results do not establish the quality of automatic
+context under the original limits.
 
 ## Capacity
 
-Representative 25,000-document/about-2.5-GB complete-workflow qualification remains
-open. Finite public 1K/10K import controls preserved originals and identities, but
-scoped import success did not establish retrieval/update/recovery/resource parity.
-Historical 10K unchanged sync missed the five-second target; the separate 1,000-update
-measurement timed out after only 272 updates in 600 seconds. Full-tier allocation,
-complete retrieval tasks and every prospective gate need a new pinned release run.
+Qualify the complete workflow at the intended scale: import, retrieval, update,
+recovery and resource use. A successful large import does not establish search
+quality or maintenance cost. Use the [capacity protocol](testing-large-vaults.md)
+and [full-check benchmark](benchmark-full-check.md) to define inputs, limits and
+required stages.
 
-Do not promote unoptimized Rust diagnostics into shipping limits. Record actual compiler
-actions, executable hash, hardware, source/input hashes, whole-account physical disk,
-process-tree RSS, monotonic timing and failed/unrun stages. [Capacity protocol](testing-large-vaults.md)
-and the [full-check control](benchmark-full-check.md) are reproducible developer
-procedures; their thresholds describe targets rather than established capacity.
+Pin a release executable with its compiler settings and hash before measuring.
+Record hardware, source/input hashes, physical disk use, process-tree memory,
+monotonic timing and failed or unrun stages. Unoptimized diagnostics cannot
+establish shipping performance. Protocol thresholds are targets until the
+corresponding complete measurement supports them.
 
 ## Qualification
 
-Open product gates include the integrated v0.3.0 independent offline critic replay,
-actual Obsidian round trips on supported OSs, combined real Codex/Claude/Cursor
-installation/discovery, supported-old-version upgrade/rollback, native GNU/Linux
-and macOS final-byte recovery, final staged packaging/trust checks and public
-post-publication replay. Provider interoperability and billing need separate bounded
-live qualification; mocks do not satisfy them.
+Before claiming support, replay the intended user task with the final executable
+on each advertised native platform. Check installation, PATH, upgrades and
+rollback, editor round trips, backup restoration and ordinary OS trust controls.
+Use the [external qualification procedure](qualification.md) for installed agents,
+live providers and final release downloads.
 
-The owner chose MIT, GitHub Issues and unsigned macOS distribution without notarization.
-Dependency notices, support intake documentation and normal OS trust behavior still
-need qualification. An unsigned digest is an integrity check rather than publisher
-authentication. No published v0.3.0 installer/download is asserted by this checkout.
-See [external qualification](qualification.md) and [installation](../user/install.md).
+The installer targets Apple silicon macOS and x86-64 GNU/Linux. macOS releases
+are unsigned and are not notarized. Hashes check integrity against the supplied
+manifest; they do not independently authenticate the publisher. Packaging must
+retain license and dependency notices and preserve normal OS security controls.
 
-Historical detailed reports remain available in Git history, for example
-`git show 59a5a92:docs/current-contracts.md` and the named `docs/validation-*.md`
-paths from that source. Ongoing evidence stays in ignored local task paths; a fresh
-clone needs only maintained protocols/contracts to begin a new run.
+Mocks establish local provider mechanics. Live interoperability and billing need
+an authorized endpoint, finite limits and retained receipts. A successful probe
+for one role does not establish other adapters, extraction schemas or model
+quality.

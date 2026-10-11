@@ -66,20 +66,4 @@ jobs:
         run: |
           python scripts/bazel.py -- build --nofetch //:build //:test_build
           just build-tools-test
-      - name: Build and smoke a native candidate
-        run: just candidate "$RUNNER_TEMP/lwiki-candidate"
-      - name: Retain candidate archive and build logs
-        if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: lwiki-candidate-windows-2025-${{ github.sha }}
-          path: |
-            ${{ runner.temp }}/lwiki-candidate/*.tar.gz
-            ${{ runner.temp }}/lwiki-candidate/*.sha256
-            ${{ runner.temp }}/lwiki-candidate/*.log
-            ${{ runner.temp }}/lwiki-candidate/*.json
-            ${{ runner.temp }}/lwiki-candidate/*.jsonl
-            ${{ runner.temp }}/lwiki-candidate/*.txt
-          if-no-files-found: warn
-          retention-days: 7
-        # Building and capability output do not qualify Windows writes/recovery.
+        # Compile-only coverage; Windows is outside the release matrix.

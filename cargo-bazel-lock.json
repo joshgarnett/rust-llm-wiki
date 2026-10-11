@@ -1,5 +1,5 @@
 {
-  "checksum": "c1cb49549637d3357a12bc094ef01de95da589f43f4b7a73f0fd6be714cbdde6",
+  "checksum": "e2bf4c8e5721defdf690f977f5b9ecc57abeba9cbb976c3c85294a7e3eba04c2",
   "crates": {
     "ahash 0.8.12": {
       "name": "ahash",
@@ -8152,6 +8152,121 @@
       ],
       "license_file": "LICENSE"
     },
+    "rpassword 7.5.4": {
+      "name": "rpassword",
+      "version": "7.5.4",
+      "package_url": "https://github.com/conradkleinespel/rpassword",
+      "repository": {
+        "Http": {
+          "url": "https://static.crates.io/crates/rpassword/7.5.4/download",
+          "sha256": "2da316a15f47e3d053de9cb2c439650bd8fa4aaeb9365f2e5f27f492ff73c196"
+        }
+      },
+      "targets": [
+        {
+          "Library": {
+            "crate_name": "rpassword",
+            "crate_root": "src/lib.rs",
+            "srcs": {
+              "allow_empty": true,
+              "include": [
+                "**/*.rs"
+              ]
+            }
+          }
+        }
+      ],
+      "library_target_name": "rpassword",
+      "common_attrs": {
+        "compile_data_glob": [
+          "**"
+        ],
+        "deps": {
+          "common": [
+            {
+              "id": "rtoolbox 0.0.6",
+              "target": "rtoolbox"
+            }
+          ],
+          "selects": {
+            "cfg(unix)": [
+              {
+                "id": "libc 0.2.189",
+                "target": "libc"
+              }
+            ],
+            "cfg(windows)": [
+              {
+                "id": "windows-sys 0.61.2",
+                "target": "windows_sys"
+              }
+            ]
+          }
+        },
+        "edition": "2024",
+        "version": "7.5.4"
+      },
+      "license": "Apache-2.0",
+      "license_ids": [
+        "Apache-2.0"
+      ],
+      "license_file": "LICENSE-APACHE"
+    },
+    "rtoolbox 0.0.6": {
+      "name": "rtoolbox",
+      "version": "0.0.6",
+      "package_url": "https://github.com/conradkleinespel/rtoolbox",
+      "repository": {
+        "Http": {
+          "url": "https://static.crates.io/crates/rtoolbox/0.0.6/download",
+          "sha256": "9a1efe12a1469752d0e6ff5ebec0b6ef4924cc5c4c71046b0ec730040535819d"
+        }
+      },
+      "targets": [
+        {
+          "Library": {
+            "crate_name": "rtoolbox",
+            "crate_root": "src/lib.rs",
+            "srcs": {
+              "allow_empty": true,
+              "include": [
+                "**/*.rs"
+              ]
+            }
+          }
+        }
+      ],
+      "library_target_name": "rtoolbox",
+      "common_attrs": {
+        "compile_data_glob": [
+          "**"
+        ],
+        "deps": {
+          "common": [],
+          "selects": {
+            "cfg(unix)": [
+              {
+                "id": "libc 0.2.189",
+                "target": "libc"
+              }
+            ],
+            "cfg(windows)": [
+              {
+                "id": "windows-sys 0.61.2",
+                "target": "windows_sys"
+              }
+            ]
+          }
+        },
+        "edition": "2018",
+        "version": "0.0.6"
+      },
+      "license": "Apache-2.0",
+      "license_ids": [
+        "Apache-2.0"
+      ],
+      "license_file": "LICENSE-APACHE"
+    },
     "rusqlite 0.40.1": {
       "name": "rusqlite",
       "version": "0.40.1",
@@ -8185,6 +8300,7 @@
           "common": [
             "backup",
             "bundled",
+            "functions",
             "hooks",
             "limits",
             "modern_sqlite"
@@ -8225,9 +8341,9 @@
       ],
       "license_file": "LICENSE"
     },
-    "rust-llm-wiki 0.2.0": {
+    "rust-llm-wiki 0.3.0": {
       "name": "rust-llm-wiki",
-      "version": "0.2.0",
+      "version": "0.3.0",
       "package_url": null,
       "repository": null,
       "targets": [
@@ -8249,6 +8365,12 @@
         "compile_data_glob": [
           "**"
         ],
+        "crate_features": {
+          "common": [
+            "default"
+          ],
+          "selects": {}
+        },
         "deps": {
           "common": [
             {
@@ -8272,12 +8394,20 @@
               "target": "jsonschema"
             },
             {
+              "id": "memchr 2.8.3",
+              "target": "memchr"
+            },
+            {
               "id": "pulldown-cmark 0.13.4",
               "target": "pulldown_cmark"
             },
             {
               "id": "reqwest 0.13.5",
               "target": "reqwest"
+            },
+            {
+              "id": "rpassword 7.5.4",
+              "target": "rpassword"
             },
             {
               "id": "rusqlite 0.40.1",
@@ -8361,10 +8491,12 @@
           "selects": {}
         },
         "edition": "2024",
-        "version": "0.2.0"
+        "version": "0.3.0"
       },
-      "license": null,
-      "license_ids": [],
+      "license": "MIT",
+      "license_ids": [
+        "MIT"
+      ],
       "license_file": null
     },
     "rustc_version 0.4.1": {
@@ -11293,6 +11425,7 @@
         ],
         "crate_features": {
           "common": [
+            "display",
             "parse",
             "serde",
             "std"
@@ -11316,6 +11449,10 @@
             {
               "id": "toml_parser 1.1.3+spec-1.1.0",
               "target": "toml_parser"
+            },
+            {
+              "id": "toml_writer 1.1.2+spec-1.1.0",
+              "target": "toml_writer"
             },
             {
               "id": "winnow 1.0.4",
@@ -11474,6 +11611,13 @@
         "compile_data_glob": [
           "**"
         ],
+        "crate_features": {
+          "common": [
+            "alloc",
+            "std"
+          ],
+          "selects": {}
+        },
         "edition": "2024",
         "version": "1.1.2+spec-1.1.0"
       },
@@ -14901,7 +15045,7 @@
   },
   "binary_crates": [],
   "workspace_members": {
-    "rust-llm-wiki 0.2.0": ""
+    "rust-llm-wiki 0.3.0": ""
   },
   "conditions": {
     "aarch64-apple-darwin": [
@@ -15053,8 +15197,10 @@
     "httpdate 1.0.3",
     "jsonschema 0.58.2",
     "libc 0.2.189",
+    "memchr 2.8.3",
     "pulldown-cmark 0.13.4",
     "reqwest 0.13.5",
+    "rpassword 7.5.4",
     "rusqlite 0.40.1",
     "rustls 0.23.44",
     "serde 1.0.229",

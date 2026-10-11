@@ -7,6 +7,14 @@ use std::{
 };
 
 pub(crate) fn binary(value: &str) -> PathBuf {
+    if let Some(path) = env::var_os("LWIKI_QUALIFY_BINARY") {
+        let path = PathBuf::from(path);
+        assert!(path.is_absolute(), "LWIKI_QUALIFY_BINARY must be absolute");
+        assert!(path.is_file(), "LWIKI_QUALIFY_BINARY must name a file");
+        return fs::canonicalize(&path).unwrap_or_else(|error| {
+            panic!("resolve qualification binary {}: {error}", path.display())
+        });
+    }
     resolve(Path::new(value), &Environment::current())
         .unwrap_or_else(|error| panic!("resolve test binary {value}: {error}"))
 }

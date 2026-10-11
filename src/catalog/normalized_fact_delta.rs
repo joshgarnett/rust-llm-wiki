@@ -85,41 +85,30 @@ fn admit_new<T: Serialize>(v: &T, count: &mut usize) -> Result<()> {
 
 impl FactDelta {
     pub(super) fn validate(&self, delta: &CatalogDelta, count: &mut usize) -> Result<()> {
+        if delta.version == 3 {
+            let policy = self.policy.as_ref().ok_or_else(|| {
+                invalid("normalized write delta requires complete policy maintenance")
+            })?;
+            let written: BTreeSet<_> = delta
+                .documents
+                .iter()
+                .filter_map(super::normalized_delta::DocumentMutation::author_note_row)
+                .map(|row| &row.path)
+                .collect();
+            if written
+                != policy
+                    .memberships
+                    .iter()
+                    .map(|member| &member.path)
+                    .collect()
+            {
+                return Err(invalid(
+                    "normalized author-note writes require exact policy membership replacements",
+                ));
+            }
+        }
         if let Some(policy) = &self.policy {
             policy.validate(delta, count)?;
-            if delta.version == 3 {
-                let written: BTreeSet<_> = delta
-                    .documents
-                    .iter()
-                    .filter_map(|document| match document {
-                        super::normalized_delta::DocumentMutation::Put { row }
-                        | super::normalized_delta::DocumentMutation::MovePage { row, .. }
-                            if row.record_id.is_some()
-                                || (delta.documents.iter().any(|d| {
-                                    matches!(
-                                        d,
-                                        super::normalized_delta::DocumentMutation::MovePage { .. }
-                                    )
-                                }) && row.owner_revision.is_none()
-                                    && row.source_id.is_none()) =>
-                        {
-                            Some(&row.path)
-                        }
-                        _ => None,
-                    })
-                    .collect();
-                if written
-                    != policy
-                        .memberships
-                        .iter()
-                        .map(|member| &member.path)
-                        .collect()
-                {
-                    return Err(invalid(
-                        "normalized canonical writes require exact policy membership replacements",
-                    ));
-                }
-            }
         }
         let mut owners = BTreeSet::new();
         for row in &self.records {

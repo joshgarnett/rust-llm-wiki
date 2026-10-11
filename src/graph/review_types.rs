@@ -318,7 +318,7 @@ impl VerifiedReviewReceipt {
 //   ->Result<Option<VerifiedReviewOverlay>>; getter accepted_assertions(), supersession_edges().
 // verify_review_policy(&BTreeMap<VaultRelativePath,ParsedNote>)
 //   ->Result<Option<VerifiedReviewPolicy>>; getter supersession_edges().
-// relevant_decision_ids(&BTreeMap<VaultRelativePath,ParsedNote>)->BTreeSet<RecordId>
+// relevant_decision_ids(&BTreeMap<VaultRelativePath,ParsedNote>)->Result<BTreeSet<RecordId>>
 // verify_review_inverse_overlay(&VaultFs,&ValidationInput,&RetainedGraphInverseInput)
 //   ->Result<VerifiedReviewInverse>; getter restored_accepted().
 // verify_review_committed_anchor(...,&RetainedGraphInverseInput) is crate-private,

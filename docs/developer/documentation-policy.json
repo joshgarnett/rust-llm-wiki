@@ -1,6 +1,6 @@
 {
   "schema_version": "lwiki.documentation-policy.v1",
-  "review_rule": "Review each document for its reader, task, clear steps and expected result. Apply AGENTS.md writing guidelines and independent task-based review. User guides must support real wiki and agent use without developer references. Keep session logs local; preserve exact code and quoted evidence.",
+  "review_rule": "Review each document for its reader, task, ordered steps and recognizable result. Apply AGENTS.md writing guidelines and independent task-based review. User guides must support a lasting wiki, a chosen agent and the reader's own notes without developer references. Keep implementation progress, unfinished checks and session evidence local. Preserve exact code and quoted evidence.",
   "documents": [
     {
       "path": "AGENTS.md",
@@ -10,12 +10,12 @@
     {
       "path": "README.md",
       "classification": "user_guide",
-      "purpose": "Help readers install lwiki, set up their real wiki, connect an agent and use their own notes."
+      "purpose": "Explain what lwiki does and lead readers to installation, setup and use with their own notes and chosen agent."
     },
     {
       "path": "docs/developer/README.md",
       "classification": "developer_reference",
-      "purpose": "Maintain reproducible development procedures, architectural decisions or qualification limits."
+      "purpose": "Find build, contribution, design and validation instructions and maintain useful documentation."
     },
     {
       "path": "docs/developer/agent-workflow/AGENT-PROMPTS.md",
@@ -175,47 +175,47 @@
     {
       "path": "docs/developer/validation-status.md",
       "classification": "developer_reference",
-      "purpose": "Maintain reproducible development procedures, architectural decisions or qualification limits."
+      "purpose": "Explain reusable validation choices and established limitations without tracking a run's progress."
     },
     {
       "path": "docs/user/README.md",
       "classification": "user_guide",
-      "purpose": "Route users to the first offline task, common workflows, availability and support."
+      "purpose": "Help readers find instructions for their next task."
     },
     {
       "path": "docs/user/everyday-use.md",
       "classification": "user_guide",
-      "purpose": "Select or initialize a wiki, capture and refresh notes, and guard author edits and Page moves."
+      "purpose": "Choose a wiki, capture updated notes and create or edit pages while preserving the reader's work."
     },
     {
       "path": "docs/user/getting-started.md",
       "classification": "user_guide",
-      "purpose": "Create a disposable offline wiki, capture a note and verify the first cited fact."
+      "purpose": "Guide readers through creating a lasting wiki, connecting an agent, capturing their own notes and recognizing a useful cited answer."
     },
     {
       "path": "docs/user/install.md",
       "classification": "user_guide",
-      "purpose": "Verify a supplied binary, explain unsigned distribution and preserve upgrade rollback."
+      "purpose": "Install a selected release, make the command available, upgrade or roll back, and remove the command."
     },
     {
       "path": "docs/user/integration.md",
       "classification": "user_guide",
-      "purpose": "Export agent instructions and explain durable files, identities, navigation and byte coordinates."
+      "purpose": "Connect agents, use cited answers and understand the files readers browse and back up."
     },
     {
       "path": "docs/user/recovery.md",
       "classification": "user_guide",
-      "purpose": "Interpret health and interrupted writes, restore exact known bytes, and back up all authority."
+      "purpose": "Diagnose reported problems, restore known files and make complete wiki backups."
     },
     {
       "path": "docs/user/retrieval.md",
       "classification": "user_guide",
-      "purpose": "Explain search and citation scope, bounded reads, named neighbors and separate host selection."
+      "purpose": "Find relevant notes, read exact cited passages and investigate missing information."
     },
     {
       "path": "docs/user/sources-and-providers.md",
       "classification": "user_guide",
-      "purpose": "Document collection and batch lifecycle, optional remote configuration and experimental boundaries."
+      "purpose": "Import and maintain note collections, configure optional remote search and understand its requests and costs."
     },
     {
       "path": "skills/llm-wiki/SKILL.md",
@@ -249,7 +249,7 @@
     }
   ],
   "migration_paths": {
-    "docs/agent-integration.md": "docs/user/integration.md#export-an-agent-workflow",
+    "docs/agent-integration.md": "docs/user/integration.md#connect-your-agent",
     "docs/benchmark-full-check.md": "docs/developer/benchmark-full-check.md",
     "docs/build-checkpoints.md": "docs/developer/build-checkpoints.md",
     "docs/builds.md": "docs/developer/builds.md",
@@ -371,7 +371,7 @@
     "docs/user/source-refresh-batch.md": "docs/user/sources-and-providers.md#refresh-a-guarded-batch",
     "docs/user/providers.md": "docs/user/sources-and-providers.md#optional-remote-providers",
     "docs/user/source-relation-preparation.md": "docs/user/sources-and-providers.md#experimental-source-relations",
-    "docs/user/agent-integration.md": "docs/user/integration.md#export-an-agent-workflow",
+    "docs/user/agent-integration.md": "docs/user/integration.md#connect-your-agent",
     "docs/user/wiki-format.md": "docs/user/integration.md#understand-the-files"
   }
 }

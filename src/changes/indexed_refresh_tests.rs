@@ -617,7 +617,7 @@ impl ConnectedFixture {
         };
         let before = dependencies(before);
         let after = dependencies(after);
-        let document = row_projection::canonical_document(&row.path, &note, Some(&row));
+        let document = row_projection::canonical_document(&row.path, &note, Some(&row)).unwrap();
         let claim = IdentityClaimRow {
             id: self.source.clone(),
             path: row.path.clone(),

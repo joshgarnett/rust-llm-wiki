@@ -1609,7 +1609,7 @@ impl Work<'_> {
         let note = self.note(&row.path)?;
         if canonical_changed {
             delta.documents.push(DocumentMutation::Put {
-                row: row_projection::canonical_document(&row.path, &note, Some(&row)),
+                row: row_projection::canonical_document(&row.path, &note, Some(&row))?,
             });
             delta.claims.push(OwnedClaims {
                 path: row.path.clone(),

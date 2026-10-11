@@ -16,7 +16,7 @@ pub enum OutputFormat {
     about = "A local Markdown wiki with traceable evidence"
 )]
 pub struct Arguments {
-    /// Wiki root containing WIKI.md; defaults to discovery from the current directory.
+    /// Wiki root; otherwise select the nearest ancestor WIKI.md, then the saved default.
     #[arg(long, global = true)]
     pub wiki: Option<PathBuf>,
     /// Output format: human-readable text, a JSON envelope or JSON Lines events.
@@ -37,9 +37,15 @@ pub struct Arguments {
     /// Retain a guarded preparation for a later explicit changes apply.
     #[arg(long, global = true)]
     pub stage: bool,
-    /// Explicit trusted local JSON preferences; never read ambient credentials.
-    #[arg(long, global = true)]
+    /// Select a user configuration file (TOML or legacy JSON).
+    #[arg(long, visible_alias = "config", global = true)]
     pub preferences: Option<PathBuf>,
+    /// Disable ambient user configuration; explicit --preferences still applies.
+    #[arg(long, global = true)]
+    pub no_user_config: bool,
+    /// Refuse a selected wiki whose stable identity differs from this value.
+    #[arg(long, global = true)]
+    pub expect_wiki_id: Option<RecordId>,
     /// Trusted provider profile name from the private provider configuration.
     #[arg(long, global = true)]
     pub profile: Option<String>,
@@ -86,7 +92,7 @@ impl Selector {
 pub enum Command {
     /// List implemented commands, schemas and supported modes.
     Capabilities,
-    /// Export portable instructions and examples for a coding agent.
+    /// Connect an agent, manage its wiki instructions, or export a portable copy.
     Skill {
         #[command(subcommand)]
         command: SkillCommand,
@@ -96,13 +102,31 @@ pub enum Command {
         /// Published schema name; inspect capabilities for available schemas.
         name: String,
     },
-    /// Create a new Markdown wiki in a directory that does not exist.
+    /// Show the selected wiki or manage the persistent fallback default.
+    Wiki {
+        #[command(subcommand)]
+        command: WikiCommand,
+    },
+    /// Set up your wiki, saved settings and agent support.
+    Setup(super::setup::SetupArguments),
+    /// Show saved settings and the selected provider without revealing credentials.
+    Config {
+        #[command(subcommand)]
+        command: ConfigCommand,
+    },
+    /// Create a Markdown wiki; existing folders require --existing.
     Init {
-        /// New wiki directory; initialization refuses an existing path.
+        /// Wiki directory; existing folders require --existing.
         path: PathBuf,
         /// Human-readable title.
         #[arg(long, default_value = "Local wiki")]
         title: String,
+        /// Initialize an existing folder without adopting its notes.
+        #[arg(long)]
+        existing: bool,
+        /// Save this wiki as the fallback for unrelated working directories.
+        #[arg(long)]
+        set_default: bool,
     },
     /// Read a record by ID or vault-relative path; dry-run plans the request without returning bytes.
     Read {
@@ -120,6 +144,33 @@ pub enum Command {
         /// Read the existing index snapshot without syncing; freshness is not verified. Dry-run only plans this mode.
         #[arg(long)]
         no_sync: bool,
+    },
+    /// Inspect physical bytes and parse diagnostics without an index or evidence claims.
+    Inspect {
+        /// Vault-relative regular file to inspect.
+        #[arg(long)]
+        path: VaultRelativePath,
+        /// Maximum physical bytes returned (default 65536).
+        #[arg(long, default_value_t = 65536)]
+        max_bytes: usize,
+        /// Start of the zero-based physical byte range.
+        #[arg(long, requires = "end")]
+        start: Option<u64>,
+        /// Exclusive end of the physical byte range.
+        #[arg(long, requires = "start")]
+        end: Option<u64>,
+    },
+    /// Apply a reviewed exact-byte patch to an ordinary note or valid Page.
+    Edit {
+        /// Vault-relative editable note path.
+        #[arg(long)]
+        path: VaultRelativePath,
+        /// Versioned literal-edit JSON patch; inspect schema literal-edit.
+        #[arg(long)]
+        patch: PathBuf,
+        /// Expected whole-file BLAKE3 hash from inspect; refuses stale edits.
+        #[arg(long)]
+        if_match: Blake3Hash,
     },
     /// Create, update or rename pages with guarded changes.
     Page {
@@ -163,6 +214,15 @@ pub enum Command {
     Check,
     /// Inspect local status without a full audit; probe providers only with --probe.
     Doctor {
+        /// Show bounded diagnostics retained in the published index, without a new audit.
+        #[arg(long, conflicts_with = "probe")]
+        diagnostics: bool,
+        /// Maximum diagnostic rows (1..=100; default 50).
+        #[arg(long, requires = "diagnostics")]
+        diagnostic_limit: Option<usize>,
+        /// Continue the same published generation's diagnostic page.
+        #[arg(long, requires = "diagnostics")]
+        diagnostic_cursor: Option<String>,
         /// Explicitly contact the selected provider within the supplied request limits.
         #[arg(long)]
         probe: bool,
@@ -198,6 +258,26 @@ pub enum Command {
         #[arg(long, default_value = "1")]
         to_schema: String,
     },
+}
+#[derive(Debug, Subcommand)]
+pub enum WikiCommand {
+    /// Show canonical root, identity, selection origin and configuration origins.
+    Show,
+    /// Set or clear the persistent fallback wiki.
+    Default {
+        #[command(subcommand)]
+        command: DefaultCommand,
+    },
+}
+#[derive(Debug, Subcommand)]
+pub enum DefaultCommand {
+    /// Verify and save a wiki path and its current identity.
+    Set {
+        /// Existing wiki directory to verify and save as the fallback.
+        path: PathBuf,
+    },
+    /// Clear the saved fallback; preserve other preferences.
+    Clear,
 }
 #[derive(Debug, Subcommand)]
 pub enum PageCommand {
@@ -276,8 +356,15 @@ pub enum SourceCommand {
     },
     /// Capture changed content as a new revision of an existing source.
     Refresh {
-        /// Stable record or changeset ID returned by an earlier command.
-        id: RecordId,
+        /// Stable Source ID; alternatively select the managed Source with --path.
+        #[arg(required_unless_present = "path", conflicts_with = "path")]
+        id: Option<RecordId>,
+        /// Managed Source author path returned by source add (not the editable original).
+        #[arg(long, required_unless_present = "id", requires = "input_if_match")]
+        path: Option<VaultRelativePath>,
+        /// Expected BLAKE3 hash of the explicit input file; required with --path.
+        #[arg(long)]
+        input_if_match: Option<Blake3Hash>,
         /// Input file; use - to read bounded standard input.
         #[arg(long)]
         file: PathBuf,
@@ -691,8 +778,28 @@ impl SearchArguments {
         }
     }
 }
+#[derive(Debug, Args)]
+pub struct SkillInstallArguments {
+    /// Agent to connect to your wiki.
+    #[arg(long, value_parser = ["codex", "claude-code", "cursor"])]
+    pub target: String,
+    /// Install for your user account or one project.
+    #[arg(long, value_parser = ["user", "project"], default_value = "user")]
+    pub scope: String,
+    /// Agent home or project folder; defaults to HOME or the current folder for project scope.
+    #[arg(long)]
+    pub directory: Option<PathBuf>,
+}
 #[derive(Debug, Subcommand)]
 pub enum SkillCommand {
+    /// Install wiki instructions for an agent.
+    Install(SkillInstallArguments),
+    /// Show where an agent's wiki instructions are installed.
+    Status(SkillInstallArguments),
+    /// Update installed wiki instructions to this lwiki version.
+    Update(SkillInstallArguments),
+    /// Disconnect an agent while preserving your wiki and unrelated files.
+    Remove(SkillInstallArguments),
     /// Write host-specific skill files to a new output directory.
     Export {
         /// Host format for the exported skill.
@@ -703,14 +810,52 @@ pub enum SkillCommand {
         output: PathBuf,
     },
 }
+#[derive(Debug, Subcommand)]
+pub enum ConfigCommand {
+    /// Show configuration paths, effective preferences and provider settings.
+    Show,
+}
 impl Command {
     pub fn name(&self) -> &'static str {
         match self {
             Self::Capabilities => "capabilities",
-            Self::Skill { .. } => "skill export",
+            Self::Setup(_) => "setup",
+            Self::Config { .. } => "config show",
+            Self::Skill {
+                command: SkillCommand::Export { .. },
+            } => "skill export",
+            Self::Skill {
+                command: SkillCommand::Install(_),
+            } => "skill install",
+            Self::Skill {
+                command: SkillCommand::Status(_),
+            } => "skill status",
+            Self::Skill {
+                command: SkillCommand::Update(_),
+            } => "skill update",
+            Self::Skill {
+                command: SkillCommand::Remove(_),
+            } => "skill remove",
             Self::Schema { .. } => "schema",
             Self::Init { .. } => "init",
+            Self::Wiki {
+                command: WikiCommand::Show,
+            } => "wiki show",
+            Self::Wiki {
+                command:
+                    WikiCommand::Default {
+                        command: DefaultCommand::Set { .. },
+                    },
+            } => "wiki default set",
+            Self::Wiki {
+                command:
+                    WikiCommand::Default {
+                        command: DefaultCommand::Clear,
+                    },
+            } => "wiki default clear",
             Self::Read { .. } => "read",
+            Self::Inspect { .. } => "inspect",
+            Self::Edit { .. } => "edit",
             Self::Storage(options) => options.command.name(),
             Self::Page {
                 command: PageCommand::Init { .. },

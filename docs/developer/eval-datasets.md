@@ -2,9 +2,9 @@
 
 Keep QASPER for long scientific documents and add ConditionalQA, WixQA ExpertWritten, MuSiQue-Full and a small versioned developer-documentation suite. Use ContractNLI as an auxiliary test of exceptions, contradiction and missing information. These address different weaknesses; a larger QASPER sample alone does not establish multi-source task completion or revision correctness.
 
-This is a dataset acquisition and adapter proposal, researched on 2026-10-03. The retained samples are **development data**, not acceptance results. No CLI evaluation, embedding request, answer generation or paid API call was performed in this research. Follow [the context protocol](evaluating-context.md) and [the critic workflow](testing-usability.md) when implementing adapters and evaluating returned evidence.
+Use this guide to acquire pinned inputs and prepare dataset-specific evidence labels. Follow [the context protocol](evaluating-context.md) and [the critic workflow](testing-usability.md) when evaluating returned evidence. Locally inspected examples are development data. Keep an independent acceptance set unseen.
 
-The [evaluation datasets quick reference](eval-datasets-quick-reference.md) consolidates the complete recorded catalog, including subsequent development evaluations, considered alternatives, operational fixtures and current acceptance gates.
+The [dataset quick reference](eval-datasets-quick-reference.md) compares useful coverage, preparation requirements and supported adapters.
 
 ## Recommended mix
 
@@ -18,23 +18,23 @@ The [evaluation datasets quick reference](eval-datasets-quick-reference.md) cons
 
 These are proposed experiments, not declared acceptance denominators. Freeze concrete source families, task counts and thresholds before exposing a new holdout. Report each category independently and preserve the existing HIGH gate; do not use the large ContractNLI task count to mask a failing multi-source category.
 
-**Implementation priority:** first adapt ConditionalQA's scenario/evidence/condition mapping and ContractNLI's three-way labels, then add the independently labeled WixQA and scoped MuSiQue arms. The [ContractNLI adapter](evaluating-contractnli.md) now prepares an evaluator-compatible, train-only fixture from the pinned archive. The original research sample directories still use research manifests; use the supported adapter's output for evaluation. ConditionalQA's first adapter exposed HTML-source rendering and full-scenario query issues in actual CLI runs; the [revised adapter](evaluating-conditionalqa.md) preserves mapped Markdown and full queries. WixQA is deliberately raw corpus plus external expert answers awaiting independent proposition/span labeling. MuSiQue data acquisition and Cargo question authoring remain pending.
+Use the [ConditionalQA adapter](evaluating-conditionalqa.md) for mapped Markdown and complete scenario queries, and the [ContractNLI adapter](evaluating-contractnli.md) for train-only classification fixtures. WixQA needs independently authored proposition and span labels. Keep MuSiQue instance pairs isolated and verify its archive before adaptation.
 
-## Additional acquired development inputs
+## Additional text, table and developer inputs
 
-The following inputs were acquired and structurally audited on 2026-10-03. They broaden evaluation capabilities without changing the frozen acceptance set. Downloaded files, original notices and acquisition failures remain local under `.artifacts/eval-2026`; no result below is a retrieval or semantic-completeness score.
+These datasets broaden coverage of numerical evidence, reasoning and developer tasks. The table describes the pinned inputs below. Verify their hashes and retain original notices before adaptation.
 
-| Input | Retained data | What it can test / remaining work |
+| Input | Pinned data | Coverage and preparation |
 | --- | --- | --- |
 | [T²-RAGBench](https://aclanthology.org/2026.eacl-long.8/), FinQA development subset | 883 questions and 299 distinct page contexts, containing 1,339,673 UTF-8 source bytes | Text/table retrieval, entity/year disambiguation and numerical evidence; independently audit question reformulations and required operands/qualifiers before grading completeness |
 | [BRIGHT](https://huggingface.co/datasets/xlangai/BRIGHT), Stack Overflow, economics and Pony subsets | 332 queries, 165,195 short documents and 2,951 long documents; all referenced gold IDs resolve | Reasoning-intensive retrieval, code/documentation and cross-domain transfer; relevance labels are not sufficient-passage labels |
 | [DevDex](https://github.com/firecrawl/benchmark-devdex), public release | 594 tasks: 201 documentation, 195 issue/PR and 198 repository lookups | Paraphrased developer search and URL/reference ranking; source pages need immutable acquisition and independent supporting-span labels before local context evaluation |
 
-T²-RAGBench was published at EACL 2026; its questions are model-reformulated, with only a subset checked by people. Its current card explicitly removes VQAonBD for poor reformulations and contains conflicting aggregate counts, so use counts from the retained bytes. The downloaded FinQA development file has no conflicting text for a shared `context_id`. Its released `context` strings are already text plus Markdown tables: source preparation preserves those bytes, keeps questions/answers outside the corpus, and treats each as a page context, not an entire financial report. The first train-file request was rejected before transfer because its advertised size exceeded the declared 50 MB cap; that failed attempt is retained rather than silently expanding the download.
+T²-RAGBench was published at EACL 2026; its questions are model-reformulated, with only a subset checked by people. Its current card explicitly removes VQAonBD for poor reformulations and contains conflicting aggregate counts, so use counts from the retained bytes. The downloaded FinQA development file has no conflicting text for a shared `context_id`. Its released `context` strings are already text plus Markdown tables: source preparation preserves those bytes, keeps questions/answers outside the corpus, and treats each as a page context, not an entire financial report.
 
 BRIGHT's short and long document sets are alternative retrieval settings, not independent source samples. The largest downloaded long document is 9,188,634 bytes; validate ingestion and context budgets before importing it, and never silently trim it. Keep `reasoning`, `gold_answer`, gold IDs and query exclusions outside indexed content. The official card declares CC BY 4.0, as does T²-RAGBench; preserve upstream source notices as well. DevDex's repository carries MIT, but linked external pages retain their own terms. Its August 2026 release measures reference retrieval, not answer completeness, and its vendor-authored comparisons do not establish an independent product-quality target.
 
-Acquisition retained 17 successful files totaling 114,587,939 bytes, plus metadata manifests and the bounded train-file failure. BRIGHT schema/reference auditing used isolated PyArrow 21.0.0 without changing project dependencies. No upstream benchmark code, provider API or model was run during these checks. The existing context evaluator needs dataset-specific adapters and independently frozen sufficient-evidence labels before these inputs can contribute complete-task scores.
+These inputs need dataset-specific adapters and independently frozen sufficient-evidence labels before they can contribute complete-task scores.
 
 Essential immutable inputs (download into new paths, retain README/license files, then verify SHA256):
 
@@ -46,7 +46,7 @@ Essential immutable inputs (download into new paths, retain README/license files
 | [BRIGHT Pony queries](https://huggingface.co/datasets/xlangai/BRIGHT/resolve/3066d29c9651a576c8aba4832d249807b181ecae/examples/pony-00000-of-00001.parquet) | 27,722 | `0c0718d3e0ef05da42f75b7c03e755d3e03d9fcdbd32b67dddd221768a8377d7` |
 | [DevDex documentation tasks](https://raw.githubusercontent.com/firecrawl/benchmark-devdex/24e60473887d33960bf155a9e73affcd07d288a3/devdex/gt/docs_public.jsonl) | 209,709 | `7bf25a95911b23cba828efc6c4920a65673d63d4233d910773c1dfd15e641b69` |
 
-At the same BRIGHT revision, replace `examples/` with `documents/` or `long_documents/` for the corresponding source files. At the same DevDex revision, `fix_public.jsonl` and `repo_public.jsonl` provide the other tracks. Use explicit download deadlines and byte caps; the completed acquisition used at most 50 MB per file and 200 MB total. Do not execute a release's model runner merely to obtain its data.
+At the same BRIGHT revision, replace `examples/` with `documents/` or `long_documents/` for the corresponding source files. At the same DevDex revision, `fix_public.jsonl` and `repo_public.jsonl` provide the other tracks. Use explicit download deadlines and byte caps; a bounded acquisition can use 50 MB per file and 200 MB total. Do not execute a release's model runner merely to obtain its data.
 
 ### ConditionalQA: preserve the conditions
 
@@ -70,7 +70,7 @@ The [original paper](https://aclanthology.org/2022.tacl-1.31/) targets compositi
 
 The [official evaluation source](https://raw.githubusercontent.com/StonyBrookNLP/musique/922ac98f19a201998dbdae6d7f2887a5258dbdeb/evaluate_v1.0.py) requires two rows per question ID for Full's grouped sufficiency evaluation. Give local records an instance suffix while keeping the shared pair/family ID. Never split a pair. Supporting paragraph recall and answer overlap remain diagnostics alongside the independent chain-completeness judgment.
 
-The [official download script](https://raw.githubusercontent.com/StonyBrookNLP/musique/922ac98f19a201998dbdae6d7f2887a5258dbdeb/download_data.sh) points to Google Drive file `1tGdADlNjWFaHLeZZGShh2IRcpO6Lv24h`, named `musique_v1.0.zip`. Only metadata, license and evaluator source were acquired here. The archive's size/hash and data schema beyond the published evaluator are **not locally verified**. The script installs `gdown` and extracts automatically; do not execute it for bounded acquisition. Download to a new local path with an explicit cap/deadline, hash first, and inspect archive members without executing upstream code.
+The [official download script](https://raw.githubusercontent.com/StonyBrookNLP/musique/922ac98f19a201998dbdae6d7f2887a5258dbdeb/download_data.sh) points to Google Drive file `1tGdADlNjWFaHLeZZGShh2IRcpO6Lv24h`, named `musique_v1.0.zip`. Verify the archive size, hash and data schema before adapting it. The script installs `gdown` and extracts automatically; do not execute it for bounded acquisition. Download to a new local path with an explicit cap/deadline, hash first, and inspect archive members without executing upstream code.
 
 Most importantly, do not flatten Full into one global wiki: another instance can restore a removed bridge and invalidate the negative label. Use a disposable vault per instance, containing that instance's provided support/distractor paragraphs only. A separately curated global multi-source experiment needs a new answerability audit across its complete corpus. Question decomposition, bridge answers and `is_supporting` labels stay outside indexed content.
 
@@ -97,21 +97,6 @@ For freshness, first index the older bytes, replace a source with the newer byte
 5. Score citation/revision/budget correctness, location coverage, semantic proposition coverage and whole-task completion separately. For conditions and instructions, complete credit requires every requested step and qualifier. Penalize unsupported/contradicted facts even when answer overlap is high. Negative cases measure false support and misleading answerability claims; lwiki's context-only output currently has no abstention decision, so an empty result cannot earn an abstention score.
 6. Use the same frozen binary, source revisions, query caches, modes and context limits in every paired comparison. All processing failures remain in denominators. Report candidate discovery, selection and final packing separately so discarded evidence is attributable to a stage. Model-assisted selection/answering requires its own predeclared protocol and accounting; no dataset justifies conflating that workflow with deterministic context.
 
-## Retained development samples and limits
-
-Ignored local artifacts live under `.artifacts/eval-datasets-additional/`. `acquisition.json` and `acquisition-supplement.json` record exact URLs, SHA256, sizes, timestamps, download caps and failures. The first ContractNLI attempt stopped at its 50 MB cap; a second attempt followed independent verification of its 65,362,913-byte size and used a 70 MB cap. Neither failure nor changed bound was discarded.
-
-`development-samples/` contains external raw labels, source-only `.md` files, per-file hash manifests and notices. `prepare_samples.py` selects by SHA256 of `lwiki-additional-dev-v1:<record-key>` within structural strata, without retrieval outcomes. It is a local research helper, not a supported repository adapter. Samples contain only required documents; **they omit global distractors and cannot demonstrate global retrieval relevance**. The complete downloaded corpus remains available for later declared experiments.
-
-| Retained sample | Questions/tasks | Full source documents | Verified mechanics |
-| --- | --- | --- | --- |
-| ConditionalQA train | 24: eight per declared stratum | 24 | All 74 evidence strings and 13 condition strings occur literally in retained sources |
-| WixQA ExpertWritten | 22: eight single, eight two, six three-plus | 42 | All 200 upstream questions reference existing article IDs |
-| ContractNLI train | 204: 96 entailment, 26 contradiction, 82 missing | 12 | All 826 sample character spans and annotation indices in bounds |
-| Cargo | No QA labels prepared | Ten files across two releases | Source/license bytes hash-pinned; release tags resolved to commits |
-
-These checks establish alignment and acquisition mechanics only. Semantic annotations, parser rendering, CLI retrieval, revision transitions and critic acceptance remain untested. No existing private critic questions were accessed.
-
 ## Reproduce essential acquisition
 
 These immutable pins and hashes allow a fresh checkout to reacquire the essential inputs without the ignored reports. Download each direct URL into a new research directory using `curl --fail --location --max-time 60 --max-filesize <cap> --output <new-file> <url>`, then verify SHA256 before parsing. Use 10,000,000-byte caps for ConditionalQA, 60,000,000 for Wix corpus, 1,000,000 for Wix questions/Cargo and 70,000,000 for ContractNLI. Public downloads require no model API credentials. Metadata pages are moving snapshots; preserve their exact acquisition bytes and notices when reproducing a prior run.
@@ -127,22 +112,18 @@ These immutable pins and hashes allow a fresh checkout to reacquire the essentia
 | [Cargo older configuration](https://raw.githubusercontent.com/rust-lang/cargo/5ffbef3211a8c378857905775a15c5b32a174d3b/src/doc/src/reference/config.md) | 49,530 | `2181a41b4cdafc0f70a12b11da5e1ce1f0036f5b8110e9f75ee255333539f500` |
 | [Cargo newer configuration](https://raw.githubusercontent.com/rust-lang/cargo/66221abdeca2002d318fde6efff516aab091df0e/src/doc/src/reference/config.md) | 50,659 | `4e8db8d34f4022425ea5abf732fac585141acab9eace09ecd905a6168f208ddf` |
 
-For each Cargo commit, the other source paths are `src/doc/src/reference/features.md`, `src/doc/src/reference/resolver.md`, `src/doc/src/commands/cargo-build.md` and `src/doc/src/commands/cargo-test.md`; also acquire `LICENSE-MIT`, `LICENSE-APACHE` and `README.md`. ConditionalQA's project license declaration and pinned `LISCENSE`, plus ContractNLI's pinned `LICENSE`, must accompany local copies. MuSiQue's metadata pin is `922ac98f19a201998dbdae6d7f2887a5258dbdeb`; its data archive still needs independent acquisition and a new hash record.
+For each Cargo commit, the other source paths are `src/doc/src/reference/features.md`, `src/doc/src/reference/resolver.md`, `src/doc/src/commands/cargo-build.md` and `src/doc/src/commands/cargo-test.md`; also acquire `LICENSE-MIT`, `LICENSE-APACHE` and `README.md`. ConditionalQA's project license declaration and pinned `LISCENSE`, plus ContractNLI's pinned `LICENSE`, must accompany local copies. MuSiQue's metadata pin is `922ac98f19a201998dbdae6d7f2887a5258dbdeb`; record a new hash after bounded acquisition of its data archive.
 
 ## Keep the next holdout unseen
 
 Choose splits before running retrieval. Cluster by source/entity/template family and connected question-support graph; exact document hashes and near-duplicate source text must not cross development/acceptance. Keep answerable/unanswerable pairs together, all 17 hypotheses from a contract together, and Cargo historical/current revisions together. In WixQA, shared article IDs link question families; a row-random split can leak the same instructions. Preserve original upstream split names as provenance while labeling locally inspected public examples development.
 
-Keep this research sample entirely development. The first public Wix row was inspected for schema in addition to the prepared sample; demote its connected source family too. Structural counts across the release are not secret acceptance questions. An independent custodian should select disjoint remaining families, write proposition labels, record hashes and retain questions privately until the binary/protocol/caches/budgets freeze. Public benchmarks are potentially pretrained; combine them with independently authored realistic questions over a new corpus. Opening a holdout to guide a fix consumes it as development data, requiring a replacement holdout and a new freeze.
-
-The ignored `exposure.json` identifies inspected sample records, the first Wix schema row and its transitive shared-article closure. Use that ledger when selecting remaining questions; do not reconstruct exposure from memory. The current evaluator already accepts multiple document IDs in evidence groups. The required extension concerns multi-source task metrics and dataset adapters, not removing a nonexistent single-document evidence-schema restriction.
-
-The retained Wix development exposure connects 47 questions through 46 article IDs. Acceptance families must exclude that closure, not just the 22 sampled rows. `provenance-manifest.json` inventories every local research artifact and all successful acquisitions while retaining the failed bounded attempt; downloaded upstream bytes total approximately 129 MB.
+Keep an exposure ledger identifying every inspected task and its transitive source family. Use it when selecting acceptance questions; do not reconstruct exposure from memory. An independent custodian should choose disjoint families, write proposition labels, record hashes and retain questions privately until the binary, protocol, caches and budgets are frozen. Public benchmarks may have appeared in model training, so supplement them with independently authored realistic questions over a new corpus. A holdout used to guide a fix becomes development data and needs replacement.
 
 ## Lower-priority alternatives
 
-[HotpotQA](https://hotpotqa.github.io/) has sentence-level supporting facts, bridge/comparison questions and a roughly 44 MB distractor dev download under CC BY-SA 4.0. It is a practical fallback if MuSiQue acquisition is blocked, but lacks Full's paired missing-bridge protocol and overlaps the Wikipedia domain. Its ten-paragraph distractor setting is not a full-wiki retrieval result. No Hotpot archive was acquired here.
+[HotpotQA](https://hotpotqa.github.io/) has sentence-level supporting facts, bridge/comparison questions and a roughly 44 MB distractor dev download under CC BY-SA 4.0. It is a practical fallback if MuSiQue acquisition is blocked, but lacks Full's paired missing-bridge protocol and overlaps the Wikipedia domain. Its ten-paragraph distractor setting is not a full-wiki retrieval result.
 
-[TechQA's official repository](https://github.com/IBM/techqa) links a release with more than 800,000 technotes; the [paper](https://aclanthology.org/2020.acl-main.117/) uses actual developer-support questions. This is relevant but acquisition is substantially heavier than WixQA. The repository's Apache-2.0 code license does not establish technote/dataset redistribution terms; data-level terms and archive size were not verified here. Defer bulk acquisition until those are checked.
+[TechQA's official repository](https://github.com/IBM/techqa) links a release with more than 800,000 technotes; the [paper](https://aclanthology.org/2020.acl-main.117/) uses actual developer-support questions. This is relevant but acquisition is substantially heavier than WixQA. The repository's Apache-2.0 code license does not establish technote/dataset redistribution terms; verify data-level terms and archive size before bulk acquisition.
 
-[FreshQA](https://github.com/freshllms/freshqa) supplies changing-fact questions and dated answer spreadsheets, with Apache-2.0 repository licensing. It does not supply the frozen evidence corpus needed for this local wiki benchmark. A new evidence collection would need timestamped provenance and scope-specific labels; do not replace local revision tests with live web freshness scores. Its spreadsheet-specific licensing was not separately verified, and no spreadsheet was downloaded.
+[FreshQA](https://github.com/freshllms/freshqa) supplies changing-fact questions and dated answer spreadsheets, with Apache-2.0 repository licensing. It does not supply the frozen evidence corpus needed for this local wiki benchmark. A new evidence collection would need timestamped provenance and scope-specific labels; do not replace local revision tests with live web freshness scores. Verify spreadsheet-specific terms before acquisition.

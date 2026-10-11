@@ -100,8 +100,18 @@ fn main() {
         ),
     };
     if format == OutputFormat::Human {
+        if matches!(envelope.command.as_str(), "read" | "context" | "inspect")
+            && let Some(selection) = &envelope.meta.selection
+        {
+            eprintln!(
+                "Wiki: {} ({}, selected by {})",
+                selection["root"].as_str().unwrap_or("unknown"),
+                selection["wiki_id"].as_str().unwrap_or("unknown"),
+                selection["origin"].as_str().unwrap_or("unknown")
+            );
+        }
         if envelope.ok
-            && envelope.command == "read"
+            && matches!(envelope.command.as_str(), "read" | "inspect")
             && let Some(hash) = envelope.data["hash"].as_str()
         {
             eprintln!(

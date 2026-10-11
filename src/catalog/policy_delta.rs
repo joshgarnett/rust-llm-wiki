@@ -104,14 +104,8 @@ impl PolicyDelta {
             let document = delta
                 .documents
                 .iter()
-                .find_map(|d| match d {
-                    DocumentMutation::Put { row } | DocumentMutation::MovePage { row, .. }
-                        if row.path == update.path =>
-                    {
-                        Some(row)
-                    }
-                    _ => None,
-                })
+                .filter_map(DocumentMutation::author_note_row)
+                .find(|row| row.path == update.path)
                 .ok_or_else(|| bad("policy membership lacks exact document replacement"))?;
             let note = crate::records::parse_note(document.raw_text.as_bytes());
             if document.hash != update.hash
@@ -132,14 +126,18 @@ impl PolicyDelta {
                 None if !moves.is_empty()
                     && document.record_id.is_none()
                     && *document
-                        == super::row_projection::canonical_document(&update.path, &note, None) =>
+                        == super::row_projection::canonical_document(
+                            &update.path,
+                            &note,
+                            None,
+                        )? =>
                 {
                     let claims = delta
                         .claims
                         .iter()
                         .find(|owned| owned.path == update.path)
                         .ok_or_else(|| bad("unadopted rewrite lacks complete identity claims"))?;
-                    let expected: Vec<_> = crate::sources::identity::readable_ids(&note)
+                    let expected: Vec<_> = crate::sources::identity::readable_ids(&note)?
                         .into_iter()
                         .map(|id| super::types::IdentityClaimRow {
                             id,
@@ -152,6 +150,26 @@ impl PolicyDelta {
                         return Err(bad(
                             "unadopted rewrite identity claims differ from exact parsed bytes",
                         ));
+                    }
+                }
+                None if document.record_id.is_none()
+                    && document.kind.is_none()
+                    && update.keys.is_empty()
+                    && *document
+                        == super::row_projection::canonical_document(
+                            &update.path,
+                            &note,
+                            None,
+                        )? =>
+                {
+                    super::literal_projection::require_plain_bytes(document.raw_text.as_bytes())?;
+                    let claims = delta
+                        .claims
+                        .iter()
+                        .find(|owned| owned.path == update.path)
+                        .ok_or_else(|| bad("ordinary rewrite lacks empty identity claims"))?;
+                    if !claims.rows.is_empty() {
+                        return Err(bad("ordinary rewrite carries identity claims"));
                     }
                 }
                 _ => return Err(bad("policy membership changes adopted document identity")),

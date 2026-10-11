@@ -1,5 +1,5 @@
 use lwiki::{
-    app::offline::init,
+    app::offline::{init, init_with_existing},
     app::*,
     catalog::scan::scan,
     changes::*,
@@ -176,7 +176,7 @@ fn tree(path: &Path) -> BTreeMap<PathBuf, (Vec<u8>, std::time::SystemTime)> {
     out
 }
 #[test]
-fn init_refuses_overwrite_and_preserves_existing_excludes() {
+fn init_refuses_overwrite_and_preserves_existing_hidden_state() {
     let t = tempfile::tempdir().unwrap();
     let path = t.path().join("new");
     let before = tree(t.path());
@@ -196,12 +196,19 @@ fn init_refuses_overwrite_and_preserves_existing_excludes() {
     fs::create_dir(&path).unwrap();
     fs::create_dir(path.join(".wiki")).unwrap();
     fs::write(path.join(".wiki/.gitignore"), b"# custom\nkeep").unwrap();
-    let created = init(&path, "Test", Default::default()).unwrap();
-    assert!(created.created);
+    let before = tree(&path);
+    assert_eq!(
+        init_with_existing(&path, "Test", true, Default::default())
+            .unwrap_err()
+            .code,
+        ErrorCode::ContentConflict
+    );
+    assert_eq!(before, tree(&path));
+    assert!(!path.join("WIKI.md").exists());
     assert!(!path.join(".wiki/cache/index.sqlite").exists());
     assert_eq!(
         fs::read(path.join(".wiki/.gitignore")).unwrap(),
-        b"# custom\nkeep\ncache/\n"
+        b"# custom\nkeep"
     );
     let before = tree(&path);
     assert_eq!(
@@ -218,7 +225,6 @@ fn init_refuses_overwrite_and_preserves_existing_excludes() {
 fn cli_discovery_precedence_and_exact_ids() {
     let (t, root) = fixture();
     let nested = t.path().join("child");
-    fs::create_dir(&nested).unwrap();
     init(&nested, "Nested", Default::default()).unwrap();
     let inside = nested.join("inside");
     fs::create_dir(&inside).unwrap();

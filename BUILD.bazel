@@ -132,6 +132,12 @@ test_suite(
     tests = _TEST_TARGETS + [":doc_tests"],
 )
 
+# Public command tests can be bound to an extracted artifact with LWIKI_QUALIFY_BINARY.
+test_suite(
+    name = "artifact_tests",
+    tests = _INTEGRATION_TESTS,
+)
+
 test_suite(
     name = "smoke",
     tests = [

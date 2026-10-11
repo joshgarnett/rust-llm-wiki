@@ -29,11 +29,11 @@ fn v1() -> serde_json::Value {
 fn ambient_locations_are_absolute_and_explicit_disabled_skip_environment() {
     assert_eq!(
         ambient_path(Some(OsStr::new("/chosen")), Some(OsStr::new("/home"))).unwrap(),
-        Path::new("/chosen/lwiki/config.json")
+        Path::new("/chosen/lwiki/config.toml")
     );
     assert_eq!(
         ambient_path(None, Some(OsStr::new("/home"))).unwrap(),
-        Path::new("/home/.config/lwiki/config.json")
+        Path::new("/home/.config/lwiki/config.toml")
     );
     let error = ambient_path(Some(OsStr::new("relative")), Some(OsStr::new("/home"))).unwrap_err();
     assert_eq!(error.code, ErrorCode::ConfigInvalid);
@@ -56,7 +56,7 @@ fn missing_ambient_uses_defaults_but_explicit_missing_names_path() {
     let path = base.join("missing/lwiki/config.json");
     let loaded = load_path(Some(&path), UserConfigOrigin::Ambient).unwrap();
     assert!(!loaded.summary().present);
-    assert_eq!(loaded.document().schema_version, "2");
+    assert_eq!(loaded.document().schema_version, "3");
     assert!(!base.join("missing").exists());
     let error = load_user_config(Some(&path), false).unwrap_err();
     assert!(error.message.contains(path.to_str().unwrap()));
@@ -456,4 +456,331 @@ fn substituted_or_edited_staged_configuration_is_never_published() {
             assert!(retained.is_none());
         }
     }
+}
+
+#[test]
+fn ambient_toml_wins_legacy_json_only_falls_back_when_toml_is_absent() {
+    let (_temp, base) = fixture();
+    let json = config(&base, v1());
+    let original = fs::read(&json).unwrap();
+    let toml = base.join("config.toml");
+    let legacy = load_ambient(&toml).unwrap();
+    assert_eq!(legacy.path(), Some(json.as_path()));
+    assert_eq!(legacy.document().defaults.read_max_bytes, Some(123));
+    fs::write(
+        &toml,
+        "schema_version = \"3\"\n[defaults]\nread_max_bytes = 456\n",
+    )
+    .unwrap();
+    let loaded = load_ambient(&toml).unwrap();
+    assert_eq!(loaded.path(), Some(toml.as_path()));
+    assert_eq!(loaded.document().defaults.read_max_bytes, Some(456));
+    assert_eq!(loaded.summary().format, Some(UserConfigFormat::Toml));
+    assert_eq!(loaded.summary().shadowed_legacy_path, Some(json.clone()));
+    assert_eq!(loaded.summary().warnings.len(), 1);
+    fs::write(
+        &toml,
+        "schema_version = \"3\"\n[defaults]\nread_max_bytes = 0\n",
+    )
+    .unwrap();
+    assert_eq!(
+        load_ambient(&toml).unwrap_err().code,
+        ErrorCode::ConfigInvalid
+    );
+    assert_eq!(fs::read(json).unwrap(), original);
+}
+
+#[test]
+fn legacy_json_setter_stays_v2_and_extended_fields_require_v3() {
+    let (_temp, base) = fixture();
+    for version in ["1", "2"] {
+        for field in ["providers_config", "embeddings", "remote"] {
+            let path = base.join("config.json");
+            // Build a real dynamic property, including empty tables old schemas cannot contain.
+            let value = serde_json::json!({"schema_version":version});
+            let mut value = value.as_object().unwrap().clone();
+            value.insert(
+                field.into(),
+                if field == "providers_config" {
+                    serde_json::Value::Null
+                } else {
+                    serde_json::json!({})
+                },
+            );
+            let bytes = serde_json::to_vec(&value).unwrap();
+            fs::write(&path, &bytes).unwrap();
+            assert!(load_user_config(Some(&path), false).is_err());
+            assert_eq!(fs::read(&path).unwrap(), bytes);
+        }
+    }
+    let path = config(&base, v1());
+    let loaded = load_user_config(Some(&path), false).unwrap();
+    update_default(&loaded, None, false, 5000).unwrap();
+    let value: serde_json::Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    assert_eq!(value["schema_version"], "2");
+    for field in ["providers_config", "embeddings", "remote"] {
+        assert!(value.get(field).is_none());
+    }
+    assert_eq!(
+        load_user_config(Some(&path), false)
+            .unwrap()
+            .document()
+            .schema_version,
+        "2"
+    );
+}
+
+#[test]
+fn supported_json_migration_preserves_all_preferences_and_original_bytes() {
+    for version in ["1", "2"] {
+        let (_temp, base) = fixture();
+        let mut value = v1();
+        value["schema_version"] = version.into();
+        let path = config(&base, value);
+        let original = fs::read(&path).unwrap();
+        let loaded = load_user_config(Some(&path), false).unwrap();
+        let target = loaded.toml_migration_target().unwrap();
+        let mut proposed = loaded.document().clone();
+        proposed.providers_config = Some(base.join("providers.toml"));
+        proposed.embeddings.query_prefix = Some("検索: ".into());
+        proposed.embeddings.max_input_bytes = Some(16000);
+        proposed.remote.max_requests = Some(7);
+        proposed.remote.max_input_units = Some(0);
+        proposed.remote.max_cost = Some("0.125".into());
+        let preview =
+            update_document(&loaded, proposed.clone(), Some(&target), true, 5000).unwrap();
+        assert!(preview.changed && !preview.applied && !preview.durable);
+        assert!(!target.exists());
+        assert!(!path.with_file_name("config.json.lock").exists());
+        assert!(!preview.preserved_original_path.as_ref().unwrap().exists());
+        let applied =
+            update_document(&loaded, proposed.clone(), Some(&target), false, 5000).unwrap();
+        assert!(applied.applied && applied.durable && applied.failure.is_none());
+        assert_eq!(
+            fs::read(applied.preserved_original_path.unwrap()).unwrap(),
+            original
+        );
+        assert_eq!(fs::read(&path).unwrap(), original);
+        let migrated = load_user_config(Some(&target), false).unwrap();
+        assert_eq!(migrated.document().schema_version, "3");
+        assert_eq!(migrated.document().defaults.read_max_bytes, Some(123));
+        assert_eq!(
+            migrated.document().vaults[&RecordId::new("Vault.First").unwrap()].lock_timeout_ms,
+            Some(42)
+        );
+        assert_eq!(migrated.document().allowed_profiles, ["local"]);
+        assert_eq!(
+            migrated.document().embeddings.query_prefix.as_deref(),
+            Some("検索: ")
+        );
+        let before = fs::read(&target).unwrap();
+        let retry = update_document(&loaded, proposed, Some(&target), false, 5000).unwrap();
+        assert!(retry.applied && retry.durable && retry.failure.is_none());
+        assert_eq!(fs::read(&target).unwrap(), before);
+        assert_eq!(
+            load_ambient(&target)
+                .unwrap()
+                .summary()
+                .shadowed_legacy_path,
+            Some(path)
+        );
+    }
+}
+
+#[test]
+fn migration_destination_and_backup_conflicts_refuse_before_any_write() {
+    for backup_collision in [false, true] {
+        let (_temp, base) = fixture();
+        let path = config(&base, v1());
+        let original = fs::read(&path).unwrap();
+        let loaded = load_user_config(Some(&path), false).unwrap();
+        let target = base.join("config.toml");
+        let collision = if backup_collision {
+            base.join("config.json.v1.bak")
+        } else {
+            target.clone()
+        };
+        fs::write(&collision, b"author's original configuration").unwrap();
+        for dry_run in [true, false] {
+            let error = update_document(
+                &loaded,
+                loaded.document().clone(),
+                Some(&target),
+                dry_run,
+                5000,
+            )
+            .unwrap_err();
+            assert_eq!(error.code, ErrorCode::ContentConflict);
+            assert_eq!(fs::read(&path).unwrap(), original);
+            assert_eq!(
+                fs::read(&collision).unwrap(),
+                b"author's original configuration"
+            );
+            assert!(!base.join("config.json.lock").exists());
+            assert!(!base.join("config.toml.lock").exists());
+        }
+    }
+}
+
+#[test]
+fn explicit_setup_destination_is_missing_without_creating_anything() {
+    let (_temp, base) = fixture();
+    let path = base.join("new/settings.toml");
+    assert!(load_user_config(Some(&path), false).is_err());
+    let loaded = load_user_config_for_setup(Some(&path), false).unwrap();
+    assert!(!loaded.summary().present);
+    assert_eq!(loaded.summary().origin, UserConfigOrigin::Explicit);
+    let mut proposed = loaded.document().clone();
+    proposed.embeddings.document_prefix = Some("document: ".into());
+    assert!(
+        !update_document(&loaded, proposed.clone(), None, true, 5000)
+            .unwrap()
+            .applied
+    );
+    assert!(!base.join("new").exists());
+    let result = update_document(&loaded, proposed, None, false, 5000).unwrap();
+    assert!(result.applied && result.durable);
+    assert_eq!(
+        load_user_config(Some(&path), false)
+            .unwrap()
+            .document()
+            .embeddings
+            .document_prefix
+            .as_deref(),
+        Some("document: ")
+    );
+}
+
+#[test]
+fn extended_toml_validation_is_strict_bounded_and_redacts_parse_input() {
+    let (_temp, base) = fixture();
+    let path = base.join("config.toml");
+    for text in [
+        "schema_version = \"1\"\n",
+        "schema_version = \"2\"\n",
+        "schema_version = \"99\"\n",
+        "schema_version = \"3\"\nschema_version = \"3\"\n",
+        "schema_version = \"3\"\nproviders_config = \"relative.toml\"\n",
+        "schema_version = \"3\"\n[defaults]\nproviders_config = \"/private/provider.toml\"\n",
+        "schema_version = \"3\"\n[vaults.test]\nremote = {}\n",
+        "schema_version = \"3\"\n[embeddings]\nmax_input_bytes = 0\n",
+        "schema_version = \"3\"\n[embeddings]\nmax_input_bytes = 131073\n",
+        "schema_version = \"3\"\n[embeddings]\nmax_input_bytes = 20\nquality_target_bytes = 21\n",
+        "schema_version = \"3\"\n[remote]\nmax_requests = 0\n",
+        "schema_version = \"3\"\n[remote]\nconcurrency = 0\n",
+        "schema_version = \"3\"\n[remote]\ndeadline_ms = 86400001\n",
+        "schema_version = \"3\"\n[remote]\ncurrency = \"usd\"\n",
+        "schema_version = \"3\"\n[remote]\nmax_cost = \"-1\"\n",
+        "schema_version = \"3\"\n[remote]\nmax_cost = \"0.0000000001\"\n",
+        "schema_version = \"3\"\n[remote]\nretry_uncertain = true\n",
+        "schema_version = \"3\"\nsecret-sentinel-not-for-errors = \"synthetic-key\"\n",
+    ] {
+        fs::write(&path, text).unwrap();
+        let error = load_user_config(Some(&path), false).unwrap_err();
+        assert_eq!(error.code, ErrorCode::ConfigInvalid);
+        assert!(!format!("{error:?}").contains("secret-sentinel-not-for-errors"));
+        assert!(!format!("{error:?}").contains("synthetic-key"));
+        assert_eq!(fs::read(&path).unwrap(), text.as_bytes());
+    }
+    fs::write(&path, br#"{"schema_version":"3"}"#).unwrap();
+    assert!(load_user_config(Some(&path), false).is_err());
+    let json = base.join("config.json");
+    fs::write(&json, "schema_version = \"3\"\n").unwrap();
+    assert!(load_user_config(Some(&json), false).is_err());
+}
+
+#[test]
+fn document_report_records_publication_before_a_later_failure() {
+    let (_temp, base) = fixture();
+    let path = base.join("config.toml");
+    let loaded = load_user_config_for_setup(Some(&path), false).unwrap();
+    let mut proposed = loaded.document().clone();
+    proposed.remote.max_requests = Some(4);
+    CHECKPOINT_HOOK.with(|hook| {
+        *hook.borrow_mut() = Some(Box::new(|stage, _| {
+            if stage == "published" {
+                Err(WikiError::new(
+                    ErrorCode::Internal,
+                    "injected later failure",
+                ))
+            } else {
+                Ok(())
+            }
+        }))
+    });
+    let report = update_document(&loaded, proposed, None, false, 5000).unwrap();
+    CHECKPOINT_HOOK.with(|hook| *hook.borrow_mut() = None);
+    assert!(report.applied && report.durable && report.failure.is_some());
+    assert_eq!(
+        load_user_config(Some(&path), false)
+            .unwrap()
+            .document()
+            .remote
+            .max_requests,
+        Some(4)
+    );
+}
+
+#[test]
+fn identical_document_retry_syncs_existing_file_and_parent_after_failed_publication_sync() {
+    let (_temp, base) = fixture();
+    let path = base.join("config.toml");
+    let loaded = load_user_config_for_setup(Some(&path), false).unwrap();
+    let mut proposed = loaded.document().clone();
+    proposed.remote.max_requests = Some(3);
+    super::super::local_io::SYNC_HOOK.with(|hook| {
+        *hook.borrow_mut() = Some(Box::new(|phase, _| {
+            if phase == "publication_directory" {
+                Err(WikiError::new(
+                    ErrorCode::Internal,
+                    "injected publication sync failure",
+                ))
+            } else {
+                Ok(())
+            }
+        }))
+    });
+    let published = update_document(&loaded, proposed.clone(), None, false, 5000);
+    super::super::local_io::SYNC_HOOK.with(|hook| *hook.borrow_mut() = None);
+    let published = published.unwrap();
+    assert!(published.applied && !published.durable && published.failure.is_some());
+    let original = fs::read(&path).unwrap();
+    let loaded = load_user_config(Some(&path), false).unwrap();
+    let phases = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    let recorded = phases.clone();
+    super::super::local_io::SYNC_HOOK.with(|hook| {
+        *hook.borrow_mut() = Some(Box::new(move |phase, _| {
+            recorded.borrow_mut().push(phase.to_string());
+            Ok(())
+        }))
+    });
+    let retry = update_document(&loaded, proposed, None, false, 5000);
+    super::super::local_io::SYNC_HOOK.with(|hook| *hook.borrow_mut() = None);
+    let retry = retry.unwrap();
+    assert!(!retry.changed && !retry.applied && retry.durable && retry.failure.is_none());
+    assert_eq!(*phases.borrow(), ["existing_file", "directory"]);
+    assert_eq!(fs::read(&path).unwrap(), original);
+}
+
+#[test]
+fn unchanged_document_sync_failure_is_an_explicit_failed_report_and_preview_never_syncs() {
+    let (_temp, base) = fixture();
+    let path = base.join("config.toml");
+    let loaded = load_user_config_for_setup(Some(&path), false).unwrap();
+    update_document(&loaded, loaded.document().clone(), None, false, 5000).unwrap();
+    let loaded = load_user_config(Some(&path), false).unwrap();
+    super::super::local_io::SYNC_HOOK.with(|hook| {
+        *hook.borrow_mut() = Some(Box::new(|_, _| {
+            Err(WikiError::new(
+                ErrorCode::Internal,
+                "injected existing sync failure",
+            ))
+        }))
+    });
+    let preview = update_document(&loaded, loaded.document().clone(), None, true, 5000).unwrap();
+    assert!(!preview.applied && !preview.durable && preview.failure.is_none());
+    let result = update_document(&loaded, loaded.document().clone(), None, false, 5000);
+    super::super::local_io::SYNC_HOOK.with(|hook| *hook.borrow_mut() = None);
+    let result = result.unwrap();
+    assert!(!result.applied && !result.durable && result.failure.is_some());
 }

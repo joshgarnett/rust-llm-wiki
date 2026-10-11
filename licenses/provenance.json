@@ -1,0 +1,170 @@
+{
+  "schema_version": 1,
+  "packages": [
+    {
+      "package": "jni",
+      "version": "0.22.4",
+      "crate_sha256": "5efd9a482cf3a427f00d6b35f14332adc7902ce91efb778580e180ff90fa3498",
+      "upstream_commit": "5ae9458a4ec44c5318f37ddc7569c1d4ae8a69e7",
+      "commit_evidence": "archive .cargo_vcs_info.json",
+      "files": [
+        {
+          "file": "jni-0.22.4-LICENSE-APACHE",
+          "upstream_path": "LICENSE-APACHE",
+          "url": "https://raw.githubusercontent.com/jni-rs/jni-rs/5ae9458a4ec44c5318f37ddc7569c1d4ae8a69e7/LICENSE-APACHE",
+          "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2"
+        },
+        {
+          "file": "jni-0.22.4-LICENSE-MIT",
+          "upstream_path": "LICENSE-MIT",
+          "url": "https://raw.githubusercontent.com/jni-rs/jni-rs/5ae9458a4ec44c5318f37ddc7569c1d4ae8a69e7/LICENSE-MIT",
+          "sha256": "fea1d5bf3dd71605ce5d7d2ff695c1837e914c77195e523a86b5391716477960"
+        }
+      ]
+    },
+    {
+      "package": "jni-macros",
+      "version": "0.22.4",
+      "crate_sha256": "a00109accc170f0bdb141fed3e393c565b6f5e072365c3bd58f5b062591560a3",
+      "upstream_commit": "33045a124105c939d1e2cbdcb5a39e5d868ffa03",
+      "commit_evidence": "archive .cargo_vcs_info.json",
+      "files": [
+        {
+          "file": "jni-macros-0.22.4-LICENSE-APACHE",
+          "upstream_path": "LICENSE-APACHE",
+          "url": "https://raw.githubusercontent.com/jni-rs/jni-rs/33045a124105c939d1e2cbdcb5a39e5d868ffa03/LICENSE-APACHE",
+          "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2"
+        },
+        {
+          "file": "jni-macros-0.22.4-LICENSE-MIT",
+          "upstream_path": "LICENSE-MIT",
+          "url": "https://raw.githubusercontent.com/jni-rs/jni-rs/33045a124105c939d1e2cbdcb5a39e5d868ffa03/LICENSE-MIT",
+          "sha256": "fea1d5bf3dd71605ce5d7d2ff695c1837e914c77195e523a86b5391716477960"
+        }
+      ]
+    },
+    {
+      "package": "jni-sys-macros",
+      "version": "0.4.1",
+      "crate_sha256": "38c0b942f458fe50cdac086d2f946512305e5631e720728f2a61aabcd47a6264",
+      "upstream_commit": "64d77b7a5f119d7b55b4e2c169a4668067ff59e6",
+      "commit_evidence": "archive .cargo_vcs_info.json",
+      "files": [
+        {
+          "file": "jni-sys-macros-0.4.1-LICENSE-APACHE",
+          "upstream_path": "LICENSE-APACHE",
+          "url": "https://raw.githubusercontent.com/jni-rs/jni-sys/64d77b7a5f119d7b55b4e2c169a4668067ff59e6/LICENSE-APACHE",
+          "sha256": "c6596eb7be8581c18be736c846fb9173b69eccf6ef94c5135893ec56bd92ba08"
+        },
+        {
+          "file": "jni-sys-macros-0.4.1-LICENSE-MIT",
+          "upstream_path": "LICENSE-MIT",
+          "url": "https://raw.githubusercontent.com/jni-rs/jni-sys/64d77b7a5f119d7b55b4e2c169a4668067ff59e6/LICENSE-MIT",
+          "sha256": "1d85bd754b04ceec93e98e890edd1fa3c6a22e81bcb32135806beeccefa51cd1"
+        }
+      ]
+    },
+    {
+      "package": "jsonschema-regex",
+      "version": "0.58.2",
+      "crate_sha256": "599c68ae272eac23e6525c3fc04a39828ae4a0d76d1fb5ba0e23a6241fd5cbfe",
+      "upstream_commit": "3d48b9026c6518e7f3a2ecc6c9c94a9f77f6083c",
+      "commit_evidence": "archive .cargo_vcs_info.json",
+      "files": [
+        {
+          "file": "jsonschema-regex-0.58.2-LICENSE",
+          "upstream_path": "LICENSE",
+          "url": "https://raw.githubusercontent.com/Stranger6667/jsonschema/3d48b9026c6518e7f3a2ecc6c9c94a9f77f6083c/LICENSE",
+          "sha256": "117829c3ca21efb132d81a44b55363d395ab8eea18526873bc828da4c0e5f038"
+        }
+      ]
+    },
+    {
+      "package": "jsonschema-value",
+      "version": "0.58.2",
+      "crate_sha256": "9097316258ece14ed6908011db130c54a11a5bd0c46472b1fe112c8c86261263",
+      "upstream_commit": "3d48b9026c6518e7f3a2ecc6c9c94a9f77f6083c",
+      "commit_evidence": "archive .cargo_vcs_info.json",
+      "files": [
+        {
+          "file": "jsonschema-value-0.58.2-LICENSE",
+          "upstream_path": "LICENSE",
+          "url": "https://raw.githubusercontent.com/Stranger6667/jsonschema/3d48b9026c6518e7f3a2ecc6c9c94a9f77f6083c/LICENSE",
+          "sha256": "117829c3ca21efb132d81a44b55363d395ab8eea18526873bc828da4c0e5f038"
+        }
+      ]
+    },
+    {
+      "package": "rustls-platform-verifier-android",
+      "version": "0.1.1",
+      "crate_sha256": "f87165f0995f63a9fbeea62b64d10b4d9d8e78ec6d7d51fb2125fda7bb36788f",
+      "upstream_commit": "996b1c903491641b17b3c9afb65d1352f6fc6b76",
+      "commit_evidence": "pinned rustls-platform-verifier 0.7.0 archive .cargo_vcs_info.json; Android crate has no VCS metadata",
+      "files": [
+        {
+          "file": "rustls-platform-verifier-android-0.1.1-LICENSE-APACHE",
+          "upstream_path": "LICENSE-APACHE",
+          "url": "https://raw.githubusercontent.com/rustls/rustls-platform-verifier/996b1c903491641b17b3c9afb65d1352f6fc6b76/LICENSE-APACHE",
+          "sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4"
+        },
+        {
+          "file": "rustls-platform-verifier-android-0.1.1-LICENSE-MIT",
+          "upstream_path": "LICENSE-MIT",
+          "url": "https://raw.githubusercontent.com/rustls/rustls-platform-verifier/996b1c903491641b17b3c9afb65d1352f6fc6b76/LICENSE-MIT",
+          "sha256": "1c7cf76689c837a68ed8d704994e52a0f2940c087958f860d17f3186afbdcc0c"
+        }
+      ]
+    },
+    {
+      "package": "uuid-simd",
+      "version": "0.8.0",
+      "crate_sha256": "23b082222b4f6619906941c17eb2297fff4c2fb96cb60164170522942a200bd8",
+      "upstream_commit": "d74c030d9dc4f3cae02146d1f497ff62726ef09a",
+      "commit_evidence": "archive .cargo_vcs_info.json",
+      "files": [
+        {
+          "file": "uuid-simd-0.8.0-LICENSE",
+          "upstream_path": "LICENSE",
+          "url": "https://raw.githubusercontent.com/Nugine/simd/d74c030d9dc4f3cae02146d1f497ff62726ef09a/LICENSE",
+          "sha256": "71674605ec4c087fe9eb534e3e4f9e26eb2e4aabcd76a29fd156c6a844d44b3d"
+        }
+      ]
+    },
+    {
+      "package": "vsimd",
+      "version": "0.8.0",
+      "crate_sha256": "5c3082ca00d5a5ef149bb8b555a72ae84c9c59f7250f013ac822ac2e49b19c64",
+      "upstream_commit": "d74c030d9dc4f3cae02146d1f497ff62726ef09a",
+      "commit_evidence": "archive .cargo_vcs_info.json",
+      "files": [
+        {
+          "file": "vsimd-0.8.0-LICENSE",
+          "upstream_path": "LICENSE",
+          "url": "https://raw.githubusercontent.com/Nugine/simd/d74c030d9dc4f3cae02146d1f497ff62726ef09a/LICENSE",
+          "sha256": "71674605ec4c087fe9eb534e3e4f9e26eb2e4aabcd76a29fd156c6a844d44b3d"
+        }
+      ]
+    },
+    {
+      "package": "yaml-rust2",
+      "version": "0.13.0",
+      "crate_sha256": "57e5b818a27a4cd30884ea380857a5e56f7ec3ba24a3990a3cc0b95af3238e18",
+      "upstream_commit": "e12069447073e0c8dd9ceab415159c4c92927534",
+      "commit_evidence": "archive .cargo_vcs_info.json",
+      "files": [
+        {
+          "file": "yaml-rust2-0.13.0-Apache-LICENSE",
+          "upstream_path": "Apache-LICENSE",
+          "url": "https://raw.githubusercontent.com/Ethiraric/yaml-rust2/e12069447073e0c8dd9ceab415159c4c92927534/Apache-LICENSE",
+          "sha256": "278f0e5c23f023a2f1af8d528dd5c29dc3a5ea2dd63558aa8d4f077c09e037c7"
+        },
+        {
+          "file": "yaml-rust2-0.13.0-MIT-LICENSE",
+          "upstream_path": "MIT-LICENSE",
+          "url": "https://raw.githubusercontent.com/Ethiraric/yaml-rust2/e12069447073e0c8dd9ceab415159c4c92927534/MIT-LICENSE",
+          "sha256": "3dd30063cdb4a378736348c215cb84b78b0711ba7e39903162cae5ce71dc9757"
+        }
+      ]
+    }
+  ]
+}

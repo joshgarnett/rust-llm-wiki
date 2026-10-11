@@ -1,62 +1,60 @@
 # Rust LLM Wiki
 
-Keep a local Markdown wiki, capture source notes, and give people or coding agents
-exact cited evidence. `lwiki` works offline for capture, reading, editing, literal
-search and context. It needs no model runtime, database server or background service.
-Semantic embeddings are optional remote API work; vectors are stored locally.
+Use your notes with a coding agent, and keep its answers linked to the text they
+come from. `lwiki` manages a local wiki: a folder of Markdown notes that you can
+open in Obsidian or another editor. It saves copies of your source notes so an
+agent can cite them, keeps earlier copies when you update a note, and helps you
+write and revise wiki pages.
 
-## Start with your notes
+Capturing notes, reading, editing and searching work offline. Search by meaning
+is optional and uses a remote embedding service. You do not need a local model,
+database server or background service.
 
-With a suitable `lwiki` binary on your PATH:
+## Get started
 
-```sh
-lwiki init "/path/to/Personal Wiki" --set-default
-lwiki wiki show
-lwiki --offline source add "/path/to/deployment-notes.md" --title "Deployment notes"
-lwiki --offline search 'atlas_migrate' --mode literal
-lwiki --offline context 'Atlas deployment' --max-bytes 6000 --max-tokens 1500
-```
+1. [Install lwiki](docs/user/install.md).
+2. Run guided setup:
 
-[Getting started](docs/user/getting-started.md) walks you through creating your wiki
-and adding your notes. [Everyday use](docs/user/everyday-use.md) covers updating notes
-and writing wiki pages. Existing
-editor folders require `init --existing`; reserved managed names must be absent.
-Open the wiki folder in Obsidian or any Markdown editor. Initialization preserves
-ordinary notes and `.obsidian` and does not adopt those notes automatically.
+   ```sh
+   lwiki setup
+   ```
 
-## Choose your task
+   Choose a folder you want to keep, save it as your default wiki, and select
+   Codex, Claude Code or Cursor when setup asks which agent to connect. You can
+   skip the optional embedding model and start with offline search.
+3. Restart your chosen agent. Give it a note or folder and a question, for example:
 
-- [Installation and binary checks](docs/user/install.md).
-- [Everyday use](docs/user/everyday-use.md): choose a wiki, capture/refresh notes, edit or move a Page.
-- [Recovery and backups](docs/user/recovery.md).
-- [Retrieval reference](docs/user/retrieval.md): citations, named neighbors and host selection.
-- [Sources and providers](docs/user/sources-and-providers.md): collections, batches and optional remote work.
-- [Integration and format](docs/user/integration.md), or [the manual index](docs/user/README.md).
+   > Use llm-wiki and my default wiki. Capture my notes from
+   > /absolute/path/to/Notes/project, then summarize the project decisions with citations.
+   > Tell me which questions the notes leave unanswered.
 
-Context assembles evidence; it does not generate an answer. A citation identifies
-exact captured bytes and their revision, while you still assess whether they
-support the claim. Bounded results can omit needed facts. Ordinary notes remain
-editable originals; captured revisions remain immutable.
+Replace the example notes path with your own. Setup prints your wiki path and the
+next steps. Your original notes stay editable; their captured copies give the
+agent text it can cite.
 
-## Availability and support
+[Getting started](docs/user/getting-started.md) explains each step and how to
+check the result. You can also [use lwiki directly](docs/user/everyday-use.md)
+from the terminal.
 
-This checkout implements the v0.3.0 workflow while local, installed-product and
-release qualification remain in progress. It does not establish a published
-v0.3.0 download or installer. Use the [installation guide](docs/user/install.md)
-for download and build instructions and [qualification status](docs/developer/validation-status.md)
-for the remaining release checks. macOS distribution is intentionally unsigned; Windows vault writes
-remain unsupported.
+## Find the instructions you need
 
-The project uses the [MIT license](LICENSE). Report reproducible issues through
-[GitHub Issues](https://github.com/joshgarnett/rust-llm-wiki/issues), including
-`lwiki --version`, OS, command, expected behavior and redacted errors. Keep private
-notes, provider secrets and accounting receipts out of public issue attachments.
-There is no promised response time.
+- [Everyday use](docs/user/everyday-use.md): choose a wiki, capture updated notes,
+  and create or edit a page.
+- [Search and citations](docs/user/retrieval.md): find evidence and read the
+  passages behind an answer.
+- [Sources and providers](docs/user/sources-and-providers.md): import a collection
+  or configure search by meaning.
+- [Agent integration and files](docs/user/integration.md): connect another agent
+  or understand what is in your wiki.
+- [Troubleshooting and backups](docs/user/recovery.md).
+- [User manual](docs/user/README.md).
 
-## Contribute
+## Support and contributions
 
-[Developer documentation](docs/developer/README.md) routes current contracts,
-build commands, architecture decisions and reproducible evaluation protocols.
-Development uses disposable vaults and mock providers. Local tests, native
-recovery, live interoperability, retrieval completeness and final release bytes
-have separate acceptance boundaries; none substitutes for another.
+The project uses the [MIT license](LICENSE). Report problems through
+[GitHub Issues](https://github.com/joshgarnett/rust-llm-wiki/issues). Include your
+`lwiki --version`, operating system, command, expected result and error message.
+Remove private notes and credentials from anything you attach.
+
+[Developer documentation](docs/developer/README.md) covers building, testing,
+contributing and the design.

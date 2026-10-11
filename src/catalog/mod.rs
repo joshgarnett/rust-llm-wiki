@@ -71,3 +71,7 @@ pub use types::*;
 
 #[cfg(test)]
 mod external_page_acceptance_tests;
+
+pub(crate) mod literal_projection;
+
+pub(crate) mod health;

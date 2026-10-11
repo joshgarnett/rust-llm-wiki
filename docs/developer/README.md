@@ -1,32 +1,43 @@
 # Developer documentation
 
-Use the [current contract map](current-contracts.md) to find an implementation
-contract and relevant tests. It describes current behavior; local execution state
-and raw experiment logs are intentionally outside the published documentation.
+Build and test lwiki with disposable wikis, then use the contracts to understand
+how a change affects files, citations and recovery. Start with the
+[build guide](builds.md) and the [current contract map](current-contracts.md).
 
-| Area | Entry point |
+| Work | Reference |
 | --- | --- |
-| Build and validate a native candidate | [Builds](builds.md) and [build checkpoints](build-checkpoints.md) |
-| Public interfaces and durable invariants | [Contracts](contracts/README.md) |
-| Architectural rationale and measured limits | [Design decisions](design-decisions.md) and [large-vault design](large-vault-design.md) |
-| Current qualification boundary | [Validation status](validation-status.md) and [external qualification](qualification.md) |
-| Independent usability/quality acceptance | [Critic workflow](testing-usability.md) |
-| Context sufficiency and honest holdouts | [Context evaluation](evaluating-context.md) and [quality targets](rag-quality-targets.md) |
-| Dataset provenance/adapters | [Dataset reference](eval-datasets-quick-reference.md), [acquisition](eval-datasets.md), [ConditionalQA](evaluating-conditionalqa.md), [ContractNLI](evaluating-contractnli.md) |
-| Resource and capacity protocols | [Large-vault testing](testing-large-vaults.md), [full-check benchmark](benchmark-full-check.md), [query limits](query-limits.md) |
-| Remote contracts | [Embeddings](embeddings.md) and [providers/jobs](contracts/providers-jobs.md) |
-| Graph authority | [Knowledge graph](knowledge-graph.md) and [record schemas](contracts/record-schemas.md) |
-| Agent implementation collaboration | [Agent workflow](agent-workflow/README.md) |
+| Build and run checks | [Builds](builds.md) and [build checkpoints](build-checkpoints.md) |
+| Implement a command or change durable storage | [Contracts](contracts/README.md) |
+| Understand design choices | [Design decisions](design-decisions.md) and [large-vault design](large-vault-design.md) |
+| Choose validation and qualify a release | [Validation and limits](validation-status.md) and [external qualification](qualification.md) |
+| Review a user's complete task independently | [Critic workflow](testing-usability.md) |
+| Evaluate context and answer completeness | [Context evaluation](evaluating-context.md) and [quality targets](rag-quality-targets.md) |
+| Acquire and adapt evaluation data | [Dataset reference](eval-datasets-quick-reference.md), [acquisition](eval-datasets.md), [ConditionalQA](evaluating-conditionalqa.md) and [ContractNLI](evaluating-contractnli.md) |
+| Measure capacity and resources | [Large-vault testing](testing-large-vaults.md), [full-check benchmark](benchmark-full-check.md) and [query limits](query-limits.md) |
+| Work on remote calls and accounting | [Embeddings](embeddings.md) and [providers/jobs](contracts/providers-jobs.md) |
+| Work on reviewed facts and graph data | [Knowledge graph](knowledge-graph.md) and [record schemas](contracts/record-schemas.md) |
+| Coordinate implementation agents | [Agent workflow](agent-workflow/README.md) |
 
-Historical run diaries remain in Git history. Ongoing plans, checkpoints, raw logs
-and per-attempt reviews live locally under ignored `.work/<task>/` or existing
-ignored evidence locations. Promote stable implemented findings here; do not
-publish a diary archive or require ignored artifacts to understand the contracts.
+## Maintain documentation
 
-The [documentation policy](documentation-policy.json) records the reviewed purpose
-and classification of each published document. Review both content and purpose
-when changing that inventory. Run `python3 scripts/check_docs.py` to check visible
-paths, fresh-clone links/anchors, structural diary signals and prose punctuation.
-`python3 scripts/test_check_docs.py` verifies those checks on disposable fixtures.
-Writing guidance is maintained in [AGENTS.md](../../AGENTS.md#writing-guidelines).
-Code and quoted evidence remain exact; grammar and clarity still need human review.
+Write user guides around the reader's task. A reader should be able to install
+lwiki, create a lasting wiki, connect an agent and use their own notes without
+consulting developer references. Follow [the writing guidelines](../../AGENTS.md#writing-guidelines)
+and have an independent reviewer follow the main task before accepting a change.
+
+Keep reusable instructions, contracts, decisions and established limits tracked.
+Put working plans, checkpoints, raw logs, reviews and unfinished checks under
+ignored `.work/<task>/`. Promote useful conclusions into the relevant reference
+instead of publishing a worklog.
+
+The [documentation policy](documentation-policy.json) records each published
+file's reader and purpose. Update it when adding or moving a document. Run:
+
+```sh
+python3 scripts/check_docs.py
+python3 scripts/test_check_docs.py
+```
+
+These checks catch inventory errors, broken local links and anchors, diary
+patterns and punctuation issues. They do not establish that the instructions
+are complete, natural or useful; task-based review does that.

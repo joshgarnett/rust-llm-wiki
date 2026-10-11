@@ -1,9 +1,9 @@
 # Design decisions and tradeoffs
 
-These are maintained implementation decisions extracted from the original proposals,
-execution decisions and measured failures. Historical diaries remain in Git history;
-[contracts](contracts/README.md) specify authority and [validation status](validation-status.md)
-records the current qualification boundary.
+Use these decisions to understand the storage and retrieval tradeoffs.
+[Contracts](contracts/README.md) specify implementation requirements;
+[validation and limits](validation-status.md) explains which checks support each
+kind of claim.
 
 ## Markdown knowledge and rebuildable indexes
 
@@ -37,8 +37,13 @@ that stronger input/allocation invariants cannot prevent.
 Initialization preflights every reserved name before writer acquisition or directory
 creation. It refuses existing hidden state, files, even empty managed directories and
 portable aliases; deliberate existing-folder intent permits ordinary author material
-and editor settings. The marker commits last. Init and default registration remain
-separate durable outcomes, and arbitrary I/O failure does not imply whole-tree rollback.
+and editor settings. A new wiki is prepared in a unique sibling folder and published
+without replacing an existing destination. In an existing author folder, a complete,
+synced marker is published before working directories, so ordinary commands can
+finish creating those directories after interruption. Failed setup reports retained
+paths and can be retried with the same choices. Unknown temporary files are preserved.
+Init and default registration remain separate durable outcomes; an I/O failure does
+not imply whole-tree rollback.
 
 ## Selection and configuration authority
 

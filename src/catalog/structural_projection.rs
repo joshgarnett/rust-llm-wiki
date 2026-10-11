@@ -244,7 +244,7 @@ pub(super) fn recompute(
         }
         let relevant = match replacement.kind {
             PolicyKind::Remap => crate::graph::remap::relevant_decision_ids(&notes),
-            PolicyKind::Review => crate::graph::review::relevant_decision_ids(&notes),
+            PolicyKind::Review => crate::graph::review::relevant_decision_ids(&notes)?,
         };
         seeds.extend(relevant);
         let prior_outputs = work.reader.policy_output_rows(replacement.kind)?;
@@ -391,7 +391,7 @@ pub(super) fn recompute(
         if let PolicyState::Failed(error) = &policy_boundary.states[&kind] {
             let relevant = match kind {
                 PolicyKind::Remap => crate::graph::remap::relevant_decision_ids(&notes),
-                PolicyKind::Review => crate::graph::review::relevant_decision_ids(&notes),
+                PolicyKind::Review => crate::graph::review::relevant_decision_ids(&notes)?,
             };
             for id in relevant {
                 if let Some(row) = rows.get_mut(&id) {

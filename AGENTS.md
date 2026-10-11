@@ -2,15 +2,15 @@
 
 This repository implements a Rust CLI, provisionally `lwiki`, for a local Markdown wiki. Implementation contracts live in the [developer reference](docs/developer/contracts/README.md). Follow the [agent workflow](docs/developer/agent-workflow/README.md) for implementation tasks.
 
-The original M0–M4 run assigned orchestration and implementation to `gpt-6-sol`. For subsequent work, prefer `gpt-6.1-sol` for bounded implementation, research and test work; use `gpt-6-astra` for architectural challenges, difficult storage/accounting invariants and independent review. The user explicitly authorizes this delegation. Follow current user model preferences and available session capabilities. Model settings belong to the session/harness; a Markdown instruction cannot change the running root model.
+Prefer `gpt-6.1-sol` for bounded implementation, research and test work; use `gpt-6-astra` for architectural challenges, difficult storage/accounting invariants and independent review. The user explicitly authorizes this delegation. Follow current user model preferences and available session capabilities. Model settings belong to the session/harness; a Markdown instruction cannot change the running root model.
 
-On implementation startup/resume, read the execution playbook and the local `docs/execution/STATE.md` checkpoint if present, then only the selected work package and its linked contracts. A fresh checkout has no session checkpoint: inspect Git and the [current contract map](docs/developer/current-contracts.md), then create local state for the authorized task. Do not load all research or previous conversations. For a small unrelated edit, read only relevant guidance.
+On implementation startup/resume, read the agent workflow and the current task's local `.work/<task>/STATE.md` checkpoint if present, then only the selected work package and its linked contracts. Older checkpoints may remain under ignored execution paths. A fresh checkout has no session checkpoint: inspect Git and the [current contract map](docs/developer/current-contracts.md), then create local state for the authorized task. Do not load all research or previous conversations. For a small unrelated edit, read only relevant guidance.
 
 The orchestrator owns shared interfaces, Cargo files, CLI registry, schemas, commits, and execution state. Workers edit only leased paths and their assigned report. No nested delegation unless the orchestrator grants it. Local tests use disposable fixture vaults and mock providers, with no production access.
 
 Keep canonical knowledge in Markdown, indexes rebuildable, source revisions immutable, headings independent of identity, and model-derived assertions traceable to evidence. Semantic embeddings are remote API calls; local models and required external database services are out of scope. Preserve the technical designs' freshness, recovery, offline/dry-run, and budget contracts.
 
-During an authorized implementation goal, continue through M0–M4 without routine confirmation. Use the reversible defaults and decision log in [DECISIONS.md](docs/developer/agent-workflow/DECISIONS.md); defer external credentials, live-host qualification, unavailable-platform checks, naming, licensing, and publishing decisions. Deferral does not waive core implementation or local correctness tests. Preserve user edits and obey platform permissions. Stop only when no safe in-scope work remains, or an explicit user/system limit requires it.
+During an authorized implementation goal, complete the user's task without routine confirmation. Use the reversible defaults and decision procedure in [DECISIONS.md](docs/developer/agent-workflow/DECISIONS.md). Follow existing user decisions and authorization for external access, licensing and release work; ask only for unresolved consequential choices or real blockers. An unavailable platform does not waive required checks. Preserve user edits and obey platform permissions. Stop only when no safe in-scope work remains, or an explicit user/system limit requires it.
 
 Update the execution state after integration, before compaction, and before stopping. Report actual checks and their limits. Never claim a mock demonstrates live-provider compatibility or a cross-build demonstrates native crash safety.
 
@@ -37,6 +37,11 @@ rules also apply to help text, setup prompts, errors and completion messages.
 - Keep storage internals, evaluation protocols, implementation history, review
   scores and release checklists in developer documentation. Do not make readers
   understand those details before they can use the tool.
+- Keep implementation progress, unfinished release checks and descriptions of
+  what "this checkout" currently implements in ignored `.work` files. This rule
+  applies to developer docs too. Developer docs explain how to build, test,
+  contribute or understand the design; they are not a worklog. A README names a
+  version only when the reader needs it to choose or run something.
 - State a limitation where it changes the reader's decision or next step. Say
   what is unavailable, what happens and what they can do. Avoid abstract phrases
   such as "availability boundary", "qualification gate" or "evidence contract"

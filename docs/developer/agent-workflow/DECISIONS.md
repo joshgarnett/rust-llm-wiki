@@ -30,7 +30,7 @@ reusable decision procedure; a local task records temporary choices and evidence
 | Selected dependency proof plus explicit global reconciliation | Generation-scoped discovery cannot claim global freshness or corpus absence. |
 | One identity-pinned user default | Resolve explicit/nearest/default once; no registry or silent wrong-target fallback. |
 | One bounded private preferences snapshot | Explicit replacement/bypass, guarded v1→v2 writes and exact backup; no provider permission grant. |
-| Strict existing-folder initialization | Every reserved name absent before writes, ordinary author/editor files untouched, marker last, no hidden-state adoption. |
+| Strict existing-folder initialization | Every reserved name absent before writes, ordinary author/editor files untouched, complete marker before managed state, no hidden-state adoption. |
 | Narrow literal note editing | Exact existing-target whole-file guard, no canonical allocation, immutable/control exclusions; malformed identity needs known bytes. |
 | Output envelope v2 | Selection metadata changes the published closed v1 shape; retain v1 for older output. |
 | Bounded grouped maintenance and compact embedding descriptors | Reduce repeated work without discarding per-owner history, supplier authority or invocation-wide budgets. |

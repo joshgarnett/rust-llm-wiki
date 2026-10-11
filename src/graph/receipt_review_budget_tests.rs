@@ -151,3 +151,40 @@ fn review_receipt_exhaustion_never_becomes_a_cached_semantic_failure() {
         );
     }
 }
+
+#[test]
+fn ordinary_review_fences_stay_opaque_beside_an_authenticated_decision() {
+    let (mut notes, _) = fixture();
+    let expected = receipts(&notes).unwrap();
+    for (name, header) in [
+        ("plain", ""),
+        ("properties", "---\nauthor: me\n---\n"),
+        ("malformed_author", "---\nauthor: [\n---\n"),
+    ] {
+        let bytes = format!("{header}# Receipt example\n```{GRAPH_REVIEW_FENCE}\nnot JSON\n```\n");
+        let note = parse_note(bytes.as_bytes());
+        assert!(has_fence(&note));
+        assert!(!is_receipt_candidate(&note).unwrap());
+        assert!(
+            crate::graph::policy_inputs::policy_membership_keys(
+                &path(&format!("{name}.md")),
+                &note
+            )
+            .unwrap()
+            .is_empty()
+        );
+        notes.insert(path(&format!("{name}.md")), note);
+    }
+    assert_eq!(receipts(&notes).unwrap(), expected);
+    verify_review_policy(&notes).unwrap();
+    for normalized in [false, true] {
+        evaluate(&notes, normalized).unwrap();
+    }
+    let malformed = parse_note(
+        format!("---\nwiki_id: broken\ntitle: [\n---\n```{GRAPH_REVIEW_FENCE}\nnot JSON\n```\n")
+            .as_bytes(),
+    );
+    assert!(is_receipt_candidate(&malformed).unwrap());
+    notes.insert(path("malformed_adopted.md"), malformed);
+    assert!(receipts(&notes).is_err());
+}

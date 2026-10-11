@@ -1,9 +1,8 @@
 # Current contracts
 
-This map routes implemented surfaces to maintained contracts and regression tests.
-The v0.3.0 integration is undergoing qualification; it is not a release acceptance
-record. Use the running binary's `capabilities`, `schema NAME` and command help
-for exact syntax. See [validation status](validation-status.md) for measured limits.
+Use this map to find the contract and regression tests for a behavior. The
+running binary's `capabilities`, `schema NAME` and command help give exact syntax.
+See [validation and limits](validation-status.md) when choosing checks.
 
 ## Select, capture, edit and resume
 
@@ -11,7 +10,7 @@ for exact syntax. See [validation status](validation-status.md) for measured lim
 | --- | --- | --- |
 | Wiki selection | Explicit root, nearest ancestor, then identity-pinned default; no invalid-target fallback. [Selection](../user/everyday-use.md#choose-the-wiki), [CLI](contracts/cli-and-skills.md) | `src/config/local.rs`, `src/vault/discovery.rs`, offline CLI/config tests |
 | Initialization | Intentional `--existing`, all reserved names absent, collision preflight before writes, authored landing preserved by sync. [Getting started](../user/getting-started.md) | `src/app/init_tests.rs`, `tests/offline_application.rs` |
-| Preferences | One bounded private snapshot; explicit replacement/bypass; v1 read preservation and guarded v2 migration. Preferences cannot grant provider authority. [CLI](contracts/cli-and-skills.md) | `src/config/local.rs`, `src/config/local_io.rs` |
+| Preferences | One bounded private snapshot; TOML schema3 settings, legacy JSON read compatibility and guarded explicit migration with a backup. Preferences cannot grant provider authority. [CLI](contracts/cli-and-skills.md) | `src/config/local.rs`, `src/config/local_io.rs` |
 | Literal inspection/edit | Physical whole-file byte coordinates and hash; guarded existing-note change with exact retained before/proposed bytes. Valid Page edits preserve IDs; immutable/control targets refuse. [Editing](../user/everyday-use.md#inspect-and-edit-exact-bytes) | `src/app/literal.rs`, changes lifecycle/recovery tests |
 | Sources | Explicit capture retains original input; path refresh binds unique Source and one expected-hash input observation; old revisions stay immutable. [Storage](contracts/storage.md), [tutorial](../user/everyday-use.md#capture-and-refresh-notes) | `src/sources/path_refresh.rs`, `tests/sources_evidence.rs`, Source refresh/import tests |
 | Pages | Named Page init allocates an ID once; existing destinations refuse. Guarded put/batch and moves preserve identity and provenance. [Reorganization](../user/everyday-use.md#create-edit-and-move-a-page) | Page citations/rename/lifecycle tests, `tests/offline_application.rs` |

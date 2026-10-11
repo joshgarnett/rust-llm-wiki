@@ -611,7 +611,7 @@ impl RetainedDelta {
             }
             expected_documents.insert(
                 source_path.clone(),
-                row_projection::canonical_document(&source_path, &after, Some(source)),
+                row_projection::canonical_document(&source_path, &after, Some(source))?,
             );
             expected_paths.insert(source_path);
             if !target.reused {
@@ -654,7 +654,7 @@ impl RetainedDelta {
                 authenticated_revisions.insert(target.revision_id.clone());
                 expected_documents.insert(
                     revision_path.clone(),
-                    row_projection::canonical_document(&revision_path, &revision_note, Some(row)),
+                    row_projection::canonical_document(&revision_path, &revision_note, Some(row))?,
                 );
                 expected_paths.insert(revision_path);
                 for field in ["wiki_original_path", "wiki_content_path"] {
@@ -1042,8 +1042,11 @@ impl RetainedDelta {
                         .and_then(|op| op.proposed.as_deref())
                         .ok_or_else(|| recovery("job row payload absent"))?;
                     let parsed = crate::records::parse_note(bytes);
-                    let document =
-                        super::row_projection::canonical_document(&record.path, &parsed, Some(row));
+                    let document = super::row_projection::canonical_document(
+                        &record.path,
+                        &parsed,
+                        Some(row),
+                    )?;
                     if row.path != record.path || parsed.canonical.as_ref() != Some(&row.record)
                         || !self.rows.documents.iter().any(|d| matches!(d,
                             super::normalized_delta::DocumentMutation::Put { row } if row == &document))
@@ -1062,6 +1065,16 @@ impl RetainedDelta {
                 {
                     return Err(recovery("job publication leaks assets or bookkeeping into document evidence"));
                 }
+            }
+            IndexedWriteOperation::LiteralEdit { path } => {
+                super::literal_projection::require_retained_literal(
+                    path,
+                    manifest,
+                    engine,
+                    &self.rows,
+                    &self.before,
+                    &self.after,
+                )?;
             }
             IndexedWriteOperation::PageBatch { pages } => {
                 for page in pages {
@@ -1377,6 +1390,17 @@ impl RetainedDelta {
         }
         self.rows.validate()?;
         self.require_operation_rows(&manifest, engine)?;
+        if let Some(IndexedWriteOperation::LiteralEdit { path }) = &self.operation {
+            let reader = catalog.cached_query_snapshot(QueryReadLimits::default())?;
+            if QueryCatalog::snapshot(&reader) != &proof.base
+                && QueryCatalog::snapshot(&reader) != &proof.intended
+            {
+                return Err(recovery(
+                    "literal replay requires its exact base or intended publication",
+                ));
+            }
+            super::literal_projection::require_literal_navigation(path, &self.rows, &reader)?;
+        }
         if self.rows.owners != engine.manifest_revision_owners(&proof.change)? {
             return Err(recovery(
                 "refresh delta owners differ from exact manifest roots",
@@ -1385,6 +1409,7 @@ impl RetainedDelta {
         match &self.operation {
             Some(
                 IndexedWriteOperation::PageBatch { .. }
+                | IndexedWriteOperation::LiteralEdit { .. }
                 | IndexedWriteOperation::JobBatch { .. }
                 | IndexedWriteOperation::PageRename { .. }
                 | IndexedWriteOperation::SourceWithdraw { .. },

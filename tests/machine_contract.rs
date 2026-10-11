@@ -41,7 +41,7 @@ fn validator(text: &str) -> jsonschema::Validator {
 
 #[test]
 fn output_envelope_matches_published_schema() {
-    let schema = validator(include_str!("../schemas/output-v1.json"));
+    let schema = validator(include_str!("../schemas/output-v2.json"));
     for envelope in [
         Envelope::success("search", json!({"hits": [], "next_cursor": null})),
         Envelope::failure("search", "USAGE", "Invalid option".into()),
@@ -65,7 +65,7 @@ fn capabilities_only_implemented_commands() {
     assert!(output.status.success());
     assert!(output.stderr.is_empty());
     let envelope: Value = serde_json::from_slice(&output.stdout).unwrap();
-    validator(include_str!("../schemas/output-v1.json"))
+    validator(include_str!("../schemas/output-v2.json"))
         .validate(&envelope)
         .unwrap();
     assert_eq!(
@@ -212,7 +212,7 @@ fn invalid_utf8_arguments_return_clean_usage_envelope() {
     assert!(output.stderr.is_empty());
     let envelope: Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(envelope["error"]["code"], "USAGE");
-    validator(include_str!("../schemas/output-v1.json"))
+    validator(include_str!("../schemas/output-v2.json"))
         .validate(&envelope)
         .unwrap();
 }

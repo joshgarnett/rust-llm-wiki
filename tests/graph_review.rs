@@ -1646,7 +1646,9 @@ fn malformed_encoded_and_deleted_canonical_review_fences_keep_capture_bounds() {
             parse_note(&bytes),
         );
         assert!(
-            relevant_decision_ids(&policy_notes).contains(&id("receipt_wrong_kind")),
+            relevant_decision_ids(&policy_notes)
+                .unwrap()
+                .contains(&id("receipt_wrong_kind")),
             "{info}"
         );
         assert_eq!(

@@ -1,5 +1,6 @@
 //! Library operations shared by CLI and agent adapters.
 pub mod extraction;
+mod init_recovery;
 pub mod offline;
 pub mod resolution;
 pub mod types;
@@ -66,3 +67,9 @@ pub(crate) mod source_relation_prepare;
 pub(crate) mod source_relation_quote;
 #[cfg(test)]
 mod source_relation_workflow_tests;
+
+#[cfg(test)]
+mod init_tests;
+
+pub mod literal;
+mod path_refresh;

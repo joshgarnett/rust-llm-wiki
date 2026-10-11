@@ -31,7 +31,7 @@ fn component(name: &str) -> Result<()> {
     Ok(())
 }
 #[derive(Clone, Copy)]
-enum Event {
+pub(crate) enum Event {
     DirectoryCreate,
     FileCreate,
     VerifyEnumeration,
@@ -40,7 +40,7 @@ enum Event {
 #[cfg(test)]
 type EventCallback = Box<dyn FnMut(Event, &Path)>;
 #[derive(Default)]
-struct Events {
+pub(crate) struct Events {
     #[cfg(test)]
     callback: Option<EventCallback>,
 }
@@ -56,12 +56,12 @@ impl Events {
 }
 
 /// A missing suffix is planned under its last held ancestor, never re-resolved later.
-struct Location {
-    held: filesystem::Directory,
-    missing: Vec<String>,
+pub(crate) struct Location {
+    pub(crate) held: filesystem::Directory,
+    pub(crate) missing: Vec<String>,
 }
 impl Location {
-    fn append(&self, relative: &str) -> Result<Self> {
+    pub(crate) fn append(&self, relative: &str) -> Result<Self> {
         let mut held = self.held.clone();
         let mut missing = self.missing.clone();
         for name in relative.split('/') {
@@ -78,7 +78,7 @@ impl Location {
         held.verify_binding()?;
         Ok(Self { held, missing })
     }
-    fn materialize(
+    pub(crate) fn materialize(
         mut self,
         created: &mut Vec<String>,
         events: &mut Events,
@@ -124,7 +124,7 @@ fn command_reference() -> Result<Vec<u8>> {
         + "\n";
     Ok(text.into_bytes())
 }
-fn package(target: &str) -> Result<BTreeMap<String, Vec<u8>>> {
+pub(crate) fn package(target: &str) -> Result<BTreeMap<String, Vec<u8>>> {
     let mut files: BTreeMap<String, Vec<u8>> = BTreeMap::from([
         (
             "SKILL.md".into(),
@@ -349,7 +349,7 @@ fn export_with_events(
 }
 
 #[cfg(any(target_os = "macos", target_os = "linux"))]
-mod filesystem {
+pub(crate) mod filesystem {
     use super::*;
     use std::{
         ffi::{CStr, CString},
@@ -363,13 +363,41 @@ mod filesystem {
     };
 
     #[derive(Clone)]
-    pub(super) struct Directory(Arc<Held>);
-    pub(super) struct FileGuard {
+    pub(crate) struct Directory(Arc<Held>);
+    pub(crate) struct FileGuard {
         file: File,
         parent: Directory,
         name: CString,
         path: PathBuf,
         stamp: (u64, i64, i64, i64, i64),
+    }
+    #[derive(Clone)]
+    pub(crate) struct LinkGuard {
+        parent: Directory,
+        name: String,
+        target: PathBuf,
+        identity: (u64, u64),
+    }
+    pub(crate) struct DirectoryLock(Directory);
+    impl Drop for DirectoryLock {
+        fn drop(&mut self) {
+            unsafe { libc::flock(self.0.0.file.as_raw_fd(), libc::LOCK_UN) };
+        }
+    }
+    impl LinkGuard {
+        pub(crate) fn target(&self) -> &Path {
+            &self.target
+        }
+        pub(crate) fn identity(&self) -> (u64, u64) {
+            self.identity
+        }
+        pub(crate) fn verify_binding(&self) -> Result<()> {
+            let current = self.parent.read_link(&self.name)?;
+            if !current.is_some_and(|v| v.identity == self.identity && v.target == self.target) {
+                return Err(changed(&self.parent.path().join(&self.name)));
+            }
+            Ok(())
+        }
     }
     fn stamp(file: &File) -> std::io::Result<(u64, i64, i64, i64, i64)> {
         let m = file.metadata()?;
@@ -382,7 +410,11 @@ mod filesystem {
         ))
     }
     impl FileGuard {
-        pub(super) fn verify_binding(&self) -> Result<()> {
+        pub(crate) fn identity(&self) -> Result<(u64, u64)> {
+            let metadata = self.file.metadata().map_err(|e| io_error(&self.path, e))?;
+            Ok((metadata.dev(), metadata.ino()))
+        }
+        pub(crate) fn verify_binding(&self) -> Result<()> {
             self.parent.verify_binding()?;
             let current = stat(&self.parent, &self.name)?.ok_or_else(|| changed(&self.path))?;
             if !current.regular()
@@ -504,7 +536,7 @@ mod filesystem {
         value.verify_binding()?;
         Ok(value)
     }
-    pub(super) fn acquire(output: &Path) -> Result<Location> {
+    pub(crate) fn acquire(output: &Path) -> Result<Location> {
         if output
             .components()
             .any(|c| matches!(c, Component::ParentDir))
@@ -572,10 +604,193 @@ mod filesystem {
         Ok(location)
     }
     impl Directory {
-        pub(super) fn path(&self) -> &Path {
+        pub(crate) fn identity(&self) -> (u64, u64) {
+            (self.0.dev, self.0.ino)
+        }
+        pub(crate) fn remove_file(&self, child: &str, guard: &FileGuard) -> Result<()> {
+            self.verify_binding()?;
+            guard.verify_binding()?;
+            let component = name(child)?;
+            let current =
+                stat(self, &component)?.ok_or_else(|| changed(&self.path().join(child)))?;
+            if !current.regular() || (current.dev, current.ino) != guard.identity()? {
+                return Err(changed(&self.path().join(child)));
+            }
+            if unsafe { libc::unlinkat(self.0.file.as_raw_fd(), component.as_ptr(), 0) } != 0 {
+                return Err(io_error(self.path(), std::io::Error::last_os_error()));
+            }
+            self.sync()
+        }
+        pub(crate) fn remove_link(&self, child: &str, guard: &LinkGuard) -> Result<()> {
+            self.verify_binding()?;
+            guard.verify_binding()?;
+            let component = name(child)?;
+            let current =
+                stat(self, &component)?.ok_or_else(|| changed(&self.path().join(child)))?;
+            if current.mode & libc::S_IFMT != libc::S_IFLNK
+                || (current.dev, current.ino) != guard.identity()
+            {
+                return Err(changed(&self.path().join(child)));
+            }
+            if unsafe { libc::unlinkat(self.0.file.as_raw_fd(), component.as_ptr(), 0) } != 0 {
+                return Err(io_error(self.path(), std::io::Error::last_os_error()));
+            }
+            self.sync()
+        }
+        pub(crate) fn remove_directory(&self, child: &str, guard: &Directory) -> Result<()> {
+            self.verify_binding()?;
+            guard.verify_binding()?;
+            let component = name(child)?;
+            let current =
+                stat(self, &component)?.ok_or_else(|| changed(&self.path().join(child)))?;
+            if !current.directory() || (current.dev, current.ino) != guard.identity() {
+                return Err(changed(&self.path().join(child)));
+            }
+            if unsafe {
+                libc::unlinkat(
+                    self.0.file.as_raw_fd(),
+                    component.as_ptr(),
+                    libc::AT_REMOVEDIR,
+                )
+            } != 0
+            {
+                return Err(conflict(format!(
+                    "owned skill directory is not empty or changed: {}",
+                    self.path().join(child).display()
+                )));
+            }
+            self.sync()
+        }
+        pub(crate) fn lock(&self) -> Result<DirectoryLock> {
+            self.verify_binding()?;
+            if unsafe { libc::flock(self.0.file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
+                return Err(WikiError::new(
+                    ErrorCode::LockTimeout,
+                    "another skill installation is running",
+                ));
+            }
+            Ok(DirectoryLock(self.clone()))
+        }
+        pub(crate) fn sync(&self) -> Result<()> {
+            self.verify_binding()?;
+            self.0
+                .file
+                .sync_all()
+                .map_err(|e| io_error(self.path(), e))?;
+            self.verify_binding()
+        }
+        pub(crate) fn file_size(&self, child: &str, maximum: usize) -> Result<Option<usize>> {
+            self.verify_binding()?;
+            let Some(entry) = stat(self, &name(child)?)? else {
+                return Ok(None);
+            };
+            if !entry.regular() || entry.size > maximum as u64 {
+                return Err(conflict("skill file must be a bounded regular file"));
+            }
+            Ok(Some(entry.size as usize))
+        }
+        pub(crate) fn read_link(&self, child: &str) -> Result<Option<LinkGuard>> {
+            self.verify_binding()?;
+            let component = name(child)?;
+            let Some(before) = stat(self, &component)? else {
+                return Ok(None);
+            };
+            if before.mode & libc::S_IFMT != libc::S_IFLNK {
+                return Err(conflict(format!(
+                    "skill discovery path is not an owned link: {}",
+                    self.path().join(child).display()
+                )));
+            }
+            let mut buffer = vec![0u8; 4097];
+            let length = unsafe {
+                libc::readlinkat(
+                    self.0.file.as_raw_fd(),
+                    component.as_ptr(),
+                    buffer.as_mut_ptr().cast(),
+                    buffer.len(),
+                )
+            };
+            if length < 0 {
+                return Err(io_error(self.path(), std::io::Error::last_os_error()));
+            }
+            if length as usize >= buffer.len() {
+                return Err(conflict("skill link target is too long"));
+            }
+            buffer.truncate(length as usize);
+            let target = PathBuf::from(
+                String::from_utf8(buffer)
+                    .map_err(|_| conflict("skill link target is not UTF-8"))?,
+            );
+            let after = stat(self, &component)?.ok_or_else(|| changed(&self.path().join(child)))?;
+            if after.dev != before.dev || after.ino != before.ino || after.mode != before.mode {
+                return Err(changed(&self.path().join(child)));
+            }
+            self.verify_binding()?;
+            Ok(Some(LinkGuard {
+                parent: self.clone(),
+                name: child.into(),
+                target,
+                identity: (before.dev, before.ino),
+            }))
+        }
+        pub(crate) fn symlink_new(
+            &self,
+            child: &str,
+            target: &Path,
+            created: &mut Vec<String>,
+        ) -> Result<LinkGuard> {
+            use std::os::unix::ffi::OsStrExt;
+            self.verify_binding()?;
+            let component = name(child)?;
+            let target = CString::new(target.as_os_str().as_bytes())
+                .map_err(|_| conflict("NUL in skill link target"))?;
+            if unsafe {
+                libc::symlinkat(target.as_ptr(), self.0.file.as_raw_fd(), component.as_ptr())
+            } != 0
+            {
+                return Err(conflict(format!(
+                    "could not create skill link {}: {}",
+                    self.path().join(child).display(),
+                    std::io::Error::last_os_error()
+                )));
+            }
+            created.push(self.path().join(child).display().to_string());
+            self.sync()?;
+            self.read_link(child)?
+                .ok_or_else(|| changed(&self.path().join(child)))
+        }
+        /// Retain the source under an unused name; never overwrite a concurrent destination.
+        pub(crate) fn move_new(
+            &self,
+            source: &str,
+            destination: &Directory,
+            child: &str,
+        ) -> Result<()> {
+            self.verify_binding()?;
+            destination.verify_binding()?;
+            let source_name = name(source)?;
+            let target_name = name(child)?;
+            rename(self, &source_name, destination, &target_name, false)?;
+            self.sync()?;
+            destination.sync()
+        }
+        /// Atomic exchange preserves the displaced object, even if a concurrent writer substitutes it.
+        pub(crate) fn exchange(
+            &self,
+            source: &str,
+            destination: &Directory,
+            child: &str,
+        ) -> Result<()> {
+            self.verify_binding()?;
+            destination.verify_binding()?;
+            rename(self, &name(source)?, destination, &name(child)?, true)?;
+            self.sync()?;
+            destination.sync()
+        }
+        pub(crate) fn path(&self) -> &Path {
             &self.0.path
         }
-        pub(super) fn verify_binding(&self) -> Result<()> {
+        pub(crate) fn verify_binding(&self) -> Result<()> {
             let mut next = Some(self);
             while let Some(dir) = next {
                 let m = dir.0.file.metadata().map_err(|e| io_error(dir.path(), e))?;
@@ -595,7 +810,7 @@ mod filesystem {
             }
             Ok(())
         }
-        pub(super) fn child(&self, child: &str) -> Result<Option<Self>> {
+        pub(crate) fn child(&self, child: &str) -> Result<Option<Self>> {
             self.verify_binding()?;
             let name = name(child)?;
             let Some(before) = stat(self, &name)? else {
@@ -619,7 +834,7 @@ mod filesystem {
                 Some(name),
             )?))
         }
-        pub(super) fn create_directory(
+        pub(crate) fn create_directory(
             &self,
             child: &str,
             created: &mut Vec<String>,
@@ -642,7 +857,7 @@ mod filesystem {
             self.verify_binding()?;
             self.child(child)?.ok_or_else(|| changed(&path))
         }
-        pub(super) fn write_new(
+        pub(crate) fn write_new(
             &self,
             child: &str,
             bytes: &[u8],
@@ -676,7 +891,7 @@ mod filesystem {
             }
             self.verify_binding()
         }
-        pub(super) fn read_file(&self, child: &str, size: usize) -> Result<(Vec<u8>, FileGuard)> {
+        pub(crate) fn read_file(&self, child: &str, size: usize) -> Result<(Vec<u8>, FileGuard)> {
             self.verify_binding()?;
             let name = name(child)?;
             let path = self.path().join(child);
@@ -718,7 +933,7 @@ mod filesystem {
             guard.verify_binding()?;
             Ok((bytes, guard))
         }
-        pub(super) fn entries(&self, limit: usize) -> Result<Vec<String>> {
+        pub(crate) fn entries(&self, limit: usize) -> Result<Vec<String>> {
             self.verify_binding()?;
             // Opening dot on the held fd creates an independent enumeration offset.
             let dot = CString::new(".").expect("literal dot");
@@ -769,6 +984,50 @@ mod filesystem {
             Ok(names)
         }
     }
+    fn rename(
+        source: &Directory,
+        from: &CStr,
+        destination: &Directory,
+        to: &CStr,
+        exchange: bool,
+    ) -> Result<()> {
+        #[cfg(target_os = "linux")]
+        let result = unsafe {
+            libc::renameat2(
+                source.0.file.as_raw_fd(),
+                from.as_ptr(),
+                destination.0.file.as_raw_fd(),
+                to.as_ptr(),
+                if exchange {
+                    libc::RENAME_EXCHANGE
+                } else {
+                    libc::RENAME_NOREPLACE
+                },
+            )
+        };
+        #[cfg(target_os = "macos")]
+        let result = unsafe {
+            libc::renameatx_np(
+                source.0.file.as_raw_fd(),
+                from.as_ptr(),
+                destination.0.file.as_raw_fd(),
+                to.as_ptr(),
+                if exchange {
+                    libc::RENAME_SWAP
+                } else {
+                    libc::RENAME_EXCL
+                },
+            )
+        };
+        if result != 0 {
+            return Err(conflict(format!(
+                "guarded skill publication failed at {}: {}",
+                destination.path().display(),
+                std::io::Error::last_os_error()
+            )));
+        }
+        Ok(())
+    }
     mod errno {
         #[cfg(any(target_os = "macos", target_os = "ios", target_os = "freebsd"))]
         fn pointer() -> *mut libc::c_int {
@@ -790,7 +1049,7 @@ mod filesystem {
 }
 
 #[cfg(windows)]
-mod filesystem {
+pub(crate) mod filesystem {
     use super::*;
     use crate::vault::{
         acl_policy::Protection,
@@ -802,12 +1061,12 @@ mod filesystem {
         sync::Arc,
     };
     #[derive(Clone)]
-    pub(super) struct Directory {
+    pub(crate) struct Directory {
         guard: Arc<DirectoryGuard>,
         path: PathBuf,
         parent: Option<Arc<Directory>>,
     }
-    pub(super) struct FileGuard {
+    pub(crate) struct FileGuard {
         checked: CheckedFile,
         path: PathBuf,
     }
@@ -1049,13 +1308,13 @@ mod filesystem {
 }
 
 #[cfg(not(any(target_os = "macos", target_os = "linux", windows)))]
-mod filesystem {
+pub(crate) mod filesystem {
     use super::*;
     #[derive(Clone)]
-    pub(super) struct Directory {
+    pub(crate) struct Directory {
         path: PathBuf,
     }
-    pub(super) struct FileGuard;
+    pub(crate) struct FileGuard;
     impl FileGuard {
         pub(super) fn verify_binding(&self) -> Result<()> {
             Err(unavailable())

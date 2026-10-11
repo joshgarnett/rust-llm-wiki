@@ -9,7 +9,10 @@ import json
 import os
 from pathlib import Path
 import platform
-import resource
+try:
+    import resource
+except ImportError:
+    resource = None
 import shutil
 import stat
 import sys
@@ -34,6 +37,7 @@ def require(condition, message):
 class PreparationGuard:
     """One cooperative interval for this childless input-preparation process."""
     def __init__(self):
+        require(resource is not None, "bounded corpus preparation requires Unix resource accounting")
         self.started = time.monotonic()
         self.input_cap = INPUT_CAP
         self.output = self.account = None

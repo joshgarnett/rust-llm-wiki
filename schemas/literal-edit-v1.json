@@ -1,0 +1,70 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:lwiki:literal-edit:1",
+  "type": "object",
+  "required": [
+    "version",
+    "edits"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "version": {
+      "const": "lwiki.literal-edit.v1"
+    },
+    "edits": {
+      "type": "array",
+      "maxItems": 128,
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": [
+          "range"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "range": {
+            "type": "object",
+            "required": [
+              "start",
+              "end"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "start": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "end": {
+                "type": "integer",
+                "minimum": 0
+              }
+            }
+          },
+          "replacement": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 255
+            }
+          },
+          "replacement_utf8": {
+            "type": "string"
+          }
+        },
+        "oneOf": [
+          {
+            "required": [
+              "replacement"
+            ]
+          },
+          {
+            "required": [
+              "replacement_utf8"
+            ]
+          }
+        ]
+      }
+    }
+  }
+}

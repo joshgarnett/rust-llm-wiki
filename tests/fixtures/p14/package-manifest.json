@@ -2,10 +2,21 @@
   "checksum_algorithm": "blake3",
   "commands": [
     "capabilities",
+    "setup",
+    "config show",
     "skill export",
+    "skill install",
+    "skill status",
+    "skill update",
+    "skill remove",
     "schema",
     "init",
+    "wiki show",
+    "wiki default set",
+    "wiki default clear",
     "read",
+    "inspect",
+    "edit",
     "page put",
     "page init",
     "page batch",
@@ -59,20 +70,22 @@
     "migrate"
   ],
   "files": {
-    "SKILL.md": "68f12831b49d7f868a58f05878049c68fc5f84e084e5be9622eab8ad4c9c7475",
+    "SKILL.md": "90295e7b61cacb670544c8a4f66db76fc21c7647e9b7b7224c2ea399f7ff136d",
     "agents/openai.yaml": "307ad222dc5d27d563d54b0a0466264fd035378ce2d103bcbf8de4ed2ea1b144",
     "references/cited-page.md": "fefdd62f704817544808d99ee230579fe08badb02f04a98901a6765c81ebd9eb",
-    "references/commands.md": "aa383885a817d5b7569eacd1204bdfc11cbd9cbcde8062571e095906c4a21566",
+    "references/commands.md": "f4d8ac233e357f45ab1b9ade11496ce31e4b82afd75f37c5bd50440aa2ee5b24",
     "references/examples.json": "c9e5471d1b1506317c140e37f051145d5017e6ef077e7350f771468f88eb6d89",
-    "references/workflows.md": "4412dce956ccc44158b1219644b460a98349356ab70dbf9f9b4c150e3f79a94a"
+    "references/workflows.md": "60a58ee29f7cf895b552865829b819239eaaec3404ce20beb1375615df902f79"
   },
-  "package_checksum": "717c62ac3f442aa46e74e70fcd16fbad57e3ba2b2fb9fc1f0e72ca67f0adb38c",
+  "package_checksum": "80b5712a20a51065d985882f52912ec93019cc5ee31fc611abbf6d3d310ecf17",
   "schema": "lwiki.skill-manifest.v1",
   "schemas": [
     "context-original-selection",
     "context-original-selection-auto",
     "context-selection",
     "output",
+    "output-v1",
+    "literal-edit",
     "record",
     "page",
     "page-batch",
@@ -95,5 +108,5 @@
     "research-submission"
   ],
   "target": "codex",
-  "version": "0.2.0"
+  "version": "0.3.0"
 }

@@ -109,7 +109,8 @@ pub(super) fn reconcile(
                 let Some(claim) = admit_cache(reader.unique_identity_claim(record.id()))? else {
                     return Ok(None);
                 };
-                if super::row_projection::canonical_document(path, &note, Some(&row)) != *document {
+                if super::row_projection::canonical_document(path, &note, Some(&row))? != *document
+                {
                     return Ok(None);
                 }
                 if row.path != *path
@@ -181,7 +182,7 @@ pub(super) fn reconcile(
     let mut current = BTreeMap::<RecordId, Vec<VaultRelativePath>>::new();
     for (path, note) in input.notes().iter() {
         input.require_clean()?;
-        for id in crate::sources::identity::readable_ids(note) {
+        for id in crate::sources::identity::readable_ids(note)? {
             if identities.contains_key(&id) {
                 current.entry(id).or_default().push(path.clone());
             }

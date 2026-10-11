@@ -312,7 +312,22 @@ impl ProviderConfig {
             ));
         }
         let bytes = checked_file(path, MAX_PROVIDER_CONFIG_BYTES, true)?;
-        let text = std::str::from_utf8(&bytes)
+        let path = std::fs::canonicalize(path)
+            .map_err(|_| config_error("provider configuration unavailable"))?;
+        Self::from_bytes(path, &bytes)
+    }
+
+    /// Validate a proposed private configuration without publishing it, resolving
+    /// credentials or authorizing any operation.
+    pub fn validate_setup_bytes(bytes: &[u8]) -> Result<()> {
+        Self::from_bytes(PathBuf::new(), bytes).map(|_| ())
+    }
+
+    fn from_bytes(path: PathBuf, bytes: &[u8]) -> Result<Self> {
+        if bytes.len() > MAX_PROVIDER_CONFIG_BYTES {
+            return Err(config_error("provider configuration exceeds byte ceiling"));
+        }
+        let text = std::str::from_utf8(bytes)
             .map_err(|_| config_error("invalid provider configuration encoding"))?;
         let raw: RawDocument =
             toml::from_str(text).map_err(|_| config_error("invalid provider configuration"))?;
@@ -325,8 +340,6 @@ impl ProviderConfig {
                 "unsupported provider configuration version or size",
             ));
         }
-        let path = std::fs::canonicalize(path)
-            .map_err(|_| config_error("provider configuration unavailable"))?;
         let mut services = BTreeMap::new();
         for (name, raw_service) in raw.services {
             identifier(&name)?;
@@ -396,6 +409,42 @@ impl ProviderConfig {
             services,
             bindings: raw.vault_bindings,
         })
+    }
+    /// Safe settings for configuration inspection. Does not read credentials.
+    pub fn profile_summary(&self, profile: &str) -> Result<serde_json::Value> {
+        let selected = self
+            .profiles
+            .get(profile)
+            .ok_or_else(|| config_error("selected provider profile is missing"))?;
+        let mut summary = serde_json::Map::new();
+        for (role, service_id) in [
+            ("embedding", &selected.embedding),
+            ("generation", &selected.generation),
+        ] {
+            if let Some(id) = service_id {
+                let service = self
+                    .services
+                    .get(id)
+                    .ok_or_else(|| config_error("selected provider service is missing"))?;
+                let auth_source = match &service.auth {
+                    AuthConfig::Static {
+                        source: StaticSource::Env(_),
+                        ..
+                    } => "environment",
+                    AuthConfig::Static {
+                        source: StaticSource::File(_),
+                        ..
+                    } => "private_file",
+                    AuthConfig::Static {
+                        source: StaticSource::Literal(_),
+                        ..
+                    } => "private_literal",
+                    AuthConfig::Command { .. } => "command",
+                };
+                summary.insert(role.into(), serde_json::json!({"service":id,"model":service.model,"auth_source":auth_source}));
+            }
+        }
+        Ok(serde_json::Value::Object(summary))
     }
     pub fn authorize(
         &self,

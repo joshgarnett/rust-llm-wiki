@@ -2313,7 +2313,7 @@ fn refresh_batch_rechecksummed_document_put_text_and_ownership_forgery_refuses()
                     .message
                     .contains("policy membership lacks exact document replacement")
                 || error.message.contains(
-                    "normalized canonical writes require exact policy membership replacements"
+                    "normalized author-note writes require exact policy membership replacements"
                 ),
             "{tamper}: {:?}",
             error
@@ -2411,7 +2411,7 @@ fn refresh_batch_rechecksummed_missing_or_extra_member_document_put_refuses() {
                 DocumentMutation::Metadata { path, .. } if path == &row.path)
             });
             rows.documents.push(DocumentMutation::Put {
-                row: row_projection::canonical_document(&row.path, &note, Some(&row)),
+                row: row_projection::canonical_document(&row.path, &note, Some(&row)).unwrap(),
             });
         }
         let forged = batch_rewrite_retained_rows(&fixture, proof, rows);
@@ -2427,7 +2427,7 @@ fn refresh_batch_rechecksummed_missing_or_extra_member_document_put_refuses() {
                     .message
                     .contains("policy membership lacks exact document replacement")
                 || error.message.contains(
-                    "normalized canonical writes require exact policy membership replacements"
+                    "normalized author-note writes require exact policy membership replacements"
                 ),
             "{tamper}: {:?}",
             error

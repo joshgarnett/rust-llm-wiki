@@ -22,3 +22,9 @@ pub mod storage;
 mod maintenance_workflow_tests;
 
 pub mod source_relations;
+
+mod health;
+
+mod config_show;
+pub mod setup;
+pub mod skill_install;

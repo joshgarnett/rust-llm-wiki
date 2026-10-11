@@ -3,12 +3,24 @@
 
 import argparse
 import hashlib
+import importlib.util
 import json
 from pathlib import Path
 import shutil
 import subprocess
 import sys
 import tarfile
+
+
+def sibling(name):
+    spec = importlib.util.spec_from_file_location(name, Path(__file__).with_name(name + ".py"))
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+verifier = sibling("verify_release")
+notices = sibling("third_party_notices")
 
 
 class BuildError(RuntimeError):
@@ -18,7 +30,10 @@ class BuildError(RuntimeError):
 BUILD_CONTRACT_FILES = (
     "Cargo.toml", "Cargo.lock", "MODULE.bazel", "MODULE.bazel.lock",
     "cargo-bazel-lock.json", ".bazelversion", ".bazelrc", "rust-toolchain.toml",
-    "scripts/bazel.py",
+    "scripts/bazel.py", "scripts/build_artifact.py", "scripts/verify_release.py",
+    "scripts/third_party_notices.py", "scripts/install.sh", "LICENSE", "THIRD-PARTY-NOTICES",
+    "scripts/artifact_platform.py",
+    "licenses/provenance.json",
 )
 
 
@@ -68,13 +83,21 @@ def build(output, repo=None):
     success_paths = [output / "build-info.json"]
     try:
         before = source_state(repo, output, "before")
-        contract_hashes = {name: sha256(repo / name) for name in BUILD_CONTRACT_FILES}
+        verifier.validate_identity(before[0], "0.0.0")
+        contracts = BUILD_CONTRACT_FILES + tuple(sorted(
+            path.relative_to(repo).as_posix() for path in (repo / "licenses").glob("*")
+            if path.is_file() and path.relative_to(repo).as_posix() not in BUILD_CONTRACT_FILES))
+        contract_hashes = {name: sha256(repo / name) for name in contracts}
+        if (repo / "THIRD-PARTY-NOTICES").read_bytes() != notices.generate(repo):
+            raise BuildError("THIRD-PARTY-NOTICES is stale; run scripts/third_party_notices.py")
         wrapper = [sys.executable, str(repo / "scripts/bazel.py")]
         target_path = run(wrapper + ["--print-target"], repo, output, "native-target.txt")
         targets = target_path.read_text(encoding="utf-8").splitlines()
         if len(targets) != 1 or not targets[0].strip():
             raise BuildError("Bazel wrapper did not report one native target")
         host = targets[0].strip()
+        if host not in verifier.TARGETS:
+            raise BuildError("native target is not in the supported two-target release matrix")
         bazel = run(wrapper + ["--", "version", "--gnu_format"], repo, output,
                     "bazel-version.txt").read_text(encoding="utf-8").strip()
         metadata_path = run(
@@ -87,6 +110,7 @@ def build(output, repo=None):
         if len(packages) != 1:
             raise BuildError("metadata did not identify the repository's rust-llm-wiki package")
         package_version = packages[0]["version"]
+        verifier.validate_identity(before[0], package_version)
         command = wrapper + ["--", "build", "--config=release", "--nofetch", "//:lwiki"]
         run(command, repo, output, "bazel-build.log")
         artifacts = run(
@@ -112,6 +136,7 @@ def build(output, repo=None):
             raise BuildError("Bazel cquery did not report exactly one executable for //:lwiki")
         binary = output / ("lwiki.exe" if "windows" in host else "lwiki")
         shutil.copy2(executables.pop(), binary)
+        requirements = verifier.platforms.inspect_file(binary, host, evidence_dir=output)
         version = run([str(binary), "--version"], repo, output, "version.txt")
         if version.read_text(encoding="utf-8").strip() != "lwiki " + package_version:
             raise BuildError("copied binary version does not match Cargo package metadata")
@@ -121,10 +146,10 @@ def build(output, repo=None):
                 or envelope.get("command") != "capabilities"):
             raise BuildError("copied binary did not return a successful capabilities envelope")
         after = source_state(repo, output, "after")
-        if before != after or contract_hashes != {name: sha256(repo / name) for name in BUILD_CONTRACT_FILES}:
+        if before != after or contract_hashes != {name: sha256(repo / name) for name in contracts}:
             raise BuildError("source HEAD, status, or build contract files changed during the build")
         info = {
-            "schema_version": 1,
+            "schema_version": 2,
             "scope": "native release build and copied-binary version/capabilities smoke only; not full qualification",
             "source": {
                 "commit": before[0], "dirty": bool(before[1]),
@@ -138,15 +163,52 @@ def build(output, repo=None):
             "build_contract_sha256": contract_hashes,
             "cargo_lock_sha256": contract_hashes["Cargo.lock"],
             "binary": binary.name, "binary_sha256": sha256(binary),
+            "platform_requirements": requirements,
         }
         info_path = output / "build-info.json"
         info_path.write_text(json.dumps(info, indent=2) + "\n", encoding="utf-8")
+        for name in ("LICENSE", "THIRD-PARTY-NOTICES"):
+            shutil.copyfile(repo / name, output / name)
+        (output / "INSTALL.txt").write_text(
+            "lwiki " + package_version + "\n\n"
+            + verifier.platforms.description(requirements) + "\n"
+            "Supported packages: Apple Silicon macOS and x86_64 GNU/Linux.\n"
+            "Use the installer from the same release with an explicit version:\n"
+            "  sh install.sh --version " + package_version + "\n"
+            "Inspect the installer before running it. Use --dry-run to verify the\n"
+            "selected archive without changing the installation prefix.\n"
+            "The default prefix is $HOME/.local. Add its bin directory to PATH.\n"
+            "Updates preserve verified older versions. Use --rollback VERSION to\n"
+            "activate one, or --uninstall to remove the owned launch links.\n"
+            "Retained versions remain for deliberate cleanup. Vaults, user config\n"
+            "and shell profiles are never changed by the installer.\n\n"
+            "macOS packages are unsigned and are not notarized. Gatekeeper can\n"
+            "block a downloaded executable. This release does not bypass that\n"
+            "protection or remove quarantine. Verify the source and follow your\n"
+            "organization's policy, or build locally.\n\n"
+            "HTTPS and release checksums verify channel integrity. They do not\n"
+            "provide independent publisher authentication.\n"
+            "Support: https://github.com/joshgarnett/rust-llm-wiki/issues\n"
+            "License: MIT. Dependency notices: THIRD-PARTY-NOTICES.\n",
+            encoding="utf-8",
+        )
+        contents = {name: (output / name).read_bytes() for name in verifier.MEMBERS[:-1]}
+        (output / "artifact-info.txt").write_text(
+            verifier.artifact_text(contents, before[0], package_version, host,
+                                   clean=not info["source"]["dirty"]), encoding="ascii")
         archive_path = output / "lwiki-{}-{}.tar.gz".format(package_version, host)
         checksum_path = output / (archive_path.name + ".sha256")
         success_paths.extend([archive_path, checksum_path])
-        with tarfile.open(archive_path, "w:gz") as bundle:
-            for path in [binary, version, capabilities, info_path]:
-                bundle.add(path, arcname=path.name, recursive=False)
+        with tarfile.open(archive_path, "w:gz", format=tarfile.USTAR_FORMAT) as bundle:
+            for name in verifier.MEMBERS:
+                path = output / name
+                member = bundle.gettarinfo(path, arcname=name)
+                member.uid = member.gid = 0
+                member.uname = member.gname = ""
+                member.mtime = 0
+                member.mode = 0o755 if name == "lwiki" else 0o644
+                with path.open("rb") as source:
+                    bundle.addfile(member, source)
         checksum_path.write_text("{}  {}\n".format(sha256(archive_path), archive_path.name), encoding="utf-8")
         return output
     except Exception as error:

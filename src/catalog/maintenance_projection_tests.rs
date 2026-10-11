@@ -296,7 +296,7 @@ fn observed(handle: &VaultFs, fail_at: usize, code: ErrorCode) -> Observed<'_> {
 fn shared_projector_refuses_swallowed_compute_and_emission_observation_failures() {
     let (_temp, handle) = fixture();
     let input = scan_input(&handle, &id(VAULT)).unwrap();
-    let notes: SourceNotes = input_notes(&input).unwrap().into();
+    let notes: SourceNotes = input_notes(&input).unwrap().try_into().unwrap();
     let clean = observed(&handle, usize::MAX, ErrorCode::ContentConflict);
     let view = SourceView::from_shared_maintenance(&handle, notes.shared(), &clean);
     let mut rows = Sink::default();
@@ -342,7 +342,7 @@ fn shared_projector_refuses_swallowed_compute_and_emission_observation_failures(
 fn observed_source_reads_precede_notes_and_overlay_fallback() {
     let (_temp, handle) = fixture();
     let input = scan_input(&handle, &id(VAULT)).unwrap();
-    let notes: SourceNotes = input_notes(&input).unwrap().into();
+    let notes: SourceNotes = input_notes(&input).unwrap().try_into().unwrap();
     let observer = observed(&handle, 1, ErrorCode::ContentConflict);
     let mut view = SourceView::from_shared_maintenance(&handle, notes, &observer);
     let target = path("WIKI.md");

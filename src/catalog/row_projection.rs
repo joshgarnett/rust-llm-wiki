@@ -4,7 +4,7 @@
 //! Callers supply adopted records and bounded, authenticated input as appropriate
 //! to their workflow. Full projection also represents invalid readable content.
 use super::{
-    scan::{isolated_fields, list, normalized_markdown, readable_id},
+    scan::{isolated_fields, list, normalized_markdown},
     types::{DocumentRow, GraphRow, RecordRow},
 };
 use crate::{
@@ -20,10 +20,11 @@ pub(crate) fn canonical_document(
     path: &VaultRelativePath,
     note: &ParsedNote,
     row: Option<&RecordRow>,
-) -> DocumentRow {
+) -> Result<DocumentRow> {
+    let has_claim = crate::sources::identity::has_wiki_claim(note)?;
     let raw_text = note.literal_text().unwrap_or_default().to_owned();
     let body = std::str::from_utf8(note.body()).unwrap_or_default();
-    let bookkeeping = declared_bookkeeping_kind(note);
+    let bookkeeping = declared_bookkeeping_kind(note)?;
     let excluded = bookkeeping.is_some_and(|kind| kind != RecordKind::Decision)
         || row.is_some_and(|r| {
             matches!(
@@ -40,7 +41,7 @@ pub(crate) fn canonical_document(
         || first_heading(body).unwrap_or_else(|| path.as_str().to_owned()),
         |r| r.record.title().to_owned(),
     );
-    DocumentRow {
+    Ok(DocumentRow {
         path: path.clone(),
         hash: note.source_hash.clone(),
         record_id: row.map(|r| r.record.id().clone()),
@@ -55,28 +56,25 @@ pub(crate) fn canonical_document(
         owner_revision: None,
         eligibility: row.map_or_else(
             || {
-                if note.canonical.is_some()
-                    || readable_id(note).is_some()
-                    || !note.diagnostics.is_empty()
-                {
+                if note.canonical.is_some() || has_claim {
                     Eligibility::Invalid
                 } else {
-                    Eligibility::Current
+                    Eligibility::Unsupported
                 }
             },
             |r| r.eligibility,
         ),
         reasons: row.map_or_else(
             || {
-                if note.canonical.is_some() || !note.diagnostics.is_empty() {
+                if has_claim {
                     vec!["unadopted_or_invalid".into()]
                 } else {
-                    vec!["note_text".into()]
+                    vec!["unadopted_note_inspection_only".into()]
                 }
             },
             |r| r.reasons.clone(),
         ),
-    }
+    })
 }
 
 /// Render supplied UTF-8 capture bytes using the immutable revision title.
@@ -154,7 +152,7 @@ pub(crate) fn graph_row(
     })
 }
 
-fn declared_bookkeeping_kind(note: &ParsedNote) -> Option<RecordKind> {
+fn declared_bookkeeping_kind(note: &ParsedNote) -> Result<Option<RecordKind>> {
     let bookkeeping = |kind| {
         matches!(
             kind,
@@ -178,15 +176,16 @@ fn declared_bookkeeping_kind(note: &ParsedNote) -> Option<RecordKind> {
                     .and_then(|kind| kind.parse().ok())
             })
         });
-    declared.filter(|kind| bookkeeping(*kind)).or_else(|| {
-        isolated_fields(note).iter().find_map(|fields| {
+    let fields = isolated_fields(note)?;
+    Ok(declared.filter(|kind| bookkeeping(*kind)).or_else(|| {
+        fields.iter().find_map(|fields| {
             fields
                 .get("wiki_kind")
                 .and_then(serde_json::Value::as_str)
                 .and_then(|kind| kind.parse().ok())
                 .filter(|kind| bookkeeping(*kind))
         })
-    })
+    }))
 }
 
 fn qualifiers(record: &CanonicalRecord) -> BTreeMap<String, serde_json::Value> {
@@ -282,10 +281,13 @@ mod tests {
             raw_text: String::from_utf8(plain.to_vec()).unwrap(),
             source_id: None,
             owner_revision: None,
-            eligibility: Eligibility::Current,
-            reasons: vec!["note_text".into()],
+            eligibility: Eligibility::Unsupported,
+            reasons: vec!["unadopted_note_inspection_only".into()],
         };
-        assert_eq!(canonical_document(&path("plain.md"), &note, None), expected);
+        assert_eq!(
+            canonical_document(&path("plain.md"), &note, None).unwrap(),
+            expected
+        );
         for (kind, excluded) in [("run", true), ("decision", false)] {
             let raw = format!(
                 "---\nwiki_schema: \"2\"\nwiki_id: copied_history\nwiki_kind: {kind}\ntitle: Unadopted metadata\n---\n# Copied outcome\n\nCopied **text**.\n"
@@ -321,7 +323,7 @@ mod tests {
                 reasons: vec!["unadopted_or_invalid".into()],
             };
             assert_eq!(
-                canonical_document(&path("copied.md"), &note, None),
+                canonical_document(&path("copied.md"), &note, None).unwrap(),
                 expected
             );
         }

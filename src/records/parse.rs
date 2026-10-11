@@ -55,7 +55,7 @@ impl ParsedNote {
 }
 /// Versions the validation/range rules independently of cache SQL.
 pub fn parser_fingerprint() -> Blake3Hash {
-    Blake3Hash::digest(b"lwiki-lossless-v2;yaml-rust2=0.13.0;pulldown-cmark=0.13.4;utf8-char-markers;yaml-core-exact-i64-u64-radix;iterative-depth;default-envelope=262144;default-depth=32;scalar-inline-edit-v1")
+    Blake3Hash::digest(b"lwiki-lossless-v2;yaml-rust2=0.13.0;pulldown-cmark=0.13.4;utf8-char-markers;yaml-core-exact-i64-u64-radix;iterative-depth;default-envelope=262144;default-depth=32;scalar-inline-edit-v1;suspected-leading-envelope-v1")
 }
 pub fn parse_note(raw: &[u8]) -> ParsedNote {
     parse_note_with_limits(raw, ParseLimits::default())
@@ -74,6 +74,21 @@ pub fn parse_note_with_limits(raw: &[u8], limits: ParseLimits) -> ParsedNote {
         newline: "\n",
         field_starts: BTreeMap::new(),
     };
+    match super::envelope_observation::suspected_region(raw) {
+        Ok(Some(_)) => {
+            let mut error =
+                WikiError::invalid("suspected wiki envelope; opening delimiter missing or damaged");
+            error.details = serde_json::json!({"reason": "suspected_wiki_envelope", "canonical_adoption": false, "coordinates_known": false});
+            error.hint = Some("Inspect and back up the exact bytes. Restore a known valid envelope in an editor; put intentional metadata examples after a heading, blank introduction or code fence.".into());
+            invalid(&mut note, error);
+            return note;
+        }
+        Err(error) => {
+            invalid(&mut note, error);
+            return note;
+        }
+        Ok(None) => {}
+    }
     let text = match std::str::from_utf8(raw) {
         Ok(s) => s,
         Err(_) => {
@@ -337,5 +352,54 @@ fn scalar(text: &str, style: TScalarStyle) -> Result<Value, WikiError> {
                 WikiError::invalid("non-finite/out-of-range YAML numbers are unsupported")
             }),
         _ => Err(WikiError::invalid("unsupported YAML scalar")),
+    }
+}
+
+#[cfg(test)]
+mod observation_tests {
+    use super::*;
+
+    #[test]
+    fn suspected_opening_damage_never_adopts_or_guesses_body_coordinates() {
+        for opener in ["", "--\n", "----\n", "\u{feff}--\r\n"] {
+            let bytes = format!("{opener}wiki_schema: '1'\nwiki_kind: page\nwiki_id: page_fixture\ntitle: Fixture\nwiki_status: reviewed\n---\n# Body\n").into_bytes();
+            let note = parse_note(&bytes);
+            assert_eq!(note.status, ParseStatus::Invalid);
+            assert_eq!(note.raw, bytes);
+            assert_eq!(
+                note.diagnostics[0].details["reason"],
+                "suspected_wiki_envelope"
+            );
+            assert!(note.canonical.is_none());
+            assert!(note.fields.is_none());
+            assert!(note.envelope.is_none());
+            assert_eq!(note.body_start, 0);
+            assert!(!note.is_editable());
+        }
+        let valid = parse_note(b"---\nwiki_schema: '1'\nwiki_kind: page\nwiki_id: page_fixture\ntitle: Fixture\nwiki_status: reviewed\n---\n# Body\n");
+        assert_eq!(valid.status, ParseStatus::Valid);
+        assert!(valid.canonical.is_some());
+        let example =
+            parse_note(b"# Example\nwiki_schema: '1'\nwiki_kind: page\nwiki_id: page_fixture\n");
+        assert_eq!(example.status, ParseStatus::NoFrontmatter);
+        assert!(example.diagnostics.is_empty());
+    }
+
+    #[test]
+    fn incomplete_leading_mapping_observation_is_explicit() {
+        let mut raw = b"author: ".to_vec();
+        raw.resize(
+            super::super::envelope_observation::MAX_OBSERVATION_BYTES + 1,
+            b'x',
+        );
+        let note = parse_note(&raw);
+        assert_eq!(note.status, ParseStatus::Invalid);
+        assert_eq!(
+            note.diagnostics[0].code,
+            crate::domain::ErrorCode::BudgetExceeded
+        );
+        assert!(note.envelope.is_none());
+        assert!(note.fields.is_none());
+        assert!(note.canonical.is_none());
     }
 }

@@ -7,7 +7,7 @@ use crate::{
 use clap::Args;
 use std::{collections::BTreeMap, path::PathBuf};
 
-#[derive(Debug, Clone, Args)]
+#[derive(Debug, Clone, Default, Args)]
 pub struct RemoteArguments {
     /// Private TOML configuration; never discover provider files inside a vault.
     #[arg(long)]
@@ -40,8 +40,8 @@ pub struct RemoteArguments {
     #[arg(long)]
     pub max_cost: Option<String>,
     /// Currency code used with --max-cost.
-    #[arg(long, default_value = "USD")]
-    pub currency: String,
+    #[arg(long, requires = "max_cost")]
+    pub currency: Option<String>,
     /// Maximum provider requests dispatched per minute.
     #[arg(long)]
     pub requests_per_minute: Option<u32>,
@@ -55,28 +55,38 @@ pub struct RemoteArguments {
     #[arg(long)]
     pub retain_http_error_body: bool,
 }
-impl Default for RemoteArguments {
-    fn default() -> Self {
-        Self {
-            providers_config: None,
-            max_requests: None,
-            concurrency: None,
-            attempts_per_task: None,
-            deadline_ms: None,
-            max_request_bytes: None,
-            max_response_bytes: None,
-            max_input_units: None,
-            max_output_units: None,
-            max_cost: None,
-            currency: "USD".into(),
-            requests_per_minute: None,
-            tokens_per_minute: None,
-            retry_uncertain: false,
-            retain_http_error_body: false,
-        }
-    }
+/// One invocation's resolved profile and user defaults. Portable settings cannot
+/// provide a configuration path or authorize a service.
+pub struct RemoteContext<'a> {
+    pub profile: Option<&'a str>,
+    pub document: &'a crate::config::LocalConfigDocument,
+    pub allow_ambient_provider: bool,
 }
 impl RemoteArguments {
+    pub fn currency_name(&self) -> &str {
+        self.currency.as_deref().unwrap_or("USD")
+    }
+    pub fn effective(&self, context: &RemoteContext<'_>) -> Self {
+        let mut effective = self.clone();
+        let defaults = &context.document.remote;
+        effective.max_requests = self.max_requests.or(defaults.max_requests);
+        effective.concurrency = self.concurrency.or(defaults.concurrency);
+        effective.attempts_per_task = self.attempts_per_task.or(defaults.attempts_per_task);
+        effective.deadline_ms = self.deadline_ms.or(defaults.deadline_ms);
+        effective.max_request_bytes = self.max_request_bytes.or(defaults.max_request_bytes);
+        effective.max_response_bytes = self.max_response_bytes.or(defaults.max_response_bytes);
+        effective.max_input_units = self.max_input_units.or(defaults.max_input_units);
+        effective.max_output_units = self.max_output_units.or(defaults.max_output_units);
+        effective.max_cost = self.max_cost.clone().or_else(|| defaults.max_cost.clone());
+        effective.currency = self.currency.clone().or_else(|| defaults.currency.clone());
+        effective.requests_per_minute = self.requests_per_minute.or(defaults.requests_per_minute);
+        effective.tokens_per_minute = self.tokens_per_minute.or(defaults.tokens_per_minute);
+        effective.providers_config = self
+            .providers_config
+            .clone()
+            .or_else(|| context.document.providers_config.clone());
+        effective
+    }
     pub fn limits(&self) -> Result<LifetimeLimits> {
         if self.max_requests == Some(0)
             || self.concurrency == Some(0)
@@ -112,13 +122,35 @@ impl RemoteArguments {
             max_cost: self
                 .max_cost
                 .as_ref()
-                .map(|s| Money::parse_decimal(Currency::new(self.currency.clone())?, s))
+                .map(|s| Money::parse_decimal(Currency::new(self.currency_name())?, s))
                 .transpose()?,
             requests_per_minute: self.requests_per_minute,
             tokens_per_minute: self.tokens_per_minute,
         })
     }
+    pub fn requested_limits_with_currency(
+        &self,
+        currency: Option<&str>,
+    ) -> Result<remote::RequestedJobLimits> {
+        let mut requested = self.requested_limits()?;
+        if let Some(amount) = &self.max_cost {
+            let currency = self
+                .currency
+                .as_deref()
+                .or(currency)
+                .unwrap_or(self.currency_name());
+            requested.limits.max_cost =
+                Some(Money::parse_decimal(Currency::new(currency)?, amount)?);
+        }
+        Ok(requested)
+    }
     pub fn requested_limits(&self) -> Result<remote::RequestedJobLimits> {
+        if self.currency.is_some() && self.max_cost.is_none() {
+            return Err(WikiError::new(
+                ErrorCode::Usage,
+                "--currency requires --max-cost",
+            ));
+        }
         let specified = [
             ("requests", self.max_requests.is_some()),
             ("concurrency", self.concurrency.is_some()),
@@ -143,15 +175,22 @@ impl RemoteArguments {
     pub fn runtime(
         &self,
         app: &crate::app::OfflineApp,
-        profile: Option<&str>,
+        context: &RemoteContext<'_>,
         capability: Capability,
     ) -> Result<RemoteRuntime> {
-        let profile = profile.ok_or_else(|| {
+        let effective = self.effective(context);
+        let profile = context.profile.ok_or_else(|| {
             WikiError::new(
                 ErrorCode::ConfigInvalid,
                 "select a trusted provider --profile",
             )
         })?;
+        if !context.allow_ambient_provider && effective.providers_config.is_none() {
+            return Err(WikiError::new(
+                ErrorCode::ConfigInvalid,
+                "--no-user-config requires an explicit --providers-config for remote work",
+            ));
+        }
         let policy = ExecutionPolicy {
             offline: app.options().offline,
             dry_run: app.options().dry_run,
@@ -161,15 +200,16 @@ impl RemoteArguments {
             app.fs(),
             app.vault_id(),
             remote::NativeRuntimeRequest {
-                config_path: self.providers_config.as_deref(),
+                config_path: effective.providers_config.as_deref(),
                 profile,
                 capability,
                 options: remote::native_job_options(policy, app.options().lock_timeout_ms),
-                limits: self.limits()?,
-                deadline_ms: self.deadline_ms.unwrap_or(900_000),
+                limits: effective.limits()?,
+                deadline_ms: effective.deadline_ms.unwrap_or(DEFAULT_DEADLINE_MS),
             },
         )?;
-        runtime.requested_limits = Some(self.requested_limits()?);
+        runtime.requested_limits =
+            Some(self.requested_limits_with_currency(effective.currency.as_deref())?);
         runtime.dispatcher = runtime
             .dispatcher
             .with_http_error_diagnostics(self.retain_http_error_body);
@@ -188,5 +228,135 @@ impl ProbeRole {
             Self::Embed => crate::providers::types::ServiceRole::Embed,
             Self::Generate => crate::providers::types::ServiceRole::Generate,
         }
+    }
+}
+
+#[cfg(test)]
+mod configuration_tests {
+    use super::*;
+
+    #[test]
+    fn saved_limits_apply_to_new_jobs_without_amending_retained_work() {
+        let mut document = crate::config::LocalConfigDocument::default();
+        document.remote.max_requests = Some(7);
+        document.remote.deadline_ms = Some(1234);
+        document.remote.max_input_units = Some(50);
+        let context = RemoteContext {
+            profile: Some("saved"),
+            document: &document,
+            allow_ambient_provider: true,
+        };
+        let cli = RemoteArguments::default();
+        let effective = cli.effective(&context);
+        assert_eq!(effective.limits().unwrap().requests, 7);
+        assert_eq!(effective.deadline_ms, Some(1234));
+        let requested = cli.requested_limits().unwrap();
+        assert!(requested.specified.is_empty());
+        assert_eq!(requested.deadline_ms, None);
+        let retained = RemoteArguments {
+            max_requests: Some(3),
+            ..Default::default()
+        }
+        .limits()
+        .unwrap();
+        assert_eq!(requested.merge_into(&retained).unwrap(), retained);
+        let explicit = RemoteArguments {
+            max_requests: Some(9),
+            deadline_ms: Some(5000),
+            ..Default::default()
+        };
+        assert_eq!(explicit.effective(&context).limits().unwrap().requests, 9);
+        let requested = explicit.requested_limits().unwrap();
+        assert_eq!(
+            requested.specified,
+            std::collections::BTreeSet::from(["requests"])
+        );
+        assert_eq!(requested.deadline_ms, Some(5000));
+        assert_eq!(requested.merge_into(&retained).unwrap().requests, 9);
+    }
+
+    #[test]
+    fn configured_currency_matches_new_and_retained_cost_requests() {
+        let mut document = crate::config::LocalConfigDocument::default();
+        document.remote.currency = Some("EUR".into());
+        let context = RemoteContext {
+            profile: None,
+            document: &document,
+            allow_ambient_provider: true,
+        };
+        let cli = RemoteArguments {
+            max_cost: Some("1.00".into()),
+            ..Default::default()
+        };
+        let effective = cli.effective(&context);
+        let requested = cli
+            .requested_limits_with_currency(effective.currency.as_deref())
+            .unwrap();
+        assert_eq!(
+            requested.limits.max_cost,
+            effective.limits().unwrap().max_cost
+        );
+        assert_eq!(
+            requested.specified,
+            std::collections::BTreeSet::from(["max_cost"])
+        );
+        let amended = cli.requested_limits_with_currency(Some("CAD")).unwrap();
+        assert_eq!(amended.limits.max_cost.unwrap().currency().as_str(), "CAD");
+        let explicit = RemoteArguments {
+            max_cost: Some("1.00".into()),
+            currency: Some("USD".into()),
+            ..Default::default()
+        };
+        assert_eq!(
+            explicit
+                .requested_limits_with_currency(Some("CAD"))
+                .unwrap()
+                .limits
+                .max_cost
+                .unwrap()
+                .currency()
+                .as_str(),
+            "USD"
+        );
+        assert!(
+            RemoteArguments {
+                currency: Some("EUR".into()),
+                ..Default::default()
+            }
+            .requested_limits()
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn explicit_provider_and_currency_override_saved_values() {
+        let mut document = crate::config::LocalConfigDocument {
+            providers_config: Some(PathBuf::from("/saved/providers.toml")),
+            ..Default::default()
+        };
+        document.remote.currency = Some("EUR".into());
+        document.remote.max_cost = Some("1.00".into());
+        let context = RemoteContext {
+            profile: None,
+            document: &document,
+            allow_ambient_provider: true,
+        };
+        let cli = RemoteArguments::default();
+        let effective = cli.effective(&context);
+        assert_eq!(effective.providers_config, document.providers_config);
+        assert_eq!(effective.currency.as_deref(), Some("EUR"));
+        assert!(cli.requested_limits().unwrap().specified.is_empty());
+        let cli = RemoteArguments {
+            providers_config: Some(PathBuf::from("/chosen/providers.toml")),
+            currency: Some("USD".into()),
+            max_cost: Some("2.00".into()),
+            ..Default::default()
+        };
+        let effective = cli.effective(&context);
+        assert_eq!(effective.providers_config, cli.providers_config);
+        assert_eq!(
+            effective.limits().unwrap().max_cost,
+            cli.limits().unwrap().max_cost
+        );
     }
 }
