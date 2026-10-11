@@ -8,6 +8,8 @@ pub mod context_selection_packet;
 pub mod context_types;
 pub(crate) mod context_units;
 pub mod cursor;
+#[cfg(feature = "experimental-semantic-discovery")]
+pub(crate) mod discovery;
 mod evidence_set_selection;
 pub mod excerpts;
 pub mod filters;

@@ -65,6 +65,10 @@ mod structural_projection;
 pub(crate) mod structural_rules;
 pub mod types;
 pub(crate) mod unit_inventory;
+#[cfg(feature = "experimental-semantic-discovery")]
+pub(crate) mod semantic_discovery;
+#[cfg(feature = "experimental-semantic-discovery")]
+mod semantic_discovery_schema;
 pub(crate) mod withdraw_projection;
 pub(crate) mod write_projection;
 pub use types::*;

@@ -323,6 +323,16 @@ impl<'a> InventoryDocumentUnits<'a> {
                     "selected owner descriptor reservation exhausted",
                 ));
             }
+            #[cfg(feature = "experimental-semantic-discovery")]
+            if binding.unit_count.saturating_add(1)
+                > crate::catalog::query_types::QueryReadLimits::default()
+                    .max_rows
+                    .saturating_sub(self.reader.usage().rows)
+            {
+                return Err(budget_error(
+                    "selected owner exceeds remaining shared catalog allowance",
+                ));
+            }
             let before = self.reader.usage();
             let result = self
                 .reader

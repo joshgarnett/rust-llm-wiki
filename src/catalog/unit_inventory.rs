@@ -838,5 +838,11 @@ pub(crate) fn apply_after(
             c.execute("UPDATE unit_owners SET proof_version=?3,modified_seq=?3 WHERE policy=?1 AND owner=?2",params![policy.as_str(),owner.as_str(),seq]).map_err(sql::sql_error)?;
         }
     }
+    #[cfg(feature = "experimental-semantic-discovery")]
+    for (policy, _) in &policies {
+        if !paths.is_empty() || affected.owners.iter().any(|(p, _)| p == policy) {
+            super::semantic_discovery::invalidate(c, policy, seq as u64)?;
+        }
+    }
     Ok(())
 }

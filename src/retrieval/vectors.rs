@@ -280,6 +280,15 @@ impl VectorCoverageCheck {
 }
 
 impl VectorStore {
+    #[cfg(feature = "experimental-semantic-discovery")]
+    pub(crate) fn discovery_budget(&self) -> Result<std::rc::Rc<VectorReadBudget>> {
+        self.retained_budget.clone().ok_or_else(|| {
+            WikiError::new(
+                ErrorCode::BudgetExceeded,
+                "semantic graph requires the existing bounded vector phase",
+            )
+        })
+    }
     pub(crate) fn bind_read_budget(
         &mut self,
         budget: &std::rc::Rc<VectorReadBudget>,
@@ -1474,6 +1483,8 @@ impl VectorStore {
 /// and does not establish a scalable candidate index.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub(crate) struct RetainedUsage {
+    #[cfg(feature = "experimental-semantic-discovery")]
+    pub distance_evaluations: usize,
     pub metadata_rows_decoded: usize,
     pub metadata_bytes_decoded: usize,
     pub vector_reads: usize,
@@ -1489,6 +1500,45 @@ pub(crate) struct VectorReadBudget {
     steps: std::sync::Arc<std::sync::atomic::AtomicU64>,
 }
 impl VectorReadBudget {
+    #[cfg(feature = "experimental-semantic-discovery")]
+    pub(crate) fn reserve_distance(&self) -> Result<()> {
+        self.check()?;
+        let mut usage = self.usage.borrow_mut();
+        if usage.distance_evaluations >= super::discovery::MAX_DISTANCE_EVALUATIONS {
+            return Err(WikiError::new(
+                ErrorCode::BudgetExceeded,
+                "semantic shared distance budget exhausted",
+            ));
+        }
+        usage.distance_evaluations += 1;
+        Ok(())
+    }
+    /// Immutable graph reads consume the very same vector/metadata allowance as
+    /// retained SQLite reads and final exact reranking. They are not SQL rows.
+    #[cfg(feature = "experimental-semantic-discovery")]
+    pub(crate) fn reserve_graph_read(&self, metadata: usize, vectors: usize) -> Result<()> {
+        self.check()?;
+        let mut usage = self.usage.borrow_mut();
+        if metadata > 1024 * 1024
+            || vectors > 65_536 * 4
+            || usage
+                .metadata_bytes_decoded
+                .saturating_add(usage.space_bytes_decoded)
+                .saturating_add(metadata)
+                > 64 * 1024 * 1024
+            || usage.vector_bytes_scanned.saturating_add(vectors) > 64 * 1024 * 1024
+            || usage.vector_reads.saturating_add(usize::from(vectors > 0)) > 131_072
+        {
+            return Err(WikiError::new(
+                ErrorCode::BudgetExceeded,
+                "bounded embedding graph read budget exhausted",
+            ));
+        }
+        usage.metadata_bytes_decoded += metadata;
+        usage.vector_bytes_scanned += vectors;
+        usage.vector_reads += usize::from(vectors > 0);
+        Ok(())
+    }
     pub(crate) fn remaining_ms(&self) -> Result<u64> {
         self.check()?;
         let elapsed = u64::try_from(self.started.elapsed().as_millis()).unwrap_or(u64::MAX);

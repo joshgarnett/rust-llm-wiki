@@ -24,3 +24,10 @@ pub mod storage;
 mod test_paths;
 mod text_projection;
 pub mod vault;
+
+/// Internal read-only builder entry point for the feature-isolated candidate CLI.
+#[cfg(feature = "experimental-semantic-discovery")]
+#[doc(hidden)]
+pub fn semantic_builder_child() -> domain::Result<()> {
+    retrieval::discovery::process::child_main()
+}

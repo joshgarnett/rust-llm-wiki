@@ -247,6 +247,8 @@ impl<'a> OwnerResolver<'a> {
 mod owner_tests;
 
 struct Discovery {
+    #[cfg(feature = "experimental-semantic-discovery")]
+    manifest: super::discovery::DiscoveryManifest,
     hits: HitSet,
     dense: BTreeMap<VaultRelativePath, Vec<DenseHit>>,
 }
@@ -275,7 +277,9 @@ fn discover(
     }
     require_space(store, state)?;
     let corpus = InventoryDocumentUnits::new(reader, &state.spec.settings, units)?;
+    #[cfg(not(feature = "experimental-semantic-discovery"))]
     let owners = RefCell::new(OwnerResolver::new(reader, &plan.filters, for_context));
+    #[cfg(not(feature = "experimental-semantic-discovery"))]
     let scan = store.exact_descriptor_stream(
         &state.id,
         query,
@@ -285,6 +289,23 @@ fn discover(
         |unit| owners.borrow_mut().allowed(unit),
         |paths| corpus.selected_owners(paths, units),
     )?;
+    #[cfg(feature = "experimental-semantic-discovery")]
+    let (nominations, manifest, graph_usage) = super::discovery::query::discover(
+        _catalog,
+        reader,
+        state,
+        query,
+        &plan,
+        for_context,
+        store,
+        store.discovery_budget()?,
+    )?;
+    #[cfg(feature = "experimental-semantic-discovery")]
+    let scan = rerank_graph_owners(&corpus, units, store, state, query, &nominations, &manifest)?;
+    #[cfg(feature = "experimental-semantic-discovery")]
+    let approximate = nominations.approximate;
+    #[cfg(not(feature = "experimental-semantic-discovery"))]
+    let approximate = false;
     let mut dense = BTreeMap::new();
     let mut dense_hits = Vec::new();
     for (rank, (best, passages)) in fusion::collapse_dense(
@@ -384,6 +405,8 @@ fn discover(
                 .collect::<Vec<_>>(),
         ),
         &hits,
+        #[cfg(feature = "experimental-semantic-discovery")]
+        &manifest,
     ))?);
     let offset = cursor::offset(
         reader,
@@ -403,19 +426,30 @@ fn discover(
         .take(end.saturating_sub(offset))
         .collect();
     let usage = units.usage();
+    #[cfg(not(feature = "experimental-semantic-discovery"))]
     warnings.push(format!("semantic coverage {}/{} eligible units; {} missing, {} corrupt, {} pending; exact linear scan. Discovery read {} compact descriptors / {} logical field bytes and rendered {} units / {} UTF-8 bytes; catalog work is separate from selected proof.",
         scan.coverage.available_units, scan.coverage.eligible_units,
         scan.coverage.missing_units, scan.coverage.corrupt_units, scan.coverage.pending_units,
         usage.descriptors, usage.descriptor_bytes, usage.units, usage.render_bytes));
+    #[cfg(feature = "experimental-semantic-discovery")]
+    warnings.push(format!("semantic indexed coverage {}/{} current units; discovery {}; graph work {}; selected replay {} descriptors. Global absence is not established by approximate discovery.",
+        manifest.coverage.indexed_current_units, manifest.coverage.eligible_current_units,
+        if nominations.approximate { "bounded approximate graph" } else { "exact bounded filtered subset" },
+        serde_json::to_string(&graph_usage).map_err(|_| conflict("graph work encoding"))?, usage.descriptors));
     warnings.push("Discovery uses published document eligibility and compact policy-bound unit identities. Compatible vectors are intersected with current descriptors; unselected canonical freshness is unverified and index sync discovers external edits.".into());
     require_space(store, state)?;
     Ok(Discovery {
+        #[cfg(feature = "experimental-semantic-discovery")]
+        manifest,
         hits: HitSet {
             network_used: false,
             graph: None,
             hits,
             next_cursor,
-            truncated: end < candidate_count || omitted > 0 || scan.coverage.missing_units > 0,
+            truncated: end < candidate_count
+                || omitted > 0
+                || scan.coverage.missing_units > 0
+                || approximate,
             candidate_count,
             omitted_candidates: omitted,
             snapshot: reader.snapshot().clone(),
@@ -424,6 +458,87 @@ fn discover(
             warnings,
         },
         dense,
+    })
+}
+
+#[cfg(feature = "experimental-semantic-discovery")]
+fn rerank_graph_owners(
+    corpus: &InventoryDocumentUnits<'_>,
+    units: &UnitBudget,
+    store: &VectorStore,
+    state: &SpaceState,
+    query: &[f32],
+    candidates: &super::discovery::DiscoveryCandidates,
+    manifest: &super::discovery::DiscoveryManifest,
+) -> Result<vectors::DenseScan> {
+    let paths: Vec<_> = candidates.hits.iter().map(|h| h.owner.clone()).collect();
+    let mut selected: BTreeMap<_, Vec<DenseHit>> =
+        paths.iter().cloned().map(|p| (p, Vec::new())).collect();
+    if selected.len() != paths.len() {
+        return Err(conflict("graph nominated a duplicate owner"));
+    }
+    let mut matched = std::collections::BTreeSet::new();
+    for unit in corpus.selected_owners(&paths, units)? {
+        let Some(passages) = selected.get_mut(&unit.owner) else {
+            return Err(conflict("graph selected replay escaped nominated owners"));
+        };
+        let vector = store.vector(&state.id, &unit.input_hash)?.ok_or_else(|| {
+            WikiError::new(
+                ErrorCode::OfflineUnavailable,
+                "selected graph unit has no compatible retained vector",
+            )
+        })?;
+        store.discovery_budget()?.reserve_distance()?;
+        let hit = DenseHit {
+            unit_id: unit.unit_id,
+            target: unit.target,
+            owner: unit.owner,
+            target_id: unit.target_id,
+            source_span: unit.source_span,
+            input_hash: unit.input_hash,
+            score: vectors::cosine(query, &vector)?,
+        };
+        if let Some(nominated) = candidates
+            .hits
+            .iter()
+            .find(|h| h.owner == hit.owner && h.unit_id == hit.unit_id)
+        {
+            if nominated != &hit {
+                return Err(conflict(
+                    "graph nomination differs from retained exact vector/descriptor",
+                ));
+            }
+            matched.insert(hit.owner.clone());
+        }
+        passages.push(hit);
+        passages.sort();
+        passages.truncate(2);
+    }
+    if matched.len() != paths.len() {
+        return Err(conflict(
+            "graph nomination absent from current selected inventory",
+        ));
+    }
+    let mut groups: Vec<_> = selected.into_values().collect();
+    if groups.iter().any(Vec::is_empty) {
+        return Err(conflict("graph selected owner has no retained passages"));
+    }
+    groups.sort_by(|a, b| a[0].cmp(&b[0]));
+    Ok(vectors::DenseScan {
+        hits: BTreeMap::from([(
+            render::TargetKind::Document,
+            groups.into_iter().flatten().collect(),
+        )]),
+        coverage: vectors::Coverage {
+            eligible_units: manifest.coverage.eligible_current_units,
+            available_units: manifest.coverage.compatible_paid_units,
+            ..Default::default()
+        },
+        available_by_target: BTreeMap::from([(render::TargetKind::Document, paths.len())]),
+        owner_cap_reached_by_target: BTreeMap::from([(
+            render::TargetKind::Document,
+            candidates.owner_cap_reached,
+        )]),
     })
 }
 
@@ -535,12 +650,20 @@ pub(crate) fn search(
     } else {
         reader.verify_operations(catalog)?;
     }
+    #[cfg(feature = "experimental-semantic-discovery")]
+    super::discovery::query::recheck_selection(catalog, &reader, &discovery.manifest)?;
     require_space(&VectorStore::open_bounded(catalog.fs(), &vectors)?, state)?;
     meter.check()?;
     let usage = vectors.usage();
     discovery.hits.warnings.push(format!("Vector read work: {} reads / {} bytes, {} metadata bytes, {} SQL VM steps; shared across both discovery passes and selected scoring.",
         usage.vector_reads, usage.vector_bytes_scanned,
         usage.metadata_bytes_decoded + usage.space_bytes_decoded, usage.sql_vm_steps));
+    #[cfg(feature = "experimental-semantic-discovery")]
+    discovery.hits.warnings.push(format!(
+        "Shared semantic distance work: {}/{} evaluations, including selected reranking.",
+        usage.distance_evaluations,
+        super::discovery::MAX_DISTANCE_EVALUATIONS
+    ));
     Ok(discovery.hits)
 }
 
@@ -612,6 +735,8 @@ pub(crate) fn context(
             fault.check(ContextCheckpoint::BeforeFinalVerification { attempt: 0 })?;
         }
         proof.recheck(catalog, &reader)?;
+        #[cfg(feature = "experimental-semantic-discovery")]
+        super::discovery::query::recheck_selection(catalog, &reader, &discovery.manifest)?;
         require_space(&VectorStore::open_bounded(catalog.fs(), &vectors)?, state)?;
         reader.check_query_budget()?;
         meter.check()?;
@@ -683,7 +808,11 @@ pub(crate) fn context(
                 owner: path.clone(),
                 observed_hash: document.hash.clone(),
                 span,
-                cosine: vectors::cosine(query, &vector)?,
+                cosine: {
+                    #[cfg(feature = "experimental-semantic-discovery")]
+                    store.discovery_budget()?.reserve_distance()?;
+                    vectors::cosine(query, &vector)?
+                },
             });
             #[cfg(test)]
             context::record_lineage_event("scored_units", || {
@@ -728,6 +857,8 @@ pub(crate) fn context(
         fault.check(ContextCheckpoint::BeforeFinalVerification { attempt: 0 })?;
     }
     proof.recheck(catalog, &reader)?;
+    #[cfg(feature = "experimental-semantic-discovery")]
+    super::discovery::query::recheck_selection(catalog, &reader, &discovery.manifest)?;
     require_space(&VectorStore::open_bounded(catalog.fs(), &vectors)?, state)?;
     meter.check()?;
     let usage = vectors.usage();
@@ -764,6 +895,12 @@ pub(crate) fn context(
     draft.warnings.push(format!("Vector read work: {} reads / {} bytes, {} metadata bytes, {} SQL VM steps; shared across discovery and scoring.",
         usage.vector_reads, usage.vector_bytes_scanned,
         usage.metadata_bytes_decoded + usage.space_bytes_decoded, usage.sql_vm_steps));
+    #[cfg(feature = "experimental-semantic-discovery")]
+    draft.warnings.push(format!(
+        "Shared semantic distance work: {}/{} evaluations, including selected scoring.",
+        usage.distance_evaluations,
+        super::discovery::MAX_DISTANCE_EVALUATIONS
+    ));
     Ok(seal(
         draft,
         indexed_documents::verification(&reader)?,

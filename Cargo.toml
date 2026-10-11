@@ -18,10 +18,13 @@ path = "src/main.rs"
 default = []
 # Private developer instrumentation; also requires explicit runtime opt-in.
 maintenance-diagnostic029 = []
+# Isolated capacity candidate; exact discovery remains the default until acceptance.
+experimental-semantic-discovery = ["dep:usearch", "serde_json/float_roundtrip"]
 
 [dependencies]
 blake3 = "=1.8.5"
 memchr = "=2.8.3"
+usearch = { version = "=2.26.4", default-features = false, optional = true }
 clap = { version = "=4.6.6", features = ["derive"] }
 serde = { version = "=1.0.229", features = ["derive"] }
 serde_json = "=1.0.151"

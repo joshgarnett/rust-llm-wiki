@@ -71,6 +71,8 @@ impl OfflineApp {
         };
         let space = spec.id()?;
         let mut report = EmbeddingReport {
+            #[cfg(feature = "experimental-semantic-discovery")]
+            discovery: None,
             space: Some(space.clone()),
             active_space: old.as_ref().map(|x| x.id.clone()),
             settings: Some(settings.clone()),
@@ -482,6 +484,20 @@ impl OfflineApp {
         report.warnings.push("Coverage describes current inventory and retained owner acknowledgments; it is not a full vector-blob integrity audit. Query discovery checks the compatible blobs it reads; canonical evidence is authenticated only for selected owners.".into());
         if !report.published {
             report.warnings.push("Preparation is pending or empty; repeat embeddings sync to resume. The retained active space is unchanged.".into())
+        }
+        #[cfg(feature = "experimental-semantic-discovery")]
+        if cursor.complete && Instant::now() < deadline {
+            report.discovery = Some(
+                self.prepare_semantic_discovery(settings, &space, deadline)
+                    .map_err(|error| {
+                        with_embedding_context(
+                            error,
+                            serde_json::json!({
+                                "vector_preparation": &report, "discovery_published": false
+                            }),
+                        )
+                    })?,
+            );
         }
         Ok(report)
     }

@@ -39,6 +39,16 @@ fn argument_format() -> OutputFormat {
     }
 }
 fn main() {
+    #[cfg(feature = "experimental-semantic-discovery")]
+    if std::env::args_os()
+        .nth(1)
+        .is_some_and(|arg| arg == "__semantic-builder-child-v1")
+    {
+        if lwiki::semantic_builder_child().is_err() {
+            std::process::exit(1);
+        }
+        return;
+    }
     let args = match Arguments::try_parse() {
         Ok(args) => args,
         Err(error) => {

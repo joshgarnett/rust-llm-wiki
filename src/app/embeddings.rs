@@ -7,6 +7,12 @@ use super::{
 mod indexed_check;
 #[path = "indexed_embedding_sync.rs"]
 mod indexed_sync;
+#[cfg(feature = "experimental-semantic-discovery")]
+#[path = "semantic_discovery_prepare.rs"]
+mod semantic_discovery_prepare;
+#[cfg(all(test, feature = "experimental-semantic-discovery"))]
+#[path = "semantic_discovery_workflow_tests.rs"]
+mod semantic_discovery_workflow_tests;
 use crate::config::providers::TrustedService;
 use crate::{
     catalog::{Catalog, CatalogGraphValidator, ReaderSnapshot},
@@ -161,7 +167,11 @@ pub struct EmbeddingReport {
     /// Normalized preparation excludes already acknowledged owners and inputs
     /// generated or recovered by this invocation; total coverage is separate.
     pub reused_inputs: usize,
+    /// Vector activation is distinct from discovery publication.
     pub published: bool,
+    #[cfg(feature = "experimental-semantic-discovery")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub discovery: Option<serde_json::Value>,
     pub dry_run: bool,
     pub network_used: bool,
     pub run_id: Option<RecordId>,
@@ -459,7 +469,7 @@ impl OfflineApp {
             drop(store);
             (spec, space, active.map(|state| state.id), coverage)
         };
-        let mut report=EmbeddingReport {space:space.clone(),active_space:active,settings:spec.as_ref().map(|s|s.settings.clone()),coverage,generated_inputs:0,reused_inputs:0,published:false,dry_run:self.options.dry_run,network_used:false,run_id:None,warnings:vec!["local check does not establish provider compatibility; missing/corrupt cache is missing coverage".into()]};
+        let mut report=EmbeddingReport {#[cfg(feature = "experimental-semantic-discovery")] discovery:None,space:space.clone(),active_space:active,settings:spec.as_ref().map(|s|s.settings.clone()),coverage,generated_inputs:0,reused_inputs:0,published:false,dry_run:self.options.dry_run,network_used:false,run_id:None,warnings:vec!["local check does not establish provider compatibility; missing/corrupt cache is missing coverage".into()]};
         if normalized {
             report.warnings.push("Coverage uses one pinned vector-cache view and individually authenticated owner scopes at an unchanged catalog publication; check is limited to 4096 owners and 120 seconds, and fails explicitly if incomplete.".into());
         }
@@ -581,6 +591,8 @@ impl OfflineApp {
             }
         }
         let mut report = EmbeddingReport {
+            #[cfg(feature = "experimental-semantic-discovery")]
+            discovery: None,
             space: Some(space.clone()),
             active_space: old_active.as_ref().map(|s| s.id.clone()),
             settings: Some(spec.settings.clone()),
@@ -815,6 +827,8 @@ impl OfflineApp {
             )?
         };
         Ok(EmbeddingReport {
+            #[cfg(feature = "experimental-semantic-discovery")]
+            discovery: None,
             space: Some(active.id.clone()), active_space: Some(active.id),
             settings: Some(active.spec.settings), coverage, generated_inputs: 0,
             reused_inputs,

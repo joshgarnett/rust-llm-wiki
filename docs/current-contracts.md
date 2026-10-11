@@ -1,5 +1,11 @@
 # Current contracts and local coverage
 
+The default-off [semantic discovery checkpoint](validation-semantic-discovery.md)
+passes 97 source-qualified affected checks, but its first real base-graph run
+fails macOS address-space-limit installation/readback. No graph was published,
+and no quality or scale credit follows. Native completeness remains 13/32 tasks
+and 79/129 facts; platform enforcement, storage costs and full lifecycle are open.
+
 The [joined maintenance candidate](validation-joined-maintenance.md) preserves
 guarded publication while parallelizing eligible reads and staging. Independent
 local review accepts 550 affected library cases, 126 integration cases and four
