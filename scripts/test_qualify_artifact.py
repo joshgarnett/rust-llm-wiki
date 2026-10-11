@@ -228,6 +228,8 @@ class ExistingArchiveTests(unittest.TestCase):
                     self.assertEqual(timeout, 180)
                     self.assertEqual(output_limit, qualification.PROFILE_LIMIT)
                     qualification.write_json(stdout_path, compiler_graph())
+                elif stage in ("tests", "release-skill", "artifact-tests"):
+                    self.assertEqual(timeout, 5400)
                 return path
 
             def prepare(archive, evidence, *args):
@@ -248,8 +250,13 @@ class ExistingArchiveTests(unittest.TestCase):
                     patch.object(qualification, "smoke", return_value=evidence / "lwiki"):
                 self.assertEqual(qualification.qualify(args, repo), 0)
             self.assertFalse(any("build_artifact.py" in str(value) for _, command in calls for value in command))
-            for stage in ("tests", "release-skill", "artifact-tests"):
+            for stage, target in (("tests", "//:test"), ("release-skill", "//:skill_export_test"),
+                                  ("artifact-tests", "//:artifact_tests")):
                 command = next(command for name, command in calls if name == stage)
+                self.assertEqual(command.count("--test_env=RUST_TEST_THREADS=1"), 1)
+                self.assertEqual(command.count(target), 1)
+                self.assertEqual([value for value in command if value.startswith("--test_arg=")],
+                                 ["--test_arg=--test-threads=1"] if stage == "release-skill" else [])
                 self.assertIn("--test_env=LWIKI_QUALIFY_BINARY=" + str(evidence / "lwiki"), command)
                 self.assertIn("--nocache_test_results", command)
                 self.assertIn("--test_strategy=standalone", command)

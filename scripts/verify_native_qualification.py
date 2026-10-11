@@ -92,6 +92,8 @@ def verify(root, release_directory, commit, version):
             if stage["stage"] == "compiler-profile" and arguments[-len(qualification.PROFILE_FLAGS):] != qualification.PROFILE_FLAGS:
                 raise qualification.QualificationError("native compiler profile query changed: " + label)
             if stage["stage"] in ("tests", "release-skill", "artifact-tests"):
+                if arguments.count("--test_env=RUST_TEST_THREADS=1") != 1:
+                    raise qualification.QualificationError("native Rust tests did not pin serial harness scheduling: " + label)
                 if ("--test_env=LWIKI_QUALIFY_BINARY=" + report["binary_path"] not in arguments
                         or "--test_strategy=standalone" not in arguments or "--nocache_test_results" not in arguments):
                     raise qualification.QualificationError("native CLI tests did not pin the archived executable: " + label)
@@ -99,7 +101,8 @@ def verify(root, release_directory, commit, version):
                 expected_options = ["--nofetch", "--config=release"]
                 if stage["stage"] != "test-build":
                     expected_options += ["--nocache_test_results", "--test_strategy=standalone",
-                                         "--test_env=LWIKI_QUALIFY_BINARY=" + report["binary_path"]]
+                                         "--test_env=LWIKI_QUALIFY_BINARY=" + report["binary_path"],
+                                         "--test_env=RUST_TEST_THREADS=1"]
                 if stage["stage"] == "tests":
                     expected_options.append("--zip_undeclared_test_outputs")
                 if stage["stage"] == "release-skill":

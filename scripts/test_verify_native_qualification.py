@@ -57,7 +57,8 @@ class NativeGateTests(unittest.TestCase):
                 elif name in ("test-build", "tests", "release-skill", "artifact-tests"):
                     command += ["--nofetch", "--config=release"]
                 if name in ("tests", "release-skill", "artifact-tests"):
-                    command += ["--test_env=LWIKI_QUALIFY_BINARY=/fixture/lwiki", "--test_strategy=standalone", "--nocache_test_results"]
+                    command += ["--test_env=LWIKI_QUALIFY_BINARY=/fixture/lwiki", "--test_env=RUST_TEST_THREADS=1",
+                                "--test_strategy=standalone", "--nocache_test_results"]
                 if name == "tests":
                     command += ["--zip_undeclared_test_outputs"]
                 if name == "release-skill":
@@ -94,6 +95,50 @@ class NativeGateTests(unittest.TestCase):
                           ["--@rules_rust//rust/settings:rustc_flag=-Copt-level=0"]):
                 with self.subTest(stage=name, extra=extra):
                     stages = [json.loads(line) for line in original.splitlines()]
+                    next(stage for stage in stages if stage["stage"] == name)["argv"] += extra
+                    path.write_text("".join(json.dumps(stage) + "\n" for stage in stages))
+                    with self.assertRaisesRegex(qualification.QualificationError, "stage options"):
+                        self.verify()
+
+    def test_each_runtime_suite_requires_exact_serial_environment_once(self):
+        import json
+        path = self.evidence / "macos-15/stages.jsonl"
+        original = [json.loads(line) for line in path.read_text().splitlines()]
+        pin = "--test_env=RUST_TEST_THREADS=1"
+        for name in ("tests", "release-skill", "artifact-tests"):
+            argv = next(stage for stage in original if stage["stage"] == name)["argv"]
+            index = argv.index(pin)
+            mutations = {
+                "missing": argv[:index] + argv[index + 1:],
+                "parallel": argv[:index] + ["--test_env=RUST_TEST_THREADS=2"] + argv[index + 1:],
+                "inherited": argv[:index] + ["--test_env=RUST_TEST_THREADS"] + argv[index + 1:],
+                "split": argv[:index] + ["--test_env", "RUST_TEST_THREADS=1"] + argv[index + 1:],
+                "duplicate": argv + [pin],
+                "conflict_after": argv + ["--test_env=RUST_TEST_THREADS=2"],
+                "conflict_before": argv[:index] + ["--test_env=RUST_TEST_THREADS=2"] + argv[index:],
+                "inherit_after": argv + ["--test_env=RUST_TEST_THREADS"],
+            }
+            for mutation, arguments in mutations.items():
+                with self.subTest(stage=name, mutation=mutation):
+                    stages = copy.deepcopy(original)
+                    next(stage for stage in stages if stage["stage"] == name)["argv"] = arguments
+                    path.write_text("".join(json.dumps(stage) + "\n" for stage in stages))
+                    with self.assertRaisesRegex(qualification.QualificationError, "serial harness scheduling|stage options"):
+                        self.verify()
+
+    def test_serial_environment_cannot_be_overridden_by_runtime_thread_or_mode_arguments(self):
+        import json
+        path = self.evidence / "macos-15/stages.jsonl"
+        original = [json.loads(line) for line in path.read_text().splitlines()]
+        for name in ("tests", "release-skill", "artifact-tests"):
+            for extra in (["--test_arg=--test-threads=2"],
+                          ["--test_arg=--test-threads", "--test_arg=2"],
+                          ["--test_arg=--test-threads=1"],
+                          ["--test_arg=--ignored"], ["--test_arg=--include-ignored"],
+                          ["--test_arg=--list"], ["--test_arg=--skip=source_relation"],
+                          ["--test_arg=source_relation"]):
+                with self.subTest(stage=name, extra=extra):
+                    stages = copy.deepcopy(original)
                     next(stage for stage in stages if stage["stage"] == name)["argv"] += extra
                     path.write_text("".join(json.dumps(stage) + "\n" for stage in stages))
                     with self.assertRaisesRegex(qualification.QualificationError, "stage options"):

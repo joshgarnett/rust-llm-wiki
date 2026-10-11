@@ -92,6 +92,20 @@ same optimization level as the shipped command. The qualification report retains
 Bazel's compiler arguments and verifies `opt-level=3`. Keep all test limits in
 place; an unoptimized diagnostic run does not establish release performance.
 
+For correctness qualification, the `tests`, `release-skill` and `artifact-tests`
+suites pass `--test_env=RUST_TEST_THREADS=1`, so each Rust harness runs one test at
+a time to avoid competition between test cases. The release-skill suite also
+retains `--test_arg=--test-threads=1`.
+Tests that start their own threads or child processes still exercise concurrency.
+The verifier requires the environment option exactly once and rejects conflicting
+thread settings, test filters and mode overrides. Keep every target and assertion,
+product deadline and accounting limit unchanged. Keep the unit target's
+`timeout="eternal"`, the 5,400-second qualification stage limit and the 150-minute
+native job limit separate from product deadlines.
+
+These settings are for correctness tests. Measure performance separately with
+representative inputs and limits.
+
 Release archives are built in GitHub Actions. Build the macOS archive on the oldest
 supported version, then run the same archive on each supported version. The macOS
 support policy covers the current major release and the previous two, on their

@@ -421,22 +421,23 @@ def qualify(args, repo=None):
         report.update(artifact=record, archive_path=str(archive), binary_path=str(binary))
         write_json(evidence / "qualification.json", report)
         override = "--test_env=LWIKI_QUALIFY_BINARY=" + str(binary)
+        test_threads = "--test_env=RUST_TEST_THREADS=1"
         profile = evidence / PROFILE_FILE
         runner.run("compiler-profile", bazel + PROFILE_FLAGS, timeout=180, stdout_path=profile, output_limit=PROFILE_LIMIT)
         report["build_profile"] = rust_build_profile(profile)
         write_json(evidence / "qualification.json", report)
         runner.run("test-build", bazel + ["build", "--nofetch", "--config=release", "//:test_build"])
         runner.run("tests", bazel + ["test", "--nofetch", "--config=release", "--nocache_test_results", "--test_strategy=standalone",
-                                     override, "--zip_undeclared_test_outputs", "//:test"])
+                                     override, test_threads, "--zip_undeclared_test_outputs", "//:test"])
         runner.stage = "retrieval-evidence"
         testlogs = command_text(bazel + ["info", "--nofetch", "--config=release", "bazel-testlogs"], repo)
         shutil.copy2(Path(testlogs) / "retrieval_baseline_test/test.outputs/outputs.zip", evidence / "retrieval-baseline.zip")
         runner.run("release-skill", bazel + ["test", "--nofetch", "--config=release", "--nocache_test_results",
-                                             "--test_strategy=standalone", override, "//:skill_export_test", "--test_arg=--test-threads=1"])
+                                             "--test_strategy=standalone", override, test_threads, "//:skill_export_test", "--test_arg=--test-threads=1"])
         runner.run("metadata", ["cargo", "metadata", "--locked", "--offline", "--no-deps", "--format-version", "1"])
         shutil.copy2(evidence / "metadata.log", evidence / "package.json")
         runner.run("artifact-tests", bazel + ["test", "--nofetch", "--config=release", "--nocache_test_results",
-                                              "--test_strategy=standalone", override, "//:artifact_tests"])
+                                              "--test_strategy=standalone", override, test_threads, "//:artifact_tests"])
         runner.stage = "executable-verification"
         verify_unchanged(binary, archive, record)
         installed = smoke(runner, binary, version, args.release_dir, record)
