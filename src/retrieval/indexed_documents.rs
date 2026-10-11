@@ -23,6 +23,10 @@ pub(super) struct SelectedCatalog<'a> {
     pub(super) proof: &'a selected_documents::SelectedDocuments,
 }
 impl QueryCatalog for SelectedCatalog<'_> {
+    fn query_deadline(&self) -> Option<std::time::Instant> {
+        self.reader.query_deadline()
+    }
+
     fn normalized_layout(&self) -> bool {
         self.reader.normalized_layout()
     }

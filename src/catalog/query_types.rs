@@ -65,6 +65,11 @@ pub(crate) trait QueryCatalog {
     fn check_query_budget(&self) -> Result<()> {
         Ok(())
     }
+    /// The same query clock used by SQL progress and decoded-work checks.
+    /// Native scalar callbacks must not start a fresh per-statement interval.
+    fn query_deadline(&self) -> Option<std::time::Instant> {
+        None
+    }
     /// SQL layout for direct bounded retrieval. Legacy adapters keep returning
     /// false because their private connection retains the original SQL shape.
     fn normalized_layout(&self) -> bool {
