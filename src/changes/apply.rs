@@ -192,6 +192,8 @@ impl ChangeEngine {
         observations: &[TargetObservation],
         guard_revision_trees: &dyn Fn(bool) -> Result<()>,
     ) -> Result<JournalState> {
+        let _diagnostic = crate::diagnostic::counter_span("canonical_executor");
+        crate::diagnostic::count("canonical_executor", manifest.operations.len() as u64);
         let mut state = initial.clone();
         if state.status.is_none() {
             state = journal::append_event(
@@ -497,8 +499,12 @@ impl ChangeEngine {
         journal::require_sync(self.fs.replace(staged, &ExpectedState::Absent, permit)?)
     }
     pub(crate) fn target_state(&self, target: &VaultRelativePath) -> Result<ExpectedState> {
+        let _diagnostic = crate::diagnostic::counter_span("target_state");
         Ok(
             read_bounded(&self.fs, target, MAX_PAYLOAD_BYTES)?.map_or(ExpectedState::Absent, |b| {
+                crate::diagnostic::bytes("target_state", b.len() as u64);
+                let _diagnostic = crate::diagnostic::counter_span("target_hash");
+                crate::diagnostic::bytes("target_hash", b.len() as u64);
                 ExpectedState::Hash(Blake3Hash::digest(b))
             }),
         )
@@ -770,6 +776,8 @@ impl ChangeEngine {
         manifest: &ChangeManifest,
         hash: &Blake3Hash,
     ) -> Result<()> {
+        let _diagnostic = crate::diagnostic::counter_span("dependency_guard");
+        crate::diagnostic::count("dependency_guard", manifest.read_preconditions.len() as u64);
         for condition in &manifest.read_preconditions {
             if self
                 .target_state(&condition.path)

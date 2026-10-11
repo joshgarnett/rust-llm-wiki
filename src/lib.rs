@@ -6,6 +6,8 @@ pub mod catalog;
 pub mod changes;
 pub mod cli;
 pub mod config;
+#[doc(hidden)]
+pub mod diagnostic;
 pub mod domain;
 pub mod graph;
 pub mod jobs;

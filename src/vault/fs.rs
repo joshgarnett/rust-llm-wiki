@@ -113,6 +113,7 @@ impl DurableIo for NativeIo {
         file.set_len(length)
     }
     fn sync_file(&self, file: &File) -> std::io::Result<()> {
+        let _diagnostic = crate::diagnostic::counter_span("file_sync");
         file.sync_all()
     }
     fn replace(&self, staged: &Path, target: &Path) -> std::io::Result<()> {
@@ -125,6 +126,7 @@ impl DurableIo for NativeIo {
         fs::create_dir(path)
     }
     fn sync_directory(&self, directory: &Path) -> std::io::Result<DirectorySync> {
+        let _diagnostic = crate::diagnostic::counter_span("directory_sync");
         #[cfg(unix)]
         {
             File::open(directory)?.sync_all()?;

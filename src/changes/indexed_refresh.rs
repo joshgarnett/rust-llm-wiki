@@ -902,6 +902,7 @@ impl ChangeEngine {
         writer: &WriterPermit,
         session: &mut IndexedRefreshSession<'_>,
     ) -> Result<ApplyReport> {
+        let _diagnostic = crate::diagnostic::stage("canonical_file_application");
         writer.require_root(self.fs.root())?;
         self.require_binding()?;
         let proof = session.proof().clone();
@@ -1097,6 +1098,7 @@ impl ChangeEngine {
                 return Err(recovery("indexed refresh published an unexpected snapshot"));
             }
         }
+        let _diagnostic_final = crate::diagnostic::stage("final_verification_and_acknowledgement");
         session.verify_selected(true, false)?;
         self.require_all_after(writer, &manifest, &hash)?;
         let seal = self.seal_indexed_publication(writer, session, &proof)?;

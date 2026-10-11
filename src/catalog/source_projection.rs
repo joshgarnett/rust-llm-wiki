@@ -116,6 +116,8 @@ pub(super) fn entry(row: &RecordRow) -> RegistryEntry {
 }
 pub(super) fn state(bytes: Option<&[u8]>) -> ExpectedState {
     bytes.map_or(ExpectedState::Absent, |bytes| {
+        let _diagnostic = crate::diagnostic::counter_span("projection_hash");
+        crate::diagnostic::bytes("projection_hash", bytes.len() as u64);
         ExpectedState::Hash(Blake3Hash::digest(bytes))
     })
 }
@@ -241,6 +243,7 @@ impl Work<'_> {
         path: &VaultRelativePath,
         expected: &ExpectedState,
     ) -> Result<()> {
+        let _diagnostic = crate::diagnostic::counter_span("projection_capture");
         self.tick()?;
         if let Some(doc) = self.captured.get(path) {
             if expected != &ExpectedState::Hash(doc.hash.clone()) {
@@ -1213,6 +1216,7 @@ pub(crate) fn project_refresh_batch(
     mut plans: Vec<IndexedSourceRefreshPlan>,
     limits: &RefreshProjectionLimits,
 ) -> Result<Option<super::write_projection::ProjectedWrite>> {
+    let _diagnostic = crate::diagnostic::counter_span("joint_projector");
     use super::write_projection::{ProjectedWrite, ProjectedWriteParts};
     use crate::changes::indexed_refresh::{
         IndexedRefreshSourceDependency, IndexedRefreshTarget, IndexedWriteOperation,
@@ -1396,6 +1400,8 @@ pub(super) fn asset_path(row: &RecordRow, name: &str) -> Result<VaultRelativePat
 
 impl Work<'_> {
     pub(super) fn recheck(&mut self) -> Result<()> {
+        let _diagnostic = crate::diagnostic::counter_span("projection_recheck");
+        crate::diagnostic::count("projection_recheck", self.before.len() as u64);
         for (path, expected) in self.before.clone() {
             self.tick()?;
             let remaining = self.limits.max_canonical_bytes.saturating_sub(self.bytes);
