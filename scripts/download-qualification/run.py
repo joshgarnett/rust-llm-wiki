@@ -134,6 +134,14 @@ def main():
         node = subprocess.check_output(['/usr/bin/which', 'node'], text=True).strip()
         url = 'https://raw.githubusercontent.com/joshgarnett/rust-llm-wiki/' + args.installer_commit + '/scripts/install.sh'
         result['installerURL'] = url
+        page_url = 'https://github.com/joshgarnett/rust-llm-wiki/blob/' + args.installer_commit + '/scripts/install.sh'
+        result['publicTransportDiagnostic'] = {'url': page_url, 'scope': 'system curl transport only; not browser download proof'}
+        try:
+            code, timing = command('public-transport-head', ['/usr/bin/curl', '-q', '--proto', '=https', '--proto-redir', '=https', '--head', '--silent', '--show-error', '--connect-timeout', '5', '--max-time', '10', '--dump-header', str(root / 'public-transport-headers.stdout'), '--output', '/dev/null', '--write-out', 'http=%{http_code} dns=%{time_namelookup} connect=%{time_connect} tls=%{time_appconnect} first_byte=%{time_starttransfer} total=%{time_total}\n', page_url], timeout=12, allow_failure=True)
+            result['publicTransportDiagnostic'].update(exit=code, metrics=timing.decode())
+        except RuntimeError as error:
+            # The independent transport diagnostic must not replace browser evidence.
+            result['publicTransportDiagnostic']['error'] = str(error)
         browser_code, _ = command('browser', [node, str(Path(__file__).with_name('browser.mjs')), str(root), url, args.installer_sha256], timeout=120, allow_failure=True)
         installer = root / 'downloads/install.sh'
         if installer.exists():
