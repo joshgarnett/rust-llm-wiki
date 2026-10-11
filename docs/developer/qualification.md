@@ -79,9 +79,10 @@ negative control. Successful export or a schema-valid skill does not prove host 
 
 ## Native and release bytes
 
-Run required correctness, fault/kill/restart/concurrency, minimal-PATH and ordinary
-workflow gates natively against the final staged executable on every supported
-target. Record compiler/profile/settings, full source commit, executable/archive
+Run the full correctness, fault/kill/restart/concurrency, minimal-PATH and ordinary
+workflow checks on Ubuntu 24.04 x86-64 and the oldest supported Apple silicon Mac,
+macOS 15. Run the installed workflow smoke test on macOS 26 and 27 using the same
+Mac archive. Record compiler/profile/settings for full runs, full source commit, executable/archive
 hashes and environment. A rebuild or re-sign that changes executable bytes requires
 replay. Container-only changes retain correctness evidence only after identical
 extracted executable bytes are proved; rerun extraction/trust checks as applicable.
@@ -113,6 +114,39 @@ latest updates. The release matrix uses macOS 15, 26 and 27; the macOS 27 runner
 currently has the label `xcode-27`. Check its reported OS version rather than
 inferring it from the label. This follows the recent-version approach in
 [Homebrew's support policy](https://docs.brew.sh/Support-Tiers).
+
+The release matrix runs full suites on Ubuntu 24.04 and macOS 15. On macOS 26 and
+27, `--mode installed-smoke` verifies the existing archive, installs it in a private
+home, captures a note, checks search and exact context citations, runs recovery,
+rebuild and wiki checks, and exercises the agent-file installation lifecycle. It
+also checks linkage and unchanged archive, extracted and installed executable
+hashes. These rows use no Rust or Bazel setup and run no compiled test suites.
+They establish the recorded installed workflow on those OS versions; full fault,
+crash and concurrency coverage comes from the two full rows.
+
+Qualification defaults to `--mode full`. The verifier requires all 28 full stages
+and observed compiler profile for Ubuntu and Mac 15, and all 20 installed stages
+for Mac 26 and 27. A completed full report can satisfy a newer Mac row while
+retaining its full designation. A legacy report remains full, including every
+original suite and compiler check. Missing full stages never become smoke evidence.
+The aggregate report records the two-full/two-installed policy and verifier commit.
+
+To check an existing archive with a newer qualification harness, dispatch
+`Opt-in native qualification` with its archive run ID, full product source commit,
+`checks=installed-smoke`, and the selected `compatibility-runner`. This runs the
+same installed checks without rebuilding the archive or repeating editor/browser
+checks. The report records the archived product commit and clean harness commit
+separately, and compares the installer with the product commit's Git bytes. The
+equivalent local command is:
+
+```sh
+scripts/qualify-local.sh NEW_EVIDENCE_DIRECTORY --mode installed-smoke \
+  --archive PATH --release-dir DIRECTORY --product-commit FULL_COMMIT
+```
+
+A separate product commit is
+allowed only for existing-archive installed smoke. Full suites keep their compiled
+harnesses bound to the actual clean product source checkout.
 
 Archive verification reads the minimum OS or glibc version from the executable
 and checks it against the release metadata. It requires `otool` or `llvm-otool`

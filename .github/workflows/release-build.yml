@@ -121,7 +121,7 @@ jobs:
           retention-days: 30
 
   qualify:
-    name: Test final executable on ${{ matrix.runner }}
+    name: Check final executable on ${{ matrix.runner }} (${{ matrix.mode }})
     needs: verify-archives
     strategy:
       fail-fast: false
@@ -130,17 +130,21 @@ jobs:
           - runner: ubuntu-24.04
             target: x86_64-unknown-linux-gnu
             macos-major: ''
+            mode: full
           - runner: macos-15
             target: aarch64-apple-darwin
             macos-major: '15'
+            mode: full
           - runner: macos-26
             target: aarch64-apple-darwin
             macos-major: '26'
+            mode: installed-smoke
           - runner: xcode-27
             target: aarch64-apple-darwin
             macos-major: '27'
+            mode: installed-smoke
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 150
+    timeout-minutes: ${{ matrix.mode == 'full' && 150 || 15 }}
     defaults:
       run:
         shell: bash
@@ -149,25 +153,27 @@ jobs:
         with:
           persist-credentials: false
       - uses: ./.github/actions/setup
+        if: matrix.mode == 'full'
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: qualification-assets-${{ github.sha }}
           path: ${{ runner.temp }}/qualification-assets
-      - name: Run full native suites and installed own-note workflow
+      - name: Run the required native suites or installed workflow
         env:
           EXPECTED_TARGET: ${{ matrix.target }}
           EXPECTED_COMMIT: ${{ github.sha }}
           RUNNER_LABEL: ${{ matrix.runner }}
           MACOS_MAJOR: ${{ matrix.macos-major }}
+          QUALIFICATION_MODE: ${{ matrix.mode }}
         run: |
           set -euo pipefail
-          test "$(python3 scripts/bazel.py --print-target)" = "$EXPECTED_TARGET"
           test "$(git rev-parse HEAD)" = "$EXPECTED_COMMIT"
           test -z "$(git status --porcelain)"
           task_version=$(python3 scripts/qualify_artifact.py --print-version)
           task_extra=()
           if [[ -n "$MACOS_MAJOR" ]]; then task_extra+=(--expected-macos-major "$MACOS_MAJOR"); fi
           scripts/qualify-local.sh "$RUNNER_TEMP/lwiki-qualification" \
+            --mode "$QUALIFICATION_MODE" \
             --archive "$RUNNER_TEMP/qualification-assets/lwiki-$task_version-$EXPECTED_TARGET.tar.gz" \
             --release-dir "$RUNNER_TEMP/qualification-assets" \
             --runner-label "$RUNNER_LABEL" "${task_extra[@]}"
@@ -226,7 +232,7 @@ jobs:
         with:
           pattern: native-evidence-*-${{ github.sha }}
           path: ${{ runner.temp }}/native-evidence
-      - name: Verify both archives and all four native reports before staging
+      - name: Verify both archives, full Linux and Mac15 suites, and newer Mac installed checks
         env:
           EXPECTED_COMMIT: ${{ github.sha }}
         run: |

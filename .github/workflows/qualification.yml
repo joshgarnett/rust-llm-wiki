@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       archive-run-id:
-        description: 'Existing release-build run for editor checks; leave empty for full native qualification'
+        description: 'Existing release-build run for archived checks; leave empty to build and qualify'
         type: string
         default: ''
       source-commit:
@@ -19,8 +19,13 @@ on:
       checks:
         description: 'Checks to run against existing archives'
         type: choice
-        options: [all, editor, installer, download, unit-diagnostic]
+        options: [all, editor, installer, download, installed-smoke, unit-diagnostic]
         default: all
+      compatibility-runner:
+        description: 'Newer Mac runner for installed-smoke only'
+        type: choice
+        options: [xcode-27, macos-26]
+        default: xcode-27
       diagnostic-runner:
         description: 'Runner for unit-diagnostic only'
         type: choice
@@ -44,17 +49,17 @@ jobs:
       tests: ${{ inputs.diagnostic-tests }}
 
   qualify-final-archives:
-    if: inputs.archive-run-id == '' && inputs.checks != 'unit-diagnostic'
+    if: inputs.archive-run-id == '' && inputs.checks != 'unit-diagnostic' && inputs.checks != 'installed-smoke'
     # Use the release pipeline so qualification never substitutes another build.
     uses: ./.github/workflows/release-build.yml
 
   editor:
     name: Check the archived release (${{ matrix.runner }}, ${{ inputs.checks }})
-    if: inputs.archive-run-id != '' && inputs.checks != 'unit-diagnostic'
+    if: (inputs.archive-run-id != '' || inputs.checks == 'installed-smoke') && inputs.checks != 'unit-diagnostic'
     strategy:
       fail-fast: false
       matrix:
-        include: ${{ fromJSON(inputs.platform == 'linux' && '[{"runner":"ubuntu-24.04","target":"x86_64-unknown-linux-gnu","macos-major":""}]' || (inputs.platform == 'macos' || inputs.checks == 'download') && '[{"runner":"macos-26","target":"aarch64-apple-darwin","macos-major":"26"}]' || '[{"runner":"macos-26","target":"aarch64-apple-darwin","macos-major":"26"},{"runner":"ubuntu-24.04","target":"x86_64-unknown-linux-gnu","macos-major":""}]') }}
+        include: ${{ fromJSON(inputs.checks == 'installed-smoke' && (inputs.compatibility-runner == 'xcode-27' && '[{"runner":"xcode-27","target":"aarch64-apple-darwin","macos-major":"27"}]' || '[{"runner":"macos-26","target":"aarch64-apple-darwin","macos-major":"26"}]') || inputs.platform == 'linux' && '[{"runner":"ubuntu-24.04","target":"x86_64-unknown-linux-gnu","macos-major":""}]' || (inputs.platform == 'macos' || inputs.checks == 'download') && '[{"runner":"macos-26","target":"aarch64-apple-darwin","macos-major":"26"}]' || '[{"runner":"macos-26","target":"aarch64-apple-darwin","macos-major":"26"},{"runner":"ubuntu-24.04","target":"x86_64-unknown-linux-gnu","macos-major":""}]') }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 20
     defaults:
@@ -72,6 +77,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          fetch-depth: ${{ inputs.checks == 'installed-smoke' && '0' || '1' }}
       - name: Verify the archive run and record the qualification source
         env:
           GH_TOKEN: ${{ github.token }}
@@ -86,8 +92,8 @@ jobs:
           import json, os, pathlib, subprocess, sys
           path = pathlib.Path(sys.argv[1])
           run = json.loads(path.read_text())
-          if os.environ['REQUESTED_PLATFORM'] == 'linux' and os.environ['REQUESTED_CHECKS'] == 'download':
-              raise SystemExit('the browser download check requires macOS')
+          if os.environ['REQUESTED_PLATFORM'] == 'linux' and os.environ['REQUESTED_CHECKS'] in ('download', 'installed-smoke'):
+              raise SystemExit('the browser and newer-Mac installed checks require macOS')
           if (run['head_sha'] != os.environ['SOURCE_COMMIT']
                   or run['repository']['full_name'] != os.environ['GITHUB_REPOSITORY']
                   or run['path'] != '.github/workflows/release-build.yml'):
@@ -115,7 +121,7 @@ jobs:
           root = pathlib.Path(os.environ['RUNNER_TEMP'])
           assets, evidence = root / 'editor-release-assets', root / 'editor-inputs'
           commit, target = os.environ['SOURCE_COMMIT'], os.environ['EDITOR_TARGET']
-          version = qualification.package_version(pathlib.Path.cwd())
+          version = qualification.package_version(pathlib.Path.cwd(), commit if os.environ['REQUESTED_CHECKS'] == 'installed-smoke' else None)
           major = os.environ['EDITOR_MACOS_MAJOR']
           host = qualification.host_information(target, os.environ['EDITOR_RUNNER'], int(major) if major else None)
           archive, binary, record = qualification.prepare_archive(
@@ -130,6 +136,13 @@ jobs:
                                  'EDITOR_INSTALLER_SHA256': qualification.digest(assets / 'install.sh')}.items():
                   env.write(key + '=' + value + '\n')
           PY
+      - name: Check installed compatibility of the archived product
+        if: inputs.checks == 'installed-smoke'
+        run: |
+          python3 scripts/qualify_artifact.py "$RUNNER_TEMP/lwiki-qualification" \
+            --mode installed-smoke --product-commit "$SOURCE_COMMIT" \
+            --archive "$EDITOR_ARCHIVE" --release-dir "$RUNNER_TEMP/editor-release-assets" \
+            --runner-label "$EDITOR_RUNNER" --expected-macos-major "$EDITOR_MACOS_MAJOR"
       - name: Check installed PATH, reinstall and removal with the final archive
         if: inputs.checks == 'all' || inputs.checks == 'installer'
         run: |
@@ -158,8 +171,13 @@ jobs:
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: editor-evidence-${{ matrix.runner }}-${{ inputs.source-commit }}-${{ github.run_id }}
+          name: ${{ inputs.checks == 'installed-smoke' && 'native-evidence' || 'editor-evidence' }}-${{ matrix.runner }}-${{ inputs.source-commit }}-${{ github.run_id }}
           path: |
+            ${{ runner.temp }}/lwiki-qualification/*.log
+            ${{ runner.temp }}/lwiki-qualification/*.json
+            ${{ runner.temp }}/lwiki-qualification/*.jsonl
+            ${{ runner.temp }}/lwiki-qualification/*.txt
+            ${{ runner.temp }}/lwiki-qualification/*.sha256
             ${{ runner.temp }}/editor-inputs/*.json
             ${{ runner.temp }}/editor-inputs/*.sha256
             ${{ runner.temp }}/editor-evidence/*.json

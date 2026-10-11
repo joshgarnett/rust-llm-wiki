@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Require four successful native runs of the exact verified release executable bytes."""
+"""Require full Linux/Mac15 suites and installed Mac26/27 checks of verified release bytes."""
 
 import argparse
 import json
@@ -17,12 +17,15 @@ RUNNERS = {
     "macos-26": ("aarch64-apple-darwin", "Darwin", "arm64", 26),
     "xcode-27": ("aarch64-apple-darwin", "Darwin", "arm64", 27),
 }
+POLICY = "lwiki.two-full-two-installed.v1"
+REQUIRED_MODES = {label: "full" if label in ("ubuntu-24.04", "macos-15") else "installed-smoke" for label in RUNNERS}
 REQUIRED_STAGES = {
     "fmt", "clippy", "compiler-profile", "test-build", "tests", "release-skill", "metadata", "artifact-tests",
     "install-preview", "install", "version", "capabilities", "setup", "capture", "search",
     "context", "recover", "rebuild", "check", "config-show", "skill-export", "linkage",
     "agent-preview", "agent-install", "agent-status", "agent-install-repeat", "agent-remove", "agent-status-removed",
 }
+INSTALLED_STAGES = REQUIRED_STAGES - {"fmt", "clippy", "compiler-profile", "test-build", "tests", "release-skill", "metadata", "artifact-tests"}
 BAZEL_TARGETS = {"fmt": "//:format", "clippy": "//:clippy", "test-build": "//:test_build",
                  "tests": "//:test", "release-skill": "//:skill_export_test", "artifact-tests": "//:artifact_tests"}
 CLI_COMMANDS = {"version": ["--version"], "capabilities": ["capabilities"], "setup": ["setup"],
@@ -34,7 +37,9 @@ CLI_COMMANDS.update({"agent-preview": ["--dry-run", "skill", "install"], "agent-
                      "agent-remove": ["skill", "remove"], "agent-status-removed": ["skill", "status"]})
 
 
-def verify(root, release_directory, commit, version):
+def verify(root, release_directory, commit, version, verifier_commit=None):
+    verifier_commit = verifier_commit or qualification.source_identity(Path(__file__).resolve().parent.parent)
+    verifier.validate_identity(verifier_commit, version)
     manifest = qualification.read_manifest(release_directory, commit, version)
     records = {record["target"]: record for record in manifest["targets"]}
     reports = sorted(root.glob("*/qualification.json"))
@@ -52,8 +57,26 @@ def verify(root, release_directory, commit, version):
         seen.add(label)
         target, system, machine, major = RUNNERS[label]
         record = records[target]
-        if (report.get("schema_version") != "lwiki.native-qualification.v1"
-                or report.get("status") != "passed"
+        schema = report.get("schema_version")
+        if schema == "lwiki.native-qualification.v1":
+            if "qualification_mode" in report:
+                raise qualification.QualificationError("legacy native reports must retain full scope: " + label)
+            mode, harness_commit = "full", commit
+        elif schema == "lwiki.native-qualification.v2":
+            mode, harness_commit = report.get("qualification_mode"), report.get("harness_commit")
+            if (mode not in qualification.MODES or report.get("test_scope") != qualification.TEST_SCOPES[mode]
+                    or report.get("harness_clean_before") is not True or report.get("harness_clean_after") is not True
+                    or not isinstance(harness_commit, str)):
+                raise qualification.QualificationError("native qualification mode or harness identity mismatch: " + label)
+            verifier.validate_identity(harness_commit, version)
+            if ((mode == "full" and harness_commit != commit)
+                    or report.get("installer_sha256") != qualification.digest(release_directory / "install.sh")):
+                raise qualification.QualificationError("native product, harness or installer identity mismatch: " + label)
+        else:
+            raise qualification.QualificationError("unsupported native report schema: " + label)
+        if REQUIRED_MODES[label] == "full" and mode != "full":
+            raise qualification.QualificationError("full native suites are required for this runner: " + label)
+        if (report.get("status") != "passed"
                 or report.get("source_commit") != commit or report.get("package_version") != version
                 or report.get("source_clean_before") is not True or report.get("source_clean_after") is not True
                 or report.get("target") != target or report.get("artifact") != record
@@ -72,13 +95,18 @@ def verify(root, release_directory, commit, version):
             raise qualification.QualificationError("native runner version does not meet its declared row: " + label)
         if major is None and 'VERSION_ID="24.04"' not in host.get("os_release", ""):
             raise qualification.QualificationError("Linux qualification must run on Ubuntu 24.04")
-        profile = qualification.rust_build_profile(path.parent / qualification.PROFILE_FILE)
-        if report.get("build_profile") != profile:
-            raise qualification.QualificationError("native compiler optimization provenance mismatch: " + label)
+        profile = None
+        if mode == "full":
+            profile = qualification.rust_build_profile(path.parent / qualification.PROFILE_FILE)
+            if report.get("build_profile") != profile:
+                raise qualification.QualificationError("native compiler optimization provenance mismatch: " + label)
+        elif "build_profile" in report or (path.parent / qualification.PROFILE_FILE).exists():
+            raise qualification.QualificationError("installed smoke must not claim compiler suite evidence: " + label)
+        required_stages = REQUIRED_STAGES if mode == "full" else INSTALLED_STAGES
         stages = [verifier.strict_json(line) for line in (path.parent / "stages.jsonl").read_bytes().splitlines()]
         if (any(not isinstance(stage, dict) for stage in stages)
-                or {stage.get("stage") for stage in stages} != REQUIRED_STAGES
-                or len(stages) != len(REQUIRED_STAGES)
+                or {stage.get("stage") for stage in stages} != required_stages
+                or len(stages) != len(required_stages)
                 or any(type(stage.get("exit_code")) is not int or stage["exit_code"] != 0 for stage in stages)):
             raise qualification.QualificationError("native qualification stages are incomplete: " + label)
         for stage in stages:
@@ -120,14 +148,17 @@ def verify(root, release_directory, commit, version):
                 if arguments[:len(expected)] != expected or not report.get("installed_binary_path"):
                     raise qualification.QualificationError("own-note checks did not run the installed executable: " + label)
         results.append({"runner_label": label, "host": host, "target": target,
+                        "required_mode": REQUIRED_MODES[label], "qualification_mode": mode, "harness_commit": harness_commit,
                         "archive_sha256": record["archive_sha256"], "binary_sha256": record["binary_sha256"],
                         "platform_requirements": record["platform_requirements"],
                         "qualification_report_sha256": qualification.digest(path),
-                        "stage_report_sha256": qualification.digest(path.parent / "stages.jsonl"),
-                        "build_profile": profile})
+                        "stage_report_sha256": qualification.digest(path.parent / "stages.jsonl")})
+        if profile is not None:
+            results[-1]["build_profile"] = profile
     if seen != set(RUNNERS):
         raise qualification.QualificationError("missing required native runner")
-    return {"schema_version": "lwiki.release-native-qualification.v1", "source_commit": commit,
+    return {"schema_version": "lwiki.release-native-qualification.v2", "verification_policy": POLICY,
+            "verifier_commit": verifier_commit, "source_commit": commit,
             "package_version": version, "status": "passed", "runners": results}
 
 

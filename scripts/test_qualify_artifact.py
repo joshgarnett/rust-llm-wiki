@@ -212,6 +212,7 @@ class ExistingArchiveTests(unittest.TestCase):
             evidence = root / "new evidence"
             archive = root / "final.tar.gz"
             archive.write_bytes(b"fixture archive")
+            (root / "install.sh").write_bytes(b"fixture installer\n")
             logroot = root / "testlogs"
             fixture = logroot / "retrieval_baseline_test/test.outputs/outputs.zip"
             fixture.parent.mkdir(parents=True)
@@ -268,10 +269,87 @@ class ExistingArchiveTests(unittest.TestCase):
             self.assertTrue(report["source_clean_after"])
             self.assertEqual(report["binary_sha256_after"], record["binary_sha256"])
             self.assertEqual(report["installed_binary_sha256"], record["binary_sha256"])
+            self.assertEqual(report["qualification_mode"], "full")
+            self.assertEqual(report["harness_commit"], COMMIT)
+
+    def smoke_request(self, mode="installed-smoke", product_commit=COMMIT, archive_present=True, assets_present=True):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        root = Path(temporary.name)
+        repo = root / "repo"
+        repo.mkdir()
+        (repo / "Cargo.toml").write_text('[package]\nversion = "' + VERSION + '"\n')
+        (root / "install.sh").write_bytes(b"product installer\n")
+        archive = root / "final.tar.gz"
+        archive.write_bytes(b"fixture archive")
+        evidence = root / "evidence"
+        record = artifact_record(MAC)
+        calls, source_reads = [], []
+
+        def prepare(archive, evidence, commit, version, target, host, release_dir):
+            self.assertEqual((commit, version, target, release_dir), (product_commit, VERSION, MAC, root))
+            binary = evidence / "lwiki"
+            binary.write_bytes(b"fixture executable")
+            return archive, binary, record
+
+        def run(runner, stage, command, *args, **kwargs):
+            calls.append((stage, command))
+            path = runner.evidence / (stage + ".log")
+            path.write_text("fixture\n")
+            return path
+
+        def source(repo, commit, name):
+            source_reads.append((commit, name))
+            return (repo / name).read_bytes()
+
+        args = argparse.Namespace(evidence=str(evidence), archive=archive if archive_present else None,
+                                  release_dir=root if assets_present else None, mode=mode, product_commit=product_commit,
+                                  runner_label="xcode-27", expected_macos_major=27)
+        with patch.object(qualification, "source_identity", return_value="b" * 40), \
+                patch.object(qualification, "source_file", side_effect=source), \
+                patch.object(qualification, "native_target", return_value=MAC), \
+                patch.object(qualification, "host_information", return_value={"macos_version": "27.0.1"}), \
+                patch.object(qualification, "command_text", side_effect=AssertionError("smoke called a build tool")), \
+                patch.object(qualification, "prepare_archive", side_effect=prepare), \
+                patch.object(qualification.Runner, "run", run), \
+                patch.object(qualification, "smoke", return_value=evidence / "lwiki") as smoke:
+            status = qualification.qualify(args, repo)
+        return status, json.loads((evidence / "qualification.json").read_text()), calls, source_reads, smoke
+
+    def test_smoke_uses_existing_product_and_separate_clean_harness_without_build_commands(self):
+        status, report, calls, reads, smoke = self.smoke_request()
+        self.assertEqual(status, 0)
+        self.assertEqual([name for name, _ in calls], ["linkage"])
+        self.assertEqual(reads, [(COMMIT, "Cargo.toml")])
+        self.assertEqual(smoke.call_args.args[-1], COMMIT)
+        self.assertEqual(report["source_commit"], COMMIT)
+        self.assertEqual(report["harness_commit"], "b" * 40)
+        self.assertTrue(report["harness_clean_before"] and report["harness_clean_after"])
+        self.assertEqual(report["qualification_mode"], "installed-smoke")
+        self.assertNotIn("build_profile", report)
+
+    def test_smoke_refuses_missing_verified_inputs_and_full_refuses_product_override_before_builds(self):
+        for options in ({"archive_present": False}, {"assets_present": False}, {"mode": "full"}, {"mode": "unknown"},
+                        {"product_commit": "short"}, {"product_commit": ""}):
+            with self.subTest(options=options):
+                status, report, calls, reads, smoke = self.smoke_request(**options)
+                self.assertNotEqual(status, 0)
+                self.assertEqual(report["status"], "failed")
+                self.assertEqual(calls, [])
+                self.assertEqual(reads, [])
+                smoke.assert_not_called()
+
+    def test_product_blob_lookup_uses_exact_commit_and_rejects_abbreviated_identity(self):
+        with patch.object(qualification.subprocess, "check_output", return_value=b"installer") as command:
+            self.assertEqual(qualification.source_file(Path("/fixture"), COMMIT, "scripts/install.sh"), b"installer")
+            command.assert_called_once_with(["git", "show", COMMIT + ":scripts/install.sh"], cwd=Path("/fixture"), timeout=30)
+            with self.assertRaises(qualification.QualificationError):
+                qualification.source_file(Path("/fixture"), "abc123", "scripts/install.sh")
+            self.assertEqual(command.call_count, 1)
 
 
 class InstalledNoteTests(unittest.TestCase):
-    def run_smoke(self, mutation=None):
+    def run_smoke(self, mutation=None, product_commit=None):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
         root = Path(temporary.name).resolve()
@@ -283,6 +361,8 @@ class InstalledNoteTests(unittest.TestCase):
         assets.mkdir()
         for path in (repo / "scripts/install.sh", assets / "install.sh"):
             path.write_text("fixture installer\n")
+        if product_commit:
+            (repo / "scripts/install.sh").write_text("newer harness installer\n")
         binary = evidence / "lwiki"
         binary.write_bytes(b"fixture executable")
         record = artifact_record(MAC)
@@ -351,8 +431,12 @@ class InstalledNoteTests(unittest.TestCase):
             return output
 
         runner = qualification.Runner(evidence, repo)
-        with patch.object(qualification.Runner, "run", run):
-            installed = qualification.smoke(runner, binary, VERSION, assets, record)
+        product_installer = b"fixture installer\n" if mutation != "product-installer" else b"different product installer\n"
+        with patch.object(qualification.Runner, "run", run), \
+                patch.object(qualification, "source_file", return_value=product_installer) as source:
+            installed = qualification.smoke(runner, binary, VERSION, assets, record, product_commit)
+            if product_commit:
+                source.assert_called_once_with(repo, product_commit, "scripts/install.sh")
         return installed, calls
 
     def test_installed_note_workflow_uses_private_home_and_exact_citation(self):
@@ -362,6 +446,11 @@ class InstalledNoteTests(unittest.TestCase):
             if name not in ("install-preview", "install"):
                 self.assertEqual(command[0], str(installed))
         self.assertIn("--non-interactive", next(command for name, command in calls if name == "setup"))
+
+    def test_separate_harness_compares_installer_to_product_blob_before_install(self):
+        self.run_smoke(product_commit=COMMIT)
+        with self.assertRaisesRegex(qualification.QualificationError, "installer differs"):
+            self.run_smoke(mutation="product-installer", product_commit=COMMIT)
 
     def test_wrong_note_revision_or_passage_is_rejected(self):
         for mutation in ("citation", "passage"):

@@ -27,6 +27,11 @@ PROFILE_QUERY = 'mnemonic("Rustc", filter("^//:", deps(//:test_build)))'
 PROFILE_LIMIT = 32 * 1024 * 1024
 PROFILE_FLAGS = ["aquery", "--nofetch", "--config=release", "--output=jsonproto",
                  "--include_commandline", "--include_param_files", "--noinclude_artifacts", PROFILE_QUERY]
+MODES = ("full", "installed-smoke")
+TEST_SCOPES = {
+    "full": "Full native library, fault/recovery and CLI suites; public CLI subprocesses use the extracted archive executable. Library assertions run in newly compiled test harnesses.",
+    "installed-smoke": "Existing archived executable only: installation, offline own-note search/context/citation, recovery/rebuild/check, agent-file lifecycle and linkage. No compiled library, fault/recovery or concurrency suites.",
+}
 
 
 def digest(path):
@@ -53,10 +58,25 @@ def source_identity(repo):
     return commit
 
 
-def package_version(repo):
+def source_file(repo, commit, name):
+    if not isinstance(commit, str) or re.fullmatch(r"[0-9a-f]{40}", commit) is None:
+        raise QualificationError("product and harness identities require full source commits")
+    return subprocess.check_output(["git", "show", commit + ":" + name], cwd=repo, timeout=30)
+
+
+def native_target():
+    targets = {("Darwin", "arm64"): "aarch64-apple-darwin", ("Linux", "x86_64"): "x86_64-unknown-linux-gnu"}
+    target = targets.get((platform.system(), platform.machine()))
+    if target is None:
+        raise QualificationError("qualification requires a supported native Mac or Linux host")
+    return target
+
+
+def package_version(repo, commit=None):
     # Cargo's package version is a literal in this repository. Keep the native
     # system Python sufficient on older runners; do not require a TOML package.
-    sections = re.findall(r"(?ms)^\[package\]\s*\n(.*?)(?=^\[|\Z)", (repo / "Cargo.toml").read_text(encoding="utf-8"))
+    text = source_file(repo, commit, "Cargo.toml").decode("utf-8") if commit else (repo / "Cargo.toml").read_text(encoding="utf-8")
+    sections = re.findall(r"(?ms)^\[package\]\s*\n(.*?)(?=^\[|\Z)", text)
     versions = re.findall(r'^version\s*=\s*"([^"\n]+)"\s*$', sections[0], re.MULTILINE) if len(sections) == 1 else []
     if len(versions) != 1:
         raise QualificationError("Cargo.toml must name one literal package version")
@@ -256,7 +276,7 @@ class Runner:
         return self.evidence / (stage + ".log")
 
 
-def smoke(runner, binary, version, release_directory, record):
+def smoke(runner, binary, version, release_directory, record, product_commit=None):
     home = runner.evidence / "home"
     home.mkdir(mode=0o700)
     env = {"PATH": "/usr/bin:/bin", "HOME": str(home),
@@ -266,7 +286,9 @@ def smoke(runner, binary, version, release_directory, record):
         prefix = home / ".local"
         install = ["/bin/sh", str(release_directory / "install.sh"), "--version", version,
                    "--prefix", str(prefix), "--from-dir", str(release_directory)]
-        if (release_directory / "install.sh").read_bytes() != (runner.repo / "scripts/install.sh").read_bytes():
+        expected_installer = (source_file(runner.repo, product_commit, "scripts/install.sh") if product_commit
+                              else (runner.repo / "scripts/install.sh").read_bytes())
+        if (release_directory / "install.sh").read_bytes() != expected_installer:
             raise QualificationError("the release installer differs from the qualified source commit")
         runner.run("install-preview", install + ["--dry-run"], env, home, 180)
         if prefix.exists():
@@ -392,23 +414,37 @@ def qualify(args, repo=None):
     evidence = evidence.resolve()
     print("Qualification evidence: " + str(evidence), file=sys.stderr)
     started = time.monotonic()
-    report = {"schema_version": "lwiki.native-qualification.v1", "status": "running",
+    mode = getattr(args, "mode", "full")
+    product_commit = getattr(args, "product_commit", None)
+    report = {"schema_version": "lwiki.native-qualification.v2", "status": "running",
               "observed_start_utc": observe(), "evidence_directory": str(evidence),
               "existing_archive": args.archive is not None, "installed_workflow": False,
-              "test_scope": "Full native library, fault/recovery and CLI suites; public CLI subprocesses use the extracted archive executable. Library assertions run in newly compiled test harnesses."}
+              "qualification_mode": mode, "test_scope": TEST_SCOPES.get(mode)}
     runner = Runner(evidence, repo)
     archive = binary = installed = record = None
     status = 1
     try:
-        target = command_text([sys.executable, "scripts/bazel.py", "--print-target"], repo)
-        commit = source_identity(repo)
-        version = package_version(repo)
+        if mode not in MODES:
+            raise QualificationError("unknown qualification mode")
+        if mode == "installed-smoke" and (args.archive is None or args.release_dir is None):
+            raise QualificationError("installed smoke requires an existing archive and complete verified release assets")
+        if product_commit is not None and mode != "installed-smoke":
+            raise QualificationError("a separate product commit is allowed only for existing-archive installed smoke")
+        if product_commit is not None and (not isinstance(product_commit, str) or re.fullmatch(r"[0-9a-f]{40}", product_commit) is None):
+            raise QualificationError("product identity requires a full source commit")
+        target = (native_target() if mode == "installed-smoke"
+                  else command_text([sys.executable, "scripts/bazel.py", "--print-target"], repo))
+        harness_commit = source_identity(repo)
+        commit = product_commit or harness_commit
+        version = package_version(repo, product_commit)
         host = host_information(target, args.runner_label, args.expected_macos_major)
-        report.update(source_commit=commit, source_clean_before=True, package_version=version, target=target, host=host)
+        report.update(source_commit=commit, source_clean_before=True, harness_commit=harness_commit,
+                      harness_clean_before=True, package_version=version, target=target, host=host)
         write_json(evidence / "host.json", host)
         bazel = [sys.executable, "scripts/bazel.py", "--"]
-        runner.run("fmt", bazel + ["test", "--nofetch", "--nocache_test_results", "//:format"])
-        runner.run("clippy", bazel + ["test", "--nofetch", "--nocache_test_results", "//:clippy"])
+        if mode == "full":
+            runner.run("fmt", bazel + ["test", "--nofetch", "--nocache_test_results", "//:format"])
+            runner.run("clippy", bazel + ["test", "--nofetch", "--nocache_test_results", "//:clippy"])
         archive = args.archive
         if archive is None:
             runner.run("release", [sys.executable, "scripts/build_artifact.py", str(evidence / "artifact")])
@@ -420,37 +456,39 @@ def qualify(args, repo=None):
         archive, binary, record = prepare_archive(archive, evidence, commit, version, target, host, args.release_dir)
         report.update(artifact=record, archive_path=str(archive), binary_path=str(binary))
         write_json(evidence / "qualification.json", report)
-        override = "--test_env=LWIKI_QUALIFY_BINARY=" + str(binary)
-        test_threads = "--test_env=RUST_TEST_THREADS=1"
-        profile = evidence / PROFILE_FILE
-        runner.run("compiler-profile", bazel + PROFILE_FLAGS, timeout=180, stdout_path=profile, output_limit=PROFILE_LIMIT)
-        report["build_profile"] = rust_build_profile(profile)
-        write_json(evidence / "qualification.json", report)
-        runner.run("test-build", bazel + ["build", "--nofetch", "--config=release", "//:test_build"])
-        runner.run("tests", bazel + ["test", "--nofetch", "--config=release", "--nocache_test_results", "--test_strategy=standalone",
-                                     override, test_threads, "--zip_undeclared_test_outputs", "//:test"])
-        runner.stage = "retrieval-evidence"
-        testlogs = command_text(bazel + ["info", "--nofetch", "--config=release", "bazel-testlogs"], repo)
-        shutil.copy2(Path(testlogs) / "retrieval_baseline_test/test.outputs/outputs.zip", evidence / "retrieval-baseline.zip")
-        runner.run("release-skill", bazel + ["test", "--nofetch", "--config=release", "--nocache_test_results",
-                                             "--test_strategy=standalone", override, test_threads, "//:skill_export_test", "--test_arg=--test-threads=1"])
-        runner.run("metadata", ["cargo", "metadata", "--locked", "--offline", "--no-deps", "--format-version", "1"])
-        shutil.copy2(evidence / "metadata.log", evidence / "package.json")
-        runner.run("artifact-tests", bazel + ["test", "--nofetch", "--config=release", "--nocache_test_results",
-                                              "--test_strategy=standalone", override, test_threads, "//:artifact_tests"])
+        if mode == "full":
+            override = "--test_env=LWIKI_QUALIFY_BINARY=" + str(binary)
+            test_threads = "--test_env=RUST_TEST_THREADS=1"
+            profile = evidence / PROFILE_FILE
+            runner.run("compiler-profile", bazel + PROFILE_FLAGS, timeout=180, stdout_path=profile, output_limit=PROFILE_LIMIT)
+            report["build_profile"] = rust_build_profile(profile)
+            write_json(evidence / "qualification.json", report)
+            runner.run("test-build", bazel + ["build", "--nofetch", "--config=release", "//:test_build"])
+            runner.run("tests", bazel + ["test", "--nofetch", "--config=release", "--nocache_test_results", "--test_strategy=standalone",
+                                         override, test_threads, "--zip_undeclared_test_outputs", "//:test"])
+            runner.stage = "retrieval-evidence"
+            testlogs = command_text(bazel + ["info", "--nofetch", "--config=release", "bazel-testlogs"], repo)
+            shutil.copy2(Path(testlogs) / "retrieval_baseline_test/test.outputs/outputs.zip", evidence / "retrieval-baseline.zip")
+            runner.run("release-skill", bazel + ["test", "--nofetch", "--config=release", "--nocache_test_results",
+                                                 "--test_strategy=standalone", override, test_threads, "//:skill_export_test", "--test_arg=--test-threads=1"])
+            runner.run("metadata", ["cargo", "metadata", "--locked", "--offline", "--no-deps", "--format-version", "1"])
+            shutil.copy2(evidence / "metadata.log", evidence / "package.json")
+            runner.run("artifact-tests", bazel + ["test", "--nofetch", "--config=release", "--nocache_test_results",
+                                                  "--test_strategy=standalone", override, test_threads, "//:artifact_tests"])
         runner.stage = "executable-verification"
         verify_unchanged(binary, archive, record)
-        installed = smoke(runner, binary, version, args.release_dir, record)
+        installed = smoke(runner, binary, version, args.release_dir, record, product_commit)
         runner.stage = "final-identity"
         verify_unchanged(binary, archive, record, installed)
-        if source_identity(repo) != commit:
+        if source_identity(repo) != harness_commit:
             raise QualificationError("source commit changed during qualification")
         if target == "aarch64-apple-darwin":
             runner.run("linkage", ["otool", "-L", str(binary)], timeout=30)
         else:
             runner.run("linkage", ["ldd", str(binary)], timeout=30)
-        report.update(status="passed", source_clean_after=True, installed_workflow=installed is not None,
+        report.update(status="passed", source_clean_after=True, harness_clean_after=True, installed_workflow=installed is not None,
                       agent_lifecycle=True,
+                      installer_sha256=digest(args.release_dir / "install.sh") if args.release_dir is not None else None,
                       installed_binary_path=str(installed) if installed is not None else None,
                       installed_binary_sha256=digest(installed) if installed is not None else None)
         (evidence / "qualification.txt").write_text("All qualification stages passed.\n", encoding="utf-8")
@@ -478,6 +516,8 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("evidence", nargs="?", help="new evidence directory; existing paths are refused")
     parser.add_argument("--archive", type=Path, help="existing final archive to qualify without building a replacement")
+    parser.add_argument("--mode", choices=MODES, default="full", help="full native suites or existing-archive installed workflow only")
+    parser.add_argument("--product-commit", help="full archived product commit; only for existing-archive installed smoke under a separate clean harness")
     parser.add_argument("--release-dir", type=Path, help="complete verified release assets for installed-note checks")
     parser.add_argument("--runner-label", default="local", help="label recorded with native host evidence")
     parser.add_argument("--expected-macos-major", type=int, help="refuse a Mac runner running a different OS major version")

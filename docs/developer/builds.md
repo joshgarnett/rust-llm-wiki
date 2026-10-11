@@ -110,10 +110,13 @@ and runs the offline smoke workflow with a minimal system PATH. See
   and retains its logs and archive.
 - `Release build` builds the final archives once, from one clean workflow commit,
   on Ubuntu 24.04 and macOS 15. It verifies both archives, then tests the same
-  extracted executable on Ubuntu 24.04 and macOS 15, 26 and 27. Native tests include
-  the full correctness and recovery suites, installation, and a workflow with
-  the installed command. Final staging requires all four native jobs and their
-  recorded executable hashes to pass. Different commits may build concurrently;
+  extracted executable on Ubuntu 24.04 and macOS 15, 26 and 27. Ubuntu and Mac 15
+  run full correctness and recovery suites plus installation and an own-note
+  workflow. Mac 26 and 27 run the installed workflow, agent-file lifecycle and
+  linkage checks without Rust/Bazel setup or compiled suites. Final staging
+  requires both full rows and both newer-Mac installed rows with exact source and
+  executable hashes; a successful full report retains its scope when used for an
+  installed row. Different commits may build concurrently;
   duplicate runs of one commit serialize.
 - Publication is a separate step after native qualification, installed workflows
   and applicable OS trust checks pass for the final executable bytes. Short CI,
