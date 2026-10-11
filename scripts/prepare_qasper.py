@@ -2,7 +2,7 @@
 """Prepare a deterministic text-only QASPER sample from pinned local archives.
 
 No network, provider calls, credentials, lwiki commands or archive path extraction.
-Existing output directories are refused. See docs/evaluating-context.md for downloads.
+Existing output directories are refused. See docs/developer/evaluating-context.md for downloads.
 """
 import hashlib
 import argparse

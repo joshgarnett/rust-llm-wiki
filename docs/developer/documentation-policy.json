@@ -1,0 +1,377 @@
+{
+  "schema_version": "lwiki.documentation-policy.v1",
+  "review_rule": "Review each document for its reader, task, clear steps and expected result. Apply AGENTS.md writing guidelines and independent task-based review. User guides must support real wiki and agent use without developer references. Keep session logs local; preserve exact code and quoted evidence.",
+  "documents": [
+    {
+      "path": "AGENTS.md",
+      "classification": "agent_instruction",
+      "purpose": "Provide reusable scoped agent instructions or the running registry-derived command reference."
+    },
+    {
+      "path": "README.md",
+      "classification": "user_guide",
+      "purpose": "Help readers install lwiki, set up their real wiki, connect an agent and use their own notes."
+    },
+    {
+      "path": "docs/developer/README.md",
+      "classification": "developer_reference",
+      "purpose": "Maintain reproducible development procedures, architectural decisions or qualification limits."
+    },
+    {
+      "path": "docs/developer/agent-workflow/AGENT-PROMPTS.md",
+      "classification": "developer_protocol",
+      "purpose": "Maintain reproducible development procedures, architectural decisions or qualification limits."
+    },
+    {
+      "path": "docs/developer/agent-workflow/DECISIONS.md",
+      "classification": "developer_protocol",
+      "purpose": "Maintain reproducible development procedures, architectural decisions or qualification limits."
+    },
+    {
+      "path": "docs/developer/agent-workflow/README.md",
+      "classification": "developer_protocol",
+      "purpose": "Maintain reproducible development procedures, architectural decisions or qualification limits."
+    },
+    {
+      "path": "docs/developer/agent-workflow/VALIDATION.md",
+      "classification": "developer_protocol",
+      "purpose": "Maintain reproducible development procedures, architectural decisions or qualification limits."
+    },
+    {
+      "path": "docs/developer/benchmark-full-check.md",
+      "classification": "developer_protocol",
+      "purpose": "Maintain reproducible development procedures, architectural decisions or qualification limits."
+    },
+    {
+      "path": "docs/developer/build-checkpoints.md",
+      "classification": "developer_protocol",
+      "purpose": "Maintain reproducible development procedures, architectural decisions or qualification limits."
+    },
+    {
+      "path": "docs/developer/builds.md",
+      "classification": "developer_protocol",
+      "purpose": "Maintain reproducible development procedures, architectural decisions or qualification limits."
+    },
+    {
+      "path": "docs/developer/contracts/README.md",
+      "classification": "developer_contract",
+      "purpose": "Define current public or durable implementation authority and invariants."
+    },
+    {
+      "path": "docs/developer/contracts/cli-and-skills.md",
+      "classification": "developer_contract",
+      "purpose": "Define current public or durable implementation authority and invariants."
+    },
+    {
+      "path": "docs/developer/contracts/providers-jobs.md",
+      "classification": "developer_contract",
+      "purpose": "Define current public or durable implementation authority and invariants."
+    },
+    {
+      "path": "docs/developer/contracts/record-schemas.md",
+      "classification": "developer_contract",
+      "purpose": "Define current public or durable implementation authority and invariants."
+    },
+    {
+      "path": "docs/developer/contracts/research-handoffs.md",
+      "classification": "developer_contract",
+      "purpose": "Define current public or durable implementation authority and invariants."
+    },
+    {
+      "path": "docs/developer/contracts/retrieval.md",
+      "classification": "developer_contract",
+      "purpose": "Define current public or durable implementation authority and invariants."
+    },
+    {
+      "path": "docs/developer/contracts/storage.md",
+      "classification": "developer_contract",
+      "purpose": "Define current public or durable implementation authority and invariants."
+    },
+    {
+      "path": "docs/developer/current-contracts.md",
+      "classification": "developer_reference",
+      "purpose": "Maintain reproducible development procedures, architectural decisions or qualification limits."
+    },
+    {
+      "path": "docs/developer/design-decisions.md",
+      "classification": "developer_reference",
+      "purpose": "Maintain reproducible development procedures, architectural decisions or qualification limits."
+    },
+    {
+      "path": "docs/developer/documentation-policy.json",
+      "classification": "policy",
+      "purpose": "Review the published documentation inventory, purpose and migration destinations."
+    },
+    {
+      "path": "docs/developer/embeddings.md",
+      "classification": "developer_reference",
+      "purpose": "Maintain reproducible development procedures, architectural decisions or qualification limits."
+    },
+    {
+      "path": "docs/developer/eval-datasets-quick-reference.md",
+      "classification": "developer_reference",
+      "purpose": "Maintain reproducible development procedures, architectural decisions or qualification limits."
+    },
+    {
+      "path": "docs/developer/eval-datasets.md",
+      "classification": "developer_reference",
+      "purpose": "Maintain reproducible development procedures, architectural decisions or qualification limits."
+    },
+    {
+      "path": "docs/developer/evaluating-conditionalqa.md",
+      "classification": "developer_protocol",
+      "purpose": "Maintain reproducible development procedures, architectural decisions or qualification limits."
+    },
+    {
+      "path": "docs/developer/evaluating-context.md",
+      "classification": "developer_protocol",
+      "purpose": "Maintain reproducible development procedures, architectural decisions or qualification limits."
+    },
+    {
+      "path": "docs/developer/evaluating-contractnli.md",
+      "classification": "developer_protocol",
+      "purpose": "Maintain reproducible development procedures, architectural decisions or qualification limits."
+    },
+    {
+      "path": "docs/developer/full-check-resource-protocol.json",
+      "classification": "developer_protocol",
+      "purpose": "Maintain reproducible development procedures, architectural decisions or qualification limits."
+    },
+    {
+      "path": "docs/developer/knowledge-graph.md",
+      "classification": "developer_reference",
+      "purpose": "Maintain reproducible development procedures, architectural decisions or qualification limits."
+    },
+    {
+      "path": "docs/developer/large-vault-design.md",
+      "classification": "developer_reference",
+      "purpose": "Maintain reproducible development procedures, architectural decisions or qualification limits."
+    },
+    {
+      "path": "docs/developer/qualification.md",
+      "classification": "developer_reference",
+      "purpose": "Maintain reproducible development procedures, architectural decisions or qualification limits."
+    },
+    {
+      "path": "docs/developer/query-limits.md",
+      "classification": "developer_reference",
+      "purpose": "Maintain reproducible development procedures, architectural decisions or qualification limits."
+    },
+    {
+      "path": "docs/developer/rag-quality-targets.md",
+      "classification": "developer_reference",
+      "purpose": "Maintain reproducible development procedures, architectural decisions or qualification limits."
+    },
+    {
+      "path": "docs/developer/testing-large-vaults.md",
+      "classification": "developer_protocol",
+      "purpose": "Maintain reproducible development procedures, architectural decisions or qualification limits."
+    },
+    {
+      "path": "docs/developer/testing-usability.md",
+      "classification": "developer_protocol",
+      "purpose": "Maintain reproducible development procedures, architectural decisions or qualification limits."
+    },
+    {
+      "path": "docs/developer/validation-status.md",
+      "classification": "developer_reference",
+      "purpose": "Maintain reproducible development procedures, architectural decisions or qualification limits."
+    },
+    {
+      "path": "docs/user/README.md",
+      "classification": "user_guide",
+      "purpose": "Route users to the first offline task, common workflows, availability and support."
+    },
+    {
+      "path": "docs/user/everyday-use.md",
+      "classification": "user_guide",
+      "purpose": "Select or initialize a wiki, capture and refresh notes, and guard author edits and Page moves."
+    },
+    {
+      "path": "docs/user/getting-started.md",
+      "classification": "user_guide",
+      "purpose": "Create a disposable offline wiki, capture a note and verify the first cited fact."
+    },
+    {
+      "path": "docs/user/install.md",
+      "classification": "user_guide",
+      "purpose": "Verify a supplied binary, explain unsigned distribution and preserve upgrade rollback."
+    },
+    {
+      "path": "docs/user/integration.md",
+      "classification": "user_guide",
+      "purpose": "Export agent instructions and explain durable files, identities, navigation and byte coordinates."
+    },
+    {
+      "path": "docs/user/recovery.md",
+      "classification": "user_guide",
+      "purpose": "Interpret health and interrupted writes, restore exact known bytes, and back up all authority."
+    },
+    {
+      "path": "docs/user/retrieval.md",
+      "classification": "user_guide",
+      "purpose": "Explain search and citation scope, bounded reads, named neighbors and separate host selection."
+    },
+    {
+      "path": "docs/user/sources-and-providers.md",
+      "classification": "user_guide",
+      "purpose": "Document collection and batch lifecycle, optional remote configuration and experimental boundaries."
+    },
+    {
+      "path": "skills/llm-wiki/SKILL.md",
+      "classification": "agent_instruction",
+      "purpose": "Provide reusable scoped agent instructions or the running registry-derived command reference."
+    },
+    {
+      "path": "skills/llm-wiki/agents/openai.yaml",
+      "classification": "documentation_asset",
+      "purpose": "Provide reusable scoped agent instructions or the running registry-derived command reference."
+    },
+    {
+      "path": "skills/llm-wiki/references/cited-page.md",
+      "classification": "agent_instruction",
+      "purpose": "Provide reusable scoped agent instructions or the running registry-derived command reference."
+    },
+    {
+      "path": "skills/llm-wiki/references/commands.md",
+      "classification": "generated_reference",
+      "purpose": "Provide reusable scoped agent instructions or the running registry-derived command reference."
+    },
+    {
+      "path": "skills/llm-wiki/references/examples.json",
+      "classification": "documentation_asset",
+      "purpose": "Provide reusable scoped agent instructions or the running registry-derived command reference."
+    },
+    {
+      "path": "skills/llm-wiki/references/workflows.md",
+      "classification": "agent_instruction",
+      "purpose": "Provide reusable scoped agent instructions or the running registry-derived command reference."
+    }
+  ],
+  "migration_paths": {
+    "docs/agent-integration.md": "docs/user/integration.md#export-an-agent-workflow",
+    "docs/benchmark-full-check.md": "docs/developer/benchmark-full-check.md",
+    "docs/build-checkpoints.md": "docs/developer/build-checkpoints.md",
+    "docs/builds.md": "docs/developer/builds.md",
+    "docs/context-selection.md": "docs/user/retrieval.md#select-passages-with-a-host",
+    "docs/current-contracts.md": "docs/developer/current-contracts.md",
+    "docs/embeddings.md": "docs/developer/embeddings.md",
+    "docs/eval-datasets-quick-reference.md": "docs/developer/eval-datasets-quick-reference.md",
+    "docs/eval-datasets.md": "docs/developer/eval-datasets.md",
+    "docs/evaluating-conditionalqa.md": "docs/developer/evaluating-conditionalqa.md",
+    "docs/evaluating-context.md": "docs/developer/evaluating-context.md",
+    "docs/evaluating-contractnli.md": "docs/developer/evaluating-contractnli.md",
+    "docs/execution/AGENT-PROMPTS.md": "docs/developer/agent-workflow/AGENT-PROMPTS.md",
+    "docs/execution/DECISIONS.md": "docs/developer/agent-workflow/DECISIONS.md",
+    "docs/execution/README.md": "docs/developer/agent-workflow/README.md",
+    "docs/execution/VALIDATION.md": "docs/developer/agent-workflow/VALIDATION.md",
+    "docs/external-page-sync.md": "docs/user/everyday-use.md#create-edit-and-move-a-page",
+    "docs/full-check-resource-protocol.json": "docs/developer/full-check-resource-protocol.json",
+    "docs/getting-started.md": "docs/user/getting-started.md",
+    "docs/indexed-context.md": "docs/user/retrieval.md#search-and-inspect-cited-context",
+    "docs/knowledge-graph.md": "docs/developer/knowledge-graph.md",
+    "docs/large-vault-design.md": "docs/developer/large-vault-design.md",
+    "docs/named-neighbors.md": "docs/user/retrieval.md#inspect-named-neighbors",
+    "docs/page-reorganization.md": "docs/user/everyday-use.md#create-edit-and-move-a-page",
+    "docs/providers.md": "docs/user/sources-and-providers.md#optional-remote-providers",
+    "docs/qualification.md": "docs/developer/qualification.md",
+    "docs/query-limits.md": "docs/developer/query-limits.md",
+    "docs/rag-quality-targets.md": "docs/developer/rag-quality-targets.md",
+    "docs/source-import-maintenance.md": "docs/user/sources-and-providers.md#maintain-imported-sources",
+    "docs/source-imports.md": "docs/user/sources-and-providers.md#import-a-collection",
+    "docs/source-refresh-batch.md": "docs/user/sources-and-providers.md#refresh-a-guarded-batch",
+    "docs/source-relation-preparation.md": "docs/user/sources-and-providers.md#experimental-source-relations",
+    "docs/technical/README.md": "docs/developer/contracts/README.md",
+    "docs/technical/cli-and-skills.md": "docs/developer/contracts/cli-and-skills.md",
+    "docs/technical/providers-jobs.md": "docs/developer/contracts/providers-jobs.md",
+    "docs/technical/record-schemas.md": "docs/developer/contracts/record-schemas.md",
+    "docs/technical/research-handoffs.md": "docs/developer/contracts/research-handoffs.md",
+    "docs/technical/retrieval.md": "docs/developer/contracts/retrieval.md",
+    "docs/technical/storage.md": "docs/developer/contracts/storage.md",
+    "docs/testing-large-vaults.md": "docs/developer/testing-large-vaults.md",
+    "docs/testing-usability.md": "docs/developer/testing-usability.md",
+    "docs/wiki-format.md": "docs/user/integration.md#understand-the-files",
+    "PROGRESS.md": "docs/developer/validation-status.md#workflow-and-recovery",
+    "docs/architecture.md": "docs/developer/design-decisions.md",
+    "docs/execution/CLEANUP.md": "docs/developer/validation-status.md#workflow-and-recovery",
+    "docs/execution/START.md": "docs/developer/validation-status.md#workflow-and-recovery",
+    "docs/execution/WORK-PACKAGES.md": "docs/developer/validation-status.md#workflow-and-recovery",
+    "docs/execution/reports/BUILD-RELEASE.md": "docs/developer/validation-status.md#workflow-and-recovery",
+    "docs/execution/reports/CLEANUP-VALIDATION.md": "docs/developer/validation-status.md#workflow-and-recovery",
+    "docs/execution/reports/EVAL-RESEARCH.md": "docs/developer/eval-datasets-quick-reference.md",
+    "docs/execution/reports/FINAL.md": "docs/developer/validation-status.md#workflow-and-recovery",
+    "docs/execution/reports/RELEASE-0.1.1.md": "docs/developer/validation-status.md#workflow-and-recovery",
+    "docs/execution/reports/RELEASE-0.1.2.md": "docs/developer/validation-status.md#workflow-and-recovery",
+    "docs/execution/reports/UX-VALIDATION.md": "docs/developer/validation-status.md#workflow-and-recovery",
+    "docs/external-research-prompts.md": "docs/developer/design-decisions.md",
+    "docs/implementation-plan.md": "docs/developer/design-decisions.md",
+    "docs/release-notes-0.1.1.md": "docs/developer/validation-status.md#workflow-and-recovery",
+    "docs/release-notes-0.1.2.md": "docs/developer/validation-status.md#workflow-and-recovery",
+    "docs/research/landscape.md": "docs/developer/design-decisions.md",
+    "docs/research/obsidian-markdown.md": "docs/developer/design-decisions.md",
+    "docs/research/research-flows.md": "docs/developer/design-decisions.md",
+    "docs/research/retrieval.md": "docs/developer/design-decisions.md",
+    "docs/research/rust-stack.md": "docs/developer/design-decisions.md",
+    "docs/technical/implementation-handoff.md": "docs/developer/design-decisions.md",
+    "docs/testing-0.1.1.md": "docs/developer/validation-status.md#workflow-and-recovery",
+    "docs/testing-0.1.2.md": "docs/developer/validation-status.md#workflow-and-recovery",
+    "docs/testing-0.2.0.md": "docs/developer/validation-status.md#workflow-and-recovery",
+    "docs/testing-cleanup.md": "docs/developer/validation-status.md#workflow-and-recovery",
+    "docs/validation-10k-workflow.md": "docs/developer/validation-status.md#workflow-and-recovery",
+    "docs/validation-1k-collection.md": "docs/developer/validation-status.md#workflow-and-recovery",
+    "docs/validation-25k-import.md": "docs/developer/validation-status.md#workflow-and-recovery",
+    "docs/validation-assisted-answer-pages.md": "docs/developer/validation-status.md#workflow-and-recovery",
+    "docs/validation-capacity-workflow.md": "docs/developer/validation-status.md#workflow-and-recovery",
+    "docs/validation-change-summary.md": "docs/developer/validation-status.md#workflow-and-recovery",
+    "docs/validation-cited-page-workflow.md": "docs/developer/validation-status.md#workflow-and-recovery",
+    "docs/validation-dry-read-preview.md": "docs/developer/validation-status.md#workflow-and-recovery",
+    "docs/validation-external-page-sync.md": "docs/developer/validation-status.md#workflow-and-recovery",
+    "docs/validation-graph-update-feasibility.md": "docs/developer/validation-status.md#workflow-and-recovery",
+    "docs/validation-host-assisted-context.md": "docs/developer/validation-status.md#retrieval-quality",
+    "docs/validation-host-investigation.md": "docs/developer/validation-status.md#retrieval-quality",
+    "docs/validation-html-evidence.md": "docs/developer/validation-status.md#workflow-and-recovery",
+    "docs/validation-import-maintenance.md": "docs/developer/validation-status.md#workflow-and-recovery",
+    "docs/validation-import-throughput.md": "docs/developer/validation-status.md#workflow-and-recovery",
+    "docs/validation-joined-maintenance.md": "docs/developer/validation-status.md#workflow-and-recovery",
+    "docs/validation-location-allocation.md": "docs/developer/validation-status.md#workflow-and-recovery",
+    "docs/validation-named-neighbors.md": "docs/developer/validation-status.md#workflow-and-recovery",
+    "docs/validation-native-default-set-assembly.md": "docs/developer/validation-status.md#retrieval-quality",
+    "docs/validation-native-dense-context.md": "docs/developer/validation-status.md#retrieval-quality",
+    "docs/validation-native-lexical-units.md": "docs/developer/validation-status.md#retrieval-quality",
+    "docs/validation-native-phrase-locality.md": "docs/developer/validation-status.md#retrieval-quality",
+    "docs/validation-new-family-host-workflow.md": "docs/developer/validation-status.md#retrieval-quality",
+    "docs/validation-normalized-embeddings.md": "docs/developer/validation-status.md#workflow-and-recovery",
+    "docs/validation-normalized-literal.md": "docs/developer/validation-status.md#workflow-and-recovery",
+    "docs/validation-original-source-selection.md": "docs/developer/validation-status.md#workflow-and-recovery",
+    "docs/validation-page-reorganization.md": "docs/developer/validation-status.md#workflow-and-recovery",
+    "docs/validation-public-1k-lifecycle.md": "docs/developer/validation-status.md#workflow-and-recovery",
+    "docs/validation-public-investigation.md": "docs/developer/validation-status.md#workflow-and-recovery",
+    "docs/validation-public-source-occupancy.md": "docs/developer/validation-status.md#workflow-and-recovery",
+    "docs/validation-real-source-page-lifecycle.md": "docs/developer/validation-status.md#workflow-and-recovery",
+    "docs/validation-representative-1k-workflow.md": "docs/developer/validation-status.md#workflow-and-recovery",
+    "docs/validation-selected-identity.md": "docs/developer/validation-status.md#workflow-and-recovery",
+    "docs/validation-skill-transfer.md": "docs/developer/validation-status.md#workflow-and-recovery",
+    "docs/validation-source-reading.md": "docs/developer/validation-status.md#workflow-and-recovery",
+    "docs/validation-source-refresh-batch.md": "docs/developer/validation-status.md#workflow-and-recovery",
+    "docs/validation-source-subject-search.md": "docs/developer/validation-status.md#workflow-and-recovery",
+    "docs/validation-task-only-query-signals.md": "docs/developer/validation-status.md#workflow-and-recovery",
+    "docs/validation-varied-vault-control.md": "docs/developer/validation-status.md#workflow-and-recovery",
+    "docs/validation-verified-search.md": "docs/developer/validation-status.md#retrieval-quality",
+    "docs/validation-wal-lifecycle.md": "docs/developer/validation-status.md#workflow-and-recovery",
+    "docs/validation-whole-source-reading.md": "docs/developer/validation-status.md#retrieval-quality",
+    "docs/user/wiki-selection.md": "docs/user/everyday-use.md#choose-the-wiki",
+    "docs/user/editing.md": "docs/user/everyday-use.md#inspect-and-edit-exact-bytes",
+    "docs/user/page-reorganization.md": "docs/user/everyday-use.md#create-edit-and-move-a-page",
+    "docs/user/external-page-sync.md": "docs/user/everyday-use.md#create-edit-and-move-a-page",
+    "docs/user/indexed-context.md": "docs/user/retrieval.md#search-and-inspect-cited-context",
+    "docs/user/context-selection.md": "docs/user/retrieval.md#select-passages-with-a-host",
+    "docs/user/named-neighbors.md": "docs/user/retrieval.md#inspect-named-neighbors",
+    "docs/user/source-imports.md": "docs/user/sources-and-providers.md#import-a-collection",
+    "docs/user/source-import-maintenance.md": "docs/user/sources-and-providers.md#maintain-imported-sources",
+    "docs/user/source-refresh-batch.md": "docs/user/sources-and-providers.md#refresh-a-guarded-batch",
+    "docs/user/providers.md": "docs/user/sources-and-providers.md#optional-remote-providers",
+    "docs/user/source-relation-preparation.md": "docs/user/sources-and-providers.md#experimental-source-relations",
+    "docs/user/agent-integration.md": "docs/user/integration.md#export-an-agent-workflow",
+    "docs/user/wiki-format.md": "docs/user/integration.md#understand-the-files"
+  }
+}

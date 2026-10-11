@@ -1,106 +1,62 @@
 # Rust LLM Wiki
 
-A Rust CLI for a local wiki that people and coding agents can read, maintain, and search.
+Keep a local Markdown wiki, capture source notes, and give people or coding agents
+exact cited evidence. `lwiki` works offline for capture, reading, editing, literal
+search and context. It needs no model runtime, database server or background service.
+Semantic embeddings are optional remote API work; vectors are stored locally.
 
-Canonical records and captured sources live in Obsidian-compatible Markdown. Bundled SQLite provides rebuildable full-text search, metadata, graphs and vector caches. Capture deployment notes, find an exact command, and give an agent cited context without provider credentials. Extraction uses an existing agent or a configured generation API; semantic search uses a remote embeddings API and stores vectors locally. The installed binary needs no model runtime, database server, Python, Node, or background service.
+## Start with your notes
 
-## Try it locally
-
-These commands use a macOS/Linux shell from the repository root. Install the pinned development tools in [builds and CI](docs/builds.md), then build a native candidate in a new output directory:
-
-```sh
-just deps-fetch
-just candidate .artifacts/candidate-001
-```
-
-Windows vault writes remain unsupported. Existing binaries can run `--help` and `--json capabilities` to inspect their own version's commands. Historical packaged releases do not include the current cleanup changes; the [historical 0.1.2 guide](docs/testing-0.1.2.md) is for that release only.
-
-Create a disposable wiki and searchable input:
+With a suitable `lwiki` binary on your PATH:
 
 ```sh
-LWIKI="$PWD/.artifacts/candidate-001/lwiki"
-DEMO="$(mktemp -d)"
-WIKI="$DEMO/wiki"
-cat > "$DEMO/deployment-notes.md" <<'EOF'
-# Atlas deployment notes
-
-The Atlas service uses Postgres for its primary database.
-Run atlas_migrate before deploying a new release.
-Rollback restores the previous release and keeps the database unchanged.
-EOF
-"$LWIKI" --offline init "$WIKI"
-"$LWIKI" --wiki "$WIKI" --offline --json source add "$DEMO/deployment-notes.md" --title 'Atlas deployment notes'
-"$LWIKI" --wiki "$WIKI" --offline search 'atlas_migrate' --mode literal --limit 5
-"$LWIKI" --wiki "$WIKI" --offline context 'Atlas deployment' --max-bytes 6000 --max-tokens 1500
-"$LWIKI" --wiki "$WIKI" --offline check
+lwiki init "/path/to/Personal Wiki" --set-default
+lwiki wiki show
+lwiki --offline source add "/path/to/deployment-notes.md" --title "Deployment notes"
+lwiki --offline search 'atlas_migrate' --mode literal
+lwiki --offline context 'Atlas deployment' --max-bytes 6000 --max-tokens 1500
 ```
 
-Search should show the deployment note and its `atlas_migrate` command. Context should return the note with source/revision IDs, byte ranges and citation hashes; it retrieves text rather than generating an answer. `check` should report zero errors. `init` requires a directory that does not exist, so initialize the `wiki` child of the temporary directory. These commands use the default legacy catalog, where search automatically syncs the local index.
+[Getting started](docs/user/getting-started.md) walks you through creating your wiki
+and adding your notes. [Everyday use](docs/user/everyday-use.md) covers updating notes
+and writing wiki pages. Existing
+editor folders require `init --existing`; reserved managed names must be absent.
+Open the wiki folder in Obsidian or any Markdown editor. Initialization preserves
+ordinary notes and `.obsidian` and does not adopt those notes automatically.
 
-Continue with [getting started](docs/getting-started.md) to add an authored page, refresh a source, inspect citations and export an agent workflow. The [maintained workflows](skills/llm-wiki/references/workflows.md) cover guarded edits, packet extraction, explicit resolution and review.
+## Choose your task
 
-For a local collection, [resumable source imports](docs/source-imports.md) prepare
-an explicit file manifest, commit bounded groups and retain Source/Revision mappings.
-That workflow explicitly activates a normalized catalog. Its ordinary search uses
-published discovery, while context verifies selected evidence; run `index sync`
-to discover external file edits. Use `search --verify-selected` when search
-excerpts need source citations. See [indexed context](docs/indexed-context.md)
-for the freshness and completeness boundaries.
+- [Installation and binary checks](docs/user/install.md).
+- [Everyday use](docs/user/everyday-use.md): choose a wiki, capture/refresh notes, edit or move a Page.
+- [Recovery and backups](docs/user/recovery.md).
+- [Retrieval reference](docs/user/retrieval.md): citations, named neighbors and host selection.
+- [Sources and providers](docs/user/sources-and-providers.md): collections, batches and optional remote work.
+- [Integration and format](docs/user/integration.md), or [the manual index](docs/user/README.md).
 
-## Providers and research
+Context assembles evidence; it does not generate an answer. A citation identifies
+exact captured bytes and their revision, while you still assess whether they
+support the claim. Bounded results can omit needed facts. Ordinary notes remain
+editable originals; captured revisions remain immutable.
 
-Remote embedding, API extraction and `doctor --probe` require explicit trusted provider configuration and caller budgets. Research instead hands bounded packets to a host agent: `research run QUESTION` persists a packet, `research import --file FILE` validates the agent's submitted sources or answer, and `research resume RUN_ID` returns the outstanding packet. The CLI does not search, fetch or generate for research. `--offline` research uses local or already captured content; `--dry-run` and `research plan` only preview. Reports retain gaps and unassessed claims; valid citation bytes do not prove a claim's meaning. Host-agent network and token usage are unobserved by CLI accounting.
+## Availability and support
 
-## Development and release evidence
+This checkout implements the v0.3.0 workflow while local, installed-product and
+release qualification remain in progress. It does not establish a published
+v0.3.0 download or installer. Use the [installation guide](docs/user/install.md)
+for download and build instructions and [qualification status](docs/developer/validation-status.md)
+for the remaining release checks. macOS distribution is intentionally unsigned; Windows vault writes
+remain unsupported.
 
-Developers use Just with Bazel 9.2.0, rules_rust 0.72.0 and Rust 1.98.0. `just ci` checks formatting, Clippy, build tooling, CLI smoke tests and consequential source/provider/retrieval/research/storage regressions; `just qualify` runs the full native test/doctest/release gates with cached test results disabled and exercises the copied binary with a minimal system PATH in a disposable vault. Normal commands use the native platform wrapper and `--nofetch` after `just deps-fetch`; Cargo remains for metadata, lock maintenance and formatting edits. See [build commands and GitHub workflows](docs/builds.md) for setup, evidence and limits.
+The project uses the [MIT license](LICENSE). Report reproducible issues through
+[GitHub Issues](https://github.com/joshgarnett/rust-llm-wiki/issues), including
+`lwiki --version`, OS, command, expected behavior and redacted errors. Keep private
+notes, provider secrets and accounting receipts out of public issue attachments.
+There is no promised response time.
 
-The [six native GitHub release jobs](https://github.com/joshgarnett/rust-llm-wiki/actions/runs/36564578331) passed for Linux GNU, macOS and Windows on x64 and ARM64. The [draft v0.1.0 release](https://github.com/joshgarnett/rust-llm-wiki/releases/tag/untagged-1fb57f8f77dbb46a0898) contains six verified archives and checksum files; it remains unpublished. [Build evidence](docs/execution/reports/BUILD-RELEASE.md) records the source and validation scope. **Windows vault writes remain unsupported**; Windows jobs check source compilation and copied-binary capabilities only.
+## Contribute
 
-## Documentation
-
-- [End-user quality and critic workflow](docs/testing-usability.md): repeatable CLI, documentation and retrieval evaluation.
-- [Indexed context](docs/indexed-context.md): verify selected captured-source bytes using an existing lexical index, with an explicit generation-scoped guarantee.
-- [Context evaluation](docs/evaluating-context.md): reproducible public datasets, exact evidence coverage and independent completeness assessment.
-- [Evaluation datasets quick reference](docs/eval-datasets-quick-reference.md): acquired and considered datasets, provenance, results, evaluation methods and current gates.
-
-- [Getting started](docs/getting-started.md): an offline tutorial and practical capture, page, refresh and agent-export examples.
-- [Provider setup](docs/providers.md): Responses, compatible gateways and bounded probes.
-- [Current contract map](docs/current-contracts.md), [cleanup register](docs/execution/CLEANUP.md), and [test-agent guide](docs/testing-cleanup.md): current capabilities, work and local/external gates.
-- [Execution playbook](docs/execution/README.md): scoped delegation and fresh-checkout guidance; its original M0–M4 sequence is historical. Reusable guidance and curated validation summaries are tracked; checkpoints and detailed run reports remain local.
-- [Opt-in external qualification](docs/qualification.md): exact follow-up procedures for provider, host, platform, corpus and publication checks.
-- [Technical design](docs/technical/README.md): storage, retrieval, providers/jobs, CLI contracts, and an ordered implementation handoff.
-- [Architecture proposal](docs/architecture.md): storage, retrieval, provenance, human and agent workflows.
-- [Markdown format](docs/wiki-format.md): small frontmatter/body contract, editable headings, Obsidian links, and best-effort recovery.
-- [Implementation plan](docs/implementation-plan.md): milestones, acceptance criteria, and open decisions.
-- [Embedding API contract](docs/embeddings.md): full URL, model, static or dynamic credentials, batching, and error handling.
-- [Entity/relationship graph](docs/knowledge-graph.md): extraction, entity resolution, evidence, incremental updates, and graph retrieval.
-- [Agent integration and skill plan](docs/agent-integration.md): Codex, Claude Code, and Cursor.
-- [Progress](PROGRESS.md): completed work, user decisions, and verification limits.
-
-For the packaged historical 0.1.2 release, use the [download and test-agent guide](docs/testing-0.1.2.md), including the offline regression script and live gateway checks.
-
-[Named Entity neighbors](docs/named-neighbors.md) connects reviewed relationships
-to exact supporting/contrary reads and Source lifecycle. Its [scoped validation](docs/validation-named-neighbors.md)
-passes all thirteen tasks at 9.5/10; representative import capacity remains open.
-
-The [0.2.0 candidate walkthrough](docs/testing-0.2.0.md) covers the new local
-collection workflow and its current validation limits. The first capacity
-qualification target is 25,000 documents; that gate is still open.
-
-## Project status
-
-**Required cleanup and local qualification complete, September 29, 2026.** `lwiki` is a provisional name. The [current contract and coverage map](docs/current-contracts.md) routes implemented behavior and its validation limits; [the cleanup register](docs/execution/CLEANUP.md) records completed work and external follow-up. Earlier M0–M4 acceptance and 0.1.2 release evidence remain historical. A [subsequent usability and live embedding evaluation](docs/execution/reports/UX-VALIDATION.md) exercises OpenAI embeddings and a small public-source corpus. Other providers, generation, other-host recovery, host discovery, broader real-model quality, licensing and publication still need separate qualification or owner decisions.
-
-## Research
-
-- [Comparable wiki and search tools](docs/research/landscape.md)
-- [Retrieval, graphs, and evaluation](docs/research/retrieval.md)
-- [Rust and embedded storage feasibility](docs/research/rust-stack.md)
-- [Obsidian and Markdown research](docs/research/obsidian-markdown.md)
-- [Cost-controlled automated research](docs/research/research-flows.md)
-- [Prompts for independent external research](docs/external-research-prompts.md)
-
-The initial research and architecture are committed as `4652248`. The current contract map and technical contracts route implemented behavior; historical planning pages preserve the original proposals. Automated regression validation uses disposable vaults and mock providers. Separately authorized live embedding evidence and its limits are recorded in the usability evaluation. The research distinguishes documented capabilities, authors' experimental claims, and this project's design. The supplied Markdown-versus-RAG report informed the questions; its embedded citation identifiers cannot be resolved here, so linked primary-source research supplies the evidence base.
-
-Human output renders command summaries, warnings and continuation guidance. `check` and `graph neighbors` currently render their structured result as formatted JSON; use `--json` for the stable output envelope. `storage plan` previews migration and retention; preserve a complete vault backup, including `.wiki`, before `storage cleanup`. Read [the cleanup guide](docs/testing-cleanup.md) for migration, guarded recovery and restore.
+[Developer documentation](docs/developer/README.md) routes current contracts,
+build commands, architecture decisions and reproducible evaluation protocols.
+Development uses disposable vaults and mock providers. Local tests, native
+recovery, live interoperability, retrieval completeness and final release bytes
+have separate acceptance boundaries; none substitutes for another.

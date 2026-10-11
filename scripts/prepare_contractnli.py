@@ -2,7 +2,7 @@
 """Prepare train-only ContractNLI development fixtures from a pinned local ZIP.
 
 No network, provider calls, credential reads, archive extraction or upstream code
-execution. See docs/evaluating-contractnli.md for interpretation and reproduction.
+execution. See docs/developer/evaluating-contractnli.md for interpretation and reproduction.
 """
 import argparse
 from collections import Counter

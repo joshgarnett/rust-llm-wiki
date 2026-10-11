@@ -19,7 +19,7 @@ from types import SimpleNamespace
 
 ROOT = Path(__file__).resolve().parents[1]
 HELPER = ROOT / 'scripts/benchmark_source_refresh.py'
-PROTOCOL = ROOT / 'docs/full-check-resource-protocol.json'
+PROTOCOL = ROOT / 'docs/developer/full-check-resource-protocol.json'
 spec = importlib.util.spec_from_file_location('full_check_bm', HELPER)
 bm = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(bm)

@@ -1,0 +1,73 @@
+# External qualification
+
+Local disposable fixtures and deterministic providers establish mechanics. External
+qualification checks actual hosts, supported native platforms, live providers,
+representative corpora and final distributed bytes. [Validation status](validation-status.md)
+records open gates; each run needs its own finite protocol and source/executable pins.
+
+## Actual providers
+
+Use only an already authorized endpoint and finite request/byte/unit/deadline/cost
+limits. Configure private absolute provider files outside the vault and bind the
+actual canonical root/ID using [provider contracts](contracts/providers-jobs.md).
+Protect credentials and private files; never include secrets/helper output in argv,
+logs, wiki content or public reports. Preferences alone do not grant provider access.
+
+Confirm deployed model/revision, output-limit field, usage classes and complete
+rate card before promising a monetary ceiling. Preview offline first; it must make
+no helper/network call. Then probe a single explicit role with finite limits from
+the running generated command reference, for example `doctor --probe --role embed`
+or `generate` and `--max-requests 1 --concurrency 1 --attempts-per-task 1` plus the
+confirmed service-specific bounds. Use `--extraction-schema` when qualifying that
+schema, rather than treating a generic generation probe as extraction compatibility.
+
+Record endpoint fingerprint, returned model, actual usage and retained run/receipts.
+Exercise cache reuse, malformed/refused/truncated response, offline replay, exact
+citations and accounting uncertainty. Preserve unknown attempts/holds and reconcile
+billing before uncertain retries. One embedding endpoint does not qualify generation,
+other roles, gateways or deployments. Historical authorized OpenAI embedding calls
+are evidence for that endpoint/run, not present universal provider qualification.
+
+## Editors and hosts
+
+Use an isolated Obsidian vault on each supported OS. Follow landing/Page/Source/Revision
+links; edit unknown properties, BOM/CRLF/Unicode, body/title/headings and supported
+Page moves. Verify exact author preservation, stable IDs, provenance, exclusions and
+refresh/history. Source mode handles unsupported nested-property representations;
+ordinary editor state remains editor-owned.
+
+Install fresh versioned exports in real Codex, Claude and Cursor sessions without
+overwriting existing instructions. Check explicit invocation, natural-language
+discovery, a complete capture/edit/refresh/cited-draft workflow and an unrelated-task
+negative control. Successful export or a schema-valid skill does not prove host behavior.
+
+## Native and release bytes
+
+Run required correctness, fault/kill/restart/concurrency, minimal-PATH and ordinary
+workflow gates natively against the final staged executable on every supported
+target. Record compiler/profile/settings, full source commit, executable/archive
+hashes and environment. A rebuild or re-sign that changes executable bytes requires
+replay. Container-only changes retain correctness evidence only after identical
+extracted executable bytes are proved; rerun extraction/trust checks as applicable.
+Windows remains build/capability-only; power-loss remains distinct from process kill.
+
+The owner chose MIT, GitHub Issues and unsigned macOS without notarization. Verify
+locked dependency notices and selected support intake, unsigned artifact origin/digest
+and normal-user OS trust/quarantine behavior. Do not require global security disabling.
+Check the actual archive layout and installer PATH/conflict/rollback behavior before
+advertising it. No nonexistent installer/download recipe is a ready product surface.
+
+Publication is a distinct authorized action after gates. After any publication,
+download unauthenticated on each advertised target, verify final tag/source/manifest/
+digests/trust, install and replay the offline journey, agent install and backup restore.
+Public README/manual/latest links must agree. Failed public replay requires an honest
+unsafe-release disposition and corrected version; never move tags or replace immutable
+published bytes silently.
+
+## Corpus and independent quality
+
+Select provenance-preserving licensed inputs and unseen tasks before results. Use
+[context evaluation](evaluating-context.md), [capacity protocol](testing-large-vaults.md)
+and [critic workflow](testing-usability.md). Record complete returned facts/citations,
+errors, regressions, resource use and observed costs. Mock vectors test mechanics;
+real model quality and supported scale need their own declared evidence.

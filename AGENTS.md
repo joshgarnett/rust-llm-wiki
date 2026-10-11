@@ -1,29 +1,59 @@
 # Repository agent guidance
 
-This repository implements a Rust CLI, provisionally `lwiki`, for a local Markdown wiki. Implementation contracts live in [docs/technical](docs/technical/README.md). The autonomous implementation run is defined by [docs/execution](docs/execution/README.md).
+This repository implements a Rust CLI, provisionally `lwiki`, for a local Markdown wiki. Implementation contracts live in the [developer reference](docs/developer/contracts/README.md). Follow the [agent workflow](docs/developer/agent-workflow/README.md) for implementation tasks.
 
 The original M0–M4 run assigned orchestration and implementation to `gpt-6-sol`. For subsequent work, prefer `gpt-6.1-sol` for bounded implementation, research and test work; use `gpt-6-astra` for architectural challenges, difficult storage/accounting invariants and independent review. The user explicitly authorizes this delegation. Follow current user model preferences and available session capabilities. Model settings belong to the session/harness; a Markdown instruction cannot change the running root model.
 
-On implementation startup/resume, read the execution playbook and the local `docs/execution/STATE.md` checkpoint if present, then only the selected work package and its linked contracts. A fresh checkout has no session checkpoint: inspect Git and the [current contract map](docs/current-contracts.md), then create local state for the authorized task. Do not load all research or previous conversations. For a small unrelated edit, read only relevant guidance.
+On implementation startup/resume, read the execution playbook and the local `docs/execution/STATE.md` checkpoint if present, then only the selected work package and its linked contracts. A fresh checkout has no session checkpoint: inspect Git and the [current contract map](docs/developer/current-contracts.md), then create local state for the authorized task. Do not load all research or previous conversations. For a small unrelated edit, read only relevant guidance.
 
 The orchestrator owns shared interfaces, Cargo files, CLI registry, schemas, commits, and execution state. Workers edit only leased paths and their assigned report. No nested delegation unless the orchestrator grants it. Local tests use disposable fixture vaults and mock providers, with no production access.
 
 Keep canonical knowledge in Markdown, indexes rebuildable, source revisions immutable, headings independent of identity, and model-derived assertions traceable to evidence. Semantic embeddings are remote API calls; local models and required external database services are out of scope. Preserve the technical designs' freshness, recovery, offline/dry-run, and budget contracts.
 
-During an authorized implementation goal, continue through M0–M4 without routine confirmation. Use the reversible defaults and decision log in [DECISIONS.md](docs/execution/DECISIONS.md); defer external credentials, live-host qualification, unavailable-platform checks, naming, licensing, and publishing decisions. Deferral does not waive core implementation or local correctness tests. Preserve user edits and obey platform permissions. Stop only when no safe in-scope work remains, or an explicit user/system limit requires it.
+During an authorized implementation goal, continue through M0–M4 without routine confirmation. Use the reversible defaults and decision log in [DECISIONS.md](docs/developer/agent-workflow/DECISIONS.md); defer external credentials, live-host qualification, unavailable-platform checks, naming, licensing, and publishing decisions. Deferral does not waive core implementation or local correctness tests. Preserve user edits and obey platform permissions. Stop only when no safe in-scope work remains, or an explicit user/system limit requires it.
 
 Update the execution state after integration, before compaction, and before stopping. Report actual checks and their limits. Never claim a mock demonstrates live-provider compatibility or a cross-build demonstrates native crash safety.
 
 Commit coherent, tested milestones as work progresses. Record the commit, validation evidence, unresolved findings and next step in the local checkpoint; promote stable conclusions into tracked summaries. A checkpoint commit preserves progress and does not imply that an unfinished quality goal has passed acceptance.
 
-Keep working plans, agent notes, reviews, session checkpoints and logs local under gitignored `.work/<task>/`. Preserve existing evidence under ignored execution paths or `.artifacts/`; do not relocate it solely for consistency. Keep user documentation, reusable developer instructions, implementation contracts/decisions and curated validation summaries tracked. Promote stable findings into those maintained documents; never commit working plans, raw logs, per-attempt reports or temporary state. An ignore rule does not untrack existing files: extract enduring guidance before removing old worklogs from the tracked tree, preserve local evidence and Git history, and ensure tracked documentation works in a fresh checkout without ignored files.
-
 ## Writing guidelines
 
-Write clear, concise, professional prose. Use plain English when possible so non-native readers can follow it easily. Avoid marketing language, em dashes, emojis, stock AI phrases and formulaic AI grammar. State concrete behavior, evidence and limitations directly. Keep code and quoted evidence exact when wording or bytes matter. Apply these guidelines to user documentation, developer guidance and agent reports.
+Write for people using the tool. User documentation must be understandable to a
+reader who has not read the code, design documents or research reports. These
+rules also apply to help text, setup prompts, errors and completion messages.
+
+- Start with what the reader wants to do and the result they will get. Give the
+  steps in order, explain what they should see, and give a useful next action.
+- The quick start creates a real, lasting wiki, connects the reader's chosen
+  agent, and helps them use their own notes. Keep disposable fixtures and
+  demo-only setup in testing instructions.
+- Use clear, concise, professional English. Prefer familiar words, short
+  sentences and direct verbs. Explain a necessary technical term the first time
+  it appears. Do not assume all readers are developers or native English speakers.
+- Use the same everyday terms throughout the docs. Introduce a wiki as a folder
+  of notes. Explain capturing as saving a copy that the agent can cite. Use
+  internal names such as Source, Revision, canonical identity or projection only
+  in a reference that needs their exact meaning.
+- Keep storage internals, evaluation protocols, implementation history, review
+  scores and release checklists in developer documentation. Do not make readers
+  understand those details before they can use the tool.
+- State a limitation where it changes the reader's decision or next step. Say
+  what is unavailable, what happens and what they can do. Avoid abstract phrases
+  such as "availability boundary", "qualification gate" or "evidence contract"
+  in user instructions. Do not add defensive caveats to every paragraph.
+- Avoid marketing language, em dashes, emojis, stock AI phrases and formulaic
+  prose. Keep command names, code, quoted evidence and exact error text intact.
+- Edit for natural flow, not just banned words. Replacing jargon with a synonym
+  does not fix a paragraph organized around implementation concerns.
+
+Before accepting user documentation, an independent reviewer must follow the
+main task without developer docs and answer: Can I tell what this does for me?
+Do I know where to start? Can I follow each step and recognize success? Can I
+use my own notes with my agent afterward? Does this sound like instructions
+from a helpful colleague? Missing steps or unclear language require revision.
+A link checker or passing command does not establish that the writing is useful.
 
 Keep working plans, agent notes, reviews, session checkpoints and logs local under gitignored `.work/<task>/`. Preserve existing evidence under ignored execution paths or `.artifacts/`; do not relocate it solely for consistency. Keep user documentation, reusable developer instructions, implementation contracts/decisions and curated validation summaries tracked. Promote stable findings into those maintained documents; never commit working plans, raw logs, per-attempt reports or temporary state. An ignore rule does not untrack existing files: extract enduring guidance before removing old worklogs from the tracked tree, preserve local evidence and Git history, and ensure tracked documentation works in a fresh checkout without ignored files.
-
 
 ## Delegate for independent judgment
 
@@ -56,7 +86,7 @@ After two iterations without a clear improvement in whole-task success, or when 
 
 ## Preserve trustworthy evaluation
 
-Use the [critic workflow](docs/testing-usability.md) and [context evaluation protocol](docs/evaluating-context.md). Prefer suitable public datasets with provenance, licenses and immutable input hashes, supplemented by independently authored realistic and synthetic cases. Include paraphrases, distant and multiple-source facts, distractors, absent information and operational failures. Keep labels out of indexed content.
+Use the [critic workflow](docs/developer/testing-usability.md) and [context evaluation protocol](docs/developer/evaluating-context.md). Prefer suitable public datasets with provenance, licenses and immutable input hashes, supplemented by independently authored realistic and synthetic cases. Include paraphrases, distant and multiple-source facts, distractors, absent information and operational failures. Keep labels out of indexed content.
 
 Separate development from unseen acceptance questions. Freeze the binary, protocol and limits before exposing a holdout; any question used to guide a fix becomes development data. Compare baseline and candidate on the same source revisions, caches and budgets. Acquire all authorized query embeddings before paired offline evaluation, since provider history can change the index. Record every error, regression and exclusion; do not cherry-pick modes, budgets or questions. Inspect the evidence actually returned, not just source-hit rates or passing unit tests.
 

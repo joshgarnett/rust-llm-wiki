@@ -59,7 +59,7 @@ def main():
         parser.error("a Bazel command is required after --")
     executable = shutil.which("bazelisk")
     if executable is None:
-        parser.error("install Bazelisk first; see docs/builds.md")
+        parser.error("install Bazelisk first; see docs/developer/builds.md")
     root = Path(__file__).resolve().parent.parent
     output_root = Path(os.environ.get("LWIKI_BAZEL_OUTPUT_ROOT", root / ".build-cache/bazel")).resolve()
     command = [executable, "--nosystem_rc", "--nohome_rc", "--output_user_root=" + str(output_root)]
