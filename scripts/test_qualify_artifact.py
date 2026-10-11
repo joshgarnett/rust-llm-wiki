@@ -164,7 +164,7 @@ class ExistingArchiveTests(unittest.TestCase):
                 command = next(command for name, command in calls if name == stage)
                 self.assertIn("--test_env=LWIKI_QUALIFY_BINARY=" + str(evidence / "lwiki"), command)
                 self.assertIn("--nocache_test_results", command)
-                self.assertIn("--test_strategy=local", command)
+                self.assertIn("--test_strategy=standalone", command)
             report = json.loads((evidence / "qualification.json").read_text())
             self.assertEqual(report["status"], "passed")
             self.assertTrue(report["source_clean_after"])
