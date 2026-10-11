@@ -116,6 +116,9 @@ Keep writing your original notes wherever you prefer. Creating a wiki in an
 existing folder does not automatically capture them. [Capture a chosen note](everyday-use.md#capture-and-refresh-notes)
 when you want it available as cited evidence.
 
+Obsidian can change line endings and remove a byte order mark (BOM) when saving.
+lwiki captures the saved file exactly.
+
 A page's title and filename can change while its `wiki_id` stays the same.
 Preserve the `wiki_*` fields when editing managed files. Do not edit saved source
 versions to update a fact; refresh the source from your updated original.
