@@ -19,7 +19,7 @@ on:
       checks:
         description: 'Checks to run against existing archives'
         type: choice
-        options: [all, editor, installer, download, installed-smoke, unit-diagnostic]
+        options: [all, editor, installer, download, installed-smoke, public-install, unit-diagnostic]
         default: all
       compatibility-runner:
         description: 'Newer Mac runner for installed-smoke only'
@@ -49,13 +49,13 @@ jobs:
       tests: ${{ inputs.diagnostic-tests }}
 
   qualify-final-archives:
-    if: inputs.archive-run-id == '' && inputs.checks != 'unit-diagnostic' && inputs.checks != 'installed-smoke'
+    if: inputs.archive-run-id == '' && inputs.checks != 'unit-diagnostic' && inputs.checks != 'installed-smoke' && inputs.checks != 'public-install'
     # Use the release pipeline so qualification never substitutes another build.
     uses: ./.github/workflows/release-build.yml
 
   editor:
     name: Check the archived release (${{ matrix.runner }}, ${{ inputs.checks }})
-    if: (inputs.archive-run-id != '' || inputs.checks == 'installed-smoke') && inputs.checks != 'unit-diagnostic'
+    if: (inputs.archive-run-id != '' || inputs.checks == 'installed-smoke') && inputs.checks != 'unit-diagnostic' && inputs.checks != 'public-install'
     strategy:
       fail-fast: false
       matrix:
@@ -203,6 +203,73 @@ jobs:
             ${{ runner.temp }}/download-evidence/*.stderr
             ${{ runner.temp }}/download-evidence/*.png
             ${{ runner.temp }}/download-evidence/downloads/install.sh
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 30
+
+  public-install:
+    name: Public installation and backup (${{ matrix.runner }})
+    if: inputs.checks == 'public-install'
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: ${{ fromJSON(inputs.platform == 'linux' && '["ubuntu-24.04"]' || inputs.platform == 'macos' && '["macos-15"]' || '["ubuntu-24.04","macos-15"]') }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: bash
+    env:
+      SOURCE_RUN_ID: ${{ inputs.archive-run-id }}
+      SOURCE_COMMIT: ${{ inputs.source-commit }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Verify the completed archive run and record the public-check harness
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          [[ "$SOURCE_RUN_ID" =~ ^[0-9]+$ ]]
+          [[ "$SOURCE_COMMIT" =~ ^[0-9a-f]{40}$ ]]
+          test -z "$(git status --porcelain)"
+          mkdir "$RUNNER_TEMP/public-install-inputs"
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$SOURCE_RUN_ID" > "$RUNNER_TEMP/public-install-inputs/source-run.json"
+          python3 - "$RUNNER_TEMP/public-install-inputs/source-run.json" <<'PY'
+          import json, os, pathlib, subprocess, sys
+          path = pathlib.Path(sys.argv[1])
+          run = json.loads(path.read_text())
+          if (run['head_sha'] != os.environ['SOURCE_COMMIT']
+                  or run['repository']['full_name'] != os.environ['GITHUB_REPOSITORY']
+                  or run['path'] != '.github/workflows/release-build.yml'
+                  or run['status'] != 'completed' or run['conclusion'] != 'success'):
+              raise SystemExit('archive run must be the successful expected repository, workflow and source')
+          record = {'product_source_commit': run['head_sha'], 'archive_run_id': run['id'],
+                    'harness_commit': subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(),
+                    'runner': os.environ['RUNNER_OS'], 'check': 'public-install'}
+          (path.parent / 'qualification-source.json').write_text(json.dumps(record, indent=2) + '\n')
+          PY
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: lwiki-verified-assets-${{ inputs.source-commit }}
+          run-id: ${{ inputs.archive-run-id }}
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/public-install-expected
+      - name: Install the public release and restore a complete wiki backup
+        run: |
+          python3 scripts/qualify_public_install.py \
+            --expected-dir "$RUNNER_TEMP/public-install-expected" \
+            --source-commit "$SOURCE_COMMIT" \
+            --evidence-dir "$RUNNER_TEMP/public-install-evidence"
+      - name: Retain public installation and backup evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: public-install-${{ matrix.runner }}-${{ inputs.source-commit }}-${{ github.run_id }}
+          path: |
+            ${{ runner.temp }}/public-install-inputs/**
+            ${{ runner.temp }}/public-install-evidence/**
           include-hidden-files: true
           if-no-files-found: warn
           retention-days: 30
