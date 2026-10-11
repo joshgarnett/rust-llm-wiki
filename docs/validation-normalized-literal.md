@@ -7,14 +7,64 @@ recover after losing the whole disposable cache. Automatic omitted-scope literal
 context uses indexed documents on a normalized vault. Lexical defaults and
 unsupported explicit scopes remain as documented in [indexed context](indexed-context.md).
 
-The implementation binds the literal query as SQLite data and uses Boolean
-`instr` over filtered raw text. It retains exact case, Unicode spelling, quotes,
+The implementation binds the literal query as SQLite data and uses a query-owned
+`memchr::memmem::Finder` predicate over filtered raw text. It retains exact case, Unicode spelling, quotes,
 front matter and punctuation. Rust supplies original UTF-8 byte offsets. Exact
 matching-document counts and candidate truncation share a pinned snapshot.
 Selected verification reuses canonical authentication and final rechecks.
 A single elapsed query clock survives SQLite and Rust work; finite query, proof
 and output budgets remain distinct. COUNT and selection can scan filtered text
 twice: limited decoding does not establish limited corpus scanning.
+
+## Substring matcher comparison, 2026-10-11 UTC
+
+The matcher replaces both normalized SQL presence scans. One prepared Finder is
+reused for COUNT and selection, borrowing SQLite text without another copy.
+Filters, ordering, exact totals, the existing 64-match offset extraction and
+selected-source proof are unchanged. Non-TEXT corrupt rows retain SQLite `instr`
+coercion behavior before the existing selected-row validation. The callback uses
+the original query deadline; timeout remains `BudgetExceeded`.
+
+All **126 affected checks passed**, covering literal parity, Unicode/NUL/case,
+cleanup/deadlines, filters, stale edits, source lifecycle and public context/offline
+commands. The shipping binary was then compared with the retained shipping
+baseline on equal copies of a 1,000-Source vault with 1,001 Pages. Both native
+macOS ARM64 executables used optimization level 3 and debug information 0.
+
+Six frozen queries each ran one warmup and five measured baseline/candidate
+pairs, alternating order by round: **72 successful commands**, no exclusions.
+Complete structured output matched except two declared verification timestamps.
+Every returned citation and literal match was checked against original bytes;
+all before/after source, Page, history and catalog authority checks passed.
+
+| Literal query | Baseline median | Candidate median | Median paired ratio |
+| --- | ---: | ---: | ---: |
+| Broad long text | 283 ms | 148 ms | 0.520 |
+| Broad common word | 200 ms | 203 ms | 1.015 |
+| Broad absent text | 309 ms | 145 ms | 0.468 |
+| Narrow long text | 31.8 ms | 32.6 ms | 1.031 |
+| Narrow common word | 32.5 ms | 31.5 ms | 0.969 |
+| Narrow absent text | 31.9 ms | 32.1 ms | 0.997 |
+
+The predeclared screen passed: median of the three broad paired ratios ≤0.90,
+and each narrow ratio ≤1.10. Common-word scanning did not improve. Five pairs
+per query establish a useful local signal, not a general speed distribution or
+25K result. Timings cover the whole public CLI from spawn through completed wait,
+including its in-flight observer; surrounding fixture and output audits are
+reported separately. No observer cost was subtracted and no cold-cache claim is
+made. The full successful campaign took about 156 seconds; provider calls/cost
+were zero.
+
+The first setup failed before any native command because a read-only SQLite
+audit changed the existing SHM file's mtime. All 11,090 file hashes still matched.
+That failure remains retained with all 72 calls unrun. The corrected fresh run
+normalizes only that exact SHM mtime in the comparison, records its actual values,
+and still requires its bytes/mode/size plus every other file and metadata field.
+No query, result, budget or speed threshold changed.
+
+This is literal-search latency evidence. Current native development completeness
+remains **13/32 positive tasks and 79/129 facts**. It does not qualify semantic
+retrieval, HIGH, unseen acceptance, 25K capacity or the full 0.2.0 release.
 
 ## Correctness checkpoint
 
@@ -92,8 +142,9 @@ failed or unqualified. This is scoped correctness acceptance, not an unqualified
 all-review-gates pass or full release qualification.
 
 This capability earns **no improvement in default retrieval completeness**.
-The native development baseline remains 9/28 facts and 2/10 complete positive
-tasks; the failed structural and contextual candidates remain unpromoted.
+At the original October 6 checkpoint, the development set had 9/28 facts and
+2/10 complete positive tasks; the expanded current baseline is stated above.
+The failed structural and contextual candidates remain unpromoted.
 Paraphrase relevance, complete multi-source answers, semantic default activation,
 full HIGH acceptance and 25K capacity remain open. The next priority is ordinary
 context retaining complete, correctly scoped evidence under unchanged budgets.

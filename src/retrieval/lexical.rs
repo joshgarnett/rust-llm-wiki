@@ -846,11 +846,20 @@ fn normalized_literal_candidates(
     plan: &QueryPlan,
     context_policy: &str,
 ) -> Result<(BTreeMap<VaultRelativePath, Candidate>, usize)> {
+    let registration =
+        super::literal_predicate::register(reader.connection(), query, reader.query_deadline())
+            .map_err(sql_error)?;
     let mut values = vec![Value::Text(query.into())];
     let common = filters::catalog_sql(&plan.filters, &mut values, true);
     let policy = filters::catalog_normal_policy(&plan.filters, true);
-    let predicate =
-        format!("({common}) AND ({policy}) AND ({context_policy}) AND instr(d.raw_text,?1)>0");
+    // Preserve instr's coercion/exclusion behavior on malformed non-TEXT rows;
+    // selected documents still pass through the existing typed decoder.
+    let function = super::literal_predicate::FUNCTION;
+    let predicate = format!(
+        "({common}) AND ({policy}) AND ({context_policy}) AND \
+         CASE WHEN typeof(d.raw_text)='text' THEN {function}(d.raw_text,?1) \
+         ELSE instr(d.raw_text,?1)>0 END"
+    );
     let count_sql = format!(
         "SELECT count(*) FROM documents d LEFT JOIN records r ON r.id=d.record_id WHERE {predicate}"
     );
@@ -942,6 +951,9 @@ fn normalized_literal_candidates(
             "literal candidate count differs within its pinned snapshot",
         ));
     }
+    drop(rows);
+    drop(statement);
+    registration.finish().map_err(sql_error)?;
     Ok((candidates, count))
 }
 

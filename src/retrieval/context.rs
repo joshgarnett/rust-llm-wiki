@@ -240,6 +240,10 @@ struct OwnerCatalog<'a> {
     owners: &'a [DocumentOwner],
 }
 impl QueryCatalog for OwnerCatalog<'_> {
+    fn query_deadline(&self) -> Option<std::time::Instant> {
+        self.reader.query_deadline()
+    }
+
     fn normalized_layout(&self) -> bool {
         self.reader.normalized_layout()
     }

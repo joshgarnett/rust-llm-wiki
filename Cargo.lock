@@ -1269,6 +1269,7 @@ dependencies = [
  "httpdate",
  "jsonschema",
  "libc",
+ "memchr",
  "pulldown-cmark",
  "reqwest",
  "rusqlite",

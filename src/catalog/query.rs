@@ -1606,6 +1606,9 @@ impl crate::changes::RevisionOwnershipLookup for QuerySnapshot {
 }
 
 impl QueryCatalog for QuerySnapshot {
+    fn query_deadline(&self) -> Option<Instant> {
+        Some(self.query_started + Duration::from_millis(self.limits.max_elapsed_ms))
+    }
     fn check_query_budget(&self) -> Result<()> {
         if self.query_started.elapsed() >= Duration::from_millis(self.limits.max_elapsed_ms) {
             return Err(WikiError::new(

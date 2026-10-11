@@ -36,6 +36,10 @@ struct SelectedCatalog<'a> {
 }
 
 impl QueryCatalog for SelectedCatalog<'_> {
+    fn query_deadline(&self) -> Option<std::time::Instant> {
+        self.reader.query_deadline()
+    }
+
     fn check_query_budget(&self) -> Result<()> {
         self.reader.check_query_budget()
     }
