@@ -333,9 +333,42 @@ optimistically eligible construction was only 6.060 ms, or 0.04987% of the
 3.194 seconds of that interval and cannot be treated as reusable validation.
 An independent architecture review instead motivated a descriptor-relative route
 and I/O candidate, preserving every current namespace and freshness check. Its
-performance remains unmeasured. The earlier failed threading comparison remains
-failed; the canonical 1,000-update/600-second product gate remains open.
+subsequent complete product comparison failed, as described below. The earlier
+failed threading comparison remains failed; the canonical
+1,000-update/600-second product gate remains open.
 
 Separate interrupted campaigns do not supply a combined workflow timing. These
 observations qualify neither retrieval quality, representative capacity nor the
 release. All final workflow gates remain mandatory.
+
+## Descriptor candidate: whole-update comparison failed
+
+The baseline completed all 1,000 genuine updates in 805.620 seconds of owning
+update time, and its complete 68-command workflow in 836.751 seconds. Its final
+checks authenticated 1,000 current and 1,000 historical captured rows, 3,000 added
+Revision files, preserved Pages and exact returned evidence.
+
+The descriptor candidate completed only 720 audited updates in 45 batches at
+881.450 seconds. The next batch returned 16 items successfully, but its enclosing
+command exceeded the remaining owner allowance before the required capture,
+history and Page checks. Those 16 effects remain unverified; they are not counted
+as completed work. Twenty commands, including the final rebuild and read checks,
+were unrun. No complete elapsed ratio or downstream parity is available.
+
+Independent review rejects descriptors as a throughput remedy. The separately
+passing 238 affected correctness checks and nine integration groups do not pass
+the 600-second product gate. The isolated candidate and all failed evidence are
+preserved; further descriptor, worker and buffer tuning is closed. A transaction
+or publication redesign requires a distinct measured benefit case and must
+preserve external-edit guards, immutable history, recovery and durability.
+
+A subsequent shipping-binary stack sample retained actual source caller chains
+from one 16-Source refresh, but its diagnostic workflow failed. The native
+command returned success in 10.961 seconds under observation; macOS redacted
+the profile's executable path, and the checker rejected that field before the
+required post-refresh content, history and Page oracles. The five downstream
+search/read/rebuild calls were not executed. Runtime attachment had separately
+verified the owned child PID and executable, so the retained profile can inform
+caller-level investigation. It supplies neither a completed update workflow nor
+a speedup measurement. Sampling-window coverage remains unqualified; all effects
+and failure evidence are retained, with no replacement run.
