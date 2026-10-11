@@ -251,6 +251,17 @@ pub struct ChangeEngine {
     pub(crate) vault_id: RecordId,
 }
 
+impl ChangeEngine {
+    /// Owned execution scope; preparation and query construction keep their
+    /// existing namespace observations and cumulative proof costs.
+    pub(crate) fn for_maintenance_execution(&self) -> Self {
+        Self {
+            fs: self.fs.for_maintenance_execution(),
+            vault_id: self.vault_id.clone(),
+        }
+    }
+}
+
 /// Complete canonical scan bytes, including readable unadopted/invalid Markdown.
 #[derive(Debug, Clone)]
 pub struct ScanDocument {

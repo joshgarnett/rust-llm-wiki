@@ -71,10 +71,7 @@ pub(crate) fn prepare_parallel_activation(
     }
     if fs.is_storage_recovery()
         || super::import_epoch_active(fs.root())
-        || fs
-            .root()
-            .resolve_raw(&VaultRelativePath::new(".wiki/state/storage/cleanup.json")?)?
-            .exists()
+        || fs.raw_exists(&VaultRelativePath::new(".wiki/state/storage/cleanup.json")?)?
     {
         return Ok(None);
     }
@@ -86,7 +83,7 @@ pub(crate) fn prepare_parallel_activation(
     }) {
         return Ok(proof);
     }
-    let proof = capture(fs.root())?;
+    let proof = capture_fs(fs)?;
     let state = OwnerState {
         root: fs.root().clone(),
         proof: proof.clone(),
@@ -98,7 +95,16 @@ pub(crate) fn prepare_parallel_activation(
     OWNER.with(|slot| *slot.borrow_mut() = Some(state));
     Ok(proof)
 }
-fn capture(root: &VaultRoot) -> Result<Option<Arc<ActivationProof>>> {
+fn capture_fs(fs: &VaultFs) -> Result<Option<Arc<ActivationProof>>> {
+    capture_with_reader(fs, &mut |path, limit| {
+        fs.read_regular_bounded(path, true, limit, "storage-read")
+    })
+}
+fn capture_with_reader(
+    fs: &VaultFs,
+    reader: &mut layout::RawReader<'_>,
+) -> Result<Option<Arc<ActivationProof>>> {
+    let root = fs.root();
     crate::maintenance_diagnostic::observe(
         crate::maintenance_diagnostic::Phase::ActivationSemantic,
         || {
@@ -112,8 +118,8 @@ fn capture(root: &VaultRoot) -> Result<Option<Arc<ActivationProof>>> {
             let validated = {
                 let _capture = OwnerCaptureGuard::enter()?;
                 crate::maintenance_parallel::record_owner_activation_validation();
-                ValidatedLayout::capture_with_reader(root, &mut |path, limit| {
-                    let bytes = layout::raw_read(root, path, limit)?;
+                ValidatedLayout::capture_fs_with_reader(fs, &mut |path, limit| {
+                    let bytes = reader(path, limit)?;
                     if let Some(bytes) = &bytes {
                         if path.as_str() == layout::ACTIVE {
                             activation = Some(layout::decode::<Layout>(bytes)?);
@@ -184,6 +190,20 @@ impl ActivationProof {
                 .sum::<usize>()) as u64
     }
     fn active(&self, root: &VaultRoot) -> Result<bool> {
+        self.active_with_hash(root, |path, limit| {
+            crate::vault::fs::hash_regular_raw_bounded(root, path, limit, "storage-read")
+        })
+    }
+    fn active_fs(&self, fs: &crate::vault::VaultFs) -> Result<bool> {
+        self.active_with_hash(fs.root(), |path, limit| {
+            fs.hash_regular_raw_bounded(path, limit, "storage-read")
+        })
+    }
+    fn active_with_hash(
+        &self,
+        root: &VaultRoot,
+        mut hash: impl FnMut(&VaultRelativePath, usize) -> Result<Option<(u64, [u8; 32])>>,
+    ) -> Result<bool> {
         crate::maintenance_diagnostic::observe(
             crate::maintenance_diagnostic::Phase::ActivationWitness,
             || {
@@ -198,12 +218,7 @@ impl ActivationProof {
                         1,
                     );
                     let actual = crate::maintenance_diagnostic::witness_read(|| {
-                        crate::vault::fs::hash_regular_raw_bounded(
-                            root,
-                            &witness.path,
-                            witness.limit,
-                            "storage-read",
-                        )
+                        hash(&witness.path, witness.limit)
                     })
                     .map_err(|error| {
                         conflict(&format!(
@@ -260,6 +275,17 @@ pub(crate) fn worker_active(root: &VaultRoot) -> Option<Result<bool>> {
     WORKER.with(|slot| {
         slot.borrow().as_ref().map(|proof| match proof {
             Some(proof) => proof.active(root),
+            None => Err(admission(
+                "parallel worker reached activation without owner proof",
+            )),
+        })
+    })
+}
+
+pub(crate) fn worker_active_fs(fs: &crate::vault::VaultFs) -> Option<Result<bool>> {
+    WORKER.with(|slot| {
+        slot.borrow().as_ref().map(|proof| match proof {
+            Some(proof) => proof.active_fs(fs),
             None => Err(admission(
                 "parallel worker reached activation without owner proof",
             )),

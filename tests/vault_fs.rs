@@ -274,6 +274,7 @@ fn nested_vaults_are_separate_scan_and_managed_path_scopes() {
 }
 
 struct FaultIo {
+    relative: bool,
     fail: &'static str,
     after: bool,
     events: Mutex<Vec<&'static str>>,
@@ -296,10 +297,46 @@ impl FaultIo {
     }
 }
 impl DurableIo for FaultIo {
+    #[cfg(unix)]
+    fn descriptor_relative(&self) -> bool {
+        self.relative && NativeIo.descriptor_relative()
+    }
+    #[cfg(unix)]
+    fn create_stage_at(&self, parent: &File, leaf: &std::ffi::OsStr) -> io::Result<File> {
+        self.call("create", || NativeIo.create_stage_at(parent, leaf))
+    }
+    #[cfg(unix)]
+    fn open_append_at(&self, parent: &File, leaf: &std::ffi::OsStr) -> io::Result<File> {
+        self.call("append", || NativeIo.open_append_at(parent, leaf))
+    }
+    #[cfg(unix)]
+    fn replace_at(
+        &self,
+        a: &File,
+        from: &std::ffi::OsStr,
+        b: &File,
+        to: &std::ffi::OsStr,
+    ) -> io::Result<()> {
+        self.call("rename", || NativeIo.replace_at(a, from, b, to))
+    }
+    #[cfg(unix)]
+    fn remove_at(&self, parent: &File, leaf: &std::ffi::OsStr) -> io::Result<()> {
+        self.call("remove", || NativeIo.remove_at(parent, leaf))
+    }
+    #[cfg(unix)]
+    fn create_directory_at(&self, parent: &File, leaf: &std::ffi::OsStr) -> io::Result<()> {
+        self.call("mkdir", || NativeIo.create_directory_at(parent, leaf))
+    }
+    #[cfg(unix)]
+    fn sync_directory_file(&self, directory: &File) -> io::Result<DirectorySync> {
+        self.call("dirsync", || NativeIo.sync_directory_file(directory))
+    }
     fn create_stage(&self, p: &Path) -> io::Result<File> {
+        assert!(!self.relative, "relative adapter reached pathname mutation");
         self.call("create", || NativeIo.create_stage(p))
     }
     fn open_append(&self, p: &Path) -> io::Result<File> {
+        assert!(!self.relative, "relative adapter reached pathname mutation");
         self.call("append", || NativeIo.open_append(p))
     }
     fn truncate_file(&self, f: &File, n: u64) -> io::Result<()> {
@@ -312,15 +349,19 @@ impl DurableIo for FaultIo {
         self.call("fsync", || NativeIo.sync_file(f))
     }
     fn replace(&self, a: &Path, b: &Path) -> io::Result<()> {
+        assert!(!self.relative, "relative adapter reached pathname mutation");
         self.call("rename", || NativeIo.replace(a, b))
     }
     fn remove(&self, p: &Path) -> io::Result<()> {
+        assert!(!self.relative, "relative adapter reached pathname mutation");
         self.call("remove", || NativeIo.remove(p))
     }
     fn create_directory(&self, p: &Path) -> io::Result<()> {
+        assert!(!self.relative, "relative adapter reached pathname mutation");
         self.call("mkdir", || NativeIo.create_directory(p))
     }
     fn sync_directory(&self, p: &Path) -> io::Result<DirectorySync> {
+        assert!(!self.relative, "relative adapter reached pathname mutation");
         self.call("dirsync", || NativeIo.sync_directory(p))
     }
 }
@@ -333,6 +374,7 @@ fn private_creation_is_protected_before_payload_and_requires_adapter_support() {
     let file_path = temp.path().join("private.bin");
     let directory_path = temp.path().join("private-dir");
     let public_only = FaultIo {
+        relative: false,
         fail: "",
         after: false,
         events: Mutex::new(Vec::new()),
@@ -380,6 +422,7 @@ fn interrupted_directory_creation_retry_resyncs_every_directory_and_parent() {
         let (_temp, root) = fixture();
         let permit = WriterPermit::acquire(&root, Duration::ZERO).unwrap();
         let interrupted = Arc::new(FaultIo {
+            relative: false,
             fail,
             after,
             events: Mutex::new(Vec::new()),
@@ -389,6 +432,7 @@ fn interrupted_directory_creation_retry_resyncs_every_directory_and_parent() {
         assert!(vault.ensure_directory(&directory, &permit).is_err());
         assert!(root.path().join("interrupted").is_dir());
         let retry = Arc::new(FaultIo {
+            relative: false,
             fail: "",
             after: false,
             events: Mutex::new(Vec::new()),
@@ -459,6 +503,7 @@ fn same_directory_replace_and_sync_failures() {
             let target = rel("page.md");
             fs::write(root.path().join(target.as_str()), "old").unwrap();
             let fault = Arc::new(FaultIo {
+                relative: false,
                 fail,
                 after,
                 events: Mutex::new(Vec::new()),
@@ -501,6 +546,7 @@ fn same_directory_replace_and_sync_failures() {
             let permit = WriterPermit::acquire(&root, Duration::ZERO).unwrap();
             fs::write(root.path().join("delete.md"), b"old").unwrap();
             let fault = Arc::new(FaultIo {
+                relative: false,
                 fail,
                 after,
                 events: Mutex::new(Vec::new()),
@@ -628,6 +674,7 @@ fn operational_append_truncate_and_recovery_sync_are_real_boundaries() {
     for fail in ["append", "write", "fsync", "dirsync", "truncate", "mkdir"] {
         for after in [false, true] {
             let fault = Arc::new(FaultIo {
+                relative: false,
                 fail,
                 after,
                 events: Mutex::new(Vec::new()),
@@ -834,4 +881,315 @@ fn fresh_marker_probe_preserves_case_nonregular_policy_and_positive_scan_budget(
     }
     fs::write(directory.join("WIKI.md"), b"nested again").unwrap();
     assert!(root.resolve(&rel("child/page.md")).is_err());
+}
+
+#[cfg(unix)]
+#[test]
+fn relative_same_directory_replace_and_sync_failures() {
+    if !NativeIo.descriptor_relative() {
+        return;
+    }
+    for fail in ["create", "write", "fsync", "rename", "dirsync"] {
+        for after in [false, true] {
+            let (_temp, root) = fixture();
+            let permit = WriterPermit::acquire(&root, Duration::ZERO).unwrap();
+            let target = rel("page.md");
+            fs::write(root.path().join(target.as_str()), "old").unwrap();
+            let fault = Arc::new(FaultIo {
+                relative: true,
+                fail,
+                after,
+                events: Mutex::new(Vec::new()),
+            });
+            let vault = VaultFs::with_io(root.clone(), fault.clone()).for_maintenance_execution();
+            let before = vault.read_before(&target).unwrap().unwrap();
+            assert_eq!(
+                before,
+                BeforeImage {
+                    bytes: b"old".to_vec(),
+                    hash: Blake3Hash::digest(b"old")
+                }
+            );
+            let staged = vault.stage(&target, b"new", &permit);
+            if let Ok(staged) = &staged {
+                assert_eq!(staged.path().parent().unwrap(), root.path());
+            }
+            let result = staged.and_then(|staged| {
+                vault.replace(staged, &ExpectedState::Hash(before.hash), &permit)
+            });
+            assert!(result.is_err(), "{fail} {after}");
+            let applied = fail == "dirsync" || (fail == "rename" && after);
+            assert_eq!(
+                fs::read(root.path().join("page.md")).unwrap(),
+                if applied { b"new" } else { b"old" }
+            );
+            assert!(fault.events.lock().unwrap().contains(&fail));
+            assert!(!fs::read_dir(root.path()).unwrap().any(|e| {
+                e.unwrap()
+                    .file_name()
+                    .to_str()
+                    .unwrap()
+                    .starts_with(".lwiki-stage-")
+            }));
+        }
+    }
+    for fail in ["remove", "dirsync"] {
+        for after in [false, true] {
+            let (_temp, root) = fixture();
+            let permit = WriterPermit::acquire(&root, Duration::ZERO).unwrap();
+            fs::write(root.path().join("delete.md"), b"old").unwrap();
+            let fault = Arc::new(FaultIo {
+                relative: true,
+                fail,
+                after,
+                events: Mutex::new(Vec::new()),
+            });
+            let vault = VaultFs::with_io(root.clone(), fault.clone()).for_maintenance_execution();
+            assert!(
+                vault
+                    .delete(
+                        &rel("delete.md"),
+                        &ExpectedState::Hash(Blake3Hash::digest(b"old")),
+                        &permit
+                    )
+                    .is_err()
+            );
+            assert_eq!(
+                root.path().join("delete.md").exists(),
+                fail == "remove" && !after
+            );
+            assert!(fault.events.lock().unwrap().contains(&fail));
+        }
+    }
+    let (_temp, root) = fixture();
+    let permit = WriterPermit::acquire(&root, Duration::ZERO).unwrap();
+    let vault = VaultFs::new(root.clone()).for_maintenance_execution();
+    let target = rel("page.md");
+    let stage = vault.stage(&target, b"new", &permit).unwrap();
+    #[cfg(unix)]
+    assert_eq!(
+        vault
+            .replace(stage, &ExpectedState::Absent, &permit)
+            .unwrap(),
+        DirectorySync::Supported
+    );
+    #[cfg(not(unix))]
+    assert_eq!(
+        vault
+            .replace(stage, &ExpectedState::Absent, &permit)
+            .unwrap(),
+        DirectorySync::Unsupported
+    );
+    let stage = vault.stage(&target, b"replacement", &permit).unwrap();
+    fs::write(root.path().join("page.md"), "external edit").unwrap();
+    assert_eq!(
+        vault
+            .replace(
+                stage,
+                &ExpectedState::Hash(Blake3Hash::digest(b"new")),
+                &permit
+            )
+            .unwrap_err()
+            .code,
+        ErrorCode::ContentConflict
+    );
+    assert_eq!(
+        vault
+            .delete(
+                &target,
+                &ExpectedState::Hash(Blake3Hash::digest(b"new")),
+                &permit
+            )
+            .unwrap_err()
+            .code,
+        ErrorCode::ContentConflict
+    );
+    assert_eq!(
+        fs::read(root.path().join("page.md")).unwrap(),
+        b"external edit"
+    );
+    vault
+        .delete(
+            &target,
+            &ExpectedState::Hash(Blake3Hash::digest(b"external edit")),
+            &permit,
+        )
+        .unwrap();
+    assert!(vault.read_before(&target).unwrap().is_none());
+    let stage = vault.stage(&target, b"new", &permit).unwrap();
+    fs::write(root.path().join("page.md"), "intruder").unwrap();
+    assert_eq!(
+        vault
+            .replace(stage, &ExpectedState::Absent, &permit)
+            .unwrap_err()
+            .code,
+        ErrorCode::ContentConflict
+    );
+    let stage = vault.stage(&target, b"new", &permit).unwrap();
+    fs::write(stage.path(), "tampered").unwrap();
+    assert_eq!(
+        vault
+            .replace(
+                stage,
+                &ExpectedState::Hash(Blake3Hash::digest(b"intruder")),
+                &permit
+            )
+            .unwrap_err()
+            .code,
+        ErrorCode::ContentConflict
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn relative_interrupted_directory_creation_retry_resyncs_every_directory_and_parent() {
+    if !NativeIo.descriptor_relative() {
+        return;
+    }
+    for (fail, after) in [("mkdir", true), ("dirsync", false), ("dirsync", true)] {
+        let (_temp, root) = fixture();
+        let permit = WriterPermit::acquire(&root, Duration::ZERO).unwrap();
+        let interrupted = Arc::new(FaultIo {
+            relative: true,
+            fail,
+            after,
+            events: Mutex::new(Vec::new()),
+        });
+        let vault = VaultFs::with_io(root.clone(), interrupted.clone()).for_maintenance_execution();
+        let directory = rel("interrupted/deep");
+        assert!(vault.ensure_directory(&directory, &permit).is_err());
+        assert!(root.path().join("interrupted").is_dir());
+        let retry = Arc::new(FaultIo {
+            relative: true,
+            fail: "",
+            after: false,
+            events: Mutex::new(Vec::new()),
+        });
+        let vault = VaultFs::with_io(root, retry.clone()).for_maintenance_execution();
+        let result = vault.ensure_directory(&directory, &permit).unwrap();
+        #[cfg(unix)]
+        assert_eq!(result, DirectorySync::Supported);
+        #[cfg(not(unix))]
+        assert_eq!(result, DirectorySync::Unsupported);
+        // Both calls perform actual NativeIo syncs, including the existing ancestor.
+        assert_eq!(
+            retry
+                .events
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|event| **event == "dirsync")
+                .count(),
+            4
+        );
+        retry.events.lock().unwrap().clear();
+        assert_eq!(vault.ensure_directory(&directory, &permit).unwrap(), result);
+        assert_eq!(
+            retry
+                .events
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|event| **event == "dirsync")
+                .count(),
+            4
+        );
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn relative_operational_fault_cuts_remain_recoverable() {
+    if !NativeIo.descriptor_relative() {
+        return;
+    }
+    for fail in ["append", "write", "fsync", "dirsync", "truncate", "mkdir"] {
+        for after in [false, true] {
+            let (_temp, root) = fixture();
+            let permit = WriterPermit::acquire(&root, Duration::ZERO).unwrap();
+            let native = VaultFs::new(root.clone()).for_maintenance_execution();
+            let target = rel(".wiki/state/events");
+            native.append_synced(&target, b"original", &permit).unwrap();
+            let fault = Arc::new(FaultIo {
+                relative: true,
+                fail,
+                after,
+                events: Mutex::new(Vec::new()),
+            });
+            let faulty = VaultFs::with_io(root.clone(), fault.clone()).for_maintenance_execution();
+            let result = if fail == "truncate" {
+                faulty
+                    .truncate_synced(&target, 4, &permit)
+                    .map(|()| DirectorySync::Supported)
+            } else if fail == "mkdir" {
+                faulty.ensure_directory(&rel("new-directory"), &permit)
+            } else {
+                faulty.append_synced(&target, b"tail", &permit)
+            };
+            assert!(result.is_err(), "relative {fail} {after}");
+            assert_eq!(
+                fault
+                    .events
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .filter(|event| **event == fail)
+                    .count(),
+                1,
+                "relative cut not reached exactly once"
+            );
+            if fail == "mkdir" {
+                assert_eq!(root.path().join("new-directory").exists(), after);
+                native
+                    .ensure_directory(&rel("new-directory"), &permit)
+                    .unwrap();
+            } else {
+                let bytes = native.read_before(&target).unwrap().unwrap().bytes;
+                let expected = if fail == "truncate" && after {
+                    b"orig".as_slice()
+                } else if matches!(fail, "fsync" | "dirsync") || (fail == "write" && after) {
+                    b"originaltail".as_slice()
+                } else {
+                    b"original".as_slice()
+                };
+                assert_eq!(bytes, expected);
+                native.sync_target(&target, &permit).unwrap();
+                native.append_synced(&target, b"retry", &permit).unwrap();
+                assert_eq!(
+                    native.read_before(&target).unwrap().unwrap().bytes,
+                    [expected, b"retry"].concat()
+                );
+            }
+        }
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn bound_stage_refuses_incapable_ordinary_publisher() {
+    if !NativeIo.descriptor_relative() {
+        return;
+    }
+    let (_temp, root) = fixture();
+    let permit = WriterPermit::acquire(&root, Duration::ZERO).unwrap();
+    let native = VaultFs::new(root.clone()).for_maintenance_execution();
+    let staged = native.stage(&rel("page.md"), b"bound", &permit).unwrap();
+    let stage_path = staged.path().to_owned();
+    let adapter = Arc::new(FaultIo {
+        relative: false,
+        fail: "unused",
+        after: false,
+        events: Mutex::new(Vec::new()),
+    });
+    let ordinary = VaultFs::with_io(root.clone(), adapter.clone());
+    assert_eq!(
+        ordinary
+            .replace(staged, &ExpectedState::Absent, &permit)
+            .unwrap_err()
+            .code,
+        ErrorCode::CapabilityUnavailable
+    );
+    assert!(adapter.events.lock().unwrap().is_empty());
+    assert!(!root.path().join("page.md").exists());
+    assert!(!stage_path.exists());
 }

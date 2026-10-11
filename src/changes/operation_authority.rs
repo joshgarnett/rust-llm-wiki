@@ -7,7 +7,7 @@
 //! and no applied canonical changes (or completed rollback) before cancel.
 use super::PreparedChange;
 use crate::{
-    domain::{Blake3Hash, ErrorCode, RecordId, Result, WikiError},
+    domain::{Blake3Hash, ErrorCode, RecordId, Result, VaultRelativePath, WikiError},
     vault::{DirectorySync, DurableIo, VaultFs, WriterPermit},
 };
 use serde::{Deserialize, Serialize};
@@ -18,6 +18,11 @@ use std::{
     sync::Arc,
 };
 
+#[cfg(unix)]
+use crate::vault::paths::descriptor;
+#[cfg(unix)]
+#[path = "operation_authority_legacy.rs"]
+mod legacy;
 const NAME: &str = "operations.json";
 const MAX_BYTES: usize = 4096;
 
@@ -368,36 +373,44 @@ fn authority_path(fs: &VaultFs) -> Result<PathBuf> {
 }
 struct Parents {
     #[cfg(unix)]
-    handles: Vec<(PathBuf, File)>,
+    fs: VaultFs,
+    #[cfg(unix)]
+    route: descriptor::Route,
+    #[cfg(unix)]
+    legacy_handles: Option<Vec<(PathBuf, File)>>,
     #[cfg(windows)]
     guard: crate::vault::windows_security::DirectoryGuard,
 }
 impl Parents {
-    fn open(path: &Path) -> Result<Self> {
+    fn open(fs: &VaultFs, path: &Path) -> Result<Self> {
         #[cfg(unix)]
         {
-            use std::os::unix::fs::OpenOptionsExt;
-            let mut handles = Vec::new();
-            for parent in path
-                .ancestors()
-                .skip(1)
-                .collect::<Vec<_>>()
-                .into_iter()
-                .rev()
-            {
-                let file = fs::OpenOptions::new()
-                    .read(true)
-                    .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC)
-                    .open(parent)
-                    .map_err(|e| io("pin authority ancestor", e))?;
-                handles.push((parent.to_path_buf(), file));
+            if !fs.uses_descriptor_relative() {
+                let result = Self {
+                    fs: fs.clone(),
+                    route: descriptor::Route::legacy(path.to_owned()),
+                    legacy_handles: Some(legacy::parents(path)?),
+                };
+                result.verify()?;
+                return Ok(result);
             }
-            let result = Self { handles };
+            let relative = path
+                .strip_prefix(fs.root().path())
+                .ok()
+                .and_then(Path::to_str)
+                .ok_or_else(|| recovery("authority path escapes vault"))?;
+            let route = fs.bind(&VaultRelativePath::new(relative)?, true)?;
+            let result = Self {
+                fs: fs.clone(),
+                route,
+                legacy_handles: None,
+            };
             result.verify()?;
             Ok(result)
         }
         #[cfg(windows)]
         {
+            let _ = fs;
             let guard = crate::vault::windows_security::open_pinned_directory(
                 path.parent().expect("state parent"),
                 crate::vault::acl_policy::Protection::Private,
@@ -407,7 +420,7 @@ impl Parents {
         }
         #[cfg(not(any(unix, windows)))]
         {
-            let _ = path;
+            let _ = (fs, path);
             Err(WikiError::new(
                 ErrorCode::CapabilityUnavailable,
                 "operation authority file protection unavailable",
@@ -416,8 +429,21 @@ impl Parents {
     }
     fn verify(&self) -> Result<()> {
         #[cfg(unix)]
-        for (path, file) in &self.handles {
-            same_file(path, file, true)?;
+        {
+            if let Some(handles) = &self.legacy_handles {
+                for (path, file) in handles {
+                    legacy::same_file(path, file, true)?;
+                }
+                return Ok(());
+            }
+            let path = authority_path(&self.fs)?;
+            let relative = path
+                .strip_prefix(self.fs.root().path())
+                .ok()
+                .and_then(Path::to_str)
+                .ok_or_else(|| recovery("authority path escapes vault"))?;
+            let fresh = self.fs.bind(&VaultRelativePath::new(relative)?, true)?;
+            self.route.same_parent(&fresh)?;
         }
         #[cfg(windows)]
         self.guard
@@ -425,29 +451,69 @@ impl Parents {
             .map_err(|e| io("verify authority ancestor", e))?;
         Ok(())
     }
-}
-fn same_file(path: &Path, file: &File, directory: bool) -> Result<()> {
     #[cfg(unix)]
-    {
-        use std::os::unix::fs::MetadataExt;
-        let held = file
-            .metadata()
-            .map_err(|e| io("inspect held authority handle", e))?;
-        let named = inspect(path).map_err(|e| io("inspect authority handle binding", e))?;
-        if named.file_type().is_symlink()
-            || held.dev() != named.dev()
-            || held.ino() != named.ino()
-            || if directory {
-                !held.is_dir()
+    fn open_file(&self, path: &Path, writable: bool) -> Result<File> {
+        if self.legacy_handles.is_some() {
+            return legacy::open_file(path, writable);
+        }
+        self.verify()?;
+        if path.parent() != self.route.path.parent() {
+            return Err(recovery("authority leaf has another parent"));
+        }
+        descriptor::open_at(
+            self.route
+                .parent()
+                .map_err(|e| io("open bound authority parent", e))?,
+            path.file_name().expect("authority leaf"),
+            if writable {
+                libc::O_RDWR
             } else {
-                !held.is_file() || held.nlink() != 1
-            }
+                libc::O_RDONLY
+            },
+            0,
+        )
+        .map_err(|e| io("open operation authority", e))
+    }
+    fn same_file(&self, path: &Path, file: &File) -> Result<()> {
+        #[cfg(unix)]
         {
-            return Err(recovery(
-                "authority handle binding changed or has unsafe type",
-            ));
+            use std::os::unix::fs::MetadataExt;
+            if self.legacy_handles.is_some() {
+                return legacy::same_file(path, file, false);
+            }
+            self.verify()?;
+            let relative = path
+                .strip_prefix(self.fs.root().path())
+                .ok()
+                .and_then(Path::to_str)
+                .ok_or_else(|| recovery("authority leaf escapes vault"))?;
+            let route = self.fs.bind(&VaultRelativePath::new(relative)?, true)?;
+            route.same_held_parent(
+                self.route
+                    .parent()
+                    .map_err(|e| io("open held authority parent", e))?,
+            )?;
+            route.require_file_identity(file)?;
+            if file
+                .metadata()
+                .map_err(|e| io("inspect authority hardlinks", e))?
+                .nlink()
+                != 1
+            {
+                return Err(recovery(
+                    "authority handle binding changed or has unsafe type",
+                ));
+            }
+            Ok(())
+        }
+        #[cfg(not(unix))]
+        {
+            same_file(path, file, false)
         }
     }
+}
+#[cfg(not(unix))]
+fn same_file(path: &Path, file: &File, directory: bool) -> Result<()> {
     #[cfg(windows)]
     {
         let _ = directory;
@@ -463,15 +529,28 @@ fn same_file(path: &Path, file: &File, directory: bool) -> Result<()> {
 fn read_bytes(fs: &VaultFs) -> Result<Option<Vec<u8>>> {
     let path = authority_path(fs)?;
     match inspect(&path) {
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            #[cfg(unix)]
+            if fs.uses_descriptor_relative() {
+                fs.bind(
+                    &VaultRelativePath::new(".wiki/state/operations.json")?,
+                    true,
+                )?;
+            }
+            return Ok(None);
+        }
         Err(e) => return Err(io("inspect authority size", e)),
         Ok(m) if m.len() > MAX_BYTES as u64 => {
             return Err(recovery("operation authority exceeds 4096 bytes"));
         }
         Ok(_) => {}
     }
-    let parents = Parents::open(&path)?;
-    #[cfg(any(unix, windows))]
+    let parents = Parents::open(fs, &path)?;
+    #[cfg(test)]
+    crate::vault::maintenance_read_tests::before_open(&path);
+    #[cfg(unix)]
+    let mut file = parents.open_file(&path, false)?;
+    #[cfg(windows)]
     let mut file = open_file(&path, false)?;
     #[cfg(not(any(unix, windows)))]
     return Err(WikiError::new(
@@ -480,7 +559,7 @@ fn read_bytes(fs: &VaultFs) -> Result<Option<Vec<u8>>> {
     ));
     #[cfg(any(unix, windows))]
     {
-        same_file(&path, &file, false)?;
+        parents.same_file(&path, &file)?;
         let mut bytes = Vec::new();
         (&mut file)
             .take(MAX_BYTES as u64 + 1)
@@ -489,25 +568,15 @@ fn read_bytes(fs: &VaultFs) -> Result<Option<Vec<u8>>> {
         #[cfg(test)]
         crate::catalog::query_diagnostics::read("operation-authority", &path, bytes.len());
         parents.verify()?;
-        same_file(&path, &file, false)?;
+        parents.same_file(&path, &file)?;
         if bytes.len() > MAX_BYTES {
             return Err(recovery("operation authority exceeds 4096 bytes"));
         }
         Ok(Some(bytes))
     }
 }
-#[cfg(any(unix, windows))]
+#[cfg(windows)]
 fn open_file(path: &Path, writable: bool) -> Result<File> {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        fs::OpenOptions::new()
-            .read(true)
-            .write(writable)
-            .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC)
-            .open(path)
-            .map_err(|e| io("open operation authority", e))
-    }
     #[cfg(windows)]
     {
         crate::vault::windows_security::open_checked_file(
@@ -526,12 +595,14 @@ fn open_file(path: &Path, writable: bool) -> Result<File> {
 }
 fn sync_existing(fs: &VaultFs) -> Result<()> {
     let path = authority_path(fs)?;
-    let parents = Parents::open(&path)?;
-    #[cfg(any(unix, windows))]
+    let parents = Parents::open(fs, &path)?;
+    #[cfg(unix)]
+    let file = parents.open_file(&path, true)?;
+    #[cfg(windows)]
     let file = open_file(&path, true)?;
     #[cfg(not(any(unix, windows)))]
     let file = File::open(&path).map_err(|e| io("open authority for durability", e))?;
-    same_file(&path, &file, false)?;
+    parents.same_file(&path, &file)?;
     fs.durable_io()
         .sync_file(&file)
         .map_err(|e| io("sync retained authority", e))?;
@@ -541,6 +612,24 @@ fn sync_existing(fs: &VaultFs) -> Result<()> {
 // Activation can encounter ancestors left by an interrupted directory
 // creation. Reestablish their entries before acknowledging the first state.
 fn sync_activation_directories(fs: &VaultFs) -> Result<()> {
+    #[cfg(unix)]
+    if fs.uses_descriptor_relative() {
+        // Each parent corresponds to the original root/.wiki/.wiki/state sync,
+        // without introducing a reserved synthetic leaf or pathname open.
+        for child in [".wiki", ".wiki/state", ".wiki/state/operations.json"] {
+            let route = fs.bind(&VaultRelativePath::new(child)?, true)?;
+            durable(
+                fs.durable_io()
+                    .sync_directory_file(
+                        route
+                            .parent()
+                            .map_err(|e| io("open activation directory", e))?,
+                    )
+                    .map_err(|e| io("sync authority activation ancestry", e))?,
+            )?;
+        }
+        return Ok(());
+    }
     for path in [
         fs.root().path().to_path_buf(),
         fs.root().path().join(".wiki"),
@@ -557,9 +646,18 @@ fn sync_activation_directories(fs: &VaultFs) -> Result<()> {
 struct Stage {
     path: PathBuf,
     io: Arc<dyn DurableIo>,
+    #[cfg(unix)]
+    parent: Option<File>,
 }
 impl Drop for Stage {
     fn drop(&mut self) {
+        #[cfg(unix)]
+        if let Some(parent) = self.parent.as_ref() {
+            let _ = self
+                .io
+                .remove_at(parent, self.path.file_name().expect("authority stage leaf"));
+            return;
+        }
         let _ = self.io.remove(&self.path);
     }
 }
@@ -573,7 +671,7 @@ fn persist(
     fs.require_storage_ready()?;
     next.validate(&next.vault_id)?;
     let path = authority_path(fs)?;
-    let parents = Parents::open(&path)?;
+    let parents = Parents::open(fs, &path)?;
     let check = || -> Result<()> {
         let found = load(fs, &next.vault_id, Presence::LegacyMayBeAbsent)?;
         if found.as_ref() != expected {
@@ -593,33 +691,70 @@ fn persist(
     if expected.is_none() {
         sync_activation_directories(fs)?;
     }
-    durable(
+    #[cfg(unix)]
+    let synced = if fs.uses_descriptor_relative() {
+        io.sync_directory_file(
+            parents
+                .route
+                .parent()
+                .map_err(|e| io_error("open authority parent", e))?,
+        )
+    } else {
         io.sync_directory(parent)
-            .map_err(|e| io_error("check authority directory durability", e))?,
-    )?;
+    };
+    #[cfg(not(unix))]
+    let synced = io.sync_directory(parent);
+    durable(synced.map_err(|e| io_error("check authority directory durability", e))?)?;
     let stage_path = parent.join(format!(".operations-{}.tmp", uuid::Uuid::now_v7()));
     // Only own cleanup after successful exclusive creation. An injected error
     // after creation may leave a harmless unselected stage, never an idle proof.
-    let mut file = io
-        .create_private_stage(&stage_path)
-        .map_err(|e| io_error("create authority stage", e))?;
+    #[cfg(unix)]
+    let stage_parent = if fs.uses_descriptor_relative() {
+        Some(
+            parents
+                .route
+                .parent()
+                .map_err(|e| io_error("open authority stage parent", e))?
+                .try_clone()
+                .map_err(|e| io_error("retain authority stage parent", e))?,
+        )
+    } else {
+        None
+    };
+    #[cfg(unix)]
+    let created = if let Some(parent) = stage_parent.as_ref() {
+        io.create_private_stage_at(
+            parent,
+            stage_path.file_name().expect("authority stage leaf"),
+        )
+    } else {
+        io.create_private_stage(&stage_path)
+    };
+    #[cfg(not(unix))]
+    let created = io.create_private_stage(&stage_path);
+    let mut file = created.map_err(|e| io_error("create authority stage", e))?;
     let stage = Stage {
         path: stage_path,
         io: io.clone(),
+        #[cfg(unix)]
+        parent: stage_parent,
     };
-    same_file(&stage.path, &file, false)?;
+    parents.same_file(&stage.path, &file)?;
     io.write_stage(&mut file, &bytes)
         .map_err(|e| io_error("write authority stage", e))?;
     io.sync_file(&file)
         .map_err(|e| io_error("sync authority stage", e))?;
     parents.verify()?;
-    same_file(&stage.path, &file, false)?;
+    parents.same_file(&stage.path, &file)?;
     // Close the stage for Windows replacement while retaining directory guards.
     drop(file);
     #[cfg(any(unix, windows))]
     {
+        #[cfg(unix)]
+        let mut staged = parents.open_file(&stage.path, false)?;
+        #[cfg(windows)]
         let mut staged = open_file(&stage.path, false)?;
-        same_file(&stage.path, &staged, false)?;
+        parents.same_file(&stage.path, &staged)?;
         let mut stored = Vec::new();
         (&mut staged)
             .take(MAX_BYTES as u64 + 1)
@@ -631,13 +766,43 @@ fn persist(
         parents.verify()?;
     }
     check()?;
-    io.replace(&stage.path, &path)
-        .map_err(|e| io_error("replace operation authority", e))?;
+    #[cfg(unix)]
+    let replaced = if fs.uses_descriptor_relative() {
+        parents.verify()?;
+        let parent = parents
+            .route
+            .parent()
+            .map_err(|e| io_error("open authority replacement parent", e))?;
+        io.replace_at(
+            stage
+                .parent
+                .as_ref()
+                .expect("relative private stage parent"),
+            stage.path.file_name().expect("authority stage leaf"),
+            parent,
+            path.file_name().expect("authority leaf"),
+        )
+    } else {
+        io.replace(&stage.path, &path)
+    };
+    #[cfg(not(unix))]
+    let replaced = io.replace(&stage.path, &path);
+    replaced.map_err(|e| io_error("replace operation authority", e))?;
     parents.verify()?;
-    durable(
+    #[cfg(unix)]
+    let synced = if fs.uses_descriptor_relative() {
+        io.sync_directory_file(
+            parents
+                .route
+                .parent()
+                .map_err(|e| io_error("open authority replacement directory", e))?,
+        )
+    } else {
         io.sync_directory(parent)
-            .map_err(|e| io_error("sync authority replacement", e))?,
-    )?;
+    };
+    #[cfg(not(unix))]
+    let synced = io.sync_directory(parent);
+    durable(synced.map_err(|e| io_error("sync authority replacement", e))?)?;
     let result = Authority {
         state: next,
         hash: Blake3Hash::digest(bytes),
@@ -993,6 +1158,9 @@ mod tests {
         }
     }
     struct Fault {
+        relative: bool,
+        cleanup_fault: Option<bool>,
+        cleanup_count: AtomicUsize,
         at: usize,
         after: bool,
         count: AtomicUsize,
@@ -1012,10 +1180,84 @@ mod tests {
         }
     }
     impl DurableIo for Fault {
+        #[cfg(unix)]
+        fn descriptor_relative(&self) -> bool {
+            self.relative && NativeIo.descriptor_relative()
+        }
+        #[cfg(unix)]
+        fn create_stage_at(&self, parent: &File, leaf: &std::ffi::OsStr) -> std::io::Result<File> {
+            self.call(|| NativeIo.create_stage_at(parent, leaf))
+        }
+        #[cfg(unix)]
+        fn create_private_stage_at(
+            &self,
+            parent: &File,
+            leaf: &std::ffi::OsStr,
+        ) -> std::io::Result<File> {
+            self.call(|| NativeIo.create_private_stage_at(parent, leaf))
+        }
+        #[cfg(unix)]
+        fn create_private_directory_at(
+            &self,
+            parent: &File,
+            leaf: &std::ffi::OsStr,
+        ) -> std::io::Result<()> {
+            NativeIo.create_private_directory_at(parent, leaf)
+        }
+        #[cfg(unix)]
+        fn open_append_at(&self, parent: &File, leaf: &std::ffi::OsStr) -> std::io::Result<File> {
+            NativeIo.open_append_at(parent, leaf)
+        }
+        #[cfg(unix)]
+        fn replace_at(
+            &self,
+            a: &File,
+            from: &std::ffi::OsStr,
+            b: &File,
+            to: &std::ffi::OsStr,
+        ) -> std::io::Result<()> {
+            self.call(|| NativeIo.replace_at(a, from, b, to))
+        }
+        #[cfg(unix)]
+        fn remove_at(&self, parent: &File, leaf: &std::ffi::OsStr) -> std::io::Result<()> {
+            self.cleanup_count.fetch_add(1, Ordering::SeqCst);
+            if self.cleanup_fault == Some(false) {
+                return Err(std::io::Error::other("cleanup before"));
+            }
+            NativeIo.remove_at(parent, leaf)?;
+            if self.cleanup_fault == Some(true) {
+                return Err(std::io::Error::other("cleanup after"));
+            }
+            Ok(())
+        }
+        #[cfg(unix)]
+        fn create_directory_at(
+            &self,
+            parent: &File,
+            leaf: &std::ffi::OsStr,
+        ) -> std::io::Result<()> {
+            NativeIo.create_directory_at(parent, leaf)
+        }
+        #[cfg(unix)]
+        fn sync_directory_file(&self, directory: &File) -> std::io::Result<DirectorySync> {
+            if self.unsupported {
+                Ok(DirectorySync::Unsupported)
+            } else {
+                self.call(|| NativeIo.sync_directory_file(directory))
+            }
+        }
         fn create_stage(&self, p: &Path) -> std::io::Result<File> {
+            assert!(
+                !self.relative,
+                "relative authority adapter reached pathname mutation"
+            );
             self.call(|| NativeIo.create_stage(p))
         }
         fn create_private_stage(&self, p: &Path) -> std::io::Result<File> {
+            assert!(
+                !self.relative,
+                "relative authority adapter reached pathname mutation"
+            );
             self.call(|| NativeIo.create_private_stage(p))
         }
         fn open_append(&self, p: &Path) -> std::io::Result<File> {
@@ -1025,21 +1267,36 @@ mod tests {
             NativeIo.truncate_file(f, n)
         }
         fn write_stage(&self, f: &mut File, b: &[u8]) -> std::io::Result<()> {
+            if self.cleanup_fault.is_some() {
+                return Err(std::io::Error::other("force staged cleanup"));
+            }
             self.call(|| NativeIo.write_stage(f, b))
         }
         fn sync_file(&self, f: &File) -> std::io::Result<()> {
             self.call(|| NativeIo.sync_file(f))
         }
         fn replace(&self, a: &Path, b: &Path) -> std::io::Result<()> {
+            assert!(
+                !self.relative,
+                "relative authority adapter reached pathname mutation"
+            );
             self.call(|| NativeIo.replace(a, b))
         }
         fn remove(&self, p: &Path) -> std::io::Result<()> {
+            assert!(
+                !self.relative,
+                "relative authority adapter reached pathname mutation"
+            );
             NativeIo.remove(p)
         }
         fn create_directory(&self, p: &Path) -> std::io::Result<()> {
             NativeIo.create_directory(p)
         }
         fn sync_directory(&self, p: &Path) -> std::io::Result<DirectorySync> {
+            assert!(
+                !self.relative,
+                "relative authority adapter reached pathname mutation"
+            );
             if self.unsupported {
                 Ok(DirectorySync::Unsupported)
             } else {
@@ -1056,6 +1313,9 @@ mod tests {
                 let faulty = VaultFs::with_io(
                     native.root().clone(),
                     Arc::new(Fault {
+                        relative: false,
+                        cleanup_fault: None,
+                        cleanup_count: AtomicUsize::new(0),
                         at,
                         after,
                         count: AtomicUsize::new(0),
@@ -1088,6 +1348,9 @@ mod tests {
                 let faulty = VaultFs::with_io(
                     native.root().clone(),
                     Arc::new(Fault {
+                        relative: false,
+                        cleanup_fault: None,
+                        cleanup_count: AtomicUsize::new(0),
                         at,
                         after,
                         count: AtomicUsize::new(0),
@@ -1148,6 +1411,9 @@ mod tests {
                     let faulty = VaultFs::with_io(
                         native.root().clone(),
                         Arc::new(Fault {
+                            relative: false,
+                            cleanup_fault: None,
+                            cleanup_count: AtomicUsize::new(0),
                             at,
                             after,
                             count: AtomicUsize::new(0),
@@ -1183,6 +1449,9 @@ mod tests {
         let faulty = VaultFs::with_io(
             native.root().clone(),
             Arc::new(Fault {
+                relative: false,
+                cleanup_fault: None,
+                cleanup_count: AtomicUsize::new(0),
                 at: 0,
                 after: false,
                 count: AtomicUsize::new(0),
@@ -1203,5 +1472,216 @@ mod tests {
                 .unwrap()
                 .is_none()
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn relative_every_replacement_fault_leaves_old_or_new_complete_authority() {
+        if !NativeIo.descriptor_relative() {
+            return;
+        }
+        for at in 1..=6 {
+            for after in [false, true] {
+                let (_temp, native, writer) = fixture();
+                let idle = initial(&native, &writer);
+                let fault = Arc::new(Fault {
+                    relative: true,
+                    cleanup_fault: None,
+                    cleanup_count: AtomicUsize::new(0),
+                    at,
+                    after,
+                    count: AtomicUsize::new(0),
+                    unsupported: false,
+                });
+                let faulty = VaultFs::with_io(native.root().clone(), fault.clone())
+                    .for_maintenance_execution();
+                assert!(
+                    begin(&faulty, &writer, &idle, change(), publication(2)).is_err(),
+                    "{at} {after}"
+                );
+                assert!(
+                    fault.count.load(Ordering::SeqCst) >= at,
+                    "unreached relative cut {at}"
+                );
+                let observed = current(&native);
+                assert_eq!(observed.publication(), &publication(1));
+                if let Some(active) = observed.active() {
+                    assert_eq!(observed.revision(), 2);
+                    assert_eq!(active.change, change());
+                    assert_eq!(active.intended, publication(2));
+                    // No canonical write occurred in this fixture; cancel proof is known.
+                    cancel(&native, &writer, &observed, &change()).unwrap();
+                } else {
+                    assert_eq!(observed, idle);
+                }
+            }
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn relative_interrupted_activation_is_absent_or_complete_and_retry_preserves_state() {
+        if !NativeIo.descriptor_relative() {
+            return;
+        }
+        for at in 1..=9 {
+            for after in [false, true] {
+                let (_temp, native, writer) = fixture();
+                let fault = Arc::new(Fault {
+                    relative: true,
+                    cleanup_fault: None,
+                    cleanup_count: AtomicUsize::new(0),
+                    at,
+                    after,
+                    count: AtomicUsize::new(0),
+                    unsupported: false,
+                });
+                let faulty = VaultFs::with_io(native.root().clone(), fault.clone())
+                    .for_maintenance_execution();
+                assert!(
+                    activate(
+                        &faulty,
+                        &writer,
+                        &vault(),
+                        publication(1),
+                        Presence::LegacyMayBeAbsent
+                    )
+                    .is_err(),
+                    "{at} {after}"
+                );
+                assert!(
+                    fault.count.load(Ordering::SeqCst) >= at,
+                    "unreached relative cut {at}"
+                );
+                if let Some(observed) =
+                    load(&native, &vault(), Presence::LegacyMayBeAbsent).unwrap()
+                {
+                    assert_eq!(observed.revision(), 1);
+                    assert_eq!(observed.publication(), &publication(1));
+                    assert!(observed.active().is_none());
+                    assert_eq!(
+                        activate(
+                            &native,
+                            &writer,
+                            &vault(),
+                            publication(1),
+                            Presence::LegacyMayBeAbsent
+                        )
+                        .unwrap(),
+                        observed
+                    );
+                } else {
+                    assert!(load(&native, &vault(), Presence::Required).is_err());
+                    initial(&native, &writer);
+                }
+            }
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn relative_terminal_transition_faults_preserve_old_or_new_floor() {
+        if !NativeIo.descriptor_relative() {
+            return;
+        }
+        for operation in 0..3 {
+            for at in 1..=6 {
+                for after in [false, true] {
+                    let (_temp, native, writer) = fixture();
+                    let idle = initial(&native, &writer);
+                    let expected = if operation < 2 {
+                        begin(&native, &writer, &idle, change(), publication(2)).unwrap()
+                    } else {
+                        idle
+                    };
+                    let replacement = Publication {
+                        file_id: "b".repeat(32),
+                        epoch: 2,
+                    };
+                    let fault = Arc::new(Fault {
+                        relative: true,
+                        cleanup_fault: None,
+                        cleanup_count: AtomicUsize::new(0),
+                        at,
+                        after,
+                        count: AtomicUsize::new(0),
+                        unsupported: false,
+                    });
+                    let faulty = VaultFs::with_io(native.root().clone(), fault.clone())
+                        .for_maintenance_execution();
+                    let result = match operation {
+                        0 => acknowledge(&faulty, &writer, &expected, &change(), publication(2)),
+                        1 => cancel(&faulty, &writer, &expected, &change()),
+                        _ => publish_rebuild(&faulty, &writer, &expected, replacement.clone()),
+                    };
+                    assert!(result.is_err(), "{operation} {at} {after}");
+                    assert!(
+                        fault.count.load(Ordering::SeqCst) >= at,
+                        "unreached relative cut {at}"
+                    );
+                    let found = current(&native);
+                    if found != expected {
+                        assert_eq!(found.revision(), expected.revision() + 1);
+                        assert!(found.active().is_none());
+                        assert_eq!(
+                            found.publication(),
+                            &match operation {
+                                0 => publication(2),
+                                1 => publication(1),
+                                _ => replacement,
+                            }
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn relative_private_cleanup_fault_preserves_authority_and_retry() {
+        if !NativeIo.descriptor_relative() {
+            return;
+        }
+        for after in [false, true] {
+            let (_temp, native, writer) = fixture();
+            let idle = initial(&native, &writer);
+            let fault = Arc::new(Fault {
+                relative: true,
+                cleanup_fault: Some(after),
+                cleanup_count: AtomicUsize::new(0),
+                at: usize::MAX,
+                after: false,
+                count: AtomicUsize::new(0),
+                unsupported: false,
+            });
+            let faulty =
+                VaultFs::with_io(native.root().clone(), fault.clone()).for_maintenance_execution();
+            assert!(begin(&faulty, &writer, &idle, change(), publication(2)).is_err());
+            assert_eq!(
+                fault.cleanup_count.load(Ordering::SeqCst),
+                1,
+                "private cleanup unlink cut was not reached"
+            );
+            assert_eq!(current(&native), idle);
+            let unselected = fs::read_dir(native.root().path().join(".wiki/state"))
+                .unwrap()
+                .filter(|entry| {
+                    entry
+                        .as_ref()
+                        .unwrap()
+                        .file_name()
+                        .to_str()
+                        .unwrap()
+                        .starts_with(".operations-")
+                })
+                .count();
+            assert_eq!(unselected, usize::from(!after));
+            let active = begin(&native, &writer, &idle, change(), publication(2)).unwrap();
+            assert_eq!(active.revision(), 2);
+            assert_eq!(active.active().unwrap().change, change());
+            cancel(&native, &writer, &active, &change()).unwrap();
+            assert!(current(&native).active().is_none());
+        }
     }
 }

@@ -334,7 +334,7 @@ impl ChangeEngine {
         plan: ChangePlan,
         identity: NamedChangeIdentity,
     ) -> Result<NamedPreparation> {
-        let version = if crate::storage::layout::active(self.fs.root())? {
+        let version = if crate::storage::layout::active_fs(&self.fs)? {
             2
         } else {
             1
@@ -407,7 +407,7 @@ impl ChangeEngine {
         if expected != sealed.manifest()
             || expected.vault_id != self.vault_id
             || expected.version
-                != if crate::storage::layout::active(self.fs.root())? {
+                != if crate::storage::layout::active_fs(&self.fs)? {
                     2
                 } else {
                     1
@@ -1098,7 +1098,7 @@ impl ChangeEngine {
         manifest: &ChangeManifest,
         mut plan: ChangePlan,
     ) -> Result<()> {
-        let retained_layout = crate::storage::layout::active(self.fs.root())?;
+        let retained_layout = crate::storage::layout::active_fs(&self.fs)?;
         if retained_layout != (manifest.version == 2) {
             return Err(WikiError::invalid(
                 "retained payload route changed during preparation",
@@ -1244,7 +1244,7 @@ impl ChangeEngine {
                     reservation,
                     move || {
                         let (fs, prepared, reference, bytes, retained_layout) = work;
-                        if crate::storage::layout::active(fs.root())? != retained_layout {
+                        if crate::storage::layout::active_fs(&fs)? != retained_layout {
                             return Err(WikiError::invalid(
                                 "retained payload route changed during preparation",
                             ));
@@ -1530,15 +1530,15 @@ pub(crate) fn read_bounded(
     path: &VaultRelativePath,
     limit: usize,
 ) -> Result<Option<Vec<u8>>> {
-    let observed =
-        crate::vault::fs::read_regular_bounded(fs.root(), path, false, limit, "managed-read")
-            .map_err(|error| {
-                if error.code == ErrorCode::BudgetExceeded {
-                    WikiError::invalid(error.message)
-                } else {
-                    error
-                }
-            })?;
+    let observed = fs
+        .read_regular_bounded(path, false, limit, "managed-read")
+        .map_err(|error| {
+            if error.code == ErrorCode::BudgetExceeded {
+                WikiError::invalid(error.message)
+            } else {
+                error
+            }
+        })?;
     match observed {
         Some(bytes) => Ok(Some(bytes)),
         None => crate::storage::layout::legacy_payload(fs, path, limit),

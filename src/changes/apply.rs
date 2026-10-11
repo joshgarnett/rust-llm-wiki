@@ -23,6 +23,11 @@ impl ChangeEngine {
         validator: &dyn GraphValidator,
         publisher: &dyn PublicationBackend,
     ) -> Result<ApplyReport> {
+        if !self.fs.maintenance_execution_requested() {
+            return self
+                .for_maintenance_execution()
+                .apply(permit, change, validator, publisher);
+        }
         permit.require_root(self.fs.root())?;
         self.require_binding()?;
         let (manifest, hash) = self.load_manifest(&change.change_id)?;
@@ -57,6 +62,11 @@ impl ChangeEngine {
         validator: &dyn GraphValidator,
         publisher: &dyn PublicationBackend,
     ) -> Result<ApplyReport> {
+        if !self.fs.maintenance_execution_requested() {
+            return self
+                .for_maintenance_execution()
+                .continue_apply(permit, change, manifest, initial, validator, publisher);
+        }
         permit.require_root(self.fs.root())?;
         publisher.check_available()?;
         self.verify_read_preconditions(permit, manifest, &change.manifest_hash)?;

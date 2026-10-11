@@ -11,6 +11,23 @@ use std::{
     sync::Arc,
 };
 
+#[cfg(unix)]
+use super::paths::descriptor;
+#[cfg(unix)]
+type BoundMetadata = descriptor::Metadata;
+#[cfg(not(unix))]
+type BoundMetadata = fs::Metadata;
+fn bound_metadata(value: fs::Metadata) -> BoundMetadata {
+    #[cfg(unix)]
+    {
+        value.into()
+    }
+    #[cfg(not(unix))]
+    {
+        value
+    }
+}
+
 /// A bounded regular-file observation with fresh namespace checks on both sides.
 /// Unix nonblocking opens reject raced special files without stranding joined jobs.
 pub(crate) fn read_regular_bounded(
@@ -20,12 +37,25 @@ pub(crate) fn read_regular_bounded(
     limit: usize,
     layer: &'static str,
 ) -> Result<Option<Vec<u8>>> {
+    read_regular_bounded_policy(root, relative, raw, limit, layer, false, None)
+}
+fn read_regular_bounded_policy(
+    root: &VaultRoot,
+    relative: &VaultRelativePath,
+    raw: bool,
+    limit: usize,
+    layer: &'static str,
+    descriptor_relative: bool,
+    scoped_fs: Option<&VaultFs>,
+) -> Result<Option<Vec<u8>>> {
     observe_regular_bounded(
         root,
         relative,
         raw,
         limit,
         layer,
+        descriptor_relative,
+        scoped_fs,
         |length| {
             let mut bytes = Vec::new();
             bytes.try_reserve_exact(length).map_err(|_| {
@@ -67,6 +97,16 @@ pub(crate) fn hash_regular_raw_bounded(
     limit: usize,
     layer: &'static str,
 ) -> Result<Option<(u64, [u8; 32])>> {
+    hash_regular_raw_bounded_policy(root, relative, limit, layer, false, None)
+}
+fn hash_regular_raw_bounded_policy(
+    root: &VaultRoot,
+    relative: &VaultRelativePath,
+    limit: usize,
+    layer: &'static str,
+    descriptor_relative: bool,
+    scoped_fs: Option<&VaultFs>,
+) -> Result<Option<(u64, [u8; 32])>> {
     const {
         assert!(std::mem::size_of::<blake3::Hasher>() <= 8 * 1024);
     }
@@ -76,6 +116,8 @@ pub(crate) fn hash_regular_raw_bounded(
         true,
         limit,
         layer,
+        descriptor_relative,
+        scoped_fs,
         |_| Ok(blake3::Hasher::new()),
         |hasher, chunk| {
             hasher.update(chunk);
@@ -91,6 +133,8 @@ fn observe_regular_bounded<T>(
     raw: bool,
     limit: usize,
     layer: &'static str,
+    descriptor_relative: bool,
+    scoped_fs: Option<&VaultFs>,
     initialize: impl FnOnce(usize) -> Result<T>,
     mut consume: impl FnMut(&mut T, &[u8]) -> Result<()>,
 ) -> Result<Option<(T, u64)>> {
@@ -101,6 +145,23 @@ fn observe_regular_bounded<T>(
             if owner_activation {
                 crate::maintenance_parallel::record_owner_activation_read();
             }
+            #[cfg(unix)]
+            let resolve = || {
+                if descriptor_relative {
+                    match scoped_fs {
+                        Some(fs) => fs.bind(relative, raw),
+                        None => root.bind(relative, raw),
+                    }
+                } else {
+                    (if raw {
+                        root.resolve_raw(relative)
+                    } else {
+                        root.resolve(relative)
+                    })
+                    .map(descriptor::Route::legacy)
+                }
+            };
+            #[cfg(not(unix))]
             let resolve = || {
                 if raw {
                     root.resolve_raw(relative)
@@ -108,6 +169,11 @@ fn observe_regular_bounded<T>(
                     root.resolve(relative)
                 }
             };
+            #[cfg(unix)]
+            let route = resolve()?;
+            #[cfg(all(unix, test))]
+            let path = &route.path;
+            #[cfg(not(unix))]
             let path = resolve()?;
             let before = match crate::maintenance_diagnostic::observe(
                 crate::maintenance_diagnostic::Phase::MetadataObservation,
@@ -116,7 +182,14 @@ fn observe_regular_bounded<T>(
                         crate::maintenance_diagnostic::Counter::MetadataCall,
                         1,
                     );
-                    fs::symlink_metadata(&path)
+                    #[cfg(unix)]
+                    {
+                        route.metadata()
+                    }
+                    #[cfg(not(unix))]
+                    {
+                        fs::symlink_metadata(&path)
+                    }
                 },
             ) {
                 Ok(meta) => meta,
@@ -142,7 +215,6 @@ fn observe_regular_bounded<T>(
             super::maintenance_read_tests::before_open(&path);
             #[cfg(unix)]
             let mut file = {
-                use std::os::unix::fs::OpenOptionsExt;
                 crate::maintenance_diagnostic::observe(
                     crate::maintenance_diagnostic::Phase::FileOpen,
                     || {
@@ -150,10 +222,7 @@ fn observe_regular_bounded<T>(
                             crate::maintenance_diagnostic::Counter::FileOpenCall,
                             1,
                         );
-                        OpenOptions::new()
-                            .read(true)
-                            .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
-                            .open(&path)
+                        route.open_read()
                     },
                 )
             }
@@ -170,7 +239,7 @@ fn observe_regular_bounded<T>(
                 },
             )
             .map_err(|e| io_error("open bounded input", e))?;
-            let same = |a: &fs::Metadata, b: &fs::Metadata| -> Result<()> {
+            let same = |a: &BoundMetadata, b: &BoundMetadata| -> Result<()> {
                 if !b.is_file() || b.file_type().is_symlink() {
                     return Err(WikiError::new(
                         ErrorCode::ContentConflict,
@@ -179,7 +248,6 @@ fn observe_regular_bounded<T>(
                 }
                 #[cfg(unix)]
                 {
-                    use std::os::unix::fs::MetadataExt;
                     if a.dev() != b.dev() || a.ino() != b.ino() {
                         return Err(WikiError::new(
                             ErrorCode::ContentConflict,
@@ -198,7 +266,7 @@ fn observe_regular_bounded<T>(
                         crate::maintenance_diagnostic::Counter::MetadataCall,
                         1,
                     );
-                    file.metadata()
+                    file.metadata().map(bound_metadata)
                 },
             )
             .map_err(|e| io_error("inspect opened input", e))?;
@@ -248,7 +316,7 @@ fn observe_regular_bounded<T>(
                             crate::maintenance_diagnostic::Counter::MetadataCall,
                             1,
                         );
-                        file.metadata()
+                        file.metadata().map(bound_metadata)
                     },
                 )
                 .map_err(|e| io_error("recheck opened input", e))?;
@@ -257,6 +325,11 @@ fn observe_regular_bounded<T>(
                     1,
                 );
                 same(&opened, &after)?;
+                #[cfg(unix)]
+                let fresh = resolve()?;
+                #[cfg(unix)]
+                route.same_parent(&fresh)?;
+                #[cfg(not(unix))]
                 if resolve()? != path {
                     return Err(WikiError::new(
                         ErrorCode::ContentConflict,
@@ -270,7 +343,14 @@ fn observe_regular_bounded<T>(
                             crate::maintenance_diagnostic::Counter::MetadataCall,
                             1,
                         );
-                        fs::symlink_metadata(&path)
+                        #[cfg(unix)]
+                        {
+                            fresh.metadata()
+                        }
+                        #[cfg(not(unix))]
+                        {
+                            fs::symlink_metadata(&path)
+                        }
                     },
                 )
                 .map_err(|e| io_error("recheck named input", e))?;
@@ -325,6 +405,58 @@ pub enum DirectorySync {
 /// A production adapter, also suitable for injecting failures around actual I/O calls.
 /// Methods must perform exactly the requested operation, without hidden retries.
 pub trait DurableIo: Send + Sync {
+    /// Opt in only when every relative operation is implemented. Legacy/fault
+    /// adapters retain their original callbacks and path semantics.
+    #[cfg(unix)]
+    fn descriptor_relative(&self) -> bool {
+        false
+    }
+    #[cfg(unix)]
+    fn create_stage_at(&self, _parent: &File, _leaf: &std::ffi::OsStr) -> std::io::Result<File> {
+        Err(std::io::ErrorKind::Unsupported.into())
+    }
+    #[cfg(unix)]
+    fn create_private_stage_at(
+        &self,
+        _parent: &File,
+        _leaf: &std::ffi::OsStr,
+    ) -> std::io::Result<File> {
+        Err(std::io::ErrorKind::Unsupported.into())
+    }
+    #[cfg(unix)]
+    fn create_private_directory_at(
+        &self,
+        _parent: &File,
+        _leaf: &std::ffi::OsStr,
+    ) -> std::io::Result<()> {
+        Err(std::io::ErrorKind::Unsupported.into())
+    }
+    #[cfg(unix)]
+    fn open_append_at(&self, _parent: &File, _leaf: &std::ffi::OsStr) -> std::io::Result<File> {
+        Err(std::io::ErrorKind::Unsupported.into())
+    }
+    #[cfg(unix)]
+    fn replace_at(
+        &self,
+        _from_parent: &File,
+        _from: &std::ffi::OsStr,
+        _to_parent: &File,
+        _to: &std::ffi::OsStr,
+    ) -> std::io::Result<()> {
+        Err(std::io::ErrorKind::Unsupported.into())
+    }
+    #[cfg(unix)]
+    fn remove_at(&self, _parent: &File, _leaf: &std::ffi::OsStr) -> std::io::Result<()> {
+        Err(std::io::ErrorKind::Unsupported.into())
+    }
+    #[cfg(unix)]
+    fn create_directory_at(&self, _parent: &File, _leaf: &std::ffi::OsStr) -> std::io::Result<()> {
+        Err(std::io::ErrorKind::Unsupported.into())
+    }
+    #[cfg(unix)]
+    fn sync_directory_file(&self, _directory: &File) -> std::io::Result<DirectorySync> {
+        Err(std::io::ErrorKind::Unsupported.into())
+    }
     fn create_stage(&self, path: &Path) -> std::io::Result<File>;
     /// Adapters must explicitly implement protected creation before accepting private payloads.
     fn create_private_stage(&self, _path: &Path) -> std::io::Result<File> {
@@ -348,6 +480,80 @@ pub trait DurableIo: Send + Sync {
 #[derive(Debug, Default)]
 pub struct NativeIo;
 impl DurableIo for NativeIo {
+    #[cfg(unix)]
+    fn descriptor_relative(&self) -> bool {
+        descriptor::supported()
+    }
+    #[cfg(unix)]
+    fn create_stage_at(&self, parent: &File, leaf: &std::ffi::OsStr) -> std::io::Result<File> {
+        descriptor::open_at(
+            parent,
+            leaf,
+            libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL,
+            0o666,
+        )
+    }
+    #[cfg(unix)]
+    fn create_private_stage_at(
+        &self,
+        parent: &File,
+        leaf: &std::ffi::OsStr,
+    ) -> std::io::Result<File> {
+        descriptor::open_at(
+            parent,
+            leaf,
+            libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL,
+            0o600,
+        )
+    }
+    #[cfg(unix)]
+    fn create_private_directory_at(
+        &self,
+        parent: &File,
+        leaf: &std::ffi::OsStr,
+    ) -> std::io::Result<()> {
+        descriptor::mkdir_private_at(parent, leaf)
+    }
+    #[cfg(unix)]
+    fn open_append_at(&self, parent: &File, leaf: &std::ffi::OsStr) -> std::io::Result<File> {
+        descriptor::open_at(
+            parent,
+            leaf,
+            libc::O_WRONLY | libc::O_CREAT | libc::O_APPEND,
+            0o666,
+        )
+    }
+    #[cfg(unix)]
+    fn replace_at(
+        &self,
+        from_parent: &File,
+        from: &std::ffi::OsStr,
+        to_parent: &File,
+        to: &std::ffi::OsStr,
+    ) -> std::io::Result<()> {
+        descriptor::rename_at(from_parent, from, to_parent, to)
+    }
+    #[cfg(unix)]
+    fn remove_at(&self, parent: &File, leaf: &std::ffi::OsStr) -> std::io::Result<()> {
+        descriptor::unlink_at(parent, leaf)
+    }
+    #[cfg(unix)]
+    fn create_directory_at(&self, parent: &File, leaf: &std::ffi::OsStr) -> std::io::Result<()> {
+        descriptor::mkdir_at(parent, leaf)
+    }
+    #[cfg(unix)]
+    fn sync_directory_file(&self, directory: &File) -> std::io::Result<DirectorySync> {
+        // Route descriptors may carry search permission only. Open the held
+        // directory itself for durability, without resolving its old pathname.
+        descriptor::open_at(
+            directory,
+            std::ffi::OsStr::new("."),
+            libc::O_RDONLY | libc::O_DIRECTORY,
+            0,
+        )?
+        .sync_all()?;
+        Ok(DirectorySync::Supported)
+    }
     fn create_stage(&self, path: &Path) -> std::io::Result<File> {
         OpenOptions::new().write(true).create_new(true).open(path)
     }
@@ -436,6 +642,7 @@ pub struct VaultFs {
     root: VaultRoot,
     io: Arc<dyn DurableIo>,
     storage_recovery: bool,
+    maintenance_execution: bool,
     published_refresh_paths: Option<Arc<crate::catalog::source_refresh::PublishedRefreshPaths>>,
 }
 /// Owner-admitted temporary-file work. It grants no replacement authority.
@@ -468,7 +675,14 @@ impl StagePreparation {
         crate::maintenance_diagnostic::observe(crate::maintenance_diagnostic::Phase::Stage, || {
             self.fs.require_storage_ready()?;
             self.fs.validate_paths(std::slice::from_ref(&self.target))?;
-            let destination = self.fs.root.resolve(&self.target)?;
+            #[cfg(unix)]
+            let (destination, parent_descriptor) = if self.fs.uses_descriptor_relative() {
+                self.fs.bind(&self.target, false)?.into_parts()
+            } else {
+                (self.fs.resolve(&self.target)?, None)
+            };
+            #[cfg(not(unix))]
+            let destination = self.fs.resolve(&self.target)?;
             if destination != self.destination {
                 return Err(WikiError::new(
                     ErrorCode::ContentConflict,
@@ -477,23 +691,69 @@ impl StagePreparation {
             }
             let parent = destination.parent().expect("managed file has parent");
             let path = parent.join(format!(".lwiki-stage-{}.tmp", uuid::Uuid::now_v7()));
-            let mut file = match self.fs.io.create_stage(&path) {
+            #[cfg(unix)]
+            let created = if self.fs.uses_descriptor_relative() {
+                self.fs.io.create_stage_at(
+                    parent_descriptor.as_ref().ok_or_else(|| {
+                        io_error("open stage parent", std::io::ErrorKind::NotFound.into())
+                    })?,
+                    path.file_name().expect("stage leaf"),
+                )
+            } else {
+                self.fs.io.create_stage(&path)
+            };
+            #[cfg(not(unix))]
+            let created = self.fs.io.create_stage(&path);
+            let mut file = match created {
                 Ok(file) => file,
                 Err(e) => {
                     if e.kind() != std::io::ErrorKind::AlreadyExists {
+                        #[cfg(unix)]
+                        if let Some(parent) = parent_descriptor.as_ref() {
+                            let _ = self
+                                .fs
+                                .io
+                                .remove_at(parent, path.file_name().expect("stage leaf"));
+                        } else {
+                            let _ = self.fs.io.remove(&path);
+                        }
+                        #[cfg(not(unix))]
                         let _ = self.fs.io.remove(&path);
                     }
                     return Err(io_error("create same-directory stage", e));
                 }
             };
-            let staged = StagedFile {
+            let mut staged = StagedFile {
                 path,
+                #[cfg(unix)]
+                parent_descriptor,
+                #[cfg(unix)]
+                prepared_parent_identity: (0, 0),
                 target: self.target.clone(),
                 root: self.fs.root.clone(),
                 io: Arc::clone(&self.fs.io),
                 proposed_hash: Blake3Hash::digest(bytes),
                 proposed_len: bytes.len(),
             };
+            #[cfg(unix)]
+            {
+                staged.prepared_parent_identity = {
+                    use std::os::unix::fs::MetadataExt;
+                    #[cfg(test)]
+                    if descriptor::fail_parent_observation() {
+                        return Err(io_error(
+                            "inspect prepared stage parent",
+                            std::io::Error::from_raw_os_error(libc::EIO),
+                        ));
+                    }
+                    let meta = match staged.parent_descriptor.as_ref() {
+                        Some(parent) => parent.metadata(),
+                        None => fs::symlink_metadata(parent),
+                    }
+                    .map_err(|e| io_error("inspect prepared stage parent", e))?;
+                    (meta.dev(), meta.ino())
+                };
+            }
             if staged.owned_bytes() > self.result_owned_bound() {
                 return Err(WikiError::new(
                     ErrorCode::BudgetExceeded,
@@ -508,12 +768,36 @@ impl StagePreparation {
                 .io
                 .sync_file(&file)
                 .map_err(|e| io_error("sync stage", e))?;
+            #[cfg(unix)]
+            if let Some(parent) = staged.parent_descriptor.as_ref() {
+                let fresh = self.fs.bind(&self.target, false)?;
+                fresh.same_held_parent(parent)?;
+                // A fresh stage observation authenticates the descriptor-created
+                // bytes in the currently named parent before returning a receipt.
+                let stage_route = self.fs.bind(
+                    &VaultRelativePath::new(
+                        staged
+                            .path
+                            .strip_prefix(self.fs.root.path())
+                            .ok()
+                            .and_then(Path::to_str)
+                            .ok_or_else(|| WikiError::invalid("stage escapes vault"))?,
+                    )?,
+                    true,
+                )?;
+                stage_route.same_held_parent(parent)?;
+                stage_route.require_file_identity(&file)?;
+            }
             Ok(staged)
         })
     }
 }
 pub struct StagedFile {
     path: PathBuf,
+    #[cfg(unix)]
+    parent_descriptor: Option<File>,
+    #[cfg(unix)]
+    prepared_parent_identity: (u64, u64),
     target: VaultRelativePath,
     root: VaultRoot,
     io: Arc<dyn DurableIo>,
@@ -537,6 +821,13 @@ impl StagedFile {
 }
 impl Drop for StagedFile {
     fn drop(&mut self) {
+        #[cfg(unix)]
+        if let Some(parent) = self.parent_descriptor.as_ref() {
+            let _ = self
+                .io
+                .remove_at(parent, self.path.file_name().expect("stage leaf"));
+            return;
+        }
         let _ = self.io.remove(&self.path);
     }
 }
@@ -553,8 +844,99 @@ impl VaultFs {
             root,
             io,
             storage_recovery: false,
+            maintenance_execution: false,
             published_refresh_paths: None,
         }
+    }
+    #[doc(hidden)]
+    pub fn for_maintenance_execution(&self) -> Self {
+        let mut scoped = self.clone();
+        scoped.maintenance_execution = true;
+        scoped
+    }
+    pub(crate) fn maintenance_execution_requested(&self) -> bool {
+        self.maintenance_execution
+    }
+    pub(crate) fn uses_descriptor_relative(&self) -> bool {
+        #[cfg(unix)]
+        {
+            self.maintenance_execution && descriptor::supported() && self.io.descriptor_relative()
+        }
+        #[cfg(not(unix))]
+        {
+            false
+        }
+    }
+    #[cfg(unix)]
+    pub(crate) fn bind(&self, path: &VaultRelativePath, raw: bool) -> Result<descriptor::Route> {
+        if raw {
+            return self.root.bind(path, true);
+        }
+        crate::maintenance_diagnostic::observe(
+            crate::maintenance_diagnostic::Phase::ResolveValidation,
+            || {
+                crate::maintenance_diagnostic::bump(
+                    crate::maintenance_diagnostic::Counter::LogicalResolve,
+                    1,
+                );
+                let physical = crate::storage::layout::physical_relative_fs(self, path)?;
+                self.root.bind(&physical, true)
+            },
+        )
+    }
+    #[cfg(unix)]
+    pub(crate) fn bind_raw_budgeted(
+        &self,
+        path: &VaultRelativePath,
+        on_step: &mut dyn FnMut() -> Result<()>,
+    ) -> Result<descriptor::Route> {
+        descriptor::Route::resolve(&self.root, path, on_step)
+    }
+    pub(crate) fn raw_exists(&self, path: &VaultRelativePath) -> Result<bool> {
+        #[cfg(unix)]
+        if self.uses_descriptor_relative() {
+            return self.bind(path, true).map(|route| route.metadata().is_ok());
+        }
+        Ok(self.root.resolve_raw(path)?.exists())
+    }
+    fn resolve(&self, path: &VaultRelativePath) -> Result<PathBuf> {
+        #[cfg(unix)]
+        if self.uses_descriptor_relative() {
+            return self.bind(path, false).map(|route| route.path);
+        }
+        self.root.resolve(path)
+    }
+    pub(crate) fn read_regular_bounded(
+        &self,
+        path: &VaultRelativePath,
+        raw: bool,
+        limit: usize,
+        layer: &'static str,
+    ) -> Result<Option<Vec<u8>>> {
+        read_regular_bounded_policy(
+            &self.root,
+            path,
+            raw,
+            limit,
+            layer,
+            self.uses_descriptor_relative(),
+            Some(self),
+        )
+    }
+    pub(crate) fn hash_regular_raw_bounded(
+        &self,
+        path: &VaultRelativePath,
+        limit: usize,
+        layer: &'static str,
+    ) -> Result<Option<(u64, [u8; 32])>> {
+        hash_regular_raw_bounded_policy(
+            &self.root,
+            path,
+            limit,
+            layer,
+            self.uses_descriptor_relative(),
+            Some(self),
+        )
     }
     pub(crate) fn with_published_refresh_paths(
         &self,
@@ -584,18 +966,19 @@ impl VaultFs {
             root: self.root.clone(),
             io: Arc::clone(&self.io),
             storage_recovery: true,
+            maintenance_execution: self.maintenance_execution,
             published_refresh_paths: None,
         }
     }
     pub(crate) fn require_storage_ready(&self) -> Result<()> {
         if !self.storage_recovery
-            && hash_regular_raw_bounded(
-                &self.root,
-                &VaultRelativePath::new(".wiki/state/storage/cleanup.json")?,
-                64 * 1024 * 1024,
-                "storage-read",
-            )?
-            .is_some()
+            && self
+                .hash_regular_raw_bounded(
+                    &VaultRelativePath::new(".wiki/state/storage/cleanup.json")?,
+                    64 * 1024 * 1024,
+                    "storage-read",
+                )?
+                .is_some()
         {
             return Err(WikiError::new(
                 ErrorCode::RecoveryRequired,
@@ -623,7 +1006,37 @@ impl VaultFs {
         self.require_storage_ready()?;
         Self::require_operational(target)?;
         self.validate_paths(std::slice::from_ref(target))?;
-        let path = self.root.resolve(target)?;
+        let path = self.resolve(target)?;
+        #[cfg(unix)]
+        if self.uses_descriptor_relative() {
+            let route = self.bind(target, false)?;
+            if route.path != path {
+                return Err(WikiError::new(
+                    ErrorCode::ContentConflict,
+                    "append route changed",
+                ));
+            }
+            let parent = route
+                .parent()
+                .map_err(|e| io_error("open append parent", e))?;
+            let mut file = self
+                .io
+                .open_append_at(parent, route.leaf())
+                .map_err(|e| io_error("open operational append", e))?;
+            let fresh = self.bind(target, false)?;
+            route.same_parent(&fresh)?;
+            fresh.require_file_identity(&file)?;
+            self.io
+                .write_stage(&mut file, bytes)
+                .map_err(|e| io_error("append operational bytes", e))?;
+            self.io
+                .sync_file(&file)
+                .map_err(|e| io_error("sync operational append", e))?;
+            return self
+                .io
+                .sync_directory_file(parent)
+                .map_err(|e| io_error("sync append directory", e));
+        }
         let mut file = self
             .io
             .open_append(&path)
@@ -647,12 +1060,45 @@ impl VaultFs {
         permit.require_root(&self.root)?;
         self.require_storage_ready()?;
         Self::require_operational(target)?;
-        let path = self.root.resolve(target)?;
+        let path = self.resolve(target)?;
         // Truncation never creates a missing operational file.
+        #[cfg(unix)]
+        let route = if self.uses_descriptor_relative() {
+            Some(self.bind(target, false)?)
+        } else {
+            None
+        };
+        #[cfg(unix)]
+        let file = if let Some(route) = route.as_ref() {
+            if route.path != path {
+                return Err(WikiError::new(
+                    ErrorCode::ContentConflict,
+                    "truncation route changed",
+                ));
+            }
+            descriptor::open_at(
+                route
+                    .parent()
+                    .map_err(|e| io_error("open truncation parent", e))?,
+                route.leaf(),
+                libc::O_WRONLY,
+                0,
+            )
+        } else {
+            OpenOptions::new().write(true).open(&path)
+        }
+        .map_err(|e| io_error("open operational truncation", e))?;
+        #[cfg(not(unix))]
         let file = OpenOptions::new()
             .write(true)
-            .open(path)
+            .open(&path)
             .map_err(|e| io_error("open operational truncation", e))?;
+        #[cfg(unix)]
+        if let Some(route) = route.as_ref() {
+            let fresh = self.bind(target, false)?;
+            route.same_parent(&fresh)?;
+            fresh.require_file_identity(&file)?;
+        }
         if length
             > crate::maintenance_diagnostic::observe(
                 crate::maintenance_diagnostic::Phase::MetadataObservation,
@@ -686,7 +1132,54 @@ impl VaultFs {
     ) -> Result<DirectorySync> {
         permit.require_root(&self.root)?;
         self.require_storage_ready()?;
-        let path = self.root.resolve(target)?;
+        let path = self.resolve(target)?;
+        #[cfg(unix)]
+        if self.uses_descriptor_relative() {
+            let route = self.bind(target, false)?;
+            if route.path != path {
+                return Err(WikiError::new(
+                    ErrorCode::ContentConflict,
+                    "sync route changed",
+                ));
+            }
+            match route.open_read() {
+                Ok(file) => {
+                    let fresh = self.bind(target, false)?;
+                    route.same_parent(&fresh)?;
+                    fresh.require_file_identity(&file)?;
+                    self.io
+                        .sync_file(&file)
+                        .map_err(|e| io_error("sync observed target", e))?;
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                    crate::maintenance_diagnostic::bump(
+                        crate::maintenance_diagnostic::Counter::ExpectedMissing,
+                        1,
+                    );
+                    let fresh = self.bind(target, false)?;
+                    route.same_parent(&fresh)?;
+                    match fresh.metadata() {
+                        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                        Err(error) => return Err(io_error("recheck absent sync target", error)),
+                        Ok(_) => {
+                            return Err(WikiError::new(
+                                ErrorCode::ContentConflict,
+                                "absent sync target appeared",
+                            ));
+                        }
+                    }
+                }
+                Err(error) => return Err(io_error("open observed target", error)),
+            }
+            return self
+                .io
+                .sync_directory_file(
+                    route
+                        .parent()
+                        .map_err(|e| io_error("open sync parent", e))?,
+                )
+                .map_err(|e| io_error("sync observed target directory", e));
+        }
         #[cfg(unix)]
         let opened = {
             use std::os::unix::fs::OpenOptionsExt;
@@ -734,7 +1227,7 @@ impl VaultFs {
                         ));
                     }
                 }
-                if self.root.resolve(target)? != path {
+                if self.resolve(target)? != path {
                     return Err(WikiError::new(
                         ErrorCode::ContentConflict,
                         "sync target route changed",
@@ -757,14 +1250,12 @@ impl VaultFs {
             .map_err(|e| io_error("sync observed target directory", e))
     }
     pub fn read_before(&self, target: &VaultRelativePath) -> Result<Option<BeforeImage>> {
-        Ok(
-            read_regular_bounded(&self.root, target, false, usize::MAX, "vault-read")?.map(
-                |bytes| BeforeImage {
-                    hash: Blake3Hash::digest(&bytes),
-                    bytes,
-                },
-            ),
-        )
+        Ok(self
+            .read_regular_bounded(target, false, usize::MAX, "vault-read")?
+            .map(|bytes| BeforeImage {
+                hash: Blake3Hash::digest(&bytes),
+                bytes,
+            }))
     }
     pub fn ensure_directory(
         &self,
@@ -774,7 +1265,7 @@ impl VaultFs {
         permit.require_root(&self.root)?;
         self.require_storage_ready()?;
         self.validate_paths(std::slice::from_ref(directory))?;
-        let directory = crate::storage::layout::physical_relative(&self.root, directory)?;
+        let directory = crate::storage::layout::physical_relative_fs(self, directory)?;
         let mut relative = String::new();
         let mut support = DirectorySync::Supported;
         for part in directory.as_str().split('/') {
@@ -782,7 +1273,48 @@ impl VaultFs {
                 relative.push('/');
             }
             relative.push_str(part);
-            let path = self.root.resolve(&VaultRelativePath::new(&relative)?)?;
+            let path = self.resolve(&VaultRelativePath::new(&relative)?)?;
+            #[cfg(unix)]
+            if self.uses_descriptor_relative() {
+                let relative = VaultRelativePath::new(&relative)?;
+                let route = self.bind(&relative, false)?;
+                if route.path != path {
+                    return Err(WikiError::new(
+                        ErrorCode::ContentConflict,
+                        "directory route changed",
+                    ));
+                }
+                let parent = route
+                    .parent()
+                    .map_err(|e| io_error("open managed directory parent", e))?;
+                match self.io.create_directory_at(parent, route.leaf()) {
+                    Ok(()) => {}
+                    Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                        let meta = route
+                            .metadata()
+                            .map_err(|e| io_error("inspect existing directory", e))?;
+                        if !meta.is_dir() || meta.file_type().is_symlink() {
+                            return Err(WikiError::invalid(
+                                "managed directory must remain a directory",
+                            ));
+                        }
+                    }
+                    Err(error) => return Err(io_error("create managed directory", error)),
+                }
+                let fresh = self.bind(&relative, false)?;
+                route.same_parent(&fresh)?;
+                let child = descriptor::directory_at(parent, route.leaf())?;
+                for directory in [&child, parent] {
+                    let result = self
+                        .io
+                        .sync_directory_file(directory)
+                        .map_err(|e| io_error("sync managed directory", e))?;
+                    if result == DirectorySync::Unsupported {
+                        support = result;
+                    }
+                }
+                continue;
+            }
             match self.io.create_directory(&path) {
                 Ok(()) => {}
                 Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists && path.is_dir() => {}
@@ -821,12 +1353,12 @@ impl VaultFs {
         permit.require_root(&self.root)?;
         self.require_storage_ready()?;
         self.validate_paths(std::slice::from_ref(target))?;
-        let destination = self.root.resolve(target)?;
+        let destination = self.resolve(target)?;
         let parent = destination.parent().expect("managed file has parent");
         // Logical operational files can have a managed physical parent different
         // from their visible siblings. Ensure only that contained parent.
         if crate::storage::layout::managed_path(target).is_some()
-            && crate::storage::layout::active(&self.root)?
+            && crate::storage::layout::active_fs(self)?
         {
             let relative = parent
                 .strip_prefix(self.root.path())
@@ -870,13 +1402,26 @@ impl VaultFs {
         expected: &ExpectedState,
         permit: &WriterPermit,
     ) -> Result<DirectorySync> {
+        #[cfg(unix)]
+        if staged.parent_descriptor.is_some() && !self.maintenance_execution_requested() {
+            return self
+                .for_maintenance_execution()
+                .replace(staged, expected, permit);
+        }
+        #[cfg(unix)]
+        if staged.parent_descriptor.is_some() && !self.uses_descriptor_relative() {
+            return Err(WikiError::new(
+                ErrorCode::CapabilityUnavailable,
+                "bound stage requires descriptor-relative publisher",
+            ));
+        }
         permit.require_root(&self.root)?;
         self.require_storage_ready()?;
         if staged.root != self.root {
             return Err(WikiError::invalid("stage belongs to another vault"));
         }
         self.validate_paths(std::slice::from_ref(&staged.target))?;
-        let destination = self.root.resolve(&staged.target)?;
+        let destination = self.resolve(&staged.target)?;
         // Stage is public by path for journal intent; detect accidental tampering.
         let metadata = crate::maintenance_diagnostic::observe(
             crate::maintenance_diagnostic::Phase::MetadataObservation,
@@ -902,23 +1447,19 @@ impl VaultFs {
             .and_then(Path::to_str)
             .ok_or_else(|| WikiError::invalid("stage escapes vault"))?;
         let stage_relative = VaultRelativePath::new(stage_relative)?;
-        let (_, stage_hash) = hash_regular_raw_bounded(
-            &self.root,
-            &stage_relative,
-            staged.proposed_len,
-            "stage-read",
-        )
-        .map_err(|error| {
-            if error.code == ErrorCode::BudgetExceeded {
-                WikiError::new(
-                    ErrorCode::ContentConflict,
-                    "stage payload grew after preparation",
-                )
-            } else {
-                error
-            }
-        })?
-        .ok_or_else(|| WikiError::new(ErrorCode::ContentConflict, "stage disappeared"))?;
+        let (_, stage_hash) = self
+            .hash_regular_raw_bounded(&stage_relative, staged.proposed_len, "stage-read")
+            .map_err(|error| {
+                if error.code == ErrorCode::BudgetExceeded {
+                    WikiError::new(
+                        ErrorCode::ContentConflict,
+                        "stage payload grew after preparation",
+                    )
+                } else {
+                    error
+                }
+            })?
+            .ok_or_else(|| WikiError::new(ErrorCode::ContentConflict, "stage disappeared"))?;
         if blake3::Hash::from(stage_hash).to_hex().as_str() != staged.proposed_hash.hex() {
             return Err(WikiError::new(
                 ErrorCode::ContentConflict,
@@ -926,6 +1467,55 @@ impl VaultFs {
             ));
         }
         self.guard(&staged.target, expected)?;
+        #[cfg(unix)]
+        if self.uses_descriptor_relative() {
+            // Rewalk both complete named routes after the byte guard. A held
+            // stage parent is never sufficient authority after ancestor rename.
+            let target_route = self.bind(&staged.target, false)?;
+            if target_route.path != destination {
+                return Err(WikiError::new(
+                    ErrorCode::ContentConflict,
+                    "replacement layout route changed",
+                ));
+            }
+            let stage_route = self.bind(&stage_relative, true)?;
+            let stage_parent = match staged.parent_descriptor.as_ref() {
+                Some(parent) => {
+                    stage_route.same_held_parent(parent)?;
+                    parent
+                }
+                None => stage_route
+                    .parent()
+                    .map_err(|e| io_error("open prepared stage parent", e))?,
+            };
+            {
+                use std::os::unix::fs::MetadataExt;
+                let held = stage_parent
+                    .metadata()
+                    .map_err(|e| io_error("inspect prepared parent", e))?;
+                if (held.dev(), held.ino()) != staged.prepared_parent_identity {
+                    return Err(WikiError::new(
+                        ErrorCode::ContentConflict,
+                        "prepared stage parent changed",
+                    ));
+                }
+            }
+            let target_parent = target_route
+                .parent()
+                .map_err(|e| io_error("open replacement parent", e))?;
+            self.io
+                .replace_at(
+                    stage_parent,
+                    staged.path.file_name().expect("stage leaf"),
+                    target_parent,
+                    target_route.leaf(),
+                )
+                .map_err(|e| io_error("replace staged file", e))?;
+            return self
+                .io
+                .sync_directory_file(target_parent)
+                .map_err(|e| io_error("sync replacement directory", e));
+        }
         self.io
             .replace(&staged.path, &destination)
             .map_err(|e| io_error("replace staged file", e))?;
@@ -942,10 +1532,30 @@ impl VaultFs {
         permit.require_root(&self.root)?;
         self.require_storage_ready()?;
         self.validate_paths(std::slice::from_ref(target))?;
-        let destination = self.root.resolve(target)?;
+        let destination = self.resolve(target)?;
         self.guard(target, expected)?;
         if expected == &ExpectedState::Absent {
             return Ok(DirectorySync::Supported);
+        }
+        #[cfg(unix)]
+        if self.uses_descriptor_relative() {
+            let route = self.bind(target, false)?;
+            if route.path != destination {
+                return Err(WikiError::new(
+                    ErrorCode::ContentConflict,
+                    "deletion layout route changed",
+                ));
+            }
+            let parent = route
+                .parent()
+                .map_err(|e| io_error("open deletion parent", e))?;
+            self.io
+                .remove_at(parent, route.leaf())
+                .map_err(|e| io_error("delete guarded file", e))?;
+            return self
+                .io
+                .sync_directory_file(parent)
+                .map_err(|e| io_error("sync deletion directory", e));
         }
         self.io
             .remove(&destination)

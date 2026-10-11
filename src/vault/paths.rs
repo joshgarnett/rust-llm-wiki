@@ -6,6 +6,9 @@ use std::{
     path::{Path, PathBuf},
 };
 use unicase::UniCase;
+#[cfg(unix)]
+#[path = "descriptor.rs"]
+pub(crate) mod descriptor;
 
 /// All 39 ASCII decimal digits have exactly one inverse spelling under the
 /// pinned Unicode fold implementation. This removes only alias enumeration;
@@ -178,10 +181,19 @@ pub(crate) mod profile {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub struct VaultRoot {
     path: PathBuf,
+    #[cfg(unix)]
+    identity: (u64, u64),
 }
+
+impl PartialEq for VaultRoot {
+    fn eq(&self, other: &Self) -> bool {
+        self.path == other.path
+    }
+}
+impl Eq for VaultRoot {}
 
 /// Eligibility only: outliers keep the owner route before any worker is dispatched.
 /// Include room for retained prefixes, WIKI probes and temporary stage suffixes.
@@ -387,7 +399,14 @@ impl VaultRoot {
         )
         .map_err(|e| root_error("canonicalize vault root", e))?;
         utf8(&path)?;
-        Ok(Self { path })
+        Ok(Self {
+            path,
+            #[cfg(unix)]
+            identity: {
+                use std::os::unix::fs::MetadataExt;
+                (meta.dev(), meta.ino())
+            },
+        })
     }
     pub fn explicit(path: impl AsRef<Path>) -> Result<Self> {
         let root = Self::for_initialization(path)?;
@@ -531,6 +550,35 @@ impl VaultRoot {
                     }
                 }
                 Ok(path)
+            },
+        )
+    }
+    #[cfg(unix)]
+    pub(crate) fn bind(
+        &self,
+        relative: &VaultRelativePath,
+        raw: bool,
+    ) -> Result<descriptor::Route> {
+        if !descriptor::supported() {
+            return (if raw {
+                self.resolve_raw(relative)
+            } else {
+                self.resolve(relative)
+            })
+            .map(descriptor::Route::legacy);
+        }
+        if raw {
+            return descriptor::Route::resolve(self, relative, &mut || Ok(()));
+        }
+        crate::maintenance_diagnostic::observe(
+            crate::maintenance_diagnostic::Phase::ResolveValidation,
+            || {
+                crate::maintenance_diagnostic::bump(
+                    crate::maintenance_diagnostic::Counter::LogicalResolve,
+                    1,
+                );
+                let physical = crate::storage::layout::physical_relative(self, relative)?;
+                descriptor::Route::resolve(self, &physical, &mut || Ok(()))
             },
         )
     }

@@ -1111,7 +1111,7 @@ impl ChangeEngine {
         session: &mut IndexedRefreshSession<'_>,
     ) -> Result<ApplyReport> {
         let scoped = Self {
-            fs: session.scoped_fs(&self.fs)?,
+            fs: session.scoped_fs(&self.fs)?.for_maintenance_execution(),
             vault_id: self.vault_id.clone(),
         };
         scoped.apply_indexed_refresh_scoped(writer, session)

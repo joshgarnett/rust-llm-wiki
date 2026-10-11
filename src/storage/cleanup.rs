@@ -504,6 +504,15 @@ pub(crate) fn verify_activation(
     }
     result
 }
+pub(crate) fn verify_activation_fs(fs: &VaultFs, activation: &layout::Layout) -> Result<()> {
+    let result = verify_activation_inner(Some(fs.root()), activation, &mut |path, max| {
+        fs.read_regular_bounded(path, true, max, "storage-read")
+    });
+    if result.is_err() {
+        invalidate_import_epoch(fs.root());
+    }
+    result
+}
 pub(crate) fn verify_activation_with_reader(
     activation: &layout::Layout,
     reader: &mut layout::RawReader<'_>,

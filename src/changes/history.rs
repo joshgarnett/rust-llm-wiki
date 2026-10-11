@@ -103,19 +103,23 @@ impl ChangeEngine {
             .flat_map(|op| [&op.before_payload, &op.after_payload])
             .flatten()
         {
-            let mut bytes = crate::storage::layout::raw_read(
-                self.fs.root(),
-                &crate::storage::layout::physical_relative(self.fs.root(), &reference.path)?,
+            let mut bytes = self.fs.read_regular_bounded(
+                &reference.path,
+                false,
                 super::prepare::MAX_PAYLOAD_BYTES,
+                "history-read",
             )?;
             if bytes.is_none()
                 && history.manifest.version == 1
-                && crate::storage::layout::active(self.fs.root())?
+                && crate::storage::layout::active_fs(&self.fs)?
             {
                 let map_path = crate::storage::layout::payload_map_path(id)?;
-                if let Some(encoded) =
-                    crate::storage::layout::raw_read(self.fs.root(), &map_path, MAX_MANIFEST_BYTES)?
-                {
+                if let Some(encoded) = self.fs.read_regular_bounded(
+                    &map_path,
+                    true,
+                    MAX_MANIFEST_BYTES,
+                    "history-read",
+                )? {
                     let map: crate::storage::layout::PayloadMap =
                         crate::storage::layout::decode(&encoded)?;
                     if map.version != 1
@@ -125,10 +129,11 @@ impl ChangeEngine {
                     {
                         return Err(WikiError::invalid("retained payload map binding differs"));
                     }
-                    bytes = crate::storage::layout::raw_read(
-                        self.fs.root(),
+                    bytes = self.fs.read_regular_bounded(
                         &crate::storage::layout::object_path(&reference.hash)?,
+                        true,
                         super::prepare::MAX_PAYLOAD_BYTES,
+                        "history-read",
                     )?;
                 }
             }

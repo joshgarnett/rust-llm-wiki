@@ -81,9 +81,16 @@ impl ValidatedLayout {
         reader: &mut RawReader<'_>,
         on_step: &mut dyn FnMut() -> Result<()>,
     ) -> Result<Self> {
-        let retained = active_with_reader(root, reader, on_step, false)?;
+        let retained = active_with_reader(root, reader, on_step, false, None)?;
         Ok(Self {
             root: root.clone(),
+            retained,
+        })
+    }
+    pub(crate) fn capture_fs_with_reader(fs: &VaultFs, reader: &mut RawReader<'_>) -> Result<Self> {
+        let retained = active_with_reader(fs.root(), reader, &mut || Ok(()), false, Some(fs))?;
+        Ok(Self {
+            root: fs.root().clone(),
             retained,
         })
     }
@@ -113,6 +120,25 @@ impl ValidatedLayout {
     }
 }
 
+/// Complete activation observation carrying an owned execution I/O policy.
+/// Root-only callers keep the ordinary resolver and its established cost.
+pub(crate) fn active_fs(fs: &VaultFs) -> Result<bool> {
+    if let Some(result) = super::maintenance_activation::worker_active_fs(fs) {
+        return result;
+    }
+    let result = active_with_reader(
+        fs.root(),
+        &mut |path, max| fs.read_regular_bounded(path, true, max, "storage-read"),
+        &mut || Ok(()),
+        true,
+        Some(fs),
+    );
+    if result.is_err() {
+        super::cleanup::invalidate_import_epoch(fs.root());
+    }
+    result
+}
+
 pub fn active(root: &VaultRoot) -> Result<bool> {
     if let Some(result) = super::maintenance_activation::worker_active(root) {
         return result;
@@ -122,6 +148,7 @@ pub fn active(root: &VaultRoot) -> Result<bool> {
         &mut |path, max| raw_read(root, path, max),
         &mut || Ok(()),
         true,
+        None,
     );
     if result.is_err() {
         super::cleanup::invalidate_import_epoch(root);
@@ -134,6 +161,7 @@ fn active_with_reader(
     reader: &mut RawReader<'_>,
     on_step: &mut dyn FnMut() -> Result<()>,
     native_reader: bool,
+    scoped_fs: Option<&VaultFs>,
 ) -> Result<bool> {
     if super::maintenance_activation::worker_context_active() {
         return Err(WikiError::new(
@@ -143,6 +171,10 @@ fn active_with_reader(
     }
     let Some(bytes) = read_with_reader(reader, &VaultRelativePath::new(ACTIVE)?, 4096)? else {
         if read_with_reader(reader, &VaultRelativePath::new("WIKI.md")?, 1024 * 1024)?.is_none() {
+            #[cfg(unix)]
+            if let Some(fs) = scoped_fs.filter(|fs| fs.uses_descriptor_relative()) {
+                return empty_initialization_fs(fs, on_step).map(|()| false);
+            }
             // Initialization validates/creates empty managed directories before
             // publishing its first marker. Missing markers never waive retained
             // history: only an empty authority namespace (plus writer lock) fits.
@@ -207,12 +239,72 @@ fn active_with_reader(
             "storage activation differs from vault format",
         ));
     }
-    if native_reader {
+    if let Some(fs) = scoped_fs.filter(|fs| native_reader && fs.uses_descriptor_relative()) {
+        super::cleanup::verify_activation_fs(fs, &layout)?;
+    } else if native_reader {
         super::cleanup::verify_activation(root, &layout)?;
     } else {
         super::cleanup::verify_activation_with_reader(&layout, reader)?;
     }
     Ok(true)
+}
+#[cfg(unix)]
+fn empty_initialization_fs(fs: &VaultFs, on_step: &mut dyn FnMut() -> Result<()>) -> Result<()> {
+    use crate::vault::paths::descriptor;
+    for name in [".wiki/retained", ".wiki/state/storage"] {
+        let relative = VaultRelativePath::new(name)?;
+        let route = fs.bind_raw_budgeted(&relative, on_step)?;
+        match route.metadata() {
+            Ok(_) => {
+                return Err(WikiError::new(
+                    ErrorCode::RecoveryRequired,
+                    "missing vault marker with retained storage authority",
+                ));
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(WikiError::new(ErrorCode::Internal, e.to_string())),
+        }
+    }
+    for name in ["changes", "runs", ".wiki/state"] {
+        let relative = VaultRelativePath::new(name)?;
+        let route = fs.bind_raw_budgeted(&relative, on_step)?;
+        on_step()?;
+        match route.metadata() {
+            Ok(_) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(e) => return Err(WikiError::new(ErrorCode::Internal, e.to_string())),
+        }
+        let directory = match descriptor::open_at(
+            route
+                .parent()
+                .map_err(|e| WikiError::new(ErrorCode::Internal, e.to_string()))?,
+            route.leaf(),
+            libc::O_RDONLY | libc::O_DIRECTORY,
+            0,
+        ) {
+            Ok(file) => file,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(e) => return Err(WikiError::new(ErrorCode::Internal, e.to_string())),
+        };
+        route.require_directory_identity(&directory)?;
+        descriptor::directory_entries(&directory, &mut |leaf, directory| {
+            on_step()?;
+            if name == ".wiki/state"
+                && leaf == "writer.lock"
+                && descriptor::entry_is_regular(directory, leaf)?
+            {
+                return Ok(());
+            }
+            Err(WikiError::new(
+                ErrorCode::RecoveryRequired,
+                "missing vault marker with retained operational history",
+            ))
+        })?;
+        let fresh = fs.bind_raw_budgeted(&relative, on_step)?;
+        route.same_parent(&fresh)?;
+        fresh.require_directory_identity(&directory)?;
+    }
+    Ok(())
 }
 pub fn managed_path(path: &VaultRelativePath) -> Option<VaultRelativePath> {
     let s = path.as_str();
@@ -243,6 +335,22 @@ pub fn physical_relative(root: &VaultRoot, path: &VaultRelativePath) -> Result<V
         || {
             if let Some(mapped) = managed_path(path)
                 && active(root)?
+            {
+                return Ok(mapped);
+            }
+            Ok(path.clone())
+        },
+    )
+}
+pub(crate) fn physical_relative_fs(
+    fs: &VaultFs,
+    path: &VaultRelativePath,
+) -> Result<VaultRelativePath> {
+    crate::maintenance_diagnostic::observe(
+        crate::maintenance_diagnostic::Phase::RouteConstruction,
+        || {
+            if let Some(mapped) = managed_path(path)
+                && active_fs(fs)?
             {
                 return Ok(mapped);
             }
@@ -293,7 +401,7 @@ pub(crate) fn put(
     path: &VaultRelativePath,
     bytes: &[u8],
 ) -> Result<()> {
-    if let Some(existing) = raw_read(fs.root(), path, bytes.len())? {
+    if let Some(existing) = fs.read_regular_bounded(path, true, bytes.len(), "storage-read")? {
         if existing != bytes {
             return Err(WikiError::new(
                 ErrorCode::ContentConflict,
@@ -351,15 +459,16 @@ fn legacy_payload_lookup(
     if parts.len() < 4
         || parts[0] != "changes"
         || !matches!(parts[2], "before" | "proposed" | "assets")
-        || !active(fs.root())?
+        || !active_fs(fs)?
     {
         return Ok(None);
     }
     let id = RecordId::new(parts[1])?;
-    let Some(bytes) = raw_read(
-        fs.root(),
+    let Some(bytes) = fs.read_regular_bounded(
         &payload_map_path(&id)?,
+        true,
         crate::changes::prepare::MAX_MANIFEST_BYTES,
+        "storage-read",
     )?
     else {
         return Err(WikiError::new(
@@ -387,7 +496,13 @@ fn legacy_payload_lookup(
             "legacy object not bound to original payload",
         ));
     }
-    let Some(bytes) = raw_read(fs.root(), &object_path(&reference.hash)?, maximum)? else {
+    let Some(bytes) = fs.read_regular_bounded(
+        &object_path(&reference.hash)?,
+        true,
+        maximum,
+        "storage-read",
+    )?
+    else {
         return if allow_missing {
             Ok(None)
         } else {

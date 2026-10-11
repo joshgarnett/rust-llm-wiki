@@ -34,7 +34,7 @@ pub(crate) fn install_before_open(
     );
     BeforeOpenGuard(path)
 }
-pub(super) fn before_open(path: &Path) {
+pub(crate) fn before_open(path: &Path) {
     let hook = BEFORE_OPEN
         .get_or_init(Default::default)
         .lock()

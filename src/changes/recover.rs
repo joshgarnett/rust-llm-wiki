@@ -9,6 +9,11 @@ impl ChangeEngine {
         permit: &WriterPermit,
         catalog: &crate::catalog::Catalog,
     ) -> Result<RecoveryReport> {
+        if !self.fs.maintenance_execution_requested() {
+            return self
+                .for_maintenance_execution()
+                .recover_indexed(permit, catalog);
+        }
         use crate::{
             catalog::source_refresh::IndexedRefreshSession,
             domain::{ErrorCode, WikiError},
@@ -128,6 +133,11 @@ impl ChangeEngine {
         validator: &dyn GraphValidator,
         publisher: &dyn PublicationBackend,
     ) -> Result<RecoveryReport> {
+        if !self.fs.maintenance_execution_requested() {
+            return self
+                .for_maintenance_execution()
+                .recover(permit, validator, publisher);
+        }
         permit.require_root(self.fs.root())?;
         self.require_binding()?;
         let mut report = RecoveryReport {
