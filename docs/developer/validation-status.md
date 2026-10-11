@@ -57,8 +57,8 @@ corresponding complete measurement supports them.
 ## Qualification
 
 Before claiming support, replay the intended user task with the final executable
-on each advertised native platform. Check installation, PATH, upgrades and
-rollback, editor round trips, backup restoration and ordinary OS trust controls.
+on each advertised native platform. Check fresh installation, PATH, reinstall and
+removal, editor round trips, backup restoration and ordinary OS trust controls.
 Use the [external qualification procedure](qualification.md) for installed agents,
 live providers and final release downloads.
 

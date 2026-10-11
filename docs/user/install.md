@@ -68,20 +68,6 @@ The archive names end in `aarch64-apple-darwin.tar.gz` for Apple silicon macOS
 and `x86_64-unknown-linux-gnu.tar.gz` for x86-64 GNU/Linux. `--dry-run` checks the
 files and shows the proposed installation without activating it.
 
-## Upgrade or go back to an earlier version
-
-[Back up your whole wiki](recovery.md#backup-and-restore) before upgrading.
-Install the new version with the same prefix. The installer keeps earlier
-installed versions, so you can select one again:
-
-```sh
-sh install.sh --rollback EARLIER_VERSION
-```
-
-Replace `EARLIER_VERSION` with an installed version, such as `0.3.0`. This changes
-the executable, not the wiki. If a new version changed the wiki's storage format,
-restore your complete pre-upgrade backup before using the old executable.
-
 ## Remove lwiki
 
 ```sh

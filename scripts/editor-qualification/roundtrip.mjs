@@ -5,8 +5,13 @@ import crypto from 'node:crypto';
 import {spawn} from 'node:child_process';
 
 const [binary, root, binaryHash] = process.argv.slice(2);
-if (process.platform !== 'darwin' || process.env.GITHUB_ACTIONS !== 'true' || process.env.RUNNER_ENVIRONMENT !== 'github-hosted') {
-  throw new Error('requires a fresh GitHub-hosted macOS VM');
+if (!['darwin', 'linux'].includes(process.platform) || process.env.GITHUB_ACTIONS !== 'true' || process.env.RUNNER_ENVIRONMENT !== 'github-hosted') {
+  throw new Error('requires a fresh GitHub-hosted macOS or Ubuntu VM');
+}
+const linux = process.platform === 'linux';
+if (linux) {
+  const preflight = JSON.parse(fs.readFileSync(path.join(root, 'network-preflight.json')));
+  if (preflight.status !== 'passed' || process.getuid() !== preflight.uid || process.getgid() !== preflight.gid || process.getuid() === 0 || fs.readlinkSync('/proc/self/ns/net') !== preflight.network_namespace || !process.env.DISPLAY || !process.env.XAUTHORITY) throw new Error('Linux controller is outside the qualified nonroot network namespace/display');
 }
 const vault = path.join(root, 'vault'), profile = path.join(root, 'profile');
 const result = {status: 'running', checks: [], operations: [], editorApi: 'Editor.replaceRange', nativeFolderOpen: 'pinned vault-open IPC', navigation: 'Workspace.openLinkText', move: 'FileManager.renameFile'};
@@ -29,6 +34,7 @@ let child, appStarted, deadlineTimer, session;
 const requests = new Map();
 let nextId = 1, receive = Buffer.alloc(0);
 const appEnv = {PATH: '/usr/bin:/bin', HOME: path.join(root, 'home'), TMPDIR: path.join(root, 'temp') + '/', XDG_CONFIG_HOME: profile, XDG_CACHE_HOME: path.join(root, 'cache'), LANG: 'en_US.UTF-8', TZ: 'UTC'};
+if (linux) Object.assign(appEnv, {DISPLAY: process.env.DISPLAY, XAUTHORITY: process.env.XAUTHORITY, LANG: 'C.UTF-8'});
 const config = path.join(root, 'preferences.toml');
 fs.writeFileSync(config, 'schema_version = "3"\n', {mode: 0o600});
 
@@ -195,10 +201,11 @@ async function workflow() {
   const originalSearch = await cli('ordinary-input-search', ['search', 'launch window', '--limit', '20']);
   check('ordinary input notes excluded from structured search', !originalSearch.data.hits.some(hit => ['notes/plain.md', 'notes/properties.md', 'notes/simple.md', 'notes/literal.md'].includes(hit.path)));
   const log = fs.openSync(path.join(root, 'app.log'), 'w');
-  const argv = ['-f', path.join(root, 'network-only.sb'), path.join(root, 'Obsidian.app', 'Contents', 'MacOS', 'Obsidian'), '--user-data-dir=' + profile, '--disk-cache-dir=' + path.join(root, 'cache'), '--log-file=' + path.join(root, 'chromium.log'), '--remote-debugging-pipe', '--disable-background-networking', '--disable-component-update', '--disable-geolocation'];
+  const executable = linux ? '/opt/Obsidian/obsidian' : path.join(root, 'Obsidian.app', 'Contents', 'MacOS', 'Obsidian');
+  const argv = ['--user-data-dir=' + profile, '--disk-cache-dir=' + path.join(root, 'cache'), '--log-file=' + path.join(root, 'chromium.log'), '--remote-debugging-pipe', '--disable-background-networking', '--disable-component-update', '--disable-geolocation'];
   appStarted = monotonic();
-  child = spawn('/usr/bin/sandbox-exec', argv, {cwd: root, env: appEnv, detached: true, stdio: ['ignore', log, log, 'pipe', 'pipe']});
-  fs.closeSync(log); save('app-pid.json', {pid: child.pid, argv, env: appEnv});
+  child = spawn(executable, argv, {cwd: root, env: appEnv, detached: true, stdio: ['ignore', log, log, 'pipe', 'pipe']});
+  fs.closeSync(log); save('app-pid.json', {pid: child.pid, executable, argv, env: appEnv, ...(linux ? {uid: process.getuid(), gid: process.getgid(), networkNamespace: fs.readlinkSync('/proc/self/ns/net')} : {network: 'allowed by normal macOS app launch'})});
   child.on('error', error => {result.spawnError = String(error);});
   deadlineTimer = setTimeout(() => {result.deadlineExceeded = true; try {process.kill(-child.pid, 'SIGKILL');} catch {} for (const request of requests.values()) {clearTimeout(request.timer); request.reject(new Error('app hard deadline'));} requests.clear();}, 285000);
   child.stdio[4].on('data', data => {

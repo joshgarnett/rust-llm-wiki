@@ -85,6 +85,5 @@ Replace the paths and question. Check that the restored wiki contains your pages
 and that the answer passages match those from the original. The copy keeps the
 same wiki ID, so select its location explicitly while testing.
 
-When restoring after an incompatible upgrade, use both the earlier executable
-and the complete pre-upgrade backup. Before `storage cleanup`, make and verify
-a complete backup; do not move or delete hidden folders by hand.
+Before `storage cleanup`, make and verify a complete backup. Do not move or
+delete hidden folders by hand.

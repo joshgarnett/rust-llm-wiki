@@ -5,7 +5,7 @@ your own notes. Then choose a guide for the task you want to do.
 
 | Task | Guide |
 | --- | --- |
-| Install, upgrade or remove lwiki | [Installation](install.md) |
+| Install or remove lwiki | [Installation](install.md) |
 | Choose a wiki, capture notes, and create or edit a page | [Everyday use](everyday-use.md) |
 | Find a fact and read its cited passage | [Search and citations](retrieval.md) |
 | Import a collection or set up search by meaning | [Sources and providers](sources-and-providers.md) |

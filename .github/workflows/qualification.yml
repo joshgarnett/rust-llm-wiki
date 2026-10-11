@@ -23,9 +23,19 @@ jobs:
     uses: ./.github/workflows/release-build.yml
 
   editor:
-    name: Test the final executable with Obsidian
+    name: Test the final executable with Obsidian (${{ matrix.runner }})
     if: inputs.archive-run-id != ''
-    runs-on: macos-26
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-26
+            target: aarch64-apple-darwin
+            macos-major: '26'
+          - runner: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+            macos-major: ''
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 20
     defaults:
       run:
@@ -33,6 +43,9 @@ jobs:
     env:
       SOURCE_RUN_ID: ${{ inputs.archive-run-id }}
       SOURCE_COMMIT: ${{ inputs.source-commit }}
+      EDITOR_RUNNER: ${{ matrix.runner }}
+      EDITOR_TARGET: ${{ matrix.target }}
+      EDITOR_MACOS_MAJOR: ${{ matrix.macos-major }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -74,9 +87,10 @@ jobs:
           import qualify_artifact as qualification
           root = pathlib.Path(os.environ['RUNNER_TEMP'])
           assets, evidence = root / 'editor-release-assets', root / 'editor-inputs'
-          commit, target = os.environ['SOURCE_COMMIT'], 'aarch64-apple-darwin'
+          commit, target = os.environ['SOURCE_COMMIT'], os.environ['EDITOR_TARGET']
           version = qualification.package_version(pathlib.Path.cwd())
-          host = qualification.host_information(target, 'macos-26', 26)
+          major = os.environ['EDITOR_MACOS_MAJOR']
+          host = qualification.host_information(target, os.environ['EDITOR_RUNNER'], int(major) if major else None)
           archive, binary, record = qualification.prepare_archive(
               assets / ('lwiki-' + version + '-' + target + '.tar.gz'),
               evidence, commit, version, target, host, assets)
@@ -97,7 +111,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: editor-evidence-${{ inputs.source-commit }}-${{ github.run_id }}
+          name: editor-evidence-${{ matrix.runner }}-${{ inputs.source-commit }}-${{ github.run_id }}
           path: |
             ${{ runner.temp }}/editor-inputs/*.json
             ${{ runner.temp }}/editor-inputs/*.sha256
@@ -109,6 +123,8 @@ jobs:
             ${{ runner.temp }}/editor-evidence/*.bin
             ${{ runner.temp }}/editor-evidence/*.log
             ${{ runner.temp }}/editor-evidence/*.sb
+            ${{ runner.temp }}/editor-evidence/vendor-apparmor-profile
+            ${{ runner.temp }}/editor-evidence/os-release
             ${{ runner.temp }}/editor-evidence/vault/**
           include-hidden-files: true
           if-no-files-found: warn

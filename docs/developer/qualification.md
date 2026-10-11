@@ -36,7 +36,7 @@ Page moves. Verify exact author preservation, stable IDs, provenance, exclusions
 refresh/history. Source mode handles unsupported nested-property representations;
 ordinary editor state remains editor-owned.
 
-For the hosted macOS editor check, first let a release-build run finish verifying
+For the hosted macOS and Linux editor checks, first let a release-build run finish verifying
 its archives. Then run the qualification workflow with that run ID and full source
 commit:
 
@@ -45,12 +45,18 @@ gh workflow run qualification.yml --ref BRANCH \
   -f archive-run-id=RUN_ID -f source-commit=FULL_COMMIT
 ```
 
-This downloads and verifies the existing archive, then opens a test wiki in a
-pinned official Obsidian build on a fresh GitHub-hosted Mac. It checks real editor
+Each job downloads and verifies the existing archive, then opens a test wiki in a
+pinned official Obsidian build on a fresh GitHub-hosted runner. It checks real editor
 saves, capture and refresh, old and new citations, Page moves and stale-edit
 conflicts. The report records the product and test-tool commits separately.
-Download the `editor-evidence` artifact to inspect the saved bytes, command output
+Download each `editor-evidence-*` artifact to inspect the saved bytes, command output
 and screenshots. A newer test-tool commit does not require rebuilding the product.
+
+The tests use synthetic notes and no accounts or provider credentials. On Linux,
+the editor runs as the runner user with a virtual display and an isolated network.
+On macOS, the editor uses its normal network access. Both preserve the editor's
+shipped sandbox settings, disable updates and limit each app run to five
+minutes. All lwiki commands run offline.
 
 Record any newline or byte-order-mark changes made by the editor. Captured bytes
 must match the saved file exactly; never restore a fixture to hide editor changes.
