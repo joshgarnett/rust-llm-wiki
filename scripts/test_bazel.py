@@ -50,8 +50,20 @@ class BazelWrapperTests(unittest.TestCase):
             run.return_value.returncode = 23
             self.assertEqual(wrapper.main(), 23)
         command = run.call_args.args[0]
-        self.assertEqual(command[-6:], ["run", "//:lwiki", "--platforms=//platforms:macos_aarch64",
-                                       "--host_platform=//platforms:macos_aarch64", "--", "--version"])
+        self.assertEqual(command[-8:], ["run", "//:lwiki", "--platforms=//platforms:macos_aarch64",
+                                       "--host_platform=//platforms:macos_aarch64",
+                                       "--macos_minimum_os=15.0", "--action_env=MACOSX_DEPLOYMENT_TARGET=15.0",
+                                       "--", "--version"])
+
+    def test_macos_deployment_flags_do_not_reach_linux_builds(self):
+        with patch.object(wrapper.sys, "argv", ["bazel.py", "--", "build", "//:lwiki"]), \
+             patch.object(wrapper.shutil, "which", return_value="/tools/bazelisk"), \
+             patch.object(wrapper, "native_target", return_value=("linux_x86_64", "x86_64-unknown-linux-gnu")), \
+             patch.object(wrapper.subprocess, "run") as run:
+            run.return_value.returncode = 0
+            self.assertEqual(wrapper.main(), 0)
+        command = run.call_args.args[0]
+        self.assertFalse(any("macos_minimum_os" in value or "MACOSX_DEPLOYMENT_TARGET" in value for value in command))
 
 
 if __name__ == "__main__":

@@ -65,7 +65,12 @@ def main():
     command = [executable, "--nosystem_rc", "--nohome_rc", "--output_user_root=" + str(output_root)]
     if arguments[0] in {"build", "test", "cquery", "aquery", "run", "coverage", "info", "fetch"}:
         boundary = arguments.index("--") if "--" in arguments else len(arguments)
-        arguments[boundary:boundary] = ["--platforms=//platforms:" + native, "--host_platform=//platforms:" + native]
+        native_flags = ["--platforms=//platforms:" + native, "--host_platform=//platforms:" + native]
+        if triple.endswith("-apple-darwin"):
+            # Pin the oldest supported macOS release. apple_support otherwise
+            # takes the SDK version as the minimum, making downloads host-dependent.
+            native_flags.extend(["--macos_minimum_os=15.0", "--action_env=MACOSX_DEPLOYMENT_TARGET=15.0"])
+        arguments[boundary:boundary] = native_flags
     command.extend(arguments)
     return subprocess.run(command, cwd=root, env=build_environment(os.environ), check=False).returncode
 
