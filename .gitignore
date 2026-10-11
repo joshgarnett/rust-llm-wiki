@@ -1,5 +1,8 @@
 /target/
 /.artifacts/
+
+# Local working plans, agent notes, reviews, checkpoints and logs.
+/.work/
 __pycache__/
 /.build-cache/
 /bazel-*

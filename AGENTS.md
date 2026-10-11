@@ -16,7 +16,7 @@ Update the execution state after integration, before compaction, and before stop
 
 Commit coherent, tested milestones as work progresses. Record the commit, validation evidence, unresolved findings and next step in the local checkpoint; promote stable conclusions into tracked summaries. A checkpoint commit preserves progress and does not imply that an unfinished quality goal has passed acceptance.
 
-Keep session checkpoints and detailed agent/run reports local under the ignored execution paths or `.artifacts/`. Keep reusable instructions, implementation decisions and curated validation summaries tracked. Promote stable findings into those maintained documents; do not add raw logs, per-attempt reports or temporary state to Git. Preserve local evidence when changing tracking, and ensure tracked documentation works in a fresh checkout without ignored files.
+Keep working plans, agent notes, reviews, session checkpoints and logs local under gitignored `.work/<task>/`. Preserve existing evidence under ignored execution paths or `.artifacts/`; do not relocate it solely for consistency. Keep user documentation, reusable developer instructions, implementation contracts/decisions and curated validation summaries tracked. Promote stable findings into those maintained documents; never commit working plans, raw logs, per-attempt reports or temporary state. An ignore rule does not untrack existing files: extract enduring guidance before removing old worklogs from the tracked tree, preserve local evidence and Git history, and ensure tracked documentation works in a fresh checkout without ignored files.
 
 ## Delegate for independent judgment
 
