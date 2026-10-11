@@ -141,7 +141,7 @@ async function navigatePublic() {
   if (outcome.value.errorText) throw Error('installer navigation failed: ' + outcome.value.errorText);
   return outcome.value;
 }
-function rawLinkObservation(expectedHref, scroll, expectedPoint) {
+function rawLinkObservation(expectedHref, scroll) {
   const anchors = document.querySelectorAll('a[data-testid="raw-button"]');
   const observation = {url: location.href, anchorCount: anchors.length};
   if (anchors.length !== 1) return {...observation, error: 'real Raw anchor is missing or ambiguous'};
@@ -161,8 +161,57 @@ function rawLinkObservation(expectedHref, scroll, expectedPoint) {
   const hit = document.elementFromPoint(point.x, point.y);
   observation.hitTest = {sameAnchor: hit?.closest('a') === anchor, tagName: hit?.tagName, anchorHref: hit?.closest('a')?.href?.slice(0, 2048)};
   if (!observation.hitTest.sameAnchor) return {...observation, error: 'real Raw anchor center is covered'};
-  if (expectedPoint && (point.x !== expectedPoint.x || point.y !== expectedPoint.y)) return {...observation, error: 'real Raw anchor moved before the gesture'};
   return observation;
+}
+async function relocateRawLink(originalControl) {
+  const begin = elapsed(), until = Math.min(105, begin + 2);
+  const evidence = {status: 'checking', originalPoint: originalControl.point, beginElapsedSeconds: begin, limits: {maxSamples: 10, maxElapsedSeconds: 2, sampleIntervalMs: 100}, samples: []};
+  result.rawLinkRelocation = evidence;
+  let previous;
+  try {
+    for (let index = 0; index < evidence.limits.maxSamples && elapsed() < until; index++) {
+      if (explicitRefusal) throw Error(explicitRefusal);
+      const sample = {index, beginElapsedSeconds: elapsed()};
+      evidence.samples.push(sample);
+      save('browser-raw-link-relocation.json', evidence);
+      let response;
+      try {
+        response = await cdp('Runtime.evaluate', {expression: `(${rawLinkObservation.toString()})(${JSON.stringify(downloadURL)},false)`, returnByValue: true}, session, Math.max(1, (until - elapsed()) * 1000));
+      } catch (error) {
+        sample.error = String(error);
+        throw error;
+      } finally {
+        sample.completedElapsedSeconds = elapsed();
+      }
+      sample.observation = response.result?.value;
+      if (response.exceptionDetails) throw Error('Raw link relocation failed: ' + JSON.stringify(response.exceptionDetails));
+      const current = sample.observation;
+      if (!current || current.error || current.url !== pageURL || current.href !== downloadURL) throw Error(current?.error || 'pinned Raw link changed during relocation');
+      if (current.bounds.width !== originalControl.bounds.width || current.bounds.height !== originalControl.bounds.height) throw Error('real Raw anchor dimensions changed during relocation');
+      if (explicitRefusal) throw Error(explicitRefusal);
+      if (elapsed() >= until) throw Error('Raw link relocation exceeded its observation deadline');
+      if (previous && ['x', 'y', 'width', 'height'].every(key => previous.bounds[key] === current.bounds[key]) && previous.point.x === current.point.x && previous.point.y === current.point.y) {
+        evidence.status = 'stable';
+        evidence.finalPoint = current.point;
+        return current;
+      }
+      previous = current;
+      save('browser-raw-link-relocation.json', evidence);
+      if (index + 1 < evidence.limits.maxSamples) {
+        if (until - elapsed() <= 0.1) break;
+        await sleep(100);
+      }
+    }
+    throw Error('Raw link did not settle within 10 samples or its observation deadline');
+  } catch (error) {
+    evidence.status = 'failed';
+    evidence.error = String(error);
+    throw error;
+  } finally {
+    evidence.completedElapsedSeconds = elapsed();
+    evidence.elapsedSeconds = evidence.completedElapsedSeconds - begin;
+    save('browser-raw-link-relocation.json', evidence);
+  }
 }
 function downloadsVisibleText() {
   const maxNodes = 4096, maxCharacters = 12000, maxDepth = 32;
@@ -255,17 +304,15 @@ try {
   if (!control || control.error || control.url !== pageURL) throw Error(control?.error || 'pinned Raw link observation unavailable');
   const beforeGesture = await cdp('Page.captureScreenshot', {format: 'png'}, session);
   fs.writeFileSync(path.join(root, 'browser-raw-link.png'), Buffer.from(beforeGesture.data, 'base64'));
-  const recheck = await cdp('Runtime.evaluate', {expression: `(${rawLinkObservation.toString()})(${JSON.stringify(downloadURL)},false,${JSON.stringify(control.point)})`, returnByValue: true}, session);
-  if (recheck.exceptionDetails) throw Error('Raw link recheck failed: ' + JSON.stringify(recheck.exceptionDetails));
-  result.rawLinkRecheck = recheck.result?.value;
-  if (!result.rawLinkRecheck || result.rawLinkRecheck.error || result.rawLinkRecheck.url !== pageURL) throw Error(result.rawLinkRecheck?.error || 'pinned Raw link changed before the gesture');
+  const finalControl = await relocateRawLink(control);
+  result.rawLinkRecheck = finalControl;
   if (explicitRefusal) throw Error(explicitRefusal);
-  result.downloadGesture = {kind: 'one real Raw-link Option-click', href: control.href, point: control.point, button: 'left', modifiers: 1, clickCount: 1, mousePressed: false, mouseReleased: false};
+  result.downloadGesture = {kind: 'one real Raw-link Option-click', href: finalControl.href, point: finalControl.point, button: 'left', modifiers: 1, clickCount: 1, mousePressed: false, mouseReleased: false};
   save('browser-result.json', result);
-  await cdp('Input.dispatchMouseEvent', {type: 'mousePressed', ...control.point, button: 'left', modifiers: 1, clickCount: 1}, session);
+  await cdp('Input.dispatchMouseEvent', {type: 'mousePressed', ...finalControl.point, button: 'left', modifiers: 1, clickCount: 1}, session);
   result.downloadGesture.mousePressed = true;
   save('browser-result.json', result);
-  await cdp('Input.dispatchMouseEvent', {type: 'mouseReleased', ...control.point, button: 'left', modifiers: 1, clickCount: 1}, session);
+  await cdp('Input.dispatchMouseEvent', {type: 'mouseReleased', ...finalControl.point, button: 'left', modifiers: 1, clickCount: 1}, session);
   result.downloadGesture.mouseReleased = true;
   save('browser-result.json', result);
   const until = Math.min(95, elapsed() + 50), installer = path.join(downloads, 'install.sh');
