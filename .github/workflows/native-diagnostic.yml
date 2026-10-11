@@ -1,6 +1,14 @@
 name: Native unit test diagnostic
 
 on:
+  workflow_call:
+    inputs:
+      runner:
+        type: string
+        required: true
+      tests:
+        type: string
+        required: true
   workflow_dispatch:
     inputs:
       runner:

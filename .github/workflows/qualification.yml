@@ -19,22 +19,38 @@ on:
       checks:
         description: 'Checks to run against existing archives'
         type: choice
-        options: [all, editor, installer, download]
+        options: [all, editor, installer, download, unit-diagnostic]
         default: all
+      diagnostic-runner:
+        description: 'Runner for unit-diagnostic only'
+        type: choice
+        options: [xcode-27, macos-26, macos-15, ubuntu-24.04]
+        default: xcode-27
+      diagnostic-tests:
+        description: 'Exact unit test names, one per line; unit-diagnostic only'
+        type: string
+        default: ''
 
 permissions:
   contents: read
   actions: read
 
 jobs:
+  unit-diagnostic:
+    if: inputs.checks == 'unit-diagnostic'
+    uses: ./.github/workflows/native-diagnostic.yml
+    with:
+      runner: ${{ inputs.diagnostic-runner }}
+      tests: ${{ inputs.diagnostic-tests }}
+
   qualify-final-archives:
-    if: inputs.archive-run-id == ''
+    if: inputs.archive-run-id == '' && inputs.checks != 'unit-diagnostic'
     # Use the release pipeline so qualification never substitutes another build.
     uses: ./.github/workflows/release-build.yml
 
   editor:
     name: Check the archived release (${{ matrix.runner }}, ${{ inputs.checks }})
-    if: inputs.archive-run-id != ''
+    if: inputs.archive-run-id != '' && inputs.checks != 'unit-diagnostic'
     strategy:
       fail-fast: false
       matrix:
