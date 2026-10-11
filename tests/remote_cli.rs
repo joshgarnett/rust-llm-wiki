@@ -899,6 +899,50 @@ fn native_generation_probe_auth_case(
         .output()
         .unwrap();
     let value: Value = serde_json::from_slice(&result.stdout).unwrap();
+    assert!(
+        result.stderr.is_empty(),
+        "JSON probe must have no prose on stderr"
+    );
+    // Present the actual CLI payload, including real retained accounting, rather
+    // than a hand-written approximation of the provider outcome.
+    let mut rendered_envelope = lwiki::output::Envelope::success("doctor", value["data"].clone());
+    rendered_envelope.ok = value["ok"].as_bool().unwrap();
+    if incomplete {
+        let error = &value["error"];
+        rendered_envelope.error = Some(lwiki::output::ErrorOutput {
+            code: error["code"].as_str().unwrap().into(),
+            message: error["message"].as_str().unwrap().into(),
+            retryable: error["retryable"].as_bool().unwrap(),
+            hint: error["hint"].as_str().map(str::to_owned),
+            details: error["details"].clone(),
+        });
+    }
+    let mut human = Vec::new();
+    lwiki::cli::present(
+        &rendered_envelope,
+        lwiki::cli::OutputFormat::Human,
+        &mut human,
+    )
+    .unwrap();
+    let human = String::from_utf8(human).unwrap();
+    assert!(human.contains(&format!("http://{address}")), "{human}");
+    assert!(human.contains("test-model"), "{human}");
+    assert!(!human.contains("synthetic-cli-secret"), "{human}");
+    assert!(!human.contains("\"attempts\""), "{human}");
+    if incomplete {
+        assert!(
+            human.contains("Provider probe (generate): failed"),
+            "{human}"
+        );
+        assert!(human.contains("usage: unknown"), "{human}");
+    } else {
+        assert!(
+            human.contains("Provider probe (generate): succeeded"),
+            "{human}"
+        );
+        assert!(human.contains("Requests dispatched: 1"), "{human}");
+        assert!(human.contains("Cost: unknown"), "{human}");
+    }
     let request = server.join().unwrap();
     let expected = service_cap.unwrap_or(256);
     if responses {

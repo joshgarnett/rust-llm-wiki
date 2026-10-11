@@ -448,6 +448,10 @@ fn native_forward_read_uses_authored_body_coordinates_preserves_legacy_and_refus
         assert_eq!(forward["data"]["body"], "🦀");
         assert!(forward["data"]["metadata"].is_object());
         assert!(forward["data"]["source_citation"].is_null());
+        if !normalized {
+            // Ordinary reads do not publish a cache for explicit cached lookup.
+            f.ok(&["index", "sync"]);
+        }
         let cached = f.ok(&[
             "read",
             "--id",
@@ -465,18 +469,27 @@ fn native_forward_read_uses_authored_body_coordinates_preserves_legacy_and_refus
             .unwrap()
             .remove("health")
             .unwrap();
-        let verified_health = verified_payload
-            .as_object_mut()
-            .unwrap()
-            .remove("health")
-            .unwrap();
+        let verified_health = verified_payload.as_object_mut().unwrap().remove("health");
         assert_eq!(cached_payload, verified_payload);
         assert_eq!(cached_health["selected_verification"], "index_snapshot");
-        assert_eq!(
-            verified_health["selected_verification"],
-            explicit["meta"]["freshness"]
-        );
-        for health in [&cached_health, &verified_health] {
+        if normalized {
+            let verified_health = verified_health.as_ref().expect("published health");
+            assert_eq!(
+                verified_health["selected_verification"],
+                explicit["meta"]["freshness"]
+            );
+            assert_eq!(
+                cached_health["index_generation"],
+                verified_health["index_generation"]
+            );
+        } else {
+            assert!(
+                verified_health.is_none(),
+                "in-memory reads must not invent published health"
+            );
+            assert!(explicit["meta"]["index_generation"].is_null());
+        }
+        for health in std::iter::once(&cached_health).chain(verified_health.as_ref()) {
             assert_eq!(health["schema_version"], "lwiki.health.v1");
             assert_eq!(health["observation"], "published_generation");
             assert_eq!(health["known_issues"], false);
@@ -484,10 +497,6 @@ fn native_forward_read_uses_authored_body_coordinates_preserves_legacy_and_refus
             assert_eq!(health["current_health"], "unknown");
             assert_eq!(health["global_membership_freshness"], "unknown");
         }
-        assert_eq!(
-            cached_health["index_generation"],
-            verified_health["index_generation"]
-        );
         assert!(cached["data"]["source_citation"].is_null());
         assert_eq!(cached["meta"]["freshness"], "index_snapshot");
         if !normalized {

@@ -25,6 +25,23 @@ fn display_value(value: &Value) -> String {
         value.to_string()
     }
 }
+pub(super) fn destination_label(destination: &Value) -> String {
+    let (Some(scheme), Some(host)) = (destination["scheme"].as_str(), destination["host"].as_str())
+    else {
+        return "Not set".into();
+    };
+    let host = if host.contains(':') && !host.starts_with('[') {
+        format!("[{host}]")
+    } else {
+        host.to_owned()
+    };
+    let port = destination["port"].as_u64();
+    if port.is_some_and(|port| !matches!((scheme, port), ("https", 443) | ("http", 80))) {
+        format!("{scheme}://{host}:{}", port.expect("checked port"))
+    } else {
+        format!("{scheme}://{host}")
+    }
+}
 fn present_setting(
     output: &mut impl std::io::Write,
     label: &str,
@@ -105,9 +122,22 @@ pub(super) fn present(
             writeln!(output, "{label}: {}", text(&data["provider"][key]["model"]))?;
             writeln!(
                 output,
+                "  Destination: {}",
+                destination_label(&data["provider"][key]["destination"])
+            )?;
+            writeln!(
+                output,
                 "  Service: {}",
                 text(&data["provider"][key]["service"])
             )?;
+            writeln!(
+                output,
+                "  API format: {}",
+                text(&data["provider"][key]["adapter"])
+            )?;
+            if let Some(limit) = data["provider"][key]["effective_output_token_limit"].as_u64() {
+                writeln!(output, "  Service output token limit: {limit}")?;
+            }
             writeln!(
                 output,
                 "  Authentication: {}",
@@ -119,6 +149,15 @@ pub(super) fn present(
                     _ => "Not set",
                 }
             )?;
+            if let Some(command) = data["provider"][key]["command_auth"].as_object() {
+                writeln!(
+                    output,
+                    "  Credential output: {}; reuse for at most {} seconds; refresh {} seconds before expiry",
+                    command["output"].as_str().unwrap_or("Not set"),
+                    command["ttl_seconds"],
+                    command["refresh_skew_seconds"],
+                )?;
+            }
             let permission = match data["provider"][key]["permitted_for_selected_wiki"].as_bool() {
                 Some(true) => "Allowed",
                 Some(false) => "Not allowed",

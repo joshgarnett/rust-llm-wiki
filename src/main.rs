@@ -208,5 +208,15 @@ fn main() {
     if output_result.is_err() {
         std::process::exit(1);
     }
+    if format == OutputFormat::Human {
+        eprintln!(
+            "Provider network: {}.",
+            if envelope.meta.network_used {
+                "used"
+            } else {
+                "not used"
+            }
+        );
+    }
     std::process::exit(i32::from(exit));
 }

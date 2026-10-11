@@ -103,6 +103,8 @@ fn graph_cli_preserves_directed_qualifiers_disputes_and_snapshot_labels() {
     assert!(!assertion["support"].as_array().unwrap().is_empty());
     assert!(!assertion["contradictions"].as_array().unwrap().is_empty());
     assert!(assertion["support"][0]["citation"].is_object());
+    // Ordinary lookup no longer publishes the saved index.
+    ok(root, &["index", "sync"]);
     let snapshot = ok(
         root,
         &[
@@ -185,7 +187,7 @@ fn graph_cli_rebuild_preserves_canonical_rows_and_cursor_scope() {
     );
     assert_eq!(first["data"]["assertions"].as_array().unwrap().len(), 1);
     if let Some(cursor) = first["data"]["next_cursor"].as_str() {
-        ok(
+        let continued = ok(
             root,
             &[
                 "graph",
@@ -218,24 +220,26 @@ fn graph_cli_rebuild_preserves_canonical_rows_and_cursor_scope() {
             4
         );
         ok(root, &["index", "rebuild"]);
-        assert_eq!(
-            invoke(
-                root,
-                &[
-                    "graph",
-                    "query",
-                    "uses",
-                    "--strategy",
-                    "relationship",
-                    "--limit",
-                    "1",
-                    "--cursor",
-                    cursor
-                ]
-            )
-            .0,
-            4
+        let resumed = ok(
+            root,
+            &[
+                "graph",
+                "query",
+                "uses",
+                "--strategy",
+                "relationship",
+                "--limit",
+                "1",
+                "--cursor",
+                cursor,
+            ],
         );
+        assert_eq!(
+            continued["data"]["assertions"],
+            resumed["data"]["assertions"]
+        );
+        assert_eq!(continued["data"]["snapshot"], resumed["data"]["snapshot"]);
+        assert!(resumed["meta"]["index_generation"].is_null());
     } else {
         panic!("multiple explicit uses assertions require a continuation");
     }
@@ -252,6 +256,30 @@ fn graph_cli_rebuild_preserves_canonical_rows_and_cursor_scope() {
         ],
     );
     assert_eq!(first["data"]["assertions"], rebuilt["data"]["assertions"]);
+
+    let assertion_path = root.join("knowledge/assertions/forward.md");
+    let authored = fs::read_to_string(&assertion_path).unwrap();
+    let edited = authored.replace("title: \"forward\"", "title: \"forward revised\"");
+    assert_ne!(authored, edited);
+    fs::write(assertion_path, edited).unwrap();
+    let before = tree(root);
+    let (exit, stale) = invoke(
+        root,
+        &[
+            "graph",
+            "query",
+            "uses",
+            "--strategy",
+            "relationship",
+            "--limit",
+            "1",
+            "--cursor",
+            first["data"]["next_cursor"].as_str().unwrap(),
+        ],
+    );
+    assert_eq!(exit, 4, "{stale}");
+    assert_eq!(stale["error"]["code"], "CURSOR_STALE");
+    assert_eq!(before, tree(root));
 }
 
 #[test]

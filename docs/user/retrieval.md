@@ -6,24 +6,25 @@ add `--wiki "/absolute/path/to/Wiki"` when you want a different one.
 
 ## Search and inspect cited context
 
-Search for an exact phrase or command:
+Search for a topic:
 
 ```sh
-lwiki --offline search 'a phrase from your note' --mode literal
+lwiki search 'project release decisions'
+```
+
+To find an exact phrase or command, use literal search:
+
+```sh
+lwiki search 'a phrase from your note' --mode literal
 ```
 
 Literal search is case sensitive and includes punctuation. It does not use
-wildcards or regular expressions. Use word search when you remember the topic
-rather than the exact wording:
-
-```sh
-lwiki --offline search 'project release decisions' --mode lexical
-```
+wildcards or regular expressions.
 
 For passages that help answer a question:
 
 ```sh
-lwiki --offline context 'What did we decide about the release?' --max-bytes 6000 --max-tokens 1500
+lwiki context 'What did we decide about the release?'
 ```
 
 Context returns text and citations. It does not write an answer. Give the text
@@ -35,11 +36,22 @@ Search and context have output limits, so they can omit useful facts. If a fact
 is missing, search for its wording, narrow to the relevant source, or read more
 of that note. An empty result does not prove the information is absent.
 
-Run `index sync` after editing wiki files outside lwiki. To check all managed
-files for errors, use `check`. On a normalized index, add `--verify-selected` to
-search when you need citations; plain search there is for finding notes. Context
-checks its selected evidence. Search by meaning uses `--mode semantic` or `hybrid` and needs
+These word searches and reads stay on your machine. You do not need `--offline`.
+In wikis created with `init` or `setup`, they pick up edits to files in the wiki
+without writing to the folder. An agent only needs read access for a local lookup.
+After changing an original note outside the wiki,
+[refresh its saved copy](everyday-use.md#capture-and-refresh-notes) to use that
+change as cited evidence.
+
+If you previously ran `index rebuild --normalized`, run `index sync` after
+editing files outside lwiki. That index searches its last saved contents; add
+`--verify-selected` to search when you need citations. Context checks the
+passages it returns. Use `check` to check all managed files for errors.
+
+Search by meaning uses `--mode semantic` or `hybrid` and needs
 [prepared embeddings](sources-and-providers.md#optional-remote-providers).
+Those modes can send text to your configured provider. `--offline` blocks those
+provider requests.
 
 ## Scope, filters and bounds
 

@@ -11,10 +11,339 @@ use crate::{
         LinkResolution, ParsedNote, RegistryEntry, extract_links, links::IndexedRegistry,
         parse_note,
     },
-    sources::{SourceView, identity::readable_ids, revision::canonical_path},
+    sources::{
+        SourceInputReads, SourceNotes, SourceView, identity::readable_ids, revision::canonical_path,
+    },
     vault::{ExpectedState, VaultFs},
 };
-use std::collections::{BTreeMap, BTreeSet};
+use std::{
+    cell::RefCell,
+    collections::{BTreeMap, BTreeSet},
+    time::{Duration, Instant},
+};
+
+/// Finite input and work allowances for ordinary read-only reconstruction.
+/// Bytes include canonical notes and every lazily read evidence/receipt asset.
+#[derive(Clone, Copy)]
+pub struct ReadScanLimits {
+    pub max_bytes: usize,
+    pub max_files: usize,
+    pub max_entries: usize,
+    pub max_elapsed_ms: u64,
+}
+
+impl Default for ReadScanLimits {
+    fn default() -> Self {
+        Self {
+            max_bytes: 64 * 1024 * 1024,
+            max_files: 4096,
+            max_entries: 65_536,
+            max_elapsed_ms: 5000,
+        }
+    }
+}
+
+#[derive(Default)]
+struct ReadScanWork {
+    states: BTreeMap<VaultRelativePath, ExpectedState>,
+    error: Option<WikiError>,
+}
+
+#[derive(Default)]
+struct ReadScanUsage {
+    bytes: usize,
+    files: usize,
+    entries: usize,
+}
+
+/// One cumulative allowance survives cache verification, reconstruction and
+/// final rechecks. It is request-local and never persists accounting state.
+pub(crate) struct ReadScanBudget {
+    limits: ReadScanLimits,
+    start: Instant,
+    usage: RefCell<ReadScanUsage>,
+}
+
+impl ReadScanBudget {
+    pub(crate) fn new(limits: ReadScanLimits) -> Result<Self> {
+        if limits.max_bytes == 0
+            || limits.max_files == 0
+            || limits.max_entries == 0
+            || limits.max_elapsed_ms == 0
+        {
+            return Err(WikiError::new(
+                ErrorCode::Usage,
+                "read-only scan limits must be positive",
+            ));
+        }
+        Ok(Self {
+            limits,
+            start: Instant::now(),
+            usage: RefCell::new(ReadScanUsage::default()),
+        })
+    }
+    pub(crate) fn check(&self) -> Result<()> {
+        if self.start.elapsed() >= Duration::from_millis(self.limits.max_elapsed_ms) {
+            return Err(read_scan_limit("read-only scan elapsed allowance exceeded"));
+        }
+        Ok(())
+    }
+    pub(crate) fn deadline(&self) -> Instant {
+        self.start + Duration::from_millis(self.limits.max_elapsed_ms)
+    }
+    pub(crate) fn charge_observation(
+        &self,
+        bytes: usize,
+        files: usize,
+        entries: usize,
+    ) -> Result<()> {
+        self.check()?;
+        let mut usage = self.usage.borrow_mut();
+        let next_bytes = usage
+            .bytes
+            .checked_add(bytes)
+            .filter(|n| *n <= self.limits.max_bytes)
+            .ok_or_else(|| read_scan_limit("read-only scan byte allowance exceeded"))?;
+        let next_files = usage
+            .files
+            .checked_add(files)
+            .filter(|n| *n <= self.limits.max_files)
+            .ok_or_else(|| read_scan_limit("read-only scan file-read allowance exceeded"))?;
+        let next_entries = usage
+            .entries
+            .checked_add(entries)
+            .filter(|n| *n <= self.limits.max_entries)
+            .ok_or_else(|| read_scan_limit("read-only scan entry allowance exceeded"))?;
+        usage.bytes = next_bytes;
+        usage.files = next_files;
+        usage.entries = next_entries;
+        Ok(())
+    }
+    pub(crate) fn remaining(&self) -> (usize, usize, usize) {
+        let usage = self.usage.borrow();
+        (
+            self.limits.max_bytes.saturating_sub(usage.bytes),
+            self.limits.max_files.saturating_sub(usage.files),
+            self.limits.max_entries.saturating_sub(usage.entries),
+        )
+    }
+}
+
+struct BoundedReadInput<'a> {
+    fs: &'a VaultFs,
+    budget: &'a ReadScanBudget,
+    work: RefCell<ReadScanWork>,
+}
+
+fn read_scan_limit(message: &str) -> WikiError {
+    let mut error = WikiError::new(ErrorCode::BudgetExceeded, message);
+    error.hint = Some("This wiki exceeds the supported read-only lookup allowance. Use inspect --path for a known file. Updating the index does not reduce the work required by this legacy read path.".into());
+    error
+}
+
+impl<'a> BoundedReadInput<'a> {
+    fn new(fs: &'a VaultFs, budget: &'a ReadScanBudget) -> Self {
+        Self {
+            fs,
+            budget,
+            work: RefCell::new(ReadScanWork::default()),
+        }
+    }
+
+    fn check(&self) -> Result<()> {
+        if let Some(error) = &self.work.borrow().error {
+            return Err(error.clone());
+        }
+        self.budget.check()
+    }
+
+    fn entry(&self) -> Result<()> {
+        self.check()?;
+        self.budget.charge_observation(0, 0, 1)
+    }
+
+    fn read(&self, path: &VaultRelativePath, ceiling: usize) -> Result<Option<Vec<u8>>> {
+        let result = (|| {
+            self.check()?;
+            self.fs
+                .root()
+                .resolve_budgeted(path, &mut || self.entry())?;
+            self.budget.charge_observation(0, 1, 0)?;
+            let remaining = self.budget.remaining().0.min(ceiling);
+            // The regular-file helper checks length before reserving memory and
+            // rejects file growth beyond this remaining aggregate allowance.
+            let bytes = crate::vault::fs::read_regular_bounded(self.fs.root(), path, false, remaining, "read-only catalog scan")
+                .map_err(|mut error| {
+                    if error.code == ErrorCode::BudgetExceeded {
+                        error.hint = read_scan_limit("").hint;
+                    }
+                    error.details = serde_json::json!({"path": path, "action": "read canonical input", "cause": error.details});
+                    error
+                })?;
+            self.check()?;
+            let expected = bytes.as_ref().map_or(ExpectedState::Absent, |bytes| {
+                ExpectedState::Hash(Blake3Hash::digest(bytes))
+            });
+            let mut work = self.work.borrow_mut();
+            if work.states.get(path).is_some_and(|old| old != &expected) {
+                return Err(WikiError::new(
+                    ErrorCode::FreshnessConflict,
+                    format!("canonical input changed during read-only scan: {path}"),
+                ));
+            }
+            self.budget
+                .charge_observation(bytes.as_ref().map_or(0, Vec::len), 0, 0)?;
+            work.states.insert(path.clone(), expected);
+            Ok(bytes)
+        })();
+        if let Err(error) = &result {
+            // Projection records damaged sources as diagnostics. A scan limit
+            // or failed observation must never turn into a complete projection.
+            self.work.borrow_mut().error = Some(error.clone());
+        }
+        result
+    }
+
+    fn notes(&self) -> Result<SourceNotes> {
+        let paths = self
+            .fs
+            .root()
+            .scan_markdown_limited(self.budget.remaining().1, &mut || self.entry())?;
+        let mut notes = BTreeMap::new();
+        for path in paths {
+            let bytes = self
+                .read(&path, self.budget.limits.max_bytes)?
+                .ok_or_else(|| {
+                    WikiError::new(
+                        ErrorCode::FreshnessConflict,
+                        "canonical member disappeared during read-only scan",
+                    )
+                })?;
+            notes.insert(path, parse_note(&bytes));
+        }
+        self.check()?;
+        notes.try_into()
+    }
+}
+
+impl SourceInputReads for BoundedReadInput<'_> {
+    fn read_observed(&self, path: &VaultRelativePath, max_bytes: usize) -> Result<Vec<u8>> {
+        self.read(path, max_bytes)?.ok_or_else(|| {
+            WikiError::new(
+                ErrorCode::SourceIntegrity,
+                format!("missing payload {path}"),
+            )
+        })
+    }
+    fn state_observed(&self, path: &VaultRelativePath) -> Result<ExpectedState> {
+        Ok(self
+            .read(path, self.budget.limits.max_bytes)?
+            .as_ref()
+            .map_or(ExpectedState::Absent, |bytes| {
+                ExpectedState::Hash(Blake3Hash::digest(bytes))
+            }))
+    }
+    fn require_clean(&self) -> Result<()> {
+        self.check()
+    }
+}
+
+/// Reuse the canonical projector with bounded named observations. No index,
+/// recovery, writer permit, provider or credential work occurs here.
+pub fn scan_bounded(
+    fs: &VaultFs,
+    vault_id: &RecordId,
+    limits: ReadScanLimits,
+) -> Result<CatalogProjection> {
+    scan_with_budget(fs, vault_id, &ReadScanBudget::new(limits)?)
+}
+
+pub(crate) fn scan_with_budget(
+    fs: &VaultFs,
+    vault_id: &RecordId,
+    budget: &ReadScanBudget,
+) -> Result<CatalogProjection> {
+    let input = BoundedReadInput::new(fs, budget);
+    let notes = input.notes()?;
+    let source_view = SourceView::from_shared_maintenance(fs, notes.shared(), &input);
+    let mut retrieval = CollectingRetrievalSink::default();
+    let mut validation = project_notes(
+        fs,
+        vault_id,
+        &notes,
+        &source_view,
+        Some(&mut retrieval),
+        None,
+    )?;
+    input.check()?;
+    // Retain failed named observations too, including absent payloads. A file
+    // appearing after projection can change eligibility without adding a note.
+    let mut dependencies: BTreeMap<_, _> = validation
+        .dependencies
+        .into_iter()
+        .map(|dependency| (dependency.path, dependency.expected))
+        .collect();
+    for (path, expected) in &input.work.borrow().states {
+        if dependencies.get(path).is_some_and(|old| old != expected) {
+            return Err(WikiError::new(
+                ErrorCode::FreshnessConflict,
+                "bounded projection observation disagrees with its dependency",
+            ));
+        }
+        dependencies.insert(path.clone(), expected.clone());
+    }
+    validation.dependencies = dependencies
+        .into_iter()
+        .map(|(path, expected)| ReadDependency { path, expected })
+        .collect();
+    retrieval.sort();
+    Ok(CatalogProjection {
+        vault_id: validation.vault_id,
+        parser_fingerprint: validation.parser_fingerprint,
+        control_manifest: validation.control_manifest,
+        documents: retrieval.documents,
+        records: validation.records,
+        graph: retrieval.graph,
+        links: retrieval.links,
+        diagnostics: validation.diagnostics,
+        dependencies: validation.dependencies,
+    })
+}
+
+/// Compare complete canonical membership and the pinned projection's exact
+/// dependencies without constructing a second corpus of retrieval rows.
+pub(crate) fn recheck_bounded(
+    fs: &VaultFs,
+    projection: &CatalogProjection,
+    budget: &ReadScanBudget,
+) -> Result<()> {
+    let input = BoundedReadInput::new(fs, budget);
+    let notes = input.notes()?;
+    if parser_fingerprint() != projection.parser_fingerprint
+        || manifest_hash(&notes) != projection.control_manifest
+    {
+        return Err(WikiError::new(
+            ErrorCode::FreshnessConflict,
+            "canonical membership changed after read-only snapshot verification",
+        ));
+    }
+    for dependency in &projection.dependencies {
+        input.check()?;
+        if !input.work.borrow().states.contains_key(&dependency.path) {
+            input.read(&dependency.path, budget.limits.max_bytes)?;
+        }
+        if input.work.borrow().states.get(&dependency.path) != Some(&dependency.expected) {
+            return Err(WikiError::new(
+                ErrorCode::FreshnessConflict,
+                format!(
+                    "canonical dependency changed after read-only snapshot verification: {}",
+                    dependency.path
+                ),
+            ));
+        }
+    }
+    input.check()
+}
 
 /// Cache identity binds every semantic adapter, not merely frontmatter parsing.
 pub fn parser_fingerprint() -> Blake3Hash {
@@ -840,6 +1169,54 @@ mod tests {
             }
         );
         validation
+    }
+
+    #[test]
+    fn bounded_read_projection_matches_legacy_with_captured_assets() {
+        let (_temp, fs, input) = fixture();
+        assert_eq!(
+            scan_bounded(&fs, &input.vault_id, ReadScanLimits::default()).unwrap(),
+            project(&fs, &input).unwrap()
+        );
+    }
+
+    #[test]
+    fn bounded_read_projection_latches_lazy_asset_exhaustion() {
+        let (_temp, fs, input) = fixture();
+        let canonical_bytes = input
+            .documents
+            .iter()
+            .map(|document| document.bytes.len())
+            .sum::<usize>();
+        let error = scan_bounded(
+            &fs,
+            &input.vault_id,
+            ReadScanLimits {
+                max_bytes: canonical_bytes + 1,
+                ..Default::default()
+            },
+        )
+        .unwrap_err();
+        assert_eq!(error.code, ErrorCode::BudgetExceeded);
+        assert!(error.details.get("path").is_some());
+    }
+
+    #[test]
+    fn bounded_read_projection_rejects_enumeration_before_retaining_extra_files() {
+        let (_temp, fs, input) = fixture();
+        assert_eq!(
+            scan_bounded(
+                &fs,
+                &input.vault_id,
+                ReadScanLimits {
+                    max_files: 1,
+                    ..Default::default()
+                }
+            )
+            .unwrap_err()
+            .code,
+            ErrorCode::BudgetExceeded
+        );
     }
     fn dependency<'a>(
         projection: &'a ValidationProjection,

@@ -623,6 +623,8 @@ fn context_cli_preserves_scopes_stances_and_exact_text_budget() {
     );
     assert!(text.len() <= 12000);
     assert!(text.len().div_ceil(4) <= 3000);
+    // Ordinary context does not publish the saved index.
+    ok(f.path(), &["index", "sync"]);
     let snapshot = ok(
         f.path(),
         &[

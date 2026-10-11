@@ -160,6 +160,16 @@ fn inspection_uses_ambient_provider_path_and_selected_wiki_profile_without_crede
         "private_file"
     );
     assert_eq!(
+        envelope.data["provider"]["embedding"]["destination"],
+        json!({"scheme":"https","host":"example.invalid","port":443})
+    );
+    assert_eq!(
+        envelope.data["provider"]["embedding"]["adapter"],
+        "embeddings-v1"
+    );
+    assert!(envelope.data["provider"]["embedding"]["effective_output_token_limit"].is_null());
+    assert!(envelope.data["provider"]["embedding"]["command_auth"].is_null());
+    assert_eq!(
         envelope.data["provider"]["embedding"]["permitted_for_selected_wiki"],
         true
     );
@@ -172,6 +182,7 @@ fn inspection_uses_ambient_provider_path_and_selected_wiki_profile_without_crede
     assert!(text.contains("standard provider location"));
     assert!(text.contains("test-model"));
     assert!(text.contains("private key file"));
+    assert!(text.contains("Destination: https://example.invalid"));
     assert!(text.contains("Use with selected wiki: Allowed"));
 }
 
@@ -284,4 +295,123 @@ fn missing_ambient_provider_file_is_actionable_without_hiding_local_settings() {
     assert!(text.contains("Provider settings file is missing. Run lwiki setup to add a model."));
     assert!(text.contains("Maximum bytes per input: 12000 (built-in default)"));
     assert!(text.contains("Maximum request attempts: 60 (built-in default)"));
+}
+
+#[test]
+fn inspection_reports_destinations_and_command_policy_without_executing_or_exposing_auth() {
+    for output_limit in [None, Some(8192)] {
+        let (_temp, base) = fixture();
+        let selected = wiki(&base);
+        let provider_path = base.join("private-provider.toml");
+        let sentinel = base.join("helper-must-not-run");
+        let helper = base.join("private credential helper");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let quoted = sentinel.to_string_lossy().replace('\'', "'\\''");
+            fs::write(&helper, format!("#!/bin/sh\n: > '{quoted}'\nexit 47\n")).unwrap();
+            fs::set_permissions(&helper, fs::Permissions::from_mode(0o700)).unwrap();
+        }
+        let limit = output_limit
+            .map(|limit| format!("max_output_tokens = {limit}\n"))
+            .unwrap_or_default();
+        let private = format!(
+            r#"version = 1
+[profiles.notes]
+embedding = "embed"
+generation = "generate"
+[services.embed]
+adapter = "embeddings-v1"
+url = "https://embedding.example.invalid:8443/private-deployment?tenant=synthetic-query-never-display"
+model = "embedding-model"
+[services.embed.headers]
+X-Private = "synthetic-header-never-display"
+[services.embed.auth]
+kind = "static"
+key = "synthetic-key-never-display"
+[services.generate]
+adapter = "responses-v1"
+url = "https://[2001:db8::1]/private-output?tenant=synthetic-second-query"
+model = "generation-model"
+{limit}[services.generate.auth]
+kind = "command"
+command = [{helper}, "synthetic-private-argument"]
+output = "json"
+ttl_seconds = 240
+refresh_skew_seconds = 30
+[vault_bindings.notes]
+root = {root}
+wiki_id = "Vault.Inspection"
+allowed_profiles = ["notes"]
+"#,
+            helper = toml::Value::String(helper.to_str().unwrap().into()),
+            root = toml::Value::String(selected.path.to_str().unwrap().into()),
+        );
+        let snapshot = config::setup_io::load_private_file(&provider_path, 65536).unwrap();
+        config::setup_io::write_private_file(&snapshot, private.as_bytes(), false, false, 5000)
+            .unwrap();
+        let mut document = config::LocalConfigDocument {
+            default_wiki: Some(selected),
+            providers_config: Some(provider_path.clone()),
+            ..Default::default()
+        };
+        document.defaults.profile = Some("notes".into());
+        let config = loaded(&base, &document);
+        for extra in [vec![], vec!["--offline"], vec!["--dry-run"]] {
+            let envelope = inspect_loaded(&arguments(&extra), &config, &base, || {
+                panic!("explicit private provider path must win")
+            })
+            .unwrap();
+            let embedding = &envelope.data["provider"]["embedding"];
+            let generation = &envelope.data["provider"]["generation"];
+            assert_eq!(
+                embedding["destination"],
+                json!({"scheme":"https","host":"embedding.example.invalid","port":8443})
+            );
+            assert_eq!(
+                generation["destination"],
+                json!({"scheme":"https","host":"[2001:db8::1]","port":443})
+            );
+            assert_eq!(generation["adapter"], "responses-v1");
+            assert_eq!(
+                generation["effective_output_token_limit"],
+                output_limit.unwrap_or(4096)
+            );
+            assert_eq!(
+                generation["command_auth"],
+                json!({"output":"json","ttl_seconds":240,"refresh_skew_seconds":30})
+            );
+            assert_eq!(generation["permitted_for_selected_wiki"], true);
+            assert_eq!(envelope.data["credentials_resolved"], false);
+            assert_eq!(envelope.data["network_used"], false);
+            assert!(!envelope.meta.network_used);
+            let mut output = Vec::new();
+            present(&envelope, &mut output).unwrap();
+            let human = String::from_utf8(output).unwrap();
+            assert!(human.contains("Destination: https://embedding.example.invalid:8443"));
+            assert!(human.contains("Destination: https://[2001:db8::1]"));
+            assert!(human.contains(&format!(
+                "Service output token limit: {}",
+                output_limit.unwrap_or(4096)
+            )));
+            assert!(human.contains("Credential output: json; reuse for at most 240 seconds"));
+            for secret in [
+                "private-deployment",
+                "synthetic-query-never-display",
+                "synthetic-second-query",
+                "synthetic-key-never-display",
+                "synthetic-header-never-display",
+                "private credential helper",
+                "synthetic-private-argument",
+            ] {
+                assert!(!human.contains(secret), "human output exposed {secret}");
+                assert!(
+                    !serde_json::to_string(&envelope).unwrap().contains(secret),
+                    "JSON exposed {secret}"
+                );
+            }
+            assert!(!sentinel.exists());
+            assert_eq!(fs::read(&provider_path).unwrap(), private.as_bytes());
+        }
+    }
 }

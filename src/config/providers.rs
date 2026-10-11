@@ -441,7 +441,37 @@ impl ProviderConfig {
                     } => "private_literal",
                     AuthConfig::Command { .. } => "command",
                 };
-                summary.insert(role.into(), serde_json::json!({"service":id,"model":service.model,"auth_source":auth_source}));
+                // Project only the destination authority. Paths and query values
+                // may contain private deployment data even in a valid URL.
+                let endpoint = url::Url::parse(&service.url)
+                    .map_err(|_| config_error("provider endpoint cannot be inspected"))?;
+                let host = endpoint
+                    .host_str()
+                    .ok_or_else(|| config_error("provider endpoint has no destination host"))?;
+                let command_auth = match &service.auth {
+                    AuthConfig::Command {
+                        output,
+                        ttl_seconds,
+                        refresh_skew_seconds,
+                        ..
+                    } => Some(serde_json::json!({
+                        "output":output,
+                        "ttl_seconds":ttl_seconds,
+                        "refresh_skew_seconds":refresh_skew_seconds,
+                    })),
+                    AuthConfig::Static { .. } => None,
+                };
+                let output_limit = (service.adapter.capability() == Capability::Generate)
+                    .then(|| service.max_output_tokens.unwrap_or(4096));
+                summary.insert(role.into(), serde_json::json!({
+                    "service":id,
+                    "model":service.model,
+                    "auth_source":auth_source,
+                    "destination":{"scheme":endpoint.scheme(),"host":host,"port":endpoint.port_or_known_default()},
+                    "adapter":service.adapter,
+                    "effective_output_token_limit":output_limit,
+                    "command_auth":command_auth,
+                }));
             }
         }
         Ok(serde_json::Value::Object(summary))

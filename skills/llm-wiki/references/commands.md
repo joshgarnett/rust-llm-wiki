@@ -1,6 +1,6 @@
-# Implemented lwiki 0.3.0 commands
+# Implemented lwiki 0.4.0 commands
 
-Generated from the release command registry and argument parser. Run `lwiki --json capabilities` before use.
+Generated command reference. Start with SKILL.md for everyday tasks; consult this reference when you need command details.
 
 ## capabilities
 

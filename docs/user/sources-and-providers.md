@@ -153,9 +153,10 @@ provider requires them. Choose how to provide your API key:
 - **Environment:** supply the variable name. That variable must also be available
   in every terminal or agent process that makes requests.
 
-Setup shows the files it will use and asks whether to permit future embedding
-requests for this wiki. It makes no network request. `config show` displays the
-model and key source without showing the secret:
+Setup shows the model and destination, then asks whether it may send wiki text
+and search questions there when you request search by meaning. Requests can cost
+money. Setup itself makes no network request. `config show` displays the model,
+destination and key source without showing the secret:
 
 ```sh
 lwiki config show

@@ -24,16 +24,12 @@ Setup walks you through these choices:
    [add search by meaning later](sources-and-providers.md#optional-remote-providers).
 5. Review the destinations and confirm setup.
 
-When setup prints **Your wiki is ready.**, it also prints the wiki location and
-what it installed. Check your saved choice:
+When setup prints **Your wiki is ready.**, restart your agent session so it can
+find the installed wiki instructions. Open the folder shown by setup in Obsidian
+or your preferred Markdown editor. `WIKI.md` is its start page.
 
-```sh
-lwiki wiki show
-lwiki config show
-```
-
-The wiki path should be the folder you chose. Open that folder in Obsidian or
-your preferred Markdown editor. `WIKI.md` is its start page.
+You can check the selected folder later with `lwiki wiki show`, or inspect model
+and connection settings with `lwiki config show`.
 
 To use an existing notes folder, supply its path:
 

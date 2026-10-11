@@ -1,5 +1,5 @@
 {
-  "checksum": "e2bf4c8e5721defdf690f977f5b9ecc57abeba9cbb976c3c85294a7e3eba04c2",
+  "checksum": "68e3ad9e9ccd6ea4a23a8d95f108e005f3d222af47d818119de6a2cf5746f145",
   "crates": {
     "ahash 0.8.12": {
       "name": "ahash",
@@ -8341,9 +8341,9 @@
       ],
       "license_file": "LICENSE"
     },
-    "rust-llm-wiki 0.3.0": {
+    "rust-llm-wiki 0.4.0": {
       "name": "rust-llm-wiki",
-      "version": "0.3.0",
+      "version": "0.4.0",
       "package_url": null,
       "repository": null,
       "targets": [
@@ -8491,7 +8491,7 @@
           "selects": {}
         },
         "edition": "2024",
-        "version": "0.3.0"
+        "version": "0.4.0"
       },
       "license": "MIT",
       "license_ids": [
@@ -15045,7 +15045,7 @@
   },
   "binary_crates": [],
   "workspace_members": {
-    "rust-llm-wiki 0.3.0": ""
+    "rust-llm-wiki 0.4.0": ""
   },
   "conditions": {
     "aarch64-apple-darwin": [

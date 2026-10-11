@@ -92,6 +92,61 @@ pub struct SetupArguments {
 fn usage(message: impl Into<String>) -> WikiError {
     WikiError::new(ErrorCode::Usage, message)
 }
+const EMBEDDING_TEXT_SCOPE: &str = "wiki text and search questions";
+
+fn embedding_destination(url: &str) -> Result<Value> {
+    let endpoint = url::Url::parse(url).map_err(|_| {
+        WikiError::new(
+            ErrorCode::ConfigInvalid,
+            "invalid embeddings-v1 endpoint URL",
+        )
+    })?;
+    if !endpoint.username().is_empty() || endpoint.password().is_some() {
+        return Err(WikiError::new(
+            ErrorCode::ConfigInvalid,
+            "embedding endpoint must not contain credentials",
+        ));
+    }
+    let host = endpoint.host_str().ok_or_else(|| {
+        WikiError::new(
+            ErrorCode::ConfigInvalid,
+            "embedding endpoint needs a destination host",
+        )
+    })?;
+    Ok(json!({"scheme":endpoint.scheme(),"host":host,"port":endpoint.port_or_known_default()}))
+}
+
+fn present_embedding_summary(
+    embedding: &Value,
+    wiki: &Path,
+    output: &mut impl Write,
+) -> io::Result<()> {
+    writeln!(
+        output,
+        "Embedding model: {}",
+        embedding["model"].as_str().unwrap_or("Not set")
+    )?;
+    writeln!(
+        output,
+        "Destination: {}",
+        super::config_show::destination_label(&embedding["destination"])
+    )?;
+    writeln!(
+        output,
+        "Text that explicit requests may send: {EMBEDDING_TEXT_SCOPE}."
+    )?;
+    writeln!(
+        output,
+        "Embedding requests for {}: {}. Setup makes no requests.",
+        wiki.display(),
+        if embedding["grant_embed"] == true {
+            "permitted when explicitly requested"
+        } else {
+            "not permitted"
+        }
+    )
+}
+
 fn absolute(path: &Path) -> Result<PathBuf> {
     if path.is_absolute() {
         return Ok(path.to_path_buf());
@@ -169,6 +224,96 @@ impl<R: BufRead, W: Write> Prompts<R, W> {
             }
         }
     }
+
+    fn path(&mut self, label: &str, default: Option<&Path>) -> Result<PathBuf> {
+        loop {
+            let default = default.map(|path| path.to_string_lossy());
+            let value = self.text(label, default.as_deref())?;
+            let wrapped = ['\'', '"', '`'].into_iter().any(|delimiter| {
+                value.len() > 1 && value.starts_with(delimiter) && value.ends_with(delimiter)
+            });
+            if wrapped && !Path::new(&value).exists() {
+                writeln!(self.output, "Enter the path without surrounding quotes or backticks. Spaces are kept as typed. If those characters are part of a new folder name, supply the path with lwiki setup PATH.")
+                    .map_err(|error| usage(error.to_string()))?;
+                continue;
+            }
+            return Ok(PathBuf::from(value));
+        }
+    }
+}
+
+fn marker_exists(path: &Path) -> Result<bool> {
+    match std::fs::symlink_metadata(path.join("WIKI.md")) {
+        Ok(_) => Ok(true),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(usage(format!(
+            "cannot inspect wiki folder {}: {error}",
+            path.display()
+        ))),
+    }
+}
+
+/// Preflight before optional setup questions, then repeat before publishing files.
+fn validate_folder(setup: &SetupArguments, args: &Arguments) -> Result<(DefaultWiki, bool)> {
+    let path = setup.path.as_deref().expect("chosen path");
+    if let Some(explicit) = &args.wiki
+        && absolute(explicit)? != path
+    {
+        return Err(usage("setup PATH and --wiki must name the same folder"));
+    }
+    let timeout = args.lock_timeout_ms.unwrap_or(5000);
+    if timeout > 30_000 {
+        return Err(usage("setup writer timeout must be at most 30000 ms"));
+    }
+    let marker_exists = marker_exists(path)?;
+    let wiki = if setup.select || marker_exists {
+        let wiki = crate::vault::discovery::default_from_path(path).map_err(|mut error| {
+            if !marker_exists
+                && error.code == ErrorCode::VaultNotFound
+                && std::fs::symlink_metadata(path)
+                    .is_ok_and(|metadata| metadata.is_dir() && !metadata.file_type().is_symlink())
+            {
+                error.hint = Some(format!(
+                    "This folder is not initialized as a wiki. To keep its notes and add wiki files, run lwiki setup {} --existing. To select a wiki, choose a folder containing a valid WIKI.md.",
+                    quote_path(path)
+                ));
+            }
+            error
+        })?;
+        if args
+            .expect_wiki_id
+            .as_ref()
+            .is_some_and(|id| *id != wiki.wiki_id)
+        {
+            return Err(WikiError::new(
+                ErrorCode::ContentConflict,
+                "selected wiki has a different ID from --expect-wiki-id",
+            ));
+        }
+        wiki
+    } else {
+        if args.expect_wiki_id.is_some() {
+            return Err(usage(
+                "a new wiki has no existing ID to check; omit --expect-wiki-id or use --select",
+            ));
+        }
+        let preview = crate::app::offline::init_with_existing(
+            path,
+            setup.title.as_deref().unwrap_or("My wiki"),
+            setup.existing,
+            OperationOptions {
+                dry_run: true,
+                offline: true,
+                stage_only: false,
+                lock_timeout_ms: timeout,
+            },
+        )?;
+        DefaultWiki {
+            path: PathBuf::from(preview.path),
+            wiki_id: preview.id,
+        }
+    };
+    Ok((wiki, marker_exists))
 }
 
 fn collect<R: BufRead, W: Write>(
@@ -201,16 +346,32 @@ fn collect<R: BufRead, W: Write>(
             }
         }
         let default = home()?.join("Wiki");
-        choices.path = Some(PathBuf::from(
-            prompts.text("Wiki folder", Some(&default.to_string_lossy()))?,
-        ));
+        choices.path = Some(prompts.path("Wiki folder", Some(&default))?);
     }
     let path = absolute(choices.path.as_deref().expect("chosen path"))?;
     choices.path = Some(path.clone());
-    let marker_exists = std::fs::symlink_metadata(path.join("WIKI.md")).is_ok();
-    if interactive && !choices.select && !marker_exists {
-        if path.exists() && !choices.existing {
-            choices.existing = prompts.yes("This folder already exists. Add wiki folders and WIKI.md while keeping your notes?", false)?;
+    let marker_exists = marker_exists(&path)?;
+    if interactive && !marker_exists {
+        let exists = match std::fs::symlink_metadata(&path) {
+            Ok(_) => true,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => false,
+            Err(error) => {
+                return Err(usage(format!(
+                    "cannot inspect wiki folder {}: {error}",
+                    path.display()
+                )));
+            }
+        };
+        if exists {
+            let mut preview = choices.clone();
+            preview.select = false;
+            preview.existing = true;
+            validate_folder(&preview, args)?;
+        } else if choices.select {
+            validate_folder(&choices, args)?;
+        }
+        if exists && !choices.existing {
+            choices.existing = prompts.yes("This folder is not a wiki yet. Add wiki folders and WIKI.md while keeping your notes?", false)?;
             if !choices.existing {
                 return Err(WikiError::new(
                     ErrorCode::Cancelled,
@@ -218,10 +379,12 @@ fn collect<R: BufRead, W: Write>(
                 ));
             }
         }
+        choices.select = false;
         if choices.title.is_none() {
             choices.title = Some(prompts.text("Wiki title", Some("My wiki"))?);
         }
     }
+    validate_folder(&choices, args)?;
     if interactive {
         if !choices.no_default {
             choices.no_default =
@@ -303,7 +466,15 @@ fn collect<R: BufRead, W: Write>(
                 }
             }
             if !choices.grant_embed {
-                choices.grant_embed = prompts.yes(&format!("Permit future explicit embedding requests for {} using this model? These requests can cost money.", path.display()), false)?;
+                let destination = embedding_destination(
+                    choices.embedding_url.as_deref().expect("chosen endpoint"),
+                )?;
+                choices.grant_embed = prompts.yes(&format!(
+                    "Permit explicit requests for similarity search in {} with model {} at {}? They can send {EMBEDDING_TEXT_SCOPE} and cost money. Setup makes no requests.",
+                    path.display(),
+                    choices.embedding_model.as_deref().expect("chosen model"),
+                    super::config_show::destination_label(&destination),
+                ), false)?;
             }
         }
     }
@@ -454,7 +625,10 @@ fn next_steps(
     }
     let mut result = Vec::new();
     if let Some(agent) = &setup.agent {
-        result.push(format!("Open {agent} and ask: Use llm-wiki with my wiki at {}. Capture the notes I choose, then answer my question with citations. Give the agent your notes or folder and your actual question.", path.display()));
+        result.push(format!(
+            "Restart your {agent} session so it can find the installed llm-wiki instructions."
+        ));
+        result.push(format!("Ask {agent}: Use llm-wiki with my wiki at {}. Capture the notes I choose, then answer my question with citations. Give the agent your notes or folder and your actual question.", path.display()));
         if args.preferences.is_some() || setup.no_default || args.no_user_config {
             result.push(format!(
                 "Tell your agent to use this command prefix: {prefix}"
@@ -581,46 +755,7 @@ pub fn execute(args: &Arguments, setup: &SetupArguments) -> Result<Envelope> {
             .unwrap_or_else(|| agent_directory_default(&choices))?;
         choices.agent_directory = Some(absolute(&directory)?);
     }
-    let marker_exists = match std::fs::symlink_metadata(requested.join("WIKI.md")) {
-        Ok(_) => true,
-        Err(error) if error.kind() == io::ErrorKind::NotFound => false,
-        Err(error) => return Err(usage(format!("cannot inspect wiki folder: {error}"))),
-    };
-    let mut wiki = if choices.select || marker_exists {
-        let wiki = crate::vault::discovery::default_from_path(requested)?;
-        if args
-            .expect_wiki_id
-            .as_ref()
-            .is_some_and(|id| *id != wiki.wiki_id)
-        {
-            return Err(WikiError::new(
-                ErrorCode::ContentConflict,
-                "selected wiki has a different ID from --expect-wiki-id",
-            ));
-        }
-        wiki
-    } else {
-        if args.expect_wiki_id.is_some() {
-            return Err(usage(
-                "a new wiki has no existing ID to check; omit --expect-wiki-id or use --select",
-            ));
-        }
-        let preview = crate::app::offline::init_with_existing(
-            requested,
-            choices.title.as_deref().unwrap_or("My wiki"),
-            choices.existing,
-            OperationOptions {
-                dry_run: true,
-                offline: true,
-                stage_only: false,
-                lock_timeout_ms: timeout,
-            },
-        )?;
-        DefaultWiki {
-            path: PathBuf::from(preview.path),
-            wiki_id: preview.id,
-        }
-    };
+    let (mut wiki, marker_exists) = validate_folder(&choices, args)?;
     let mut proposed = loaded.document().clone();
     if !choices.no_default {
         proposed.default_wiki = Some(wiki.clone());
@@ -751,10 +886,13 @@ pub fn execute(args: &Arguments, setup: &SetupArguments) -> Result<Envelope> {
     } else {
         None
     };
+    let embedding_preview = embedding.as_ref().map(|selected| -> Result<Value> {
+        Ok(json!({"model":selected.model,"destination":embedding_destination(&selected.url)?,"text_scope":EMBEDDING_TEXT_SCOPE,"dimensions":selected.dimensions,"grant_embed":selected.grant,"network_requests":0}))
+    }).transpose()?;
     let plan = json!({"wiki":wiki.path,"wiki_action":if marker_exists || choices.select { "select" } else { "create" }, "initialize_existing_folder":choices.existing,
         "save_default":!choices.no_default,"configuration":if writes_config { config_path } else { None },
         "provider_configuration":choices.providers_file,"credential_file":choices.credential_file,
-        "embedding":embedding.as_ref().map(|selected| json!({"model":selected.model,"dimensions":selected.dimensions,"grant_embed":selected.grant,"network_requests":0})),
+        "embedding":embedding_preview,
         "agent":choices.agent,"agent_installation":agent_preview,"network_requests":0});
     if args.output_format() == OutputFormat::Human {
         writeln!(prompts.output, "Wiki folder: {}", wiki.path.display())
@@ -775,20 +913,9 @@ pub fn execute(args: &Arguments, setup: &SetupArguments) -> Result<Envelope> {
             writeln!(prompts.output, "Private key file: {}", path.display())
                 .map_err(|error| usage(error.to_string()))?;
         }
-        if let Some(selected) = &embedding {
-            writeln!(prompts.output, "Embedding model: {}", selected.model)
+        if let Some(embedding) = &embedding_preview {
+            present_embedding_summary(embedding, &wiki.path, &mut prompts.output)
                 .map_err(|error| usage(error.to_string()))?;
-            writeln!(
-                prompts.output,
-                "Embedding requests for {}: {}. Setup makes no requests.",
-                wiki.path.display(),
-                if selected.grant {
-                    "permitted when explicitly requested"
-                } else {
-                    "not permitted"
-                }
-            )
-            .map_err(|error| usage(error.to_string()))?;
         }
         if let Some(preview) = &agent_preview {
             if let Some(destination) = preview.get("destination").and_then(Value::as_str) {
@@ -1081,6 +1208,12 @@ pub(crate) fn present_report(envelope: &Envelope, output: &mut impl Write) -> io
             _ => "Setup is incomplete.",
         }
     )?;
+    let plan = &envelope.data["plan"];
+    if plan["embedding"].is_object()
+        && let Some(wiki) = plan["wiki"].as_str()
+    {
+        present_embedding_summary(&plan["embedding"], Path::new(wiki), output)?;
+    }
     if let Some(steps) = envelope.data["steps"].as_array() {
         for step in steps {
             writeln!(

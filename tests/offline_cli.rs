@@ -1150,7 +1150,7 @@ fn init_subprocess_and_bounded_file_input_are_guarded() {
 }
 
 #[test]
-fn normal_cli_search_recovers_committed_sql_with_incomplete_change_journal() {
+fn normal_cli_search_preserves_unfinished_change_until_explicit_recovery() {
     use lwiki::{catalog::*, changes::*, domain::*, vault::*};
     use std::{sync::Arc, time::Duration};
     struct Interrupt;
@@ -1214,7 +1214,25 @@ fn normal_cli_search_recovers_committed_sql_with_incomplete_change_journal() {
         ChangeStatus::FilesApplied
     );
     drop(writer);
-    let hits = ok(temp.path(), &["search", "Recovered"], None);
+    let before = tree(temp.path());
+    let (exit, blocked) = invoke(
+        Some(temp.path()),
+        &["search", "Recovered", "--mode", "lexical"],
+        None,
+    );
+    assert_eq!(exit, 5, "{blocked}");
+    assert_eq!(blocked["error"]["code"], "RECOVERY_REQUIRED");
+    assert_eq!(tree(temp.path()), before);
+    assert_eq!(
+        engine.inspect(&retained.prepared.change_id).unwrap().status,
+        ChangeStatus::FilesApplied
+    );
+    ok(temp.path(), &["recover"], None);
+    let hits = ok(
+        temp.path(),
+        &["search", "Recovered", "--mode", "lexical"],
+        None,
+    );
     assert_eq!(hits["meta"]["freshness"], "verified_snapshot");
     assert_eq!(hits["data"]["hits"].as_array().unwrap().len(), 1);
     assert_eq!(
@@ -1859,7 +1877,7 @@ fn doctor_cli_human_summary_states_unperformed_checks_and_quotes_selected_vault(
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
-    assert!(output.stderr.is_empty());
+    assert_eq!(output.stderr, b"Provider network: not used.\n");
     let rendered = String::from_utf8(output.stdout).unwrap();
     assert!(!rendered.trim_start().starts_with('{'), "{rendered}");
     assert!(
@@ -1870,8 +1888,7 @@ fn doctor_cli_human_summary_states_unperformed_checks_and_quotes_selected_vault(
         "Cache:",
         "legacy",
         "present_uninspected",
-        "Canonical, history and cache-integrity audits: not performed.",
-        "Canonical freshness: unknown",
+        "Notes and history were not audited.",
     ] {
         assert!(
             rendered.contains(expected),

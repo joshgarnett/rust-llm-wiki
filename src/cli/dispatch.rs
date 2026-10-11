@@ -600,6 +600,9 @@ fn execute_selected(
         ));
     }
     let mut envelope = Envelope::success(command, Value::Null);
+    // Reuse legacy reader health; reopening its cache can require WAL writes or
+    // discard a successful in-memory reconstruction after cache loss.
+    let mut legacy_read_health = None;
     envelope.meta.selection = Some(
         json!({"schema_version":"lwiki.selection.v1","root":selected_root,"wiki_id":selected.wiki_id,"origin":selected.origin,"requested_path":selected.requested_path,"configuration":local.summary(),"preference_origins":preferences.origins}),
     );
@@ -610,6 +613,7 @@ fn execute_selected(
             command: WikiCommand::Show,
         } => {
             envelope.data = envelope.meta.selection.clone().expect("selection bound");
+            envelope.data["title"] = json!(super::human_status::wiki_title(&app)?);
         }
         Command::Edit {
             path,
@@ -649,6 +653,9 @@ fn execute_selected(
                 range,
                 max_bytes: preferences.read_max_bytes,
             };
+            if request.max_bytes == 0 || request.max_bytes > MAX_INPUT_BYTES {
+                return Err(usage("read limit must be 1..=16 MiB"));
+            }
             if args.dry_run {
                 envelope.data = json!({
                     "dry_run": true,
@@ -719,15 +726,13 @@ fn execute_selected(
                 }
                 outcome
             } else {
-                let (_writer, reader) = reader(&app, *no_sync)?;
+                let (reader, read_budget) = reader(&app, *no_sync)?;
                 snapshot_metadata(&mut envelope.meta, &reader);
+                legacy_read_health = Some(held_legacy_read_health(&reader, &mut envelope));
                 if *no_sync {
                     cached_legacy_read(&catalog, &reader, request, from)?
                 } else {
-                    let mut outcome = match from {
-                        Some(start) => app.read_from(request, start)?,
-                        None => app.read(request)?,
-                    };
+                    let mut outcome = cached_read(&reader, request, from)?;
                     let document = reader
                         .projection()
                         .documents
@@ -739,6 +744,38 @@ fn execute_selected(
                                 "read bytes changed after snapshot verification",
                             )
                         })?;
+                    read_budget.check()?;
+                    let bytes = crate::vault::fs::read_regular_bounded(
+                        app.fs().root(),
+                        &outcome.path,
+                        false,
+                        read_budget.remaining().0,
+                        "verified read",
+                    )?
+                    .ok_or_else(|| {
+                        WikiError::new(
+                            ErrorCode::FreshnessConflict,
+                            "selected read path disappeared after snapshot verification",
+                        )
+                    })?;
+                    if Blake3Hash::digest(&bytes) != outcome.hash {
+                        return Err(WikiError::new(
+                            ErrorCode::FreshnessConflict,
+                            "selected read bytes changed after snapshot verification",
+                        ));
+                    }
+                    let note = parse_note(&bytes);
+                    let body = if document.owner_revision.is_none() {
+                        note.body()
+                    } else {
+                        bytes.as_slice()
+                    };
+                    std::str::from_utf8(body)
+                        .map_err(|_| WikiError::invalid("requested body is not UTF-8"))?;
+                    // Includes the Source/head/ownership dependencies used to
+                    // derive this document, plus complete canonical membership.
+                    read_budget.charge_observation(bytes.len(), 1, 0)?;
+                    catalog.recheck_read_snapshot(&reader, &read_budget)?;
                     outcome.source_citation = authenticated_read_citation(document, &outcome)?;
                     outcome
                 }
@@ -1125,6 +1162,11 @@ fn execute_selected(
                 settings.validate()?;
                 envelope.data = json!({"settings":settings,"dry_run":true,"probe":probe,
                 "sync":sync,"cache_state_unknown":true,"network_used":false});
+                super::human_status::attach_provider_summary(
+                    &mut envelope,
+                    &remote,
+                    &remote_context,
+                );
                 envelope
                     .warnings
                     .push("embedding coverage is unknown during dry-run".into());
@@ -1175,6 +1217,16 @@ fn execute_selected(
                 }
                 if args.dry_run {
                     envelope.data = retrieval::selected_search::preview(&search.query, &plan)?;
+                    if matches!(
+                        plan.mode,
+                        retrieval::SearchMode::Semantic | retrieval::SearchMode::Hybrid
+                    ) {
+                        super::human_status::attach_provider_summary(
+                            &mut envelope,
+                            &search.remote,
+                            &remote_context,
+                        );
+                    }
                     envelope.warnings.push("Selected search preview validates the request only; index access, admission and evidence verification are unperformed.".into());
                 } else {
                     let catalog = Catalog::with_options(
@@ -1237,6 +1289,16 @@ fn execute_selected(
                 }
                 if args.dry_run && plan.mode != retrieval::SearchMode::Lexical {
                     envelope.data = retrieval::selected_search::preview(&search.query, &plan)?;
+                    if matches!(
+                        plan.mode,
+                        retrieval::SearchMode::Semantic | retrieval::SearchMode::Hybrid
+                    ) {
+                        super::human_status::attach_provider_summary(
+                            &mut envelope,
+                            &search.remote,
+                            &remote_context,
+                        );
+                    }
                     envelope.warnings.push("Search preview validates the request only; index access, cache availability and evidence verification are unperformed.".into());
                     return Ok(envelope);
                 }
@@ -1295,10 +1357,21 @@ fn execute_selected(
                 // Even a read-only WAL open can create sidecars. Use no SQLite path.
                 let projection = crate::catalog::scan::scan(app.fs(), app.vault_id())?;
                 envelope.data = json!({"query":search.query,"plan":plan,"dry_run":true,"cache_state_unknown":true,"canonical_document_count":projection.documents.len(),"hits":null});
+                if matches!(
+                    plan.mode,
+                    retrieval::SearchMode::Semantic | retrieval::SearchMode::Hybrid
+                ) {
+                    super::human_status::attach_provider_summary(
+                        &mut envelope,
+                        &search.remote,
+                        &remote_context,
+                    );
+                }
                 envelope
                     .warnings
                     .push("search results and index freshness are unknown during dry-run".into());
             } else {
+                let mut local_search_generation = None;
                 let hits = if matches!(
                     plan.mode,
                     retrieval::SearchMode::Semantic | retrieval::SearchMode::Hybrid
@@ -1327,15 +1400,24 @@ fn execute_selected(
                     if search.graph.is_some() {
                         return Err(usage("--graph requires hybrid search"));
                     }
-                    let (_writer, reader) = reader(&app, search.no_sync)?;
-                    if plan.mode == retrieval::SearchMode::Lexical {
+                    let (reader, read_budget) = reader(&app, search.no_sync)?;
+                    legacy_read_health = Some(held_legacy_read_health(&reader, &mut envelope));
+                    let hits = if plan.mode == retrieval::SearchMode::Lexical {
                         retrieval::lexical::search_ordinary_lexical(&reader, &search.query, &plan)?
                     } else {
                         retrieval::search(&reader, &search.query, &plan)?
+                    };
+                    if !search.no_sync {
+                        catalog.recheck_read_snapshot(&reader, &read_budget)?;
                     }
+                    local_search_generation = Some(reader.persistent_generation());
+                    hits
                 };
                 require_legacy_query_still_selected(&catalog)?;
                 result_metadata(&mut envelope.meta, &hits.snapshot, &hits.verification);
+                if let Some(generation) = local_search_generation {
+                    envelope.meta.index_generation = generation;
+                }
                 envelope.meta.network_used = hits.network_used;
                 envelope.meta.partial = hits.truncated;
                 envelope.warnings.extend(hits.warnings.iter().cloned());
@@ -1360,10 +1442,17 @@ fn execute_selected(
                         .warnings
                         .push("packet preview is unpersisted and cannot be imported".into());
                     if matches!(options.executor, super::extraction::Executor::Api) {
-                        envelope.warnings.push(format!("API preview did not check private service dimensions, including the effective max_output_tokens cap (default 4096); requested {}. No credentials were resolved.", options.max_output_tokens));
+                        envelope.warnings.push(format!("API preview did not authorize provider work or check whether the requested output allowance {} fits the service cap. No credentials were resolved.", options.max_output_tokens));
                     }
                 }
                 envelope.data = value(outcome)?;
+                if args.dry_run && matches!(options.executor, super::extraction::Executor::Api) {
+                    super::human_status::attach_provider_summary(
+                        &mut envelope,
+                        &options.remote,
+                        &remote_context,
+                    );
+                }
             } else {
                 let runtime =
                     options
@@ -1462,6 +1551,13 @@ fn execute_selected(
                 "layout_unknown":true,"target_resolution_performed":false,
                 "canonical_scan_performed":false,"verification_performed":false,
                 "legacy_default_navigation":neighbors,"results":null});
+                if plan.seed_mode == crate::graph::GraphSeedMode::Semantic {
+                    super::human_status::attach_provider_summary(
+                        &mut envelope,
+                        &options.remote,
+                        &remote_context,
+                    );
+                }
                 envelope
                 .warnings
                 .push("Dry-run validates the graph request; target existence, layout capabilities, results and freshness remain unknown. Normalized named neighbors verify selected dependencies by default; --no-sync is cached unless --verify-selected is explicit.".into());
@@ -1475,6 +1571,7 @@ fn execute_selected(
                     },
                 );
                 let normalized = catalog.operation_state()?.is_some();
+                let mut local_graph_generation = None;
                 let result = if normalized {
                     let GraphCommand::Neighbors { id, .. } = command else {
                         return Err(WikiError::new(
@@ -1509,14 +1606,22 @@ fn execute_selected(
                         },
                     )?
                 } else {
-                    let (_writer, reader) = reader(&app, options.no_sync)?;
-                    match command {
+                    let (reader, read_budget) = reader(&app, options.no_sync)?;
+                    let result = match command {
                         GraphCommand::Query { query, .. } => query::query(&reader, query, &plan)?,
                         GraphCommand::Neighbors { id, .. } => query::neighbors(&reader, id, &plan)?,
                         _ => unreachable!("extraction handled above"),
+                    };
+                    if !options.no_sync {
+                        catalog.recheck_read_snapshot(&reader, &read_budget)?;
                     }
+                    local_graph_generation = Some(reader.persistent_generation());
+                    result
                 };
                 result_metadata(&mut envelope.meta, &result.snapshot, &result.verification);
+                if let Some(generation) = local_graph_generation {
+                    envelope.meta.index_generation = generation;
+                }
                 envelope.meta.network_used = result.network_used;
                 envelope.meta.partial = result.truncated;
                 envelope.warnings.extend(result.warnings.iter().cloned());
@@ -1614,10 +1719,25 @@ fn execute_selected(
                 args.dry_run && context.search.no_sync && cached_documents && normalized_selected;
             if args.dry_run && !cached_dry_run {
                 envelope.data = json!({"query": context.search.query, "request": request, "dry_run": true, "cache_state_unknown": true, "context": null});
+                if matches!(
+                    request.documents.mode,
+                    retrieval::SearchMode::Semantic | retrieval::SearchMode::Hybrid
+                ) || request
+                    .graph
+                    .as_ref()
+                    .is_some_and(|graph| graph.seed_mode == crate::graph::GraphSeedMode::Semantic)
+                {
+                    super::human_status::attach_provider_summary(
+                        &mut envelope,
+                        &context.search.remote,
+                        &remote_context,
+                    );
+                }
                 envelope
                     .warnings
                     .push("context and freshness are unknown during dry-run".into());
             } else {
+                let mut local_generation = None;
                 let result = if matches!(
                     request.documents.mode,
                     retrieval::SearchMode::Semantic | retrieval::SearchMode::Hybrid
@@ -1648,30 +1768,39 @@ fn execute_selected(
                         },
                     )?
                 } else {
-                    let writer = if matches!(
-                        request.scope,
-                        retrieval::ContextScope::Snapshot
-                            | retrieval::ContextScope::IndexedEvidence
-                            | retrieval::ContextScope::IndexedDocuments
-                    ) {
-                        None
-                    } else {
-                        Some(WriterPermit::acquire(
-                            app.fs().root(),
-                            Duration::from_millis(app.options().lock_timeout_ms),
-                        )?)
+                    let options = retrieval::ContextOptions {
+                        selection: selection.clone(),
+                        experimental_source_relations: context.experimental_source_relations,
+                        ..Default::default()
                     };
-                    retrieval::verification::context_with_options(
-                        &catalog,
-                        writer.as_ref(),
-                        &context.search.query,
-                        &request,
-                        &retrieval::ContextOptions {
-                            selection: selection.clone(),
-                            experimental_source_relations: context.experimental_source_relations,
-                            ..Default::default()
-                        },
-                    )?
+                    if !normalized_selected
+                        && !matches!(
+                            request.scope,
+                            retrieval::ContextScope::IndexedEvidence
+                                | retrieval::ContextScope::IndexedDocuments
+                        )
+                    {
+                        let (reader, read_budget) =
+                            reader(&app, request.scope == retrieval::ContextScope::Snapshot)?;
+                        legacy_read_health = Some(held_legacy_read_health(&reader, &mut envelope));
+                        local_generation = Some(reader.persistent_generation());
+                        retrieval::verification::context_with_reader(
+                            &catalog,
+                            &reader,
+                            &read_budget,
+                            &context.search.query,
+                            &request,
+                            &options,
+                        )?
+                    } else {
+                        retrieval::verification::context_with_options(
+                            &catalog,
+                            None,
+                            &context.search.query,
+                            &request,
+                            &options,
+                        )?
+                    }
                 };
                 if context.experimental_source_relations {
                     envelope.meta.evidence_strategy = Some("experimental_source_relations".into());
@@ -1682,6 +1811,9 @@ fn execute_selected(
                 }
                 envelope.meta.network_used = result.network_used;
                 envelope.meta.index_generation = Some(result.snapshot().generation);
+                if let Some(generation) = local_generation {
+                    envelope.meta.index_generation = generation;
+                }
                 match result.verification() {
                     SnapshotVerification::IndexSnapshot => {
                         envelope.meta.freshness = Some("index_snapshot".into())
@@ -1746,6 +1878,7 @@ fn execute_selected(
                     "offline execution cannot probe a provider",
                 ));
             }
+            let provider = super::human_status::provider_summary(remote, &remote_context);
             let mut doctor = app.doctor()?;
             if *probe {
                 let service_role = role.service_role();
@@ -1753,13 +1886,23 @@ fn execute_selected(
                 if args.dry_run {
                     envelope.data = json!({"doctor":doctor,"probe":{"dry_run":true,"role":service_role,"network_used":false,"remote_work":"unknown"}});
                 } else {
-                    let runtime =
-                        remote.runtime(&app, &remote_context, service_role.capability())?;
-                    let result = if *extraction_schema {
-                        app.probe_extraction_schema(&runtime)?
-                    } else {
-                        app.probe_provider(&runtime, service_role)?
-                    };
+                    let result = (|| {
+                        let runtime =
+                            remote.runtime(&app, &remote_context, service_role.capability())?;
+                        if *extraction_schema {
+                            app.probe_extraction_schema(&runtime)
+                        } else {
+                            app.probe_provider(&runtime, service_role)
+                        }
+                    })()
+                    .map_err(|mut error: WikiError| {
+                        if !error.details.is_object() {
+                            error.details = json!({"cause":error.details});
+                        }
+                        error.details["provider"] = provider.clone();
+                        error.details["probe_role"] = json!(service_role);
+                        error
+                    })?;
                     doctor.provider_probe_performed = result.network_used;
                     envelope.meta.network_used = result.network_used;
                     envelope.data = json!({"doctor":doctor,"probe":result});
@@ -1767,6 +1910,7 @@ fn execute_selected(
             } else {
                 envelope.data = value(doctor)?;
             }
+            envelope.data["provider"] = provider;
             if *diagnostics {
                 if args.dry_run {
                     super::health::attach_preview(&mut envelope, false);
@@ -1998,8 +2142,46 @@ fn execute_selected(
         }
         | Command::Skill { .. } => unreachable!(),
     }
-    attach_read_health(args, &app, &mut envelope)?;
+    if let Some(health) = legacy_read_health {
+        if let Some(health) = health {
+            super::health::attach_known_read(&mut envelope, &health)?;
+        }
+    } else {
+        attach_read_health(args, &app, &mut envelope)?;
+    }
     Ok(envelope)
+}
+
+fn held_legacy_read_health(
+    reader: &ReaderSnapshot,
+    envelope: &mut Envelope,
+) -> Option<crate::catalog::health::KnownHealth> {
+    let has_issues = !reader.projection().diagnostics.is_empty();
+    if let Some(index_generation) = reader.persistent_generation() {
+        Some(crate::catalog::health::KnownHealth {
+            index_generation,
+            has_issues,
+        })
+    } else {
+        if has_issues {
+            let paths: std::collections::BTreeSet<_> = reader
+                .projection()
+                .diagnostics
+                .iter()
+                .map(|diagnostic| diagnostic.path.as_str())
+                .collect();
+            let shown = paths.iter().take(3).copied().collect::<Vec<_>>().join(", ");
+            let more = if paths.len() > 3 {
+                format!(" and {} more", paths.len() - 3)
+            } else {
+                String::new()
+            };
+            envelope.warnings.push(format!(
+                "Some notes need attention: {shown}{more}. Run check for details."
+            ));
+        }
+        None
+    }
 }
 
 fn attach_read_health(args: &Arguments, app: &OfflineApp, envelope: &mut Envelope) -> Result<()> {
@@ -2127,7 +2309,10 @@ fn page_preview_metadata(envelope: &mut Envelope, explicit_targets: bool) {
     });
     envelope.warnings.push("Page preview leaves indexed identities, affected records, read dependencies and portable path collisions unchecked. Omitted destinations remain unresolved; --path allows checking that file's author guard. Staging or applying performs admission checks.".into());
 }
-fn reader(app: &OfflineApp, no_sync: bool) -> Result<(Option<WriterPermit>, ReaderSnapshot)> {
+fn reader(
+    app: &OfflineApp,
+    no_sync: bool,
+) -> Result<(ReaderSnapshot, crate::catalog::scan::ReadScanBudget)> {
     let catalog = Catalog::with_options(
         app.fs().clone(),
         app.vault_id().clone(),
@@ -2136,29 +2321,17 @@ fn reader(app: &OfflineApp, no_sync: bool) -> Result<(Option<WriterPermit>, Read
             fault: None,
         },
     );
-    if no_sync {
-        return Ok((None, catalog.index_snapshot()?));
-    }
-    let writer = WriterPermit::acquire(
-        app.fs().root(),
-        Duration::from_millis(app.options().lock_timeout_ms),
-    )?;
-    match catalog.verified_snapshot(Some(&writer)) {
-        Ok(snapshot) => Ok((Some(writer), snapshot)),
-        Err(error) if error.code == ErrorCode::RecoveryRequired => {
-            ChangeEngine::new(app.fs().clone())?.recover(
-                &writer,
-                &CatalogGraphValidator,
-                &catalog,
-            )?;
-            let snapshot = catalog.verified_snapshot(Some(&writer))?;
-            Ok((Some(writer), snapshot))
-        }
-        Err(error) => Err(error),
-    }
+    let budget =
+        crate::catalog::scan::ReadScanBudget::new(crate::catalog::scan::ReadScanLimits::default())?;
+    let reader = if no_sync {
+        catalog.index_snapshot()?
+    } else {
+        catalog.read_only_snapshot_with_budget(&budget)?
+    };
+    Ok((reader, budget))
 }
 fn snapshot_metadata(meta: &mut Metadata, reader: &ReaderSnapshot) {
-    meta.index_generation = Some(reader.snapshot().generation);
+    meta.index_generation = reader.persistent_generation();
     match reader.verification() {
         SnapshotVerification::IndexSnapshot => meta.freshness = Some("index_snapshot".into()),
         SnapshotVerification::IndexedEvidence { verified_at, .. } => {
@@ -2608,7 +2781,10 @@ fn present_inner(
         },
     );
     if format == OutputFormat::Human
-        && !matches!(envelope.command.as_str(), "read" | "context" | "inspect")
+        && !matches!(
+            envelope.command.as_str(),
+            "read" | "context" | "inspect" | "wiki show"
+        )
         && let Some(selection) = &envelope.meta.selection
     {
         writeln!(
@@ -2725,6 +2901,12 @@ fn present_inner(
             }
             Ok(())
         }
+        OutputFormat::Human if envelope.ok && envelope.command == "wiki show" => {
+            super::human_status::present_wiki(envelope, output)
+        }
+        OutputFormat::Human if envelope.command == "doctor" => {
+            super::human_status::present_doctor(envelope, output, &command_prefix)
+        }
         OutputFormat::Human if !envelope.ok => {
             if let Some(error) = &envelope.error {
                 writeln!(output, "{}: {}", error.code, error.message)?;
@@ -2767,45 +2949,6 @@ fn present_inner(
                 }
             }
             Ok(())
-        }
-        OutputFormat::Human
-            if envelope.command == "doctor" && envelope.data["cache_state"].is_string() =>
-        {
-            let doctor = &envelope.data;
-            writeln!(
-                output,
-                "Cache: {} / {}",
-                doctor["cache_layout"].as_str().unwrap_or("unknown"),
-                doctor["cache_state"].as_str().unwrap_or("unknown")
-            )?;
-            if let Some(compatible) = doctor["parser_compatible"].as_bool() {
-                writeln!(output, "Parser compatible: {compatible}")?;
-            }
-            if let Some(note) = doctor["cache_note"].as_str() {
-                writeln!(output, "{note}")?;
-            }
-            if let Some(message) = doctor["cache_error"]["message"].as_str() {
-                writeln!(output, "Cache observation failed: {message}")?;
-                if let Some(hint) = doctor["cache_error"]["hint"].as_str() {
-                    writeln!(output, "{hint}")?;
-                }
-            }
-            writeln!(
-                output,
-                "Operation status: {}",
-                doctor["operation_state"].as_str().unwrap_or("not_checked")
-            )?;
-            if let Some(change) = doctor["active_change"].as_str() {
-                writeln!(
-                    output,
-                    "Active change: {change}\nRecover with: {command_prefix} recover"
-                )?;
-            }
-            writeln!(
-                output,
-                "Canonical, history and cache-integrity audits: not performed. Canonical freshness: unknown."
-            )?;
-            writeln!(output, "Canonical diagnostics: {command_prefix} check")
         }
         OutputFormat::Human if envelope.command == "check" => {
             if envelope.data["canonical_check_performed"] != true {

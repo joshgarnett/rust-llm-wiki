@@ -91,7 +91,7 @@ impl Location {
 }
 fn command_reference() -> Result<Vec<u8>> {
     let mut text = format!(
-        "# Implemented lwiki {} commands\n\nGenerated from the release command registry and argument parser. Run `lwiki --json capabilities` before use.\n",
+        "# Implemented lwiki {} commands\n\nGenerated command reference. Start with SKILL.md for everyday tasks; consult this reference when you need command details.\n",
         env!("CARGO_PKG_VERSION")
     );
     let mut parser = super::arguments::Arguments::command();

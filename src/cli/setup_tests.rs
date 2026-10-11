@@ -141,6 +141,336 @@ fn closed_input_without_a_destination_returns_actionable_usage() {
 }
 
 #[test]
+fn interactive_use_offers_initialization_and_preserves_notes() {
+    let (_temp, wiki, preferences, args) = fixture();
+    fs::create_dir(&wiki).unwrap();
+    fs::create_dir(wiki.join(".obsidian")).unwrap();
+    let note = b"My own note, kept exactly.\r\n";
+    let editor = b"{\"mine\":true}\n";
+    fs::write(wiki.join("my note.md"), note).unwrap();
+    fs::write(wiki.join(".obsidian/settings.json"), editor).unwrap();
+    let input = format!("use\n{}\nyes\nMy notes\nyes\nskip\nno\n", wiki.display());
+    let mut prompts = Prompts {
+        input: io::Cursor::new(input.as_bytes()),
+        output: Vec::new(),
+    };
+    let mut chosen = collect(&SetupArguments::default(), &args, true, &mut prompts).unwrap();
+    assert!(chosen.existing);
+    assert!(!chosen.select);
+    assert_eq!(chosen.path.as_deref(), Some(wiki.as_path()));
+    assert!(!wiki.join("WIKI.md").exists());
+    assert!(!preferences.exists());
+    let text = String::from_utf8(prompts.output).unwrap();
+    assert!(text.contains("This folder is not a wiki yet"));
+    assert!(text.find("keeping your notes").unwrap() < text.find("Connect an agent").unwrap());
+    chosen.non_interactive = true;
+    assert!(execute(&args, &chosen).unwrap().ok);
+    assert_eq!(fs::read(wiki.join("my note.md")).unwrap(), note);
+    assert_eq!(
+        fs::read(wiki.join(".obsidian/settings.json")).unwrap(),
+        editor
+    );
+}
+
+#[test]
+fn folder_failures_precede_agent_provider_and_key_questions() {
+    for occupied in ["WIKI.md", "pages"] {
+        let (_temp, wiki, preferences, args) = fixture();
+        fs::create_dir(&wiki).unwrap();
+        let original = b"Author-owned bytes\n";
+        fs::write(wiki.join(occupied), original).unwrap();
+        let mut prompts = Prompts {
+            input: io::Cursor::new(b"yes\ncodex\nyes\nkey\n"),
+            output: Vec::new(),
+        };
+        let error = collect(&choices(&wiki), &args, true, &mut prompts).unwrap_err();
+        assert!(matches!(
+            error.code,
+            ErrorCode::RecordInvalid | ErrorCode::ContentConflict
+        ));
+        assert_eq!(prompts.input.position(), 0);
+        assert!(prompts.output.is_empty());
+        assert_eq!(fs::read(wiki.join(occupied)).unwrap(), original);
+        assert!(!wiki.join(".wiki").exists());
+        assert!(!preferences.exists());
+    }
+
+    let (_temp, wiki, preferences, args) = fixture();
+    let unavailable = wiki.join("parent not created").join("wiki");
+    let mut chosen = choices(&unavailable);
+    chosen.title = Some("My wiki".into());
+    let mut prompts = Prompts {
+        input: io::Cursor::new(b"yes\ncodex\nyes\nkey\n"),
+        output: Vec::new(),
+    };
+    assert!(collect(&chosen, &args, true, &mut prompts).is_err());
+    assert_eq!(prompts.input.position(), 0);
+    assert!(prompts.output.is_empty());
+    assert!(!wiki.exists());
+    assert!(!preferences.exists());
+}
+
+#[test]
+fn declined_initialization_and_noninteractive_select_leave_notes_untouched() {
+    let (_temp, wiki, preferences, args) = fixture();
+    fs::create_dir(&wiki).unwrap();
+    fs::write(wiki.join("note.md"), b"Keep this note\n").unwrap();
+    let mut selected = choices(&wiki);
+    selected.select = true;
+    let mut prompts = Prompts {
+        input: io::Cursor::new(b"no\n"),
+        output: Vec::new(),
+    };
+    assert_eq!(
+        collect(&selected, &args, true, &mut prompts)
+            .unwrap_err()
+            .code,
+        ErrorCode::Cancelled
+    );
+    let mut no_prompts = Prompts {
+        input: io::Cursor::new(b"yes\n"),
+        output: Vec::new(),
+    };
+    let error = collect(&selected, &args, false, &mut no_prompts).unwrap_err();
+    assert_eq!(error.code, ErrorCode::VaultNotFound);
+    assert!(error.hint.unwrap().contains("--existing"));
+    assert_eq!(no_prompts.input.position(), 0);
+    assert!(no_prompts.output.is_empty());
+    assert!(!wiki.join("WIKI.md").exists());
+    assert!(!wiki.join(".wiki").exists());
+    assert!(!preferences.exists());
+    assert_eq!(fs::read(wiki.join("note.md")).unwrap(), b"Keep this note\n");
+}
+
+#[test]
+fn select_remediation_does_not_describe_missing_folders_as_existing_notes() {
+    let (_temp, wiki, preferences, args) = fixture();
+    let mut selected = choices(&wiki);
+    selected.select = true;
+    let mut prompts = Prompts {
+        input: io::Cursor::new(b""),
+        output: Vec::new(),
+    };
+    let error = collect(&selected, &args, false, &mut prompts).unwrap_err();
+    assert!(
+        !error
+            .hint
+            .as_deref()
+            .is_some_and(|hint| hint.contains("--existing"))
+    );
+    assert!(!wiki.exists());
+    assert!(!preferences.exists());
+}
+
+#[test]
+fn initialized_folder_is_selected_before_optional_questions() {
+    let (_temp, wiki, _preferences, mut args) = fixture();
+    assert!(execute(&args, &choices(&wiki)).unwrap().ok);
+    let identity = crate::vault::discovery::default_from_path(&wiki).unwrap();
+    let marker = fs::read(wiki.join("WIKI.md")).unwrap();
+    args.expect_wiki_id = Some(identity.wiki_id);
+    let setup = SetupArguments {
+        path: Some(wiki.clone()),
+        select: true,
+        no_default: true,
+        ..Default::default()
+    };
+    let mut prompts = Prompts {
+        input: io::Cursor::new(b"skip\nno\n"),
+        output: Vec::new(),
+    };
+    let chosen = collect(&setup, &args, true, &mut prompts).unwrap();
+    assert!(chosen.select);
+    assert!(!chosen.existing);
+    assert!(chosen.title.is_none());
+    assert_eq!(fs::read(wiki.join("WIKI.md")).unwrap(), marker);
+    let output = String::from_utf8(prompts.output).unwrap();
+    assert!(!output.contains("not a wiki yet"));
+    assert!(!output.contains("Wiki title"));
+}
+
+#[test]
+fn file_target_is_rejected_before_optional_questions() {
+    let (_temp, wiki, _preferences, args) = fixture();
+    fs::write(&wiki, b"Author file\n").unwrap();
+    let mut prompts = Prompts {
+        input: io::Cursor::new(b"yes\ncodex\nyes\n"),
+        output: Vec::new(),
+    };
+    let error = collect(&choices(&wiki), &args, true, &mut prompts).unwrap_err();
+    assert!(error.message.contains(wiki.to_str().unwrap()));
+    assert_eq!(prompts.input.position(), 0);
+    assert!(prompts.output.is_empty());
+    assert_eq!(fs::read(wiki).unwrap(), b"Author file\n");
+}
+
+#[cfg(unix)]
+#[test]
+fn symlink_folder_is_rejected_before_optional_questions() {
+    let (_temp, wiki, _preferences, args) = fixture();
+    let target = wiki.with_file_name("Author notes");
+    fs::create_dir(&target).unwrap();
+    fs::write(target.join("note.md"), b"Author note\n").unwrap();
+    std::os::unix::fs::symlink(&target, &wiki).unwrap();
+    let mut prompts = Prompts {
+        input: io::Cursor::new(b"yes\ncodex\nyes\n"),
+        output: Vec::new(),
+    };
+    assert!(collect(&choices(&wiki), &args, true, &mut prompts).is_err());
+    assert_eq!(prompts.input.position(), 0);
+    assert!(prompts.output.is_empty());
+    assert!(!target.join("WIKI.md").exists());
+    assert!(!target.join(".wiki").exists());
+    assert_eq!(fs::read(target.join("note.md")).unwrap(), b"Author note\n");
+}
+
+#[test]
+fn prompted_paths_correct_pasted_delimiters_and_keep_spaces() {
+    let (_temp, wiki, _preferences, _args) = fixture();
+    for delimiter in ['\'', '"', '`'] {
+        let input = format!(
+            "{delimiter}{}{delimiter}\n{}\n",
+            wiki.display(),
+            wiki.display()
+        );
+        let mut prompts = Prompts {
+            input: io::Cursor::new(input.as_bytes()),
+            output: Vec::new(),
+        };
+        assert_eq!(prompts.path("Wiki folder", None).unwrap(), wiki);
+        let text = String::from_utf8(prompts.output).unwrap();
+        assert!(text.contains("without surrounding quotes or backticks"));
+        assert!(text.contains("Spaces are kept as typed"));
+        assert!(!wiki.exists());
+    }
+}
+
+#[test]
+fn explicit_path_keeps_literal_quotes_and_backticks() {
+    let (_temp, wiki, _preferences, mut args) = fixture();
+    let literal = wiki.with_file_name("`My 'notes'`");
+    args.dry_run = true;
+    let report = execute(&args, &choices(&literal)).unwrap();
+    assert!(report.ok);
+    assert_eq!(report.data["plan"]["wiki"], json!(literal));
+    assert!(!literal.exists());
+}
+
+#[test]
+fn agent_next_steps_explain_session_restart() {
+    let (_temp, wiki, preferences, args) = fixture();
+    let mut setup = choices(&wiki);
+    setup.agent = Some("codex".into());
+    let steps = next_steps(&args, &setup, &wiki, Some(&preferences));
+    assert_eq!(
+        steps[0],
+        "Restart your codex session so it can find the installed llm-wiki instructions."
+    );
+    assert!(steps[1].starts_with("Ask codex:"));
+}
+
+#[test]
+fn embedding_consent_names_model_destination_and_explicit_text_scope() {
+    for (answer, granted) in [("yes", true), ("no", false)] {
+        let (_temp, wiki, preferences, args) = fixture();
+        let mut setup = model(&wiki);
+        setup.title = Some("My notes".into());
+        setup.no_default = true;
+        setup.grant_embed = false;
+        setup.embedding_url = Some(
+            "https://gateway.example.invalid:8443/private-deployment?tenant=private-query".into(),
+        );
+        let input = format!("skip\n{answer}\n");
+        let mut prompts = Prompts {
+            input: io::Cursor::new(input.as_bytes()),
+            output: Vec::new(),
+        };
+        let choices = collect(&setup, &args, true, &mut prompts).unwrap();
+        assert_eq!(choices.grant_embed, granted);
+        let output = String::from_utf8(prompts.output).unwrap();
+        assert!(output.contains("Permit explicit requests for similarity search"));
+        assert!(
+            output.contains("my-selected-embedding-model at https://gateway.example.invalid:8443")
+        );
+        assert!(output.contains("wiki text and search questions and cost money"));
+        assert!(output.contains("Setup makes no requests"));
+        assert!(!output.contains("private-deployment"));
+        assert!(!output.contains("private-query"));
+        assert!(!wiki.exists());
+        assert!(!preferences.exists());
+    }
+}
+
+#[test]
+fn embedding_preview_discloses_safe_destination_and_scope_without_remote_work() {
+    for granted in [false, true] {
+        let (_temp, wiki, preferences, mut args) = fixture();
+        args.dry_run = true;
+        args.json = true;
+        let mut setup = model(&wiki);
+        setup.grant_embed = granted;
+        setup.embedding_url =
+            Some("https://[2001:db8::1]:8443/private-deployment?tenant=private-query".into());
+        let report = execute(&args, &setup).unwrap();
+        let embedding = &report.data["plan"]["embedding"];
+        assert_eq!(
+            embedding["destination"],
+            json!({"scheme":"https","host":"[2001:db8::1]","port":8443})
+        );
+        assert_eq!(embedding["text_scope"], "wiki text and search questions");
+        assert_eq!(embedding["grant_embed"], granted);
+        assert_eq!(embedding["network_requests"], 0);
+        let mut output = Vec::new();
+        present_report(&report, &mut output).unwrap();
+        let output = String::from_utf8(output).unwrap();
+        assert!(output.contains("Embedding model: my-selected-embedding-model"));
+        assert!(output.contains("Destination: https://[2001:db8::1]:8443"));
+        assert!(
+            output.contains("Text that explicit requests may send: wiki text and search questions")
+        );
+        assert!(output.contains(if granted {
+            "permitted when explicitly requested"
+        } else {
+            "not permitted"
+        }));
+        assert!(!output.contains("private-deployment"));
+        assert!(!output.contains("private-query"));
+        assert!(!report.meta.network_used);
+        assert!(!wiki.exists());
+        assert!(!preferences.exists());
+    }
+}
+
+#[test]
+fn credential_bearing_endpoint_fails_before_the_consent_question() {
+    let (_temp, wiki, preferences, args) = fixture();
+    let mut setup = model(&wiki);
+    setup.title = Some("My notes".into());
+    setup.no_default = true;
+    setup.grant_embed = false;
+    setup.embedding_url = Some("https://private-user:private-password@gateway.example.invalid/private-path?tenant=private-query".into());
+    let mut prompts = Prompts {
+        input: io::Cursor::new(b"skip\nyes\n"),
+        output: Vec::new(),
+    };
+    let error = collect(&setup, &args, true, &mut prompts).unwrap_err();
+    assert_eq!(error.code, ErrorCode::ConfigInvalid);
+    let output = String::from_utf8(prompts.output).unwrap();
+    assert!(!output.contains("Permit explicit"));
+    for private in [
+        "private-user",
+        "private-password",
+        "private-path",
+        "private-query",
+    ] {
+        assert!(!output.contains(private));
+        assert!(!error.message.contains(private));
+    }
+    assert!(!wiki.exists());
+    assert!(!preferences.exists());
+}
+
+#[test]
 fn optional_embedding_setup_writes_references_and_grants_without_reading_the_key() {
     let (_temp, wiki, preferences, args) = fixture();
     let setup = model(&wiki);

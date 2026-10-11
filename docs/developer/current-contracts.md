@@ -21,7 +21,7 @@ See [validation and limits](validation-status.md) when choosing checks.
 
 | Area | Implemented behavior | Contract and checks |
 | --- | --- | --- |
-| Literal/lexical retrieval | Bounded original-text discovery and cited context; excerpts may omit required facts. Legacy default synchronization differs from published normalized discovery. | [Indexed context](../user/retrieval.md#search-and-inspect-cited-context), [retrieval](contracts/retrieval.md); retrieval/context suites |
+| Literal/lexical retrieval | Bounded original-text discovery and cited context; excerpts may omit required facts. Ordinary legacy local lookup verifies files through a bounded in-memory view without a writer permit; explicit cached lookup still uses SQLite coordination files. Normalized discovery uses its published catalog. | [Indexed context](../user/retrieval.md#search-and-inspect-cited-context), [retrieval](contracts/retrieval.md); retrieval/context suites |
 | Selected verification | Authenticate selected canonical records, revision ownership, heads, exact bytes/spans and final dependencies. A discovery generation does not establish global corpus currentness or completeness. | [Query limits](query-limits.md), selected identity/freshness tests |
 | Historical evidence | Explicit history retains exact revision identity and Historical/Withdrawn labels. Old citation integrity does not make old facts Current. | Source evidence/currentness and context tests |
 | Semantic/hybrid retrieval | Remote prepared compatible vectors, local caches and exact cached offline query vectors. Normalized queries still scan compatible vectors; full scale is unqualified. | [Embeddings](embeddings.md), embeddings/provider/retrieval tests |

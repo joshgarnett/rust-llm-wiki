@@ -26,5 +26,6 @@ pub mod source_relations;
 mod health;
 
 mod config_show;
+mod human_status;
 pub mod setup;
 pub mod skill_install;
