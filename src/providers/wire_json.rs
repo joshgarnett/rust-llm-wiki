@@ -133,6 +133,7 @@ pub(super) fn expected_model(p: &PreparedWire) -> Option<&'static str> {
     match basis {
         BoundBasis::UnknownCompatible => None,
         BoundBasis::OpenAiChatGpt41SnapshotV1 => Some("gpt-4.1-2025-04-14"),
+        BoundBasis::OpenAiResponsesGpt41MiniSnapshotV1 => Some("gpt-4.1-mini-2025-04-14"),
         BoundBasis::OpenAiEmbedding3SmallV1 { .. } => Some("text-embedding-3-small"),
         BoundBasis::OpenAiEmbedding3LargeV1 { .. } => Some("text-embedding-3-large"),
     }
@@ -389,6 +390,14 @@ fn supports_usage(analysis: &UsageAssessment, surface: UsageSurface, documented:
 }
 pub(super) fn totals_within_contract(p: &PreparedWire, v: &Value) -> bool {
     let generation = matches!(p.contract, WireContract::Generation(_));
+    // An observed forbidden class cannot be hidden by another malformed usage
+    // field. Missing or malformed counts still remain unknown, never zero.
+    if matches!(&p.contract, WireContract::Generation(c)
+        if matches!(c.basis, BoundBasis::OpenAiResponsesGpt41MiniSnapshotV1))
+        && count(&v["usage"]["output_tokens_details"], "reasoning_tokens").is_some_and(|n| n > 0)
+    {
+        return false;
+    }
     if !usage_valid_for(p, v, generation) {
         return true;
     }
@@ -397,7 +406,13 @@ pub(super) fn totals_within_contract(p: &PreparedWire, v: &Value) -> bool {
     };
     let (input_key, output_key, _, _) = usage_keys(usage_surface(p, generation));
     match &p.contract {
-        WireContract::Generation(c) if matches!(c.basis, BoundBasis::OpenAiChatGpt41SnapshotV1) => {
+        WireContract::Generation(c)
+            if matches!(
+                c.basis,
+                BoundBasis::OpenAiChatGpt41SnapshotV1
+                    | BoundBasis::OpenAiResponsesGpt41MiniSnapshotV1
+            ) =>
+        {
             let combined = 1_047_576u64.checked_add(c.total_generated_token_limit);
             !count(u, input_key).is_some_and(|n| n > 1_047_576)
                 && !count(u, output_key).is_some_and(|n| n > c.total_generated_token_limit)

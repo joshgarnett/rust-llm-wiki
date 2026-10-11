@@ -33,6 +33,7 @@ struct Snapshot {
 enum Basis {
     UnknownCompatible,
     OpenAiChatGpt41SnapshotV1,
+    OpenAiResponsesGpt41MiniSnapshotV1,
     OpenAiEmbedding3SmallV1 { representation_revision: String },
     OpenAiEmbedding3LargeV1 { representation_revision: String },
 }
@@ -111,6 +112,9 @@ impl Basis {
         match basis {
             BoundBasis::UnknownCompatible => Self::UnknownCompatible,
             BoundBasis::OpenAiChatGpt41SnapshotV1 => Self::OpenAiChatGpt41SnapshotV1,
+            BoundBasis::OpenAiResponsesGpt41MiniSnapshotV1 => {
+                Self::OpenAiResponsesGpt41MiniSnapshotV1
+            }
             BoundBasis::OpenAiEmbedding3SmallV1 {
                 representation_revision,
             } => Self::OpenAiEmbedding3SmallV1 {
@@ -131,6 +135,11 @@ impl Basis {
                 if role == ServiceRole::Generate && model == Some("gpt-4.1-2025-04-14") =>
             {
                 BoundBasis::OpenAiChatGpt41SnapshotV1
+            }
+            Self::OpenAiResponsesGpt41MiniSnapshotV1
+                if role == ServiceRole::Generate && model == Some("gpt-4.1-mini-2025-04-14") =>
+            {
+                BoundBasis::OpenAiResponsesGpt41MiniSnapshotV1
             }
             Self::OpenAiEmbedding3SmallV1 {
                 representation_revision,
@@ -290,7 +299,13 @@ impl Contract {
             ) if role == ServiceRole::Generate => {
                 let basis = basis.restore(bound, role)?;
                 if (surface == GenerationSurface::Responses
-                    && !matches!(basis, BoundBasis::UnknownCompatible))
+                    && !matches!(
+                        basis,
+                        BoundBasis::UnknownCompatible
+                            | BoundBasis::OpenAiResponsesGpt41MiniSnapshotV1
+                    ))
+                    || (matches!(basis, BoundBasis::OpenAiResponsesGpt41MiniSnapshotV1)
+                        && (surface != GenerationSurface::Responses || *max_output_tokens > 32768))
                     || &schema != output_schema
                     || total_generated_token_limit != *max_output_tokens
                     || *max_output_tokens == 0

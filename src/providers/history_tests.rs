@@ -347,3 +347,157 @@ fn legacy_chat_codec_omits_new_fields_and_remains_canonical() {
     assert!(value["contract"].get("provider_schema").is_none());
     assert!(history::restore(&c.fs, &task, &p.bound, DispatchPurpose::Task).is_ok());
 }
+
+#[test]
+fn historical_responses_mini_preserves_original_basis_quote_and_usage_after_config_change() {
+    use crate::jobs::{
+        BillableClass, Currency, KnownOrUnknown, Money, PriceValidity, Rate, RateCard,
+    };
+    let input = generation_input();
+    let c = case_with_adapter(
+        ServiceRole::Generate,
+        input.clone(),
+        "gpt-4.1-mini-2025-04-14",
+        "https://api.openai.com/v1/responses",
+        "response_mode=\"json-schema\"\n",
+        |_| {},
+        "responses-v1",
+    );
+    let task = run_task(&c, &input);
+    let mut prepared =
+        generation_wire::prepare(&c.trusted, &task, &input, DispatchPurpose::Task).unwrap();
+    let mut card = RateCard {
+        id: "historical-mini-fixture".into(),
+        version: 1,
+        fingerprint: hash([]),
+        currency: Currency::new("USD").unwrap(),
+        validity: PriceValidity::DispatchLocked {
+            valid_from_utc_ms: 0,
+            valid_until_utc_ms: i64::MAX,
+        },
+        request_fee_nanounits: 0,
+        rates: std::collections::BTreeMap::from(
+            [
+                (BillableClass::Input, 400_000_000),
+                (BillableClass::CachedInput, 100_000_000),
+                (BillableClass::Output, 1_600_000_000),
+                (BillableClass::Reasoning, 0),
+            ]
+            .map(|(class, price_nanounits)| {
+                (
+                    class,
+                    Rate {
+                        price_nanounits,
+                        per_units: std::num::NonZeroU64::new(1_000_000).unwrap(),
+                    },
+                )
+            }),
+        ),
+    };
+    card.fingerprint = budgets::rate_card_fingerprint(&card).unwrap();
+    prepared.bound.rate_card = Some(card);
+    prepared.bound.quoted_allowance = Some(Money::new(Currency::new("USD").unwrap(), 523_813_600));
+    prepared.bound.profile_fingerprint = Some(c.trusted.summary().profile_fingerprint);
+    prepared.bound.bounds_fingerprint = budgets::bound_fingerprint(&prepared.bound).unwrap();
+    history::retain(&c.fs, &task, &mut prepared).unwrap();
+    let original_bound = prepared.bound.clone();
+    let codec = prepared.bound.codec.as_ref().unwrap();
+    let retained: Value =
+        serde_json::from_slice(&std::fs::read(c.fs.root().resolve(&codec.path).unwrap()).unwrap())
+            .unwrap();
+    assert_eq!(retained["contract"]["surface"], "responses");
+    assert_eq!(
+        retained["contract"]["basis"]["basis"],
+        "open_ai_responses_gpt41_mini_snapshot_v1"
+    );
+    private(
+        &c.config,
+        b"current model, endpoint, credentials and rates changed",
+    );
+    assert!(c.trusted.recheck(&c.fs).is_err());
+    let restored = history::restore(&c.fs, &task, &prepared.bound, DispatchPurpose::Task).unwrap();
+    assert_eq!(restored.bound, original_bound);
+    assert!(restored.body.is_empty());
+    assert!(restored.headers.is_empty());
+    let WireContract::Generation(contract) = &restored.contract else {
+        panic!("generation expected")
+    };
+    assert!(matches!(
+        contract.basis,
+        BoundBasis::OpenAiResponsesGpt41MiniSnapshotV1
+    ));
+    let good = json!({"object":"response","status":"completed","model":"gpt-4.1-mini-2025-04-14","incomplete_details":null,"error":null,"output":[{"type":"message","role":"assistant","status":"completed","content":[{"type":"output_text","text":"{\"ok\":true}"}]}],"usage":{"input_tokens":10,"input_tokens_details":{"cached_tokens":3},"output_tokens":8,"output_tokens_details":{"reasoning_tokens":0},"total_tokens":18}});
+    for wire in [&prepared, &restored] {
+        let ValidatedOutput::Generation { value, .. } =
+            generation_wire::decode(wire, &reply(good.clone())).unwrap()
+        else {
+            panic!("generation output expected")
+        };
+        assert_eq!(value, json!({"ok":true}));
+        let usage = generation_wire::observe(wire, &reply(good.clone()));
+        assert!(usage.contract_violation.is_none());
+        assert_eq!(
+            usage.computed_cost,
+            KnownOrUnknown::Known(Money::new(Currency::new("USD").unwrap(), 15_900))
+        );
+    }
+    let original_usage = generation_wire::observe(&prepared, &reply(good.clone()));
+    let restored_usage = generation_wire::observe(&restored, &reply(good.clone()));
+    let (KnownOrUnknown::Known(original_usage), KnownOrUnknown::Known(restored_usage)) =
+        (original_usage.usage, restored_usage.usage)
+    else {
+        panic!("known original and historical usage expected")
+    };
+    assert_eq!(original_usage.billable_units, restored_usage.billable_units);
+    assert_eq!(original_usage.response_bytes, restored_usage.response_bytes);
+    // Historical decoding deliberately has no outgoing body or send authority.
+    // The original request bound was retained unchanged above.
+    assert_eq!(original_usage.request_bytes, prepared.body.len() as u64);
+    assert_eq!(restored_usage.request_bytes, 0);
+    let mut missing_usage = good.clone();
+    missing_usage["usage"]
+        .as_object_mut()
+        .unwrap()
+        .remove("output_tokens_details");
+    assert_eq!(
+        generation_wire::observe(&restored, &reply(missing_usage)).computed_cost,
+        KnownOrUnknown::Unknown
+    );
+    let mut wrong_model = good;
+    wrong_model["model"] = "gpt-4.1-mini".into();
+    assert!(generation_wire::decode(&restored, &reply(wrong_model.clone())).is_err());
+    assert!(
+        generation_wire::observe(&restored, &reply(wrong_model))
+            .contract_violation
+            .is_some()
+    );
+    let mut reasoning = json!({"object":"response","status":"completed","model":"gpt-4.1-mini-2025-04-14","output":[{"type":"message","role":"assistant","status":"completed","content":[{"type":"output_text","text":"{\"ok\":true}"}]}],"usage":{"input_tokens":10,"input_tokens_details":{"cached_tokens":3},"output_tokens":8,"output_tokens_details":{"reasoning_tokens":0},"total_tokens":18}});
+    reasoning["usage"]["output_tokens_details"]["reasoning_tokens"] = 1.into();
+    assert!(generation_wire::decode(&restored, &reply(reasoning.clone())).is_err());
+    assert!(
+        generation_wire::observe(&restored, &reply(reasoning.clone()))
+            .contract_violation
+            .is_some()
+    );
+    reasoning["usage"]["input_tokens"] = "malformed".into();
+    let observed = generation_wire::observe(&restored, &reply(reasoning.clone()));
+    assert!(observed.contract_violation.is_some());
+    assert_eq!(observed.computed_cost, KnownOrUnknown::Unknown);
+    assert!(generation_wire::decode(&restored, &reply(reasoning)).is_err());
+    // Authenticated codec tampering must fail. The altered limit also disagrees
+    // with the original descriptor; the wire tests isolate the 32768 ceiling.
+    for (field, value) in [
+        ("surface", json!("chat_completions")),
+        ("total_generated_token_limit", json!(32769)),
+    ] {
+        let mut bad = retained.clone();
+        bad["contract"][field] = value;
+        let bound = rewritten(&c, &prepared.bound, &canonical_json(&bad).unwrap());
+        assert!(
+            history::restore(&c.fs, &task, &bound, DispatchPurpose::Task).is_err(),
+            "{field}"
+        );
+    }
+    assert_eq!(c.inputs.0.load(Ordering::SeqCst), 0);
+    assert_eq!(c.runner.calls.load(Ordering::SeqCst), 0);
+}

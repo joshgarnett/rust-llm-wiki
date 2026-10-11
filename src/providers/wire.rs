@@ -214,11 +214,15 @@ pub(super) fn seal(
                 }
                 _ => {}
             }
-            let known = matches!(c.basis, BoundBasis::OpenAiChatGpt41SnapshotV1);
+            let chat = matches!(c.basis, BoundBasis::OpenAiChatGpt41SnapshotV1);
+            let mini = matches!(c.basis, BoundBasis::OpenAiResponsesGpt41MiniSnapshotV1);
+            let known = chat || mini;
             if known
                 && (c.total_generated_token_limit == 0
                     || c.total_generated_token_limit > 32768
-                    || !matches!(c.output_limit_field, OutputLimitField::MaxCompletionTokens))
+                    || (chat
+                        && !matches!(c.output_limit_field, OutputLimitField::MaxCompletionTokens))
+                    || (mini && c.surface != GenerationSurface::Responses))
             {
                 return Err(WikiError::invalid("documented completion bound differs"));
             }
@@ -233,7 +237,11 @@ pub(super) fn seal(
                     ),
                     (
                         BillableClass::Reasoning,
-                        known.then_some(c.total_generated_token_limit),
+                        known.then_some(if mini {
+                            0
+                        } else {
+                            c.total_generated_token_limit
+                        }),
                     ),
                 ]),
             )
@@ -251,6 +259,12 @@ pub(super) fn seal(
             Some("openai.gpt41.contract.v1"),
             "gpt-4.1-2025-04-14",
             "https://api.openai.com/v1/chat/completions",
+            1_047_576,
+        ),
+        BoundBasis::OpenAiResponsesGpt41MiniSnapshotV1 => (
+            Some("openai.responses.gpt41mini.contract.v1"),
+            "gpt-4.1-mini-2025-04-14",
+            "https://api.openai.com/v1/responses",
             1_047_576,
         ),
         BoundBasis::OpenAiEmbedding3SmallV1 {

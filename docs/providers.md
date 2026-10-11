@@ -104,6 +104,25 @@ An HTTP success can still contain incomplete, refused or invalid output. Errors 
 
 Gateway usage extensions and nullable details are accepted without inventing zero charges. Unknown token partitions, unknown extensions, or additional cache-write classes can leave cost unknown. Request and byte budgets remain useful; hard token/cost budgets require a proven adapter/model bound and may be unavailable for gateway deployments. A mock test passing does not establish live gateway compatibility or semantic ranking quality.
 
+The exact `gpt-4.1-mini-2025-04-14` snapshot at
+`https://api.openai.com/v1/responses`, without a custom CA, has a conservative
+generation bound: 1,047,576 input tokens and independently the same cached-input
+allowance, the requested output limit up to 32,768, and zero reasoning tokens.
+These are reservation ceilings, not predictions of input usage. A matching valid
+rate card enables a hard cost limit; aliases and compatible gateways retain
+unknown bounds. Missing usage details keep the corresponding charge unknown.
+A lifetime cost limit can stop an unfinished batch, and resuming its Run retains
+consumed cost and unresolved reservations. The model's documented limits are
+listed in the [OpenAI model reference](https://developers.openai.com/api/docs/models/gpt-4.1-mini).
+
+The local release-profile checkpoint passed 29 affected checks across wire
+validation, historical decoding and selected durable accounting boundaries.
+One compiler failure and one incorrect replay-fixture assertion were corrected;
+the final replay reused unchanged passing checks. Historical decoding preserves
+the original bound and billing partition after configuration changes, without
+recreating a request body or send authority. This is local accounting evidence;
+complete-corpus wire quoting and live-provider qualification remain separate.
+
 ## Embedding passage size
 
 `embeddings check --offline --json` reports the effective active-space `data.settings` and coverage; without a retained active cache, settings are null. A dry-run reports requested settings and unknown cache state instead. The hard default is 12,000 UTF-8 bytes per rendered input, including title/heading context. Long source text is split with complete original byte coverage; short notes stay whole.

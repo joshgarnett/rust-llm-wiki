@@ -204,6 +204,7 @@ pub(crate) struct ObservedUsage {
 pub(super) enum BoundBasis {
     UnknownCompatible,
     OpenAiChatGpt41SnapshotV1,
+    OpenAiResponsesGpt41MiniSnapshotV1,
     OpenAiEmbedding3SmallV1 { representation_revision: String },
     OpenAiEmbedding3LargeV1 { representation_revision: String },
 }

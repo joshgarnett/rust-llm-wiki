@@ -358,6 +358,17 @@ pub(super) fn prepare(
             return Err(WikiError::invalid("documented completion ceiling exceeded"));
         }
         BoundBasis::OpenAiChatGpt41SnapshotV1
+    } else if surface == GenerationSurface::Responses
+        && s.ca_bytes.is_none()
+        && s.url == "https://api.openai.com/v1/responses"
+        && model == "gpt-4.1-mini-2025-04-14"
+    {
+        // Pinned nonreasoning snapshot; aliases and compatible gateways confer
+        // no documented bound. Responses seals max_output_tokens below.
+        if *max_output_tokens > 32768 {
+            return Err(WikiError::invalid("documented completion ceiling exceeded"));
+        }
+        BoundBasis::OpenAiResponsesGpt41MiniSnapshotV1
     } else {
         BoundBasis::UnknownCompatible
     };

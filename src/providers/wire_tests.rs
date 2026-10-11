@@ -805,3 +805,330 @@ fn embedding_output_details_without_total_never_settle_input_only_cost() {
         assert!(embed::decode(&p, &reply(&response)).is_err());
     }
 }
+
+fn mini_input(limit: u64) -> RemoteInput {
+    let mut input = generation_input();
+    if let RemoteOperation::Generate {
+        max_output_tokens, ..
+    } = &mut input.operation
+    {
+        *max_output_tokens = limit;
+    }
+    input
+}
+fn mini_case(input: RemoteInput, model: &str, url: &str, extra: &str) -> Case {
+    case_with_adapter(
+        ServiceRole::Generate,
+        input,
+        model,
+        url,
+        extra,
+        |_| {},
+        "responses-v1",
+    )
+}
+fn mini_response() -> Value {
+    json!({"object":"response","status":"completed","model":"gpt-4.1-mini-2025-04-14","incomplete_details":null,"error":null,"output":[{"type":"message","role":"assistant","status":"completed","content":[{"type":"output_text","text":"{\"ok\":true}"}]}],"usage":{"input_tokens":10,"input_tokens_details":{"cached_tokens":3},"output_tokens":8,"output_tokens_details":{"reasoning_tokens":0},"total_tokens":18}})
+}
+fn mini_card() -> RateCard {
+    let mut card = RateCard {
+        id: "mini-fixture".into(),
+        version: 1,
+        fingerprint: hash([]),
+        currency: Currency::new("USD").unwrap(),
+        validity: PriceValidity::DispatchLocked {
+            valid_from_utc_ms: 0,
+            valid_until_utc_ms: i64::MAX,
+        },
+        request_fee_nanounits: 0,
+        rates: std::collections::BTreeMap::from(
+            [
+                (BillableClass::Input, 400_000_000),
+                (BillableClass::CachedInput, 100_000_000),
+                (BillableClass::Output, 1_600_000_000),
+                (BillableClass::Reasoning, 0),
+            ]
+            .map(|(class, price_nanounits)| {
+                (
+                    class,
+                    Rate {
+                        price_nanounits,
+                        per_units: std::num::NonZeroU64::new(1_000_000).unwrap(),
+                    },
+                )
+            }),
+        ),
+    };
+    card.fingerprint = budgets::rate_card_fingerprint(&card).unwrap();
+    card
+}
+
+fn mini_priced_extra() -> String {
+    let card = mini_card();
+    let mut extra = format!(
+        "[services.service.rate_card]\nid=\"mini-fixture\"\nversion=1\nfingerprint={}\ncurrency=\"USD\"\nrequest_fee_nanounits=0\n[services.service.rate_card.validity]\npricing=\"dispatch_locked\"\nvalid_from_utc_ms=0\nvalid_until_utc_ms={}\n",
+        quote(card.fingerprint.as_str()),
+        i64::MAX
+    );
+    for (class, rate) in &card.rates {
+        let name = match class {
+            BillableClass::Input => "input",
+            BillableClass::CachedInput => "cached_input",
+            BillableClass::Output => "output",
+            BillableClass::Reasoning => "reasoning",
+        };
+        extra.push_str(&format!(
+            "[services.service.rate_card.rates.{name}]\nprice_nanounits={}\nper_units={}\n",
+            rate.price_nanounits, rate.per_units
+        ));
+    }
+    extra
+}
+
+#[test]
+fn responses_mini_snapshot_exact_identity_bounds_and_fingerprints() {
+    let input = mini_input(4096);
+    let c = mini_case(
+        input.clone(),
+        "gpt-4.1-mini-2025-04-14",
+        "https://api.openai.com/v1/responses",
+        "response_mode=\"json-schema\"\n",
+    );
+    let p = genwire::prepare(&c.trusted, &c.spec.tasks[0], &input, DispatchPurpose::Task).unwrap();
+    let WireContract::Generation(contract) = &p.contract else {
+        panic!("generation expected")
+    };
+    assert!(matches!(
+        contract.basis,
+        BoundBasis::OpenAiResponsesGpt41MiniSnapshotV1
+    ));
+    for (class, expected) in [
+        (BillableClass::Input, 1_047_576),
+        (BillableClass::CachedInput, 1_047_576),
+        (BillableClass::Output, 4096),
+        (BillableClass::Reasoning, 0),
+    ] {
+        let TokenBound::ProvenUpper {
+            count,
+            method,
+            fingerprint,
+        } = &p.bound.billable_bounds[&class]
+        else {
+            panic!("proven bound expected for {class:?}")
+        };
+        assert_eq!(*count, expected);
+        assert_eq!(method, "openai.responses.gpt41mini.contract.v1");
+        assert_ne!(fingerprint, &hash([]));
+    }
+    assert_eq!(p.bound.request_bytes, p.body.len() as u64);
+    assert_eq!(p.bound.response_bytes, GENERATION_SPOOL_MAX_BYTES);
+    assert_eq!(p.bound.timeout_ms, 120_000);
+    assert_eq!(
+        p.bound.bounds_fingerprint,
+        budgets::bound_fingerprint(&p.bound).unwrap()
+    );
+    let c2 = mini_case(
+        mini_input(2048),
+        "gpt-4.1-mini-2025-04-14",
+        "https://api.openai.com/v1/responses",
+        "response_mode=\"json-schema\"\n",
+    );
+    let p2 = genwire::prepare(
+        &c2.trusted,
+        &c2.spec.tasks[0],
+        &mini_input(2048),
+        DispatchPurpose::Task,
+    )
+    .unwrap();
+    assert_ne!(p.bound.wire_hash, p2.bound.wire_hash);
+    assert_ne!(p.bound.bounds_fingerprint, p2.bound.bounds_fingerprint);
+    let mut forged = c.spec.tasks[0].clone();
+    forged.settings_hash = hash("forged-mini-settings");
+    assert!(genwire::prepare(&c.trusted, &forged, &input, DispatchPurpose::Task).is_err());
+    for limit in [32768, 32769] {
+        let input = mini_input(limit);
+        let c = mini_case(
+            input.clone(),
+            "gpt-4.1-mini-2025-04-14",
+            "https://api.openai.com/v1/responses",
+            "max_output_tokens=32769\n",
+        );
+        let result = genwire::prepare(&c.trusted, &c.spec.tasks[0], &input, DispatchPurpose::Task);
+        assert_eq!(result.is_ok(), limit == 32768);
+    }
+}
+
+#[test]
+fn responses_mini_snapshot_alias_endpoint_and_custom_ca_remain_unknown() {
+    let ca = test_paths::fixture(env!("CARGO_MANIFEST_DIR"), "tests/fixtures/p16b/ca.pem");
+    let ca_extra = format!("ca_file={}\n", quote(ca.to_str().unwrap()));
+    for (model, url, extra) in [
+        ("gpt-4.1-mini", "https://api.openai.com/v1/responses", ""),
+        (
+            "gpt-4.1-mini-2025-04-14",
+            "https://gateway.example/v1/responses",
+            "",
+        ),
+        (
+            "gpt-4.1-mini-2025-04-14",
+            "https://api.openai.com/v1/chat/completions",
+            "",
+        ),
+        (
+            "gpt-4.1-mini-2025-04-14",
+            "https://api.openai.com/v1/responses",
+            ca_extra.as_str(),
+        ),
+    ] {
+        let input = mini_input(16);
+        let c = mini_case(input.clone(), model, url, extra);
+        let p =
+            genwire::prepare(&c.trusted, &c.spec.tasks[0], &input, DispatchPurpose::Task).unwrap();
+        assert!(
+            p.bound
+                .billable_bounds
+                .values()
+                .all(|bound| matches!(bound, TokenBound::Unknown))
+        );
+        let limits = LifetimeLimits {
+            max_cost: Some(Money::new(Currency::new("USD").unwrap(), 10_000_000_000)),
+            ..LifetimeLimits::default()
+        };
+        assert!(budgets::quote_bound(&p.bound, &limits, 1, 1_000_000).is_err());
+    }
+}
+
+#[test]
+fn responses_mini_snapshot_settlement_partition_missing_details_and_violations() {
+    let input = mini_input(4096);
+    let c = mini_case(
+        input.clone(),
+        "gpt-4.1-mini-2025-04-14",
+        "https://api.openai.com/v1/responses",
+        "",
+    );
+    let mut p =
+        genwire::prepare(&c.trusted, &c.spec.tasks[0], &input, DispatchPurpose::Task).unwrap();
+    p.bound.rate_card = Some(mini_card());
+    let v = mini_response();
+    assert!(genwire::decode(&p, &reply(&v)).is_ok());
+    let observed = genwire::observe(&p, &reply(&v));
+    assert!(observed.contract_violation.is_none());
+    let KnownOrUnknown::Known(usage) = observed.usage else {
+        panic!("usage expected")
+    };
+    for (class, count) in [
+        (BillableClass::Input, 7),
+        (BillableClass::CachedInput, 3),
+        (BillableClass::Output, 8),
+        (BillableClass::Reasoning, 0),
+    ] {
+        assert_eq!(usage.billable_units[&class], KnownOrUnknown::Known(count));
+    }
+    assert_eq!(
+        observed.computed_cost,
+        KnownOrUnknown::Known(Money::new(Currency::new("USD").unwrap(), 15_900))
+    );
+    let mut zero_cached = v.clone();
+    zero_cached["usage"]["input_tokens_details"]["cached_tokens"] = 0.into();
+    assert_eq!(
+        genwire::observe(&p, &reply(&zero_cached)).computed_cost,
+        KnownOrUnknown::Known(Money::new(Currency::new("USD").unwrap(), 16_800))
+    );
+    for (details, field) in [
+        ("input_tokens_details", "cached_tokens"),
+        ("output_tokens_details", "reasoning_tokens"),
+    ] {
+        for malformed in [None, Some(json!("invalid"))] {
+            let mut missing = v.clone();
+            if let Some(value) = malformed {
+                missing["usage"][details][field] = value;
+            } else {
+                missing["usage"].as_object_mut().unwrap().remove(details);
+            }
+            assert_eq!(
+                genwire::observe(&p, &reply(&missing)).computed_cost,
+                KnownOrUnknown::Unknown
+            );
+        }
+    }
+    for (field, value) in [
+        ("input_tokens", json!(1_047_577)),
+        ("output_tokens", json!(4097)),
+    ] {
+        let mut excess = v.clone();
+        excess["usage"][field] = value;
+        excess["usage"]["total_tokens"] = (excess["usage"]["input_tokens"].as_u64().unwrap()
+            + excess["usage"]["output_tokens"].as_u64().unwrap())
+        .into();
+        let observed = genwire::observe(&p, &reply(&excess));
+        assert!(observed.contract_violation.is_some(), "{field}");
+        assert_eq!(observed.computed_cost, KnownOrUnknown::Unknown);
+        assert!(genwire::decode(&p, &reply(&excess)).is_err());
+    }
+    let mut reasoning = v.clone();
+    reasoning["usage"]["output_tokens_details"]["reasoning_tokens"] = 1.into();
+    assert!(
+        genwire::observe(&p, &reply(&reasoning))
+            .contract_violation
+            .is_some()
+    );
+    assert_eq!(
+        genwire::observe(&p, &reply(&reasoning)).computed_cost,
+        KnownOrUnknown::Unknown
+    );
+    assert!(genwire::decode(&p, &reply(&reasoning)).is_err());
+    reasoning["usage"]["input_tokens"] = "malformed".into();
+    assert!(
+        genwire::observe(&p, &reply(&reasoning))
+            .contract_violation
+            .is_some()
+    );
+    assert_eq!(
+        genwire::observe(&p, &reply(&reasoning)).computed_cost,
+        KnownOrUnknown::Unknown
+    );
+    assert!(genwire::decode(&p, &reply(&reasoning)).is_err());
+    let mut wrong_model = v;
+    wrong_model["model"] = "gpt-4.1-mini".into();
+    assert!(
+        genwire::observe(&p, &reply(&wrong_model))
+            .contract_violation
+            .is_some()
+    );
+    assert!(genwire::decode(&p, &reply(&wrong_model)).is_err());
+}
+
+#[test]
+fn responses_mini_snapshot_finite_quote_preserves_global_outstanding_holds() {
+    let input = mini_input(4096);
+    let c = mini_case(
+        input.clone(),
+        "gpt-4.1-mini-2025-04-14",
+        "https://api.openai.com/v1/responses",
+        &mini_priced_extra(),
+    );
+    let p = genwire::prepare(&c.trusted, &c.spec.tasks[0], &input, DispatchPurpose::Task).unwrap();
+    assert_eq!(
+        p.bound.quoted_allowance,
+        Some(Money::new(Currency::new("USD").unwrap(), 530_341_600))
+    );
+    let limits = LifetimeLimits {
+        requests: 994,
+        concurrency: 1,
+        attempts_per_task: 1,
+        max_cost: Some(Money::new(Currency::new("USD").unwrap(), 10_000_000_000)),
+        ..LifetimeLimits::default()
+    };
+    let allowance = budgets::quote_bound(&p.bound, &limits, 1, 1_000_000).unwrap();
+    assert_eq!(allowance.cost, p.bound.quoted_allowance);
+    let mut holds = budgets::zero();
+    for _ in 0..18 {
+        budgets::fits(&budgets::zero(), &holds, &allowance, &limits).unwrap();
+        budgets::add(&mut holds, &allowance).unwrap();
+    }
+    // Nineteenth reservation is blocked while unknown settlements retain all
+    // eighteen outstanding reservations. No budget reset occurs.
+    assert!(budgets::fits(&budgets::zero(), &holds, &allowance, &limits).is_err());
+    assert_eq!(holds.cost.unwrap().nanounits(), 9_546_148_800);
+}
