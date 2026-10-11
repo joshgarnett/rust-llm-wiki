@@ -5,6 +5,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import plistlib
 import pwd
 import re
 import shlex
@@ -108,7 +109,7 @@ def download_history_observation(history):
                 ('downloads', 'downloads', ['id', 'guid', 'current_path', 'target_path', 'start_time', 'end_time',
                                           'received_bytes', 'total_bytes', 'state', 'danger_type', 'interrupt_reason',
                                           'opened', 'transient', 'mime_type', 'original_mime_type'], ['id'],
-                 {'id', 'current_path', 'target_path', 'state'}),
+                 {'id', 'current_path', 'target_path', 'received_bytes', 'total_bytes', 'state', 'danger_type', 'interrupt_reason'}),
                 ('downloads_url_chains', 'urlChains', ['id', 'chain_index', 'url'], ['id', 'chain_index'],
                  {'id', 'chain_index', 'url'}),
             ]
@@ -145,6 +146,58 @@ def download_history_observation(history):
     return observation
 
 
+def validate_download_history(history, browser, installer, clicked_url, final_url):
+    if (history.get('status') != 'observed'
+            or any(history.get('truncated', {}).get(key) is not False for key in ['downloads', 'urlChains', 'fieldValues'])):
+        raise RuntimeError('browser download History observation is unavailable or incomplete')
+    if (browser.get('status') != 'passed' or browser.get('forcedCleanup') is not False
+            or browser.get('shutdown', {}).get('normalExit') is not True
+            or type(browser.get('childExit', {}).get('code')) is not int
+            or browser['childExit']['code'] != 0
+            or 'signal' not in browser.get('childExit', {})
+            or browser.get('childExit', {}).get('signal') is not None):
+        raise RuntimeError('browser did not establish completion followed by normal child/process-group exit')
+    completion = browser.get('downloadCompletion', {})
+    ui_id = completion.get('identity', {}).get('id')
+    if completion.get('status') != 'complete' or not isinstance(ui_id, str) or not re.fullmatch('[0-9]+', ui_id):
+        raise RuntimeError('browser completed UI download ID is unavailable')
+    downloads = history.get('downloads', [])
+    if len(downloads) != 1:
+        raise RuntimeError('browser History must contain exactly the one completed UI download')
+    row = downloads[0]
+    expected = {'id': int(ui_id), 'received_bytes': 37470, 'total_bytes': 37470,
+                'state': 1, 'danger_type': 0, 'interrupt_reason': 0}
+    if any(type(row.get(key)) is not int or row[key] != value for key, value in expected.items()):
+        raise RuntimeError('browser History ID, bytes or clean completion state differs from the completed UI item')
+    if row.get('current_path') != str(installer) or row.get('target_path') != str(installer):
+        raise RuntimeError('browser History paths differ from the owned completed installer')
+    chain = history.get('urlChains', [])
+    if (len(chain) < 2 or any(type(member.get('id')) is not int or member['id'] != row['id']
+                              or type(member.get('chain_index')) is not int or not isinstance(member.get('url'), str)
+                              for member in chain)):
+        raise RuntimeError('browser History URL chain does not belong to the completed download ID')
+    if [member['chain_index'] for member in chain] != list(range(len(chain))):
+        raise RuntimeError('browser History URL chain is not a complete ordered chain')
+    if chain[0]['url'] != clicked_url or chain[-1]['url'] != final_url:
+        raise RuntimeError('browser History URL chain does not bind the exact clicked Raw URL to the exact final URL')
+    return {'uiID': ui_id, 'historyID': row['id'], 'download': row, 'orderedURLChain': chain}
+
+
+def validate_where_froms(attributes, final_url, page_url):
+    encoded = attributes.get('com.apple.metadata:kMDItemWhereFroms')
+    if not isinstance(encoded, str) or len(encoded) > 128 * 1024:
+        raise RuntimeError('browser WhereFroms metadata is unavailable or exceeds its bound')
+    try:
+        origins = plistlib.loads(bytes.fromhex(encoded))
+    except (ValueError, plistlib.InvalidFileException) as error:
+        raise RuntimeError('browser WhereFroms metadata is not a valid property list') from error
+    if (not isinstance(origins, list) or len(origins) > 64
+            or any(not isinstance(value, str) or len(value) > 2048 for value in origins)
+            or final_url not in origins or page_url not in origins):
+        raise RuntimeError('browser WhereFroms metadata does not bind the exact final installer URL and source page')
+    return origins
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     for key in ['assets', 'archive-sha256', 'manifest-sha256', 'binary-sha256', 'installer-commit', 'installer-sha256', 'source-provenance', 'evidence']:
@@ -174,6 +227,7 @@ def main():
     save(root / 'result.json', result)
     commands = []
     browser_evidence_collected = False
+    browser_cleanup_done = False
 
     def command(name, argv, timeout=30, allow_failure=False, command_env=None):
         start = time.monotonic()
@@ -232,6 +286,35 @@ def main():
         result['browserDownloadURLChains'] = history['urlChains']
         save(root / 'result.json', result)
 
+    def cleanup_browser_group():
+        nonlocal browser_cleanup_done
+        browser_cleanup_done = True
+        pidfile = root / 'browser-pid.json'
+        if not pidfile.exists():
+            return
+        pid = json.loads(pidfile.read_text())['pid']
+        try:
+            os.killpg(pid, 0)
+            os.killpg(pid, signal.SIGKILL)
+            result['supervisorForcedCleanup'] = True
+            result['status'] = 'failed'
+            result.setdefault('error', 'browser required supervisor forced cleanup')
+        except ProcessLookupError:
+            result['supervisorForcedCleanup'] = False
+        until = time.monotonic() + 3
+        while time.monotonic() < until:
+            try:
+                os.killpg(pid, 0)
+            except ProcessLookupError:
+                break
+            time.sleep(0.1)
+        try:
+            os.killpg(pid, 0)
+            result['status'] = 'failed'
+            result.setdefault('error', 'owned browser process group survived cleanup')
+        except ProcessLookupError:
+            result['browserProcessGroupGone'] = True
+
     try:
         result['macOS'] = command('macos-version', ['/usr/bin/sw_vers'])[1].decode()
         result['gatekeeper'] = command('gatekeeper', ['/usr/sbin/spctl', '--status'])[1].decode().strip()
@@ -274,22 +357,31 @@ def main():
             # The independent transport diagnostic must not replace browser evidence.
             result['publicTransportDiagnostic']['error'] = str(error)
         browser_code, _ = command('browser', [node, str(Path(__file__).with_name('browser.mjs')), str(root), url, args.installer_sha256, str(browser_home)], timeout=120, allow_failure=True)
+        browser = json.loads((root / 'browser-result.json').read_text())
+        if browser_code:
+            result['status'] = 'failed'
+            result.setdefault('error', 'browser download failed: ' + str(browser.get('error', 'retained actual browser UI/result')))
+        cleanup_browser_group()
         observe_browser_download()
         installer = root / 'downloads/install.sh'
         if installer.exists():
             result['installerAttributesBefore'] = attrs(installer)
         if browser_code:
             raise RuntimeError('browser download failed; retained actual browser UI/result')
+        if result.get('supervisorForcedCleanup') or result.get('browserProcessGroupGone') is not True:
+            raise RuntimeError('browser did not finish normal shutdown before the original History observation')
+        metadata = installer.lstat()
+        if not stat.S_ISREG(metadata.st_mode) or metadata.st_uid != os.getuid() or metadata.st_size != 37470:
+            raise RuntimeError('browser installer is not the exact owned regular 37470-byte file')
         if digest(installer) != args.installer_sha256:
             raise RuntimeError('downloaded installer changed')
         result['installerAttributesBefore'] = attrs(installer)
         if not result['installerAttributesBefore'].get('com.apple.quarantine'):
             raise RuntimeError('browser download has no genuine quarantine; cannot claim browser trust evidence')
+        result['installerWhereFroms'] = validate_where_froms(result['installerAttributesBefore'], url, page_url)
         history = result['browserDownloadHistoryEvidence']
-        if history['status'] != 'observed' or any(history['truncated'].values()):
-            raise RuntimeError('browser download History observation is unavailable or incomplete')
-        if not any(row.get('url') == url for row in result['browserDownloadURLChains']):
-            raise RuntimeError('browser history does not establish exact public download URL')
+        clicked_url = 'https://github.com/joshgarnett/rust-llm-wiki/raw/' + args.installer_commit + '/scripts/install.sh'
+        result['browserDownloadHistoryBinding'] = validate_download_history(history, browser, installer, clicked_url, url)
         prefix = root / 'prefix'
         code, _ = command('install', ['/bin/sh', str(installer), '--version', '0.3.0', '--prefix', str(prefix), '--from-dir', str(assets)], timeout=60, allow_failure=True)
         result['installExit'] = code
@@ -316,30 +408,10 @@ def main():
         result['status'] = 'passed'
     except Exception as error:
         result['status'] = 'failed'
-        result['error'] = str(error)
+        result.setdefault('error', str(error))
     finally:
-        pidfile = root / 'browser-pid.json'
-        if pidfile.exists():
-            pid = json.loads(pidfile.read_text())['pid']
-            try:
-                os.killpg(pid, 0)
-                os.killpg(pid, signal.SIGKILL)
-                result['supervisorForcedCleanup'] = True
-            except ProcessLookupError:
-                result['supervisorForcedCleanup'] = False
-            until = time.monotonic() + 3
-            while time.monotonic() < until:
-                try:
-                    os.killpg(pid, 0)
-                except ProcessLookupError:
-                    break
-                time.sleep(0.1)
-            try:
-                os.killpg(pid, 0)
-                result['status'] = 'failed'
-                result['error'] = 'owned browser process group survived cleanup'
-            except ProcessLookupError:
-                result['browserProcessGroupGone'] = True
+        if not browser_cleanup_done:
+            cleanup_browser_group()
         if not browser_evidence_collected:
             observe_browser_download()
         save(root / 'result.json', result)
