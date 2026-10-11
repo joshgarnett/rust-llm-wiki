@@ -50,7 +50,7 @@ class NativeGateTests(unittest.TestCase):
                 if name in gate.BAZEL_TARGETS:
                     command += [gate.BAZEL_TARGETS[name]]
                 if name in ("tests", "release-skill", "artifact-tests"):
-                    command += ["--test_env=LWIKI_QUALIFY_BINARY=/fixture/lwiki", "--test_strategy=local", "--nocache_test_results"]
+                    command += ["--test_env=LWIKI_QUALIFY_BINARY=/fixture/lwiki", "--test_strategy=standalone", "--nocache_test_results"]
                 if name in gate.CLI_COMMANDS:
                     command = [report["installed_binary_path"]] + (["--json", "--offline"] if name != "version" else []) + gate.CLI_COMMANDS[name]
                 stages.append({"stage": name, "argv": command, "exit_code": 0})
@@ -123,6 +123,15 @@ class NativeGateTests(unittest.TestCase):
         path.write_text(path.read_text().replace("/fixture/home/.local/bin/lwiki", "/fixture/another/lwiki"))
         with self.assertRaisesRegex(qualification.QualificationError, "installed executable"):
             self.verify()
+
+    def test_invalid_or_unpinned_strategy_blocks_staging(self):
+        path = self.evidence / "macos-15/stages.jsonl"
+        original = path.read_text()
+        for strategy in ["local", "remote"]:
+            with self.subTest(strategy=strategy):
+                path.write_text(original.replace("--test_strategy=standalone", "--test_strategy=" + strategy))
+                with self.assertRaisesRegex(qualification.QualificationError, "pin"):
+                    self.verify()
 
 
 if __name__ == "__main__":

@@ -86,7 +86,7 @@ def verify(root, release_directory, commit, version):
                 raise qualification.QualificationError("native suite target is missing: " + label)
             if stage["stage"] in ("tests", "release-skill", "artifact-tests"):
                 if ("--test_env=LWIKI_QUALIFY_BINARY=" + report["binary_path"] not in arguments
-                        or "--test_strategy=local" not in arguments or "--nocache_test_results" not in arguments):
+                        or "--test_strategy=standalone" not in arguments or "--nocache_test_results" not in arguments):
                     raise qualification.QualificationError("native CLI tests did not pin the archived executable: " + label)
             if stage["stage"] in CLI_COMMANDS:
                 expected = ([report.get("installed_binary_path")] + (["--json", "--offline"]
