@@ -33,7 +33,7 @@ child.stdout.pipe(fs.createWriteStream(path.join(root, 'browser.stdout')));
 child.stderr.pipe(fs.createWriteStream(path.join(root, 'browser.stderr')));
 const begin = process.hrtime.bigint();
 const elapsed = () => Number(process.hrtime.bigint() - begin) / 1e9;
-let next = 1, pending = new Map(), commands = new Map(), receive = Buffer.alloc(0), session, spawnError, mainNavigation, explicitRefusal;
+let next = 1, pending = new Map(), commands = new Map(), receive = Buffer.alloc(0), session, spawnError, mainNavigation, explicitRefusal, downloadUIAttempted = false, desktopFailureAttempted = false;
 const trace = (name, value) => fs.appendFileSync(path.join(root, name + '.jsonl'), JSON.stringify({elapsedSeconds: elapsed(), ...value}) + '\n');
 const phase = name => {result.phase = name; save('browser-result.json', result);};
 child.on('error', error => {spawnError = String(error);});
@@ -108,6 +108,8 @@ async function snapshot(name) {
   save(name + '.json', {mainNavigation, explicitRefusal, inspections: rows.map((row, i) => row.status === 'fulfilled' ? row.value : {key: operations[i][0], error: String(row.reason)})});
 }
 async function desktopFailure() {
+  if (desktopFailureAttempted) return;
+  desktopFailureAttempted = true;
   const output = path.join(root, 'browser-failure-desktop.png');
   const p = spawn('/usr/sbin/screencapture', ['-x', output], {env: process.env, stdio: ['ignore', 'pipe', 'pipe']});
   const state = {argv: ['/usr/sbin/screencapture', '-x', output], permissions: 'no grants or prompts accepted'};
@@ -138,6 +140,77 @@ async function navigatePublic() {
   if (outcome.error) throw Error(outcome.error);
   if (outcome.value.errorText) throw Error('installer navigation failed: ' + outcome.value.errorText);
   return outcome.value;
+}
+function rawLinkObservation(expectedHref, scroll, expectedPoint) {
+  const anchors = document.querySelectorAll('a[data-testid="raw-button"]');
+  const observation = {url: location.href, anchorCount: anchors.length};
+  if (anchors.length !== 1) return {...observation, error: 'real Raw anchor is missing or ambiguous'};
+  const anchor = anchors[0];
+  observation.href = anchor.href;
+  observation.label = anchor.innerText.slice(0, 256);
+  observation.attributes = [...anchor.attributes].slice(0, 32).map(attribute => ({name: attribute.name.slice(0, 128), value: attribute.value.slice(0, 512)}));
+  observation.attributesTruncated = anchor.attributes.length > 32;
+  if (anchor.href !== expectedHref) return {...observation, error: 'real Raw anchor has another href'};
+  if (scroll) anchor.scrollIntoView({block: 'center', inline: 'center', behavior: 'instant'});
+  const bounds = anchor.getBoundingClientRect();
+  observation.bounds = {x: bounds.x, y: bounds.y, width: bounds.width, height: bounds.height};
+  const point = {x: bounds.x + bounds.width / 2, y: bounds.y + bounds.height / 2};
+  observation.point = point;
+  const style = getComputedStyle(anchor);
+  if (![point.x, point.y, bounds.width, bounds.height].every(Number.isFinite) || bounds.width <= 0 || bounds.height <= 0 || point.x < 0 || point.x >= innerWidth || point.y < 0 || point.y >= innerHeight || style.display === 'none' || style.visibility !== 'visible') return {...observation, error: 'real Raw anchor is not visible in the viewport'};
+  const hit = document.elementFromPoint(point.x, point.y);
+  observation.hitTest = {sameAnchor: hit?.closest('a') === anchor, tagName: hit?.tagName, anchorHref: hit?.closest('a')?.href?.slice(0, 2048)};
+  if (!observation.hitTest.sameAnchor) return {...observation, error: 'real Raw anchor center is covered'};
+  if (expectedPoint && (point.x !== expectedPoint.x || point.y !== expectedPoint.y)) return {...observation, error: 'real Raw anchor moved before the gesture'};
+  return observation;
+}
+function downloadsVisibleText() {
+  const maxNodes = 4096, maxCharacters = 12000, maxDepth = 32;
+  const stack = [{node: document.body, depth: 0}], seen = new Set(), text = [];
+  let characters = 0, truncated = false;
+  while (stack.length && seen.size < maxNodes && characters < maxCharacters) {
+    const {node, depth} = stack.pop();
+    if (!node || seen.has(node)) continue;
+    seen.add(node);
+    if (depth > maxDepth) {truncated = true; continue;}
+    if (node.nodeType === Node.TEXT_NODE) {
+      const parent = node.parentElement || node.getRootNode().host;
+      if (!parent || !parent.getClientRects().length) continue;
+      const value = node.textContent.trim();
+      if (value) {const separator = text.length ? 1 : 0; const bounded = value.slice(0, Math.max(0, maxCharacters - characters - separator)); text.push(bounded); characters += bounded.length + separator; truncated ||= bounded.length < value.length;}
+      continue;
+    }
+    if (node.nodeType === Node.ELEMENT_NODE) {
+      if (['SCRIPT', 'STYLE', 'TEMPLATE'].includes(node.tagName)) continue;
+      const style = getComputedStyle(node);
+      if (style.display === 'none' || style.visibility === 'hidden' || style.visibility === 'collapse') continue;
+    }
+    const children = node.shadowRoot ? node.shadowRoot.childNodes : node.tagName === 'SLOT' ? node.assignedNodes({flatten: true}) : node.childNodes;
+    if (children.length + stack.length + seen.size > maxNodes) truncated = true;
+    for (let index = Math.min(children.length, maxNodes - seen.size - stack.length) - 1; index >= 0; index--) stack.push({node: children[index], depth: depth + 1});
+  }
+  return {url: location.href, title: document.title, text: text.join('\n'), visitedNodes: seen.size, truncated: truncated || stack.length > 0, limits: {maxNodes, maxCharacters, maxDepth}};
+}
+async function observeDownloadsUI() {
+  downloadUIAttempted = true;
+  const evidence = {url: 'chrome://downloads/', approvals: 'none attempted'};
+  try {
+    evidence.navigation = await cdp('Page.navigate', {url: evidence.url}, session);
+    if (evidence.navigation.errorText) throw Error(evidence.navigation.errorText);
+    await sleep(1000);
+    const observations = await Promise.allSettled([
+      cdp('Page.captureScreenshot', {format: 'png'}, session).then(shot => {fs.writeFileSync(path.join(root, 'browser-downloads.png'), Buffer.from(shot.data, 'base64')); return {captured: true};}),
+      cdp('Runtime.evaluate', {expression: `(${downloadsVisibleText.toString()})()`, returnByValue: true}, session).then(rows => {if (rows.exceptionDetails) throw Error(JSON.stringify(rows.exceptionDetails)); const value = rows.result?.value; if (value?.url !== evidence.url || typeof value.text !== 'string' || !value.text) throw Error('visible Downloads text unavailable'); return value;}),
+    ]);
+    evidence.screenshot = observations[0].status === 'fulfilled' ? observations[0].value : {error: String(observations[0].reason)};
+    evidence.visibleText = observations[1].status === 'fulfilled' ? observations[1].value : {error: String(observations[1].reason)};
+    if (observations.some(row => row.status === 'rejected')) throw Error('Downloads UI observation incomplete');
+  } catch (error) {
+    evidence.error = String(error);
+    throw error;
+  } finally {
+    save('browser-download-ui.json', evidence);
+  }
 }
 try {
   phase('browser setup');
@@ -173,24 +246,38 @@ try {
   if (state?.url !== pageURL || state.ready !== 'complete' || state.raw !== downloadURL) throw Error('pinned GitHub file page did not load');
   save('installer-document.json', state);
   phase('normal browser download');
-  // GitHub raw text has CSP sandbox without allow-downloads. Initiate from its
-  // ordinary unsandboxed same-origin file page, following GitHub's raw redirect.
-  const click = await cdp('Runtime.evaluate', {expression: `(()=>{const a=document.createElement('a');a.href=${JSON.stringify(downloadURL)};a.download='install.sh';a.textContent='Download install.sh';document.body.appendChild(a);a.click();return {href:a.href,download:a.download};})()`, userGesture: true, returnByValue: true}, session);
-  if (click.exceptionDetails) throw Error('download gesture failed: ' + JSON.stringify(click.exceptionDetails));
-  result.downloadGesture = click.result?.value;
+  // Chrome's documented Mac shortcut downloads the existing link with Option.
+  // The pinned real control must be visible and its center must hit that anchor.
+  const link = await cdp('Runtime.evaluate', {expression: `(${rawLinkObservation.toString()})(${JSON.stringify(downloadURL)},true)`, returnByValue: true}, session);
+  if (link.exceptionDetails) throw Error('Raw link inspection failed: ' + JSON.stringify(link.exceptionDetails));
+  const control = link.result?.value;
+  save('browser-raw-link.json', control || {error: 'Raw link observation absent'});
+  if (!control || control.error || control.url !== pageURL) throw Error(control?.error || 'pinned Raw link observation unavailable');
+  const beforeGesture = await cdp('Page.captureScreenshot', {format: 'png'}, session);
+  fs.writeFileSync(path.join(root, 'browser-raw-link.png'), Buffer.from(beforeGesture.data, 'base64'));
+  const recheck = await cdp('Runtime.evaluate', {expression: `(${rawLinkObservation.toString()})(${JSON.stringify(downloadURL)},false,${JSON.stringify(control.point)})`, returnByValue: true}, session);
+  if (recheck.exceptionDetails) throw Error('Raw link recheck failed: ' + JSON.stringify(recheck.exceptionDetails));
+  result.rawLinkRecheck = recheck.result?.value;
+  if (!result.rawLinkRecheck || result.rawLinkRecheck.error || result.rawLinkRecheck.url !== pageURL) throw Error(result.rawLinkRecheck?.error || 'pinned Raw link changed before the gesture');
+  if (explicitRefusal) throw Error(explicitRefusal);
+  result.downloadGesture = {kind: 'one real Raw-link Option-click', href: control.href, point: control.point, button: 'left', modifiers: 1, clickCount: 1, mousePressed: false, mouseReleased: false};
+  save('browser-result.json', result);
+  await cdp('Input.dispatchMouseEvent', {type: 'mousePressed', ...control.point, button: 'left', modifiers: 1, clickCount: 1}, session);
+  result.downloadGesture.mousePressed = true;
+  save('browser-result.json', result);
+  await cdp('Input.dispatchMouseEvent', {type: 'mouseReleased', ...control.point, button: 'left', modifiers: 1, clickCount: 1}, session);
+  result.downloadGesture.mouseReleased = true;
+  save('browser-result.json', result);
   const until = Math.min(95, elapsed() + 50), installer = path.join(downloads, 'install.sh');
   while (elapsed() < until && !fs.existsSync(installer)) {
     if (explicitRefusal) throw Error(explicitRefusal);
     await sleep(250);
   }
   if (explicitRefusal) throw Error(explicitRefusal);
+  if (fs.existsSync(installer)) await snapshot('browser-download-attempt-page');
+  else await Promise.allSettled([snapshot('browser-download-attempt-page'), desktopFailure()]);
   // Record the actual download UI, including any warning, without clicking Keep.
-  await cdp('Page.navigate', {url: 'chrome://downloads/'}, session);
-  await sleep(1000);
-  const shot = await cdp('Page.captureScreenshot', {format: 'png'}, session);
-  fs.writeFileSync(path.join(root, 'browser-downloads.png'), Buffer.from(shot.data, 'base64'));
-  const rows = await cdp('Runtime.evaluate', {expression: `(()=>{const m=document.querySelector('downloads-manager');return {text:document.body.innerText,items:m?.items};})()`, returnByValue: true}, session);
-  save('browser-download-ui.json', rows);
+  await observeDownloadsUI();
   if (!fs.existsSync(installer)) throw Error('browser did not finish install.sh download; no warning accepted');
   result.downloadedSHA256 = hash(fs.readFileSync(installer));
   if (result.downloadedSHA256 !== expectedHash) throw Error('browser installer bytes differ from pinned commit');
@@ -199,6 +286,9 @@ try {
 } catch (error) {
   result.status = 'failed'; result.error = String(error);
   if (session && elapsed() < 105) await Promise.allSettled([snapshot('browser-failure-page'), desktopFailure()]);
+  if (session && !downloadUIAttempted && elapsed() < 105) {
+    try {await observeDownloadsUI();} catch (observationError) {result.downloadUIError = String(observationError);}
+  }
 } finally {
   result.mainNavigation = mainNavigation;
   result.explicitRefusal = explicitRefusal;
