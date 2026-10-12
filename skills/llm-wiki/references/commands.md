@@ -100,9 +100,9 @@ Options:
           Prevent provider requests and credential helper calls; local operations remain available
 
       --agent <AGENT>
-          Install wiki instructions for codex, claude-code or cursor
+          Install wiki instructions for Codex, Sagex, Claude Code or Cursor
 
-          [possible values: codex, claude-code, cursor]
+          [possible values: codex, sagex, claude-code, cursor]
 
       --dry-run
           Preview without writes, provider requests or credential resolution
@@ -153,6 +153,14 @@ Options:
       --prompt-key
           Read your key without displaying it and save it in a private file. Requires a terminal
 
+      --credential-command <CREDENTIAL_COMMAND>
+          Program and arguments that return a token. Quotes preserve spaces; no shell runs
+
+      --credential-output <CREDENTIAL_OUTPUT>
+          Credential command output: token-only text (default) or key/expiry JSON
+
+          [possible values: text, json]
+
       --credential-file <CREDENTIAL_FILE>
           Private file destination for --prompt-key; defaults beside the provider configuration
 
@@ -164,6 +172,49 @@ Options:
 
       --grant-embed
           Permit explicit future embedding requests for this wiki and chosen model
+
+      --grant-provider
+          Permit explicit future API requests for every final model shown for this wiki
+
+      --generation-model <GENERATION_MODEL>
+          Optional generation model for API extraction. Your agent can extract without it
+
+      --generation-url <GENERATION_URL>
+          Full endpoint URL for the generation model
+
+      --generation-adapter <GENERATION_ADAPTER>
+          Generation API format; new models default to responses-v1
+
+          [possible values: responses-v1, chat-completions-v1]
+
+      --generation-max-output-tokens <GENERATION_MAX_OUTPUT_TOKENS>
+          Maximum output tokens for the generation model; omitted settings are kept
+
+      --generation-reuse-auth
+          Reuse the embedding credentials after reviewing both destinations
+
+      --generation-key-env <GENERATION_KEY_ENV>
+          Environment variable holding the generation key; its value is not read
+
+      --generation-key-file <GENERATION_KEY_FILE>
+          Existing private generation key file
+
+      --generation-prompt-key
+          Read and save a generation key privately; requires a terminal
+
+      --generation-credential-command <GENERATION_CREDENTIAL_COMMAND>
+          Generation credential program and arguments; no shell runs
+
+      --generation-credential-output <GENERATION_CREDENTIAL_OUTPUT>
+          Generation command output: token-only text (default) or key/expiry JSON
+
+          [possible values: text, json]
+
+      --generation-credential-file <GENERATION_CREDENTIAL_FILE>
+          Private file destination for --generation-prompt-key
+
+      --generation-replace-key
+          Deliberately replace the generation private key file
 
       --embedding-document-prefix <EMBEDDING_DOCUMENT_PREFIX>
           Text added before documents sent for embedding
@@ -229,6 +280,110 @@ Options:
 
       --lock-timeout-ms <LOCK_TIMEOUT_MS>
           Maximum writer-lock wait in milliseconds (default: 5000; preferences may override)
+
+  -h, --help
+          Print help
+
+```
+
+## config set
+
+```text
+Change supplied settings for one model while keeping the other model
+
+Usage: lwiki config set [OPTIONS] <ROLE>
+
+Arguments:
+  <ROLE>
+          Model role to change. Settings for the other role are kept
+
+          [possible values: embedding, generation]
+
+Options:
+      --model <MODEL>
+          Model name from your provider
+
+      --wiki <WIKI>
+          Wiki root; otherwise select the nearest ancestor WIKI.md, then the saved default
+
+      --format <FORMAT>
+          Output format: human-readable text, a JSON envelope or JSON Lines events
+
+          [possible values: human, json, jsonl]
+
+      --url <URL>
+          Full endpoint URL. Review its destination before permitting requests
+
+      --adapter <ADAPTER>
+          API format for this role; omitted settings are kept
+
+          [possible values: embeddings-v1, responses-v1, chat-completions-v1]
+
+      --json
+          Emit one structured JSON envelope
+
+      --dimensions <DIMENSIONS>
+          Embedding vector dimensions (number or auto)
+
+      --jsonl
+          Emit JSON Lines events for supported streaming commands
+
+      --max-output-tokens <MAX_OUTPUT_TOKENS>
+          Generation model's maximum output tokens
+
+      --offline
+          Prevent provider requests and credential helper calls; local operations remain available
+
+      --dry-run
+          Preview without writes, provider requests or credential resolution
+
+      --key-env <KEY_ENV>
+          Environment variable holding the key; its value is not read
+
+      --key-file <KEY_FILE>
+          Existing private key file; only its absolute path is saved
+
+      --stage
+          Retain a guarded preparation for a later explicit changes apply
+
+      --credential-command <CREDENTIAL_COMMAND>
+          Credential program and arguments; quotes preserve spaces and no shell runs
+
+      --preferences <PREFERENCES>
+          Select a user configuration file (TOML or legacy JSON)
+
+          [alias: --config]
+
+      --credential-output <CREDENTIAL_OUTPUT>
+          Command output: token-only text (default), or key/expiry JSON
+
+          [possible values: text, json]
+
+      --no-user-config
+          Disable ambient user configuration; explicit --preferences still applies
+
+      --expect-wiki-id <EXPECT_WIKI_ID>
+          Refuse a selected wiki whose stable identity differs from this value
+
+      --reuse-auth <REUSE_AUTH>
+          Deliberately copy credentials from the indicated model role
+
+          [possible values: embedding, generation]
+
+      --profile <PROFILE>
+          Trusted provider profile name from the private provider configuration
+
+      --providers-config <PROVIDERS_CONFIG>
+          Private provider settings file; otherwise use your saved location
+
+      --grant-provider
+          Permit explicit API requests for every final model and destination shown
+
+      --lock-timeout-ms <LOCK_TIMEOUT_MS>
+          Maximum writer-lock wait in milliseconds (default: 5000; preferences may override)
+
+      --non-interactive
+          Use supplied settings without prompts; at least one setting is required
 
   -h, --help
           Print help

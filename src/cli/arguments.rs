@@ -109,7 +109,7 @@ pub enum Command {
     },
     /// Set up your wiki, saved settings and agent support.
     Setup(super::setup::SetupArguments),
-    /// Show saved settings and the selected provider without revealing credentials.
+    /// Inspect settings or change one model without revealing credentials.
     Config {
         #[command(subcommand)]
         command: ConfigCommand,
@@ -814,13 +814,20 @@ pub enum SkillCommand {
 pub enum ConfigCommand {
     /// Show configuration paths, effective preferences and provider settings.
     Show,
+    /// Change supplied settings for one model while keeping the other model.
+    Set(Box<super::config_set::ProviderSetArguments>),
 }
 impl Command {
     pub fn name(&self) -> &'static str {
         match self {
             Self::Capabilities => "capabilities",
             Self::Setup(_) => "setup",
-            Self::Config { .. } => "config show",
+            Self::Config {
+                command: ConfigCommand::Show,
+            } => "config show",
+            Self::Config {
+                command: ConfigCommand::Set(_),
+            } => "config set",
             Self::Skill {
                 command: SkillCommand::Export { .. },
             } => "skill export",

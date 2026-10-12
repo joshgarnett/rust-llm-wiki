@@ -738,25 +738,63 @@ fn native_source_relations_cli_prepares_retains_and_rebuilds_offline() {
 fn native_responses_doctor_probe_uses_default_and_service_capped_output() {
     native_generation_probe_case(true, None, false);
     native_generation_probe_case(true, Some(64), false);
+    native_generation_probe_case(true, Some(8192), false);
 }
 
 #[test]
-fn native_chat_doctor_probe_keeps_legacy_output_limit() {
+fn native_chat_doctor_probe_keeps_legacy_wire_with_service_output_limit() {
     native_generation_probe_case(false, None, false);
 }
 
 #[test]
 fn native_incomplete_responses_probe_retains_one_paid_attempt_and_fixed_reason() {
     native_generation_probe_case(true, None, true);
+    native_generation_probe_case(true, Some(8192), true);
+    native_generation_probe_auth_case(true, Some(8192), true, false, true);
+}
+
+#[test]
+fn doctor_generation_zero_output_allowance_refuses_before_provider_or_run_writes() {
+    let f = Fixture::new();
+    let config = f.temp.path().join("providers.toml");
+    let before = files(f.temp.path());
+    for extraction_schema in [false, true] {
+        let mut argv = vec![
+            "lwiki",
+            "--wiki",
+            f.temp.path().to_str().unwrap(),
+            "--no-user-config",
+            "--json",
+            "--profile",
+            "primary",
+            "doctor",
+            "--probe",
+            "--role",
+            "generate",
+            "--providers-config",
+            config.to_str().unwrap(),
+            "--max-output-units",
+            "0",
+        ];
+        if extraction_schema {
+            argv.push("--extraction-schema");
+        }
+        let args = Arguments::try_parse_from(argv).unwrap();
+        let (envelope, exit) = execute(&args);
+        assert_ne!(exit, 0);
+        assert!(!envelope.meta.network_used);
+        assert_eq!(envelope.error.unwrap().code, "BUDGET_EXCEEDED");
+        assert_eq!(files(f.temp.path()), before);
+    }
 }
 
 fn native_generation_probe_case(responses: bool, service_cap: Option<u64>, incomplete: bool) {
-    native_generation_probe_auth_case(responses, service_cap, incomplete, false);
+    native_generation_probe_auth_case(responses, service_cap, incomplete, false, false);
 }
 
 #[test]
 fn native_generation_probe_accepts_private_credential_file_with_terminal_newline() {
-    native_generation_probe_auth_case(false, None, false, true);
+    native_generation_probe_auth_case(false, None, false, true, false);
 }
 
 fn native_generation_probe_auth_case(
@@ -764,8 +802,10 @@ fn native_generation_probe_auth_case(
     service_cap: Option<u64>,
     incomplete: bool,
     file_auth: bool,
+    extraction_schema: bool,
 ) {
     let f = Fixture::new();
+    let expected = service_cap.unwrap_or(4096);
     let listener = std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).unwrap();
     let address = listener.local_addr().unwrap();
     listener.set_nonblocking(true).unwrap();
@@ -877,10 +917,29 @@ fn native_generation_probe_auth_case(
         content
     };
     std::fs::write(&config, content).unwrap();
+    let selection_temp = tempfile::tempdir().unwrap();
+    let selection_base = std::fs::canonicalize(selection_temp.path()).unwrap();
+    let default_a = selection_base.join("Default A notes");
+    std::fs::create_dir(&default_a).unwrap();
+    std::fs::write(default_a.join("WIKI.md"), "---\nwiki_schema: \"1\"\nwiki_id: Vault.Default.A\nwiki_kind: vault\ntitle: Default A\n---\n").unwrap();
+    let preferences = selection_base.join("Owner's probe preferences.toml");
+    let mut document = lwiki::config::LocalConfigDocument {
+        default_wiki: Some(lwiki::config::DefaultWiki {
+            path: default_a.clone(),
+            wiki_id: RecordId::new("Vault.Default.A").unwrap(),
+        }),
+        providers_config: Some(selection_base.join("Unused A providers.toml")),
+        ..Default::default()
+    };
+    document.defaults.profile = Some("unused-default-profile".into());
+    std::fs::write(&preferences, toml::to_string(&document).unwrap()).unwrap();
     let result = std::process::Command::new(test_paths::binary(env!("CARGO_BIN_EXE_lwiki")))
         .args([
             "--wiki",
             f.temp.path().to_str().unwrap(),
+            "--preferences",
+            preferences.to_str().unwrap(),
+            "--no-user-config",
             "--json",
             "--profile",
             "primary",
@@ -895,6 +954,7 @@ fn native_generation_probe_auth_case(
             "--attempts-per-task",
             "1",
         ])
+        .args(extraction_schema.then_some("--extraction-schema"))
         .env("EXPLICIT_FIXTURE_TOKEN", "synthetic-cli-secret")
         .output()
         .unwrap();
@@ -935,6 +995,22 @@ fn native_generation_probe_auth_case(
             "{human}"
         );
         assert!(human.contains("usage: unknown"), "{human}");
+        assert!(
+            human.contains(&format!("{expected}-token output limit")),
+            "{human}"
+        );
+        assert!(human.contains("Reasoning tokens"), "{human}");
+        assert!(
+            human.contains("config set generation")
+                && human.contains("--max-output-tokens TOKENS --grant-provider --non-interactive"),
+            "{human}"
+        );
+        assert!(!human.contains("--max-output-units"), "{human}");
+        assert!(
+            human.contains("repeat your original doctor command"),
+            "{human}"
+        );
+        assert_eq!(human.contains("--extraction-schema"), extraction_schema);
     } else {
         assert!(
             human.contains("Provider probe (generate): succeeded"),
@@ -944,7 +1020,6 @@ fn native_generation_probe_auth_case(
         assert!(human.contains("Cost: unknown"), "{human}");
     }
     let request = server.join().unwrap();
-    let expected = service_cap.unwrap_or(256);
     if responses {
         assert_eq!(request["max_output_tokens"], expected);
         assert!(request.get("messages").is_none());
@@ -961,6 +1036,60 @@ fn native_generation_probe_auth_case(
             value["error"]["details"]["cause"]["reason"],
             "incomplete_max_output_tokens"
         );
+        assert_eq!(
+            value["error"]["details"]["cause"]["max_output_tokens"],
+            expected
+        );
+        assert_eq!(
+            value["error"]["details"]["cause"]["effective_service_cap"],
+            expected
+        );
+        assert!(
+            value["error"]["hint"]
+                .as_str()
+                .unwrap()
+                .contains("--max-output-tokens TOKENS")
+        );
+        let repair = value["error"]["details"]["repair_command"]
+            .as_str()
+            .unwrap();
+        let words = shlex::split(repair).unwrap().into_iter().map(|word| {
+            if word == "TOKENS" {
+                (expected * 2).to_string()
+            } else {
+                word
+            }
+        });
+        let repair_args = Arguments::try_parse_from(words).unwrap();
+        assert_eq!(repair_args.wiki.as_deref(), Some(f.fs.root().path()));
+        assert_ne!(repair_args.wiki.as_ref(), Some(&default_a));
+        assert_eq!(repair_args.preferences.as_ref(), Some(&preferences));
+        assert_eq!(repair_args.expect_wiki_id.as_ref(), Some(f.app.vault_id()));
+        assert_eq!(repair_args.profile.as_deref(), Some("primary"));
+        let lwiki::cli::Command::Config {
+            command: lwiki::cli::arguments::ConfigCommand::Set(settings),
+        } = repair_args.command
+        else {
+            panic!("repair is not config set");
+        };
+        assert_eq!(settings.providers_config.as_ref(), Some(&config));
+        assert!(
+            value["error"]["hint"]
+                .as_str()
+                .unwrap()
+                .contains("Omit its old --profile")
+        );
+        let accounting = Arguments::try_parse_from(
+            shlex::split(
+                value["error"]["details"]["accounting_command"]
+                    .as_str()
+                    .unwrap(),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(accounting.wiki.as_deref(), Some(f.fs.root().path()));
+        assert_eq!(accounting.preferences.as_ref(), Some(&preferences));
         let run = value["error"]["details"]["run_id"].as_str().unwrap();
         let projection =
             lwiki::catalog::scan::scan(&f.fs, &lwiki::domain::RecordId::new("vault_test").unwrap())
@@ -981,6 +1110,8 @@ fn native_generation_probe_auth_case(
         assert!(retained.contains("\"billable_units\""));
         let inspection = native_probe_status(&f, run);
         assert_eq!(inspection["state"], "paused");
+        assert_eq!(inspection["attempts"].as_array().unwrap().len(), 1);
+        assert_eq!(inspection["budget"]["dispatched_requests"], 1);
         assert_eq!(inspection["attempts"][0]["phase"], "settled");
         // The fixture has no trusted rate card: pausing must retain the paid
         // attempt's unknown billing rather than mark it released or free.
@@ -1204,6 +1335,21 @@ fn native_generation_probe_unknown_unit_bound_refuses_before_send() {
     assert!(!result.status.success(), "{value}");
     assert_eq!(value["error"]["code"], "CAPABILITY_UNAVAILABLE");
     assert_eq!(value["meta"]["network_used"], false);
+    let run = value["error"]["details"]["run_id"].as_str().unwrap();
+    let input: lwiki::providers::types::RemoteInput = serde_json::from_slice(
+        &std::fs::read(f.temp.path().join(format!("runs/{run}/inputs/probe.json"))).unwrap(),
+    )
+    .unwrap();
+    let lwiki::providers::types::RemoteOperation::Generate {
+        max_output_tokens, ..
+    } = input.operation
+    else {
+        panic!("generation probe retained a non-generation request");
+    };
+    assert_eq!(max_output_tokens, 64);
+    let inspection = native_probe_status(&f, run);
+    assert!(inspection["attempts"].as_array().unwrap().is_empty());
+    assert_eq!(inspection["budget"]["dispatched_requests"], 0);
     assert!(
         matches!(listener.accept(), Err(error) if error.kind() == std::io::ErrorKind::WouldBlock)
     );

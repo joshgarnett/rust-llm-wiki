@@ -137,32 +137,73 @@ questions into numerical vectors that lwiki stores locally. It sends that text
 to your chosen provider and can cost money. Keep using literal or word search
 if you do not want those calls.
 
-To configure a model, rerun setup for your wiki:
+### Set up search by meaning
+
+Rerun setup for your wiki:
 
 ```sh
 lwiki setup "/absolute/path/to/Wiki" --select
 ```
 
-When asked about an embedding model, answer yes. Supply the model name and full
-embeddings endpoint URL from your provider. Set vector dimensions only if your
-provider requires them. Choose how to provide your API key:
+Choose `skip` at the agent question if your agent is already connected. When
+asked about an embedding model, answer yes. Supply the model name and full
+embeddings endpoint URL from your provider. Leave vector dimensions empty for
+the provider's default, or enter a number if your provider requires one.
+Choose how lwiki gets your API key:
 
+- **Command:** enter a credential helper command, such as `sagex auth export`.
+  Install the program and follow its sign-in instructions first. Choose `text`
+  if it returns only a token, or `json` if it returns a `key` and optional
+  `expires_at` expiry time.
 - **Save privately:** enter the key at the hidden terminal prompt. Setup saves it
   in a private file outside your wiki, so later terminals can use it.
 - **Private file:** supply an existing private key file; setup records its path.
 - **Environment:** supply the variable name. That variable must also be available
   in every terminal or agent process that makes requests.
 
-Setup shows the model and destination, then asks whether it may send wiki text
-and search questions there when you request search by meaning. Requests can cost
-money. Setup itself makes no network request. `config show` displays the model,
-destination and key source without showing the secret:
+If you already know the model and endpoint, supply them and the helper directly:
+
+```sh
+lwiki setup "/absolute/path/to/Wiki" --select \
+  --embedding-model MODEL \
+  --embedding-url "https://gateway.example/v1/embeddings" \
+  --credential-command 'sagex auth export'
+```
+
+Replace `MODEL` and the example URL with your provider's values. Use a helper
+that returns the required output format. For JSON output, add
+`--credential-output json`. Its output must be a JSON object containing only a
+`key` string and an optional `expires_at`. The expiry is an RFC 3339 timestamp,
+such as `2026-12-01T18:00:00Z`.
+
+Keep the command quoted as one argument. Quotes inside it can preserve spaces
+in a program path or an argument. lwiki runs the program directly; pipes,
+redirects, variable expansion and command substitutions do not run. Never put
+the key itself in the command. Setup records the helper without running it.
+When a provider request needs credentials, the helper has a 10-second timeout.
+lwiki keeps its token in memory for at most 300 seconds and stops reusing it
+60 seconds before a supplied expiry. A later request gets a fresh token.
+
+Setup also offers a generation model, described below. Skip it if you only want
+search by meaning. Before saving, review each model, destination, API format,
+credential source and the text it may receive. Embeddings can send wiki text
+and search questions. Generation can send wiki text selected for extraction.
+Answer yes to permit those requests only if you approve all the models shown,
+then confirm applying the settings. Requests can cost money. Setup makes no
+provider request and does not test the credentials.
+
+Check the saved choices:
 
 ```sh
 lwiki config show
 ```
 
-After granting access, test the selected provider with a single paid request,
+The output shows the selected wiki, model, destination and credential source
+without showing the key or helper arguments.
+
+### Prepare embeddings and search
+
+After granting access, test the embedding service with at most one paid request,
 then prepare embeddings with a finite request limit:
 
 ```sh
@@ -172,9 +213,10 @@ lwiki search 'your question in different words' --mode semantic --max-requests 1
 ```
 
 The sync result reports how much text has embeddings. A request limit can leave
-work incomplete; check coverage before increasing it. Saved provider choices
-apply to new commands, so you do not need to repeat their paths or profile name.
-The full provider configuration remains a separate private file.
+work incomplete; check coverage before increasing it. Capturing or refreshing
+notes does not prepare embeddings. Run sync again after those updates or after
+changing the embedding model. Saved provider choices apply to new commands, so
+you do not need to repeat their paths or profile name.
 
 A new semantic question needs a query embedding. An identical cached question
 can later run offline, but offline mode cannot create a missing embedding.
@@ -187,12 +229,138 @@ Retries count toward request limits. If a send has an uncertain result, inspect
 a command does not reset an existing run's limits. Use `jobs amend --help` when
 you deliberately want to increase a retained run's allowance.
 
-For a manually maintained provider file, pass
-`--providers-config "/absolute/private/providers.toml" --profile PROFILE`.
-Keep credentials outside notes, command arguments and public reports. Generation
-services use a separate model and adapter; configuring embeddings does not
-configure generation. The [provider reference](../developer/contracts/providers-jobs.md)
-covers advanced adapters, rate cards and accounting.
+### Add an optional generation model
+
+A generation model lets lwiki call an API to extract information from selected
+wiki text. Your agent can extract information without this extra service.
+Configuring an embedding model does not configure generation.
+
+Answer yes at setup's generation question. Enter the model and full endpoint URL
+from your provider. Choose `responses-v1` or `chat-completions-v1` to match that
+endpoint. New generation settings default to `responses-v1`.
+
+You can use separate generation credentials. Setup also offers to reuse your
+embedding credentials, after showing both destinations. Choose reuse only if
+the same credentials are intended for both services. To add generation to a
+wiki that already has embedding credentials:
+
+```sh
+lwiki setup "/absolute/path/to/Wiki" --select \
+  --generation-model MODEL \
+  --generation-url "https://gateway.example/v1/responses" \
+  --generation-reuse-auth
+```
+
+Replace the model and URL. For a Chat Completions endpoint, also supply
+`--generation-adapter chat-completions-v1`. To use a separate helper, replace
+`--generation-reuse-auth` with
+`--generation-credential-command 'sagex auth export'`. Add
+`--generation-credential-output json` if that helper returns JSON. Setup also
+accepts `--generation-key-env VARIABLE`, `--generation-key-file PATH` or
+`--generation-prompt-key` for the other credential choices.
+
+Review both models before granting permission and applying the settings, then
+run `lwiki config show`. This saves configuration; it does not start extraction.
+
+### Change a model or credentials
+
+Use `config set` for the selected wiki. To choose a different wiki, pass the same
+`--wiki` folder to both the edit and its readback, as shown below.
+The commands below work in a terminal and ask you to review permission and
+confirm saving. Omitted settings and the other model role are kept.
+
+Change the embedding model:
+
+```sh
+lwiki config set embedding --model NEW_MODEL
+```
+
+Change how generation gets credentials:
+
+```sh
+lwiki config set generation --credential-command 'sagex auth export'
+```
+
+Add `--credential-output json` for a JSON helper. For either role, you can use
+`--key-env VARIABLE` or `--key-file "/absolute/private/key"` instead. To
+deliberately share embedding credentials with generation, use
+`lwiki config set generation --reuse-auth embedding` and review both destinations.
+
+Set generation's maximum output to 8192 tokens:
+
+```sh
+lwiki config set generation --max-output-tokens 8192
+```
+
+A token is a small piece of text counted by the model. This setting is a ceiling;
+an individual request may use a smaller limit. The generation test in
+`doctor --probe --role generate` uses this ceiling, subject to your request budget.
+If the test runs out of output tokens, it explains how to increase the limit.
+
+Set embedding dimensions to the number required by your provider:
+
+```sh
+lwiki config set embedding --dimensions 1024
+```
+
+You can also change an endpoint with `--url URL` or its API format with
+`--adapter responses-v1`, `--adapter chat-completions-v1` for generation, or
+`--adapter embeddings-v1` for embeddings. Use your provider's documented values.
+Running `lwiki config set embedding` or `lwiki config set generation` without
+flags offers a prompt for one setting.
+
+After an edit, expect `Your model settings were saved.` and a summary of both
+models. Confirm the saved value:
+
+```sh
+lwiki config show
+```
+
+To edit and check another wiki, keep its folder on both commands:
+
+```sh
+lwiki --wiki "/absolute/path/to/OtherWiki" config set embedding --model NEW_MODEL
+lwiki --wiki "/absolute/path/to/OtherWiki" config show
+```
+
+To preview without saving or running a helper, use:
+
+```sh
+lwiki --dry-run config set generation --max-output-tokens 8192 --non-interactive
+```
+
+For an unattended edit, review the preview first, then rerun without `--dry-run`
+and with `--grant-provider --non-interactive`. `--grant-provider` approves
+explicit requests for every final model and destination shown. Changed settings,
+including credentials or an output cap, require this reviewed permission.
+Setup's `--grant-embed` approves embeddings only; it cannot approve a new or
+changed generation service. Neither setup nor `config set` sends provider
+requests, including when used with `--offline`.
+
+If saving is incomplete, follow the reported retry instruction. Completed steps
+are preserved; repeating the same edit reuses matching settings.
+
+### Advanced provider settings
+
+The full provider configuration stays in a private file outside your notes.
+For a manually maintained file, add
+`--providers-config "/absolute/private/providers.toml"` to the command that
+makes requests and use `--profile PROFILE` to choose its profile. `config set`
+also accepts `--providers-config` after the model role. Keep keys outside notes,
+command arguments and public reports.
+Setup and `config set` save model choices and the provider file for the wiki you
+selected. Other wikis keep their settings. After saving, commands for that wiki
+use the saved file and profile without repeating those options.
+The [provider reference](../developer/contracts/providers-jobs.md) covers headers,
+rate cards and accounting.
+
+Provider files are limited to 64 KiB and 128 services and profiles each. Distinct
+edits retain earlier definitions and can reach those limits; repeating identical
+settings does not add entries. If an edit reports a size or table-format error,
+review the private file using the provider reference before retrying. Setup and
+`config set` cannot extend root collections written as closed inline TOML tables.
+Changing settings can also reformat your user preferences file and remove its
+comments, while retaining the saved values.
 
 ## Experimental Source relations
 

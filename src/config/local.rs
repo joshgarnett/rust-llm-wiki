@@ -29,54 +29,97 @@ fn format_for_path(path: &Path) -> UserConfigFormat {
 fn parse_document(path: &Path, bytes: &[u8]) -> Result<LocalConfigDocument> {
     let format = format_for_path(path);
     // Parse failures never repeat user input, which could contain an accidental key.
-    let (value, fields): (LocalConfigDocument, Vec<String>) = match format {
-        UserConfigFormat::Json => {
-            let raw: serde_json::Value =
-                crate::changes::prepare::strict_json(bytes).map_err(|_| {
+    let (value, fields, scoped_provider_present): (LocalConfigDocument, Vec<String>, bool) =
+        match format {
+            UserConfigFormat::Json => {
+                let raw: serde_json::Value =
+                    crate::changes::prepare::strict_json(bytes).map_err(|_| {
+                        super::local_io::error(
+                            path,
+                            "parse configuration",
+                            "invalid JSON document or duplicate key",
+                        )
+                    })?;
+                let fields = raw
+                    .as_object()
+                    .map(|map| map.keys().cloned().collect())
+                    .unwrap_or_default();
+                if raw
+                    .get("defaults")
+                    .and_then(serde_json::Value::as_object)
+                    .is_some_and(|defaults| defaults.contains_key("providers_config"))
+                {
+                    return Err(super::local_io::error(
+                        path,
+                        "validate configuration",
+                        "providers_config is allowed only at the top level or in vaults entries",
+                    ));
+                }
+                let scoped_provider_present = raw
+                    .get("vaults")
+                    .and_then(serde_json::Value::as_object)
+                    .is_some_and(|vaults| {
+                        vaults.values().any(|preferences| {
+                            preferences.as_object().is_some_and(|preferences| {
+                                preferences.contains_key("providers_config")
+                            })
+                        })
+                    });
+                let value = serde_json::from_value(raw).map_err(|_| {
                     super::local_io::error(
                         path,
                         "parse configuration",
-                        "invalid JSON document or duplicate key",
+                        "invalid JSON configuration fields",
                     )
                 })?;
-            let fields = raw
-                .as_object()
-                .map(|map| map.keys().cloned().collect())
-                .unwrap_or_default();
-            let value = serde_json::from_value(raw).map_err(|_| {
-                super::local_io::error(
-                    path,
-                    "parse configuration",
-                    "invalid JSON configuration fields",
-                )
-            })?;
-            (value, fields)
-        }
-        UserConfigFormat::Toml => {
-            let text = std::str::from_utf8(bytes).map_err(|_| {
-                super::local_io::error(path, "parse configuration", "TOML must be UTF-8")
-            })?;
-            let raw: toml::Value = toml::from_str(text).map_err(|_| {
-                super::local_io::error(
-                    path,
-                    "parse configuration",
-                    "invalid TOML document or duplicate key",
-                )
-            })?;
-            let fields = raw
-                .as_table()
-                .map(|map| map.keys().cloned().collect())
-                .unwrap_or_default();
-            let value = raw.try_into().map_err(|_| {
-                super::local_io::error(
-                    path,
-                    "parse configuration",
-                    "invalid TOML configuration fields",
-                )
-            })?;
-            (value, fields)
-        }
-    };
+                (value, fields, scoped_provider_present)
+            }
+            UserConfigFormat::Toml => {
+                let text = std::str::from_utf8(bytes).map_err(|_| {
+                    super::local_io::error(path, "parse configuration", "TOML must be UTF-8")
+                })?;
+                let raw: toml::Value = toml::from_str(text).map_err(|_| {
+                    super::local_io::error(
+                        path,
+                        "parse configuration",
+                        "invalid TOML document or duplicate key",
+                    )
+                })?;
+                let fields = raw
+                    .as_table()
+                    .map(|map| map.keys().cloned().collect())
+                    .unwrap_or_default();
+                if raw
+                    .get("defaults")
+                    .and_then(toml::Value::as_table)
+                    .is_some_and(|defaults| defaults.contains_key("providers_config"))
+                {
+                    return Err(super::local_io::error(
+                        path,
+                        "validate configuration",
+                        "providers_config is allowed only at the top level or in vaults entries",
+                    ));
+                }
+                let scoped_provider_present = raw
+                    .get("vaults")
+                    .and_then(toml::Value::as_table)
+                    .is_some_and(|vaults| {
+                        vaults.values().any(|preferences| {
+                            preferences.as_table().is_some_and(|preferences| {
+                                preferences.contains_key("providers_config")
+                            })
+                        })
+                    });
+                let value = raw.try_into().map_err(|_| {
+                    super::local_io::error(
+                        path,
+                        "parse configuration",
+                        "invalid TOML configuration fields",
+                    )
+                })?;
+                (value, fields, scoped_provider_present)
+            }
+        };
     if !["1", "2", LOCAL_CONFIG_SCHEMA_VERSION].contains(&value.schema_version.as_str())
         || (format == UserConfigFormat::Toml && value.schema_version != LOCAL_CONFIG_SCHEMA_VERSION)
     {
@@ -94,9 +137,10 @@ fn parse_document(path: &Path, bytes: &[u8]) -> Result<LocalConfigDocument> {
         ));
     }
     if value.schema_version != LOCAL_CONFIG_SCHEMA_VERSION
-        && fields
-            .iter()
-            .any(|field| ["providers_config", "embeddings", "remote"].contains(&field.as_str()))
+        && (scoped_provider_present
+            || fields.iter().any(|field| {
+                ["providers_config", "embeddings", "remote"].contains(&field.as_str())
+            }))
     {
         return Err(super::local_io::error(
             path,
@@ -108,6 +152,25 @@ fn parse_document(path: &Path, bytes: &[u8]) -> Result<LocalConfigDocument> {
     Ok(value)
 }
 fn validate_document(path: &Path, value: &LocalConfigDocument) -> Result<()> {
+    if value.defaults.providers_config.is_some() {
+        return Err(super::local_io::error(
+            path,
+            "validate configuration",
+            "providers_config is allowed only at the top level or in vaults entries",
+        ));
+    }
+    if value.schema_version != LOCAL_CONFIG_SCHEMA_VERSION
+        && value
+            .vaults
+            .values()
+            .any(|preferences| preferences.providers_config.is_some())
+    {
+        return Err(super::local_io::error(
+            path,
+            "validate configuration",
+            "scoped provider selections require schema version 3",
+        ));
+    }
     if let Some(default) = &value.default_wiki {
         validate_default(path, default)?;
     }
@@ -115,6 +178,9 @@ fn validate_document(path: &Path, value: &LocalConfigDocument) -> Result<()> {
         validate_absolute_path(path, providers, "providers_config")?;
     }
     for preferences in std::iter::once(&value.defaults).chain(value.vaults.values()) {
+        if let Some(providers) = &preferences.providers_config {
+            validate_absolute_path(path, providers, "vaults.providers_config")?;
+        }
         if preferences
             .read_max_bytes
             .is_some_and(|v| v == 0 || v > crate::app::offline::MAX_INPUT_BYTES)
@@ -448,6 +514,10 @@ fn read_path(path: &Path) -> Result<Option<Vec<u8>>> {
 pub fn require_write_target(config: &LoadedUserConfig) -> Result<&Path> {
     config.path().ok_or_else(|| config_error("default changes require user configuration; omit --no-user-config or provide --preferences FILE"))
 }
+/// Compare private selections with the same canonical-parent rules used by guarded snapshots.
+pub fn normalize_private_path(path: &Path) -> Result<PathBuf> {
+    super::local_io::effective_path(path)
+}
 #[derive(Debug, Clone, Serialize)]
 pub struct DocumentUpdateReport {
     pub configuration_path: PathBuf,
@@ -544,6 +614,10 @@ pub fn update_document(
     // Legacy JSON setters cannot silently discard newly configured schema-3 fields.
     if proposed.schema_version == "2"
         && (proposed.providers_config.is_some()
+            || proposed
+                .vaults
+                .values()
+                .any(|preferences| preferences.providers_config.is_some())
             || serde_json::to_value(&proposed.embeddings).ok()
                 != serde_json::to_value(EmbeddingDefaults::default()).ok()
             || serde_json::to_value(&proposed.remote).ok()
@@ -912,6 +986,7 @@ pub fn resolve_loaded(
             })
             .transpose()?,
         profile: record.string("wiki_profile").map(str::to_owned),
+        providers_config: None,
     };
     let local = loaded.summary.present.then_some(&loaded.document);
     let mut result = Preferences {

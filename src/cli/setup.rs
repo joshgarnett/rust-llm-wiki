@@ -4,12 +4,16 @@ use crate::{
     app::OperationOptions,
     config::{
         self, DefaultWiki,
-        provider_setup::{EmbeddingSetup, SetupAuth},
+        provider_edit::{
+            self, ProviderAdapter, ProviderAuthPatch, ProviderEditPlan, ProviderGrantDecision,
+            ProviderRole, ProviderRolePatch,
+        },
+        provider_setup::{SetupAuth, SetupCommandOutput},
     },
     domain::*,
     output::{Envelope, ErrorOutput},
 };
-use clap::Args;
+use clap::{Args, ValueEnum};
 use serde::Serialize;
 use serde_json::{Value, json};
 use std::{
@@ -17,7 +21,22 @@ use std::{
     path::{Path, PathBuf},
 };
 
-#[derive(Debug, Clone, Default, Args)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, ValueEnum)]
+pub enum CredentialOutput {
+    #[default]
+    Text,
+    Json,
+}
+impl From<CredentialOutput> for SetupCommandOutput {
+    fn from(value: CredentialOutput) -> Self {
+        match value {
+            CredentialOutput::Text => Self::Text,
+            CredentialOutput::Json => Self::Json,
+        }
+    }
+}
+
+#[derive(Clone, Default, Args)]
 pub struct SetupArguments {
     /// Folder for your wiki. An existing wiki is selected safely on repeated runs.
     pub path: Option<PathBuf>,
@@ -36,8 +55,8 @@ pub struct SetupArguments {
     /// Use supplied choices without prompts. Optional agent and model setup default to skipped.
     #[arg(long)]
     pub non_interactive: bool,
-    /// Install wiki instructions for codex, claude-code or cursor.
-    #[arg(long, value_parser = ["codex", "claude-code", "cursor"])]
+    /// Install wiki instructions for Codex, Sagex, Claude Code or Cursor.
+    #[arg(long, value_parser = ["codex", "sagex", "claude-code", "cursor"])]
     pub agent: Option<String>,
     /// Install for your user account (default) or one project.
     #[arg(long, value_parser = ["user", "project"])]
@@ -55,14 +74,20 @@ pub struct SetupArguments {
     #[arg(long)]
     pub embedding_dimensions: Option<String>,
     /// Environment variable holding your key. Setup does not read its value.
-    #[arg(long, conflicts_with_all = ["key_file", "prompt_key"])]
+    #[arg(long, conflicts_with_all = ["key_file", "prompt_key", "credential_command"])]
     pub key_env: Option<String>,
     /// Existing private key file. Setup stores only its absolute path.
-    #[arg(long, conflicts_with = "prompt_key")]
+    #[arg(long, conflicts_with_all = ["prompt_key", "credential_command"])]
     pub key_file: Option<PathBuf>,
     /// Read your key without displaying it and save it in a private file. Requires a terminal.
     #[arg(long)]
     pub prompt_key: bool,
+    /// Program and arguments that return a token. Quotes preserve spaces; no shell runs.
+    #[arg(long, conflicts_with_all = ["key_env", "key_file", "prompt_key"])]
+    pub credential_command: Option<String>,
+    /// Credential command output: token-only text (default) or key/expiry JSON.
+    #[arg(long, value_enum, requires = "credential_command")]
+    pub credential_output: Option<CredentialOutput>,
     /// Private file destination for --prompt-key; defaults beside the provider configuration.
     #[arg(long, requires = "prompt_key")]
     pub credential_file: Option<PathBuf>,
@@ -75,6 +100,45 @@ pub struct SetupArguments {
     /// Permit explicit future embedding requests for this wiki and chosen model.
     #[arg(long)]
     pub grant_embed: bool,
+    /// Permit explicit future API requests for every final model shown for this wiki.
+    #[arg(long, conflicts_with = "grant_embed")]
+    pub grant_provider: bool,
+    /// Optional generation model for API extraction. Your agent can extract without it.
+    #[arg(long)]
+    pub generation_model: Option<String>,
+    /// Full endpoint URL for the generation model.
+    #[arg(long)]
+    pub generation_url: Option<String>,
+    /// Generation API format; new models default to responses-v1.
+    #[arg(long, value_parser = ["responses-v1", "chat-completions-v1"])]
+    pub generation_adapter: Option<String>,
+    /// Maximum output tokens for the generation model; omitted settings are kept.
+    #[arg(long)]
+    pub generation_max_output_tokens: Option<u64>,
+    /// Reuse the embedding credentials after reviewing both destinations.
+    #[arg(long, conflicts_with_all = ["generation_key_env", "generation_key_file", "generation_prompt_key", "generation_credential_command"])]
+    pub generation_reuse_auth: bool,
+    /// Environment variable holding the generation key; its value is not read.
+    #[arg(long, conflicts_with_all = ["generation_key_file", "generation_prompt_key", "generation_credential_command", "generation_reuse_auth"])]
+    pub generation_key_env: Option<String>,
+    /// Existing private generation key file.
+    #[arg(long, conflicts_with_all = ["generation_prompt_key", "generation_credential_command", "generation_reuse_auth"])]
+    pub generation_key_file: Option<PathBuf>,
+    /// Read and save a generation key privately; requires a terminal.
+    #[arg(long, conflicts_with_all = ["generation_credential_command", "generation_reuse_auth"])]
+    pub generation_prompt_key: bool,
+    /// Generation credential program and arguments; no shell runs.
+    #[arg(long, conflicts_with = "generation_reuse_auth")]
+    pub generation_credential_command: Option<String>,
+    /// Generation command output: token-only text (default) or key/expiry JSON.
+    #[arg(long, value_enum, requires = "generation_credential_command")]
+    pub generation_credential_output: Option<CredentialOutput>,
+    /// Private file destination for --generation-prompt-key.
+    #[arg(long, requires = "generation_prompt_key")]
+    pub generation_credential_file: Option<PathBuf>,
+    /// Deliberately replace the generation private key file.
+    #[arg(long, requires = "generation_prompt_key")]
+    pub generation_replace_key: bool,
     /// Text added before documents sent for embedding.
     #[arg(long)]
     pub embedding_document_prefix: Option<String>,
@@ -89,7 +153,254 @@ pub struct SetupArguments {
     pub embedding_quality_target_bytes: Option<usize>,
 }
 
-fn usage(message: impl Into<String>) -> WikiError {
+// Commands and endpoint queries may contain private data.
+impl std::fmt::Debug for SetupArguments {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("SetupArguments")
+            .field("path", &self.path)
+            .field("non_interactive", &self.non_interactive)
+            .field("provider_settings", &"private_choices")
+            .finish()
+    }
+}
+
+/// Parse one familiar command line, resolve its program, and validate exact argv.
+/// No program, shell, environment expansion or credential lookup is executed.
+pub(super) fn command_auth(text: &str, output: CredentialOutput) -> Result<SetupAuth> {
+    command_auth_with_path(text, output, std::env::var_os("PATH").as_deref())
+}
+fn command_auth_with_path(
+    text: &str,
+    output: CredentialOutput,
+    search_path: Option<&std::ffi::OsStr>,
+) -> Result<SetupAuth> {
+    if text.is_empty() || text.len() > 4096 {
+        return Err(usage(
+            "credential command must contain 1..=4096 bytes; use one program and its arguments",
+        ));
+    }
+    let mut argv = shlex::split(text).ok_or_else(|| {
+        usage("credential command has unmatched quotes; correct the quotes and try again")
+    })?;
+    let program = argv
+        .first()
+        .filter(|program| !program.is_empty())
+        .ok_or_else(|| usage("credential command needs a program name"))?;
+    let supplied = Path::new(program);
+    let has_separator = supplied.components().count() > 1 || supplied.is_absolute();
+    let candidates = if has_separator {
+        vec![absolute(supplied)?]
+    } else {
+        search_path
+            .map(std::env::split_paths)
+            .into_iter()
+            .flatten()
+            .map(|directory| absolute(&directory.join(program)))
+            .collect::<Result<Vec<_>>>()?
+    };
+    let executable = candidates.into_iter().find_map(|path| {
+        let metadata = std::fs::metadata(&path).ok()?;
+        if !metadata.is_file() { return None; }
+        #[cfg(unix)] {
+            use std::os::unix::fs::PermissionsExt;
+            if metadata.permissions().mode() & 0o111 == 0 { return None; }
+        }
+        std::fs::canonicalize(path).ok()
+    }).ok_or_else(|| usage("credential program was not found or is not executable; install it, check PATH, or supply its absolute path"))?;
+    argv[0] = executable
+        .to_str()
+        .ok_or_else(|| usage("credential program path must be UTF-8"))?
+        .into();
+    SetupAuth::command(argv, output.into(), 300, 60, 10)
+}
+
+pub(super) fn adapter(value: &str) -> Result<ProviderAdapter> {
+    match value {
+        "embeddings-v1" => Ok(ProviderAdapter::EmbeddingsV1),
+        "responses-v1" => Ok(ProviderAdapter::ResponsesV1),
+        "chat-completions-v1" => Ok(ProviderAdapter::ChatCompletionsV1),
+        _ => Err(usage(
+            "choose embeddings-v1, responses-v1 or chat-completions-v1",
+        )),
+    }
+}
+
+pub(super) fn effective_profile(
+    args: &Arguments,
+    loaded: &config::local::LoadedUserConfig,
+    wiki: &DefaultWiki,
+    existing: bool,
+) -> Result<Option<String>> {
+    if existing {
+        let root = crate::vault::VaultRoot::explicit(&wiki.path)?;
+        return Ok(config::local::resolve_loaded(
+            &crate::vault::VaultFs::new(root),
+            &wiki.wiki_id,
+            &config::PreferenceOptions {
+                profile: args.profile.clone(),
+                ..Default::default()
+            },
+            loaded,
+        )?
+        .profile);
+    }
+    Ok(args
+        .profile
+        .clone()
+        .or_else(|| loaded.document().defaults.profile.clone()))
+}
+
+pub(super) fn saved_profile(
+    loaded: &config::local::LoadedUserConfig,
+    wiki: &DefaultWiki,
+    existing: bool,
+) -> Result<Option<String>> {
+    if existing {
+        let root = crate::vault::VaultRoot::explicit(&wiki.path)?;
+        return Ok(config::local::resolve_loaded(
+            &crate::vault::VaultFs::new(root),
+            &wiki.wiki_id,
+            &config::PreferenceOptions::default(),
+            loaded,
+        )?
+        .profile);
+    }
+    Ok(loaded.document().defaults.profile.clone())
+}
+
+/// Publish the selected wiki's file/profile pair without changing another wiki's fallback.
+pub(super) fn save_provider_selection(
+    proposed: &mut config::LocalConfigDocument,
+    wiki: &DefaultWiki,
+    previous_profile: Option<&str>,
+    profile: &str,
+    provider_path: &Path,
+) -> Result<bool> {
+    let same_file = if let Some((saved, _)) = proposed.saved_provider_config(Some(&wiki.wiki_id)) {
+        config::local::normalize_private_path(saved)? == provider_path
+    } else {
+        // A writer's preferences-sibling default can differ from ordinary remote reads.
+        crate::app::remote::default_provider_path()
+            .ok()
+            .and_then(|path| config::local::normalize_private_path(&path).ok())
+            .is_some_and(|path| path == provider_path)
+    };
+    let profile_changed = previous_profile != Some(profile);
+    if profile_changed || !same_file {
+        let preferences = proposed.vaults.entry(wiki.wiki_id.clone()).or_default();
+        preferences.profile = Some(profile.into());
+        preferences.providers_config = Some(provider_path.to_path_buf());
+    }
+    Ok(profile_changed)
+}
+
+/// Confirm the exact private definition before selecting it in preferences.
+pub(super) fn recheck_provider_publication(path: &Path, expected: &[u8]) -> Result<()> {
+    let current =
+        config::setup_io::load_private_file(path, config::providers::MAX_PROVIDER_CONFIG_BYTES)?;
+    if current.bytes() != Some(expected) {
+        return Err(WikiError::new(
+            ErrorCode::ContentConflict,
+            "provider settings changed before saving the wiki's model choice; your edits were kept",
+        ));
+    }
+    Ok(())
+}
+
+fn provider_summary(plan: &ProviderEditPlan) -> Value {
+    let mut value = json!({"roles": plan.roles, "changed_fields": plan.changed_fields,
+        "consent_requirements":plan.consent_requirements,"permission_complete":plan.consent_satisfied,
+        "projected_bytes":plan.projected_bytes,"network_requests":0,"credentials_resolved":false});
+    for role in &plan.roles {
+        let mut summary = serde_json::to_value(role).expect("safe provider summary");
+        summary["text_scope"] = json!(if role.role == ProviderRole::Embedding {
+            EMBEDDING_TEXT_SCOPE
+        } else {
+            "wiki text selected for API extraction"
+        });
+        summary["permitted"] = json!(plan.consent_satisfied);
+        summary["network_requests"] = json!(0);
+        if role.role == ProviderRole::Embedding {
+            summary["grant_embed"] = json!(plan.consent_satisfied);
+        }
+        value[role.role.as_str()] = summary;
+    }
+    value
+}
+
+pub(super) fn present_providers(summary: &Value, output: &mut impl Write) -> io::Result<()> {
+    for (name, label) in [("embedding", "Embedding"), ("generation", "Generation")] {
+        let role = &summary[name];
+        if !role.is_object() {
+            continue;
+        }
+        writeln!(
+            output,
+            "{label} model: {}",
+            role["model"].as_str().unwrap_or("Not set")
+        )?;
+        writeln!(
+            output,
+            "Destination: {}",
+            super::config_show::destination_label(&role["destination"])
+        )?;
+        if let Some(adapter) = role["adapter"].as_str() {
+            writeln!(output, "API format: {adapter}")?;
+        }
+        if name == "embedding" {
+            writeln!(
+                output,
+                "Vector dimensions: {}",
+                role["dimensions"].as_str().unwrap_or("provider default")
+            )?;
+        }
+        if let Some(limit) = role["effective_output_token_limit"].as_u64() {
+            writeln!(output, "Maximum output tokens: {limit}")?;
+        }
+        writeln!(
+            output,
+            "Text that explicit requests may send: {}.",
+            role["text_scope"].as_str().unwrap_or("wiki text")
+        )?;
+        writeln!(
+            output,
+            "Credentials: {}.",
+            match role["auth_source"].as_str() {
+                Some("command") => "credential command",
+                Some("environment") => "environment variable",
+                Some("private_file") => "private key file",
+                _ => "saved private key",
+            }
+        )?;
+        if let Some(command) = role["command_auth"].as_object() {
+            writeln!(
+                output,
+                "Command output: {}; reuse for at most {} seconds; refresh {} seconds before expiry; timeout {} seconds.",
+                command["output"].as_str().unwrap_or("text"),
+                command["ttl_seconds"],
+                command["refresh_skew_seconds"],
+                command["timeout_seconds"]
+            )?;
+        }
+        writeln!(
+            output,
+            "Explicit API requests: {}. This command makes no requests.",
+            if role["permitted"] == true {
+                "permitted when explicitly requested"
+            } else {
+                "not permitted"
+            }
+        )?;
+    }
+    Ok(())
+}
+
+pub(super) fn safe_provider_summary(plan: &ProviderEditPlan) -> Value {
+    provider_summary(plan)
+}
+
+pub(super) fn usage(message: impl Into<String>) -> WikiError {
     WikiError::new(ErrorCode::Usage, message)
 }
 const EMBEDDING_TEXT_SCOPE: &str = "wiki text and search questions";
@@ -116,38 +427,7 @@ fn embedding_destination(url: &str) -> Result<Value> {
     Ok(json!({"scheme":endpoint.scheme(),"host":host,"port":endpoint.port_or_known_default()}))
 }
 
-fn present_embedding_summary(
-    embedding: &Value,
-    wiki: &Path,
-    output: &mut impl Write,
-) -> io::Result<()> {
-    writeln!(
-        output,
-        "Embedding model: {}",
-        embedding["model"].as_str().unwrap_or("Not set")
-    )?;
-    writeln!(
-        output,
-        "Destination: {}",
-        super::config_show::destination_label(&embedding["destination"])
-    )?;
-    writeln!(
-        output,
-        "Text that explicit requests may send: {EMBEDDING_TEXT_SCOPE}."
-    )?;
-    writeln!(
-        output,
-        "Embedding requests for {}: {}. Setup makes no requests.",
-        wiki.display(),
-        if embedding["grant_embed"] == true {
-            "permitted when explicitly requested"
-        } else {
-            "not permitted"
-        }
-    )
-}
-
-fn absolute(path: &Path) -> Result<PathBuf> {
+pub(super) fn absolute(path: &Path) -> Result<PathBuf> {
     if path.is_absolute() {
         return Ok(path.to_path_buf());
     }
@@ -169,6 +449,14 @@ fn agent_directory_default(setup: &SetupArguments) -> Result<PathBuf> {
         home()
     }
 }
+// Sagex reads the shared .agents skill layout. Reuse its existing Codex
+// installation identity so choosing Sagex does not change package ownership.
+fn agent_install_target(agent: &str) -> &str {
+    if agent == "sagex" { "codex" } else { agent }
+}
+fn agent_label(agent: &str) -> &str {
+    if agent == "sagex" { "Sagex" } else { agent }
+}
 fn quote(text: &str) -> String {
     format!("'{}'", text.replace('\'', "'\\''"))
 }
@@ -176,12 +464,12 @@ fn quote_path(path: &Path) -> String {
     quote(&path.to_string_lossy())
 }
 
-struct Prompts<R, W> {
-    input: R,
-    output: W,
+pub(super) struct Prompts<R, W> {
+    pub(super) input: R,
+    pub(super) output: W,
 }
 impl<R: BufRead, W: Write> Prompts<R, W> {
-    fn text(&mut self, label: &str, default: Option<&str>) -> Result<String> {
+    pub(super) fn text(&mut self, label: &str, default: Option<&str>) -> Result<String> {
         if let Some(default) = default {
             write!(self.output, "{label} [{default}]: ")
         } else {
@@ -213,7 +501,7 @@ impl<R: BufRead, W: Write> Prompts<R, W> {
             line
         })
     }
-    fn yes(&mut self, label: &str, default: bool) -> Result<bool> {
+    pub(super) fn yes(&mut self, label: &str, default: bool) -> Result<bool> {
         loop {
             let answer = self.text(label, Some(if default { "yes" } else { "no" }))?;
             match answer.to_ascii_lowercase().as_str() {
@@ -316,12 +604,21 @@ fn validate_folder(setup: &SetupArguments, args: &Arguments) -> Result<(DefaultW
     Ok((wiki, marker_exists))
 }
 
+#[cfg(test)]
 fn collect<R: BufRead, W: Write>(
     setup: &SetupArguments,
     args: &Arguments,
     interactive: bool,
     prompts: &mut Prompts<R, W>,
 ) -> Result<SetupArguments> {
+    collect_loaded(setup, args, interactive, prompts).map(|(choices, _)| choices)
+}
+fn collect_loaded<R: BufRead, W: Write>(
+    setup: &SetupArguments,
+    args: &Arguments,
+    interactive: bool,
+    prompts: &mut Prompts<R, W>,
+) -> Result<(SetupArguments, config::local::LoadedUserConfig)> {
     let mut choices = setup.clone();
     choices.path = choices.path.or_else(|| args.wiki.clone());
     if choices.path.is_none() {
@@ -385,6 +682,10 @@ fn collect<R: BufRead, W: Write>(
         }
     }
     validate_folder(&choices, args)?;
+    let loaded = config::local::load_user_config_for_setup(
+        args.preferences.as_deref(),
+        args.no_user_config,
+    )?;
     if interactive {
         if !choices.no_default {
             choices.no_default =
@@ -392,18 +693,23 @@ fn collect<R: BufRead, W: Write>(
         }
         if choices.agent.is_none() {
             loop {
-                let agent = prompts.text(
-                    "Connect an agent (codex/claude-code/cursor/skip)",
-                    Some("skip"),
-                )?;
+                let agent = prompts
+                    .text(
+                        "Connect an agent (codex/Sagex/claude-code/cursor/skip)",
+                        Some("skip"),
+                    )?
+                    .to_ascii_lowercase();
                 match agent.as_str() {
-                    "codex" | "claude-code" | "cursor" => {
+                    "codex" | "sagex" | "claude-code" | "cursor" => {
                         choices.agent = Some(agent);
                         break;
                     }
                     "skip" => break,
-                    _ => writeln!(prompts.output, "Choose codex, claude-code, cursor or skip.")
-                        .map_err(|error| usage(error.to_string()))?,
+                    _ => writeln!(
+                        prompts.output,
+                        "Choose codex, Sagex, claude-code, cursor or skip."
+                    )
+                    .map_err(|error| usage(error.to_string()))?,
                 }
             }
         }
@@ -418,67 +724,463 @@ fn collect<R: BufRead, W: Write>(
                 Some(&default.to_string_lossy()),
             )?));
         }
-        let configure = choices.embedding_model.is_some() || choices.embedding_url.is_some()
-            || prompts.yes("Configure an optional embedding model for similarity search? No requests will be made.", false)?;
+        let current = current_provider_summary(args, &choices, &loaded)?;
+        let embedding_current = current
+            .as_ref()
+            .map(|value| &value["embedding"])
+            .filter(|value| value.is_object());
+        let configure = embedding_requested(&choices)
+            || prompts.yes(
+                if embedding_current.is_some() {
+                    "Change the embedding model for similarity search?"
+                } else {
+                    "Add an embedding model for similarity search? Setup makes no requests."
+                },
+                false,
+            )?;
         if configure {
             if choices.embedding_model.is_none() {
-                choices.embedding_model =
-                    Some(prompts.text("Embedding model name from your provider", None)?);
+                choices.embedding_model = Some(prompts.text(
+                    "Embedding model name",
+                    embedding_current.and_then(|value| value["model"].as_str()),
+                )?);
             }
             if choices.embedding_url.is_none() {
-                choices.embedding_url =
-                    Some(prompts.text("Full embeddings-v1 endpoint URL from your provider", None)?);
+                let value = prompts.text(
+                    if embedding_current.is_some() {
+                        "Full embeddings-v1 endpoint URL (leave empty to keep it)"
+                    } else {
+                        "Full embeddings-v1 endpoint URL"
+                    },
+                    None,
+                )?;
+                if !value.is_empty() {
+                    choices.embedding_url = Some(value);
+                }
             }
-            if choices.embedding_dimensions.is_none() {
-                let dimensions = prompts.text("Requested vector dimensions (number, auto, or leave empty to use provider default)", None)?;
+            if let Some(url) = &choices.embedding_url {
+                embedding_destination(url)?;
+            }
+            if choices.embedding_dimensions.is_none() && embedding_current.is_none() {
+                let dimensions = prompts.text(
+                    "Vector dimensions (number, auto, or empty for provider default)",
+                    None,
+                )?;
                 if !dimensions.is_empty() {
                     choices.embedding_dimensions = Some(dimensions);
                 }
             }
-            if choices.key_env.is_none() && choices.key_file.is_none() && !choices.prompt_key {
-                loop {
-                    let auth = prompts.text(
-                        "Key source (save privately/environment/private file)",
-                        Some("save privately"),
-                    )?;
-                    match auth.as_str() {
-                        "save privately" | "save" => {
-                            choices.prompt_key = true;
-                            break;
-                        }
-                        "environment" | "env" => {
-                            choices.key_env =
-                                Some(prompts.text("Environment variable name", None)?);
-                            break;
-                        }
-                        "private file" | "file" => {
-                            choices.key_file = Some(PathBuf::from(
-                                prompts.text("Existing private key file", None)?,
-                            ));
-                            break;
-                        }
-                        _ => writeln!(
-                            prompts.output,
-                            "Choose save privately, environment or private file."
-                        )
-                        .map_err(|error| usage(error.to_string()))?,
-                    }
+            collect_auth(&mut choices, false, embedding_current.is_some(), prompts)?;
+        }
+        let generation_current = current
+            .as_ref()
+            .map(|value| &value["generation"])
+            .filter(|value| value.is_object());
+        let configure_generation = generation_requested(&choices)
+            || prompts.yes(
+                if generation_current.is_some() {
+                    "Change the generation model for API extraction?"
+                } else {
+                    "Add a generation model for API extraction? Your agent can extract without one."
+                },
+                false,
+            )?;
+        if configure_generation {
+            if choices.generation_model.is_none() {
+                choices.generation_model = Some(prompts.text(
+                    "Generation model name",
+                    generation_current.and_then(|value| value["model"].as_str()),
+                )?);
+            }
+            if choices.generation_url.is_none() {
+                let value = prompts.text(
+                    if generation_current.is_some() {
+                        "Full generation endpoint URL (leave empty to keep it)"
+                    } else {
+                        "Full generation endpoint URL"
+                    },
+                    None,
+                )?;
+                if !value.is_empty() {
+                    choices.generation_url = Some(value);
                 }
             }
-            if !choices.grant_embed {
-                let destination = embedding_destination(
-                    choices.embedding_url.as_deref().expect("chosen endpoint"),
-                )?;
-                choices.grant_embed = prompts.yes(&format!(
-                    "Permit explicit requests for similarity search in {} with model {} at {}? They can send {EMBEDDING_TEXT_SCOPE} and cost money. Setup makes no requests.",
-                    path.display(),
-                    choices.embedding_model.as_deref().expect("chosen model"),
-                    super::config_show::destination_label(&destination),
-                ), false)?;
+            if let Some(url) = &choices.generation_url {
+                embedding_destination(url)?;
+            }
+            if choices.generation_adapter.is_none() && generation_current.is_none() {
+                loop {
+                    let value = prompts.text(
+                        "Generation API format (responses-v1/chat-completions-v1)",
+                        Some("responses-v1"),
+                    )?;
+                    if matches!(value.as_str(), "responses-v1" | "chat-completions-v1") {
+                        choices.generation_adapter = Some(value);
+                        break;
+                    }
+                    writeln!(
+                        prompts.output,
+                        "Choose responses-v1 or chat-completions-v1."
+                    )
+                    .map_err(|error| usage(error.to_string()))?;
+                }
+            }
+            if !generation_auth_supplied(&choices) && generation_current.is_none() {
+                let embedding_host = choices
+                    .embedding_url
+                    .as_deref()
+                    .map(embedding_destination)
+                    .transpose()?
+                    .or_else(|| embedding_current.map(|value| value["destination"].clone()));
+                let generation_host = choices
+                    .generation_url
+                    .as_deref()
+                    .map(embedding_destination)
+                    .transpose()?
+                    .or_else(|| generation_current.map(|value| value["destination"].clone()));
+                if let (Some(embedding_host), Some(generation_host)) =
+                    (embedding_host, generation_host)
+                {
+                    writeln!(
+                        prompts.output,
+                        "Embedding destination: {}. Generation destination: {}.",
+                        super::config_show::destination_label(&embedding_host),
+                        super::config_show::destination_label(&generation_host)
+                    )
+                    .map_err(|error| usage(error.to_string()))?;
+                    choices.generation_reuse_auth = prompts.yes(
+                        "Use the same credentials for these two destinations?",
+                        false,
+                    )?;
+                }
+            }
+            if !choices.generation_reuse_auth {
+                collect_auth(&mut choices, true, generation_current.is_some(), prompts)?;
             }
         }
     }
-    Ok(choices)
+    Ok((choices, loaded))
+}
+
+fn embedding_auth_supplied(choices: &SetupArguments) -> bool {
+    choices.key_env.is_some()
+        || choices.key_file.is_some()
+        || choices.prompt_key
+        || choices.credential_command.is_some()
+}
+fn generation_auth_supplied(choices: &SetupArguments) -> bool {
+    choices.generation_key_env.is_some()
+        || choices.generation_key_file.is_some()
+        || choices.generation_prompt_key
+        || choices.generation_credential_command.is_some()
+        || choices.generation_reuse_auth
+}
+fn embedding_requested(choices: &SetupArguments) -> bool {
+    choices.embedding_model.is_some()
+        || choices.embedding_url.is_some()
+        || choices.embedding_dimensions.is_some()
+        || embedding_auth_supplied(choices)
+}
+fn generation_requested(choices: &SetupArguments) -> bool {
+    choices.generation_model.is_some()
+        || choices.generation_url.is_some()
+        || choices.generation_adapter.is_some()
+        || choices.generation_max_output_tokens.is_some()
+        || generation_auth_supplied(choices)
+}
+
+fn current_provider_summary(
+    args: &Arguments,
+    setup: &SetupArguments,
+    loaded: &config::local::LoadedUserConfig,
+) -> Result<Option<Value>> {
+    let (wiki, existing) = validate_folder(setup, args)?;
+    let profile = effective_profile(args, loaded, &wiki, existing)?;
+    let Some(profile) = profile else {
+        return Ok(None);
+    };
+    let migration = loaded.toml_migration_target();
+    let path = setup
+        .providers_file
+        .clone()
+        .or_else(|| {
+            loaded
+                .document()
+                .saved_provider_config(Some(&wiki.wiki_id))
+                .map(|(path, _)| path.to_path_buf())
+        })
+        .or_else(|| {
+            migration
+                .as_deref()
+                .or(loaded.path())
+                .and_then(Path::parent)
+                .map(|parent| parent.join("providers.toml"))
+        });
+    let Some(path) = path else {
+        return Ok(None);
+    };
+    let snapshot = config::setup_io::load_private_file(
+        &absolute(&path)?,
+        config::providers::MAX_PROVIDER_CONFIG_BYTES,
+    )?;
+    if !snapshot.present() {
+        return Ok(None);
+    }
+    let plan = provider_edit::plan_provider_edit(
+        snapshot.bytes(),
+        &wiki,
+        Some(&profile),
+        &[],
+        ProviderGrantDecision::Preserve,
+    )?;
+    Ok(Some(provider_summary(&plan)))
+}
+
+fn collect_auth<R: BufRead, W: Write>(
+    choices: &mut SetupArguments,
+    generation: bool,
+    existing: bool,
+    prompts: &mut Prompts<R, W>,
+) -> Result<()> {
+    if if generation {
+        generation_auth_supplied(choices)
+    } else {
+        embedding_auth_supplied(choices)
+    } {
+        return Ok(());
+    }
+    loop {
+        let value = prompts.text(
+            "Credentials (command/environment/private file/save privately/keep)",
+            Some(if existing { "keep" } else { "command" }),
+        )?;
+        match value.as_str() {
+            "keep" if existing => return Ok(()),
+            "command" => {
+                writeln!(
+                    prompts.output,
+                    "Use one program and its arguments. Shell pipes and substitutions do not run."
+                )
+                .map_err(|error| usage(error.to_string()))?;
+                let text = loop {
+                    let text = prompts.text("Credential command", None)?;
+                    match command_auth(&text, CredentialOutput::Text) {
+                        Ok(_) => break text,
+                        Err(error) => writeln!(prompts.output, "{}", error.message)
+                            .map_err(|error| usage(error.to_string()))?,
+                    }
+                };
+                let output = loop {
+                    let output = prompts.text("Command output (text/json)", Some("text"))?;
+                    match output.as_str() {
+                        "text" => break CredentialOutput::Text,
+                        "json" => break CredentialOutput::Json,
+                        _ => writeln!(
+                            prompts.output,
+                            "Choose text for a token, or json for key and optional expires_at."
+                        )
+                        .map_err(|error| usage(error.to_string()))?,
+                    }
+                };
+                if generation {
+                    choices.generation_credential_command = Some(text);
+                    choices.generation_credential_output = Some(output);
+                } else {
+                    choices.credential_command = Some(text);
+                    choices.credential_output = Some(output);
+                }
+                return Ok(());
+            }
+            "environment" | "env" => {
+                let name = prompts.text("Environment variable name", None)?;
+                if generation {
+                    choices.generation_key_env = Some(name);
+                } else {
+                    choices.key_env = Some(name);
+                }
+                return Ok(());
+            }
+            "private file" | "file" => {
+                let path = prompts.path("Existing private key file", None)?;
+                if generation {
+                    choices.generation_key_file = Some(path);
+                } else {
+                    choices.key_file = Some(path);
+                }
+                return Ok(());
+            }
+            "save privately" | "save" => {
+                if generation {
+                    choices.generation_prompt_key = true;
+                } else {
+                    choices.prompt_key = true;
+                }
+                return Ok(());
+            }
+            _ => writeln!(
+                prompts.output,
+                "Choose command, environment, private file{}.",
+                if existing {
+                    ", save privately or keep"
+                } else {
+                    " or save privately"
+                }
+            )
+            .map_err(|error| usage(error.to_string()))?,
+        }
+    }
+}
+
+pub(super) fn review_provider_permission<R: BufRead, W: Write>(
+    plan: &ProviderEditPlan,
+    prompts: &mut Prompts<R, W>,
+) -> Result<bool> {
+    present_providers(&provider_summary(plan), &mut prompts.output)
+        .map_err(|error| usage(error.to_string()))?;
+    prompts.yes("Permit explicit API requests for all models and destinations shown above? They can send the described text and cost money.", false)
+}
+
+fn collect_setup_auth(
+    choices: &mut SetupArguments,
+    generation: bool,
+    parent: &Path,
+    snapshots: &mut Vec<(bool, config::setup_io::PrivateFileSnapshot, bool)>,
+) -> Result<ProviderAuthPatch> {
+    let (environment, file, prompt, command, output, reuse) = if generation {
+        (
+            choices.generation_key_env.clone(),
+            choices.generation_key_file.clone(),
+            choices.generation_prompt_key,
+            choices.generation_credential_command.clone(),
+            choices.generation_credential_output,
+            choices.generation_reuse_auth,
+        )
+    } else {
+        (
+            choices.key_env.clone(),
+            choices.key_file.clone(),
+            choices.prompt_key,
+            choices.credential_command.clone(),
+            choices.credential_output,
+            false,
+        )
+    };
+    if [
+        environment.is_some(),
+        file.is_some(),
+        prompt,
+        command.is_some(),
+        reuse,
+    ]
+    .into_iter()
+    .filter(|value| *value)
+    .count()
+        > 1
+    {
+        return Err(usage("choose one credential source for each model"));
+    }
+    if reuse {
+        return Ok(ProviderAuthPatch::CopyFrom(ProviderRole::Embedding));
+    }
+    if let Some(command) = command {
+        return Ok(ProviderAuthPatch::Replace(command_auth(
+            &command,
+            output.unwrap_or_default(),
+        )?));
+    }
+    if let Some(name) = environment {
+        return Ok(ProviderAuthPatch::Replace(SetupAuth::Environment(name)));
+    }
+    if let Some(file) = file {
+        let path = absolute(&file)?;
+        if generation {
+            choices.generation_key_file = Some(path.clone());
+        } else {
+            choices.key_file = Some(path.clone());
+        }
+        return Ok(ProviderAuthPatch::Replace(SetupAuth::PrivateFile(path)));
+    }
+    if prompt {
+        let (destination, replace, model, url) = if generation {
+            (
+                choices.generation_credential_file.clone(),
+                choices.generation_replace_key,
+                choices.generation_model.as_deref(),
+                choices.generation_url.as_deref(),
+            )
+        } else {
+            (
+                choices.credential_file.clone(),
+                choices.replace_key,
+                choices.embedding_model.as_deref(),
+                choices.embedding_url.as_deref(),
+            )
+        };
+        let role = if generation {
+            "generation"
+        } else {
+            "embedding"
+        };
+        let hash = blake3::hash(
+            format!("{role}\n{}\n{}", model.unwrap_or(""), url.unwrap_or("")).as_bytes(),
+        )
+        .to_hex()
+        .to_string();
+        let path = absolute(
+            &destination.unwrap_or_else(|| parent.join(format!("{role}-key-{}", &hash[..16]))),
+        )?;
+        let snapshot =
+            config::setup_io::load_private_file(&path, config::providers::MAX_SECRET_BYTES)?;
+        if snapshot.present() && !replace {
+            return Err(WikiError::new(
+                ErrorCode::ContentConflict,
+                "private key destination exists; reuse it with --key-file, choose another credential file, or explicitly replace it",
+            ));
+        }
+        if snapshots
+            .iter()
+            .any(|(_, existing, _)| existing.path() == snapshot.path())
+        {
+            return Err(usage(
+                "two saved keys need different private file destinations; choose separate paths or reuse the embedding credentials",
+            ));
+        }
+        if generation {
+            choices.generation_credential_file = Some(snapshot.path().to_path_buf());
+        } else {
+            choices.credential_file = Some(snapshot.path().to_path_buf());
+        }
+        let auth = SetupAuth::PrivateFile(snapshot.path().to_path_buf());
+        snapshots.push((generation, snapshot, replace));
+        return Ok(ProviderAuthPatch::Replace(auth));
+    }
+    Ok(ProviderAuthPatch::Preserve)
+}
+fn clear_provider_choices(choices: &mut SetupArguments) {
+    choices.embedding_model = None;
+    choices.embedding_url = None;
+    choices.embedding_dimensions = None;
+    choices.key_env = None;
+    choices.key_file = None;
+    choices.prompt_key = false;
+    choices.credential_command = None;
+    choices.credential_output = None;
+    choices.credential_file = None;
+    choices.replace_key = false;
+    choices.generation_model = None;
+    choices.generation_url = None;
+    choices.generation_adapter = None;
+    choices.generation_max_output_tokens = None;
+    choices.generation_key_env = None;
+    choices.generation_key_file = None;
+    choices.generation_prompt_key = false;
+    choices.generation_credential_command = None;
+    choices.generation_credential_output = None;
+    choices.generation_credential_file = None;
+    choices.generation_replace_key = false;
+    choices.generation_reuse_auth = false;
+    choices.grant_provider = false;
+    choices.grant_embed = false;
 }
 
 #[derive(Clone, Serialize)]
@@ -520,6 +1222,14 @@ fn checkpoint(stage: &str, wiki: &Path) -> Result<()> {
 }
 
 fn retry_command(args: &Arguments, setup: &SetupArguments, configuration: Option<&Path>) -> String {
+    retry_command_profile(args, setup, configuration, args.profile.as_deref())
+}
+fn retry_command_profile(
+    args: &Arguments,
+    setup: &SetupArguments,
+    configuration: Option<&Path>,
+    profile: Option<&str>,
+) -> String {
     let mut command = String::from("lwiki");
     if args.preferences.is_some()
         && let Some(path) = configuration
@@ -528,6 +1238,9 @@ fn retry_command(args: &Arguments, setup: &SetupArguments, configuration: Option
     }
     if args.no_user_config {
         command += " --no-user-config";
+    }
+    if let Some(profile) = profile {
+        command += &format!(" --profile {}", quote(profile));
     }
     if let Some(timeout) = args.lock_timeout_ms {
         command += &format!(" --lock-timeout-ms {timeout}");
@@ -539,7 +1252,7 @@ fn retry_command(args: &Arguments, setup: &SetupArguments, configuration: Option
         " setup {}",
         quote_path(setup.path.as_deref().expect("chosen path"))
     );
-    if !setup.prompt_key {
+    if !setup.prompt_key && !setup.generation_prompt_key {
         command += " --non-interactive";
     }
     if setup.select {
@@ -565,9 +1278,11 @@ fn retry_command(args: &Arguments, setup: &SetupArguments, configuration: Option
     }
     for (flag, value) in [
         ("--embedding-model", &setup.embedding_model),
-        ("--embedding-url", &setup.embedding_url),
         ("--embedding-dimensions", &setup.embedding_dimensions),
         ("--key-env", &setup.key_env),
+        ("--generation-model", &setup.generation_model),
+        ("--generation-adapter", &setup.generation_adapter),
+        ("--generation-key-env", &setup.generation_key_env),
         (
             "--embedding-document-prefix",
             &setup.embedding_document_prefix,
@@ -582,10 +1297,70 @@ fn retry_command(args: &Arguments, setup: &SetupArguments, configuration: Option
         ("--key-file", &setup.key_file),
         ("--providers-file", &setup.providers_file),
         ("--credential-file", &setup.credential_file),
+        ("--generation-key-file", &setup.generation_key_file),
+        (
+            "--generation-credential-file",
+            &setup.generation_credential_file,
+        ),
     ] {
         if let Some(path) = path {
             command += &format!(" {flag} {}", quote_path(path));
         }
+    }
+    // Retrying before provider publication needs the original private endpoint/command.
+    // Placeholders keep argv, paths and query values out of ordinary reports.
+    for (flag, supplied) in [
+        ("--embedding-url", setup.embedding_url.is_some()),
+        ("--generation-url", setup.generation_url.is_some()),
+        ("--credential-command", setup.credential_command.is_some()),
+        (
+            "--generation-credential-command",
+            setup.generation_credential_command.is_some(),
+        ),
+    ] {
+        if supplied {
+            command += &format!(
+                " {flag} {}",
+                quote(if flag.contains("command") {
+                    "<repeat your credential command>"
+                } else {
+                    "<repeat your full endpoint URL>"
+                })
+            );
+        }
+    }
+    for (flag, value) in [
+        ("--credential-output", setup.credential_output),
+        (
+            "--generation-credential-output",
+            setup.generation_credential_output,
+        ),
+    ] {
+        if let Some(value) = value {
+            command += &format!(
+                " {flag} {}",
+                if value == CredentialOutput::Json {
+                    "json"
+                } else {
+                    "text"
+                }
+            );
+        }
+    }
+    if setup.generation_prompt_key {
+        command += " --generation-prompt-key";
+    }
+    if setup.generation_replace_key {
+        command += " --generation-replace-key";
+    }
+    if setup.generation_reuse_auth {
+        command += " --generation-reuse-auth";
+    }
+    if setup.grant_provider {
+        command += " --grant-provider";
+    }
+    if let Some(value) = setup.generation_max_output_tokens {
+        command += &format!(" --generation-max-output-tokens {value}");
     }
     if setup.prompt_key {
         command += " --prompt-key";
@@ -625,6 +1400,7 @@ fn next_steps(
     }
     let mut result = Vec::new();
     if let Some(agent) = &setup.agent {
+        let agent = agent_label(agent);
         result.push(format!(
             "Restart your {agent} session so it can find the installed llm-wiki instructions."
         ));
@@ -635,7 +1411,7 @@ fn next_steps(
             ));
         }
     } else {
-        result.push("Connect your agent later by rerunning setup with --agent codex, --agent claude-code or --agent cursor.".into());
+        result.push("Connect your agent later by rerunning setup with --agent codex, --agent sagex, --agent claude-code or --agent cursor.".into());
     }
     result.push(format!("Capture one of your notes: {prefix} --offline source add '/absolute/path/to/your-note.md' --title 'Your note title'"));
     result.push(format!(
@@ -680,7 +1456,7 @@ fn finish(
     envelope
 }
 
-/// Setup configures files only. It never resolves credentials or contacts providers.
+/// Setup configures files only. It never resolves saved credentials, runs a credential command or contacts providers.
 pub fn execute(args: &Arguments, setup: &SetupArguments) -> Result<Envelope> {
     if args.stage {
         return Err(usage(
@@ -695,7 +1471,7 @@ pub fn execute(args: &Arguments, setup: &SetupArguments) -> Result<Envelope> {
         input: io::stdin().lock(),
         output: io::stderr().lock(),
     };
-    let mut choices = collect(setup, args, interactive, &mut prompts)?;
+    let (mut choices, loaded) = collect_loaded(setup, args, interactive, &mut prompts)?;
     let requested = choices.path.as_deref().expect("chosen path");
     if let Some(explicit) = &args.wiki
         && absolute(explicit)? != requested
@@ -713,39 +1489,30 @@ pub fn execute(args: &Arguments, setup: &SetupArguments) -> Result<Envelope> {
     if timeout > 30_000 {
         return Err(usage("setup writer timeout must be at most 30000 ms"));
     }
-    let loaded = config::local::load_user_config_for_setup(
-        args.preferences.as_deref(),
-        args.no_user_config,
-    )?;
     let config_target = loaded.toml_migration_target();
     let config_path = config_target.as_deref().or(loaded.path());
     if !choices.no_default {
         config::local::require_write_target(&loaded)?;
     }
-    let provider_requested = choices.embedding_model.is_some() || choices.embedding_url.is_some();
-    if !provider_requested
-        && (choices.embedding_dimensions.is_some()
-            || choices.key_env.is_some()
-            || choices.key_file.is_some()
-            || choices.prompt_key
-            || choices.providers_file.is_some()
-            || choices.grant_embed
-            || choices.embedding_document_prefix.is_some()
-            || choices.embedding_query_prefix.is_some()
-            || choices.embedding_max_input_bytes.is_some()
-            || choices.embedding_quality_target_bytes.is_some())
-    {
-        return Err(usage(
-            "embedding setup requires --embedding-model and --embedding-url; omit model options to skip it",
-        ));
-    }
-    if choices.prompt_key
+    let provider_requested = embedding_requested(&choices)
+        || generation_requested(&choices)
+        || choices.grant_embed
+        || choices.grant_provider
+        || choices.providers_file.is_some()
+        || choices.embedding_document_prefix.is_some()
+        || choices.embedding_query_prefix.is_some()
+        || choices.embedding_max_input_bytes.is_some()
+        || choices.embedding_quality_target_bytes.is_some();
+    if (choices.prompt_key || choices.generation_prompt_key)
         && !args.dry_run
         && (choices.non_interactive || !io::stdin().is_terminal() || !io::stderr().is_terminal())
     {
         return Err(usage(
-            "--prompt-key requires interactive terminal input; use --key-env NAME or --key-file FILE with --non-interactive or redirected input",
+            "saving a new key requires interactive terminal input; use a credential command, environment variable or private key file with --non-interactive",
         ));
+    }
+    if choices.grant_embed && choices.grant_provider {
+        return Err(usage("choose --grant-provider or --grant-embed, not both"));
     }
     if choices.agent.is_some() {
         let directory = choices
@@ -760,25 +1527,32 @@ pub fn execute(args: &Arguments, setup: &SetupArguments) -> Result<Envelope> {
     if !choices.no_default {
         proposed.default_wiki = Some(wiki.clone());
     }
+    let selected_profile = effective_profile(args, &loaded, &wiki, marker_exists)?;
+    let prior_saved_profile = saved_profile(&loaded, &wiki, marker_exists)?;
     let mut provider_snapshot = None;
-    let mut credential_snapshot = None;
-    let mut embedding = None;
+    let mut credential_snapshots = Vec::new();
     let mut provider_document = None;
+    let mut provider_write_needed = false;
+    let mut patches = Vec::new();
+    let mut providers_preview = None;
+    let mut grant = if choices.grant_provider {
+        ProviderGrantDecision::ReviewedAllRoles
+    } else if choices.grant_embed {
+        ProviderGrantDecision::EmbeddingOnly
+    } else {
+        ProviderGrantDecision::Preserve
+    };
     if provider_requested {
-        let model = choices
-            .embedding_model
-            .clone()
-            .ok_or_else(|| usage("provide --embedding-model MODEL"))?;
-        let url = choices
-            .embedding_url
-            .clone()
-            .ok_or_else(|| usage("provide --embedding-url URL"))?;
-        let parent = config_path.and_then(Path::parent).ok_or_else(|| usage("model setup needs a persistent user configuration; omit --no-user-config or provide --preferences FILE"))?;
+        let parent = config_path.and_then(Path::parent).ok_or_else(|| usage("model setup needs saved user settings; omit --no-user-config or provide --preferences FILE"))?;
         let provider_path = absolute(
             &choices
                 .providers_file
                 .clone()
-                .or_else(|| proposed.providers_config.clone())
+                .or_else(|| {
+                    proposed
+                        .saved_provider_config(Some(&wiki.wiki_id))
+                        .map(|(path, _)| path.to_path_buf())
+                })
                 .unwrap_or_else(|| parent.join("providers.toml")),
         )?;
         let snapshot = config::setup_io::load_private_file(
@@ -786,68 +1560,109 @@ pub fn execute(args: &Arguments, setup: &SetupArguments) -> Result<Envelope> {
             config::providers::MAX_PROVIDER_CONFIG_BYTES,
         )?;
         choices.providers_file = Some(snapshot.path().to_path_buf());
-        let auth = if let Some(name) = &choices.key_env {
-            SetupAuth::Environment(name.clone())
-        } else if let Some(path) = &choices.key_file {
-            let path = absolute(path)?;
-            choices.key_file = Some(path.clone());
-            SetupAuth::PrivateFile(path)
-        } else if choices.prompt_key {
-            let hash = blake3::hash(format!("{model}\n{url}").as_bytes())
-                .to_hex()
-                .to_string();
-            let path = absolute(
-                &choices
-                    .credential_file
-                    .clone()
-                    .unwrap_or_else(|| parent.join(format!("embedding-key-{}", &hash[..16]))),
-            )?;
-            let key_snapshot =
-                config::setup_io::load_private_file(&path, config::providers::MAX_SECRET_BYTES)?;
-            if key_snapshot.bytes().is_some() && !choices.replace_key {
-                return Err(WikiError::new(
-                    ErrorCode::ContentConflict,
-                    "private key destination already exists; use --key-file to reuse it, choose --credential-file elsewhere, or explicitly use --replace-key",
+        if embedding_requested(&choices) {
+            let mut patch = ProviderRolePatch::new(ProviderRole::Embedding);
+            patch.model = choices.embedding_model.clone();
+            patch.url = choices.embedding_url.clone();
+            patch.dimensions = choices.embedding_dimensions.clone();
+            patch.auth =
+                collect_setup_auth(&mut choices, false, parent, &mut credential_snapshots)?;
+            patches.push(patch);
+        }
+        if generation_requested(&choices) {
+            let mut patch = ProviderRolePatch::new(ProviderRole::Generation);
+            patch.model = choices.generation_model.clone();
+            patch.url = choices.generation_url.clone();
+            patch.adapter = choices
+                .generation_adapter
+                .as_deref()
+                .map(adapter)
+                .transpose()?;
+            patch.max_output_tokens = choices.generation_max_output_tokens;
+            patch.auth = collect_setup_auth(&mut choices, true, parent, &mut credential_snapshots)?;
+            patches.push(patch);
+        }
+        if selected_profile.is_none() {
+            if embedding_requested(&choices)
+                && (choices.embedding_model.is_none() || choices.embedding_url.is_none())
+            {
+                return Err(usage(
+                    "new embedding setup needs --embedding-model MODEL and --embedding-url URL",
                 ));
             }
-            choices.credential_file = Some(key_snapshot.path().to_path_buf());
-            let auth = SetupAuth::PrivateFile(key_snapshot.path().to_path_buf());
-            credential_snapshot = Some(key_snapshot);
-            auth
-        } else {
-            return Err(usage(
-                "model setup needs --key-env NAME, --key-file FILE or --prompt-key; no key is required when model setup is skipped",
-            ));
-        };
-        let selected = EmbeddingSetup {
-            model,
-            url,
-            dimensions: choices.embedding_dimensions.clone(),
-            auth,
-            grant: choices.grant_embed,
-        };
-        let document =
-            config::provider_setup::build_embedding_document(snapshot.bytes(), &selected, &wiki)?;
-        config::setup_io::write_private_file(&snapshot, &document.bytes, true, true, timeout)?;
-        if let Some(key_snapshot) = &credential_snapshot {
+            if generation_requested(&choices)
+                && (choices.generation_model.is_none() || choices.generation_url.is_none())
+            {
+                return Err(usage(
+                    "new generation setup needs --generation-model MODEL and --generation-url URL",
+                ));
+            }
+        }
+        let mut document = provider_edit::plan_provider_edit(
+            snapshot.bytes(),
+            &wiki,
+            selected_profile.as_deref(),
+            &patches,
+            grant,
+        )?;
+        if interactive && !document.consent_satisfied {
+            if review_provider_permission(&document, &mut prompts)? {
+                choices.grant_provider = true;
+                choices.grant_embed = false;
+                grant = ProviderGrantDecision::ReviewedAllRoles;
+                document = provider_edit::plan_provider_edit(
+                    snapshot.bytes(),
+                    &wiki,
+                    selected_profile.as_deref(),
+                    &patches,
+                    grant,
+                )?;
+            } else if !args.dry_run {
+                return Err(WikiError::new(
+                    ErrorCode::Cancelled,
+                    "model changes were not applied; rerun setup without model choices to keep local use, or review them with --grant-provider",
+                ));
+            }
+        }
+        if !args.dry_run && !document.consent_satisfied {
+            let mut error = usage(
+                "model changes need permission; review the --dry-run preview, then rerun with --grant-provider (or --grant-embed for embedding-only changes)",
+            );
+            error.details = json!({"providers":provider_summary(&document),"writes":0});
+            return Err(error);
+        }
+        provider_write_needed = config::setup_io::write_private_file(
+            &snapshot,
+            document.proposed_bytes(),
+            true,
+            true,
+            timeout,
+        )?
+        .changed;
+        for (_, key_snapshot, replace) in &credential_snapshots {
             config::setup_io::write_private_file(
                 key_snapshot,
                 b"setup preview only",
-                choices.replace_key,
+                *replace,
                 true,
                 timeout,
             )?;
         }
-        proposed.providers_config = Some(snapshot.path().to_path_buf());
-        proposed
-            .vaults
-            .entry(wiki.wiki_id.clone())
-            .or_default()
-            .profile = Some(document.profile.clone());
-        if !proposed.allowed_profiles.is_empty()
-            && !proposed.allowed_profiles.contains(&document.profile)
+        let selection_changed = save_provider_selection(
+            &mut proposed,
+            &wiki,
+            prior_saved_profile.as_deref(),
+            document.profile(),
+            snapshot.path(),
+        )?;
+        if selection_changed
+            && !proposed.allowed_profiles.is_empty()
+            && !proposed
+                .allowed_profiles
+                .iter()
+                .any(|profile| profile == document.profile())
         {
-            proposed.allowed_profiles.push(document.profile.clone());
+            proposed.allowed_profiles.push(document.profile().into());
         }
         if let Some(value) = &choices.embedding_document_prefix {
             proposed.embeddings.document_prefix = Some(value.clone());
@@ -861,24 +1676,29 @@ pub fn execute(args: &Arguments, setup: &SetupArguments) -> Result<Envelope> {
         if let Some(value) = choices.embedding_quality_target_bytes {
             proposed.embeddings.quality_target_bytes = Some(value);
         }
+        providers_preview = Some(provider_summary(&document));
         provider_snapshot = Some(snapshot);
         provider_document = Some(document);
-        embedding = Some(selected);
+    } else if selected_profile.is_some() {
+        providers_preview = current_provider_summary(args, &choices, &loaded)?;
     }
     let writes_config = !choices.no_default || provider_requested;
-    if writes_config {
+    let configuration_write_needed = if writes_config {
         config::local::update_document(
             &loaded,
             proposed.clone(),
             config_target.as_deref(),
             true,
             timeout,
-        )?;
-    }
+        )?
+        .changed
+    } else {
+        false
+    };
     let agent_preview = if let Some(agent) = &choices.agent {
         Some(super::skill_install::operate(
             "install",
-            agent,
+            agent_install_target(agent),
             choices.agent_directory.as_deref().expect("agent home"),
             choices.agent_scope.as_deref().unwrap_or("user"),
             true,
@@ -886,13 +1706,19 @@ pub fn execute(args: &Arguments, setup: &SetupArguments) -> Result<Envelope> {
     } else {
         None
     };
-    let embedding_preview = embedding.as_ref().map(|selected| -> Result<Value> {
-        Ok(json!({"model":selected.model,"destination":embedding_destination(&selected.url)?,"text_scope":EMBEDDING_TEXT_SCOPE,"dimensions":selected.dimensions,"grant_embed":selected.grant,"network_requests":0}))
-    }).transpose()?;
+    let embedding_preview = providers_preview
+        .as_ref()
+        .map(|value| value["embedding"].clone())
+        .filter(Value::is_object);
+    let generation_preview = providers_preview
+        .as_ref()
+        .map(|value| value["generation"].clone())
+        .filter(Value::is_object);
     let plan = json!({"wiki":wiki.path,"wiki_action":if marker_exists || choices.select { "select" } else { "create" }, "initialize_existing_folder":choices.existing,
         "save_default":!choices.no_default,"configuration":if writes_config { config_path } else { None },
         "provider_configuration":choices.providers_file,"credential_file":choices.credential_file,
-        "embedding":embedding_preview,
+        "embedding":embedding_preview,"generation":generation_preview,"providers":providers_preview,
+        "generation_credential_file":choices.generation_credential_file,
         "agent":choices.agent,"agent_installation":agent_preview,"network_requests":0});
     if args.output_format() == OutputFormat::Human {
         writeln!(prompts.output, "Wiki folder: {}", wiki.path.display())
@@ -913,13 +1739,18 @@ pub fn execute(args: &Arguments, setup: &SetupArguments) -> Result<Envelope> {
             writeln!(prompts.output, "Private key file: {}", path.display())
                 .map_err(|error| usage(error.to_string()))?;
         }
-        if let Some(embedding) = &embedding_preview {
-            present_embedding_summary(embedding, &wiki.path, &mut prompts.output)
+        if let Some(providers) = &providers_preview {
+            present_providers(providers, &mut prompts.output)
                 .map_err(|error| usage(error.to_string()))?;
         }
         if let Some(preview) = &agent_preview {
             if let Some(destination) = preview.get("destination").and_then(Value::as_str) {
-                writeln!(prompts.output, "Agent instructions: {destination}")
+                let label = if choices.agent.as_deref() == Some("sagex") {
+                    "Sagex instructions (shared agent skills folder)"
+                } else {
+                    "Agent instructions"
+                };
+                writeln!(prompts.output, "{label}: {destination}")
                     .map_err(|error| usage(error.to_string()))?;
             } else if let Some(directory) = &choices.agent_directory {
                 writeln!(prompts.output, "Agent home: {}", directory.display())
@@ -949,9 +1780,13 @@ pub fn execute(args: &Arguments, setup: &SetupArguments) -> Result<Envelope> {
             "Create your wiki"
         },
     )];
-    if let Some(snapshot) = &credential_snapshot {
+    for (generation, snapshot, _) in &credential_snapshots {
         steps.push(step(
-            "credential",
+            if *generation {
+                "generation_credential"
+            } else {
+                "credential"
+            },
             Some(snapshot.path().to_path_buf()),
             "Save your key privately",
         ));
@@ -960,7 +1795,7 @@ pub fn execute(args: &Arguments, setup: &SetupArguments) -> Result<Envelope> {
         steps.push(step(
             "provider",
             Some(snapshot.path().to_path_buf()),
-            "Save optional embedding settings",
+            "Save your model settings",
         ));
     }
     if writes_config {
@@ -974,7 +1809,11 @@ pub fn execute(args: &Arguments, setup: &SetupArguments) -> Result<Envelope> {
         steps.push(step(
             "agent",
             choices.agent_directory.clone(),
-            "Install your chosen agent's wiki instructions",
+            if choices.agent.as_deref() == Some("sagex") {
+                "Install Sagex's wiki instructions in the shared agent skills folder"
+            } else {
+                "Install your chosen agent's wiki instructions"
+            },
         ));
     }
     if args.dry_run {
@@ -1038,11 +1877,13 @@ pub fn execute(args: &Arguments, setup: &SetupArguments) -> Result<Envelope> {
             if let Some(preferences) = proposed.vaults.remove(&old_id) {
                 proposed.vaults.insert(wiki.wiki_id.clone(), preferences);
             }
-            if let (Some(snapshot), Some(selected)) = (&provider_snapshot, &embedding) {
-                provider_document = Some(config::provider_setup::build_embedding_document(
+            if let Some(snapshot) = &provider_snapshot {
+                provider_document = Some(provider_edit::plan_provider_edit(
                     snapshot.bytes(),
-                    selected,
                     &wiki,
+                    selected_profile.as_deref(),
+                    &patches,
+                    grant,
                 )?);
             }
         } else if crate::vault::discovery::default_from_path(&wiki.path)? != wiki {
@@ -1063,8 +1904,13 @@ pub fn execute(args: &Arguments, setup: &SetupArguments) -> Result<Envelope> {
         steps[0].status = "complete";
         checkpoint("wiki_complete", &wiki.path)?;
         let mut index = 1;
-        if let Some(snapshot) = &credential_snapshot {
-            let key = rpassword::prompt_password("Provider key (hidden): ").map_err(|_| {
+        for (generation, snapshot, replace) in &credential_snapshots {
+            let key = rpassword::prompt_password(if *generation {
+                "Generation provider key (hidden): "
+            } else {
+                "Embedding provider key (hidden): "
+            })
+            .map_err(|_| {
                 WikiError::new(
                     ErrorCode::Cancelled,
                     "private key input stopped; key was not saved",
@@ -1081,17 +1927,24 @@ pub fn execute(args: &Arguments, setup: &SetupArguments) -> Result<Envelope> {
             let report = config::setup_io::write_private_file(
                 snapshot,
                 key.as_bytes(),
-                choices.replace_key,
+                *replace,
                 false,
                 timeout,
             )?;
             steps[index].applied = report.applied;
             steps[index].durable = report.durable;
             if report.applied || (!report.changed && report.durable) {
-                retry_choices.prompt_key = false;
-                retry_choices.replace_key = false;
-                retry_choices.key_file = Some(snapshot.path().to_path_buf());
-                retry_choices.credential_file = None;
+                if *generation {
+                    retry_choices.generation_prompt_key = false;
+                    retry_choices.generation_replace_key = false;
+                    retry_choices.generation_key_file = Some(snapshot.path().to_path_buf());
+                    retry_choices.generation_credential_file = None;
+                } else {
+                    retry_choices.prompt_key = false;
+                    retry_choices.replace_key = false;
+                    retry_choices.key_file = Some(snapshot.path().to_path_buf());
+                    retry_choices.credential_file = None;
+                }
                 retry = retry_command(args, &retry_choices, retry_configuration.as_deref());
             }
             if let Some(failure) = report.failure {
@@ -1104,13 +1957,24 @@ pub fn execute(args: &Arguments, setup: &SetupArguments) -> Result<Envelope> {
         if let (Some(snapshot), Some(document)) = (&provider_snapshot, &provider_document) {
             let report = config::setup_io::write_private_file(
                 snapshot,
-                &document.bytes,
+                document.proposed_bytes(),
                 true,
-                false,
+                !provider_write_needed,
                 timeout,
             )?;
             steps[index].applied = report.applied;
             steps[index].durable = report.durable;
+            if report.applied || !report.changed {
+                // Published private settings provide an exact, secret-free retry.
+                clear_provider_choices(&mut retry_choices);
+                retry_choices.providers_file = Some(snapshot.path().to_path_buf());
+                retry = retry_command_profile(
+                    args,
+                    &retry_choices,
+                    retry_configuration.as_deref(),
+                    Some(document.profile()),
+                );
+            }
             if let Some(failure) = report.failure {
                 return Err(failure);
             }
@@ -1119,18 +1983,35 @@ pub fn execute(args: &Arguments, setup: &SetupArguments) -> Result<Envelope> {
             checkpoint("provider_complete", &wiki.path)?;
         }
         if writes_config {
+            if let (Some(snapshot), Some(document)) = (&provider_snapshot, &provider_document) {
+                recheck_provider_publication(snapshot.path(), document.proposed_bytes())?;
+            }
+            if crate::vault::discovery::default_from_path(&wiki.path)? != wiki {
+                return Err(WikiError::new(
+                    ErrorCode::ContentConflict,
+                    "selected wiki changed before saving your settings",
+                ));
+            }
             let report = config::local::update_document(
                 &loaded,
                 proposed.clone(),
                 config_target.as_deref(),
-                false,
+                !configuration_write_needed,
                 timeout,
             )?;
             steps[index].applied = report.applied;
             steps[index].durable = report.durable;
-            if report.applied || report.durable {
+            if report.applied || report.durable || !report.changed {
                 retry_configuration = Some(report.configuration_path.clone());
-                retry = retry_command(args, &retry_choices, retry_configuration.as_deref());
+                retry = retry_command_profile(
+                    args,
+                    &retry_choices,
+                    retry_configuration.as_deref(),
+                    provider_document
+                        .as_ref()
+                        .map(|document| document.profile())
+                        .or(args.profile.as_deref()),
+                );
             }
             if let Some(failure) = report.failure {
                 return Err(failure);
@@ -1142,7 +2023,7 @@ pub fn execute(args: &Arguments, setup: &SetupArguments) -> Result<Envelope> {
         if let Some(agent) = &choices.agent {
             let report = super::skill_install::operate(
                 "install",
-                agent,
+                agent_install_target(agent),
                 choices.agent_directory.as_deref().expect("agent home"),
                 choices.agent_scope.as_deref().unwrap_or("user"),
                 false,
@@ -1192,9 +2073,6 @@ pub fn execute(args: &Arguments, setup: &SetupArguments) -> Result<Envelope> {
     }
     let mut envelope = finish(&plan, &steps, &retry, &next, &wiki, false, None);
     envelope.warnings.extend(loaded.summary().warnings.clone());
-    if provider_requested && !choices.grant_embed {
-        envelope.warnings.push("Model settings were saved without permission for embedding requests. Rerun setup with the same model choices and --grant-embed if you want to permit explicit embedding commands.".into());
-    }
     Ok(envelope)
 }
 
@@ -1209,10 +2087,8 @@ pub(crate) fn present_report(envelope: &Envelope, output: &mut impl Write) -> io
         }
     )?;
     let plan = &envelope.data["plan"];
-    if plan["embedding"].is_object()
-        && let Some(wiki) = plan["wiki"].as_str()
-    {
-        present_embedding_summary(&plan["embedding"], Path::new(wiki), output)?;
+    if plan["providers"].is_object() {
+        present_providers(&plan["providers"], output)?;
     }
     if let Some(steps) = envelope.data["steps"].as_array() {
         for step in steps {
@@ -1240,7 +2116,7 @@ pub(crate) fn present_report(envelope: &Envelope, output: &mut impl Write) -> io
     if !envelope.ok {
         writeln!(
             output,
-            "Retry: {}",
+            "Retry (replace any placeholders with your original private choices): {}",
             envelope.data["retry"]
                 .as_str()
                 .unwrap_or("lwiki setup --help")

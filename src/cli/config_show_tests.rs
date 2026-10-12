@@ -28,7 +28,7 @@ fn wiki(base: &Path) -> config::DefaultWiki {
 #[test]
 fn inspection_resolves_every_default_with_runtime_values_and_origins() {
     let document = config::LocalConfigDocument::default();
-    let settings = effective_settings(&document, None, true).unwrap();
+    let settings = effective_settings(&document, None, None, true).unwrap();
     let embedding = super::super::embeddings::EmbeddingSettingsArguments::default()
         .settings(&document.embeddings);
     let remote = super::super::remote::RemoteArguments::default();
@@ -81,7 +81,7 @@ fn inspection_preserves_explicit_empty_prefix_zero_units_and_configured_currency
     document.remote.currency = Some("EUR".into());
     document.remote.deadline_ms = Some(10000);
     document.remote.requests_per_minute = Some(3);
-    let settings = effective_settings(&document, Some("saved"), true).unwrap();
+    let settings = effective_settings(&document, Some("saved"), None, true).unwrap();
     assert_eq!(settings["embeddings"]["values"]["document_prefix"], "");
     assert_eq!(
         settings["embeddings"]["origins"]["document_prefix"],
@@ -299,7 +299,11 @@ fn missing_ambient_provider_file_is_actionable_without_hiding_local_settings() {
 
 #[test]
 fn inspection_reports_destinations_and_command_policy_without_executing_or_exposing_auth() {
-    for output_limit in [None, Some(8192)] {
+    for (output_limit, configured_dimensions) in [
+        (None, None),
+        (Some(8192), Some("auto")),
+        (Some(8192), Some("1024")),
+    ] {
         let (_temp, base) = fixture();
         let selected = wiki(&base);
         let provider_path = base.join("private-provider.toml");
@@ -315,6 +319,11 @@ fn inspection_reports_destinations_and_command_policy_without_executing_or_expos
         let limit = output_limit
             .map(|limit| format!("max_output_tokens = {limit}\n"))
             .unwrap_or_default();
+        let dimensions = match configured_dimensions {
+            Some("auto") => "dimensions = \"auto\"\n".into(),
+            Some(count) => format!("dimensions = {count}\n"),
+            None => String::new(),
+        };
         let private = format!(
             r#"version = 1
 [profiles.notes]
@@ -324,7 +333,7 @@ generation = "generate"
 adapter = "embeddings-v1"
 url = "https://embedding.example.invalid:8443/private-deployment?tenant=synthetic-query-never-display"
 model = "embedding-model"
-[services.embed.headers]
+{dimensions}[services.embed.headers]
 X-Private = "synthetic-header-never-display"
 [services.embed.auth]
 kind = "static"
@@ -372,6 +381,16 @@ allowed_profiles = ["notes"]
                 generation["destination"],
                 json!({"scheme":"https","host":"[2001:db8::1]","port":443})
             );
+            assert_eq!(
+                embedding["dimensions"],
+                configured_dimensions
+                    .map(|dimensions| {
+                        dimensions
+                            .parse::<u32>()
+                            .map_or_else(|_| json!(dimensions), |count| json!(count))
+                    })
+                    .unwrap_or(Value::Null)
+            );
             assert_eq!(generation["adapter"], "responses-v1");
             assert_eq!(
                 generation["effective_output_token_limit"],
@@ -389,6 +408,10 @@ allowed_profiles = ["notes"]
             present(&envelope, &mut output).unwrap();
             let human = String::from_utf8(output).unwrap();
             assert!(human.contains("Destination: https://embedding.example.invalid:8443"));
+            assert!(human.contains(&format!(
+                "Configured vector dimensions: {}",
+                configured_dimensions.unwrap_or("provider default")
+            )));
             assert!(human.contains("Destination: https://[2001:db8::1]"));
             assert!(human.contains(&format!(
                 "Service output token limit: {}",
@@ -414,4 +437,41 @@ allowed_profiles = ["notes"]
             assert_eq!(fs::read(&provider_path).unwrap(), private.as_bytes());
         }
     }
+}
+
+#[test]
+fn inspection_uses_scoped_file_for_selected_wiki_and_global_without_selection() {
+    let (_temp, base) = fixture();
+    let selected = wiki(&base);
+    let global = base.join("global providers.toml");
+    let scoped = base.join("wiki providers.toml");
+    let mut document = config::LocalConfigDocument {
+        providers_config: Some(global.clone()),
+        ..Default::default()
+    };
+    document.vaults.insert(
+        selected.wiki_id.clone(),
+        config::LocalPreferences {
+            providers_config: Some(scoped.clone()),
+            ..Default::default()
+        },
+    );
+    let loaded = loaded(&base, &document);
+    let args = arguments(&["--wiki", selected.path.to_str().unwrap()]);
+    let result = inspect_loaded(&args, &loaded, &base, || panic!("saved path wins")).unwrap();
+    assert_eq!(result.data["provider_configuration"]["path"], json!(scoped));
+    assert_eq!(
+        result.data["provider_configuration"]["origin"],
+        "user_vault"
+    );
+    let result = inspect_loaded(&arguments(&[]), &loaded, &base, || {
+        panic!("saved path wins")
+    })
+    .unwrap();
+    assert!(result.data["selection_error"].is_object());
+    assert_eq!(result.data["provider_configuration"]["path"], json!(global));
+    assert_eq!(
+        result.data["provider_configuration"]["origin"],
+        "user_config"
+    );
 }

@@ -2,7 +2,7 @@
 
 Create a wiki you can keep, connect your coding agent, and ask it questions about
 your own notes. Start by [installing lwiki](install.md). You also need Codex,
-Claude Code or Cursor installed to follow the agent steps. You can use the
+Sagex, Claude Code or Cursor installed to follow the agent steps. You can use the
 terminal commands below without an agent.
 
 ## Set up your wiki
@@ -18,10 +18,11 @@ Setup walks you through these choices:
 1. Create a wiki or use one you already have. Choose a lasting location, such as
    the suggested `Wiki` folder in your home directory. Give it a title.
 2. Save this wiki as your default so later commands can find it from any folder.
-3. Choose `codex`, `claude-code` or `cursor` to install the wiki instructions for
+3. Choose `codex`, `sagex`, `claude-code` or `cursor` to install the wiki instructions for
    your agent. Accept your home folder unless your agent uses a different one.
 4. Skip the optional embedding model to start without an API key. You can
    [add search by meaning later](sources-and-providers.md#optional-remote-providers).
+   You can also skip generation; your agent can work without a separate model.
 5. Review the destinations and confirm setup.
 
 When setup prints **Your wiki is ready.**, restart your agent session so it can

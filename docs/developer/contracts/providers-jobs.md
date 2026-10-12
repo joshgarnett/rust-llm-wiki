@@ -33,10 +33,16 @@ Adapters implement pure `encode`, `decode`, and `upper_bound` methods; only disp
 ## 2. Private profiles and trust
 
 Choose the private provider file from explicit `--providers-config`, then the
-absolute `providers_config` reference in the loaded user config. Setup writes a
-sibling `providers.toml`. Existing platform defaults remain a compatibility
+selected wiki's ID-keyed `vaults.ID.providers_config` reference, then the absolute
+top-level `providers_config` reference in the loaded user config. Existing platform defaults remain a compatibility
 fallback when user configuration is enabled. Never discover authority by walking
-upward from a vault. A profile maps capabilities to endpoint-bound services:
+upward from a vault. Setup and `config set` use a preferences-sibling
+`providers.toml` when neither an explicit nor a saved path exists. They save the
+resulting canonical file/profile pair together for the selected wiki when it
+changes or that writer destination differs from ordinary reads. They never
+replace the top-level file reference, other wiki entries or their private grants.
+Repeating an already effective file/profile retains bytes without introducing a
+redundant wiki override. A profile maps capabilities to endpoint-bound services:
 
 ```toml
 version = 1

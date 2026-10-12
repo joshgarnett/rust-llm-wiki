@@ -99,6 +99,18 @@ fn present_provider(provider: &Value, output: &mut impl Write) -> io::Result<()>
                 super::config_show::destination_label(&service["destination"]),
                 service["adapter"].as_str().unwrap_or("unknown API format")
             )?;
+            if role == "embedding" {
+                let configured = &service["dimensions"];
+                let dimensions = if let Some(count) = configured.as_u64() {
+                    count.to_string()
+                } else {
+                    configured.as_str().unwrap_or("provider default").to_owned()
+                };
+                writeln!(output, "  Configured vector dimensions: {dimensions}")?;
+            }
+            if let Some(limit) = service["effective_output_token_limit"].as_u64() {
+                writeln!(output, "  Maximum output tokens: {limit}")?;
+            }
         }
     }
     if provider["inspection"] == "unavailable" {
@@ -451,6 +463,7 @@ refresh_skew_seconds = 30
         };
         let context = RemoteContext {
             profile: Some("notes"),
+            wiki_id: None,
             document: &document,
             allow_ambient_provider: false,
         };
@@ -489,6 +502,7 @@ refresh_skew_seconds = 30
         let unconfigured = crate::config::LocalConfigDocument::default();
         let disabled = RemoteContext {
             profile: Some("notes"),
+            wiki_id: None,
             document: &unconfigured,
             allow_ambient_provider: false,
         };

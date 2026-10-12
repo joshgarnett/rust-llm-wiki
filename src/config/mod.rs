@@ -1,6 +1,7 @@
 //! Explicit private preferences and safe portable selections.
 pub mod local;
 mod local_io;
+pub mod provider_edit;
 pub mod provider_setup;
 pub mod providers;
 pub mod setup_io;

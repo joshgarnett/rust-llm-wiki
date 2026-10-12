@@ -31,11 +31,20 @@ provider/default tables. Reads never migrate. Setup can explicitly migrate JSON
 to TOML, preserving the exact original and a versioned backup. Conflicting
 backup/destination bytes refuse untouched. Publication and durable sync are
 separate outcomes; retries verify unchanged files and confirm durability.
+Schema3 permits an optional absolute `providers_config` in each `vaults.ID`
+entry; `[defaults].providers_config` and portable authority paths remain invalid.
+Schema1/2 JSON rejects scoped field presence, including null. Migration carries
+scoped paths and other wiki preferences together. Older strict binaries reject
+schema3 documents using this extension; downgrade requires compatible settings.
 
 Precedence is explicit CLI options, ID-keyed user vault overrides, user defaults,
 portable WIKI.md preferences, then built-ins. Explicit offline is final. Global
 user config can select a private provider file and embedding/new-job defaults;
-portable wiki preferences cannot provide endpoints, credentials, helpers or grants.
+the selected authenticated wiki ID can override only that private file selection.
+Setup and provider edits persist the selected wiki's file/profile pair without
+changing the global provider fallback. CLI provider paths take precedence over
+wiki paths, then the global path, then the documented platform fallback.
+Portable wiki preferences cannot provide endpoints, credentials, helpers or grants.
 Every remote consumer uses the resolved profile. `--no-user-config` also disables
 ambient provider authority lookup unless an explicit preferences file was selected.
 Retained jobs keep their limits/accounting; configured defaults are not CLI budget

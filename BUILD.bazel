@@ -185,6 +185,7 @@ test_suite(
         ":graph_queries_test",
         ":provider_dispatch_test",
         ":remote_cli_test",
+        ":config_provider_scope_test",
         ":research_handoff_test",
         ":research_recovery_test",
         ":retrieval_lexical_test",

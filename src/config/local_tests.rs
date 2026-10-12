@@ -784,3 +784,142 @@ fn unchanged_document_sync_failure_is_an_explicit_failed_report_and_preview_neve
     let result = result.unwrap();
     assert!(!result.applied && !result.durable && result.failure.is_some());
 }
+
+#[test]
+fn scoped_provider_paths_round_trip_resolve_and_migrate_without_affecting_other_wikis() {
+    let (_temp, base) = fixture();
+    let a = RecordId::new("Vault.A").unwrap();
+    let b = RecordId::new("Vault.B").unwrap();
+    let mut document = LocalConfigDocument {
+        providers_config: Some(base.join("A providers.toml")),
+        ..Default::default()
+    };
+    document.vaults.insert(
+        b.clone(),
+        LocalPreferences {
+            profile: Some("primary".into()),
+            providers_config: Some(base.join("B providers.toml")),
+            read_max_bytes: Some(234),
+            ..Default::default()
+        },
+    );
+    for extension in ["toml", "json"] {
+        let path = base.join(format!("scoped.{extension}"));
+        let bytes = serialize_document(&path, &document).unwrap();
+        fs::write(&path, &bytes).unwrap();
+        let loaded = load_user_config(Some(&path), true).unwrap();
+        let saved = loaded.document();
+        assert_eq!(
+            saved.saved_provider_config(Some(&b)),
+            Some((base.join("B providers.toml").as_path(), "user_vault"))
+        );
+        assert_eq!(
+            saved.saved_provider_config(Some(&a)),
+            Some((base.join("A providers.toml").as_path(), "user_config"))
+        );
+        assert_eq!(
+            saved.saved_provider_config(None),
+            saved.saved_provider_config(Some(&a))
+        );
+        if extension == "json" {
+            let target = loaded.toml_migration_target().unwrap();
+            update_document(&loaded, saved.clone(), Some(&target), false, 5000).unwrap();
+            let migrated = load_user_config(Some(&target), false).unwrap();
+            assert_eq!(
+                serde_json::to_value(migrated.document()).unwrap(),
+                serde_json::to_value(&document).unwrap()
+            );
+            assert_eq!(fs::read(&path).unwrap(), bytes);
+            assert_eq!(
+                fs::read(path.with_file_name("scoped.json.v3.bak")).unwrap(),
+                bytes
+            );
+        }
+    }
+    let absent =
+        serialize_document(&base.join("absent.json"), &LocalConfigDocument::default()).unwrap();
+    let absent: serde_json::Value = serde_json::from_slice(&absent).unwrap();
+    assert!(absent["defaults"].get("providers_config").is_none());
+}
+
+#[test]
+fn scoped_provider_paths_reject_legacy_presence_default_scope_and_invalid_paths() {
+    let (_temp, base) = fixture();
+    let path = base.join("scope.json");
+    for version in ["1", "2"] {
+        for value in [
+            serde_json::Value::Null,
+            serde_json::json!(base.join("private.toml")),
+        ] {
+            let bytes = serde_json::to_vec(&serde_json::json!({"schema_version":version,"vaults":{"Vault.B":{"providers_config":value}}})).unwrap();
+            fs::write(&path, &bytes).unwrap();
+            assert!(load_user_config(Some(&path), false).is_err());
+            assert_eq!(fs::read(&path).unwrap(), bytes);
+        }
+    }
+    for invalid in [
+        "relative.toml".to_owned(),
+        base.join("../private.toml").to_str().unwrap().to_owned(),
+        format!("/{}", "x".repeat(4096)),
+        format!("/{}file.toml", "x/".repeat(65)),
+    ] {
+        fs::write(&path, serde_json::to_vec(&serde_json::json!({"schema_version":"3","vaults":{"Vault.B":{"providers_config":invalid}}})).unwrap()).unwrap();
+        assert!(load_user_config(Some(&path), false).is_err());
+    }
+    for value in [
+        serde_json::Value::Null,
+        serde_json::json!(base.join("private.toml")),
+    ] {
+        fs::write(
+            &path,
+            serde_json::to_vec(
+                &serde_json::json!({"schema_version":"3","defaults":{"providers_config":value}}),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert!(load_user_config(Some(&path), false).is_err());
+    }
+    let old = config(&base, serde_json::json!({"schema_version":"2"}));
+    let loaded = load_user_config(Some(&old), false).unwrap();
+    let mut proposed = loaded.document().clone();
+    proposed
+        .vaults
+        .entry(RecordId::new("Vault.B").unwrap())
+        .or_default()
+        .providers_config = Some(base.join("private.toml"));
+    assert!(update_document(&loaded, proposed.clone(), None, false, 5000).is_err());
+    assert!(serialize_document(&old, &proposed).is_err());
+    let target = loaded.toml_migration_target().unwrap();
+    update_document(&loaded, proposed, Some(&target), false, 5000).unwrap();
+    assert!(
+        load_user_config(Some(&target), false)
+            .unwrap()
+            .document()
+            .saved_provider_config(Some(&RecordId::new("Vault.B").unwrap()))
+            .is_some()
+    );
+}
+
+#[test]
+fn portable_preferences_cannot_select_a_private_provider_file() {
+    let (_temp, base) = fixture();
+    let selected = wiki(&base, "portable", "Vault.Portable");
+    let marker = selected.path.join("WIKI.md");
+    let bytes = fs::read_to_string(&marker).unwrap().replace(
+        "wiki_kind: vault",
+        "wiki_kind: vault\nlwiki_providers_config: /private/provider.toml",
+    );
+    fs::write(&marker, bytes).unwrap();
+    let fs = VaultFs::new(crate::vault::VaultRoot::explicit(&selected.path).unwrap());
+    let loaded = load_user_config(None, true).unwrap();
+    assert!(
+        resolve_loaded(
+            &fs,
+            &selected.wiki_id,
+            &PreferenceOptions::default(),
+            &loaded
+        )
+        .is_err()
+    );
+}

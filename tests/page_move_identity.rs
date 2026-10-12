@@ -15,6 +15,18 @@ use std::{
 const BEGIN: &str = "<!-- lwiki:source-citations:v1 begin -->";
 const END: &str = "<!-- lwiki:source-citations:v1 end -->";
 
+// Timing measures each invocation; all content, proof and other health fields
+// must still agree when two selectors read the same snapshot.
+fn without_elapsed(mut data: Value) -> Value {
+    if let Some(construction) = data
+        .pointer_mut("/health/read_work/construction")
+        .and_then(Value::as_object_mut)
+    {
+        assert!(construction.remove("elapsed_ms").unwrap().is_u64());
+    }
+    data
+}
+
 struct Fixture {
     temp: tempfile::TempDir,
     root: PathBuf,
@@ -162,7 +174,10 @@ fn native_sole_page_and_plain_incoming_move_keep_exact_author_and_one_current_id
     assert_eq!(fs::read(f.root.join("unrelated.md")).unwrap(), untouched);
     let current = f.ok(&["read", "--id", "Page.Guide"]);
     let destination = f.ok(&["read", "--path", "handbook/Guide.md"]);
-    assert_eq!(current["data"], destination["data"]);
+    assert_eq!(
+        without_elapsed(current["data"].clone()),
+        without_elapsed(destination["data"].clone())
+    );
     assert_eq!(current["data"]["path"], "handbook/Guide.md");
     assert_eq!(current["data"]["hash"], before["data"]["hash"]);
     assert_eq!(current["data"]["record"], before["data"]["record"]);
@@ -282,6 +297,7 @@ fn native_cited_page_move_rebases_only_provenance_and_delete_sync_never_resurrec
     ]);
     let payload_path = discovered["data"]["hits"][0]["path"].as_str().unwrap();
     let proof = f.ok(&["read", "--path", payload_path]);
+    let published_before = f.ok(&["read", "--path", payload_path, "--no-sync"]);
     let citation = &proof["data"]["source_citation"]["citation"];
     assert_eq!(citation["kind"], "source");
     assert_eq!(citation["reference"]["source_id"], source);
@@ -365,6 +381,15 @@ fn native_cited_page_move_rebases_only_provenance_and_delete_sync_never_resurrec
     assert_eq!(current["data"]["record"], before["data"]["record"]);
     assert_eq!(current["data"]["path"], "handbook/deep/Answer.md");
     let source_after = f.ok(&["read", "--path", payload_path]);
+    let published_after = f.ok(&["read", "--path", payload_path, "--no-sync"]);
+    assert!(
+        published_after["meta"]["index_generation"]
+            .as_u64()
+            .unwrap()
+            > published_before["meta"]["index_generation"]
+                .as_u64()
+                .unwrap()
+    );
     let mut source_payload = source_after["data"].clone();
     let mut original_payload = proof["data"].clone();
     let after_health = source_payload
@@ -378,17 +403,15 @@ fn native_cited_page_move_rebases_only_provenance_and_delete_sync_never_resurrec
         .remove("health")
         .unwrap();
     assert_eq!(source_payload, original_payload);
-    assert!(
-        after_health["index_generation"].as_u64().unwrap()
-            > before_health["index_generation"].as_u64().unwrap()
-    );
+
     for health in [&before_health, &after_health] {
         assert_eq!(health["schema_version"], "lwiki.health.v1");
-        assert_eq!(health["observation"], "published_generation");
+        assert_eq!(health["observation"], "current_observation");
+        assert!(health["index_generation"].is_null());
         assert_eq!(health["known_issues"], false);
         assert!(health["structured_eligibility_complete"].is_null());
-        assert_eq!(health["current_health"], "unknown");
-        assert_eq!(health["global_membership_freshness"], "unknown");
+        assert_eq!(health["current_health"], "observed");
+        assert_eq!(health["global_membership_freshness"], "current_observation");
     }
     assert_eq!(
         after_health["selected_verification"],
@@ -476,18 +499,29 @@ fn native_cited_page_move_rebases_only_provenance_and_delete_sync_never_resurrec
             .remove("health")
             .unwrap();
         assert_eq!(after_payload, before_payload);
+        let published_restored = f.ok(&[
+            "read",
+            "--path",
+            after["data"]["path"].as_str().unwrap(),
+            "--no-sync",
+        ]);
         assert!(
-            after_health["index_generation"].as_u64().unwrap()
-                > before_health["index_generation"].as_u64().unwrap()
+            published_restored["meta"]["index_generation"]
+                .as_u64()
+                .unwrap()
+                > published_after["meta"]["index_generation"]
+                    .as_u64()
+                    .unwrap()
         );
         for (health, read) in [(&before_health, before), (&after_health, after)] {
             assert_eq!(health["schema_version"], "lwiki.health.v1");
-            assert_eq!(health["observation"], "published_generation");
+            assert_eq!(health["observation"], "current_observation");
+            assert!(health["index_generation"].is_null());
             assert_eq!(health["known_issues"], false);
             assert!(health["structured_eligibility_complete"].is_null());
             assert_eq!(health["selected_verification"], read["meta"]["freshness"]);
-            assert_eq!(health["current_health"], "unknown");
-            assert_eq!(health["global_membership_freshness"], "unknown");
+            assert_eq!(health["current_health"], "observed");
+            assert_eq!(health["global_membership_freshness"], "current_observation");
         }
         assert_eq!(
             after_health["selected_verification"],

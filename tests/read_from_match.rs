@@ -19,6 +19,18 @@ use std::{
 const PAGE: &str = "pages/authored.md";
 const AUTHORED: &str = "a🦀éz\nBody coordinates exclude front matter.\n";
 
+// Timing measures each invocation; all content, proof and other health fields
+// must still agree when two selectors read the same snapshot.
+fn without_elapsed(mut data: Value) -> Value {
+    if let Some(construction) = data
+        .pointer_mut("/health/read_work/construction")
+        .and_then(Value::as_object_mut)
+    {
+        assert!(construction.remove("elapsed_ms").unwrap().is_u64());
+    }
+    data
+}
+
 struct Fixture {
     temp: tempfile::TempDir,
     root: PathBuf,
@@ -329,8 +341,14 @@ fn native_forward_read_preserves_utf8_empty_eof_limits_and_strict_explicit_bound
     let all = f.ok(&["read", "--path", path]);
     let zero = f.ok(&["read", "--path", path, "--start", "0"]);
     let exact = f.ok(&["read", "--path", path, "--start", "0", "--end", "8"]);
-    assert_eq!(all["data"], zero["data"]);
-    assert_eq!(all["data"], exact["data"]);
+    assert_eq!(
+        without_elapsed(all["data"].clone()),
+        without_elapsed(zero["data"].clone())
+    );
+    assert_eq!(
+        without_elapsed(all["data"].clone()),
+        without_elapsed(exact["data"].clone())
+    );
     let overflow = f.usage(&["read", "--path", path, "--start", "18446744073709551616"]);
     assert!(overflow["data"]["body"].is_null());
 }
@@ -444,7 +462,10 @@ fn native_forward_read_uses_authored_body_coordinates_preserves_legacy_and_refus
             "--max-bytes",
             "5",
         ]);
-        assert_eq!(forward["data"], explicit["data"]);
+        assert_eq!(
+            without_elapsed(forward["data"].clone()),
+            without_elapsed(explicit["data"].clone())
+        );
         assert_eq!(forward["data"]["body"], "🦀");
         assert!(forward["data"]["metadata"].is_object());
         assert!(forward["data"]["source_citation"].is_null());
@@ -473,15 +494,24 @@ fn native_forward_read_uses_authored_body_coordinates_preserves_legacy_and_refus
         assert_eq!(cached_payload, verified_payload);
         assert_eq!(cached_health["selected_verification"], "index_snapshot");
         if normalized {
-            let verified_health = verified_health.as_ref().expect("published health");
+            let verified_health = verified_health
+                .as_ref()
+                .expect("current observation health");
             assert_eq!(
                 verified_health["selected_verification"],
                 explicit["meta"]["freshness"]
             );
+            assert!(cached_health["index_generation"].is_u64());
+            assert!(verified_health["index_generation"].is_null());
+            assert_eq!(verified_health["observation"], "current_observation");
+            assert_eq!(verified_health["current_health"], "observed");
             assert_eq!(
-                cached_health["index_generation"],
-                verified_health["index_generation"]
+                verified_health["global_membership_freshness"],
+                "current_observation"
             );
+            assert_eq!(verified_health["schema_version"], "lwiki.health.v1");
+            assert_eq!(verified_health["known_issues"], false);
+            assert!(verified_health["structured_eligibility_complete"].is_null());
         } else {
             assert!(
                 verified_health.is_none(),
@@ -489,7 +519,8 @@ fn native_forward_read_uses_authored_body_coordinates_preserves_legacy_and_refus
             );
             assert!(explicit["meta"]["index_generation"].is_null());
         }
-        for health in std::iter::once(&cached_health).chain(verified_health.as_ref()) {
+        {
+            let health = &cached_health;
             assert_eq!(health["schema_version"], "lwiki.health.v1");
             assert_eq!(health["observation"], "published_generation");
             assert_eq!(health["known_issues"], false);
@@ -564,9 +595,37 @@ fn native_forward_read_uses_authored_body_coordinates_preserves_legacy_and_refus
         .unwrap()
         .set_times(fs::FileTimes::new().set_modified(metadata.modified().unwrap()))
         .unwrap();
-    let (exit, refused) = f.invoke(&["read", "--path", path, "--start", "1", "--max-bytes", "1"]);
+    // A valid title edit is visible immediately without publishing the index.
+    // Explicit verification of the older published view still rejects drift.
+    let current = f.ok(&["read", "--path", path, "--start", "1", "--max-bytes", "1"]);
+    assert_eq!(current["data"]["body"], &original[1..2]);
+    assert!(current["data"]["source_citation"].is_object());
+    let renamed = f.ok(&["read", "--id", &source]);
+    assert_eq!(
+        renamed["data"]["record"]["title"],
+        "Altered captured source"
+    );
+    let (exit, refused) = f.invoke(&[
+        "search",
+        "driftmatch",
+        "--mode",
+        "lexical",
+        "--no-sync",
+        "--verify-selected",
+    ]);
     assert_eq!(exit, 4, "{refused}");
     assert_eq!(refused["error"]["code"], "FRESHNESS_CONFLICT");
+
+    // Captured bytes are immutable. A current read must not bless corruption
+    // merely because it can reconstruct a new in-memory view.
+    fs::write(
+        f.root.join(path),
+        original.replacen("driftmatch", "driftcatch", 1),
+    )
+    .unwrap();
+    let (exit, refused) = f.invoke(&["read", "--path", path, "--start", "1", "--max-bytes", "1"]);
+    assert_ne!(exit, 0, "{refused}");
+    assert_eq!(refused["error"]["code"], "SOURCE_INTEGRITY");
     assert!(refused["data"]["source_citation"].is_null());
     assert!(refused["data"]["body"].is_null());
     let cached = f.ok(&[

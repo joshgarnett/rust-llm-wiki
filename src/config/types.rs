@@ -2,7 +2,7 @@
 use crate::domain::RecordId;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 pub const MAX_LOCAL_CONFIG_BYTES: usize = 65_536;
 pub const LOCAL_CONFIG_SCHEMA_VERSION: &str = "3";
 #[derive(Debug, Clone, Default)]
@@ -29,6 +29,9 @@ pub struct LocalPreferences {
     pub read_max_bytes: Option<usize>,
     pub lock_timeout_ms: Option<u64>,
     pub profile: Option<String>,
+    /// Private authority file selection, valid only in ID-keyed vault entries.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub providers_config: Option<PathBuf>,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -97,5 +100,23 @@ impl Default for LocalConfigDocument {
             embeddings: EmbeddingDefaults::default(),
             remote: RemoteDefaults::default(),
         }
+    }
+}
+
+impl LocalConfigDocument {
+    /// Resolve only private saved selections, using an authenticated selected wiki ID.
+    pub fn saved_provider_config(
+        &self,
+        wiki_id: Option<&RecordId>,
+    ) -> Option<(&Path, &'static str)> {
+        wiki_id
+            .and_then(|id| self.vaults.get(id))
+            .and_then(|preferences| preferences.providers_config.as_deref())
+            .map(|path| (path, "user_vault"))
+            .or_else(|| {
+                self.providers_config
+                    .as_deref()
+                    .map(|path| (path, "user_config"))
+            })
     }
 }

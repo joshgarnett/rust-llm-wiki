@@ -59,6 +59,7 @@ pub struct RemoteArguments {
 /// provide a configuration path or authorize a service.
 pub struct RemoteContext<'a> {
     pub profile: Option<&'a str>,
+    pub wiki_id: Option<&'a RecordId>,
     pub document: &'a crate::config::LocalConfigDocument,
     pub allow_ambient_provider: bool,
 }
@@ -81,10 +82,12 @@ impl RemoteArguments {
         effective.currency = self.currency.clone().or_else(|| defaults.currency.clone());
         effective.requests_per_minute = self.requests_per_minute.or(defaults.requests_per_minute);
         effective.tokens_per_minute = self.tokens_per_minute.or(defaults.tokens_per_minute);
-        effective.providers_config = self
-            .providers_config
-            .clone()
-            .or_else(|| context.document.providers_config.clone());
+        effective.providers_config = self.providers_config.clone().or_else(|| {
+            context
+                .document
+                .saved_provider_config(context.wiki_id)
+                .map(|(path, _)| path.to_path_buf())
+        });
         effective
     }
     pub fn limits(&self) -> Result<LifetimeLimits> {
@@ -243,6 +246,7 @@ mod configuration_tests {
         document.remote.max_input_units = Some(50);
         let context = RemoteContext {
             profile: Some("saved"),
+            wiki_id: None,
             document: &document,
             allow_ambient_provider: true,
         };
@@ -281,6 +285,7 @@ mod configuration_tests {
         document.remote.currency = Some("EUR".into());
         let context = RemoteContext {
             profile: None,
+            wiki_id: None,
             document: &document,
             allow_ambient_provider: true,
         };
@@ -338,6 +343,7 @@ mod configuration_tests {
         document.remote.max_cost = Some("1.00".into());
         let context = RemoteContext {
             profile: None,
+            wiki_id: None,
             document: &document,
             allow_ambient_provider: true,
         };
@@ -357,6 +363,68 @@ mod configuration_tests {
         assert_eq!(
             effective.limits().unwrap().max_cost,
             cli.limits().unwrap().max_cost
+        );
+    }
+}
+
+#[cfg(test)]
+mod provider_scope_tests {
+    use super::*;
+
+    #[test]
+    fn provider_resolution_uses_cli_then_authenticated_wiki_then_global() {
+        let wiki_id = RecordId::new("Vault.B").unwrap();
+        let mut document = crate::config::LocalConfigDocument {
+            providers_config: Some(PathBuf::from("/global/providers.toml")),
+            ..Default::default()
+        };
+        document.vaults.insert(
+            wiki_id.clone(),
+            crate::config::LocalPreferences {
+                providers_config: Some(PathBuf::from("/wiki-b/providers.toml")),
+                ..Default::default()
+            },
+        );
+        let selected = RemoteContext {
+            profile: None,
+            wiki_id: Some(&wiki_id),
+            document: &document,
+            allow_ambient_provider: false,
+        };
+        assert_eq!(
+            RemoteArguments::default()
+                .effective(&selected)
+                .providers_config,
+            Some(PathBuf::from("/wiki-b/providers.toml"))
+        );
+        let explicit = RemoteArguments {
+            providers_config: Some(PathBuf::from("/cli/providers.toml")),
+            ..Default::default()
+        };
+        assert_eq!(
+            explicit.effective(&selected).providers_config,
+            explicit.providers_config
+        );
+        let unselected = RemoteContext {
+            wiki_id: None,
+            ..selected
+        };
+        assert_eq!(
+            RemoteArguments::default()
+                .effective(&unselected)
+                .providers_config,
+            document.providers_config
+        );
+        let unknown = RecordId::new("Vault.Unknown").unwrap();
+        let unknown = RemoteContext {
+            wiki_id: Some(&unknown),
+            ..unselected
+        };
+        assert_eq!(
+            RemoteArguments::default()
+                .effective(&unknown)
+                .providers_config,
+            document.providers_config
         );
     }
 }

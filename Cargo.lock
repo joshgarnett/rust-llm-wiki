@@ -1298,6 +1298,7 @@ dependencies = [
  "rustls",
  "serde",
  "serde_json",
+ "shlex",
  "tempfile",
  "time",
  "tokio",

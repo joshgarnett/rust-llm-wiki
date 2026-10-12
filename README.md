@@ -20,7 +20,7 @@ database server or background service.
    ```
 
    Choose a folder you want to keep, save it as your default wiki, and select
-   Codex, Claude Code or Cursor when setup asks which agent to connect. You can
+   Codex, Sagex, Claude Code or Cursor when setup asks which agent to connect. You can
    skip the optional embedding model and start with offline search.
 3. Restart your chosen agent. Give it a note or folder and a question, for example:
 

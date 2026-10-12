@@ -250,6 +250,13 @@ impl OfflineApp {
                 "provider probe role differs",
             ));
         }
+        let generation_output_limit = match role {
+            ServiceRole::Embed => None,
+            ServiceRole::Generate => Some(probe_output_limit(
+                runtime.service.service().max_output_tokens,
+                &runtime.limits,
+            )?),
+        };
         let operation = match role {
             ServiceRole::Embed => {
                 let utf8 = "lwiki explicit accounted probe".to_string();
@@ -274,13 +281,13 @@ impl OfflineApp {
                     "packet_fingerprint": Blake3Hash::digest(b"lwiki.extraction-probe.v1"),
                 }).to_string(),
                 output_schema: packet::schema()?,
-                max_output_tokens: probe_output_limit(runtime)?,
+                max_output_tokens: generation_output_limit.unwrap(),
             },
             ServiceRole::Generate => RemoteOperation::Generate {
                 instructions: "Return a JSON object with ok set to true.".into(),
                 data: "Explicit provider probe.".into(),
                 output_schema: serde_json::json!({"type":"object","properties":{"ok":{"type":"boolean"}},"required":["ok"],"additionalProperties":false}),
-                max_output_tokens: probe_output_limit(runtime)?,
+                max_output_tokens: generation_output_limit.unwrap(),
             },
         };
         let input = RemoteInput {
@@ -389,6 +396,14 @@ impl OfflineApp {
                         }
                     }
                     let mut error = failure.error;
+                    if let Some(output_limit) = generation_output_limit {
+                        explain_incomplete_probe(
+                            &mut error,
+                            output_limit,
+                            runtime.service.service().max_output_tokens.unwrap_or(4096),
+                            &runtime.limits,
+                        );
+                    }
                     error.details = serde_json::json!({"run_id": run_id, "cause": error.details});
                     return Err(error);
                 }
@@ -446,9 +461,11 @@ impl OfflineApp {
                 error.details = serde_json::json!({});
             }
             error.details["run_id"] = serde_json::to_value(&run_id).unwrap();
-            error.details["next_action"] = format!(
-                "Inspect retained accounting with: lwiki jobs status --run {run_id}. After correcting the reported setup or budget issue, explicitly rerun doctor --probe; it creates a new probe run and does not erase prior charges."
-            ).into();
+            if error.details["cause"]["reason"] != "incomplete_max_output_tokens" {
+                error.details["next_action"] = format!(
+                    "Inspect retained accounting with: lwiki jobs status --run {run_id}. After correcting the reported setup or budget issue, explicitly rerun doctor --probe; it creates a new probe run and does not erase prior charges."
+                ).into();
+            }
             if pause.is_err() {
                 // Preserve the original error; a failed state transition must
                 // not be presented as a successfully paused run.
@@ -459,10 +476,10 @@ impl OfflineApp {
     }
 }
 
-fn probe_output_limit(runtime: &RemoteRuntime) -> Result<u64> {
-    let mut limit = 256u64.min(runtime.service.service().max_output_tokens.unwrap_or(4096));
+fn probe_output_limit(service_cap: Option<u64>, limits: &LifetimeLimits) -> Result<u64> {
+    let mut limit = service_cap.unwrap_or(4096);
     for class in [BillableClass::Output, BillableClass::Reasoning] {
-        if let Some(ceiling) = runtime.limits.billable_units.get(&class) {
+        if let Some(ceiling) = limits.billable_units.get(&class) {
             limit = limit.min(*ceiling);
         }
     }
@@ -473,4 +490,116 @@ fn probe_output_limit(runtime: &RemoteRuntime) -> Result<u64> {
         ));
     }
     Ok(limit)
+}
+
+fn explain_incomplete_probe(
+    error: &mut WikiError,
+    output_limit: u64,
+    service_cap: u64,
+    limits: &LifetimeLimits,
+) {
+    if error.details["reason"] != "incomplete_max_output_tokens" {
+        return;
+    }
+    error.message = format!(
+        "Generation probe reached its {output_limit}-token output limit before completing."
+    );
+    let output_units_ceiling = [BillableClass::Output, BillableClass::Reasoning]
+        .iter()
+        .filter_map(|class| limits.billable_units.get(class).copied())
+        .min();
+    error.hint =
+        Some("Reasoning tokens can use this allowance before the model returns JSON.".into());
+    error.details["max_output_tokens"] = output_limit.into();
+    error.details["effective_service_cap"] = service_cap.into();
+    error.details["output_units_ceiling"] = serde_json::json!(output_units_ceiling);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn generation_probe_allowance_uses_service_cap_and_both_billable_ceilings() {
+        for (service_cap, output_units, reasoning_units, expected) in [
+            (None, None, None, 4096),
+            (Some(64), None, None, 64),
+            (Some(8192), None, None, 8192),
+            (None, Some(256), None, 256),
+            (None, None, Some(128), 128),
+            (Some(64), Some(256), Some(128), 64),
+            (Some(8192), Some(512), Some(128), 128),
+            (Some(8192), Some(128), Some(512), 128),
+        ] {
+            let mut limits = LifetimeLimits::default();
+            if let Some(ceiling) = output_units {
+                limits.billable_units.insert(BillableClass::Output, ceiling);
+            }
+            if let Some(ceiling) = reasoning_units {
+                limits
+                    .billable_units
+                    .insert(BillableClass::Reasoning, ceiling);
+            }
+            assert_eq!(probe_output_limit(service_cap, &limits).unwrap(), expected);
+        }
+    }
+
+    #[test]
+    fn generation_probe_zero_allowance_refuses_instead_of_raising_a_ceiling() {
+        for class in [BillableClass::Output, BillableClass::Reasoning] {
+            let mut limits = LifetimeLimits::default();
+            limits.billable_units.insert(class, 0);
+            assert_eq!(
+                probe_output_limit(Some(8192), &limits).unwrap_err().code,
+                ErrorCode::BudgetExceeded
+            );
+        }
+        assert_eq!(
+            probe_output_limit(Some(0), &LifetimeLimits::default())
+                .unwrap_err()
+                .code,
+            ErrorCode::BudgetExceeded
+        );
+    }
+
+    #[test]
+    fn incomplete_error_retains_allowance_facts_without_context_free_commands() {
+        for ceiling in [None, Some(8192), Some(4096), Some(64)] {
+            for class in [BillableClass::Output, BillableClass::Reasoning] {
+                let mut limits = LifetimeLimits::default();
+                if let Some(ceiling) = ceiling {
+                    limits.billable_units.insert(class, ceiling);
+                }
+                let output_limit = probe_output_limit(None, &limits).unwrap();
+                let mut error = WikiError::new(ErrorCode::ProviderResponse, "original failure");
+                error.details = serde_json::json!({"reason":"incomplete_max_output_tokens"});
+                explain_incomplete_probe(&mut error, output_limit, 4096, &limits);
+                let hint = error.hint.unwrap();
+                assert!(hint.contains("Reasoning tokens"));
+                assert!(!hint.contains("lwiki"));
+                assert!(error.message.contains(&format!("{output_limit}-token")));
+                assert_eq!(error.details["reason"], "incomplete_max_output_tokens");
+                assert_eq!(error.details["max_output_tokens"], output_limit);
+                assert_eq!(error.details["effective_service_cap"], 4096);
+                assert_eq!(
+                    error.details["output_units_ceiling"],
+                    serde_json::json!(ceiling)
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn other_provider_failures_keep_their_original_message_and_hint() {
+        let mut error = WikiError::new(ErrorCode::ProviderResponse, "original failure");
+        error.details = serde_json::json!({"reason":"schema_invalid"});
+        error.hint = Some("original hint".into());
+        explain_incomplete_probe(&mut error, 4096, 4096, &LifetimeLimits::default());
+        assert_eq!(error.message, "original failure");
+        assert_eq!(error.hint.as_deref(), Some("original hint"));
+        assert_eq!(
+            error.details,
+            serde_json::json!({"reason":"schema_invalid"})
+        );
+    }
 }

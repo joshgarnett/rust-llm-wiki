@@ -1,4 +1,5 @@
 use super::*;
+use crate::config::provider_setup::EmbeddingSetup;
 use clap::Parser;
 use std::fs;
 
@@ -149,7 +150,10 @@ fn interactive_use_offers_initialization_and_preserves_notes() {
     let editor = b"{\"mine\":true}\n";
     fs::write(wiki.join("my note.md"), note).unwrap();
     fs::write(wiki.join(".obsidian/settings.json"), editor).unwrap();
-    let input = format!("use\n{}\nyes\nMy notes\nyes\nskip\nno\n", wiki.display());
+    let input = format!(
+        "use\n{}\nyes\nMy notes\nyes\nskip\nno\nno\n",
+        wiki.display()
+    );
     let mut prompts = Prompts {
         input: io::Cursor::new(input.as_bytes()),
         output: Vec::new(),
@@ -276,7 +280,7 @@ fn initialized_folder_is_selected_before_optional_questions() {
         ..Default::default()
     };
     let mut prompts = Prompts {
-        input: io::Cursor::new(b"skip\nno\n"),
+        input: io::Cursor::new(b"skip\nno\nno\n"),
         output: Vec::new(),
     };
     let chosen = collect(&setup, &args, true, &mut prompts).unwrap();
@@ -370,7 +374,122 @@ fn agent_next_steps_explain_session_restart() {
 }
 
 #[test]
-fn embedding_consent_names_model_destination_and_explicit_text_scope() {
+fn sagex_guided_choice_names_the_selected_agent_without_writes() {
+    let (temp, wiki, preferences, args) = fixture();
+    let mut setup = choices(&wiki);
+    setup.title = Some("My notes".into());
+    setup.no_default = true;
+    setup.agent_directory = Some(temp.path().to_path_buf());
+    let mut prompts = Prompts {
+        input: io::Cursor::new(b"Sagex\nno\nno\n"),
+        output: Vec::new(),
+    };
+    let selected = collect(&setup, &args, true, &mut prompts).unwrap();
+    assert_eq!(selected.agent.as_deref(), Some("sagex"));
+    assert!(String::from_utf8(prompts.output).unwrap().contains("Sagex"));
+    let steps = next_steps(&args, &selected, &wiki, Some(&preferences));
+    assert_eq!(
+        steps[0],
+        "Restart your Sagex session so it can find the installed llm-wiki instructions."
+    );
+    assert!(steps[1].starts_with("Ask Sagex:"));
+    assert!(!wiki.exists());
+    assert!(!preferences.exists());
+    assert!(!temp.path().join(".agents").exists());
+}
+
+#[test]
+fn sagex_reuses_shared_installation_without_changing_package_or_receipts() {
+    for scope in ["user", "project"] {
+        let (temp, wiki, preferences, args) = fixture();
+        let agent_home = fs::canonicalize(temp.path()).unwrap().join("Agent home");
+        fs::create_dir(&agent_home).unwrap();
+        let mut setup = choices(&wiki);
+        setup.agent = Some("codex".into());
+        setup.agent_scope = Some(scope.into());
+        setup.agent_directory = Some(agent_home.clone());
+        let installed = execute(&args, &setup).unwrap();
+        assert!(installed.ok, "{:?}", installed.error);
+        let destination = agent_home.join(".agents/skills/llm-wiki");
+        let link = fs::read_link(&destination).unwrap();
+        let manifest = fs::read(destination.join("manifest.json")).unwrap();
+        let package: Value = serde_json::from_slice(&manifest).unwrap();
+        assert_eq!(package["target"], "shared");
+        let state = agent_home.join(if scope == "project" {
+            ".agents/skills/.lwiki/current.json"
+        } else {
+            ".local/share/lwiki/skills/current.json"
+        });
+        let receipt = fs::read(&state).unwrap();
+        let saved_preferences = fs::read(&preferences).unwrap();
+
+        setup.agent = Some("sagex".into());
+        let reused = execute(&args, &setup).unwrap();
+        assert!(reused.ok, "{:?}", reused.error);
+        assert_eq!(reused.data["plan"]["agent"], "sagex");
+        assert_eq!(reused.data["plan"]["agent_installation"]["target"], "codex");
+        assert_eq!(reused.data["plan"]["agent_installation"]["changed"], false);
+        assert_eq!(fs::read_link(&destination).unwrap(), link);
+        assert_eq!(
+            fs::read(destination.join("manifest.json")).unwrap(),
+            manifest
+        );
+        assert_eq!(fs::read(&state).unwrap(), receipt);
+        assert_eq!(fs::read(&preferences).unwrap(), saved_preferences);
+        assert!(
+            reused.data["retry"]
+                .as_str()
+                .unwrap()
+                .contains("--agent 'sagex'")
+        );
+        let mut human = Vec::new();
+        present_report(&reused, &mut human).unwrap();
+        let human = String::from_utf8(human).unwrap();
+        assert!(human.contains("Sagex's wiki instructions in the shared agent skills folder"));
+        assert!(human.contains("Restart your Sagex session"));
+        assert!(human.contains("Ask Sagex:"));
+    }
+}
+
+#[test]
+fn sagex_flag_previews_shared_destination_without_creating_files() {
+    let (temp, wiki, preferences, mut args) = fixture();
+    args.dry_run = true;
+    let agent_home = fs::canonicalize(temp.path()).unwrap().join("Agent home");
+    fs::create_dir(&agent_home).unwrap();
+    let parsed = Arguments::try_parse_from([
+        "lwiki",
+        "setup",
+        wiki.to_str().unwrap(),
+        "--agent",
+        "sagex",
+        "--agent-directory",
+        agent_home.to_str().unwrap(),
+        "--non-interactive",
+    ])
+    .unwrap();
+    let super::super::arguments::Command::Setup(setup) = parsed.command else {
+        panic!("expected setup command");
+    };
+    let preview = execute(&args, &setup).unwrap();
+    assert!(preview.ok, "{:?}", preview.error);
+    assert_eq!(preview.data["plan"]["agent"], "sagex");
+    assert_eq!(
+        preview.data["plan"]["agent_installation"]["target"],
+        "codex"
+    );
+    assert_eq!(
+        preview.data["plan"]["agent_installation"]["destination"],
+        json!(agent_home.join(".agents/skills/llm-wiki"))
+    );
+    assert!(!wiki.exists());
+    assert!(!preferences.exists());
+    assert!(!agent_home.join(".agents").exists());
+    assert!(!agent_home.join(".local").exists());
+}
+
+#[test]
+fn provider_consent_names_models_destinations_and_explicit_text_scopes() {
     for (answer, granted) in [("yes", true), ("no", false)] {
         let (_temp, wiki, preferences, args) = fixture();
         let mut setup = model(&wiki);
@@ -380,20 +499,40 @@ fn embedding_consent_names_model_destination_and_explicit_text_scope() {
         setup.embedding_url = Some(
             "https://gateway.example.invalid:8443/private-deployment?tenant=private-query".into(),
         );
-        let input = format!("skip\n{answer}\n");
-        let mut prompts = Prompts {
-            input: io::Cursor::new(input.as_bytes()),
+        let mut collection = Prompts {
+            input: io::Cursor::new(b"skip\nno\n"),
             output: Vec::new(),
         };
-        let choices = collect(&setup, &args, true, &mut prompts).unwrap();
-        assert_eq!(choices.grant_embed, granted);
-        let output = String::from_utf8(prompts.output).unwrap();
-        assert!(output.contains("Permit explicit requests for similarity search"));
-        assert!(
-            output.contains("my-selected-embedding-model at https://gateway.example.invalid:8443")
+        let choices = collect(&setup, &args, true, &mut collection).unwrap();
+        let (identity, _) = validate_folder(&choices, &args).unwrap();
+        let mut patch = ProviderRolePatch::new(ProviderRole::Embedding);
+        patch.model = choices.embedding_model.clone();
+        patch.url = choices.embedding_url.clone();
+        patch.auth = ProviderAuthPatch::Replace(SetupAuth::Environment("MY_KEY".into()));
+        let plan = provider_edit::plan_provider_edit(
+            None,
+            &identity,
+            None,
+            &[patch],
+            ProviderGrantDecision::Preserve,
+        )
+        .unwrap();
+        let mut prompts = Prompts {
+            input: io::Cursor::new(format!("{answer}\n").into_bytes()),
+            output: Vec::new(),
+        };
+        assert_eq!(
+            review_provider_permission(&plan, &mut prompts).unwrap(),
+            granted
         );
-        assert!(output.contains("wiki text and search questions and cost money"));
-        assert!(output.contains("Setup makes no requests"));
+        let output = String::from_utf8(prompts.output).unwrap();
+        assert!(
+            output.contains("Permit explicit API requests for all models and destinations shown")
+        );
+        assert!(output.contains("Embedding model: my-selected-embedding-model"));
+        assert!(output.contains("Destination: https://gateway.example.invalid:8443"));
+        assert!(output.contains("wiki text and search questions"));
+        assert!(output.contains("cost money"));
         assert!(!output.contains("private-deployment"));
         assert!(!output.contains("private-query"));
         assert!(!wiki.exists());
@@ -477,7 +616,11 @@ fn optional_embedding_setup_writes_references_and_grants_without_reading_the_key
     let report = execute(&args, &setup).unwrap();
     assert!(report.ok, "{:?}", report.error);
     let loaded = config::local::load_user_config(Some(&preferences), false).unwrap();
-    let provider_path = loaded.document().providers_config.as_ref().unwrap();
+    let provider_path = loaded
+        .document()
+        .saved_provider_config(Some(&loaded.default_wiki().unwrap().wiki_id))
+        .unwrap()
+        .0;
     let provider_before = fs::read(provider_path).unwrap();
     let provider = config::providers::ProviderConfig::load(provider_path).unwrap();
     let profile = loaded
@@ -796,4 +939,318 @@ fn selecting_without_config_updates_keeps_the_original_explicit_json_prefix() {
                     && step.contains("--wiki")
             )
     );
+}
+
+#[cfg(unix)]
+fn credential_program(base: &Path) -> (PathBuf, PathBuf) {
+    use std::os::unix::fs::PermissionsExt;
+    let program = base.join("credential program");
+    let sentinel = base.join("helper-was-run");
+    fs::write(
+        &program,
+        format!("#!/bin/sh\ntouch '{}'\nprintf secret\n", sentinel.display()),
+    )
+    .unwrap();
+    fs::set_permissions(&program, fs::Permissions::from_mode(0o700)).unwrap();
+    (fs::canonicalize(program).unwrap(), sentinel)
+}
+
+#[cfg(unix)]
+#[test]
+fn direct_command_keeps_quoted_argv_and_literal_shell_characters_without_running() {
+    let (temp, wiki, _preferences, mut args) = fixture();
+    let (program, sentinel) = credential_program(temp.path());
+    let auth = command_auth_with_path(
+        "'credential program' auth 'two words' '$(private)' '|' '*.md' '$HOME'",
+        CredentialOutput::Json,
+        Some(temp.path().as_os_str()),
+    )
+    .unwrap();
+    let (identity, _) = validate_folder(&choices(&wiki), &args).unwrap();
+    let mut patch = ProviderRolePatch::new(ProviderRole::Embedding);
+    patch.model = Some("chosen-embedding".into());
+    patch.url = Some("https://embed.example/v1/embeddings".into());
+    patch.auth = ProviderAuthPatch::Replace(auth.clone());
+    let plan = provider_edit::plan_provider_edit(
+        None,
+        &identity,
+        None,
+        &[patch],
+        ProviderGrantDecision::ReviewedAllRoles,
+    )
+    .unwrap();
+    let parsed: toml::Table =
+        toml::from_str(std::str::from_utf8(plan.proposed_bytes()).unwrap()).unwrap();
+    let service = parsed["profiles"][plan.profile()]["embedding"]
+        .as_str()
+        .unwrap();
+    let auth = &parsed["services"][service]["auth"];
+    assert_eq!(
+        auth["command"],
+        toml::Value::Array(
+            vec![
+                program.to_str().unwrap(),
+                "auth",
+                "two words",
+                "$(private)",
+                "|",
+                "*.md",
+                "$HOME"
+            ]
+            .into_iter()
+            .map(|s| toml::Value::String(s.into()))
+            .collect()
+        )
+    );
+    assert_eq!(auth["output"].as_str(), Some("json"));
+    assert_eq!(auth["ttl_seconds"].as_integer(), Some(300));
+    assert_eq!(auth["refresh_skew_seconds"].as_integer(), Some(60));
+    assert_eq!(auth["timeout_seconds"].as_integer(), Some(10));
+    assert!(!format!("{plan:?}").contains("$(private)"));
+    assert!(!sentinel.exists());
+    let mut setup = model(&wiki);
+    setup.key_env = None;
+    setup.credential_command = Some(format!(
+        "'{}' auth 'private-argv-marker'",
+        program.display()
+    ));
+    setup.credential_output = Some(CredentialOutput::Json);
+    args.dry_run = true;
+    args.offline = true;
+    args.json = true;
+    let preview = execute(&args, &setup).unwrap();
+    assert!(preview.ok);
+    assert!(!preview.meta.network_used);
+    assert!(!sentinel.exists());
+    assert!(
+        !serde_json::to_string(&preview)
+            .unwrap()
+            .contains("private-argv-marker")
+    );
+    args.dry_run = false;
+    assert!(execute(&args, &setup).unwrap().ok);
+    assert!(!sentinel.exists());
+}
+
+#[test]
+fn missing_program_and_malformed_command_fail_before_any_setup_writes() {
+    let (_temp, wiki, preferences, mut args) = fixture();
+    args.dry_run = true;
+    for text in [
+        "'unclosed",
+        "definitely-absent-lwiki-credential-program private-argument",
+        "",
+    ] {
+        let mut setup = model(&wiki);
+        setup.key_env = None;
+        setup.credential_command = Some(text.into());
+        let error = execute(&args, &setup).unwrap_err();
+        assert!(!error.message.contains("private-argument"));
+        assert!(!wiki.exists());
+        assert!(!preferences.exists());
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn interactive_command_corrects_missing_program_and_shares_auth_only_after_both_hosts() {
+    let (temp, wiki, preferences, args) = fixture();
+    let (program, sentinel) = credential_program(temp.path());
+    let setup = SetupArguments {
+        path: Some(wiki.clone()),
+        title: Some("My notes".into()),
+        no_default: true,
+        embedding_model: Some("embed".into()),
+        embedding_url: Some("https://embed.example/private?tenant=hidden".into()),
+        embedding_dimensions: Some("auto".into()),
+        generation_model: Some("generate".into()),
+        generation_url: Some("https://generate.example/private?tenant=hidden".into()),
+        generation_adapter: Some("responses-v1".into()),
+        ..Default::default()
+    };
+    let input = format!(
+        "skip\ncommand\nmissing-lwiki-helper\n'{}' auth 'two words'\njson\nyes\n",
+        program.display()
+    );
+    let mut prompts = Prompts {
+        input: io::Cursor::new(input.into_bytes()),
+        output: Vec::new(),
+    };
+    let choices = collect(&setup, &args, true, &mut prompts).unwrap();
+    assert!(choices.generation_reuse_auth);
+    assert_eq!(choices.credential_output, Some(CredentialOutput::Json));
+    let output = String::from_utf8(prompts.output).unwrap();
+    assert!(output.contains("was not found or is not executable"));
+    let embedding = output
+        .find("Embedding destination: https://embed.example")
+        .unwrap();
+    let generation = output
+        .find("Generation destination: https://generate.example")
+        .unwrap();
+    let reuse = output
+        .find("Use the same credentials for these two destinations?")
+        .unwrap();
+    assert!(embedding < reuse && generation < reuse);
+    assert!(!output.contains("tenant=hidden"));
+    assert!(!sentinel.exists());
+    assert!(!wiki.exists());
+    assert!(!preferences.exists());
+}
+
+#[test]
+fn setup_embedding_grant_never_grants_added_generation() {
+    let (_temp, wiki, preferences, args) = fixture();
+    let mut setup = model(&wiki);
+    setup.generation_model = Some("extract".into());
+    setup.generation_url = Some("https://generate.example/v1/responses".into());
+    setup.generation_reuse_auth = true;
+    let error = execute(&args, &setup).unwrap_err();
+    assert!(error.message.contains("--grant-provider"));
+    assert!(!wiki.exists());
+    assert!(!preferences.exists());
+    setup.grant_embed = false;
+    setup.grant_provider = true;
+    let result = execute(&args, &setup).unwrap();
+    assert!(result.ok);
+    assert_eq!(result.data["plan"]["generation"]["model"], "extract");
+    assert_eq!(
+        result.data["plan"]["generation"]["auth_source"],
+        "environment"
+    );
+    let identity = crate::vault::discovery::default_from_path(&wiki).unwrap();
+    let loaded = config::local::load_user_config(Some(&preferences), false).unwrap();
+    let providers = config::providers::ProviderConfig::load(
+        loaded
+            .document()
+            .saved_provider_config(Some(&identity.wiki_id))
+            .unwrap()
+            .0,
+    )
+    .unwrap();
+    let profile = loaded.document().vaults[&identity.wiki_id]
+        .profile
+        .as_ref()
+        .unwrap();
+    let fs = crate::vault::VaultFs::new(crate::vault::VaultRoot::explicit(&wiki).unwrap());
+    providers
+        .authorize(
+            &fs,
+            &identity.wiki_id,
+            profile,
+            crate::jobs::Capability::Generate,
+        )
+        .unwrap();
+}
+
+#[test]
+fn setup_provider_publication_failure_retains_entries_and_secret_free_retry() {
+    let (_temp, wiki, preferences, args) = fixture();
+    CHECKPOINT.with(|hook| {
+        *hook.borrow_mut() = Some(Box::new(|stage, _| {
+            if stage == "provider_complete" {
+                Err(WikiError::new(
+                    ErrorCode::Internal,
+                    "injected preferences failure",
+                ))
+            } else {
+                Ok(())
+            }
+        }))
+    });
+    let result = execute(&args, &model(&wiki));
+    CHECKPOINT.with(|hook| *hook.borrow_mut() = None);
+    let result = result.unwrap();
+    assert!(!result.ok);
+    assert!(result.meta.partial);
+    assert!(!preferences.exists());
+    let provider_path = preferences.parent().unwrap().join("providers.toml");
+    let published = fs::read(&provider_path).unwrap();
+    let retry = result.data["retry"].as_str().unwrap();
+    assert!(retry.contains("--profile"));
+    assert!(!retry.contains("--embedding-url"));
+    assert!(!retry.contains("--key-env"));
+    let argv = shlex::split(retry).unwrap();
+    let retry_args = Arguments::try_parse_from(argv).unwrap();
+    let super::super::arguments::Command::Setup(retry_setup) = &retry_args.command else {
+        panic!("setup retry")
+    };
+    assert!(execute(&retry_args, retry_setup).unwrap().ok);
+    assert_eq!(fs::read(&provider_path).unwrap(), published);
+}
+
+#[test]
+fn setup_persists_b_provider_without_repointing_default_a_and_rerun_uses_saved_file() {
+    let (_temp, a_path, preferences, args) = fixture();
+    assert!(execute(&args, &model(&a_path)).unwrap().ok);
+    let a = crate::vault::discovery::default_from_path(&a_path).unwrap();
+    let loaded = config::local::load_user_config(Some(&preferences), false).unwrap();
+    let a_providers = loaded
+        .document()
+        .saved_provider_config(Some(&a.wiki_id))
+        .unwrap()
+        .0
+        .to_path_buf();
+    let mut document = loaded.document().clone();
+    // Represent an existing global-only selection from before scoped writes.
+    document.providers_config = Some(a_providers.clone());
+    document
+        .vaults
+        .get_mut(&a.wiki_id)
+        .unwrap()
+        .providers_config = None;
+    config::local::update_document(&loaded, document.clone(), None, false, 5000).unwrap();
+    let a_bytes = fs::read(&a_providers).unwrap();
+    let a_preferences = serde_json::to_value(&document.vaults[&a.wiki_id]).unwrap();
+    let b_path = a_path.with_file_name("B's notes");
+    let b_providers = preferences.parent().unwrap().join("B providers.toml");
+    let mut setup = model(&b_path);
+    setup.no_default = true;
+    setup.providers_file = Some(b_providers.clone());
+    setup.embedding_model = Some("wiki-b-embedding".into());
+    assert!(execute(&args, &setup).unwrap().ok);
+    let b = crate::vault::discovery::default_from_path(&b_path).unwrap();
+    let loaded = config::local::load_user_config(Some(&preferences), false).unwrap();
+    assert_eq!(loaded.default_wiki(), Some(&a));
+    assert_eq!(
+        loaded.document().providers_config.as_ref(),
+        Some(&a_providers)
+    );
+    assert_eq!(
+        serde_json::to_value(&loaded.document().vaults[&a.wiki_id]).unwrap(),
+        a_preferences
+    );
+    assert_eq!(
+        loaded.document().vaults[&b.wiki_id]
+            .providers_config
+            .as_ref(),
+        Some(&b_providers)
+    );
+    assert_eq!(fs::read(&a_providers).unwrap(), a_bytes);
+    let before_preferences = fs::read(&preferences).unwrap();
+    let before_b = fs::read(&b_providers).unwrap();
+    setup.providers_file = None;
+    setup.grant_embed = false;
+    let repeat = execute(&args, &setup).unwrap();
+    assert!(repeat.ok, "{:?}", repeat.error);
+    assert_eq!(
+        repeat.data["plan"]["provider_configuration"],
+        json!(b_providers)
+    );
+    assert_eq!(
+        repeat.data["plan"]["embedding"]["model"],
+        "wiki-b-embedding"
+    );
+    assert_eq!(fs::read(&preferences).unwrap(), before_preferences);
+    assert_eq!(fs::read(&b_providers).unwrap(), before_b);
+    let inspect = SetupArguments {
+        no_default: true,
+        ..choices(&b_path)
+    };
+    let inspected = execute(&args, &inspect).unwrap();
+    assert!(inspected.ok);
+    assert_eq!(
+        inspected.data["plan"]["embedding"]["model"],
+        "wiki-b-embedding"
+    );
+    assert_eq!(fs::read(&a_providers).unwrap(), a_bytes);
 }

@@ -135,6 +135,15 @@ pub(super) fn present(
                 "  API format: {}",
                 text(&data["provider"][key]["adapter"])
             )?;
+            if key == "embedding" {
+                let configured = &data["provider"][key]["dimensions"];
+                let dimensions = if let Some(count) = configured.as_u64() {
+                    count.to_string()
+                } else {
+                    configured.as_str().unwrap_or("provider default").to_owned()
+                };
+                writeln!(output, "  Configured vector dimensions: {dimensions}")?;
+            }
             if let Some(limit) = data["provider"][key]["effective_output_token_limit"].as_u64() {
                 writeln!(output, "  Service output token limit: {limit}")?;
             }
@@ -233,6 +242,7 @@ fn configured_origin(present: bool) -> &'static str {
 fn effective_settings(
     document: &config::LocalConfigDocument,
     profile: Option<&str>,
+    wiki_id: Option<&RecordId>,
     allow_ambient_provider: bool,
 ) -> Result<Value> {
     let embeddings =
@@ -240,6 +250,7 @@ fn effective_settings(
     embeddings.validate()?;
     let context = super::remote::RemoteContext {
         profile,
+        wiki_id,
         document,
         allow_ambient_provider,
     };
@@ -380,13 +391,19 @@ fn inspect_loaded(
     }
     let allow_ambient_provider =
         loaded.summary().origin != config::local::UserConfigOrigin::Disabled;
-    let settings = effective_settings(document, profile.as_deref(), allow_ambient_provider)?;
+    let wiki_id = selected_fs.as_ref().map(|(_, id)| id);
+    let settings = effective_settings(
+        document,
+        profile.as_deref(),
+        wiki_id,
+        allow_ambient_provider,
+    )?;
     envelope.data["effective_embeddings"] = settings["embeddings"].clone();
     envelope.data["effective_remote"] = settings["remote"].clone();
     envelope.data["selected_profile"] = json!(profile);
     envelope.data["selected_profile_origin"] = json!(profile_origin);
-    let (path, origin) = if let Some(path) = &document.providers_config {
-        (Some(path.clone()), "user_config")
+    let (path, origin) = if let Some((path, origin)) = document.saved_provider_config(wiki_id) {
+        (Some(path.to_path_buf()), origin)
     } else if allow_ambient_provider {
         match ambient_provider() {
             Ok(path) => (Some(path), "ambient"),

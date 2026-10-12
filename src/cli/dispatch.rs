@@ -30,6 +30,7 @@ pub const COMMANDS: &[&str] = &[
     "capabilities",
     "setup",
     "config show",
+    "config set",
     "skill export",
     "skill install",
     "skill status",
@@ -255,7 +256,12 @@ fn execute_inner_diagnostic_body(args: &Arguments) -> Result<Envelope> {
             ));
         }
         Command::Setup(setup) => return super::setup::execute(args, setup),
-        Command::Config { .. } => return super::config_show::execute(args),
+        Command::Config {
+            command: ConfigCommand::Show,
+        } => return super::config_show::execute(args),
+        Command::Config {
+            command: ConfigCommand::Set(settings),
+        } => return super::config_set::execute(args, settings),
         Command::Capabilities => {
             return Ok(Envelope::success(
                 command,
@@ -590,6 +596,7 @@ fn execute_selected(
     )?;
     let remote_context = super::remote::RemoteContext {
         profile: preferences.profile.as_deref(),
+        wiki_id: Some(&selected.wiki_id),
         document: local.document(),
         allow_ambient_provider: local.summary().origin != config::local::UserConfigOrigin::Disabled,
     };
@@ -2001,6 +2008,15 @@ fn execute_selected(
                         }
                         error.details["provider"] = provider.clone();
                         error.details["probe_role"] = json!(service_role);
+                        super::probe_diagnostic::decorate(
+                            &mut error,
+                            args,
+                            local,
+                            selected,
+                            remote,
+                            &remote_context,
+                            *extraction_schema,
+                        );
                         error
                     })?;
                     doctor.provider_probe_performed = result.network_used;
@@ -3019,6 +3035,9 @@ fn present_inner(
         }
         OutputFormat::Human if envelope.command == "setup" => {
             super::setup::present_report(envelope, output)
+        }
+        OutputFormat::Human if envelope.command == "config set" => {
+            super::config_set::present(envelope, output)
         }
         OutputFormat::Human if envelope.ok && envelope.command == "config show" => {
             super::config_show::present(envelope, output)

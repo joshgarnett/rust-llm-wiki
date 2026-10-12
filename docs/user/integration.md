@@ -12,7 +12,7 @@ For normal installation, rerun setup and choose the agent:
 lwiki setup "/absolute/path/to/Wiki" --select --agent codex
 ```
 
-Use `claude-code` or `cursor` instead of `codex` for those agents. Setup shows
+Use `sagex`, `claude-code` or `cursor` instead of `codex` for those agents. Setup shows
 where it will install the `llm-wiki` instructions. It keeps the selected wiki
 and existing notes. Restart the agent after setup, then give it a task with your
 chosen notes and question, as in [getting started](getting-started.md#give-your-agent-a-real-task).
@@ -52,6 +52,9 @@ running lwiki version. It does not install or launch the agent. Keep one
 installed copy per agent so old and new instructions do not compete.
 
 ## Check, update or remove agent instructions
+
+For Sagex, the commands in this section use `--target codex`, which manages the
+same shared instructions installed by `setup --agent sagex`.
 
 Check the instructions installed for your agent:
 

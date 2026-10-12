@@ -469,6 +469,8 @@ impl ProviderConfig {
                     "auth_source":auth_source,
                     "destination":{"scheme":endpoint.scheme(),"host":host,"port":endpoint.port_or_known_default()},
                     "adapter":service.adapter,
+                    // Configured count or auto, never a discovered provider dimension.
+                    "dimensions":service.dimensions,
                     "effective_output_token_limit":output_limit,
                     "command_auth":command_auth,
                 }));

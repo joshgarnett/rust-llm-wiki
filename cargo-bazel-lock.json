@@ -1,5 +1,5 @@
 {
-  "checksum": "68e3ad9e9ccd6ea4a23a8d95f108e005f3d222af47d818119de6a2cf5746f145",
+  "checksum": "0ce1b612da08bddcb2e3db91f1ec374ab8637ba5d90856c621dda06ae36bf9b7",
   "crates": {
     "ahash 0.8.12": {
       "name": "ahash",
@@ -8426,6 +8426,10 @@
               "target": "serde_json"
             },
             {
+              "id": "shlex 2.0.1",
+              "target": "shlex"
+            },
+            {
               "id": "time 0.3.55",
               "target": "time"
             },
@@ -15205,6 +15209,7 @@
     "rustls 0.23.44",
     "serde 1.0.229",
     "serde_json 1.0.151",
+    "shlex 2.0.1",
     "time 0.3.55",
     "tokio 1.53.1",
     "toml 1.1.6+spec-1.1.0",
