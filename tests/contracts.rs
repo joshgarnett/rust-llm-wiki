@@ -444,18 +444,23 @@ fn predicate_literal_and_qualifier_matrix() {
 }
 
 #[test]
-fn storage_layout_two_is_reserved_for_vault_markers() {
-    let marker = record("vault", json!({"wiki_schema":"2"}));
-    let parsed = canonical(marker.clone());
-    assert_eq!(parsed.kind(), RecordKind::Vault);
-    let bytes = b"---\nwiki_schema: \"2\"\nwiki_id: vault_fixture\nwiki_kind: vault\ntitle: Layout two\n---\nStorage layout 2\n";
-    assert_eq!(
-        lwiki::records::parse_note(bytes).status,
-        lwiki::records::ParseStatus::Valid
-    );
-    invalid(record(
-        "page",
-        json!({"wiki_schema":"2","wiki_status":"reviewed"}),
-    ));
-    invalid(record("vault", json!({"wiki_schema":"3"})));
+fn storage_layout_schemas_are_reserved_for_vault_markers() {
+    for schema in ["2", "3"] {
+        let marker = record("vault", json!({"wiki_schema":schema}));
+        assert_eq!(canonical(marker).kind(), RecordKind::Vault);
+        let text = format!(
+            "---\nwiki_schema: \"{schema}\"\nwiki_id: vault_fixture\nwiki_kind: vault\ntitle: Storage layout\n---\nStorage layout {schema}\n"
+        );
+        assert_eq!(
+            lwiki::records::parse_note(text.as_bytes()).status,
+            lwiki::records::ParseStatus::Valid
+        );
+        for mut value in examples() {
+            if value["wiki_kind"] != "vault" {
+                value["wiki_schema"] = json!(schema);
+                invalid(value);
+            }
+        }
+    }
+    invalid(record("vault", json!({"wiki_schema":"4"})));
 }
