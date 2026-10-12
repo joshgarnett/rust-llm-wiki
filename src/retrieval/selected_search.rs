@@ -7,6 +7,7 @@ use super::{
 use crate::{
     catalog::{
         Catalog,
+        query::QuerySnapshot,
         query_types::{QueryCatalog, QueryReadLimits},
     },
     domain::*,
@@ -197,6 +198,46 @@ pub fn search_ordinary_lexical(
     {
         coordinate(catalog, query, plan, budget, true)
     }
+}
+
+/// Ordinary current discovery uses the existing selected citation proof, then
+/// verifies the complete admitted observation without reopening the saved index.
+pub(crate) fn search_current_observation(
+    catalog: &Catalog,
+    reader: &QuerySnapshot,
+    query: &str,
+    plan: &QueryPlan,
+    budget: &VerificationBudget,
+) -> Result<HitSet> {
+    let plan = lexical::validate_plan(query, plan)?;
+    if !reader.is_current_observation()
+        || !matches!(plan.mode, SearchMode::Literal | SearchMode::Lexical)
+    {
+        return Err(WikiError::new(
+            ErrorCode::CapabilityUnavailable,
+            "current search requires a current literal/lexical observation",
+        ));
+    }
+    let mut hits = if plan.mode == SearchMode::Lexical {
+        lexical::search_ordinary_lexical_catalog(reader, query, &plan)?
+    } else {
+        lexical::search_catalog(reader, query, &plan)?
+    };
+    let paths = hits
+        .hits
+        .iter()
+        .map(|hit| hit.locator.path.clone())
+        .collect::<Vec<_>>();
+    let budget = super::verification::current_proof_budget(reader, budget)?;
+    let mut proof = selected_documents::authenticate(catalog, reader, &paths, &budget)?;
+    for hit in &mut hits.hits {
+        bind_hit(hit, &proof, catalog.vault_id())?;
+    }
+    hits.dependency_fingerprint = reader.dependency_fingerprint()?;
+    serde_json::to_vec(&hits).map_err(serialization)?;
+    proof.recheck(catalog, reader)?;
+    hits.verification = super::verification::verify_current_observation(catalog, reader, &proof)?;
+    Ok(hits)
 }
 
 #[cfg(test)]

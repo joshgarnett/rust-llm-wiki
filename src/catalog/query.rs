@@ -19,12 +19,17 @@ use std::{
     cell::Cell,
     collections::BTreeSet,
     ops::Deref,
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
     time::{Duration, Instant},
 };
 
 enum QueryConnection {
     Legacy(Connection),
     Normalized(selector::Selected<Connection>),
+    Transient(Connection, Box<super::transient_read::CurrentObservation>),
 }
 
 impl Deref for QueryConnection {
@@ -33,6 +38,7 @@ impl Deref for QueryConnection {
         match self {
             Self::Legacy(connection) => connection,
             Self::Normalized(selected) => selected.value(),
+            Self::Transient(connection, _) => connection,
         }
     }
 }
@@ -55,6 +61,7 @@ pub(crate) struct QuerySnapshot {
 enum QueryScope {
     IndexedEvidence,
     CatalogSnapshot,
+    CurrentObservation,
 }
 
 /// Lifecycle-only access deliberately excludes document and FTS text.
@@ -77,20 +84,39 @@ pub(crate) struct BoundedIncidentIds {
 
 impl Catalog {
     pub(crate) fn query_snapshot(&self, limits: QueryReadLimits) -> Result<QuerySnapshot> {
-        self.query_snapshot_with_scope(limits, QueryScope::IndexedEvidence)
+        self.query_snapshot_with_scope(limits, QueryScope::IndexedEvidence, false)
     }
 
     /// General cached discovery has a distinct cursor/dependency domain from
     /// the selected captured-source evidence protocol. Neither scope audits the
     /// whole catalog or establishes canonical freshness by opening a reader.
     pub(crate) fn cached_query_snapshot(&self, limits: QueryReadLimits) -> Result<QuerySnapshot> {
-        self.query_snapshot_with_scope(limits, QueryScope::CatalogSnapshot)
+        self.query_snapshot_with_scope(limits, QueryScope::CatalogSnapshot, false)
+    }
+
+    /// Ordinary CLI fallback for one read-only invocation. SQLite may share a
+    /// read-only SHM node with later connections in this process, so this reader
+    /// must be closed before opening mutation connections. Existing selected and
+    /// cached APIs retain their original same-process write concurrency.
+    pub(crate) fn published_read_only_query_snapshot(
+        &self,
+        limits: QueryReadLimits,
+    ) -> Result<QuerySnapshot> {
+        limits.validate()?;
+        if self.operation_state()?.is_none() {
+            return Err(WikiError::new(
+                ErrorCode::CapabilityUnavailable,
+                "read-only published discovery requires a normalized catalog",
+            ));
+        }
+        self.query_snapshot_with_scope(limits, QueryScope::CatalogSnapshot, true)
     }
 
     fn query_snapshot_with_scope(
         &self,
         limits: QueryReadLimits,
         scope: QueryScope,
+        read_only_shm: bool,
     ) -> Result<QuerySnapshot> {
         // Reject invalid requests before resolving or opening any cache path.
         limits.validate()?;
@@ -110,13 +136,17 @@ impl Catalog {
             |path, selection| {
                 #[cfg(test)]
                 super::query_diagnostics::access("catalog_open");
-                let connection = Connection::open_with_flags(
-                    path,
-                    OpenFlags::SQLITE_OPEN_READ_ONLY
-                        | OpenFlags::SQLITE_OPEN_NO_MUTEX
-                        | OpenFlags::SQLITE_OPEN_NOFOLLOW,
-                )
-                .map_err(sql::sql_error)?;
+                let connection = if read_only_shm {
+                    sql::read_only_connection(path, true)?
+                } else {
+                    Connection::open_with_flags(
+                        path,
+                        OpenFlags::SQLITE_OPEN_READ_ONLY
+                            | OpenFlags::SQLITE_OPEN_NO_MUTEX
+                            | OpenFlags::SQLITE_OPEN_NOFOLLOW,
+                    )
+                    .map_err(sql::sql_error)?
+                };
                 let query_started = configure_query(&connection, &limits)?;
                 sql::configure(&connection, timeout, false)?;
                 connection
@@ -246,7 +276,16 @@ impl Catalog {
 }
 
 fn configure_query(connection: &Connection, limits: &QueryReadLimits) -> Result<Instant> {
-    let start = Instant::now();
+    configure_query_at(connection, limits, Instant::now(), false, None)
+}
+
+pub(super) fn configure_query_at(
+    connection: &Connection,
+    limits: &QueryReadLimits,
+    start: Instant,
+    memory: bool,
+    progress: Option<Arc<AtomicU64>>,
+) -> Result<Instant> {
     let elapsed = Duration::from_millis(limits.max_elapsed_ms);
     // SQLite may do substantial work inside a native FTS operation between
     // callbacks. Count executed VM work cumulatively across this connection.
@@ -258,6 +297,9 @@ fn configure_query(connection: &Connection, limits: &QueryReadLimits) -> Result<
         .progress_handler(
             interval,
             Some(move || {
+                if let Some(progress) = &progress {
+                    progress.fetch_add(1, Ordering::Relaxed);
+                }
                 #[cfg(test)]
                 super::query_diagnostics::vm_step();
                 if start.elapsed() >= elapsed || remaining <= interval as u64 {
@@ -277,7 +319,11 @@ fn configure_query(connection: &Connection, limits: &QueryReadLimits) -> Result<
         .set_limit(Limit::SQLITE_LIMIT_SQL_LENGTH, 256 * 1024)
         .map_err(sql::sql_error)?;
     connection
-        .execute_batch("PRAGMA mmap_size=0; PRAGMA cache_size=-8192; PRAGMA temp_store=FILE;")
+        .execute_batch(if memory {
+            "PRAGMA mmap_size=0; PRAGMA cache_size=-8192; PRAGMA temp_store=MEMORY;"
+        } else {
+            "PRAGMA mmap_size=0; PRAGMA cache_size=-8192; PRAGMA temp_store=FILE;"
+        })
         .map_err(sql::sql_error)?;
     Ok(start)
 }
@@ -306,7 +352,66 @@ fn header_hash(row: &Row<'_>, column: usize) -> Result<Blake3Hash> {
 }
 
 impl QuerySnapshot {
+    pub(super) fn from_current_observation(
+        connection: Connection,
+        observation: super::transient_read::CurrentObservation,
+        snapshot: ReadSnapshot,
+        vault_id: RecordId,
+        limits: QueryReadLimits,
+        query_started: Instant,
+        authority: Authority,
+    ) -> Self {
+        Self {
+            connection: QueryConnection::Transient(connection, Box::new(observation)),
+            snapshot,
+            vault_id,
+            verification: SnapshotVerification::IndexSnapshot,
+            usage: Cell::new(QueryReadUsage::default()),
+            fact_layout_verified: Cell::new(true),
+            policy_layout_verified: Cell::new(false),
+            limits,
+            query_started,
+            operation_authority: Some(authority),
+            scope: QueryScope::CurrentObservation,
+        }
+    }
+
+    pub(crate) fn persistent_generation(&self) -> Option<u64> {
+        (!self.is_current_observation()).then_some(self.snapshot.generation)
+    }
+
+    pub(crate) fn is_current_observation(&self) -> bool {
+        matches!(&self.connection, QueryConnection::Transient(..))
+    }
+
+    pub(crate) fn current_observation(&self) -> Option<&super::transient_read::CurrentObservation> {
+        match &self.connection {
+            QueryConnection::Transient(_, observation) => Some(observation),
+            _ => None,
+        }
+    }
+
+    /// The coordinator calls this immediately before emitting assembled evidence.
+    /// Selected readers retain their existing operation check; their selected
+    /// canonical proof remains owned by the existing evidence coordinator.
+    pub(crate) fn final_recheck(&self, catalog: &Catalog) -> Result<()> {
+        self.check_query_budget()?;
+        self.verify_operations(catalog)?;
+        if let Some(observation) = self.current_observation() {
+            observation.final_recheck()?;
+            self.verify_operations(catalog)?;
+        }
+        self.check_query_budget()
+    }
+
     pub(crate) fn verify_operations(&self, catalog: &Catalog) -> Result<()> {
+        if self.is_current_observation() {
+            let captured = self
+                .operation_authority
+                .as_ref()
+                .ok_or_else(|| corrupt("transient observation has no authority"))?;
+            return super::transient_read::verify_authority(catalog, captured);
+        }
         if let Some(captured) = &self.operation_authority {
             catalog.operation_state()?.ok_or_else(|| {
                 WikiError::new(
@@ -569,6 +674,12 @@ impl QuerySnapshot {
 // These helpers do not inspect canonical files or claim fresh global identity.
 impl QuerySnapshot {
     fn require_refresh_publication(&self) -> Result<()> {
+        // Private construction supplies the same normalized typed rows without
+        // pretending that a durable publication exists. Mutation callers still
+        // must bind a real publication independently.
+        if self.is_current_observation() {
+            return self.check_query_budget();
+        }
         let QueryConnection::Normalized(selected) = &self.connection else {
             return Err(WikiError::new(
                 ErrorCode::OfflineUnavailable,
@@ -1622,14 +1733,20 @@ impl QueryCatalog for QuerySnapshot {
         }
         Ok(())
     }
+    fn current_observation_layout(&self) -> bool {
+        self.is_current_observation()
+    }
     fn publication_id(&self) -> Option<&str> {
         match &self.connection {
             QueryConnection::Normalized(selected) => Some(&selected.selection().file_id),
-            QueryConnection::Legacy(_) => None,
+            QueryConnection::Legacy(_) | QueryConnection::Transient(..) => None,
         }
     }
     fn normalized_layout(&self) -> bool {
-        matches!(&self.connection, QueryConnection::Normalized(_))
+        matches!(
+            &self.connection,
+            QueryConnection::Normalized(_) | QueryConnection::Transient(..)
+        )
     }
     fn connection(&self) -> &Connection {
         &self.connection
@@ -1898,6 +2015,9 @@ impl QueryCatalog for QuerySnapshot {
         Ok(result)
     }
     fn dependency_fingerprint(&self) -> Result<Blake3Hash> {
+        if let Some(observation) = self.current_observation() {
+            return Ok(observation.fingerprint.clone());
+        }
         // Include physical identity and the actual pinned epoch: rebuilt files
         // can share logical headers/epochs while containing different candidates.
         if let QueryConnection::Normalized(selected) = &self.connection {
@@ -1919,6 +2039,7 @@ impl QueryCatalog for QuerySnapshot {
         match self.scope {
             QueryScope::IndexedEvidence => "indexed_evidence",
             QueryScope::CatalogSnapshot => "catalog_snapshot",
+            QueryScope::CurrentObservation => "current_observation",
         }
     }
     fn decode_document(&self, row: &Row<'_>, column: usize) -> Result<DocumentRow> {

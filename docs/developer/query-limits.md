@@ -40,3 +40,25 @@ An embedding space separately bounds **query prefix plus full query** using its 
 Context passage selection separately bounds distinct tokenized terms at 256 and reports omissions. Punctuation may yield several tokens from one accepted whitespace phrase. Output bytes, candidate counts, source scans and verification deadlines remain independent; a larger input ceiling does not expand the final answer context or prove completeness.
 
 The independent code review also found an older 8,192-byte internal graph-key ceiling. It now permits the shared query ceiling plus 128 bytes for its fixed space prefix. The complete key still participates in cursor identity. Integration tests exercise 16 KiB input through semantic graph, hybrid graph search and graph context, and reject a cursor reused with only the query's final byte changed.
+
+## Current note observation
+
+Ordinary local lookup in an activated normalized wiki can construct a complete
+command-local read view without opening the saved index or writing to the wiki.
+Admission permits 4,096 unique files, 65,536 cumulative path steps, 4 MiB of
+manifest/path accounting, 8 MiB per file, 16 MiB of retained raw notes and 64 MiB
+of cumulative canonical I/O. Capture, selected proof and final recheck share a
+five-second cooperative deadline. The file count limits distinct census members,
+not the number of physical reads; repeated proof reads consume I/O and path work.
+
+SQL construction permits 65,536 logical rows, 128 MiB of cumulative admitted row
+bytes and 128 MiB of primary SQLite pages. One cumulative SQL progress handler
+covers construction and selection, subject to the existing 10-million-step query
+ceiling. Caller limits may tighten these allowances. These are logical work limits,
+not a hard process-memory or wall-clock guarantee.
+
+If admission fails only for resources, ordinary search and omitted-scope context
+may use the published index and disclose that new or edited notes can be missing.
+An explicit current context request does not degrade. Missing or damaged retained
+authority, active recovery and canonical identity conflicts are not resource
+fallbacks. A missing derived cache alone does not block an admitted observation.

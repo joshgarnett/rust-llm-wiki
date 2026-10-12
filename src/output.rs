@@ -20,6 +20,9 @@ pub struct Metadata {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub selection: Option<Value>,
     pub index_generation: Option<u64>,
+    /// Complete command-local observation, distinct from a published index.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub read_view: Option<Value>,
     pub freshness: Option<String>,
     pub verified_at: Option<String>,
     pub partial: bool,

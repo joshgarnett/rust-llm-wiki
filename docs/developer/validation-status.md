@@ -71,3 +71,12 @@ Mocks establish local provider mechanics. Live interoperability and billing need
 an authorized endpoint, finite limits and retained receipts. A successful probe
 for one role does not establish other adapters, extraction schemas or model
 quality.
+
+To check ordinary local lookup without write access, run
+`python3 scripts/check_read_only_lookup.py --binary /path/to/lwiki --output /new/evidence/folder`.
+The check removes the derived index from disposable legacy and normalized wikis,
+then verifies search, context and read under native write restrictions. It also
+checks that writes are actually denied and that the wiki and private settings
+remain unchanged. Missing enforcement tools produce an unsupported result, not
+a pass. macOS uses `sandbox-exec`; Linux uses a separate unprivileged identity.
+This fixed regression check does not establish retrieval quality on other notes.

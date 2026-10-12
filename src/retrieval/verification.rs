@@ -3,7 +3,7 @@ use super::{context, context_types::*};
 use crate::{
     catalog::{
         Catalog, CatalogGraphValidator, CatalogProjection, ReaderSnapshot, SnapshotVerification,
-        query_types::QueryReadLimits,
+        query::QuerySnapshot, query_types::QueryReadLimits,
     },
     changes::{ChangeEngine, ProposedTarget, ScanDocument, ValidationInput},
     domain::*,
@@ -20,6 +20,54 @@ pub fn context(
     request: &ContextRequest,
 ) -> Result<ContextResult> {
     context_with_options(catalog, writer, query, request, &ContextOptions::default())
+}
+
+/// Selected canonical reads consume the same allowance as the complete current
+/// observation. Neither admission nor its final recheck starts a new budget.
+pub(crate) fn current_proof_budget(
+    reader: &QuerySnapshot,
+    requested: &VerificationBudget,
+) -> Result<VerificationBudget> {
+    let observation = reader.current_observation().ok_or_else(|| {
+        WikiError::invalid("current document proof requires a current observation")
+    })?;
+    let (bytes, entries, elapsed_ms) = observation.remaining_work()?;
+    let budget = VerificationBudget {
+        max_bytes: requested.max_bytes.min(bytes),
+        // Each selected physical read and logical entry shares the observation's
+        // path-work allowance. Reserving half for each prevents over-admission.
+        max_files: requested.max_files.min(entries / 2),
+        max_entries: requested.max_entries.min(entries / 2),
+        max_elapsed_ms: requested.max_elapsed_ms.min(elapsed_ms),
+    };
+    if budget.max_bytes == 0
+        || budget.max_files == 0
+        || budget.max_entries == 0
+        || budget.max_elapsed_ms == 0
+    {
+        return Err(budget_error(
+            "current observation proof allowance exhausted",
+        ));
+    }
+    Ok(budget)
+}
+
+/// This is the only seal for current normalized evidence. Selected citation
+/// proof is complete before the full membership, bytes and authority recheck.
+pub(crate) fn verify_current_observation(
+    catalog: &Catalog,
+    reader: &QuerySnapshot,
+    proof: &super::selected_documents::SelectedDocuments,
+) -> Result<SnapshotVerification> {
+    let observation = reader.current_observation().ok_or_else(|| {
+        WikiError::invalid("current document proof requires a current observation")
+    })?;
+    let (bytes, files, entries) = proof.meter().work();
+    observation.charge_work(bytes, files, entries)?;
+    reader.final_recheck(catalog)?;
+    Ok(SnapshotVerification::VerifiedSnapshot {
+        verified_at: crate::sources::revision::timestamp()?,
+    })
 }
 pub(super) struct Meter {
     budget: VerificationBudget,

@@ -241,7 +241,7 @@ fn search_inner_with_discovery(
     if source_only {
         validate_source_indexes(reader.connection(), reader.normalized_layout())?;
     } else if reader.normalized_layout() {
-        validate_general_indexes(reader.connection())?;
+        validate_general_indexes(reader.connection(), reader.current_observation_layout())?;
     }
     let tokenizer = if plan.mode == SearchMode::Lexical {
         Some(Tokenizer::new(reader.connection())?)
@@ -637,22 +637,26 @@ const SOURCE_INDEXES: [(&str, &str); 3] = [
 const GENERAL_TITLE_INDEX: &str = "CREATE INDEX document_titles ON documents(title,record_id,path)";
 const GENERAL_CANDIDATE_INDEX: &str = "CREATE INDEX document_candidate_metadata ON documents(doc_row,path,record_id,kind,eligibility,source_id,owner_revision)";
 
-fn validate_general_indexes(connection: &Connection) -> Result<()> {
+fn validate_general_indexes(connection: &Connection, current_observation: bool) -> Result<()> {
     // Layout 0/1 builders did not publish the complete registry/fact membership
     // used by this query. An index alone cannot make their missing alias rows
     // authoritative; refuse before silently demoting exact alias to FTS.
-    let layout: i64 = connection
-        .query_row(
-            "SELECT proof_layout_version FROM catalog_meta WHERE singleton=1",
-            [],
-            |row| row.get(0),
-        )
-        .map_err(sql_error)?;
-    if layout != 2 {
-        return Err(WikiError::new(
-            ErrorCode::CapabilityUnavailable,
-            "all-document normalized retrieval requires complete proof layout 2",
-        ));
+    // Transient normalized facts come from private production construction,
+    // not a fabricated catalog_meta publication. Keep exact index checks below.
+    if !current_observation {
+        let layout: i64 = connection
+            .query_row(
+                "SELECT proof_layout_version FROM catalog_meta WHERE singleton=1",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(sql_error)?;
+        if layout != 2 {
+            return Err(WikiError::new(
+                ErrorCode::CapabilityUnavailable,
+                "all-document normalized retrieval requires complete proof layout 2",
+            ));
+        }
     }
     for (name, expected, message) in [
         (

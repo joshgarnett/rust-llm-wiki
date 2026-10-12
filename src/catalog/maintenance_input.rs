@@ -742,6 +742,81 @@ impl MaintenanceInput {
             Ok(bytes)
         })
     }
+    /// Share the command allowance with selected evidence authentication. Its
+    /// owned meter must be tightened before reads and charged before full recheck.
+    pub(crate) fn remaining_external_work(&self) -> Result<(usize, usize, u64)> {
+        self.require_clean()?;
+        let usage = self.usage();
+        Ok((
+            self.limits
+                .max_io_bytes
+                .saturating_sub(usage.io_bytes)
+                .min(usize::MAX as u64) as usize,
+            self.limits.max_path_steps.saturating_sub(usage.path_steps),
+            self.remaining_time()?.as_millis().min(u64::MAX as u128) as u64,
+        ))
+    }
+    pub(crate) fn charge_external_work(
+        &self,
+        bytes: usize,
+        files: usize,
+        entries: usize,
+    ) -> Result<()> {
+        self.guarded(|| {
+            let mut state = self.mutable.borrow_mut();
+            let io_bytes = state
+                .usage
+                .io_bytes
+                .checked_add(bytes as u64)
+                .filter(|n| *n <= self.limits.max_io_bytes)
+                .ok_or_else(|| budget("current observation cumulative input bytes exhausted"))?;
+            let path_steps = state
+                .usage
+                .path_steps
+                .checked_add(files)
+                .and_then(|n| n.checked_add(entries))
+                .filter(|n| *n <= self.limits.max_path_steps)
+                .ok_or_else(|| budget("current observation cumulative path work exhausted"))?;
+            state.usage.io_bytes = io_bytes;
+            state.usage.path_steps = path_steps;
+            Ok(())
+        })
+    }
+
+    /// Bind complete admitted membership plus every lazy payload and raw layout
+    /// observation. Hash borrowed entries without allocating another inventory.
+    pub(crate) fn observation_fingerprint(&self) -> Result<Blake3Hash> {
+        self.require_clean()?;
+        let mut hasher = blake3::Hasher::new();
+        let mut field = |bytes: &[u8]| {
+            hasher.update(&(bytes.len() as u64).to_le_bytes());
+            hasher.update(bytes);
+        };
+        field(b"lwiki.maintenance-observation.v1");
+        for (path, entry) in &self.scanned {
+            self.require_clean()?;
+            field(b"scanned");
+            field(path.as_str().as_bytes());
+            field(entry.hash.as_str().as_bytes());
+        }
+        let state = self.mutable.borrow();
+        for (label, values) in [
+            (b"observed".as_slice(), &state.observed),
+            (b"layout".as_slice(), &state.layout_observed),
+        ] {
+            for (path, entry) in values {
+                field(label);
+                field(path.as_str().as_bytes());
+                match &entry.expected {
+                    ExpectedState::Absent => field(b"absent"),
+                    ExpectedState::Hash(hash) => field(hash.as_str().as_bytes()),
+                }
+            }
+        }
+        drop(state);
+        self.require_clean()?;
+        Blake3Hash::new(format!("blake3:{}", hasher.finalize().to_hex()))
+    }
     pub(crate) fn final_recheck(&self) -> Result<()> {
         self.guarded(|| {
             let paths = self.census(false)?;

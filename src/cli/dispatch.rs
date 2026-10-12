@@ -603,6 +603,7 @@ fn execute_selected(
     // Reuse legacy reader health; reopening its cache can require WAL writes or
     // discard a successful in-memory reconstruction after cache loss.
     let mut legacy_read_health = None;
+    let mut current_read_health = None;
     envelope.meta.selection = Some(
         json!({"schema_version":"lwiki.selection.v1","root":selected_root,"wiki_id":selected.wiki_id,"origin":selected.origin,"requested_path":selected.requested_path,"configuration":local.summary(),"preference_origins":preferences.origins}),
     );
@@ -685,7 +686,11 @@ fn execute_selected(
             );
             let outcome = if catalog.operation_state()?.is_some() {
                 catalog.guard_query()?;
-                let reader = catalog.query_snapshot(QueryReadLimits::default())?;
+                let reader = if *no_sync {
+                    catalog.query_snapshot(QueryReadLimits::default())?
+                } else {
+                    normalized_current_reader(&catalog, &mut envelope)?
+                };
                 if !reader.normalized_layout() {
                     return Err(WikiError::new(
                         ErrorCode::IndexCorrupt,
@@ -696,15 +701,25 @@ fn execute_selected(
                 if !*no_sync {
                     let read_proof_error = |mut error: WikiError| {
                         if error.code == ErrorCode::BudgetExceeded {
-                            error.hint = Some("Selected read verification exceeded its bounded budget. Context supports --verification-* controls; read --no-sync returns explicitly unverified cached bytes when those are sufficient.".into());
+                            error.hint = Some(if reader.is_current_observation() {
+                                "Checking this note reached a size or time limit. Use inspect --path for a known file when physical bytes are sufficient.".into()
+                            } else {
+                                "Selected read verification exceeded its bounded budget. Context supports --verification-* controls; read --no-sync returns explicitly unverified cached bytes when those are sufficient.".into()
+                            });
                         }
                         error
+                    };
+                    let requested_budget = retrieval::VerificationBudget::default();
+                    let proof_budget = if reader.is_current_observation() {
+                        retrieval::verification::current_proof_budget(&reader, &requested_budget)?
+                    } else {
+                        requested_budget
                     };
                     let mut proof = retrieval::selected_documents::authenticate(
                         &catalog,
                         &reader,
                         std::slice::from_ref(&outcome.path),
-                        &retrieval::VerificationBudget::default(),
+                        &proof_budget,
                     )
                     .map_err(read_proof_error)?;
                     proof.recheck(&catalog, &reader).map_err(read_proof_error)?;
@@ -715,11 +730,25 @@ fn execute_selected(
                         )
                     })?;
                     outcome.source_citation = authenticated_read_citation(document, &outcome)?;
-                    let verification = retrieval::indexed_documents::verification(&reader)?;
+                    let verification = if reader.is_current_observation() {
+                        retrieval::verification::verify_current_observation(
+                            &catalog, &reader, &proof,
+                        )?
+                    } else {
+                        retrieval::indexed_documents::verification(&reader)?
+                    };
                     result_metadata(&mut envelope.meta, reader.snapshot(), &verification);
-                    envelope.warnings.push("Read verifies selected document dependencies against this discovery generation; global membership and identity uniqueness are not verified. Use index sync to discover external edits.".into());
+                    envelope.meta.index_generation = reader.persistent_generation();
+                    if !reader.is_current_observation() {
+                        envelope.warnings.push("Read verifies selected document dependencies against this discovery generation; global membership and identity uniqueness are not verified. Use index sync to discover external edits.".into());
+                    }
                 }
-                reader.verify_operations(&catalog)?;
+                if reader.is_current_observation() {
+                    current_read_health = current_observation_health(&reader, &mut envelope.meta);
+                } else {
+                    legacy_read_health = Some(Some(reader.known_health()?));
+                    reader.verify_operations(&catalog)?;
+                }
                 if *no_sync && !args.dry_run {
                     envelope.meta.index_generation = Some(reader.snapshot().generation);
                     envelope.meta.freshness = Some("index_snapshot".into());
@@ -1307,14 +1336,26 @@ fn execute_selected(
                     plan.mode,
                     retrieval::SearchMode::Literal | retrieval::SearchMode::Lexical
                 ) {
-                    let reader = catalog.cached_query_snapshot(QueryReadLimits::default())?;
+                    let reader = if !args.dry_run && !search.no_sync {
+                        normalized_current_reader(&catalog, &mut envelope)?
+                    } else {
+                        catalog.cached_query_snapshot(QueryReadLimits::default())?
+                    };
                     if !reader.normalized_layout() {
                         return Err(WikiError::new(
                             ErrorCode::IndexCorrupt,
                             "normalized search selected another catalog layout",
                         ));
                     }
-                    let hits = if plan.mode == retrieval::SearchMode::Lexical {
+                    let hits = if reader.is_current_observation() {
+                        retrieval::selected_search::search_current_observation(
+                            &catalog,
+                            &reader,
+                            &search.query,
+                            &plan,
+                            &retrieval::VerificationBudget::default(),
+                        )?
+                    } else if plan.mode == retrieval::SearchMode::Lexical {
                         retrieval::lexical::search_ordinary_lexical_catalog(
                             &reader,
                             &search.query,
@@ -1323,7 +1364,13 @@ fn execute_selected(
                     } else {
                         retrieval::lexical::search_catalog(&reader, &search.query, &plan)?
                     };
-                    reader.verify_operations(&catalog)?;
+                    if reader.is_current_observation() {
+                        current_read_health =
+                            current_observation_health(&reader, &mut envelope.meta);
+                    } else {
+                        legacy_read_health = Some(Some(reader.known_health()?));
+                        reader.verify_operations(&catalog)?;
+                    }
                     hits
                 } else {
                     with_embedding_runtime(
@@ -1344,6 +1391,9 @@ fn execute_selected(
                     )?
                 };
                 result_metadata(&mut envelope.meta, &hits.snapshot, &hits.verification);
+                if current_read_health.is_some() {
+                    envelope.meta.index_generation = None;
+                }
                 envelope.meta.network_used = hits.network_used;
                 envelope.meta.partial = hits.truncated;
                 envelope.warnings.extend(hits.warnings.iter().cloned());
@@ -1639,8 +1689,29 @@ fn execute_selected(
             );
             let normalized_selected = catalog.operation_state()?.is_some();
             let mut request = context.request();
+            let current_local_documents = normalized_selected
+                && request.target == retrieval::ContextTarget::Documents
+                && request.graph.is_none()
+                && matches!(
+                    request.documents.mode,
+                    retrieval::SearchMode::Literal | retrieval::SearchMode::Lexical
+                )
+                && !request.documents.filters.include_historical
+                && !context.search.no_sync
+                && !context.prepare_selection
+                && !context.prepare_original_selection
+                && context.selection.is_none()
+                && !context.discover_originals
+                && context.selection_original_paths.is_empty()
+                && context.selection_input_max_bytes.is_none()
+                && !context.experimental_source_relations
+                && !context.experimental_hybrid_lexical_evidence;
             if context.scope.is_none() && normalized_selected {
-                request.scope = retrieval::ContextScope::IndexedDocuments;
+                request.scope = if current_local_documents {
+                    retrieval::ContextScope::Current
+                } else {
+                    retrieval::ContextScope::IndexedDocuments
+                };
             }
             let request = retrieval::context::validate_request(&context.search.query, &request)?;
             if request.scope == retrieval::ContextScope::IndexedEvidence
@@ -1709,10 +1780,11 @@ fn execute_selected(
                         | retrieval::ContextScope::IndexedDocuments
                 )
                 && !cached_documents
+                && !(current_local_documents && request.scope == retrieval::ContextScope::Current)
             {
                 return Err(WikiError::new(
                     ErrorCode::CapabilityUnavailable,
-                    "normalized context supports literal, lexical, semantic and hybrid indexed-documents, plus lexical indexed-evidence and snapshot; omit --scope for selected document verification. Strict current/historical context is not yet available on normalized vaults; check performs a separate full audit",
+                    "normalized current context supports local literal/lexical documents without graph or host selection; use indexed-documents for existing selected/semantic routes, or indexed-evidence for captured sources",
                 ));
             }
             let cached_dry_run =
@@ -1773,7 +1845,35 @@ fn execute_selected(
                         experimental_source_relations: context.experimental_source_relations,
                         ..Default::default()
                     };
-                    if !normalized_selected
+                    if current_local_documents && request.scope == retrieval::ContextScope::Current
+                    {
+                        let mut scoped_request = request.clone();
+                        let reader = match catalog.current_query_snapshot(QueryReadLimits::default())? {
+                            crate::catalog::transient_read::CurrentQueryAttempt::Ready(reader) => *reader,
+                            crate::catalog::transient_read::CurrentQueryAttempt::BoundedUnavailable(reason)
+                                if context.scope.is_none() => {
+                                    scoped_request.scope = retrieval::ContextScope::IndexedDocuments;
+                                    published_after_observation_bound(&catalog, reason, &mut envelope)?
+                                }
+                            crate::catalog::transient_read::CurrentQueryAttempt::BoundedUnavailable(reason) => return Err(reason),
+                        };
+                        let result = retrieval::indexed_documents::context_with_reader(
+                            &catalog,
+                            &reader,
+                            &context.search.query,
+                            &scoped_request,
+                            &options,
+                        )?;
+                        local_generation = Some(reader.persistent_generation());
+                        if reader.is_current_observation() {
+                            current_read_health =
+                                current_observation_health(&reader, &mut envelope.meta);
+                        } else {
+                            legacy_read_health = Some(Some(reader.known_health()?));
+                            reader.verify_operations(&catalog)?;
+                        }
+                        result
+                    } else if !normalized_selected
                         && !matches!(
                             request.scope,
                             retrieval::ContextScope::IndexedEvidence
@@ -2142,14 +2242,72 @@ fn execute_selected(
         }
         | Command::Skill { .. } => unreachable!(),
     }
-    if let Some(health) = legacy_read_health {
+    if let Some(health) = current_read_health {
+        // The private generation zero binds SQL/cursors, never publication.
+        if envelope.data.get("snapshot").is_some() {
+            envelope.data["snapshot"]["generation"] = Value::Null;
+        }
+        envelope.data["health"] = health;
+    } else if let Some(health) = legacy_read_health {
         if let Some(health) = health {
             super::health::attach_known_read(&mut envelope, &health)?;
+        } else if envelope.data.get("snapshot").is_some() {
+            envelope.data["snapshot"]["generation"] = Value::Null;
         }
     } else {
         attach_read_health(args, &app, &mut envelope)?;
     }
     Ok(envelope)
+}
+
+/// Only admitted observation exhaustion permits published discovery fallback.
+fn normalized_current_reader(catalog: &Catalog, envelope: &mut Envelope) -> Result<QuerySnapshot> {
+    match catalog.current_query_snapshot(QueryReadLimits::default())? {
+        crate::catalog::transient_read::CurrentQueryAttempt::Ready(reader) => Ok(*reader),
+        crate::catalog::transient_read::CurrentQueryAttempt::BoundedUnavailable(reason) => {
+            published_after_observation_bound(catalog, reason, envelope)
+        }
+    }
+}
+
+fn published_after_observation_bound(
+    catalog: &Catalog,
+    reason: WikiError,
+    envelope: &mut Envelope,
+) -> Result<QuerySnapshot> {
+    let reader = catalog
+        .published_read_only_query_snapshot(QueryReadLimits::default())
+        .map_err(|mut error| {
+            if !error.details.is_object() {
+                error.details = json!({"context":error.details});
+            }
+            error.details["current_observation_unavailable"] = json!(reason);
+            error
+        })?;
+    envelope.warnings.push("Checking current notes reached a size or time limit. Results use the saved index and may miss new or edited notes. Run lwiki index sync in a session with write access to update it.".into());
+    Ok(reader)
+}
+
+/// This contains no query or filesystem read after the complete final proof.
+fn current_observation_health(reader: &QuerySnapshot, meta: &mut Metadata) -> Option<Value> {
+    reader.current_observation().map(|observation| {
+        meta.index_generation = None;
+        meta.read_view = Some(json!({
+            "kind":"current_observation", "fingerprint":observation.fingerprint,
+            "observed_at":observation.observed_at, "published_generation":null,
+        }));
+        json!({
+            "schema_version":"lwiki.health.v1", "observation":"current_observation",
+            "index_generation":null, "known_issues":observation.known_issues,
+            "current_health":"observed", "global_membership_freshness":"current_observation",
+            "selected_verification":"verified_snapshot", "structured_eligibility_complete":null,
+            "read_work": {
+                "canonical":observation.usage(), "construction":observation.build_stats,
+                "construction_rows":observation.construction_rows,
+                "sql_progress_callbacks":observation.sql_progress_callbacks(),
+            },
+        })
+    })
 }
 
 fn held_legacy_read_health(

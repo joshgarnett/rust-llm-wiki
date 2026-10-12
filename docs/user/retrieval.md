@@ -37,16 +37,17 @@ is missing, search for its wording, narrow to the relevant source, or read more
 of that note. An empty result does not prove the information is absent.
 
 These word searches and reads stay on your machine. You do not need `--offline`.
-In wikis created with `init` or `setup`, they pick up edits to files in the wiki
-without writing to the folder. An agent only needs read access for a local lookup.
+Ordinary local lookups pick up edits to files in a small wiki without writing
+to the folder. An agent only needs read access. This also works when the saved
+search index is missing.
 After changing an original note outside the wiki,
 [refresh its saved copy](everyday-use.md#capture-and-refresh-notes) to use that
 change as cited evidence.
 
-If you previously ran `index rebuild --normalized`, run `index sync` after
-editing files outside lwiki. That index searches its last saved contents; add
-`--verify-selected` to search when you need citations. Context checks the
-passages it returns. Use `check` to check all managed files for errors.
+For larger wikis, a lookup may use the saved index and warn that new or edited
+notes could be missing. Run `lwiki index sync` from a session with write access
+to update it. Read warnings before treating a result as current. Use `lwiki check`
+to check all managed files for errors.
 
 Search by meaning uses `--mode semantic` or `hybrid` and needs
 [prepared embeddings](sources-and-providers.md#optional-remote-providers).
@@ -78,18 +79,21 @@ your agent may count them differently. Read warnings and omissions as well as
 the passages. If using JSON, `data.text` is the rendered evidence; the full
 response also includes metadata and may repeat passages.
 
-On normalized indexes, context defaults to `indexed-documents`, which checks
-the selected files. `--scope indexed-evidence --mode lexical` searches only
-indexed captured sources without syncing. `--include-historical` can include
+For explicit control on normalized indexes, `--scope indexed-documents`
+searches the saved index and checks the selected files.
+`--scope indexed-evidence --mode lexical` searches only indexed captured sources
+without syncing. `--include-historical` can include
 earlier captured versions in literal or word context; read their labels before
 using them as current facts. Historical semantic and hybrid selection are
 unsupported.
 
-An older index may use whole-wiki `current` verification instead. If a command
-reports that a scope is unsupported, use its suggested scope. To use the
-normalized layout, back up the wiki and run `index rebuild --normalized`.
-Snapshot context and `read --no-sync` use cached text without current source
-citations. They are useful for inspection, not for claiming the text is current.
+Ordinary local context checks current notes when the wiki fits its read limits.
+If it uses the saved index instead, its warnings explain that choice.
+Explicit `--scope current` requires the current check and fails if it cannot
+complete within those limits. Snapshot context and `read --no-sync` use cached
+text without current source citations. They are useful for inspection, not for
+claiming the text is current. `--no-sync` is not a workaround for denied write
+access; ordinary local lookup is the read-only route.
 
 ## Read an exact captured range
 

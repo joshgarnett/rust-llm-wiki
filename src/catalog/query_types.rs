@@ -75,6 +75,11 @@ pub(crate) trait QueryCatalog {
     fn normalized_layout(&self) -> bool {
         false
     }
+    /// Only a privately constructed current observation can supply complete
+    /// normalized facts without a persisted catalog metadata header.
+    fn current_observation_layout(&self) -> bool {
+        false
+    }
     fn publication_id(&self) -> Option<&str> {
         None
     }

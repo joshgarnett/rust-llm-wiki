@@ -42,7 +42,7 @@ marker and leaves other targets and ordinary Cargo dependency sources unchanged.
 | `just build` / `just release` | Development / optimized Bazel build |
 | `just format` / `just format-fix` | Bazel formatting check / Cargo formatting edit |
 | `just check` | Formatting and strict Clippy for all targets |
-| `just test-smoke` | Runfile paths, contracts, machine output, offline CLI and skill export |
+| `just test-smoke` | Optimized runfile paths, contracts, machine output, offline CLI and skill export |
 | `just build-tools-test` | Build orchestration regressions with fake tools |
 | `just ci` | Check, build tools, CLI smoke and consequential regression subsets |
 | `just test` | Library, binary, integration, example tests and doctests |
@@ -138,3 +138,8 @@ The repository is [joshgarnett/rust-llm-wiki](https://github.com/joshgarnett/rus
 Use [validation and limits](validation-status.md) to choose checks for the final
 artifact. macOS distribution is unsigned and is not notarized; test normal OS
 trust behavior and native workflows against the final executable.
+
+CLI smoke and consequential regression tests use the release configuration.
+Lookup deadlines apply to the shipped optimized executable; unoptimized timings
+are diagnostic and do not establish supported wiki sizes. Format and lint checks
+remain separate.

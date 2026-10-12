@@ -47,13 +47,13 @@ test:
     {{ python }} scripts/bazel.py -- build --nofetch //:test_build
     {{ python }} scripts/bazel.py -- test --nofetch //:test
 
-# Fast CLI/schema/offline/export checks; excludes long recovery matrices.
+# CLI/schema/offline/export checks with shipping optimizations; excludes long recovery matrices.
 test-smoke:
-    {{ python }} scripts/bazel.py -- test --nofetch //:smoke
+    {{ python }} scripts/bazel.py -- test --nofetch --config=release //:smoke
 
 # Provider/source/retrieval/research/storage and bounded conflict/checkpoint cases.
 test-regressions:
-    {{ python }} scripts/bazel.py -- test --nofetch //:regressions
+    {{ python }} scripts/bazel.py -- test --nofetch --config=release //:regressions
 
 # Check build scripts without compiling Rust or using the network.
 build-tools-test:

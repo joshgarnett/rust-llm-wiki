@@ -35,6 +35,12 @@ jobs:
         run: just ci
       - name: Build and smoke a native candidate
         run: just candidate "$RUNNER_TEMP/lwiki-candidate"
+      - name: Verify lookup with wiki writes denied
+        run: >-
+          python3 scripts/check_read_only_lookup.py
+          --binary "$RUNNER_TEMP/lwiki-candidate/lwiki"
+          --repo-root "$GITHUB_WORKSPACE"
+          --output "$RUNNER_TEMP/lwiki-readonly"
       - name: Retain candidate archive and build logs
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -47,6 +53,7 @@ jobs:
             ${{ runner.temp }}/lwiki-candidate/*.json
             ${{ runner.temp }}/lwiki-candidate/*.jsonl
             ${{ runner.temp }}/lwiki-candidate/*.txt
+            ${{ runner.temp }}/lwiki-readonly/*.json
           if-no-files-found: warn
           retention-days: 7
 

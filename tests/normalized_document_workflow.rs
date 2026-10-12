@@ -114,7 +114,10 @@ fn normalized_document_workflow_plain_mixed_discovery_read_and_context_have_dist
     let (source, revision) = f.add(CAPTURE);
     f.ok(&["index", "rebuild", "--normalized"]);
     let search = f.ok(&["search", "workflowprobe"]);
-    assert_eq!(search["meta"]["freshness"], "index_snapshot");
+    assert_eq!(search["meta"]["freshness"], "verified_snapshot");
+    assert!(search["meta"]["index_generation"].is_null());
+    assert!(search["data"]["snapshot"]["generation"].is_null());
+    assert_eq!(search["meta"]["read_view"]["kind"], "current_observation");
     assert!(
         search["data"]["hits"]
             .as_array()
@@ -123,18 +126,14 @@ fn normalized_document_workflow_plain_mixed_discovery_read_and_context_have_dist
             .any(|h| h["locator"]["path"] == PAGE)
     );
     let read = f.ok(&["read", "--path", PAGE]);
-    assert_eq!(read["meta"]["freshness"], "indexed_evidence");
+    assert_eq!(read["meta"]["freshness"], "verified_snapshot");
+    assert!(read["meta"]["index_generation"].is_null());
     assert!(read["data"]["body"].as_str().unwrap().contains(AUTHORED));
     let result = f.ok(&["context", "workflowprobe"]);
-    assert_eq!(result["meta"]["freshness"], "indexed_evidence");
-    assert_eq!(
-        result["data"]["verification"]["global_membership_verified"],
-        false
-    );
-    assert_eq!(
-        result["data"]["verification"]["discovery_generation"],
-        search["meta"]["index_generation"]
-    );
+    assert_eq!(result["meta"]["freshness"], "verified_snapshot");
+    assert!(result["meta"]["index_generation"].is_null());
+    assert!(result["data"]["snapshot"]["generation"].is_null());
+    assert_eq!(result["meta"]["read_view"]["kind"], "current_observation");
     let passages = result["data"]["passages"].as_array().unwrap();
     let authored = passages
         .iter()
@@ -155,6 +154,12 @@ fn normalized_document_workflow_plain_mixed_discovery_read_and_context_have_dist
         .expect("capture passage");
     assert_citation(captured, &source, &revision, CAPTURE);
     let explicit = f.ok(&["context", "workflowprobe", "--scope", "indexed-documents"]);
+    assert_eq!(explicit["meta"]["freshness"], "indexed_evidence");
+    assert_eq!(
+        explicit["data"]["verification"]["global_membership_verified"],
+        false
+    );
+    assert!(explicit["meta"].get("read_view").is_none());
     assert_eq!(explicit["data"]["passages"], result["data"]["passages"]);
     let source_only = f.ok(&["context", "workflowprobe", "--scope", "indexed-evidence"]);
     assert!(
@@ -185,11 +190,10 @@ fn mutate_same_size_and_mtime(path: &Path, old: &str, new: &str) {
     );
 }
 #[test]
-fn normalized_document_workflow_selected_authored_and_support_tamper_refuse_but_cached_reads_remain_explicit()
- {
-    for support in [false, true] {
+fn normalized_document_workflow_valid_edits_are_current_but_published_drift_refuses() {
+    for commentary in [false, true] {
         let f = Fixture::new(true);
-        if support {
+        if commentary {
             mutate_same_size_and_mtime(
                 &f.root().join("knowledge/evidence/forward_short.md"),
                 "Verified",
@@ -198,13 +202,28 @@ fn normalized_document_workflow_selected_authored_and_support_tamper_refuse_but_
         } else {
             mutate_same_size_and_mtime(&f.root().join(PAGE), "41 green", "42 green");
         }
-        for args in [
-            vec!["read", "--path", PAGE],
-            vec!["context", "workflowprobe", "--scope", "indexed-documents"],
-        ] {
-            let (code, result) = f.invoke(&args);
-            assert_ne!(code, 0, "tamper accepted: {args:?}: {result}");
-            assert_eq!(result["error"]["code"], "FRESHNESS_CONFLICT", "{result}");
+        let args = ["context", "workflowprobe", "--scope", "indexed-documents"];
+        let (code, result) = f.invoke(&args);
+        assert_ne!(code, 0, "published selected drift accepted: {result}");
+        assert_eq!(result["error"]["code"], "FRESHNESS_CONFLICT", "{result}");
+        let observed = f.ok(&["read", "--path", PAGE]);
+        assert_eq!(observed["meta"]["freshness"], "verified_snapshot");
+        assert!(
+            observed["data"]["body"]
+                .as_str()
+                .unwrap()
+                .contains(if commentary { "41 green" } else { "42 green" })
+        );
+        if commentary {
+            assert_eq!(observed["data"]["health"]["known_issues"], false);
+            let current = f.ok(&["context", "workflowprobe"]);
+            assert!(
+                current["data"]["passages"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|passage| passage["locator"]["path"] == PAGE)
+            );
         }
         let cached = f.ok(&["read", "--path", PAGE, "--no-sync"]);
         assert_eq!(cached["meta"]["freshness"], "index_snapshot");
@@ -216,22 +235,70 @@ fn normalized_document_workflow_selected_authored_and_support_tamper_refuse_but_
         );
         assert_eq!(
             f.ok(&["search", "workflowprobe"])["meta"]["freshness"],
-            "index_snapshot"
+            "verified_snapshot"
         );
     }
 }
 
 #[test]
-fn normalized_document_workflow_unrelated_changes_do_not_turn_selected_verification_into_global_freshness()
- {
+fn normalized_document_workflow_corrupt_captured_support_is_excluded_without_repair() {
     let f = Fixture::new(true);
-    let before = f.ok(&["search", "workflowprobe"]);
+    // These two current revisions supply all supporting evidence for the Page's
+    // assertion. Damaging just one would leave the other valid support intact.
+    let revisions = [
+        "sources/source_00000000-0000-7000-8000-000000000005/revisions/revision_00000000-0000-7000-8000-000000000008",
+        "sources/source_00000000-0000-7000-8000-000000000006/revisions/revision_00000000-0000-7000-8000-000000000009",
+    ];
+    let mut unchanged = Vec::new();
+    for revision in revisions {
+        let directory = f.root().join(revision);
+        for name in ["original.md", "revision.md"] {
+            let path = directory.join(name);
+            let bytes = fs::read(&path).unwrap();
+            unchanged.push((path, bytes));
+        }
+        let path = directory.join("content.md");
+        mutate_same_size_and_mtime(
+            &path,
+            "North Lab uses South Lab.",
+            "South Lab uses South Lab.",
+        );
+        let damaged = fs::read(&path).unwrap();
+        unchanged.push((path, damaged));
+    }
+    let (code, result) = f.invoke(&["context", "workflowprobe", "--scope", "indexed-documents"]);
+    assert_ne!(code, 0, "corrupt published dependency accepted: {result}");
+    assert_eq!(result["error"]["code"], "FRESHNESS_CONFLICT", "{result}");
+    let observed = f.ok(&["read", "--path", PAGE]);
+    assert_eq!(observed["meta"]["freshness"], "verified_snapshot");
+    assert_eq!(observed["data"]["health"]["known_issues"], true);
+    let current = f.ok(&["context", "workflowprobe"]);
+    assert!(
+        current["data"]["passages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|passage| passage["locator"]["path"] != PAGE)
+    );
+    for (path, bytes) in unchanged {
+        assert_eq!(
+            fs::read(&path).unwrap(),
+            bytes,
+            "read rewrote {}",
+            path.display()
+        );
+    }
+}
+
+#[test]
+fn normalized_document_workflow_current_discovery_and_explicit_indexed_scope_remain_distinct() {
+    let f = Fixture::new(true);
+    let before = f.ok(&["search", "workflowprobe", "--no-sync"]);
     fs::write(
         f.root().join("knowledge/pages/unindexed.md"),
-        "workflowprobe: new unpublished note\n",
-    )
-    .unwrap();
-    let after = f.ok(&["context", "workflowprobe"]);
+        "---\nwiki_schema: '1'\nwiki_id: page_unindexed\nwiki_kind: page\ntitle: New note\nwiki_status: reviewed\n---\nworkflowprobe: new unpublished note\n",
+    ).unwrap();
+    let after = f.ok(&["context", "workflowprobe", "--scope", "indexed-documents"]);
     assert_eq!(
         after["meta"]["index_generation"],
         before["meta"]["index_generation"]
@@ -246,9 +313,21 @@ fn normalized_document_workflow_unrelated_changes_do_not_turn_selected_verificat
             .unwrap()
             .contains("new unpublished")
     );
-    let (code, current) = f.invoke(&["context", "workflowprobe", "--scope", "current"]);
-    assert_ne!(code, 0);
-    assert_eq!(current["error"]["code"], "CAPABILITY_UNAVAILABLE");
+    for args in [
+        vec!["context", "workflowprobe"],
+        vec!["context", "workflowprobe", "--scope", "current"],
+    ] {
+        let current = f.ok(&args);
+        assert_eq!(current["meta"]["freshness"], "verified_snapshot");
+        assert_eq!(current["meta"]["read_view"]["kind"], "current_observation");
+        assert!(current["meta"]["index_generation"].is_null());
+        assert!(
+            current["data"]["text"]
+                .as_str()
+                .unwrap()
+                .contains("new unpublished")
+        );
+    }
     assert_eq!(
         f.ok(&[
             "context",
@@ -307,18 +386,24 @@ fn normalized_document_workflow_legacy_omitted_scope_remains_current() {
 }
 
 #[test]
-fn normalized_document_workflow_removed_selected_dependency_refuses_without_implicit_repair() {
+fn normalized_document_workflow_removed_support_is_excluded_current_and_refused_indexed() {
     let f = Fixture::new(true);
     fs::remove_file(f.root().join("knowledge/assertions/forward.md")).unwrap();
-    for args in [
-        vec!["read", "--path", PAGE],
-        vec!["context", "workflowprobe", "--scope", "indexed-documents"],
-    ] {
-        let (code, result) = f.invoke(&args);
-        assert_ne!(code, 0, "removed dependency accepted: {result}");
-        assert_eq!(result["error"]["code"], "FRESHNESS_CONFLICT");
-        assert!(result["meta"]["verified_at"].is_null());
-    }
+    let (code, result) = f.invoke(&["context", "workflowprobe", "--scope", "indexed-documents"]);
+    assert_ne!(code, 0, "removed published dependency accepted: {result}");
+    assert_eq!(result["error"]["code"], "FRESHNESS_CONFLICT");
+    assert!(result["meta"]["verified_at"].is_null());
+    let observed = f.ok(&["read", "--path", PAGE]);
+    assert_eq!(observed["meta"]["freshness"], "verified_snapshot");
+    assert_eq!(observed["data"]["health"]["known_issues"], true);
+    let current = f.ok(&["context", "workflowprobe"]);
+    assert!(
+        current["data"]["passages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|passage| passage["locator"]["path"] != PAGE)
+    );
     assert!(
         f.ok(&["read", "--path", PAGE, "--no-sync"])["data"]["body"]
             .as_str()
@@ -331,7 +416,8 @@ fn normalized_document_workflow_removed_selected_dependency_refuses_without_impl
 fn normalized_document_workflow_selected_document_verification_budget_refuses_without_cached_fallback()
  {
     let f = Fixture::new(true);
-    let generation = f.ok(&["search", "workflowprobe"])["meta"]["index_generation"].clone();
+    let generation =
+        f.ok(&["search", "workflowprobe", "--no-sync"])["meta"]["index_generation"].clone();
     let (code, result) = f.invoke(&[
         "context",
         "workflowprobe",
@@ -345,7 +431,7 @@ fn normalized_document_workflow_selected_document_verification_budget_refuses_wi
     assert!(result["meta"]["freshness"].is_null());
     assert!(result["meta"]["verified_at"].is_null());
     assert_eq!(
-        f.ok(&["search", "workflowprobe"])["meta"]["index_generation"],
+        f.ok(&["search", "workflowprobe", "--no-sync"])["meta"]["index_generation"],
         generation
     );
 }
@@ -360,7 +446,7 @@ fn normalized_document_workflow_large_authored_read_uses_document_budget() {
     fs::write(&path, &raw).unwrap();
     f.ok(&["index", "rebuild", "--normalized"]);
     let read = f.ok(&["read", "--path", PAGE, "--max-bytes", "4096"]);
-    assert_eq!(read["meta"]["freshness"], "indexed_evidence");
+    assert_eq!(read["meta"]["freshness"], "verified_snapshot");
     assert_eq!(read["data"]["hash"], Blake3Hash::digest(&raw).as_str());
     assert_eq!(read["data"]["truncated"], true);
     assert!(read["data"]["body"].as_str().unwrap().len() <= 4096);

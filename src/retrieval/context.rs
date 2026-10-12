@@ -1194,7 +1194,7 @@ fn validate_bounded_document_assembly(
     validate_selection_action(request, selection)?;
     if !matches!(
         request.scope,
-        ContextScope::Snapshot | ContextScope::IndexedDocuments
+        ContextScope::Snapshot | ContextScope::IndexedDocuments | ContextScope::Current
     ) || request.target != ContextTarget::Documents
         || (request.scope == ContextScope::Snapshot
             && request.documents.mode != SearchMode::Lexical)
@@ -1202,7 +1202,7 @@ fn validate_bounded_document_assembly(
     {
         return Err(WikiError::new(
             ErrorCode::Usage,
-            "bounded document assembly requires lexical snapshot or authenticated indexed-documents context",
+            "bounded document assembly requires lexical snapshot or authenticated current/indexed-documents context",
         ));
     }
     Ok(())

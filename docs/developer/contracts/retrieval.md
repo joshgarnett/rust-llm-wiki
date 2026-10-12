@@ -25,6 +25,25 @@ fn assemble(snapshot: &ReadSnapshot, hits: HitSet, budget: ContextBudget)
 
 Use shared `RecordRef`, `CitationRef`, `Eligibility`, and `DocumentLocator`; paths/headings are presentation. `CitationRef::Source(SourceSpanRef)` cites captured text without invented assertions; `CitationRef::Assertion(EvidenceRef)` additionally binds a proposition. Ordinary unadopted notes and malformed envelopes without an accepted canonical identity remain available for literal physical inspection; they do not enter default lexical or literal search, embeddings or context. Capturing them creates an immutable searchable copy. Adopted records with invalid dependencies retain labeled discovery according to their per-kind eligibility. Search defaults to lexical. `index sync` never extracts/embeds; semantic/hybrid modes explicitly embed uncached queries. Offline execution permits matching cached vectors and never credential helpers. An unavailable semantic leg requires an error or an explicitly selected, disclosed lexical fallback.
 
+Ordinary local literal/lexical normalized search, document context and reads use a
+command-local normalized observation when admitted by the finite read budget.
+Production projection and row construction are shared with index maintenance;
+this path never opens the saved catalog, acquires a writer or publishes an epoch.
+It binds the captured wiki identity, complete admitted membership and dependencies,
+layout authority and an unchanged idle operation-authority revision. Selected
+proof work and final recheck share the original cumulative work/deadline allowance.
+Malformed retained authority and changed canonical evidence remain errors.
+
+A resource refusal alone may fall back to published discovery, with a warning that
+new or edited notes can be absent. An explicitly requested current context scope
+cannot degrade. Explicit indexed scopes, cached/no-sync, selected-only verification, remote,
+graph, historical and host-selection routes retain their own contracts. Successful complete observations use
+`current_observation` provenance and verified-snapshot freshness; serialized index
+and snapshot generations are null, not a fabricated publication zero. Observation
+fingerprints bind content and authority, while observation time is reported separately.
+These checks do not establish a filesystem-wide atomic snapshot against external
+editors, nor an answer-completeness guarantee. See [read limits](../query-limits.md#current-note-observation).
+
 On normalized catalogs, ordinary `index sync` can apply a supported group of
 1–16 external authored-Page changes through a coherent SQLite backup and selected
 projection. Complete input comparison and final byte/membership recheck remain

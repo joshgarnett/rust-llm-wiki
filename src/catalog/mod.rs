@@ -63,6 +63,7 @@ pub(crate) mod source_relations;
 pub mod sql;
 mod structural_projection;
 pub(crate) mod structural_rules;
+pub(crate) mod transient_read;
 pub mod types;
 pub(crate) mod unit_inventory;
 pub(crate) mod withdraw_projection;

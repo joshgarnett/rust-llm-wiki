@@ -97,6 +97,7 @@ fn assert_local_workflow(root: &Path) {
     assert!(!search["data"]["hits"].as_array().unwrap().is_empty());
     assert_eq!(search["meta"]["freshness"], "verified_snapshot");
     assert!(search["meta"]["index_generation"].is_null());
+    assert!(search["data"]["snapshot"]["generation"].is_null());
     let read = ok(root, &["read", "--path", CONTENT]);
     let actual = fs::read_to_string(root.join(CONTENT)).unwrap();
     assert_eq!(read["data"]["body"], actual);
@@ -115,6 +116,7 @@ fn assert_local_workflow(root: &Path) {
             .contains("North Lab")
     );
     assert!(context["meta"]["index_generation"].is_null());
+    assert!(context["data"]["snapshot"]["generation"].is_null());
 }
 
 #[test]

@@ -396,7 +396,7 @@ fn candidate_metadata_preflight_refuses_missing_or_different_definitions() {
 }
 
 fn assert_index_matches_table(reader: &QuerySnapshot) {
-    validate_general_indexes(reader.connection()).unwrap();
+    validate_general_indexes(reader.connection(), reader.current_observation_layout()).unwrap();
     let columns = "doc_row,path,record_id,kind,eligibility,source_id,owner_revision";
     let difference: i64 = reader.connection().query_row(&format!("SELECT count(*) FROM (SELECT {columns} FROM documents INDEXED BY document_candidate_metadata EXCEPT SELECT {columns} FROM documents NOT INDEXED)"),[],|r|r.get(0)).unwrap();
     assert_eq!(difference, 0);

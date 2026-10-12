@@ -29,6 +29,33 @@
           ],
           "minimum": 0
         },
+        "read_view": {
+          "type": "object",
+          "description": "Optional complete command-local observation; no index generation is published.",
+          "properties": {
+            "kind": {
+              "const": "current_observation"
+            },
+            "fingerprint": {
+              "type": "string",
+              "minLength": 1
+            },
+            "observed_at": {
+              "type": "string",
+              "minLength": 1
+            },
+            "published_generation": {
+              "type": "null"
+            }
+          },
+          "required": [
+            "kind",
+            "fingerprint",
+            "observed_at",
+            "published_generation"
+          ],
+          "additionalProperties": false
+        },
         "freshness": {
           "enum": [
             null,
@@ -174,7 +201,26 @@
         "partial",
         "network_used"
       ],
-      "additionalProperties": false
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "required": [
+              "read_view"
+            ]
+          },
+          "then": {
+            "properties": {
+              "index_generation": {
+                "type": "null"
+              },
+              "freshness": {
+                "const": "verified_snapshot"
+              }
+            }
+          }
+        }
+      ]
     },
     "warnings": {
       "type": "array",

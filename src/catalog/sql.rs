@@ -54,6 +54,30 @@ pub(crate) fn configure(connection: &Connection, timeout_ms: u64, writable: bool
     }
     Ok(())
 }
+/// Keep WAL's ordinary locking/concurrency protocol while opening its existing
+/// shared-memory file read-only. SQLite's built-in Unix and Windows VFSes honor
+/// readonly_shm; unlike immutable this does not assert that a mutable DB is frozen.
+/// Callers preflight retained WAL/SHM through the selector before this open.
+/// SQLite can still request a write-capable WAL handle before its read-only retry.
+pub(crate) fn read_only_connection(path: &Path, no_follow: bool) -> Result<Connection> {
+    let mut uri = url::Url::from_file_path(path).map_err(|_| {
+        WikiError::new(
+            ErrorCode::IndexCorrupt,
+            "catalog path cannot be encoded as a file URI",
+        )
+    })?;
+    uri.query_pairs_mut()
+        .append_pair("mode", "ro")
+        .append_pair("readonly_shm", "1");
+    let mut flags = OpenFlags::SQLITE_OPEN_READ_ONLY
+        | OpenFlags::SQLITE_OPEN_NO_MUTEX
+        | OpenFlags::SQLITE_OPEN_URI;
+    if no_follow {
+        flags |= OpenFlags::SQLITE_OPEN_NOFOLLOW;
+    }
+    Connection::open_with_flags(uri.as_str(), flags).map_err(sql_error)
+}
+
 pub(crate) fn open(path: &Path, timeout_ms: u64, writable: bool) -> Result<Connection> {
     let flags = if writable {
         OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_CREATE
@@ -555,4 +579,121 @@ pub(crate) fn prune_generations(tx: &Transaction<'_>, published: i64) -> Result<
             .map_err(sql_error)?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod read_only_uri_tests {
+    use super::*;
+    use std::fs;
+
+    #[test]
+    fn retained_read_only_shm_reader_requires_closing_before_a_later_writer() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp
+            .path()
+            .canonicalize()
+            .unwrap()
+            .join("concurrent.sqlite");
+        let initial = Connection::open(&path).unwrap();
+        crate::catalog::selector::configure_wal(&initial).unwrap();
+        initial
+            .execute_batch("CREATE TABLE sample(value INTEGER); INSERT INTO sample VALUES(1);")
+            .unwrap();
+        drop(initial);
+        let reader = read_only_connection(&path, true).unwrap();
+        reader.execute_batch("BEGIN DEFERRED").unwrap();
+        assert_eq!(
+            reader
+                .query_row("SELECT count(*) FROM sample", [], |row| row
+                    .get::<_, i64>(0))
+                .unwrap(),
+            1
+        );
+        let writer = Connection::open(&path).unwrap();
+        let error = writer
+            .execute("INSERT INTO sample VALUES(2)", [])
+            .unwrap_err();
+        assert_eq!(
+            error.sqlite_error_code(),
+            Some(rusqlite::ErrorCode::ReadOnly)
+        );
+        // Close both handles sharing the read-only SHM node, then reopen for a
+        // mutation. This is why the helper is confined to read-only invocations.
+        drop(writer);
+        drop(reader);
+        let writer = Connection::open(&path).unwrap();
+        writer.execute("INSERT INTO sample VALUES(2)", []).unwrap();
+        // A writer that already owns the SHM node preserves existing behavior.
+        let reader = read_only_connection(&path, true).unwrap();
+        reader.execute_batch("BEGIN DEFERRED").unwrap();
+        assert_eq!(
+            reader
+                .query_row("SELECT count(*) FROM sample", [], |row| row
+                    .get::<_, i64>(0))
+                .unwrap(),
+            2
+        );
+        writer.execute("INSERT INTO sample VALUES(3)", []).unwrap();
+        assert_eq!(
+            reader
+                .query_row("SELECT count(*) FROM sample", [], |row| row
+                    .get::<_, i64>(0))
+                .unwrap(),
+            2
+        );
+        drop(reader);
+        assert_eq!(
+            writer
+                .query_row("SELECT count(*) FROM sample", [], |row| row
+                    .get::<_, i64>(0))
+                .unwrap(),
+            3
+        );
+    }
+
+    #[test]
+    fn encoded_read_only_wal_uri_preserves_existing_sidecars_after_cold_open() {
+        let temp = tempfile::tempdir().unwrap();
+        #[cfg(unix)]
+        let name = "café #%?&readonly_shm=0.sqlite";
+        #[cfg(not(unix))]
+        let name = "café #%.sqlite";
+        let path = temp.path().canonicalize().unwrap().join(name);
+        let writer = Connection::open(&path).unwrap();
+        crate::catalog::selector::configure_wal(&writer).unwrap();
+        writer
+            .execute_batch(
+                "CREATE TABLE sample(value TEXT); INSERT INTO sample VALUES('retained answer');",
+            )
+            .unwrap();
+        drop(writer);
+        let states = || {
+            fs::read_dir(temp.path())
+                .unwrap()
+                .map(|entry| {
+                    let path = entry.unwrap().path();
+                    (
+                        path.clone(),
+                        (
+                            fs::read(&path).unwrap(),
+                            fs::metadata(path).unwrap().modified().unwrap(),
+                        ),
+                    )
+                })
+                .collect::<std::collections::BTreeMap<_, _>>()
+        };
+        let before = states();
+        assert_eq!(before.len(), 3, "database plus retained WAL and SHM");
+        for _ in 0..2 {
+            let reader = read_only_connection(&path, true).unwrap();
+            assert_eq!(
+                reader
+                    .query_row("SELECT value FROM sample", [], |row| row
+                        .get::<_, String>(0))
+                    .unwrap(),
+                "retained answer"
+            );
+        }
+        assert_eq!(states(), before);
+    }
 }

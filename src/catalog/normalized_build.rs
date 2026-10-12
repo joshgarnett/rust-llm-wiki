@@ -384,204 +384,6 @@ impl<'a> NormalizedBuilder<'a> {
         self.transaction_open = false;
     }
 
-    fn insert_document(&mut self, row: &DocumentRow) -> Result<()> {
-        crate::maintenance_diagnostic::observe(
-            crate::maintenance_diagnostic::Phase::RebuildIndexPublication,
-            || {
-                self.guard()?;
-                let aliases_size = counted_json(&row.aliases, self.limits.max_row_bytes)?;
-                let tags_size = counted_json(&row.tags, self.limits.max_row_bytes)?;
-                let reasons_size = counted_json(&row.reasons, self.limits.max_row_bytes)?;
-                let aliases_text_size = joined_size(&row.aliases)?;
-                let tags_text_size = joined_size(&row.tags)?;
-                let ordinary = checked_sum(&[
-                    512,
-                    row.path.as_str().len() as u64,
-                    row.hash.as_str().len() as u64,
-                    row.record_id.as_ref().map_or(0, |v| v.as_str().len()) as u64,
-                    row.kind.map_or(0, |v| v.as_str().len()) as u64,
-                    row.source_id.as_ref().map_or(0, |v| v.as_str().len()) as u64,
-                    row.owner_revision.as_ref().map_or(0, |v| v.as_str().len()) as u64,
-                    eligibility(row.eligibility).len() as u64,
-                    row.title.len() as u64,
-                    row.headings.len() as u64,
-                    row.body.len() as u64,
-                    row.raw_text.len() as u64,
-                    aliases_size,
-                    tags_size,
-                    reasons_size,
-                    aliases_text_size,
-                    tags_text_size,
-                ])?;
-                let fts = checked_sum(&[
-                    row.title.len() as u64,
-                    aliases_text_size,
-                    row.headings.len() as u64,
-                    tags_text_size,
-                    row.body.len() as u64,
-                ])?;
-                let relations = super::source_relations::prepare_document(row)?;
-                let extra_rows = relations.storage_charges().len() as u64;
-                let group_rows = extra_rows
-                    .checked_add(1)
-                    .ok_or_else(|| budget("relation projection row overflow"))?;
-                if group_rows > self.limits.max_batch_rows
-                    || self
-                        .total_rows
-                        .checked_add(group_rows)
-                        .is_none_or(|n| n > self.limits.max_rows)
-                {
-                    return Err(budget("relation projection exceeds build row allowance"));
-                }
-                if self
-                    .batch_rows
-                    .checked_add(group_rows)
-                    .is_none_or(|n| n > self.limits.max_batch_rows)
-                {
-                    self.flush()?;
-                }
-                // Reserve the logical document and all hints in one batch;
-                // a flush between reservations must not lose its byte charge.
-                self.admit(checked_sum(&[
-                    ordinary,
-                    fts,
-                    relations.storage_bytes() as u64,
-                ])?)?;
-                self.total_rows += extra_rows;
-                self.batch_rows += extra_rows;
-                let aliases_json = sql::json(&row.aliases)?;
-                let tags_json = sql::json(&row.tags)?;
-                let reasons_json = sql::json(&row.reasons)?;
-                let aliases_text = row.aliases.join(" ");
-                let tags_text = row.tags.join(" ");
-                self.connection().execute("INSERT INTO documents(path,record_id,kind,file_hash,title,aliases_json,aliases_text,headings,tags_json,tags_text,body,raw_text,source_id,owner_revision,eligibility,reasons_json) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16)", params![
-            row.path.as_str(),row.record_id.as_ref().map(|v|v.as_str()),row.kind.map(|v|v.as_str()),row.hash.as_str(),row.title,
-            aliases_json,aliases_text,row.headings,tags_json,tags_text,row.body,row.raw_text,row.source_id.as_ref().map(|v|v.as_str()),
-            row.owner_revision.as_ref().map(|v|v.as_str()),eligibility(row.eligibility),reasons_json
-        ]).map_err(build_sql_error)?;
-                let rowid = self.connection().last_insert_rowid();
-                self.step(BuildCheckpoint::AfterOrdinaryRow)?;
-                self.connection().execute("INSERT INTO documents_fts(rowid,title,aliases,headings,tags,body) VALUES(?1,?2,?3,?4,?5,?6)",
-            params![rowid,row.title,aliases_text,row.headings,tags_text,row.body]).map_err(build_sql_error)?;
-                self.step(BuildCheckpoint::AfterFtsRow)?;
-                super::source_relations::apply_document(self.connection(), &relations)?;
-                self.stats.documents += 1;
-                Ok(())
-            },
-        )
-    }
-    fn insert_graph(&mut self, row: &GraphRow) -> Result<()> {
-        crate::maintenance_diagnostic::observe(
-            crate::maintenance_diagnostic::Phase::RebuildIndexPublication,
-            || {
-                self.guard()?;
-                let aliases_size = counted_json(&row.aliases, self.limits.max_row_bytes)?;
-                let aliases_text_size = joined_size(&row.aliases)?;
-                let text = checked_sum(&[
-                    row.name.len() as u64,
-                    aliases_text_size,
-                    row.endpoints.len() as u64,
-                    row.predicate.len() as u64,
-                    row.qualifiers.len() as u64,
-                    row.description.len() as u64,
-                ])?;
-                self.admit(checked_sum(&[
-                    512,
-                    aliases_size,
-                    text,
-                    text,
-                    row.target_id.as_str().len() as u64,
-                    row.target_id.as_str().len() as u64,
-                    row.target_kind.as_str().len() as u64,
-                    row.target_kind.as_str().len() as u64,
-                ])?)?;
-                let aliases_json = sql::json(&row.aliases)?;
-                let aliases_text = row.aliases.join(" ");
-                self.connection().execute("INSERT INTO graph_rows(target_id,target_kind,name,aliases_json,aliases_text,endpoints,predicate,qualifiers,description) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9)",
-            params![row.target_id.as_str(),row.target_kind.as_str(),row.name,aliases_json,aliases_text,row.endpoints,row.predicate,row.qualifiers,row.description]).map_err(build_sql_error)?;
-                let rowid = self.connection().last_insert_rowid();
-                self.step(BuildCheckpoint::AfterOrdinaryRow)?;
-                self.connection().execute("INSERT INTO graph_fts(rowid,name,aliases,endpoints,predicate,qualifiers,description,target_kind,target_id) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9)",
-            params![rowid,row.name,aliases_text,row.endpoints,row.predicate,row.qualifiers,row.description,row.target_kind.as_str(),row.target_id.as_str()]).map_err(build_sql_error)?;
-                self.step(BuildCheckpoint::AfterFtsRow)?;
-                self.stats.graph_rows += 1;
-                Ok(())
-            },
-        )
-    }
-    fn insert_link(&mut self, row: &LinkRow) -> Result<()> {
-        self.admit(checked_sum(&[
-            512,
-            row.from_path.as_str().len() as u64,
-            row.target_id.as_ref().map_or(0, |v| v.as_str().len()) as u64,
-            row.target_path.as_ref().map_or(0, |v| v.as_str().len()) as u64,
-            row.resolution.len() as u64,
-        ])?)?;
-        self.connection().execute("INSERT INTO links(from_path,byte_start,target_id,target_path,resolution) VALUES(?1,?2,?3,?4,?5)",params![row.from_path.as_str(),sql::integer(row.byte_start)?,row.target_id.as_ref().map(|v|v.as_str()),row.target_path.as_ref().map(|v|v.as_str()),row.resolution]).map_err(build_sql_error)?;
-        self.stats.links += 1;
-        Ok(())
-    }
-
-    fn commit_lookup<T: Serialize>(&mut self, namespace: &str, row: &T) -> Result<()> {
-        counted_json(row, self.limits.max_row_bytes)?;
-        let encoded = sql::json(row)?;
-        self.lookup_hash
-            .update(&(namespace.len() as u64).to_le_bytes());
-        self.lookup_hash.update(namespace.as_bytes());
-        self.lookup_hash
-            .update(&(encoded.len() as u64).to_le_bytes());
-        self.lookup_hash.update(encoded.as_bytes());
-        Ok(())
-    }
-
-    fn insert_eligibility_facts(
-        &mut self,
-        projection: &ValidationProjection,
-        facts: &super::eligibility_facts::NormalizedEligibilityFacts,
-    ) -> Result<()> {
-        super::normalized_metadata::visit_eligibility_rows(projection, facts, self)
-    }
-
-    fn insert_link_fact(&mut self, row: &super::link_facts::OwnedLinkFact) -> Result<()> {
-        let bytes = counted_json(row, self.limits.max_row_bytes)?;
-        self.admit(checked_sum(&[256, bytes])?)?;
-        self.connection().execute("INSERT INTO link_facts(from_path,byte_start,raw_destination,typed_id,typed_kind) VALUES(?1,?2,?3,?4,?5)",
-            params![row.from_path.as_str(),sql::integer(row.byte_start)?,row.raw_destination,
-                row.typed.as_ref().map(|target|target.id.as_str()),row.typed.as_ref().map(|target|target.expected_kind.as_str())]).map_err(build_sql_error)?;
-        for key in &row.keys {
-            self.admit(checked_sum(&[
-                256,
-                key.value.len() as u64,
-                row.from_path.as_str().len() as u64,
-            ])?)?;
-            self.connection().execute("INSERT INTO link_match_keys(kind,value,from_path,byte_start) VALUES(?1,?2,?3,?4)",
-                params![link_key_kind(key.kind),key.value,row.from_path.as_str(),sql::integer(row.byte_start)?]).map_err(build_sql_error)?;
-        }
-        self.commit_lookup("link_fact", row)?;
-        self.stats.link_facts += 1;
-        Ok(())
-    }
-
-    fn insert_registry_keys(
-        &mut self,
-        entry: &crate::records::RegistryEntry,
-        keys: &[super::link_facts::MatchKey],
-    ) -> Result<()> {
-        for key in keys {
-            self.admit(checked_sum(&[
-                256,
-                key.value.len() as u64,
-                entry.id.as_str().len() as u64,
-                entry.path.as_str().len() as u64,
-            ])?)?;
-            self.connection().execute("INSERT INTO registry_match_keys(kind,value,record_id,path) VALUES(?1,?2,?3,?4)",
-                params![link_key_kind(key.kind),key.value,entry.id.as_str(),entry.path.as_str()]).map_err(build_sql_error)?;
-            self.commit_lookup("registry_key", &(&entry.id, &entry.path, key))?;
-            self.stats.registry_keys += 1;
-        }
-        Ok(())
-    }
-
     fn reconstruct_revision_owners(&mut self) -> Result<Blake3Hash> {
         let engine = crate::changes::ChangeEngine::new(self.fs.clone())?;
         let writer = self.writer;
@@ -652,10 +454,6 @@ impl<'a> NormalizedBuilder<'a> {
         Blake3Hash::new(format!("blake3:{}", fingerprint.finalize().to_hex()))
     }
 
-    fn insert_refresh_lookups(&mut self, projection: &ValidationProjection) -> Result<()> {
-        super::normalized_metadata::visit_refresh_rows(projection, self)
-    }
-
     #[cfg(test)]
     pub fn finish(self, projection: &ValidationProjection) -> Result<CompletedCatalog> {
         self.finish_with_facts(projection, None)
@@ -716,92 +514,10 @@ impl<'a> NormalizedBuilder<'a> {
                         "normalized emitted facts require normalized finalization",
                     ));
                 }
-                for (id, row) in &projection.records {
-                    if id != row.record.id() {
-                        return Err(WikiError::new(
-                            ErrorCode::IndexCorrupt,
-                            "record key disagrees with canonical identity",
-                        ));
-                    }
-                    let size = counted_json(row, self.limits.max_row_bytes)?;
-                    self.admit(checked_sum(&[
-                        512,
-                        size,
-                        id.as_str().len() as u64,
-                        row.record.kind().as_str().len() as u64,
-                        row.path.as_str().len() as u64,
-                        row.hash.as_str().len() as u64,
-                        row.authored_status.as_ref().map_or(0, String::len) as u64,
-                        eligibility(row.eligibility).len() as u64,
-                        row.identity_eligibility.map_or(0, |v| eligibility(v).len()) as u64,
-                        row.description_eligibility
-                            .map_or(0, |v| eligibility(v).len()) as u64,
-                    ])?)?;
-                    let row_json = sql::json(row)?;
-                    self.connection()
-                        .execute(
-                            "INSERT INTO records VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)",
-                            params![
-                                id.as_str(),
-                                row.record.kind().as_str(),
-                                row.path.as_str(),
-                                row.hash.as_str(),
-                                row.authored_status,
-                                eligibility(row.eligibility),
-                                row.identity_eligibility.map(eligibility),
-                                row.description_eligibility.map(eligibility),
-                                row.disputed,
-                                row_json
-                            ],
-                        )
-                        .map_err(build_sql_error)?;
-                    self.stats.records += 1;
-                }
+                self.insert_records(projection)?;
                 self.insert_refresh_lookups(projection)?;
                 let revision_ownership_hash = self.reconstruct_revision_owners()?;
-                for dependency in &projection.dependencies {
-                    let hash = match &dependency.expected {
-                        ExpectedState::Absent => None,
-                        ExpectedState::Hash(hash) => Some(hash.as_str()),
-                    };
-                    self.admit(checked_sum(&[
-                        256,
-                        dependency.path.as_str().len() as u64,
-                        hash.map_or(0, str::len) as u64,
-                    ])?)?;
-                    self.connection()
-                        .execute(
-                            "INSERT INTO dependencies(path,expected_hash) VALUES(?1,?2)",
-                            params![dependency.path.as_str(), hash],
-                        )
-                        .map_err(build_sql_error)?;
-                    self.stats.dependencies += 1;
-                }
-                for diagnostic in &projection.diagnostics {
-                    let size = counted_json(&diagnostic.details, self.limits.max_row_bytes)?;
-                    self.admit(checked_sum(&[
-                        512,
-                        size,
-                        diagnostic.path.as_str().len() as u64,
-                        diagnostic
-                            .record_id
-                            .as_ref()
-                            .map_or(0, |v| v.as_str().len()) as u64,
-                        diagnostic.code.to_string().len() as u64,
-                    ])?)?;
-                    self.connection()
-                .execute(
-                    "INSERT INTO diagnostics(path,record_id,code,details_json) VALUES(?1,?2,?3,?4)",
-                    params![
-                        diagnostic.path.as_str(),
-                        diagnostic.record_id.as_ref().map(|v| v.as_str()),
-                        diagnostic.code.to_string(),
-                        sql::json(&diagnostic.details)?
-                    ],
-                )
-                .map_err(build_sql_error)?;
-                    self.stats.diagnostics += 1;
-                }
+                self.insert_dependencies_and_diagnostics(projection)?;
                 self.flush()?;
                 let dependency_hash = dependency_fingerprint(&projection.dependencies)?;
                 self.guard()?;
@@ -1202,7 +918,359 @@ pub(super) fn copy_selected_and_apply(
     })
 }
 
-impl super::normalized_metadata::MetadataSink for NormalizedBuilder<'_> {
+// Shared typed row construction. Durable publication and transient observation
+// supply separate lifecycles; neither implementation fabricates the other's authority.
+pub(super) trait NormalizedRows: Sized {
+    fn connection(&self) -> &Connection;
+    fn limits(&self) -> &BuildLimits;
+    fn guard(&self) -> Result<()>;
+    fn admit(&mut self, bytes: u64) -> Result<()>;
+    fn flush(&mut self) -> Result<()>;
+    fn failed(&mut self);
+    fn step(&self, checkpoint: BuildCheckpoint) -> Result<()>;
+    fn stats_mut(&mut self) -> &mut BuildStats;
+    fn lookup_hash_mut(&mut self) -> &mut blake3::Hasher;
+    fn total_rows(&self) -> u64;
+    fn batch_rows(&self) -> u64;
+    fn total_rows_mut(&mut self) -> &mut u64;
+    fn batch_rows_mut(&mut self) -> &mut u64;
+    fn insert_document(&mut self, row: &DocumentRow) -> Result<()> {
+        crate::maintenance_diagnostic::observe(
+            crate::maintenance_diagnostic::Phase::RebuildIndexPublication,
+            || {
+                self.guard()?;
+                let aliases_size = counted_json(&row.aliases, self.limits().max_row_bytes)?;
+                let tags_size = counted_json(&row.tags, self.limits().max_row_bytes)?;
+                let reasons_size = counted_json(&row.reasons, self.limits().max_row_bytes)?;
+                let aliases_text_size = joined_size(&row.aliases)?;
+                let tags_text_size = joined_size(&row.tags)?;
+                let ordinary = checked_sum(&[
+                    512,
+                    row.path.as_str().len() as u64,
+                    row.hash.as_str().len() as u64,
+                    row.record_id.as_ref().map_or(0, |v| v.as_str().len()) as u64,
+                    row.kind.map_or(0, |v| v.as_str().len()) as u64,
+                    row.source_id.as_ref().map_or(0, |v| v.as_str().len()) as u64,
+                    row.owner_revision.as_ref().map_or(0, |v| v.as_str().len()) as u64,
+                    eligibility(row.eligibility).len() as u64,
+                    row.title.len() as u64,
+                    row.headings.len() as u64,
+                    row.body.len() as u64,
+                    row.raw_text.len() as u64,
+                    aliases_size,
+                    tags_size,
+                    reasons_size,
+                    aliases_text_size,
+                    tags_text_size,
+                ])?;
+                let fts = checked_sum(&[
+                    row.title.len() as u64,
+                    aliases_text_size,
+                    row.headings.len() as u64,
+                    tags_text_size,
+                    row.body.len() as u64,
+                ])?;
+                let relations = super::source_relations::prepare_document(row)?;
+                let extra_rows = relations.storage_charges().len() as u64;
+                let group_rows = extra_rows
+                    .checked_add(1)
+                    .ok_or_else(|| budget("relation projection row overflow"))?;
+                if group_rows > self.limits().max_batch_rows
+                    || self
+                        .total_rows()
+                        .checked_add(group_rows)
+                        .is_none_or(|n| n > self.limits().max_rows)
+                {
+                    return Err(budget("relation projection exceeds build row allowance"));
+                }
+                if self
+                    .batch_rows()
+                    .checked_add(group_rows)
+                    .is_none_or(|n| n > self.limits().max_batch_rows)
+                {
+                    self.flush()?;
+                }
+                // Reserve the logical document and all hints in one batch;
+                // a flush between reservations must not lose its byte charge.
+                self.admit(checked_sum(&[
+                    ordinary,
+                    fts,
+                    relations.storage_bytes() as u64,
+                ])?)?;
+                *self.total_rows_mut() += extra_rows;
+                *self.batch_rows_mut() += extra_rows;
+                let aliases_json = sql::json(&row.aliases)?;
+                let tags_json = sql::json(&row.tags)?;
+                let reasons_json = sql::json(&row.reasons)?;
+                let aliases_text = row.aliases.join(" ");
+                let tags_text = row.tags.join(" ");
+                self.connection().execute("INSERT INTO documents(path,record_id,kind,file_hash,title,aliases_json,aliases_text,headings,tags_json,tags_text,body,raw_text,source_id,owner_revision,eligibility,reasons_json) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16)", params![
+            row.path.as_str(),row.record_id.as_ref().map(|v|v.as_str()),row.kind.map(|v|v.as_str()),row.hash.as_str(),row.title,
+            aliases_json,aliases_text,row.headings,tags_json,tags_text,row.body,row.raw_text,row.source_id.as_ref().map(|v|v.as_str()),
+            row.owner_revision.as_ref().map(|v|v.as_str()),eligibility(row.eligibility),reasons_json
+        ]).map_err(build_sql_error)?;
+                let rowid = self.connection().last_insert_rowid();
+                self.step(BuildCheckpoint::AfterOrdinaryRow)?;
+                self.connection().execute("INSERT INTO documents_fts(rowid,title,aliases,headings,tags,body) VALUES(?1,?2,?3,?4,?5,?6)",
+            params![rowid,row.title,aliases_text,row.headings,tags_text,row.body]).map_err(build_sql_error)?;
+                self.step(BuildCheckpoint::AfterFtsRow)?;
+                super::source_relations::apply_document(self.connection(), &relations)?;
+                self.stats_mut().documents += 1;
+                Ok(())
+            },
+        )
+    }
+    fn insert_graph(&mut self, row: &GraphRow) -> Result<()> {
+        crate::maintenance_diagnostic::observe(
+            crate::maintenance_diagnostic::Phase::RebuildIndexPublication,
+            || {
+                self.guard()?;
+                let aliases_size = counted_json(&row.aliases, self.limits().max_row_bytes)?;
+                let aliases_text_size = joined_size(&row.aliases)?;
+                let text = checked_sum(&[
+                    row.name.len() as u64,
+                    aliases_text_size,
+                    row.endpoints.len() as u64,
+                    row.predicate.len() as u64,
+                    row.qualifiers.len() as u64,
+                    row.description.len() as u64,
+                ])?;
+                self.admit(checked_sum(&[
+                    512,
+                    aliases_size,
+                    text,
+                    text,
+                    row.target_id.as_str().len() as u64,
+                    row.target_id.as_str().len() as u64,
+                    row.target_kind.as_str().len() as u64,
+                    row.target_kind.as_str().len() as u64,
+                ])?)?;
+                let aliases_json = sql::json(&row.aliases)?;
+                let aliases_text = row.aliases.join(" ");
+                self.connection().execute("INSERT INTO graph_rows(target_id,target_kind,name,aliases_json,aliases_text,endpoints,predicate,qualifiers,description) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9)",
+            params![row.target_id.as_str(),row.target_kind.as_str(),row.name,aliases_json,aliases_text,row.endpoints,row.predicate,row.qualifiers,row.description]).map_err(build_sql_error)?;
+                let rowid = self.connection().last_insert_rowid();
+                self.step(BuildCheckpoint::AfterOrdinaryRow)?;
+                self.connection().execute("INSERT INTO graph_fts(rowid,name,aliases,endpoints,predicate,qualifiers,description,target_kind,target_id) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9)",
+            params![rowid,row.name,aliases_text,row.endpoints,row.predicate,row.qualifiers,row.description,row.target_kind.as_str(),row.target_id.as_str()]).map_err(build_sql_error)?;
+                self.step(BuildCheckpoint::AfterFtsRow)?;
+                self.stats_mut().graph_rows += 1;
+                Ok(())
+            },
+        )
+    }
+    fn insert_link(&mut self, row: &LinkRow) -> Result<()> {
+        self.admit(checked_sum(&[
+            512,
+            row.from_path.as_str().len() as u64,
+            row.target_id.as_ref().map_or(0, |v| v.as_str().len()) as u64,
+            row.target_path.as_ref().map_or(0, |v| v.as_str().len()) as u64,
+            row.resolution.len() as u64,
+        ])?)?;
+        self.connection().execute("INSERT INTO links(from_path,byte_start,target_id,target_path,resolution) VALUES(?1,?2,?3,?4,?5)",params![row.from_path.as_str(),sql::integer(row.byte_start)?,row.target_id.as_ref().map(|v|v.as_str()),row.target_path.as_ref().map(|v|v.as_str()),row.resolution]).map_err(build_sql_error)?;
+        self.stats_mut().links += 1;
+        Ok(())
+    }
+
+    fn commit_lookup<T: Serialize>(&mut self, namespace: &str, row: &T) -> Result<()> {
+        counted_json(row, self.limits().max_row_bytes)?;
+        let encoded = sql::json(row)?;
+        self.lookup_hash_mut()
+            .update(&(namespace.len() as u64).to_le_bytes());
+        self.lookup_hash_mut().update(namespace.as_bytes());
+        self.lookup_hash_mut()
+            .update(&(encoded.len() as u64).to_le_bytes());
+        self.lookup_hash_mut().update(encoded.as_bytes());
+        Ok(())
+    }
+
+    fn insert_eligibility_facts(
+        &mut self,
+        projection: &ValidationProjection,
+        facts: &super::eligibility_facts::NormalizedEligibilityFacts,
+    ) -> Result<()> {
+        super::normalized_metadata::visit_eligibility_rows(projection, facts, self)
+    }
+
+    fn insert_link_fact(&mut self, row: &super::link_facts::OwnedLinkFact) -> Result<()> {
+        let bytes = counted_json(row, self.limits().max_row_bytes)?;
+        self.admit(checked_sum(&[256, bytes])?)?;
+        self.connection().execute("INSERT INTO link_facts(from_path,byte_start,raw_destination,typed_id,typed_kind) VALUES(?1,?2,?3,?4,?5)",
+            params![row.from_path.as_str(),sql::integer(row.byte_start)?,row.raw_destination,
+                row.typed.as_ref().map(|target|target.id.as_str()),row.typed.as_ref().map(|target|target.expected_kind.as_str())]).map_err(build_sql_error)?;
+        for key in &row.keys {
+            self.admit(checked_sum(&[
+                256,
+                key.value.len() as u64,
+                row.from_path.as_str().len() as u64,
+            ])?)?;
+            self.connection().execute("INSERT INTO link_match_keys(kind,value,from_path,byte_start) VALUES(?1,?2,?3,?4)",
+                params![link_key_kind(key.kind),key.value,row.from_path.as_str(),sql::integer(row.byte_start)?]).map_err(build_sql_error)?;
+        }
+        self.commit_lookup("link_fact", row)?;
+        self.stats_mut().link_facts += 1;
+        Ok(())
+    }
+
+    fn insert_registry_keys(
+        &mut self,
+        entry: &crate::records::RegistryEntry,
+        keys: &[super::link_facts::MatchKey],
+    ) -> Result<()> {
+        for key in keys {
+            self.admit(checked_sum(&[
+                256,
+                key.value.len() as u64,
+                entry.id.as_str().len() as u64,
+                entry.path.as_str().len() as u64,
+            ])?)?;
+            self.connection().execute("INSERT INTO registry_match_keys(kind,value,record_id,path) VALUES(?1,?2,?3,?4)",
+                params![link_key_kind(key.kind),key.value,entry.id.as_str(),entry.path.as_str()]).map_err(build_sql_error)?;
+            self.commit_lookup("registry_key", &(&entry.id, &entry.path, key))?;
+            self.stats_mut().registry_keys += 1;
+        }
+        Ok(())
+    }
+
+    fn insert_records(&mut self, projection: &ValidationProjection) -> Result<()> {
+        for (id, row) in &projection.records {
+            if id != row.record.id() {
+                return Err(WikiError::new(
+                    ErrorCode::IndexCorrupt,
+                    "record key disagrees with canonical identity",
+                ));
+            }
+            let size = counted_json(row, self.limits().max_row_bytes)?;
+            self.admit(checked_sum(&[
+                512,
+                size,
+                id.as_str().len() as u64,
+                row.record.kind().as_str().len() as u64,
+                row.path.as_str().len() as u64,
+                row.hash.as_str().len() as u64,
+                row.authored_status.as_ref().map_or(0, String::len) as u64,
+                eligibility(row.eligibility).len() as u64,
+                row.identity_eligibility.map_or(0, |v| eligibility(v).len()) as u64,
+                row.description_eligibility
+                    .map_or(0, |v| eligibility(v).len()) as u64,
+            ])?)?;
+            let row_json = sql::json(row)?;
+            self.connection()
+                .execute(
+                    "INSERT INTO records VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)",
+                    params![
+                        id.as_str(),
+                        row.record.kind().as_str(),
+                        row.path.as_str(),
+                        row.hash.as_str(),
+                        row.authored_status,
+                        eligibility(row.eligibility),
+                        row.identity_eligibility.map(eligibility),
+                        row.description_eligibility.map(eligibility),
+                        row.disputed,
+                        row_json
+                    ],
+                )
+                .map_err(build_sql_error)?;
+            self.stats_mut().records += 1;
+        }
+        Ok(())
+    }
+    fn insert_dependencies_and_diagnostics(
+        &mut self,
+        projection: &ValidationProjection,
+    ) -> Result<()> {
+        for dependency in &projection.dependencies {
+            let hash = match &dependency.expected {
+                ExpectedState::Absent => None,
+                ExpectedState::Hash(hash) => Some(hash.as_str()),
+            };
+            self.admit(checked_sum(&[
+                256,
+                dependency.path.as_str().len() as u64,
+                hash.map_or(0, str::len) as u64,
+            ])?)?;
+            self.connection()
+                .execute(
+                    "INSERT INTO dependencies(path,expected_hash) VALUES(?1,?2)",
+                    params![dependency.path.as_str(), hash],
+                )
+                .map_err(build_sql_error)?;
+            self.stats_mut().dependencies += 1;
+        }
+        for diagnostic in &projection.diagnostics {
+            let size = counted_json(&diagnostic.details, self.limits().max_row_bytes)?;
+            self.admit(checked_sum(&[
+                512,
+                size,
+                diagnostic.path.as_str().len() as u64,
+                diagnostic
+                    .record_id
+                    .as_ref()
+                    .map_or(0, |v| v.as_str().len()) as u64,
+                diagnostic.code.to_string().len() as u64,
+            ])?)?;
+            self.connection()
+                .execute(
+                    "INSERT INTO diagnostics(path,record_id,code,details_json) VALUES(?1,?2,?3,?4)",
+                    params![
+                        diagnostic.path.as_str(),
+                        diagnostic.record_id.as_ref().map(|v| v.as_str()),
+                        diagnostic.code.to_string(),
+                        sql::json(&diagnostic.details)?
+                    ],
+                )
+                .map_err(build_sql_error)?;
+            self.stats_mut().diagnostics += 1;
+        }
+        Ok(())
+    }
+    fn insert_refresh_lookups(&mut self, projection: &ValidationProjection) -> Result<()> {
+        super::normalized_metadata::visit_refresh_rows(projection, self)
+    }
+}
+impl NormalizedRows for NormalizedBuilder<'_> {
+    fn connection(&self) -> &Connection {
+        self.connection()
+    }
+    fn limits(&self) -> &BuildLimits {
+        &self.limits
+    }
+    fn guard(&self) -> Result<()> {
+        self.guard()
+    }
+    fn admit(&mut self, bytes: u64) -> Result<()> {
+        self.admit(bytes)
+    }
+    fn flush(&mut self) -> Result<()> {
+        self.flush()
+    }
+    fn failed(&mut self) {
+        self.failed()
+    }
+    fn step(&self, step: BuildCheckpoint) -> Result<()> {
+        self.step(step)
+    }
+    fn stats_mut(&mut self) -> &mut BuildStats {
+        &mut self.stats
+    }
+    fn lookup_hash_mut(&mut self) -> &mut blake3::Hasher {
+        &mut self.lookup_hash
+    }
+    fn total_rows(&self) -> u64 {
+        self.total_rows
+    }
+    fn batch_rows(&self) -> u64 {
+        self.batch_rows
+    }
+    fn total_rows_mut(&mut self) -> &mut u64 {
+        &mut self.total_rows
+    }
+    fn batch_rows_mut(&mut self) -> &mut u64 {
+        &mut self.batch_rows
+    }
+}
+impl<T: NormalizedRows> super::normalized_metadata::MetadataSink for T {
     fn progress(&mut self) -> Result<()> {
         self.guard()
     }
@@ -1212,7 +1280,7 @@ impl super::normalized_metadata::MetadataSink for NormalizedBuilder<'_> {
         match row {
             MetadataRow::Policy(row) => {
                 let columns = row.columns()?;
-                let bytes = counted_json(&columns, self.limits.max_row_bytes)?;
+                let bytes = counted_json(&columns, self.limits().max_row_bytes)?;
                 self.admit(checked_sum(&[256, bytes])?)?;
                 self.connection()
                     .execute(
@@ -1235,31 +1303,31 @@ impl super::normalized_metadata::MetadataSink for NormalizedBuilder<'_> {
                     )
                     .map_err(build_sql_error)?;
                 self.commit_lookup("assertion_navigation_key", &(id, &key))?;
-                self.stats.assertion_navigation_keys += 1;
+                self.stats_mut().assertion_navigation_keys += 1;
             }
             MetadataRow::Opposition {
                 assertion: id,
                 key,
                 negated,
             } => {
-                let bytes = counted_json(&key, self.limits.max_row_bytes)?;
+                let bytes = counted_json(&key, self.limits().max_row_bytes)?;
                 self.admit(checked_sum(&[256, id.as_str().len() as u64, bytes])?)?;
                 self.connection().execute("INSERT INTO opposition_members(key_json,negated,assertion_id) VALUES(?1,?2,?3)",
                     params![sql::json(&key)?, negated, id.as_str()]).map_err(build_sql_error)?;
                 self.commit_lookup("opposition_member", &(&key, negated, id))?;
-                self.stats.opposition_members += 1;
+                self.stats_mut().opposition_members += 1;
             }
             MetadataRow::Baseline {
                 id,
                 baseline,
                 structural,
             } => {
-                let bytes = counted_json(&(baseline, structural), self.limits.max_row_bytes)?;
+                let bytes = counted_json(&(baseline, structural), self.limits().max_row_bytes)?;
                 self.admit(checked_sum(&[256, id.as_str().len() as u64, bytes])?)?;
                 self.connection().execute("INSERT INTO record_eligibility_facts(record_id,baseline_json,structural_json) VALUES(?1,?2,?3)",
                     params![id.as_str(), sql::json(baseline)?, sql::json(structural)?]).map_err(build_sql_error)?;
                 self.commit_lookup("baseline", &(id, baseline, structural))?;
-                self.stats.eligibility_facts += 1;
+                self.stats_mut().eligibility_facts += 1;
             }
             MetadataRow::DirectPath { owner: id, path } => {
                 self.admit(checked_sum(&[
@@ -1274,10 +1342,10 @@ impl super::normalized_metadata::MetadataSink for NormalizedBuilder<'_> {
                     )
                     .map_err(build_sql_error)?;
                 self.commit_lookup("direct_path", &(id, path))?;
-                self.stats.direct_paths += 1;
+                self.stats_mut().direct_paths += 1;
             }
             MetadataRow::SemanticEdge(edge) => {
-                let bytes = counted_json(edge, self.limits.max_row_bytes)?;
+                let bytes = counted_json(edge, self.limits().max_row_bytes)?;
                 self.admit(checked_sum(&[256, bytes])?)?;
                 self.connection()
                     .execute(
@@ -1290,7 +1358,7 @@ impl super::normalized_metadata::MetadataSink for NormalizedBuilder<'_> {
                     )
                     .map_err(build_sql_error)?;
                 self.commit_lookup("semantic_edge", edge)?;
-                self.stats.semantic_edges += 1;
+                self.stats_mut().semantic_edges += 1;
             }
             MetadataRow::SourceRevision {
                 source,
@@ -1332,7 +1400,7 @@ impl super::normalized_metadata::MetadataSink for NormalizedBuilder<'_> {
     }
 }
 
-impl RetrievalSink for NormalizedBuilder<'_> {
+impl<T: NormalizedRows> RetrievalSink for T {
     fn link_fact(&mut self, row: super::link_facts::OwnedLinkFact) -> Result<()> {
         let result = self.insert_link_fact(&row);
         if result.is_err() {
@@ -1361,7 +1429,7 @@ impl RetrievalSink for NormalizedBuilder<'_> {
                 row.hash.as_str().len() as u64,
             ])?)?;
             self.connection().execute("INSERT INTO identity_claims(record_id,path,file_hash,kind) VALUES(?1,?2,?3,?4)", params![row.id.as_str(),row.path.as_str(),row.hash.as_str(),row.kind.map(|kind|kind.as_str())]).map_err(build_sql_error)?;
-            self.stats.identity_claims += 1;
+            self.stats_mut().identity_claims += 1;
             Ok(())
         })();
         if result.is_err() {
