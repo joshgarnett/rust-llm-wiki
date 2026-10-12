@@ -14,8 +14,9 @@ lwiki source capture "/absolute/path/to/Notes/project"
 
 Capture walks the folder recursively for `.md`, `.markdown` and `.txt` notes
 and saves them in groups. Hidden folders and symbolic links are skipped. Its
-result shows source IDs, citation status, unchanged files and any skipped or
-failed files. Repeat the command to add new files and refresh changed ones. It keeps
+summary gives totals, shows a few saved files with their source IDs and citation
+status, and reports every skipped or failed file. Repeat the command to add new
+files and refresh changed ones. It keeps
 earlier copies and leaves your originals unchanged. Use `--offline` when you
 want no provider requests.
 

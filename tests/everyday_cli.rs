@@ -617,7 +617,7 @@ fn human_markdown_capture_answer_and_cited_save_preserve_evidence_and_actual_des
     let read_status = String::from_utf8_lossy(&read.stderr);
     assert!(read_status.contains(&wiki_id));
     assert!(read_status.contains("Freshness:"));
-    assert!(read_status.contains("truncated: true"));
+    assert!(read_status.contains("More requested text remains."));
     assert_eq!(read_status.matches("More text is available.").count(), 1);
     let read_citation: Value = serde_json::from_str(
         read_status
@@ -664,7 +664,7 @@ fn human_markdown_capture_answer_and_cited_save_preserve_evidence_and_actual_des
     );
     let completion = String::from_utf8_lossy(&saved.stdout);
     assert!(completion.contains("Draft saved."), "{completion}");
-    assert!(completion.contains("verified for this proposal: true"));
+    assert!(completion.contains("checked for this page change: yes"));
     let path = completion
         .lines()
         .find_map(|line| line.strip_prefix("Page path: "))

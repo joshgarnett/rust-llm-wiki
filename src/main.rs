@@ -140,8 +140,14 @@ fn main() {
                 }
                 if envelope.command == "source read" {
                     eprintln!(
-                        "Read bytes {}..{}; truncated: {}.",
-                        read["range"]["start"], read["range"]["end"], read["truncated"]
+                        "Read bytes {}..{}. {}",
+                        read["range"]["start"],
+                        read["range"]["end"],
+                        if read["truncated"] == true {
+                            "More requested text remains."
+                        } else {
+                            "The requested text was returned in full."
+                        }
                     );
                 }
             }

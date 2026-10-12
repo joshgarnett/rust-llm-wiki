@@ -32,8 +32,12 @@ pub(super) fn present(
     if let Some(count) = data["source_citations"]["reference_count"].as_u64() {
         writeln!(
             output,
-            "Source references: {count}; verified for this proposal: {}. Prose support is not checked.",
-            data["source_citations"]["verification_performed"] == true
+            "Source references: {count}; checked for this page change: {}. This check does not confirm that the references support the text.",
+            if data["source_citations"]["verification_performed"] == true {
+                "yes"
+            } else {
+                "no"
+            }
         )?;
     }
     if let Some(change) = data["change"]["change_id"].as_str() {
@@ -102,7 +106,10 @@ mod tests {
             let text = String::from_utf8(output).unwrap();
             assert!(text.starts_with(expected));
             assert!(text.contains("Page path: pages/actual.md\nPage ID: custom_destination"));
-            assert!(text.contains(&format!("verified for this proposal: {verified}")));
+            assert!(text.contains(&format!(
+                "checked for this page change: {}",
+                if verified { "yes" } else { "no" }
+            )));
             assert!(!text.contains("sources/support.md"));
             if envelope.data["status"] == "prepared" {
                 assert!(text.contains("lwiki --wiki '/chosen wiki' changes apply Change.actual"));
