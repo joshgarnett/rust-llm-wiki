@@ -1137,7 +1137,7 @@ fn retained_apply_failure_returns_inspectable_change_and_human_snapshot_is_label
     assert!(
         String::from_utf8(read.stderr)
             .unwrap()
-            .contains("index_snapshot (unverified)")
+            .contains("Saved index used; this text is unverified and has no source citation.")
     );
 }
 
