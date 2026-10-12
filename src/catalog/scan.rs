@@ -19,6 +19,7 @@ use crate::{
 use std::{
     cell::RefCell,
     collections::{BTreeMap, BTreeSet},
+    sync::Mutex,
     time::{Duration, Instant},
 };
 
@@ -60,12 +61,20 @@ struct ReadScanUsage {
 /// final rechecks. It is request-local and never persists accounting state.
 pub(crate) struct ReadScanBudget {
     limits: ReadScanLimits,
-    start: Instant,
-    usage: RefCell<ReadScanUsage>,
+    deadline: Instant,
+    usage: Mutex<ReadScanUsage>,
 }
 
 impl ReadScanBudget {
     pub(crate) fn new(limits: ReadScanLimits) -> Result<Self> {
+        Self::with_deadline(
+            limits,
+            Instant::now()
+                .checked_add(Duration::from_millis(limits.max_elapsed_ms))
+                .ok_or_else(|| WikiError::invalid("read-only scan deadline overflow"))?,
+        )
+    }
+    pub(crate) fn with_deadline(limits: ReadScanLimits, deadline: Instant) -> Result<Self> {
         if limits.max_bytes == 0
             || limits.max_files == 0
             || limits.max_entries == 0
@@ -78,18 +87,28 @@ impl ReadScanBudget {
         }
         Ok(Self {
             limits,
-            start: Instant::now(),
-            usage: RefCell::new(ReadScanUsage::default()),
+            deadline: deadline.min(
+                Instant::now()
+                    .checked_add(Duration::from_millis(limits.max_elapsed_ms))
+                    .ok_or_else(|| WikiError::invalid("read-only scan deadline overflow"))?,
+            ),
+            usage: Mutex::new(ReadScanUsage::default()),
         })
     }
     pub(crate) fn check(&self) -> Result<()> {
-        if self.start.elapsed() >= Duration::from_millis(self.limits.max_elapsed_ms) {
+        if self.usage.is_poisoned() {
+            return Err(WikiError::new(
+                ErrorCode::Internal,
+                "local read budget unavailable",
+            ));
+        }
+        if Instant::now() >= self.deadline {
             return Err(read_scan_limit("read-only scan elapsed allowance exceeded"));
         }
         Ok(())
     }
     pub(crate) fn deadline(&self) -> Instant {
-        self.start + Duration::from_millis(self.limits.max_elapsed_ms)
+        self.deadline
     }
     pub(crate) fn charge_observation(
         &self,
@@ -98,7 +117,10 @@ impl ReadScanBudget {
         entries: usize,
     ) -> Result<()> {
         self.check()?;
-        let mut usage = self.usage.borrow_mut();
+        let mut usage = self
+            .usage
+            .lock()
+            .map_err(|_| WikiError::new(ErrorCode::Internal, "local read budget unavailable"))?;
         let next_bytes = usage
             .bytes
             .checked_add(bytes)
@@ -120,18 +142,46 @@ impl ReadScanBudget {
         Ok(())
     }
     pub(crate) fn remaining(&self) -> (usize, usize, usize) {
-        let usage = self.usage.borrow();
+        let Ok(usage) = self.usage.lock() else {
+            return (0, 0, 0);
+        };
         (
             self.limits.max_bytes.saturating_sub(usage.bytes),
             self.limits.max_files.saturating_sub(usage.files),
             self.limits.max_entries.saturating_sub(usage.entries),
         )
     }
+    pub(crate) fn remaining_time(&self) -> Result<Duration> {
+        self.check()?;
+        Ok(self.deadline().saturating_duration_since(Instant::now()))
+    }
+    pub(crate) fn read_raw(
+        &self,
+        fs: &VaultFs,
+        path: &VaultRelativePath,
+        ceiling: usize,
+    ) -> Result<Option<Vec<u8>>> {
+        self.check()?;
+        let remaining = self.remaining().0;
+        if remaining == 0 {
+            return Err(read_scan_limit("read-only scan byte allowance exceeded"));
+        }
+        // Leave one byte for the growth sentinel; even rejected reads are
+        // metered by the physical reader before their error is returned.
+        let limit = ceiling.min(remaining - 1);
+        crate::vault::fs::read_regular_raw_checked(
+            fs.root(),
+            path,
+            limit,
+            &mut |bytes, files, entries| self.charge_observation(bytes, files, entries),
+        )
+    }
 }
 
-struct BoundedReadInput<'a> {
+pub(crate) struct BoundedReadInput<'a> {
     fs: &'a VaultFs,
     budget: &'a ReadScanBudget,
+    layout: crate::storage::layout::ValidatedLayout,
     work: RefCell<ReadScanWork>,
 }
 
@@ -142,12 +192,18 @@ fn read_scan_limit(message: &str) -> WikiError {
 }
 
 impl<'a> BoundedReadInput<'a> {
-    fn new(fs: &'a VaultFs, budget: &'a ReadScanBudget) -> Self {
-        Self {
+    pub(crate) fn new(fs: &'a VaultFs, budget: &'a ReadScanBudget) -> Result<Self> {
+        let layout = crate::storage::layout::ValidatedLayout::capture_with_reader_budgeted(
+            fs.root(),
+            &mut |path, maximum| budget.read_raw(fs, path, maximum),
+            &mut || budget.charge_observation(0, 0, 1),
+        )?;
+        Ok(Self {
             fs,
             budget,
+            layout,
             work: RefCell::new(ReadScanWork::default()),
-        }
+        })
     }
 
     fn check(&self) -> Result<()> {
@@ -162,17 +218,11 @@ impl<'a> BoundedReadInput<'a> {
         self.budget.charge_observation(0, 0, 1)
     }
 
-    fn read(&self, path: &VaultRelativePath, ceiling: usize) -> Result<Option<Vec<u8>>> {
+    pub(crate) fn read(&self, path: &VaultRelativePath, ceiling: usize) -> Result<Option<Vec<u8>>> {
         let result = (|| {
             self.check()?;
-            self.fs
-                .root()
-                .resolve_budgeted(path, &mut || self.entry())?;
-            self.budget.charge_observation(0, 1, 0)?;
-            let remaining = self.budget.remaining().0.min(ceiling);
-            // The regular-file helper checks length before reserving memory and
-            // rejects file growth beyond this remaining aggregate allowance.
-            let bytes = crate::vault::fs::read_regular_bounded(self.fs.root(), path, false, remaining, "read-only catalog scan")
+            let physical = self.layout.map(self.fs.root(), path)?;
+            let bytes = self.budget.read_raw(self.fs, &physical, ceiling)
                 .map_err(|mut error| {
                     if error.code == ErrorCode::BudgetExceeded {
                         error.hint = read_scan_limit("").hint;
@@ -191,8 +241,6 @@ impl<'a> BoundedReadInput<'a> {
                     format!("canonical input changed during read-only scan: {path}"),
                 ));
             }
-            self.budget
-                .charge_observation(bytes.as_ref().map_or(0, Vec::len), 0, 0)?;
             work.states.insert(path.clone(), expected);
             Ok(bytes)
         })();
@@ -204,11 +252,89 @@ impl<'a> BoundedReadInput<'a> {
         result
     }
 
-    fn notes(&self) -> Result<SourceNotes> {
-        let paths = self
-            .fs
+    pub(crate) fn resolve(&self, path: &VaultRelativePath) -> Result<std::path::PathBuf> {
+        self.check()?;
+        let physical = self.layout.map(self.fs.root(), path)?;
+        self.fs
             .root()
-            .scan_markdown_limited(self.budget.remaining().1, &mut || self.entry())?;
+            .resolve_raw_budgeted(&physical, &mut || self.entry())
+    }
+    pub(crate) fn physical(&self, path: &VaultRelativePath) -> Result<VaultRelativePath> {
+        self.layout.map(self.fs.root(), path)
+    }
+    pub(crate) fn validate_paths(&self, paths: &[VaultRelativePath]) -> Result<()> {
+        self.fs
+            .root()
+            .validate_paths_with_layout(paths, None, &self.layout, &mut || self.entry())
+    }
+
+    /// Retained format-1 payloads can be stored as shared objects after explicit
+    /// cleanup. Authenticate their original manifest with this same reader.
+    pub(crate) fn read_managed(
+        &self,
+        path: &VaultRelativePath,
+        ceiling: usize,
+    ) -> Result<Option<Vec<u8>>> {
+        if let Some(bytes) = self.read(path, ceiling)? {
+            return Ok(Some(bytes));
+        }
+        let parts: Vec<_> = path.as_str().split('/').collect();
+        if parts.len() < 4
+            || parts[0] != "changes"
+            || !matches!(parts[2], "before" | "proposed" | "assets")
+            || !self.layout.retained(self.fs.root())?
+        {
+            return Ok(None);
+        }
+        let id = RecordId::new(parts[1])?;
+        let encoded = self
+            .budget
+            .read_raw(
+                self.fs,
+                &crate::storage::layout::payload_map_path(&id)?,
+                crate::changes::prepare::MAX_MANIFEST_BYTES,
+            )?
+            .ok_or_else(|| {
+                WikiError::new(
+                    ErrorCode::RecoveryRequired,
+                    "retained legacy payload map missing",
+                )
+            })?;
+        let map: crate::storage::layout::PayloadMap = crate::storage::layout::decode(&encoded)?;
+        let mut reader = |path: &VaultRelativePath, maximum| self.read_managed(path, maximum);
+        let engine = crate::changes::ChangeEngine::new_with_reader(self.fs.clone(), &mut reader)?;
+        let (manifest, hash) = engine.load_manifest_structure_with_reader(&id, &mut reader)?;
+        if map.version != 1 || map.change_id != id || map.manifest_hash != hash {
+            return Err(WikiError::invalid("legacy payload map binding differs"));
+        }
+        let Some(reference) = map.entries.iter().find(|entry| &entry.path == path) else {
+            return Ok(None);
+        };
+        if !manifest
+            .operations
+            .iter()
+            .flat_map(|op| [&op.before_payload, &op.after_payload])
+            .flatten()
+            .any(|r| r == reference)
+        {
+            return Err(WikiError::invalid(
+                "legacy object not bound to original payload",
+            ));
+        }
+        let bytes = self.budget.read_raw(self.fs, &crate::storage::layout::object_path(&reference.hash)?, ceiling)?
+            .ok_or_else(|| WikiError::new(ErrorCode::RecoveryRequired, "retained undo payload is unavailable after cleanup; committed history remains inspectable"))?;
+        if bytes.len() as u64 != reference.byte_len || Blake3Hash::digest(&bytes) != reference.hash
+        {
+            return Err(WikiError::new(
+                ErrorCode::RecoveryRequired,
+                "retained shared object integrity failure",
+            ));
+        }
+        Ok(Some(bytes))
+    }
+
+    fn notes(&self) -> Result<SourceNotes> {
+        let paths = self.markdown_paths()?;
         let mut notes = BTreeMap::new();
         for path in paths {
             let bytes = self
@@ -223,6 +349,15 @@ impl<'a> BoundedReadInput<'a> {
         }
         self.check()?;
         notes.try_into()
+    }
+    pub(crate) fn markdown_paths(&self) -> Result<Vec<VaultRelativePath>> {
+        self.check()?;
+        self.fs.root().scan_markdown_with_layout(
+            self.budget.remaining().1,
+            &mut || self.entry(),
+            &mut |_| Ok(()),
+            &self.layout,
+        )
     }
 }
 
@@ -263,7 +398,7 @@ pub(crate) fn scan_with_budget(
     vault_id: &RecordId,
     budget: &ReadScanBudget,
 ) -> Result<CatalogProjection> {
-    let input = BoundedReadInput::new(fs, budget);
+    let input = BoundedReadInput::new(fs, budget)?;
     let notes = input.notes()?;
     let source_view = SourceView::from_shared_maintenance(fs, notes.shared(), &input);
     let mut retrieval = CollectingRetrievalSink::default();
@@ -317,7 +452,7 @@ pub(crate) fn recheck_bounded(
     projection: &CatalogProjection,
     budget: &ReadScanBudget,
 ) -> Result<()> {
-    let input = BoundedReadInput::new(fs, budget);
+    let input = BoundedReadInput::new(fs, budget)?;
     let notes = input.notes()?;
     if parser_fingerprint() != projection.parser_fingerprint
         || manifest_hash(&notes) != projection.control_manifest
@@ -1169,6 +1304,102 @@ mod tests {
             }
         );
         validation
+    }
+
+    #[test]
+    fn bounded_raw_reads_reserve_bytes_once_before_concurrent_streams() {
+        let temp = tempfile::tempdir().unwrap();
+        write(
+            temp.path(),
+            "WIKI.md",
+            &envelope("vault", "vault_test", json!({}), b""),
+        );
+        let bytes = vec![b'x'; 4096];
+        write(temp.path(), "input.bin", &bytes);
+        let fs = VaultFs::new(VaultRoot::explicit(temp.path()).unwrap());
+        let budget = std::sync::Arc::new(
+            ReadScanBudget::new(ReadScanLimits {
+                max_bytes: bytes.len() + 1,
+                max_files: 10,
+                max_entries: 1000,
+                max_elapsed_ms: 5000,
+            })
+            .unwrap(),
+        );
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+        let results = std::thread::scope(|scope| {
+            let jobs = (0..2)
+                .map(|_| {
+                    let budget = std::sync::Arc::clone(&budget);
+                    let barrier = std::sync::Arc::clone(&barrier);
+                    let fs = &fs;
+                    scope.spawn(move || {
+                        barrier.wait();
+                        budget.read_raw(fs, &path("input.bin"), 4096)
+                    })
+                })
+                .collect::<Vec<_>>();
+            jobs.into_iter()
+                .map(|job| job.join().unwrap())
+                .collect::<Vec<_>>()
+        });
+        assert_eq!(results.iter().filter(|result| result.is_ok()).count(), 1);
+        assert_eq!(
+            results
+                .into_iter()
+                .filter_map(Result::err)
+                .next()
+                .unwrap()
+                .code,
+            ErrorCode::BudgetExceeded
+        );
+        assert_eq!(budget.remaining().0, 0);
+    }
+
+    #[test]
+    fn poisoned_budget_refuses_without_resetting_consumed_usage() {
+        let budget = ReadScanBudget::new(ReadScanLimits::default()).unwrap();
+        budget.charge_observation(17, 2, 3).unwrap();
+        let _ = std::panic::catch_unwind(|| {
+            let _held = budget.usage.lock().unwrap();
+            panic!("fixture poisons accounting lock");
+        });
+        assert_eq!(budget.check().unwrap_err().code, ErrorCode::Internal);
+        assert_eq!(budget.remaining(), (0, 0, 0));
+        assert_eq!(
+            budget.charge_observation(0, 0, 0).unwrap_err().code,
+            ErrorCode::Internal
+        );
+        let Err(poisoned) = budget.usage.lock() else {
+            panic!("fixture lock must stay poisoned");
+        };
+        let poisoned = poisoned.into_inner();
+        assert_eq!(
+            (poisoned.bytes, poisoned.files, poisoned.entries),
+            (17, 2, 3)
+        );
+    }
+
+    #[test]
+    fn bounded_raw_read_charges_payload_and_growth_sentinel() {
+        let temp = tempfile::tempdir().unwrap();
+        write(
+            temp.path(),
+            "WIKI.md",
+            &envelope("vault", "vault_test", json!({}), b""),
+        );
+        write(temp.path(), "input.bin", b"payload");
+        let fs = VaultFs::new(VaultRoot::explicit(temp.path()).unwrap());
+        let budget = ReadScanBudget::new(ReadScanLimits::default()).unwrap();
+        let before = budget.remaining();
+        assert_eq!(
+            budget.read_raw(&fs, &path("input.bin"), 1024).unwrap(),
+            Some(b"payload".to_vec())
+        );
+        let after = budget.remaining();
+        assert_eq!(before.0 - after.0, 8);
+        assert_eq!(before.1 - after.1, 1);
+        assert!(before.2 > after.2);
     }
 
     #[test]

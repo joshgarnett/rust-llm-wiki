@@ -350,6 +350,25 @@ impl OfflineApp {
         draft: ChangeDraft,
         force_stage: bool,
     ) -> Result<MutationOutcome> {
+        self.execute_draft_writer(draft, force_stage, None)
+    }
+
+    /// The caller owns the lookup/allocation/publication writer boundary.
+    pub(super) fn execute_draft_with_writer(
+        &self,
+        draft: ChangeDraft,
+        force_stage: bool,
+        writer: &WriterPermit,
+    ) -> Result<MutationOutcome> {
+        self.execute_draft_writer(draft, force_stage, Some(writer))
+    }
+
+    fn execute_draft_writer(
+        &self,
+        draft: ChangeDraft,
+        force_stage: bool,
+        writer: Option<&WriterPermit>,
+    ) -> Result<MutationOutcome> {
         self.catalog().guard_current(None)?;
         let engine = self.engine()?;
         let plan = engine.plan(&draft)?;
@@ -367,8 +386,15 @@ impl OfflineApp {
                 reused: plan.operations.is_empty(),
             });
         }
-        let w = self.writer()?;
-        let retained = engine.prepare(&w, draft)?;
+        let owned_writer;
+        let w = match writer {
+            Some(writer) => writer,
+            None => {
+                owned_writer = self.writer()?;
+                &owned_writer
+            }
+        };
+        let retained = engine.prepare(w, draft)?;
         if force_stage || self.options.stage_only {
             return Ok(MutationOutcome {
                 source_capture: None,
@@ -382,7 +408,7 @@ impl OfflineApp {
         }
         let applied = engine
             .apply(
-                &w,
+                w,
                 &retained.prepared,
                 &CatalogGraphValidator,
                 &self.catalog(),

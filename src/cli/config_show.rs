@@ -143,6 +143,13 @@ pub(super) fn present(
                     configured.as_str().unwrap_or("provider default").to_owned()
                 };
                 writeln!(output, "  Configured vector dimensions: {dimensions}")?;
+                writeln!(
+                    output,
+                    "  Automatic similarity search: {}",
+                    super::automatic_embeddings::consent_label(
+                        &data["provider"][key]["automatic_embedding_consent"]
+                    )
+                )?;
             }
             if let Some(limit) = data["provider"][key]["effective_output_token_limit"].as_u64() {
                 writeln!(output, "  Service output token limit: {limit}")?;
@@ -442,6 +449,10 @@ fn inspect_loaded(
                     if let Some((fs, id)) = &selected_fs {
                         envelope.data["provider"][name]["permitted_for_selected_wiki"] =
                             json!(providers.authorize(fs, id, &profile, capability).is_ok());
+                        if name == "embedding" {
+                            envelope.data["provider"][name]["automatic_embedding_consent"] =
+                                json!(providers.automatic_embedding_consent(fs, id, &profile)?);
+                        }
                     }
                 }
             }

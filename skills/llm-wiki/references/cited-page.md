@@ -13,7 +13,10 @@ When the user asks to save the answer:
 2. Write `REFS.json` outside the wiki with `schema_version` equal to `"1"` and a
    `citations` array containing the exact returned citation objects whose `kind`
    is `source`. Use the objects unchanged. A verified captured-text read can also
-   supply its `data.source_citation.citation`. Source or Revision metadata and
+   supply `data.read.source_citation.citation` from `source read`, or
+   `data.source_citation.citation` from a payload-path `read`. Capture supplies
+   each saved item's `data.items[].citation`; read that source before using its
+   text to support claims. Source or Revision metadata and
    authored `note_text` do not supply captured source citations.
 3. Run `lwiki --json page init --file BODY.md --title 'TITLE' --source-refs REFS.json`.
    This saves a draft and generates readable provenance links from the verified
@@ -56,8 +59,8 @@ to establish that a requested flag is supported. Normalized selected verificatio
 checks returned dependencies, not every note in the wiki. Do not activate a
 normalized layout or rebuild an index merely to follow a retrieval recipe.
 Semantic/hybrid retrieval requires compatible prepared embeddings; offline use
-also requires an exact cached query vector. Remote preparation remains separately
-authorized work.
+also requires an exact cached query vector. Remote preparation requires a matching automatic embedding grant or explicit
+authorization. Automatic permission never authorizes generation.
 
 ## Retrieve, inspect conditions and read gaps
 

@@ -73,6 +73,8 @@ use each command's `--help` for its arguments.
 | `read --id ID` or `read --path PATH` | Record metadata and bounded body; optional byte range on verified UTF-8 boundaries. Dry-run returns only a request plan. |
 | `page put --file FILE` | Create a page; `--if-match HASH` required to replace an existing page |
 | `page rename ID --to PATH --if-match HASH` | Changeset updating the path and known incoming links; ID preserved |
+| `source capture PATH... [--files-from FILE]` | Capture or refresh local notes in grouped publications; return Source IDs and exact citations |
+| `source read ID [--revision REV]` | Read current or historical captured text directly by Source ID, with exact citation and continuation |
 | `source add FILE` | Capture immutable bytes and normalized text for supported local formats |
 | `source import prepare/run/resume/status` | Freeze a local JSONL list, publish bounded shared-change groups and retain progress/mappings |
 | `source refresh ID --file FILE` | Add a revision; unchanged capture is idempotent |
@@ -80,7 +82,7 @@ use each command's `--help` for its arguments.
 | `source withdraw ID --reason TEXT` | Persist withdrawal and invalidate dependent current evidence |
 | `evidence revalidate ID --to-revision REV --if-match HASH` | Stage successor evidence only when the original quote matches uniquely in the target source revision |
 | `index sync`, `index rebuild` | Refresh/recreate local projections; never embed or extract |
-| `search QUERY` | Ranked discovery, document-first lexical default |
+| `search QUERY` | Hybrid discovery with local fallback when mode is omitted; explicit modes retain their contracts |
 | `graph neighbors ID`, `graph query QUERY` | Page/provenance navigation or typed graph search |
 | `context QUERY` | Select verified evidence under byte/token budgets |
 | `check`, `doctor` | Knowledge/format diagnostics; installation/index/profile diagnostics |
@@ -99,6 +101,55 @@ use each command's `--help` for its arguments.
 
 `--file -` reads bounded stdin. Body text, bulk payloads, and secrets are not interpolated into shell strings. No command depends on an editor, pager, `jq`, or `rg`. Editor launching can follow after the deterministic file/stdin write path exists. No default destructive purge command or automatic Git commit is needed for v1.
 
+## Grouped local capture and direct source reads
+
+`source capture` accepts files/folders and an optional UTF-8 newline-delimited
+`--files-from` list whose relative entries resolve from the list's folder. Folder
+selection includes visible regular `.md`, `.markdown` and `.txt` files; links,
+hidden directories, managed wiki trees and managed canonical notes are excluded.
+Explicit files retain the existing supported/unsupported extraction behavior.
+Selection freezes deterministic original bytes/hashes before publication, deduplicates
+overlapping paths and reports excluded inputs and errors.
+
+Invocation ceilings are 10,000 files, 100,000 traversal entries, depth 32, 16 MiB per
+file, 256 MiB total input and 16 MiB result metadata. Origin lookup has a separate
+64 MiB/4096-file SourceView allowance. Those are admission bounds, not qualified
+capacity or a whole-command latency guarantee.
+
+The canonical Source envelope binds the absolute canonical original path. Repeating
+unchanged capture reuses its Source/revision; changed bytes add a revision while
+preserving identity/title and immutable history. Different paths with identical
+bytes remain distinct Sources. Missing remembered originals are reported without
+removing their capture. Duplicate absolute bindings refuse. Legacy relative origins
+are not guessed from today's working directory; explicit `source refresh` remains
+the update route for those bindings.
+
+One writer permit covers lookup/allocation and true grouped publication on both
+layouts. New groups hold up to eight files, refresh groups sixteen, with a 4 MiB
+original-input target; a larger otherwise supported file forms a group alone.
+Ordinary engine validation/read guards and normalized sealed projections remain
+required. A failed group is not retried as scalar writes. Earlier committed groups
+remain saved, later inputs report not-attempted and retry reuses existing bindings.
+Per-item identity, action, capture state, citation and error plus aggregate partial
+status describe actual results. Partial capture returns `ok:false`, `meta.partial:true`
+and a nonzero status while retaining successful groups. A committed item with an acknowledgment error can
+contribute to both committed-action and error counts.
+
+Supported nonempty captures return exact whole-document SourceRefs after final
+source/dependency verification and membership recheck. Unsupported originals remain
+retained without invented readable text or citations. One optional automatic hook
+receives the union of actual changed owners after capture, including earlier
+committed groups on partial failure; the capture engine itself calls no provider.
+
+`source read ID` resolves the current captured head; `--revision` must belong to
+that Source's retained history. `--start`, optional `--end` and `--max-bytes` select
+UTF-8-safe text and return exact reusable citation bytes/hash with continuation and
+observed eligibility. Empty text has no fabricated citation; unsupported text gives
+a useful absence error. Reads are writer-free, preserve current/selected proof and
+final rechecks, and distinguish current observations from real persistent generations
+without synthetic publication values. Generic `read --id` keeps its existing meaning.
+Dry-run returns only its validated request plan, with no text/citation verification.
+
 ## Source citations on draft Pages
 
 `page init` and `page put` accept `--source-refs FILE`, or bounded stdin when the
@@ -109,11 +160,14 @@ is 64 KiB and 16 submitted references before stable exact deduplication. Paths,
 quote text, eligibility and assertion references are not accepted authority.
 
 Normal staging/application authenticates source ownership, immutable revision
-payloads, nonempty UTF-8 spans and quote hashes. It renders actual Source,
-Revision and captured-content links relative to the final Page destination,
-with exact JSON references and a state explicitly observed during that guarded
-write. Those observations participate in publication read guards; they do not
-prove prose support or continuing freshness. Normalized verification touches
+payloads, nonempty UTF-8 spans and quote hashes. It renders a compact Sources list
+with authenticated titles linked to the exact cited captured content, relative to
+the final Page destination. Older saved copies
+and withdrawn sources carry plain status labels; a brief qualification states that
+status was checked when the Page was saved. Exact JSON references remain losslessly
+encoded in a hidden HTML comment inside the existing owned block. Those
+observations participate in publication read guards; they do not prove prose
+support or continuing freshness. Normalized verification touches
 selected dependencies. Legacy verification retains its bounded SourceView scan;
 its initial scan and selected-payload allowance are separate 64 MiB limits.
 

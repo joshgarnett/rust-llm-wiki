@@ -390,6 +390,45 @@ impl Catalog {
         settings: &EmbeddingSettings,
         limit: usize,
     ) -> Result<UnitInventoryState> {
+        self.prepare_unit_inventory_page_inner(writer, settings, limit, None)
+    }
+    pub(crate) fn prepare_unit_inventory_page_with_deadline(
+        &self,
+        writer: &WriterPermit,
+        settings: &EmbeddingSettings,
+        limit: usize,
+        deadline: std::time::Instant,
+    ) -> Result<UnitInventoryState> {
+        // A longer caller deadline must not exceed UnitBudget's existing
+        // ceiling. Callers paging one phase pass the same frozen deadline;
+        // taking the minimum here can only shorten it.
+        let deadline = deadline.min(std::time::Instant::now() + Duration::from_secs(30));
+        self.prepare_unit_inventory_page_inner(writer, settings, limit, Some(deadline))
+    }
+    fn prepare_unit_inventory_page_inner(
+        &self,
+        writer: &WriterPermit,
+        settings: &EmbeddingSettings,
+        limit: usize,
+        deadline: Option<std::time::Instant>,
+    ) -> Result<UnitInventoryState> {
+        let remaining = || -> Result<Duration> {
+            match deadline {
+                Some(deadline) => {
+                    let duration = deadline
+                        .saturating_duration_since(std::time::Instant::now())
+                        .min(Duration::from_secs(30));
+                    if duration.as_millis() == 0 {
+                        return Err(exhausted(
+                            "automatic unit inventory admission deadline reached",
+                        ));
+                    }
+                    Ok(duration)
+                }
+                None => Ok(Duration::from_secs(30)),
+            }
+        };
+        remaining()?;
         writer.require_root(self.fs.root())?;
         settings.validate()?;
         if !(1..=128).contains(&limit) {
@@ -397,17 +436,32 @@ impl Catalog {
                 "unit backfill page requires 1..=128 owners",
             ));
         }
-        let selection =
-            selector::delta_selection(&self.fs, writer, &self.vault_id, Duration::from_secs(30))?;
-        selector::ensure_delta_ready(&self.fs, writer, &selection, Duration::from_secs(30))?;
-        let reader = self.cached_query_snapshot(QueryReadLimits::default())?;
+        let selection = selector::delta_selection(&self.fs, writer, &self.vault_id, remaining()?)?;
+        selector::ensure_delta_ready(&self.fs, writer, &selection, remaining()?)?;
+        let mut read_limits = QueryReadLimits::default();
+        read_limits.max_elapsed_ms = read_limits
+            .max_elapsed_ms
+            .min(remaining()?.as_millis() as u64);
+        let reader = self.cached_query_snapshot(read_limits)?;
         let snapshot = reader.snapshot().clone();
         reader.verify_operations(self)?;
-        let sql_writer =
-            selector::open_delta(&self.fs, writer, &selection, Duration::from_secs(30))?;
+        let sql_writer = selector::open_delta(&self.fs, writer, &selection, remaining()?)?;
         let c = sql_writer.connection();
-        sql::configure(c, 30_000, true)?;
+        let install_deadline = || -> Result<()> {
+            if let Some(deadline) = deadline {
+                c.progress_handler(1, Some(move || std::time::Instant::now() >= deadline))
+                    .map_err(sql::sql_error)?;
+            }
+            Ok(())
+        };
+        install_deadline()?;
+        sql::configure(c, remaining()?.as_millis() as u64, true)?;
         super::source_refresh::configure_delta(c)?;
+        install_deadline()?;
+        remaining()?;
+        if deadline.is_some() {
+            c.busy_timeout(Duration::ZERO).map_err(sql::sql_error)?;
+        }
         let tx = Transaction::new_unchecked(c, TransactionBehavior::Immediate)
             .map_err(sql::sql_error)?;
         if normalized_read::header(&tx, sql_writer.selection())?.snapshot != snapshot {
@@ -463,7 +517,10 @@ impl Catalog {
             drop(rows);
             drop(statement);
             finished = paths.len() < limit;
-            let budget = UnitBudget::new(UnitLimits::default())?;
+            let budget = match deadline {
+                Some(deadline) => UnitBudget::with_deadline(UnitLimits::default(), deadline)?,
+                None => UnitBudget::new(UnitLimits::default())?,
+            };
             let mut bytes = 0;
             for path in &paths {
                 // Already-maintained new owners need no duplicate backfill render.
@@ -504,6 +561,7 @@ impl Catalog {
                 |r| r.get(0),
             )
             .map_err(sql::sql_error)?;
+        remaining()?;
         tx.commit().map_err(sql::sql_error)?;
         drop(reader);
         sql_writer.checkpoint_wal()?;

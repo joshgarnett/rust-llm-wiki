@@ -68,6 +68,12 @@ fn attempt<'a>(loaded: &'a Loaded, r: &AttemptRef) -> Result<&'a AttemptInspecti
         .ok_or_else(|| events::corrupt("attempt identity differs from stored history"))
 }
 impl JobLedger {
+    /// Verify retained accounting without requiring historical source inputs
+    /// to remain current. Every required canonical checkpoint proof must pass.
+    /// This uses the original verifier and does not impose a local I/O deadline.
+    pub(crate) fn inspect_accounting_verified(&self) -> Result<LedgerInspection> {
+        self.with_proof_policy(false, true, |_, loaded| Ok(loaded.state.inspection.clone()))
+    }
     /// Complete a run only after its concrete tasks ended and all possibly sent
     /// attempts have durable settlement. Unknown charges remain reserved forever.
     pub fn complete_run(&self) -> Result<EventRef> {
@@ -652,6 +658,14 @@ impl JobLedger {
         bind: bool,
         f: impl FnOnce(&RunLedgerGuard<'_>, &mut Loaded) -> Result<T>,
     ) -> Result<T> {
+        self.with_proof_policy(bind, false, f)
+    }
+    fn with_proof_policy<T>(
+        &self,
+        bind: bool,
+        strict_checkpoint_proofs: bool,
+        f: impl FnOnce(&RunLedgerGuard<'_>, &mut Loaded) -> Result<T>,
+    ) -> Result<T> {
         let store = self.io_store()?;
         let first = self.options.clock.read()?;
         let mut check = || {
@@ -668,7 +682,7 @@ impl JobLedger {
             Duration::from_millis(self.options.lock_timeout_ms),
             &mut check,
         )?;
-        let mut loaded = self.load(&guard, bind)?;
+        let mut loaded = self.load_with_proof_policy(&guard, bind, strict_checkpoint_proofs)?;
         f(&guard, &mut loaded).map_err(|mut e| {
             let old = std::mem::replace(&mut e.details, serde_json::Value::Null);
             e.details = serde_json::json!({"run_id":self.run_id,"context":old});
@@ -676,6 +690,14 @@ impl JobLedger {
         })
     }
     fn load(&self, g: &RunLedgerGuard<'_>, bind: bool) -> Result<Loaded> {
+        self.load_with_proof_policy(g, bind, false)
+    }
+    fn load_with_proof_policy(
+        &self,
+        g: &RunLedgerGuard<'_>,
+        bind: bool,
+        strict_checkpoint_proofs: bool,
+    ) -> Result<Loaded> {
         let before = g.read_journal()?.ok_or_else(|| {
             events::corrupt("operational journal missing; old lifetime budget cannot resume")
         })?;
@@ -732,7 +754,7 @@ impl JobLedger {
                     &decoded.frames,
                 )
             {
-                if bind {
+                if bind || strict_checkpoint_proofs {
                     return Err(error);
                 }
                 state.inspection.warnings.push(format!("canonical checkpoint proof unavailable; operational accounting only, no canonical authority: {}", error.message));
@@ -3008,5 +3030,137 @@ impl JobLedger {
             ErrorCode::ContentConflict,
             "unfamiliar run edit has no exact committed checkpoint proof",
         ))
+    }
+}
+
+#[cfg(test)]
+mod automatic_accounting_read_tests {
+    use super::*;
+    use crate::jobs::test_support as common;
+
+    #[test]
+    fn verified_accounting_keeps_unknown_holds_after_source_drift_without_writes() {
+        let (_temp, fs, job, spec, _) = common::fixture(1, |_| {});
+        let reservation = job
+            .reserve(&spec.tasks[0].key, common::bound(&spec.tasks[0]))
+            .unwrap();
+        drop(job.dispatch_intent(reservation).unwrap());
+        let journal = fs
+            .root()
+            .path()
+            .join(".wiki/state/jobs/run_test/journal.bin");
+        let head = fs
+            .root()
+            .path()
+            .join(".wiki/state/jobs/run_test/checkpoint.json");
+        let original_journal = std::fs::read(&journal).unwrap();
+        let original_head = std::fs::read(&head).unwrap();
+        let before = job.inspect_accounting_verified().unwrap();
+        assert_eq!(before.budget.outstanding.requests, 1);
+        assert_eq!(before.attempts.len(), 1);
+        assert_eq!(before.attempts[0].phase, AttemptPhase::DispatchIntent);
+        std::fs::write(
+            fs.root().resolve(&spec.tasks[0].input.path).unwrap(),
+            b"historical source changed",
+        )
+        .unwrap();
+        let historical = job.inspect_accounting_verified().unwrap();
+        assert_eq!(historical.budget, before.budget);
+        assert_eq!(historical.attempts, before.attempts);
+        assert_eq!(std::fs::read(journal).unwrap(), original_journal);
+        assert_eq!(std::fs::read(head).unwrap(), original_head);
+    }
+
+    #[test]
+    fn verified_accounting_refuses_missing_or_corrupt_durable_head() {
+        for missing in [false, true] {
+            let (_temp, fs, job, _, _) = common::fixture(1, |_| {});
+            let head = fs
+                .root()
+                .path()
+                .join(".wiki/state/jobs/run_test/checkpoint.json");
+            if missing {
+                std::fs::remove_file(&head).unwrap();
+            } else {
+                std::fs::write(&head, b"corrupt durable head").unwrap();
+            }
+            let journal = fs
+                .root()
+                .path()
+                .join(".wiki/state/jobs/run_test/journal.bin");
+            let original = std::fs::read(&journal).unwrap();
+            assert!(job.inspect_accounting_verified().is_err());
+            assert_eq!(std::fs::read(journal).unwrap(), original);
+            assert_eq!(head.exists(), !missing);
+            if !missing {
+                assert_eq!(std::fs::read(head).unwrap(), b"corrupt durable head");
+            }
+        }
+    }
+
+    #[test]
+    fn verified_accounting_refuses_missing_history_without_recreating_it() {
+        let (_temp, fs, job, _, _) = common::fixture(1, |_| {});
+        let journal = fs
+            .root()
+            .path()
+            .join(".wiki/state/jobs/run_test/journal.bin");
+        std::fs::remove_file(&journal).unwrap();
+        let head = fs
+            .root()
+            .path()
+            .join(".wiki/state/jobs/run_test/checkpoint.json");
+        let original = std::fs::read(&head).unwrap();
+        assert!(job.inspect_accounting_verified().is_err());
+        assert!(!journal.exists());
+        assert_eq!(std::fs::read(head).unwrap(), original);
+        assert!(fs.root().path().join("runs/run_test/run.md").is_file());
+    }
+
+    #[test]
+    fn verified_accounting_refuses_bad_canonical_checkpoint_instead_of_warning() {
+        let (_temp, fs, job, _, _) = common::fixture(1, |_| {});
+        let draft = job.checkpoint_plan().unwrap();
+        let writer = WriterPermit::acquire(fs.root(), Duration::from_secs(1)).unwrap();
+        let engine = ChangeEngine::new(fs.clone()).unwrap();
+        let prepared = engine.prepare(&writer, draft).unwrap().prepared;
+        engine
+            .apply(
+                &writer,
+                &prepared,
+                &CatalogGraphValidator,
+                &Catalog::new(fs.clone(), common::id("vault_test")),
+            )
+            .unwrap();
+        drop(writer);
+        job.checkpoint_committed(&prepared).unwrap();
+        assert!(job.inspect_accounting_verified().is_ok());
+        let asset = std::fs::read_dir(fs.root().path().join("runs/run_test/checkpoints"))
+            .unwrap()
+            .next()
+            .unwrap()
+            .unwrap()
+            .path();
+        std::fs::write(asset, b"corrupt compact checkpoint proof").unwrap();
+        let head = fs
+            .root()
+            .path()
+            .join(".wiki/state/jobs/run_test/checkpoint.json");
+        let journal = fs
+            .root()
+            .path()
+            .join(".wiki/state/jobs/run_test/journal.bin");
+        let original_head = std::fs::read(&head).unwrap();
+        let original_journal = std::fs::read(&journal).unwrap();
+        assert!(job.inspect_accounting_verified().is_err());
+        let ordinary = job.inspect().unwrap();
+        assert!(
+            ordinary
+                .warnings
+                .iter()
+                .any(|warning| { warning.starts_with("canonical checkpoint proof unavailable") })
+        );
+        assert_eq!(std::fs::read(head).unwrap(), original_head);
+        assert_eq!(std::fs::read(journal).unwrap(), original_journal);
     }
 }

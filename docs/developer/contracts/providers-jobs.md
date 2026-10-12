@@ -90,6 +90,62 @@ Each service uses the exact full URL, including non-secret query parameters; app
 
 Require HTTPS except an explicit loopback test setting; verify certificates, with optional private CA file. Provider redirects are disabled. Standard headers cannot overwrite managed auth/content headers; additional secret headers use explicit environment/file references. Reject duplicate keys and unknown settings. Diagnostics expose capability/model and endpoint fingerprint, never keys, helper output, or provider error bodies. Changing credentials does not change embedding space; changing endpoint/model/rendering does.
 
+### Automatic embedding permission and execution
+
+`setup --auto-embed` and `config set embedding --auto-embed` review a separate
+private version-1 `automatic_embedding` grant under the wiki binding. It binds the
+canonical root/ID, profile, full endpoint fingerprint, model, deployment revision,
+dimensions and fixed `eligible_wiki_text_and_search_queries` scope. The review
+identifies the destination, model, text scope and possible cost. Legacy
+`allowed_profiles`/`--grant-embed` authority permits explicit dispatch only; it
+never creates automatic permission. An automatic-only binding can have no explicit
+allowed profiles and authorizes embedding only, never generation.
+
+Consent inspection returns absent, matching or binding-changed without resolving
+credentials. Runtime additionally guards current private bytes, wiki identity and
+CA configuration. Endpoint, model, revision, dimensions or wiki/profile changes
+require matching permission before automatic dispatch. Credential-only edits may
+preserve permission, including a copy-on-write profile transfer, only after the old
+binding matches and the final text/destination identity remains exact. Generation
+changes retain their separate explicit review requirements.
+
+Matching permission enables optional preparation after setup, embedding config
+edits, committed content saves and ordinary omitted-mode lookup. A command shares
+one invocation allowance across corpus preparation, query embedding, retained task
+reconciliation and final accounting; no item, group, phase or new Run resets it.
+Save preparation selects the actual changed-owner union once, including committed
+capture groups before a later failure. Reused, staged, failed and dry-run proposals
+and operational receipt/checkpoint records do not trigger preparation. Generation
+configuration edits do not prepare unrelated wiki text.
+
+| Trigger | Admission deadline | Requests | Rendered inputs | Input bytes |
+|---|---:|---:|---:|---:|
+| Setup / embedding configuration | 60 seconds | 8 | 128 | 1 MiB |
+| Committed save | 15 seconds | 2 | 32 | 256 KiB |
+| Lookup, including query | 5 seconds | 2 | 16 | 96 KiB |
+
+These ceilings compose with caller and retained Run limits. Automatic work permits
+one concurrent attempt and at most one attempt per task; it never retries an
+uncertain dispatch. Discovery and preflight are bounded and must establish complete
+retained accounting before new paid admission. Unknown holds, exact canonical
+receipt/checkpoint proofs and original Run identity remain authoritative; a bound
+or unresolved attempt cannot be bypassed with a replacement Run.
+
+The deadline stops new attempts and entry into new canonical transactions. An
+already admitted bootstrap, receipt or checkpoint transaction completes through the
+existing engine and its normal guards/recovery rules, even after that deadline.
+A Received response whose receipt cannot start remains durably spooled with its
+holds for later same-attempt reconciliation, without repeat HTTP or usable-vector
+activation. No strict whole-command duration or aggregate local IO ceiling is
+promised; elapsed observations include canonical completion and accounting proof.
+
+Optional provider, permission, budget or writer failures return secondary automatic
+status while preserving a completed save or useful local lookup. Genuine unresolved
+canonical authority still requires ordinary recovery. Status reports readiness,
+partial/pending/skipped/blocked/failed work, actual invocation transport activity,
+count completeness and per-Run accounting. Retained lifetime totals are not current
+command spending; missing accounting/cost remains unavailable or unknown.
+
 ## 3. Credentials
 
 `AuthConfig::Static` requires exactly one `key`, `key_env`, or `key_file`. Literal keys are allowed only in private configuration; initialization favors references. Missing/empty credentials fail before dispatch. Use secret wrappers without `Debug` serialization and bounded file reads.
@@ -111,7 +167,9 @@ JSON stdout is exactly `{"key":"token","expires_at":"2026-09-28T18:00:00Z"}`; ex
 
 Spawn argv directly, with stdin closed, private-config working directory, ten-second deadline, and 16 KiB output ceiling. Discard stderr rather than risk exposing secrets. The helper is trusted user code, not sandboxed code. Initially support native executables and explicitly configured interpreters; reject implicit Windows `.bat`/`.cmd` launching. On 401, command auth refreshes once, then retries only within attempt/request/cost limits. Static auth fails; 403 does not imply expiry.
 
-`--offline` and `--dry-run` prevent helper execution, DNS, probes, and HTTP even if a cache misses. Dry-run also prevents journals, credential caches, index refresh, and file writes. Check those modes before resolving secrets. Ordinary local operations never enter the credential path.
+`--offline` and `--dry-run` prevent helper execution, DNS, probes, and HTTP even if a cache misses. Dry-run also prevents journals, credential caches, index refresh, and file writes. Check those modes before resolving secrets. Explicit local lookup modes and commands without authorized automatic work never
+enter the credential path. `--no-sync` also suppresses automatic preparation and
+its helpers/requests.
 
 ## 4. Embedding wire contract
 
@@ -212,7 +270,10 @@ Every dispatch reserves a request slot, bounded bytes/tokens, concurrency slot, 
 
 Keep unknown charges reserved; no timeout refund. Explicit uncertain retry spends a new allowance. Provider-confirmed usage can settle known charges; reconciliation records amendments rather than editing historical receipts. A provider violating the configured bound invalidates that guarantee, records overspend, and stops further dispatch. External-agent usage and network activity inside a trusted credential helper are outside dispatcher billing observation; neither can be capped by it.
 
-On cancellation, persist completed work, mark unresolved dispatches, and stop new requests. Recovery reconciles journal entries with Markdown outputs before scheduling. Markdown-only restore recovers recorded work, not missing charges: without complete operational accounting or provider reconciliation, continuing the old hard-dollar budget is prohibited. A new run must disclose previous unknown spend. No automatic synthesis or embedding follows cache loss.
+On cancellation, persist completed work, mark unresolved dispatches, and stop new requests. Recovery reconciles journal entries with Markdown outputs before scheduling. Markdown-only restore recovers recorded work, not missing charges: without complete operational accounting or provider reconciliation, continuing the old hard-dollar budget is prohibited. A new run must disclose previous unknown spend. Cache loss alone grants no paid
+rebuild authority. Matching automatic embedding permission may prepare missing
+vectors under the same admission/accounting rules; absent that permission, an
+explicit embedding command is required. Generation is never implied.
 
 ## 10. Provider failure tests
 
@@ -226,13 +287,13 @@ On cancellation, persist completed work, mark unresolved dispatches, and stop ne
 | 429, long Retry-After, timeout after send | Bounded attempts/deadline; unknown charge retained |
 | Two processes reserve final slot | At most one admitted; caps include retries |
 | Crash before/after each journal/commit boundary | Replay without lost completed output/double settlement |
-| Resume after changed source/model; deleted SQLite | Reuse only matching durable work; no implicit paid rebuild |
+| Resume after changed source/model; deleted SQLite | Reuse only matching durable work; rebuild requires explicit dispatch or matching automatic grant |
 
 Run these against mocks and fault-injected storage first; add opt-in live contract tests for the actual selected endpoints before claiming interoperability.
 
 ### Probe allowance and gateway headers
 
-Explicit generation probes request up to 256 output tokens, bounded by the configured service maximum and caller output-unit ceiling. Unproven gateway token/cost ceilings still fail admission rather than promising unsupported hard guarantees; request/byte ceilings remain available. Responses and Chat use the configured adapter for probes.
+Explicit generation probes use the configured service output cap (4096 tokens when omitted), reduced by any caller output-unit or reasoning-unit ceiling. A zero allowance refuses before dispatch. Incomplete output identifies the cap and an explicit bounded retry; it never raises a limit automatically. Unproven gateway token/cost ceilings still fail admission rather than promising unsupported hard guarantees; request/byte ceilings remain available. Responses and Chat use the configured adapter for probes.
 
 Response header names follow RFC 9110 token syntax, including underscores, while count/byte/name/value-control limits remain enforced. Invalid headers report `response_headers_invalid`; oversized bodies report `response_bound`. [RFC 9110 §5.6.2](https://www.rfc-editor.org/rfc/rfc9110.html#name-tokens)
 

@@ -335,6 +335,32 @@ pub enum PageCommand {
 }
 #[derive(Debug, Subcommand)]
 pub enum SourceCommand {
+    /// Capture files or a folder of notes. Repeat to add new files and refresh changes.
+    Capture {
+        /// Files or folders to capture; quote paths containing spaces.
+        #[arg(required_unless_present = "files_from")]
+        paths: Vec<PathBuf>,
+        /// Read one path per line, relative to this list's folder.
+        #[arg(long)]
+        files_from: Option<PathBuf>,
+    },
+    /// Read a captured source and get a citation for the returned text.
+    Read {
+        /// Source ID returned by capture or search.
+        id: RecordId,
+        /// Read an earlier captured revision.
+        #[arg(long)]
+        revision: Option<RecordId>,
+        /// Start at this UTF-8 byte offset in the captured text.
+        #[arg(long)]
+        start: Option<u64>,
+        /// Stop before this UTF-8 byte offset; omit to read toward the end.
+        #[arg(long, requires = "start")]
+        end: Option<u64>,
+        /// Maximum bytes of text to return; reports where to continue.
+        #[arg(long)]
+        max_bytes: Option<usize>,
+    },
     /// Refresh 1–16 guarded existing Sources in one recoverable publication.
     RefreshBatch {
         /// JSON request; relative member files resolve from its directory.
@@ -711,9 +737,9 @@ pub struct SearchArguments {
 
     /// Search text; lexical terms are treated as data, not query operators.
     pub query: String,
-    /// Retrieval mode; semantic and hybrid modes require compatible embeddings.
-    #[arg(long, value_enum, default_value = "lexical")]
-    pub mode: Mode,
+    /// Retrieval mode. Omit for hybrid search with automatic preparation and local fallback.
+    #[arg(long, value_enum)]
+    pub mode: Option<Mode>,
     /// Filter by record kind; repeat for multiple kinds.
     #[arg(long = "kind")]
     pub kinds: Vec<RecordKind>,
@@ -754,7 +780,7 @@ pub struct SearchArguments {
 impl SearchArguments {
     pub fn plan(&self) -> QueryPlan {
         QueryPlan {
-            mode: match self.mode {
+            mode: match self.mode.unwrap_or(Mode::Hybrid) {
                 Mode::Literal => SearchMode::Literal,
                 Mode::Lexical => SearchMode::Lexical,
                 Mode::Semantic => SearchMode::Semantic,
@@ -879,6 +905,12 @@ impl Command {
             Self::Source {
                 command: SourceCommand::Add { .. },
             } => "source add",
+            Self::Source {
+                command: SourceCommand::Capture { .. },
+            } => "source capture",
+            Self::Source {
+                command: SourceCommand::Read { .. },
+            } => "source read",
             Self::Source {
                 command: SourceCommand::Refresh { .. },
             } => "source refresh",

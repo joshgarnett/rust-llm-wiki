@@ -1,5 +1,6 @@
 //! Immutable source captures and exact, scoped evidence verification.
 pub mod capture;
+pub(crate) mod capture_inputs;
 pub mod evidence;
 pub(crate) mod identity;
 pub(crate) mod import_manifest;

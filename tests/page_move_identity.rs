@@ -3,7 +3,7 @@
 mod test_paths;
 
 use lwiki::domain::Blake3Hash;
-use pulldown_cmark::{Event, Parser, Tag};
+use pulldown_cmark::{Event, Parser, Tag, TagEnd};
 use serde_json::{Value, json};
 use std::{
     collections::BTreeMap,
@@ -252,14 +252,25 @@ fn citation_links(root: &Path, page: &str, block: &str) -> Vec<PathBuf> {
     links
 }
 fn encoded_refs(block: &str) -> Value {
-    let encoded = block
-        .split("```json\n")
-        .nth(1)
-        .unwrap()
-        .split("\n```")
-        .next()
-        .unwrap();
-    serde_json::from_str(encoded).unwrap()
+    let mut html_block = String::new();
+    for event in Parser::new(block) {
+        match event {
+            Event::Start(Tag::HtmlBlock) => html_block.clear(),
+            Event::Html(html) => html_block.push_str(&html),
+            Event::End(TagEnd::HtmlBlock) => {
+                if let Some(encoded) = html_block
+                    .trim()
+                    .strip_prefix("<!--")
+                    .and_then(|s| s.strip_suffix("-->"))
+                    && let Ok(value) = serde_json::from_str(encoded)
+                {
+                    return value;
+                }
+            }
+            _ => {}
+        }
+    }
+    panic!("saved Page retains machine-readable exact source references")
 }
 
 #[test]
@@ -334,21 +345,12 @@ fn native_cited_page_move_rebases_only_provenance_and_delete_sync_never_resurrec
     let original_links = citation_links(&f.root, "pages/cited.md", block_before);
     assert_eq!(
         original_links.len(),
-        3,
-        "Source, Revision and captured payload links"
+        1,
+        "one title link opens the exact saved content"
     );
-    let owner = f.ok(&["read", "--id", source]);
-    let revision_note = f.ok(&["read", "--id", revision]);
-    let mut expected = [
-        owner["data"]["path"].as_str().unwrap(),
-        revision_note["data"]["path"].as_str().unwrap(),
-        payload_path,
-    ]
-    .into_iter()
-    .map(|p| fs::canonicalize(f.root.join(p)).unwrap())
-    .collect::<Vec<_>>();
-    expected.sort();
+    let expected = vec![fs::canonicalize(f.root.join(payload_path)).unwrap()];
     assert_eq!(original_links, expected);
+    assert_eq!(encoded_refs(block_before)["citations"], json!([citation]));
     let sources_before = source_files(&f.root.join("sources"));
     f.write("incoming.md", "Plain incoming [[pages/cited.md|Answer]].\n");
     f.ok(&["index", "sync"]);

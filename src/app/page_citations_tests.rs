@@ -118,7 +118,7 @@ fn outside(markdown: &str) -> (String, String) {
     let end = markdown.find(END).unwrap() + END.len();
     (markdown[..start].into(), markdown[end..].into())
 }
-// Inspect ordinary Markdown semantics rather than matching renderer spelling.
+// Inspect Markdown semantics and losslessly decode the retained citation data.
 fn decoded_citations(markdown: &str) -> Vec<CitationRef> {
     fn collect(value: &Value, out: &mut Vec<CitationRef>) {
         if value.get("kind") == Some(&json!("source")) && value.get("reference").is_some() {
@@ -135,6 +135,7 @@ fn decoded_citations(markdown: &str) -> Vec<CitationRef> {
     }
     let mut out = Vec::new();
     let mut code = None::<String>;
+    let mut html_block = String::new();
     for event in Parser::new(block(markdown)) {
         match event {
             Event::Start(Tag::CodeBlock(_)) => code = Some(String::new()),
@@ -143,6 +144,18 @@ fn decoded_citations(markdown: &str) -> Vec<CitationRef> {
                 let value: Value = serde_json::from_str(&code.take().unwrap())
                     .expect("machine-readable citation JSON");
                 collect(&value, &mut out);
+            }
+            Event::Start(Tag::HtmlBlock) => html_block.clear(),
+            Event::Html(html) => html_block.push_str(&html),
+            Event::End(TagEnd::HtmlBlock) => {
+                if let Some(encoded) = html_block
+                    .trim()
+                    .strip_prefix("<!--")
+                    .and_then(|s| s.strip_suffix("-->"))
+                    && let Ok(value) = serde_json::from_str::<Value>(encoded)
+                {
+                    collect(&value, &mut out);
+                }
             }
             _ => {}
         }
@@ -176,13 +189,16 @@ fn assert_navigation(
         }
     }
     let expected: Vec<_> = targets
+        .as_chunks::<3>()
+        .0
         .iter()
+        .map(|paths| &paths[2])
         .map(|p| fs::canonicalize(f.root.join(p.as_str())).unwrap())
         .collect();
     assert_eq!(
         actual.len(),
         expected.len(),
-        "exactly Source, Revision and captured-content navigation per distinct ref"
+        "one exact saved-content link per distinct reference"
     );
     for p in expected {
         assert!(
@@ -190,6 +206,169 @@ fn assert_navigation(
             "missing authenticated target {}",
             p.display()
         );
+    }
+}
+
+#[test]
+fn cited_page_title_is_readable_without_exposing_metadata_or_active_markup() {
+    for normalized in [false, true] {
+        let f = Fixture::new(normalized);
+        let title = "Café [bait](https://invalid.test) `code` *bold* _em_ \\ <script> & facts\r\n\t\u{7}\u{2028}東京 -->";
+        let mut request = capture("A supported fact.\n");
+        request.title = title.into();
+        let added = f.app.source_add(request).unwrap();
+        let (citation, targets) = f.reference(
+            &added.allocated_ids["source"],
+            &added.allocated_ids["revision"],
+        );
+        let p = path("pages/readable.md");
+        f.app
+            .page_initialize_with_source_refs(
+                Some(p.clone()),
+                None,
+                "Readable answer".into(),
+                "A supported answer.\n".into(),
+                refs(std::slice::from_ref(&citation)),
+            )
+            .unwrap();
+        let markdown = String::from_utf8(f.bytes(&p)).unwrap();
+        let mut label = String::new();
+        let mut visible = String::new();
+        let mut in_link = false;
+        let mut links = 0;
+        for event in Parser::new(block(&markdown)) {
+            match event {
+                Event::Start(Tag::Link { .. }) => {
+                    in_link = true;
+                    links += 1;
+                }
+                Event::End(TagEnd::Link) => in_link = false,
+                Event::Text(text) => {
+                    visible.push_str(&text);
+                    if in_link {
+                        label.push_str(&text);
+                    }
+                }
+                Event::Html(html) => assert!(!html.contains("<script>")),
+                Event::Code(_) | Event::InlineHtml(_) | Event::Start(Tag::CodeBlock(_)) => {
+                    panic!("title or citation metadata became active markup")
+                }
+                _ => {}
+            }
+        }
+        assert_eq!(links, 1);
+        assert_eq!(
+            label,
+            title
+                .chars()
+                .map(
+                    |c| if c.is_control() || matches!(c, '\u{2028}' | '\u{2029}') {
+                        ' '
+                    } else {
+                        c
+                    }
+                )
+                .collect::<String>()
+        );
+        assert!(visible.contains("Sources"));
+        assert!(visible.contains("checked when this page was saved"));
+        assert!(!visible.contains("source_revision") && !visible.contains("quote_hash"));
+        assert!(!visible.contains("Immutable Revision") && !visible.contains("Source provenance"));
+        assert_eq!(decoded_citations(&markdown), vec![citation]);
+        assert_navigation(&f, &p, &markdown, &targets);
+        let hidden = block(&markdown)
+            .split("<!--\n")
+            .nth(1)
+            .unwrap()
+            .split("\n-->")
+            .next()
+            .unwrap();
+        assert!(!hidden.contains("--") && !hidden.contains(['<', '>', '&']));
+    }
+}
+
+#[test]
+fn previously_saved_citation_block_moves_and_upgrades_without_changing_author_text() {
+    for normalized in [false, true] {
+        let f = Fixture::new(normalized);
+        let (_, citation, targets) = f.add("An older saved citation.\n");
+        let from = path("pages/previous.md");
+        let to = path("handbook/deep/previous.md");
+        let created = f
+            .app
+            .page_initialize(
+                Some(from.clone()),
+                None,
+                "Previous page".into(),
+                "Author text.\r\n".into(),
+            )
+            .unwrap();
+        let before = f.bytes(&from);
+        let legacy = format!(
+            "{BEGIN}\n\n### Source provenance\n\n1. [Source](../{}) · [Immutable Revision](../{}) · [Captured content](../{}) — current (observed during this Page write).\n\n```json\n{}\n```\n\n{END}",
+            targets[0],
+            targets[1],
+            targets[2],
+            serde_json::to_string_pretty(&refs(std::slice::from_ref(&citation))).unwrap(),
+        );
+        let mut authored = before.clone();
+        authored.extend_from_slice(format!("\n{legacy}\r\nAuthor tail.\r\n").as_bytes());
+        f.app
+            .page_put(
+                from.clone(),
+                authored.clone(),
+                Some(Blake3Hash::digest(&before)),
+            )
+            .unwrap();
+        f.app
+            .page_rename(
+                created.allocated_ids[from.as_str()].clone(),
+                to.clone(),
+                Blake3Hash::digest(&authored),
+            )
+            .unwrap();
+        let moved = f.bytes(&to);
+        let moved_text = std::str::from_utf8(&moved).unwrap();
+        assert_eq!(
+            outside(moved_text),
+            outside(std::str::from_utf8(&authored).unwrap())
+        );
+        assert_eq!(decoded_citations(moved_text), vec![citation.clone()]);
+        // Existing v1 pages retain all three old links when moved. Their next
+        // explicitly cited save replaces only the owned block with the new view.
+        let base = url::Url::from_file_path(f.root.join(to.as_str())).unwrap();
+        let actual: Vec<_> = Parser::new(block(moved_text))
+            .filter_map(|event| {
+                if let Event::Start(Tag::Link { dest_url, .. }) = event {
+                    Some(
+                        fs::canonicalize(base.join(&dest_url).unwrap().to_file_path().unwrap())
+                            .unwrap(),
+                    )
+                } else {
+                    None
+                }
+            })
+            .collect();
+        assert_eq!(
+            actual,
+            targets
+                .iter()
+                .map(|p| fs::canonicalize(f.root.join(p.as_str())).unwrap())
+                .collect::<Vec<_>>()
+        );
+        f.app
+            .page_put_with_source_refs(
+                to.clone(),
+                moved.clone(),
+                Some(Blake3Hash::digest(&moved)),
+                refs(std::slice::from_ref(&citation)),
+            )
+            .unwrap();
+        let upgraded = String::from_utf8(f.bytes(&to)).unwrap();
+        assert_eq!(outside(&upgraded), outside(moved_text));
+        assert_eq!(decoded_citations(&upgraded), vec![citation]);
+        assert_navigation(&f, &to, &upgraded, &targets);
+        assert!(!block(&upgraded).contains("```json"));
     }
 }
 
@@ -512,8 +691,8 @@ fn typed_citations_refresh_and_withdraw_keep_immutable_links_and_exact_refs() {
             outside(std::str::from_utf8(&first).unwrap())
         );
         assert_eq!(decoded_citations(markdown), vec![old.clone(), new.clone()]);
-        assert!(block(markdown).to_lowercase().contains("historical"));
-        assert!(block(markdown).to_lowercase().contains("current"));
+        assert!(block(markdown).contains("older saved copy"));
+        assert!(block(markdown).contains("Source status checked when this page was saved."));
         let targets = [old_targets, new_targets].concat();
         assert_navigation(&f, &p, markdown, &targets);
         f.app.source_withdraw(source, "Fixture withdrawal").unwrap();

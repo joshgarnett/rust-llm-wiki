@@ -53,8 +53,16 @@ impl NamedPreparation {
 
 impl ChangeEngine {
     pub fn new(fs: VaultFs) -> Result<Self> {
+        Self::new_with_reader(fs.clone(), &mut |path, maximum| {
+            read_bounded(&fs, path, maximum)
+        })
+    }
+    pub(crate) fn new_with_reader(
+        fs: VaultFs,
+        reader: &mut crate::storage::layout::RawReader<'_>,
+    ) -> Result<Self> {
         VaultRoot::explicit(fs.root().path())?;
-        let marker = read_bounded(&fs, &VaultRelativePath::new("WIKI.md")?, MAX_MANIFEST_BYTES)?
+        let marker = reader(&VaultRelativePath::new("WIKI.md")?, MAX_MANIFEST_BYTES)?
             .ok_or_else(|| WikiError::invalid("missing WIKI.md"))?;
         let parsed = parse_note(&marker);
         let record = parsed
@@ -75,13 +83,15 @@ impl ChangeEngine {
         &self.vault_id
     }
     pub(crate) fn require_binding(&self) -> Result<()> {
+        self.require_binding_with_reader(&mut |path, maximum| read_bounded(&self.fs, path, maximum))
+    }
+    pub(crate) fn require_binding_with_reader(
+        &self,
+        reader: &mut crate::storage::layout::RawReader<'_>,
+    ) -> Result<()> {
         VaultRoot::explicit(self.fs.root().path())?;
-        let marker = read_bounded(
-            &self.fs,
-            &VaultRelativePath::new("WIKI.md")?,
-            MAX_MANIFEST_BYTES,
-        )?
-        .ok_or_else(|| WikiError::invalid("missing WIKI.md"))?;
+        let marker = reader(&VaultRelativePath::new("WIKI.md")?, MAX_MANIFEST_BYTES)?
+            .ok_or_else(|| WikiError::invalid("missing WIKI.md"))?;
         let parsed = parse_note(&marker);
         if !parsed
             .canonical
@@ -687,15 +697,27 @@ impl ChangeEngine {
         })
     }
     pub fn inspect(&self, id: &RecordId) -> Result<ChangeInspection> {
-        self.require_binding()?;
-        let (manifest, manifest_hash) = self.load_manifest(id)?;
-        let journal = journal::load_journal(&self.fs, &manifest, &manifest_hash)?;
-        let terminal = super::outcome::terminal_report(&self.fs, &manifest, &manifest_hash)?;
+        self.inspect_with_reader(id, &mut |path, maximum| {
+            read_bounded(&self.fs, path, maximum)
+        })
+    }
+    pub(crate) fn inspect_with_reader(
+        &self,
+        id: &RecordId,
+        reader: &mut crate::storage::layout::RawReader<'_>,
+    ) -> Result<ChangeInspection> {
+        self.require_binding_with_reader(reader)?;
+        let mut remaining = usize::MAX;
+        let (manifest, manifest_hash) =
+            self.load_manifest_budgeted_with_reader(id, &mut remaining, reader)?;
+        let journal = journal::load_journal_with_reader(&manifest, &manifest_hash, reader)?;
+        let terminal =
+            super::outcome::terminal_report_with_reader(&manifest, &manifest_hash, reader)?;
         let status = terminal.map_or_else(
             || journal.status.unwrap_or(ChangeStatus::Prepared),
             |report| report.status,
         );
-        let note = read_bounded(&self.fs, &manifest_path(id)?, MAX_MANIFEST_BYTES + 65_536)?
+        let note = reader(&manifest_path(id)?, MAX_MANIFEST_BYTES + 65_536)?
             .ok_or_else(|| WikiError::invalid("missing change note"))?;
         let note_status = parse_note(&note)
             .canonical
@@ -711,9 +733,7 @@ impl ChangeEngine {
                 target: operation.target.clone(),
                 before: operation.before.clone(),
                 after: operation.after.clone(),
-                observed: state(
-                    read_bounded(&self.fs, &operation.target, MAX_PAYLOAD_BYTES)?.as_deref(),
-                ),
+                observed: state(reader(&operation.target, MAX_PAYLOAD_BYTES)?.as_deref()),
             });
         }
         Ok(ChangeInspection {
@@ -753,9 +773,28 @@ impl ChangeEngine {
         &self,
         progress: &mut dyn FnMut() -> Result<()>,
     ) -> Result<(Vec<RecordId>, Vec<RecordId>)> {
-        progress()?;
         let relative = VaultRelativePath::new("changes")?;
         let path = self.fs.root().resolve(&relative)?;
+        self.classify_change_directories_at(&path, progress, &mut |path, maximum| {
+            read_bounded(&self.fs, path, maximum)
+        })
+    }
+    pub(crate) fn change_ids_with_reader(
+        &self,
+        directory: &std::path::Path,
+        progress: &mut dyn FnMut() -> Result<()>,
+        reader: &mut crate::storage::layout::RawReader<'_>,
+    ) -> Result<Vec<RecordId>> {
+        self.classify_change_directories_at(directory, progress, reader)
+            .map(|(actionable, _)| actionable)
+    }
+    fn classify_change_directories_at(
+        &self,
+        path: &std::path::Path,
+        progress: &mut dyn FnMut() -> Result<()>,
+        reader: &mut crate::storage::layout::RawReader<'_>,
+    ) -> Result<(Vec<RecordId>, Vec<RecordId>)> {
+        progress()?;
         let entries = match fs::read_dir(path) {
             Ok(entries) => entries,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
@@ -777,8 +816,7 @@ impl ChangeEngine {
             if kind.is_symlink() || !kind.is_dir() {
                 return Err(WikiError::invalid("invalid retained change entry"));
             }
-            if read_bounded(&self.fs, &manifest_path(&id)?, MAX_MANIFEST_BYTES + 65_536)?.is_some()
-            {
+            if reader(&manifest_path(&id)?, MAX_MANIFEST_BYTES + 65_536)?.is_some() {
                 // Existing malformed notes remain actionable errors on normal loading.
                 ids.push(id);
                 continue;
@@ -790,7 +828,7 @@ impl ChangeEngine {
                 VaultRelativePath::new(format!("changes/{id}/revision-trees.json"))?,
             ] {
                 progress()?;
-                if read_bounded(&self.fs, &evidence, MAX_JOURNAL_BYTES)?.is_some() {
+                if reader(&evidence, MAX_JOURNAL_BYTES)?.is_some() {
                     return Err(WikiError::new(
                         ErrorCode::RecoveryRequired,
                         format!(
@@ -816,7 +854,17 @@ impl ChangeEngine {
         id: &RecordId,
         remaining: &mut usize,
     ) -> Result<(ChangeManifest, Blake3Hash)> {
-        let (manifest, hash) = self.load_manifest_structure(id)?;
+        self.load_manifest_budgeted_with_reader(id, remaining, &mut |path, maximum| {
+            read_bounded(&self.fs, path, maximum)
+        })
+    }
+    fn load_manifest_budgeted_with_reader(
+        &self,
+        id: &RecordId,
+        remaining: &mut usize,
+        reader: &mut crate::storage::layout::RawReader<'_>,
+    ) -> Result<(ChangeManifest, Blake3Hash)> {
+        let (manifest, hash) = self.load_manifest_structure_with_reader(id, reader)?;
         let payload_bytes = manifest
             .operations
             .iter()
@@ -852,7 +900,7 @@ impl ChangeEngine {
             ));
         }
         *remaining -= payload_bytes;
-        self.validate_manifest(&manifest, id)?;
+        self.validate_manifest_with_reader(&manifest, id, reader)?;
         Ok((manifest, hash))
     }
     /// Read exact manifest identity and structural bindings only. This is history
@@ -861,7 +909,16 @@ impl ChangeEngine {
         &self,
         id: &RecordId,
     ) -> Result<(ChangeManifest, Blake3Hash)> {
-        let bytes = read_bounded(&self.fs, &manifest_path(id)?, MAX_MANIFEST_BYTES + 65_536)?
+        self.load_manifest_structure_with_reader(id, &mut |path, maximum| {
+            read_bounded(&self.fs, path, maximum)
+        })
+    }
+    pub(crate) fn load_manifest_structure_with_reader(
+        &self,
+        id: &RecordId,
+        reader: &mut crate::storage::layout::RawReader<'_>,
+    ) -> Result<(ChangeManifest, Blake3Hash)> {
+        let bytes = reader(&manifest_path(id)?, MAX_MANIFEST_BYTES + 65_536)?
             .ok_or_else(|| WikiError::invalid("missing retained manifest"))?;
         let parsed = parse_note(&bytes);
         let record = parsed
@@ -909,6 +966,16 @@ impl ChangeEngine {
         Ok((manifest, hash))
     }
     pub(crate) fn validate_manifest(&self, manifest: &ChangeManifest, id: &RecordId) -> Result<()> {
+        self.validate_manifest_with_reader(manifest, id, &mut |path, maximum| {
+            read_bounded(&self.fs, path, maximum)
+        })
+    }
+    fn validate_manifest_with_reader(
+        &self,
+        manifest: &ChangeManifest,
+        id: &RecordId,
+        reader: &mut crate::storage::layout::RawReader<'_>,
+    ) -> Result<()> {
         self.validate_manifest_structure(manifest, id)?;
         let targets: Vec<_> = manifest
             .operations
@@ -919,21 +986,23 @@ impl ChangeEngine {
             if operation.before == operation.after {
                 return Err(WikiError::invalid("retained no-op"));
             }
-            let before = self.verify_payload(
+            let before = self.verify_payload_with_reader(
                 id,
                 index,
                 "before",
                 &operation.target,
-                &operation.before,
-                &operation.before_payload,
+                (&operation.before, &operation.before_payload),
+                MAX_PAYLOAD_BYTES,
+                reader,
             )?;
-            let after = self.verify_payload(
+            let after = self.verify_payload_with_reader(
                 id,
                 index,
                 "proposed",
                 &operation.target,
-                &operation.after,
-                &operation.after_payload,
+                (&operation.after, &operation.after_payload),
+                MAX_PAYLOAD_BYTES,
+                reader,
             )?;
             for dependency in source_dependencies(after.as_deref(), &targets) {
                 let required = targets
@@ -1067,6 +1136,27 @@ impl ChangeEngine {
         expected_payload: (&ExpectedState, &Option<PayloadRef>),
         limit: usize,
     ) -> Result<Option<Vec<u8>>> {
+        self.verify_payload_with_reader(
+            id,
+            index,
+            side,
+            target,
+            expected_payload,
+            limit,
+            &mut |path, maximum| read_bounded(&self.fs, path, maximum),
+        )
+    }
+    #[allow(clippy::too_many_arguments)]
+    fn verify_payload_with_reader(
+        &self,
+        id: &RecordId,
+        index: usize,
+        side: &str,
+        target: &VaultRelativePath,
+        expected_payload: (&ExpectedState, &Option<PayloadRef>),
+        limit: usize,
+        reader: &mut crate::storage::layout::RawReader<'_>,
+    ) -> Result<Option<Vec<u8>>> {
         let (expected, payload) = expected_payload;
         match (expected, payload) {
             (ExpectedState::Absent, None) => Ok(None),
@@ -1078,7 +1168,7 @@ impl ChangeEngine {
                 {
                     return Err(WikiError::invalid("invalid retained payload reference"));
                 }
-                let bytes = read_bounded(&self.fs, &payload.path, limit.min(MAX_PAYLOAD_BYTES))?
+                let bytes = reader(&payload.path, limit.min(MAX_PAYLOAD_BYTES))?
                     .ok_or_else(|| WikiError::invalid("missing retained payload"))?;
                 if bytes.len() as u64 != payload.byte_len
                     || Blake3Hash::digest(&bytes) != payload.hash

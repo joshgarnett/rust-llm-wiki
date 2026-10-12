@@ -6,9 +6,10 @@
 use super::{
     DefaultWiki,
     provider_setup::{
-        SetupAuth, auth_table, dimensions_value, encode_document, insert_exact, invalid,
-        parse_document,
+        SetupAuth, append_automatic_embedding_grant, auth_table, dimensions_value, encode_document,
+        insert_exact, invalid, parse_document,
     },
+    providers::{AutomaticEmbeddingConsent, ProviderAutomaticEmbeddingDecision},
 };
 use crate::domain::*;
 use serde::Serialize;
@@ -271,6 +272,12 @@ pub struct ProviderEditPlan {
     pub new_embedding_identity: Option<ProviderEmbeddingIdentity>,
     pub consent_requirements: Vec<ProviderConsentRequirement>,
     pub consent_satisfied: bool,
+    /// Permission to publish these settings. Automatic embedding permission does
+    /// not grant explicit provider calls or authorize generation changes.
+    pub configuration_consent_satisfied: bool,
+    /// Descriptor comparison only; runtime must revalidate root, marker and bytes.
+    pub previous_automatic_embedding_consent: AutomaticEmbeddingConsent,
+    pub automatic_embedding_consent: AutomaticEmbeddingConsent,
     pub projected_bytes: usize,
 }
 
@@ -297,6 +304,14 @@ impl fmt::Debug for ProviderEditPlan {
             .field("changed_fields", &self.changed_fields)
             .field("consent_requirements", &self.consent_requirements)
             .field("consent_satisfied", &self.consent_satisfied)
+            .field(
+                "configuration_consent_satisfied",
+                &self.configuration_consent_satisfied,
+            )
+            .field(
+                "automatic_embedding_consent",
+                &self.automatic_embedding_consent,
+            )
             .field("projected_bytes", &self.projected_bytes)
             .finish()
     }
@@ -558,7 +573,7 @@ fn identity_fields_changed(original: Option<&Table>, candidate: &Table, fields: 
 /// `wiki.path` is the caller's canonical root. The planner compares bindings at
 /// that exact root and ID and does not obtain authority from caller assertions.
 /// It neither publishes bytes nor changes preferences. A caller must require
-/// `consent_satisfied` before publishing or selecting a profile when this plan has
+/// `configuration_consent_satisfied` before publishing or selecting a profile when this plan has
 /// consent requirements. This matters even when a historical target profile has
 /// an old retained binding: append-only planning does not revoke that binding.
 pub fn plan_provider_edit(
@@ -567,6 +582,28 @@ pub fn plan_provider_edit(
     effective_profile: Option<&str>,
     patches: &[ProviderRolePatch],
     grant: ProviderGrantDecision,
+) -> Result<ProviderEditPlan> {
+    plan_provider_edit_with_automatic(
+        existing,
+        wiki,
+        effective_profile,
+        patches,
+        grant,
+        ProviderAutomaticEmbeddingDecision::Preserve,
+    )
+}
+
+/// Plan automatic text permission independently of explicit role permission.
+/// Preserve carries matching original consent across identity-preserving role
+/// copies, including auth rotation. Reviewed permits the fixed embedding scope
+/// only and cannot satisfy consent_requirements for generation or explicit work.
+pub fn plan_provider_edit_with_automatic(
+    existing: Option<&[u8]>,
+    wiki: &DefaultWiki,
+    effective_profile: Option<&str>,
+    patches: &[ProviderRolePatch],
+    grant: ProviderGrantDecision,
+    automatic: ProviderAutomaticEmbeddingDecision,
 ) -> Result<ProviderEditPlan> {
     if !wiki.path.is_absolute() || wiki.path.to_str().is_none() {
         return Err(invalid("select a wiki with an absolute UTF-8 folder path"));
@@ -818,7 +855,22 @@ pub fn plan_provider_edit(
             "provider edits reached the 128 service/profile limit; original is preserved; use a reviewed smaller provider configuration",
         ));
     }
+    let (previous_automatic_embedding_consent, automatic_embedding_consent) =
+        append_automatic_embedding_grant(
+            existing,
+            &mut document,
+            &mut additions,
+            wiki,
+            (effective_profile, &profile),
+            automatic,
+        )?;
     let bytes = encode_document(existing, &document, &additions)?;
+    let configuration_consent_satisfied = consent_satisfied
+        || (automatic_embedding_consent == AutomaticEmbeddingConsent::Matching
+            && consent_requirements.iter().all(|requirement| {
+                requirement.role == ProviderRole::Embedding
+                    || requirement.reason == ProviderConsentReason::MissingPermission
+            }));
     let mut roles = Vec::new();
     for role in ROLES {
         let index = role.index();
@@ -865,6 +917,9 @@ pub fn plan_provider_edit(
         new_embedding_identity,
         consent_requirements,
         consent_satisfied,
+        configuration_consent_satisfied,
+        previous_automatic_embedding_consent,
+        automatic_embedding_consent,
     })
 }
 

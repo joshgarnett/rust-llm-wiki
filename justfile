@@ -53,7 +53,7 @@ test-smoke:
 
 # Provider/source/retrieval/research/storage and bounded conflict/checkpoint cases.
 test-regressions:
-    {{ python }} scripts/bazel.py -- test --nofetch --config=release //:regressions
+    {{ python }} scripts/bazel.py -- test --nofetch --config=release --test_strategy=exclusive //:regressions
 
 # Check build scripts without compiling Rust or using the network.
 build-tools-test:

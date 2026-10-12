@@ -12,6 +12,7 @@ pub mod types;
 
 mod diagnostics;
 mod embedding_wire;
+pub(crate) use embedding_wire::preview as preview_embedding_request;
 mod generation_schema;
 pub(crate) mod generation_task;
 mod generation_wire;

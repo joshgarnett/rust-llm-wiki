@@ -26,6 +26,57 @@ pub(crate) fn read_regular_bounded(
         raw,
         limit,
         layer,
+        &mut |_, _, _| Ok(()),
+        false,
+        |length| {
+            let mut bytes = Vec::new();
+            bytes.try_reserve_exact(length).map_err(|_| {
+                WikiError::new(ErrorCode::BudgetExceeded, "bounded input allocation failed")
+            })?;
+            if bytes.capacity() > limit {
+                return Err(WikiError::new(
+                    ErrorCode::BudgetExceeded,
+                    "bounded input capacity exceeds allowance",
+                ));
+            }
+            Ok(bytes)
+        },
+        |bytes, chunk| {
+            bytes.try_reserve_exact(chunk.len()).map_err(|_| {
+                WikiError::new(
+                    ErrorCode::BudgetExceeded,
+                    "bounded input growth allocation failed",
+                )
+            })?;
+            if bytes.capacity() > limit {
+                return Err(WikiError::new(
+                    ErrorCode::BudgetExceeded,
+                    "bounded input capacity exceeds allowance",
+                ));
+            }
+            bytes.extend_from_slice(chunk);
+            Ok(())
+        },
+    )
+    .map(|value| value.map(|(bytes, _)| bytes))
+}
+
+/// Meter every physical path traversal and byte read, including a raced growth
+/// sentinel. Logical mapping must be authenticated separately by the caller.
+pub(crate) fn read_regular_raw_checked(
+    root: &VaultRoot,
+    relative: &VaultRelativePath,
+    limit: usize,
+    progress: &mut dyn FnMut(usize, usize, usize) -> Result<()>,
+) -> Result<Option<Vec<u8>>> {
+    observe_regular_bounded(
+        root,
+        relative,
+        true,
+        limit,
+        "bounded local read",
+        progress,
+        true,
         |length| {
             let mut bytes = Vec::new();
             bytes.try_reserve_exact(length).map_err(|_| {
@@ -76,6 +127,8 @@ pub(crate) fn hash_regular_raw_bounded(
         true,
         limit,
         layer,
+        &mut |_, _, _| Ok(()),
+        false,
         |_| Ok(blake3::Hasher::new()),
         |hasher, chunk| {
             hasher.update(chunk);
@@ -85,12 +138,18 @@ pub(crate) fn hash_regular_raw_bounded(
     .map(|value| value.map(|(hasher, bytes)| (bytes, *hasher.finalize().as_bytes())))
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "One protected reader keeps explicit observation and bounded prepayment semantics"
+)]
 fn observe_regular_bounded<T>(
     root: &VaultRoot,
     relative: &VaultRelativePath,
     raw: bool,
     limit: usize,
     layer: &'static str,
+    progress: &mut dyn FnMut(usize, usize, usize) -> Result<()>,
+    prepay_reads: bool,
     initialize: impl FnOnce(usize) -> Result<T>,
     mut consume: impl FnMut(&mut T, &[u8]) -> Result<()>,
 ) -> Result<Option<(T, u64)>> {
@@ -101,14 +160,15 @@ fn observe_regular_bounded<T>(
             if owner_activation {
                 crate::maintenance_parallel::record_owner_activation_read();
             }
-            let resolve = || {
+            progress(0, 1, 0)?;
+            let resolve = |progress: &mut dyn FnMut(usize, usize, usize) -> Result<()>| {
                 if raw {
-                    root.resolve_raw(relative)
+                    root.resolve_raw_budgeted(relative, &mut || progress(0, 0, 1))
                 } else {
-                    root.resolve(relative)
+                    root.resolve_budgeted(relative, &mut || progress(0, 0, 1))
                 }
             };
-            let path = resolve()?;
+            let path = resolve(progress)?;
             let before = match crate::maintenance_diagnostic::observe(
                 crate::maintenance_diagnostic::Phase::MetadataObservation,
                 || {
@@ -213,16 +273,30 @@ fn observe_regular_bounded<T>(
                     "opened input exceeds byte allowance",
                 ));
             }
+            // Reserve the complete admitted stream and its growth sentinel
+            // before reading. Concurrent readers cannot both spend an observed
+            // remainder. Growth beyond this observed size refuses as before.
+            let limit = if prepay_reads {
+                let observed = opened.len() as usize;
+                progress(observed + 1, 0, 0)?;
+                observed
+            } else {
+                limit
+            };
             let mut state = initialize(opened.len() as usize)?;
             let mut observed = 0usize;
             let result = (|| {
                 let mut buffer = [0u8; 64 * 1024];
                 loop {
+                    progress(0, 0, 0)?;
                     let remaining = limit.saturating_sub(observed);
                     if remaining == 0 {
                         let mut sentinel = [0u8; 1];
                         let n = crate::maintenance_diagnostic::read(|| file.read(&mut sentinel))
                             .map_err(|e| io_error("read input boundary", e))?;
+                        if !prepay_reads {
+                            progress(n, 0, 0)?;
+                        }
                         observed += n;
                         if n != 0 {
                             return Err(WikiError::new(
@@ -235,6 +309,9 @@ fn observe_regular_bounded<T>(
                     let cap = remaining.min(buffer.len());
                     let n = crate::maintenance_diagnostic::read(|| file.read(&mut buffer[..cap]))
                         .map_err(|e| io_error("read bounded input", e))?;
+                    if !prepay_reads {
+                        progress(n, 0, 0)?;
+                    }
                     observed += n;
                     if n == 0 {
                         break;
@@ -257,7 +334,7 @@ fn observe_regular_bounded<T>(
                     1,
                 );
                 same(&opened, &after)?;
-                if resolve()? != path {
+                if resolve(progress)? != path {
                     return Err(WikiError::new(
                         ErrorCode::ContentConflict,
                         "bounded input route changed",
@@ -604,6 +681,27 @@ impl VaultFs {
         }
         Ok(())
     }
+    pub(crate) fn require_storage_ready_bounded(
+        &self,
+        budget: &crate::catalog::scan::ReadScanBudget,
+    ) -> Result<()> {
+        budget.check()?;
+        if !self.storage_recovery
+            && budget
+                .read_raw(
+                    self,
+                    &VaultRelativePath::new(".wiki/state/storage/cleanup.json")?,
+                    64 * 1024 * 1024,
+                )?
+                .is_some()
+        {
+            return Err(WikiError::new(
+                ErrorCode::RecoveryRequired,
+                "storage cleanup is interrupted; run `lwiki storage cleanup` before ordinary writes",
+            ));
+        }
+        Ok(())
+    }
     fn require_operational(target: &VaultRelativePath) -> Result<()> {
         if !target.as_str().starts_with(".wiki/state/") {
             return Err(WikiError::invalid(
@@ -801,6 +899,50 @@ impl VaultFs {
                 if result == DirectorySync::Unsupported {
                     support = result;
                 }
+            }
+        }
+        Ok(support)
+    }
+    pub(crate) fn ensure_directory_bounded(
+        &self,
+        directory: &VaultRelativePath,
+        permit: &WriterPermit,
+        budget: &crate::catalog::scan::ReadScanBudget,
+    ) -> Result<DirectorySync> {
+        permit.require_root(&self.root)?;
+        self.require_storage_ready_bounded(budget)?;
+        let input = crate::catalog::scan::BoundedReadInput::new(self, budget)?;
+        input.validate_paths(std::slice::from_ref(directory))?;
+        let physical = input.physical(directory)?;
+        let mut relative = String::new();
+        let mut support = DirectorySync::Supported;
+        for part in physical.as_str().split('/') {
+            if !relative.is_empty() {
+                relative.push('/');
+            }
+            relative.push_str(part);
+            let path = input.resolve(&VaultRelativePath::new(&relative)?)?;
+            budget.check()?;
+            match self.io.create_directory(&path) {
+                Ok(()) => {}
+                Err(error)
+                    if error.kind() == std::io::ErrorKind::AlreadyExists && path.is_dir() => {}
+                Err(error) => return Err(io_error("create managed directory", error)),
+            }
+            for dir in [
+                path.as_path(),
+                path.parent().expect("managed directory has parent"),
+            ] {
+                budget.check()?;
+                if self
+                    .io
+                    .sync_directory(dir)
+                    .map_err(|error| io_error("sync managed directory", error))?
+                    == DirectorySync::Unsupported
+                {
+                    support = DirectorySync::Unsupported;
+                }
+                budget.check()?;
             }
         }
         Ok(support)

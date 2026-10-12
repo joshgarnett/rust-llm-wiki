@@ -45,6 +45,33 @@ pub(super) fn attach_provider_summary(
     envelope.data["provider"] = provider_summary(remote, context);
 }
 
+pub(super) fn automatic_consent(
+    app: &OfflineApp,
+    remote: &RemoteArguments,
+    context: &RemoteContext<'_>,
+) -> Value {
+    let Some(profile) = context.profile else {
+        return json!("absent");
+    };
+    let effective = remote.effective(context);
+    let path = effective.providers_config.map(Ok).unwrap_or_else(|| {
+        if context.allow_ambient_provider {
+            crate::app::remote::default_provider_path()
+        } else {
+            Err(WikiError::new(
+                ErrorCode::ProfileUntrusted,
+                "no provider selected",
+            ))
+        }
+    });
+    path.and_then(|path| ProviderConfig::load(&path))
+        .and_then(|providers| {
+            providers.automatic_embedding_consent(app.fs(), app.vault_id(), profile)
+        })
+        .map(|consent| json!(consent))
+        .unwrap_or_else(|_| json!("unavailable"))
+}
+
 /// Observe the selected marker through the same bounded, contained read used
 /// for selection, and refuse a replacement identity before reporting its title.
 pub(super) fn wiki_title(app: &OfflineApp) -> Result<String> {
@@ -107,6 +134,13 @@ fn present_provider(provider: &Value, output: &mut impl Write) -> io::Result<()>
                     configured.as_str().unwrap_or("provider default").to_owned()
                 };
                 writeln!(output, "  Configured vector dimensions: {dimensions}")?;
+                writeln!(
+                    output,
+                    "  Automatic similarity search: {}",
+                    super::automatic_embeddings::consent_label(
+                        &service["automatic_embedding_consent"]
+                    )
+                )?;
             }
             if let Some(limit) = service["effective_output_token_limit"].as_u64() {
                 writeln!(output, "  Maximum output tokens: {limit}")?;

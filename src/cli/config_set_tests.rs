@@ -129,12 +129,165 @@ fn choices(role: ProviderRoleArgument) -> ProviderSetArguments {
         reuse_auth: None,
         providers_config: None,
         grant_provider: false,
+        auto_embed: false,
         non_interactive: true,
     }
 }
 fn read(path: &Path) -> toml::Table {
     toml::from_str(std::str::from_utf8(&fs::read(path).unwrap()).unwrap()).unwrap()
 }
+
+#[test]
+fn automatic_choice_enables_existing_model_without_an_auth_or_model_edit() {
+    let mut fixture = fixture();
+    fixture.args.offline = true;
+    let mut settings = choices(ProviderRoleArgument::Embedding);
+    settings.auto_embed = true;
+    let outcome = execute(&fixture.args, &settings).unwrap();
+    assert!(outcome.ok, "{:?}", outcome.error);
+    assert_eq!(
+        outcome.data["providers"]["automatic_embedding_consent"],
+        "matching"
+    );
+    assert_eq!(
+        outcome.data["providers"]["embedding"]["model"],
+        "old-embedding"
+    );
+    assert_eq!(
+        outcome.data["providers"]["generation"]["model"],
+        "old-generation"
+    );
+    assert!(!outcome.meta.network_used);
+    let providers = config::providers::ProviderConfig::load(&fixture.providers).unwrap();
+    let fs =
+        crate::vault::VaultFs::new(crate::vault::VaultRoot::explicit(&fixture.wiki.path).unwrap());
+    assert_eq!(
+        providers
+            .automatic_embedding_consent(&fs, &fixture.wiki.wiki_id, &selected_profile(&fixture))
+            .unwrap(),
+        AutomaticEmbeddingConsent::Matching
+    );
+    assert_eq!(
+        read(&fixture.providers)["services"]["generate"],
+        toml::from_str::<toml::Table>(std::str::from_utf8(&fixture.original).unwrap()).unwrap()["services"]
+            ["generate"]
+    );
+}
+
+#[test]
+fn automatic_choice_does_not_authorize_an_unbound_generation_model() {
+    let mut fixture = fixture();
+    fixture.args.offline = true;
+    let private = std::str::from_utf8(&fixture.original)
+        .unwrap()
+        .replace("allowed_profiles = [\"manual\"]", "allowed_profiles = []");
+    fs::write(&fixture.providers, private).unwrap();
+    let mut settings = choices(ProviderRoleArgument::Embedding);
+    settings.auto_embed = true;
+    let outcome = execute(&fixture.args, &settings).unwrap();
+    assert!(outcome.ok, "{:?}", outcome.error);
+    let providers = config::providers::ProviderConfig::load(&fixture.providers).unwrap();
+    let fs =
+        crate::vault::VaultFs::new(crate::vault::VaultRoot::explicit(&fixture.wiki.path).unwrap());
+    let profile = selected_profile(&fixture);
+    assert!(
+        providers
+            .authorize_automatic_embeddings(&fs, &fixture.wiki.wiki_id, &profile)
+            .is_ok()
+    );
+    assert!(
+        providers
+            .authorize(
+                &fs,
+                &fixture.wiki.wiki_id,
+                &profile,
+                crate::jobs::Capability::Generate
+            )
+            .is_err()
+    );
+    assert!(
+        providers
+            .authorize(
+                &fs,
+                &fixture.wiki.wiki_id,
+                &profile,
+                crate::jobs::Capability::Embed
+            )
+            .is_err()
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn generation_cap_and_credentials_keep_automatic_permission_without_running_embedding_helper() {
+    use std::os::unix::fs::PermissionsExt;
+
+    for edit in ["cap", "credentials"] {
+        let mut fixture = fixture();
+        let program = fixture.wiki.path.parent().unwrap().join("embedding helper");
+        let sentinel = program.with_file_name("embedding helper ran");
+        fs::write(
+            &program,
+            format!("#!/bin/sh\ntouch '{}'\nexit 47\n", sentinel.display()),
+        )
+        .unwrap();
+        fs::set_permissions(&program, fs::Permissions::from_mode(0o700)).unwrap();
+
+        fixture.args.offline = true;
+        let mut automatic = choices(ProviderRoleArgument::Embedding);
+        automatic.auto_embed = true;
+        automatic.credential_command = Some(format!("'{}'", program.display()));
+        assert!(execute(&fixture.args, &automatic).unwrap().ok);
+        assert!(!sentinel.exists());
+
+        let vault_fs = crate::vault::VaultFs::new(
+            crate::vault::VaultRoot::explicit(&fixture.wiki.path).unwrap(),
+        );
+        let app =
+            crate::app::OfflineApp::new(vault_fs.clone(), crate::app::OperationOptions::default())
+                .unwrap();
+        app.page_put(
+            VaultRelativePath::new("knowledge/pages/pending.md").unwrap(),
+            b"---\nwiki_schema: '1'\nwiki_id: Page.Pending\nwiki_kind: page\ntitle: Pending\nwiki_status: reviewed\n---\nA saved note awaits similarity search preparation.\n".to_vec(),
+            None,
+        )
+        .unwrap();
+
+        fixture.args.offline = false;
+        let mut generation = choices(ProviderRoleArgument::Generation);
+        generation.grant_provider = true;
+        if edit == "cap" {
+            generation.max_output_tokens = Some(2048);
+        } else {
+            generation.key_env = Some("LWIKI_UNREAD_UPDATED_GENERATION_KEY".into());
+        }
+        let outcome = execute(&fixture.args, &generation).unwrap();
+        assert!(outcome.ok, "{edit}: {:?}", outcome.error);
+        assert!(!outcome.meta.network_used, "{edit}");
+        assert!(outcome.data.get("automatic_embeddings").is_none(), "{edit}");
+        assert_eq!(outcome.data["configuration_network_requests"], 0);
+        assert_eq!(outcome.data["configuration_credentials_resolved"], false);
+        assert!(outcome.data.get("network_requests").is_none());
+        assert!(outcome.data.get("credentials_resolved").is_none());
+        assert!(
+            !sentinel.exists(),
+            "{edit} ran the embedding credential helper"
+        );
+        let providers = config::providers::ProviderConfig::load(&fixture.providers).unwrap();
+        assert_eq!(
+            providers
+                .automatic_embedding_consent(
+                    &vault_fs,
+                    &fixture.wiki.wiki_id,
+                    &selected_profile(&fixture),
+                )
+                .unwrap(),
+            AutomaticEmbeddingConsent::Matching,
+            "{edit} lost the unchanged embedding permission"
+        );
+    }
+}
+
 fn selected_profile(fixture: &Fixture) -> String {
     config::local::load_user_config(Some(&fixture.preferences), false)
         .unwrap()

@@ -12,6 +12,13 @@ use std::{
     sync::Arc,
 };
 
+#[path = "providers_automatic.rs"]
+mod automatic;
+use automatic::AutomaticEmbeddingGrant;
+pub use automatic::{
+    AutomaticEmbeddingBindingChange, AutomaticEmbeddingConsent, ProviderAutomaticEmbeddingDecision,
+};
+
 #[cfg(not(windows))]
 use std::{fs::File, io::Read};
 
@@ -73,7 +80,7 @@ impl AdapterKind {
         }
     }
 }
-#[derive(Clone, Deserialize, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(untagged)]
 pub(crate) enum Dimensions {
     Fixed(u32),
@@ -208,6 +215,8 @@ struct VaultBinding {
     root: PathBuf,
     wiki_id: RecordId,
     allowed_profiles: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    automatic_embedding: Option<AutomaticEmbeddingGrant>,
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -378,6 +387,9 @@ impl ProviderConfig {
                     return Err(config_error("invalid allowed-profile binding"));
                 }
             }
+            if let Some(grant) = &binding.automatic_embedding {
+                grant.validate(&raw.profiles)?;
+            }
         }
         let normalized_services: BTreeMap<_, _> = services
             .iter()
@@ -499,6 +511,17 @@ impl ProviderConfig {
         if !bound {
             return Err(untrusted());
         }
+        self.trusted_service(fs, vault_id, profile, capability, marker)
+    }
+
+    fn trusted_service(
+        &self,
+        fs: &VaultFs,
+        vault_id: &RecordId,
+        profile: &str,
+        capability: Capability,
+        marker: Vec<u8>,
+    ) -> Result<TrustedService> {
         let p = self.profiles.get(profile).ok_or_else(untrusted)?;
         let service_id = match capability {
             Capability::Embed => p.embedding.as_ref(),
@@ -576,6 +599,40 @@ impl TrustedService {
     }
     pub(crate) fn cwd(&self) -> &Path {
         &self.cwd
+    }
+    /// Automatic work reuses the same private-file protection checks and vault
+    /// binding. Private configuration/CA reads are conservatively prepaid at
+    /// their finite byte ceiling; credential material is never read here.
+    pub(crate) fn recheck_with_budget(
+        &self,
+        fs: &VaultFs,
+        budget: &crate::catalog::scan::ReadScanBudget,
+    ) -> Result<()> {
+        let read = crate::catalog::scan::BoundedReadInput::new(fs, budget)?;
+        let marker = read
+            .read_managed(
+                &VaultRelativePath::new("WIKI.md")?,
+                MAX_PROVIDER_CONFIG_BYTES,
+            )?
+            .ok_or_else(untrusted)?;
+        if fs.root().path() != self.root || Blake3Hash::digest(marker) != self.marker_hash {
+            return Err(untrusted());
+        }
+        let checked = |path: &Path, private: bool| -> Result<Vec<u8>> {
+            budget.charge_observation(MAX_PROVIDER_CONFIG_BYTES + 1, 1, 1)?;
+            let bytes = checked_file(path, MAX_PROVIDER_CONFIG_BYTES, private)?;
+            budget.check()?;
+            Ok(bytes)
+        };
+        if Blake3Hash::digest(checked(&self.path, true)?) != self.content_guard {
+            return Err(untrusted());
+        }
+        if let Some((path, expected)) = &self.service.ca_guard
+            && Blake3Hash::digest(checked(path, false)?) != *expected
+        {
+            return Err(untrusted());
+        }
+        Ok(())
     }
     pub(crate) fn recheck(&self, fs: &VaultFs) -> Result<()> {
         if fs.root().path() != self.root

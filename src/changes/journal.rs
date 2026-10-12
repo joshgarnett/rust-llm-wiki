@@ -99,8 +99,16 @@ pub fn load_journal(
     manifest: &ChangeManifest,
     hash: &crate::domain::Blake3Hash,
 ) -> Result<JournalState> {
-    let bytes = read_bounded(fs, &journal_path(&manifest.change_id)?, MAX_JOURNAL_BYTES)?
-        .unwrap_or_default();
+    load_journal_with_reader(manifest, hash, &mut |path, maximum| {
+        read_bounded(fs, path, maximum)
+    })
+}
+pub(crate) fn load_journal_with_reader(
+    manifest: &ChangeManifest,
+    hash: &crate::domain::Blake3Hash,
+    reader: &mut crate::storage::layout::RawReader<'_>,
+) -> Result<JournalState> {
+    let bytes = reader(&journal_path(&manifest.change_id)?, MAX_JOURNAL_BYTES)?.unwrap_or_default();
     decode_journal(&bytes, manifest, hash)
 }
 

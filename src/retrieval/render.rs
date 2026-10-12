@@ -133,11 +133,21 @@ pub fn corpus_iter<'a>(
     reader: &'a ReaderSnapshot,
     settings: &'a EmbeddingSettings,
 ) -> Result<impl Iterator<Item = Result<RenderedUnit>> + 'a> {
+    corpus_selected_iter(reader, settings, None)
+}
+/// Select owners before rendering so unchanged or unrelated content consumes no
+/// rendered-input allowance. Canonical observation remains the caller's duty.
+pub(crate) fn corpus_selected_iter<'a>(
+    reader: &'a ReaderSnapshot,
+    settings: &'a EmbeddingSettings,
+    paths: Option<&'a [VaultRelativePath]>,
+) -> Result<impl Iterator<Item = Result<RenderedUnit>> + 'a> {
     settings.validate()?;
     Ok(reader
         .projection()
         .documents
         .iter()
+        .filter(move |document| paths.is_none_or(|paths| paths.contains(&document.path)))
         .flat_map(move |document| {
             let row = document
                 .record_id
@@ -172,7 +182,14 @@ pub fn corpus_iter<'a>(
         }))
 }
 pub fn corpus(reader: &ReaderSnapshot, settings: &EmbeddingSettings) -> Result<Vec<RenderedUnit>> {
-    let mut result = corpus_iter(reader, settings)?.collect::<Result<Vec<_>>>()?;
+    corpus_selected(reader, settings, None)
+}
+pub(crate) fn corpus_selected(
+    reader: &ReaderSnapshot,
+    settings: &EmbeddingSettings,
+    paths: Option<&[VaultRelativePath]>,
+) -> Result<Vec<RenderedUnit>> {
+    let mut result = corpus_selected_iter(reader, settings, paths)?.collect::<Result<Vec<_>>>()?;
     result.sort_by(|a, b| {
         a.target
             .cmp(&b.target)

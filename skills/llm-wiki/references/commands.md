@@ -124,7 +124,7 @@ Options:
           [alias: --config]
 
       --embedding-model <EMBEDDING_MODEL>
-          Optional embedding model name supplied by your provider; makes no requests
+          Embedding model from your provider. Saved automatic permission may prepare search after setup
 
       --no-user-config
           Disable ambient user configuration; explicit --preferences still applies
@@ -142,7 +142,7 @@ Options:
           Trusted provider profile name from the private provider configuration
 
       --key-env <KEY_ENV>
-          Environment variable holding your key. Setup does not read its value
+          Environment variable holding your key. Its name is saved for provider requests
 
       --lock-timeout-ms <LOCK_TIMEOUT_MS>
           Maximum writer-lock wait in milliseconds (default: 5000; preferences may override)
@@ -171,7 +171,10 @@ Options:
           Private provider configuration destination; defaults beside your user configuration
 
       --grant-embed
-          Permit explicit future embedding requests for this wiki and chosen model
+          Permit explicitly requested embedding calls; this grant does not enable automatic preparation
+
+      --auto-embed
+          Prepare similarity search now and after saves; send eligible wiki text and search questions to this embedding model
 
       --grant-provider
           Permit explicit future API requests for every final model shown for this wiki
@@ -295,7 +298,7 @@ Usage: lwiki config set [OPTIONS] <ROLE>
 
 Arguments:
   <ROLE>
-          Model role to change. Settings for the other role are kept
+          Model role to change. Embedding edits may prepare search with saved automatic permission
 
           [possible values: embedding, generation]
 
@@ -338,7 +341,7 @@ Options:
           Preview without writes, provider requests or credential resolution
 
       --key-env <KEY_ENV>
-          Environment variable holding the key; its value is not read
+          Environment variable holding the key. Its name is saved for provider requests
 
       --key-file <KEY_FILE>
           Existing private key file; only its absolute path is saved
@@ -377,10 +380,13 @@ Options:
           Private provider settings file; otherwise use your saved location
 
       --grant-provider
-          Permit explicit API requests for every final model and destination shown
+          Permit explicitly requested API calls for every model shown; this grant does not enable automatic preparation
 
       --lock-timeout-ms <LOCK_TIMEOUT_MS>
           Maximum writer-lock wait in milliseconds (default: 5000; preferences may override)
+
+      --auto-embed
+          Prepare similarity search now and after saves; permit eligible wiki text and search questions for this embedding model
 
       --non-interactive
           Use supplied settings without prompts; at least one setting is required
@@ -1490,6 +1496,135 @@ Options:
 
       --jsonl
           Emit JSON Lines events for supported streaming commands
+
+      --offline
+          Prevent provider requests and credential helper calls; local operations remain available
+
+      --dry-run
+          Preview without writes, provider requests or credential resolution
+
+      --stage
+          Retain a guarded preparation for a later explicit changes apply
+
+      --preferences <PREFERENCES>
+          Select a user configuration file (TOML or legacy JSON)
+
+          [alias: --config]
+
+      --no-user-config
+          Disable ambient user configuration; explicit --preferences still applies
+
+      --expect-wiki-id <EXPECT_WIKI_ID>
+          Refuse a selected wiki whose stable identity differs from this value
+
+      --profile <PROFILE>
+          Trusted provider profile name from the private provider configuration
+
+      --lock-timeout-ms <LOCK_TIMEOUT_MS>
+          Maximum writer-lock wait in milliseconds (default: 5000; preferences may override)
+
+  -h, --help
+          Print help
+
+```
+
+## source capture
+
+```text
+Capture files or a folder of notes. Repeat to add new files and refresh changes
+
+Usage: lwiki source capture [OPTIONS] [PATHS]...
+
+Arguments:
+  [PATHS]...
+          Files or folders to capture; quote paths containing spaces
+
+Options:
+      --files-from <FILES_FROM>
+          Read one path per line, relative to this list's folder
+
+      --wiki <WIKI>
+          Wiki root; otherwise select the nearest ancestor WIKI.md, then the saved default
+
+      --format <FORMAT>
+          Output format: human-readable text, a JSON envelope or JSON Lines events
+
+          [possible values: human, json, jsonl]
+
+      --json
+          Emit one structured JSON envelope
+
+      --jsonl
+          Emit JSON Lines events for supported streaming commands
+
+      --offline
+          Prevent provider requests and credential helper calls; local operations remain available
+
+      --dry-run
+          Preview without writes, provider requests or credential resolution
+
+      --stage
+          Retain a guarded preparation for a later explicit changes apply
+
+      --preferences <PREFERENCES>
+          Select a user configuration file (TOML or legacy JSON)
+
+          [alias: --config]
+
+      --no-user-config
+          Disable ambient user configuration; explicit --preferences still applies
+
+      --expect-wiki-id <EXPECT_WIKI_ID>
+          Refuse a selected wiki whose stable identity differs from this value
+
+      --profile <PROFILE>
+          Trusted provider profile name from the private provider configuration
+
+      --lock-timeout-ms <LOCK_TIMEOUT_MS>
+          Maximum writer-lock wait in milliseconds (default: 5000; preferences may override)
+
+  -h, --help
+          Print help
+
+```
+
+## source read
+
+```text
+Read a captured source and get a citation for the returned text
+
+Usage: lwiki source read [OPTIONS] <ID>
+
+Arguments:
+  <ID>
+          Source ID returned by capture or search
+
+Options:
+      --revision <REVISION>
+          Read an earlier captured revision
+
+      --wiki <WIKI>
+          Wiki root; otherwise select the nearest ancestor WIKI.md, then the saved default
+
+      --format <FORMAT>
+          Output format: human-readable text, a JSON envelope or JSON Lines events
+
+          [possible values: human, json, jsonl]
+
+      --start <START>
+          Start at this UTF-8 byte offset in the captured text
+
+      --end <END>
+          Stop before this UTF-8 byte offset; omit to read toward the end
+
+      --json
+          Emit one structured JSON envelope
+
+      --jsonl
+          Emit JSON Lines events for supported streaming commands
+
+      --max-bytes <MAX_BYTES>
+          Maximum bytes of text to return; reports where to continue
 
       --offline
           Prevent provider requests and credential helper calls; local operations remain available
@@ -2674,9 +2809,8 @@ Options:
           Use lexical results when compatible embeddings are unavailable
 
       --mode <MODE>
-          Retrieval mode; semantic and hybrid modes require compatible embeddings
+          Retrieval mode. Omit for hybrid search with automatic preparation and local fallback
 
-          [default: lexical]
           [possible values: literal, lexical, semantic, hybrid]
 
       --kind <KINDS>
@@ -2833,9 +2967,8 @@ Options:
           Use lexical results when compatible embeddings are unavailable
 
       --mode <MODE>
-          Retrieval mode; semantic and hybrid modes require compatible embeddings
+          Retrieval mode. Omit for hybrid search with automatic preparation and local fallback
 
-          [default: lexical]
           [possible values: literal, lexical, semantic, hybrid]
 
       --kind <KINDS>

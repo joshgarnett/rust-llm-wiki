@@ -15,6 +15,10 @@ pub struct InvocationBudget {
     started_at_utc_ms: i64,
     deadline_utc_ms: i64,
     state: Mutex<State>,
+    automatic_deadline: Option<std::time::Instant>,
+    automatic_io: Option<Arc<crate::catalog::scan::ReadScanBudget>>,
+    canonical_started: std::sync::atomic::AtomicU64,
+    canonical_elapsed_ms: std::sync::atomic::AtomicU64,
 }
 #[derive(Default)]
 struct State {
@@ -59,7 +63,96 @@ impl InvocationBudget {
             started_at_utc_ms,
             deadline_utc_ms,
             state: Mutex::new(State::default()),
+            automatic_deadline: None,
+            automatic_io: None,
+            canonical_started: std::sync::atomic::AtomicU64::new(0),
+            canonical_elapsed_ms: std::sync::atomic::AtomicU64::new(0),
         })
+    }
+    /// Automatic work additionally retains the monotonic deadline established
+    /// before local preparation. Explicit invocation behavior remains unchanged.
+    pub(crate) fn new_automatic(
+        limits: LifetimeLimits,
+        started_at_utc_ms: i64,
+        deadline_utc_ms: i64,
+        deadline: std::time::Instant,
+    ) -> Result<Self> {
+        let mut budget = Self::new(limits, started_at_utc_ms, deadline_utc_ms)?;
+        budget.automatic_deadline = Some(deadline);
+        budget.check_automatic_time(1)?;
+        Ok(budget)
+    }
+    pub(crate) fn new_automatic_with_io(
+        limits: LifetimeLimits,
+        started_at_utc_ms: i64,
+        deadline_utc_ms: i64,
+        deadline: std::time::Instant,
+        io: Arc<crate::catalog::scan::ReadScanBudget>,
+    ) -> Result<Self> {
+        let mut budget = Self::new_automatic(limits, started_at_utc_ms, deadline_utc_ms, deadline)?;
+        budget.automatic_io = Some(io);
+        Ok(budget)
+    }
+    pub(crate) fn automatic_io(&self) -> Option<&crate::catalog::scan::ReadScanBudget> {
+        self.automatic_io.as_deref()
+    }
+    pub(crate) fn canonical_observations(&self) -> (u64, u64) {
+        use std::sync::atomic::Ordering;
+        (
+            self.canonical_started.load(Ordering::Relaxed),
+            self.canonical_elapsed_ms.load(Ordering::Relaxed),
+        )
+    }
+    pub(crate) fn observe_canonical_start(&self) -> CanonicalTiming<'_> {
+        self.canonical_started
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        CanonicalTiming {
+            budget: self,
+            started: std::time::Instant::now(),
+        }
+    }
+    pub(crate) fn automatic_deadline(&self) -> Option<std::time::Instant> {
+        self.automatic_deadline
+    }
+    pub(crate) fn automatic_timeout(
+        &self,
+        configured_ms: u64,
+        now_utc_ms: i64,
+        run_deadline_utc_ms: i64,
+    ) -> Result<Option<u64>> {
+        let Some(deadline) = self.automatic_deadline else {
+            return Ok(None);
+        };
+        let monotonic = u64::try_from(
+            deadline
+                .saturating_duration_since(std::time::Instant::now())
+                .as_millis(),
+        )
+        .unwrap_or(u64::MAX);
+        let utc = self
+            .deadline_utc_ms
+            .min(run_deadline_utc_ms)
+            .checked_sub(now_utc_ms)
+            .and_then(|ms| u64::try_from(ms).ok())
+            .unwrap_or(0);
+        let timeout = configured_ms.min(monotonic.min(utc) / 2);
+        if timeout == 0 {
+            return Err(error("automatic attempt has no admission headroom"));
+        }
+        Ok(Some(timeout))
+    }
+    pub(crate) fn check_automatic_time(&self, required_ms: u64) -> Result<()> {
+        if self.automatic_deadline.is_some_and(|deadline| {
+            deadline
+                .saturating_duration_since(std::time::Instant::now())
+                .as_millis()
+                < u128::from(required_ms)
+        }) {
+            return Err(error(
+                "automatic attempt deadline or admission headroom exhausted",
+            ));
+        }
+        Ok(())
     }
     pub fn started_at_utc_ms(&self) -> i64 {
         self.started_at_utc_ms
@@ -81,6 +174,7 @@ impl InvocationBudget {
         now: i64,
         deadline: i64,
     ) -> Result<usize> {
+        self.check_automatic_time(bound.timeout_ms)?;
         let allowance = jobs::budgets::quote_bound(
             bound,
             &self.limits,
@@ -248,4 +342,17 @@ fn token_units(allowance: &Allowance) -> Result<u64> {
         .try_fold(0u64, |sum, (_, count)| {
             sum.checked_add(*count).ok_or_else(overflow)
         })
+}
+
+pub(crate) struct CanonicalTiming<'a> {
+    budget: &'a InvocationBudget,
+    started: std::time::Instant,
+}
+impl Drop for CanonicalTiming<'_> {
+    fn drop(&mut self) {
+        let elapsed = u64::try_from(self.started.elapsed().as_millis()).unwrap_or(u64::MAX);
+        self.budget
+            .canonical_elapsed_ms
+            .fetch_add(elapsed, std::sync::atomic::Ordering::Relaxed);
+    }
 }

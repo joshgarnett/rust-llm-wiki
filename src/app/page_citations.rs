@@ -130,8 +130,7 @@ fn source_reference(citation: &CitationRef) -> Result<&SourceSpanRef> {
 }
 
 struct CitationPresentation {
-    source_path: VaultRelativePath,
-    revision_path: VaultRelativePath,
+    source_title: String,
     content_path: VaultRelativePath,
     state: CitationState,
 }
@@ -268,8 +267,7 @@ impl OfflineApp {
             }
             let state = observed_state(&source.record, reference);
             presentations.push(CitationPresentation {
-                source_path: source.path.clone(),
-                revision_path: revision.path.clone(),
+                source_title: source.record.title().to_owned(),
                 content_path,
                 state,
             });
@@ -339,8 +337,7 @@ impl OfflineApp {
                 }
             }
             presentations.push(CitationPresentation {
-                source_path: sp.clone(),
-                revision_path: rp.clone(),
+                source_title: source.title().to_owned(),
                 content_path,
                 state: observed_state(source, reference),
             });
@@ -510,26 +507,48 @@ fn render_block(
     if refs.is_empty() {
         return Ok(String::new());
     }
-    let mut block = format!(
-        "{BEGIN}\n\n### Source provenance\n\nStates below were verified during this Page write; they are not a continuing freshness guarantee. Links open the whole captured content; exact byte ranges remain in the Source references.\n\n"
-    );
+    let mut block = format!("{BEGIN}\n\n### Sources\n\n");
     for (index, presentation) in presentations.iter().enumerate() {
-        let source = SourceLink::relative(page, &presentation.source_path)?;
-        let revision = SourceLink::relative(page, &presentation.revision_path)?;
         let content = SourceLink::relative(page, &presentation.content_path)?;
-        let state = match presentation.state {
-            CitationState::Current => "current",
-            CitationState::Historical => "historical",
-            CitationState::Withdrawn => "withdrawn",
+        let title = markdown_link_title(&presentation.source_title);
+        let status = match presentation.state {
+            CitationState::Current => "",
+            CitationState::Historical => " (older saved copy)",
+            CitationState::Withdrawn => " (withdrawn)",
         };
-        block.push_str(&format!("{}. [Source]({}) · [Immutable Revision]({}) · [Captured content]({}) — {state} (observed during this Page write).\n", index + 1, source.0, revision.0, content.0));
+        block.push_str(&format!(
+            "{}. [{title}]({}){status}\n",
+            index + 1,
+            content.0
+        ));
     }
-    block.push_str("\n```json\n");
-    block.push_str(
-        &serde_json::to_string_pretty(refs).map_err(|e| WikiError::invalid(e.to_string()))?,
-    );
-    block.push_str(&format!("\n```\n\n{END}"));
+    block.push_str("\nSource status checked when this page was saved.\n\n<!--\n");
+    // Keep exact references in the Markdown without exposing storage details in
+    // ordinary reading. JSON Unicode escapes are lossless and prevent comment
+    // termination, reserved-marker injection and HTML comment syntax hazards.
+    let encoded = serde_json::to_string_pretty(refs)
+        .map_err(|e| WikiError::invalid(e.to_string()))?
+        .replace('&', "\\u0026")
+        .replace('<', "\\u003c")
+        .replace('>', "\\u003e")
+        .replace('-', "\\u002d");
+    block.push_str(&encoded);
+    block.push_str(&format!("\n-->\n\n{END}"));
     Ok(block)
+}
+fn markdown_link_title(title: &str) -> String {
+    let mut escaped = String::new();
+    for character in title.chars() {
+        if character.is_control() || matches!(character, '\u{2028}' | '\u{2029}') {
+            escaped.push(' ');
+        } else {
+            if character.is_ascii_punctuation() {
+                escaped.push('\\');
+            }
+            escaped.push(character);
+        }
+    }
+    escaped
 }
 fn owned_block(text: &str) -> Result<Option<std::ops::Range<usize>>> {
     let markers: Vec<_> = text.match_indices(RESERVED).collect();

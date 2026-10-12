@@ -9,6 +9,7 @@ use crate::{
         provider_edit::{
             self, ProviderAuthPatch, ProviderGrantDecision, ProviderRole, ProviderRolePatch,
         },
+        providers::{AutomaticEmbeddingConsent, ProviderAutomaticEmbeddingDecision},
     },
     domain::*,
     output::{Envelope, ErrorOutput},
@@ -36,7 +37,7 @@ impl From<ProviderRoleArgument> for ProviderRole {
 
 #[derive(Clone, Args)]
 pub struct ProviderSetArguments {
-    /// Model role to change. Settings for the other role are kept.
+    /// Model role to change. Embedding edits may prepare search with saved automatic permission.
     #[arg(value_enum)]
     pub role: ProviderRoleArgument,
     /// Model name from your provider.
@@ -54,7 +55,7 @@ pub struct ProviderSetArguments {
     /// Generation model's maximum output tokens.
     #[arg(long)]
     pub max_output_tokens: Option<u64>,
-    /// Environment variable holding the key; its value is not read.
+    /// Environment variable holding the key. Its name is saved for provider requests.
     #[arg(long, conflicts_with_all = ["key_file", "credential_command", "reuse_auth"])]
     pub key_env: Option<String>,
     /// Existing private key file; only its absolute path is saved.
@@ -72,9 +73,12 @@ pub struct ProviderSetArguments {
     /// Private provider settings file; otherwise use your saved location.
     #[arg(long)]
     pub providers_config: Option<PathBuf>,
-    /// Permit explicit API requests for every final model and destination shown.
+    /// Permit explicitly requested API calls for every model shown; this grant does not enable automatic preparation.
     #[arg(long)]
     pub grant_provider: bool,
+    /// Prepare similarity search now and after saves; permit eligible wiki text and search questions for this embedding model.
+    #[arg(long)]
+    pub auto_embed: bool,
     /// Use supplied settings without prompts; at least one setting is required.
     #[arg(long)]
     pub non_interactive: bool,
@@ -89,6 +93,11 @@ impl std::fmt::Debug for ProviderSetArguments {
 }
 
 fn patch(settings: &ProviderSetArguments) -> Result<ProviderRolePatch> {
+    if settings.auto_embed && settings.role != ProviderRoleArgument::Embedding {
+        return Err(setup::usage(
+            "--auto-embed applies to embedding; use config set embedding --auto-embed",
+        ));
+    }
     let mut patch = ProviderRolePatch::new(settings.role.into());
     patch.model = settings.model.clone();
     patch.url = settings.url.clone();
@@ -149,7 +158,7 @@ fn collect<R: io::BufRead, W: Write>(
     prompts: &mut Prompts<R, W>,
 ) -> Result<ProviderSetArguments> {
     let mut choices = settings.clone();
-    if !patch(&choices)?.is_empty() {
+    if !patch(&choices)?.is_empty() || choices.auto_embed || choices.grant_provider {
         return Ok(choices);
     }
     if !interactive {
@@ -382,29 +391,54 @@ pub(super) fn execute(args: &Arguments, settings: &ProviderSetArguments) -> Resu
     };
     let choices = collect(settings, interactive, &mut prompts)?;
     let patches = [patch(&choices)?];
+    let mut choices = choices;
     let mut decision = if choices.grant_provider {
         ProviderGrantDecision::ReviewedAllRoles
     } else {
         ProviderGrantDecision::Preserve
     };
-    let mut plan = provider_edit::plan_provider_edit(
+    let mut automatic = if choices.auto_embed {
+        ProviderAutomaticEmbeddingDecision::Reviewed
+    } else {
+        ProviderAutomaticEmbeddingDecision::Preserve
+    };
+    let mut plan = provider_edit::plan_provider_edit_with_automatic(
         snapshot.bytes(),
         &wiki,
         profile.as_deref(),
         &patches,
         decision,
+        automatic,
     )?;
     if interactive
-        && !plan.consent_satisfied
-        && setup::review_provider_permission(&plan, &mut prompts)?
+        && choices.role == ProviderRoleArgument::Embedding
+        && !choices.auto_embed
+        && plan.automatic_embedding_consent != AutomaticEmbeddingConsent::Matching
+        && setup::review_automatic_permission(&plan, &wiki, &mut prompts)?
     {
-        decision = ProviderGrantDecision::ReviewedAllRoles;
-        plan = provider_edit::plan_provider_edit(
+        choices.auto_embed = true;
+        automatic = ProviderAutomaticEmbeddingDecision::Reviewed;
+        plan = provider_edit::plan_provider_edit_with_automatic(
             snapshot.bytes(),
             &wiki,
             profile.as_deref(),
             &patches,
             decision,
+            automatic,
+        )?;
+    }
+    if interactive
+        && !plan.configuration_consent_satisfied
+        && setup::review_provider_permission(&plan, &mut prompts)?
+    {
+        decision = ProviderGrantDecision::ReviewedAllRoles;
+        plan = provider_edit::plan_provider_edit_with_automatic(
+            snapshot.bytes(),
+            &wiki,
+            profile.as_deref(),
+            &patches,
+            decision,
+            automatic,
         )?;
     }
     let summary = setup::safe_provider_summary(&plan);
@@ -412,7 +446,7 @@ pub(super) fn execute(args: &Arguments, settings: &ProviderSetArguments) -> Resu
         show_changes(&summary, &mut prompts.output)
             .map_err(|error| setup::usage(error.to_string()))?;
     }
-    if !args.dry_run && !plan.consent_satisfied {
+    if !args.dry_run && !plan.configuration_consent_satisfied {
         let mut error = setup::usage(
             "model changes need permission; review the --dry-run preview, then rerun with --grant-provider to permit explicit requests for all models shown",
         );
@@ -534,8 +568,15 @@ pub(super) fn execute(args: &Arguments, settings: &ProviderSetArguments) -> Resu
         json!({"role":choices.role.into_provider_name(),"wiki":wiki.path,
         "providers":summary,"provider_configuration":snapshot.path(),"configuration":preferences_path,"steps":steps,
         "completion":if cancelled { "cancelled" } else if failure.is_some() { "incomplete" } else if args.dry_run { "preview" } else { "complete" },
-        "next_step":next_step,"credentials_resolved":false,"network_requests":0}),
+        "next_step":next_step,"configuration_credentials_resolved":false,"configuration_network_requests":0}),
     );
+    if choices.role == ProviderRoleArgument::Embedding {
+        envelope.data["automatic_embeddings"] = super::automatic_embeddings::preview(
+            plan.automatic_embedding_consent == AutomaticEmbeddingConsent::Matching,
+            crate::app::embeddings::PreparationTrigger::Setup,
+            &proposed,
+        );
+    }
     if let Some(error) = failure {
         envelope.ok = false;
         envelope.error = Some(ErrorOutput { code:error.code.to_string(),message:error.message,retryable:error.retryable,
@@ -556,6 +597,15 @@ pub(super) fn execute(args: &Arguments, settings: &ProviderSetArguments) -> Resu
     envelope.meta.partial = partial;
     envelope.meta.wiki_id = Some(wiki.wiki_id.to_string());
     envelope.warnings.extend(loaded.summary().warnings.clone());
+    if envelope.ok && !args.dry_run && choices.role == ProviderRoleArgument::Embedding {
+        super::automatic_embeddings::after_setup(
+            args,
+            &wiki,
+            Some(plan.profile()),
+            Some(preferences_path),
+            &mut envelope,
+        );
+    }
     Ok(envelope)
 }
 impl ProviderRoleArgument {

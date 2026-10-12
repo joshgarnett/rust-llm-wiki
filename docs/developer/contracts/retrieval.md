@@ -23,7 +23,36 @@ fn assemble(snapshot: &ReadSnapshot, hits: HitSet, budget: ContextBudget)
     -> Result<EvidenceBundle>;
 ```
 
-Use shared `RecordRef`, `CitationRef`, `Eligibility`, and `DocumentLocator`; paths/headings are presentation. `CitationRef::Source(SourceSpanRef)` cites captured text without invented assertions; `CitationRef::Assertion(EvidenceRef)` additionally binds a proposition. Ordinary unadopted notes and malformed envelopes without an accepted canonical identity remain available for literal physical inspection; they do not enter default lexical or literal search, embeddings or context. Capturing them creates an immutable searchable copy. Adopted records with invalid dependencies retain labeled discovery according to their per-kind eligibility. Search defaults to lexical. `index sync` never extracts/embeds; semantic/hybrid modes explicitly embed uncached queries. Offline execution permits matching cached vectors and never credential helpers. An unavailable semantic leg requires an error or an explicitly selected, disclosed lexical fallback.
+Use shared `RecordRef`, `CitationRef`, `Eligibility`, and `DocumentLocator`; paths/headings are presentation. `CitationRef::Source(SourceSpanRef)` cites captured text without invented assertions; `CitationRef::Assertion(EvidenceRef)` additionally binds a proposition. Ordinary unadopted notes and malformed envelopes without an accepted canonical identity remain available for literal physical inspection; they do not enter default lexical or literal search, embeddings or context. Capturing them creates an immutable searchable copy. Adopted records with invalid dependencies retain labeled discovery according to their per-kind eligibility. `index sync` never extracts or embeds.
+
+Ordinary CLI `search` and document `context` with omitted mode attempt hybrid
+lookup with disclosed local lexical fallback. Matching private automatic permission
+may prepare missing corpus/query vectors under the [provider contract](providers-jobs.md#automatic-embedding-permission-and-execution).
+Request validation precedes optional provider construction. Explicit literal/lexical
+modes remain local. Explicit semantic/hybrid modes retain explicit dispatch authority
+and require an error or requested lexical fallback when the semantic leg is
+unavailable; legacy explicit grants never imply automatic corpus preparation.
+Specialized indexed-evidence, host-selection, source-relation, graph-target and
+historical context routes retain their compatible implicit lexical selection.
+
+Offline, no-sync and dry-run start no automatic request or credential helper. The
+omitted-mode offline/no-sync CLI path selects local lexical lookup; explicit
+semantic/hybrid offline execution can use matching cached vectors under its existing
+contract. Automatic fallback uses the ordinary bounded read-only observation and
+still rejects genuine unresolved canonical authority. Actual provider activity is
+reported even when the final evidence is lexical.
+
+Automatic saves render changed owners and reuse unchanged input/space hashes.
+Setup/lookup preparation can progress through missing current inputs within one
+invocation allowance, reserving query capacity for lookup. Both storage layouts
+use production render/segmentation and membership proof. Partial work reports
+coverage; vector membership becomes usable only with the ordinary authenticated
+receipt, settlement and current-input checks. Missing cache data never restores
+vectors from receipts or resets retained unknown charges. Explicit
+`embeddings sync --dry-run` renders bounded current inputs and exact first-attempt
+wire previews without credentials, provider requests, Runs, writers or cache
+publication. It omits text and marks pending-cache work or incomplete counts
+unknown; preview counts do not claim actual paid work.
 
 Ordinary local literal/lexical normalized search, document context and reads use a
 command-local normalized observation when admitted by the finite read budget.

@@ -352,6 +352,19 @@ fn exists(path: &Path) -> Result<bool> {
     }
 }
 fn read(fs: &VaultFs, name: CachePath<'_>) -> Result<Option<Vec<u8>>> {
+    read_with_budget(fs, name, None)
+}
+fn read_with_budget(
+    fs: &VaultFs,
+    name: CachePath<'_>,
+    budget: Option<&super::scan::ReadScanBudget>,
+) -> Result<Option<Vec<u8>>> {
+    if let Some(budget) = budget {
+        // Protected JSON readers may read a growth sentinel. Reserve its whole
+        // fixed ceiling before any protected open, including absent observations.
+        // The owned path/handle checks have a fixed allowlisted ancestry.
+        budget.charge_observation(JSON_LIMIT + 1, 1, 16)?;
+    }
     let name = path(fs, name)?;
     if !exists(&name)? {
         return Ok(None);
@@ -398,6 +411,16 @@ pub(crate) fn has_activation_evidence(fs: &VaultFs) -> Result<bool> {
     Ok(read(fs, ACTIVE)?.is_some()
         || read(fs, CURRENT)?.is_some()
         || read_rebuild_record(fs)?.is_some())
+}
+pub(crate) fn has_activation_evidence_bounded(
+    fs: &VaultFs,
+    budget: &super::scan::ReadScanBudget,
+) -> Result<bool> {
+    let present = read_with_budget(fs, ACTIVE, Some(budget))?.is_some()
+        || read_with_budget(fs, CURRENT, Some(budget))?.is_some()
+        || read_with_budget(fs, CachePath::RebuildState, Some(budget))?.is_some();
+    budget.check()?;
+    Ok(present)
 }
 fn selection(fs: &VaultFs, vault: &RecordId) -> Result<Option<CatalogSelection>> {
     let active = marker(fs, vault)?;

@@ -194,6 +194,27 @@ pub(crate) fn load(
     vault: &RecordId,
     presence: Presence,
 ) -> Result<Option<Authority>> {
+    load_with_budget(fs, vault, presence, None)
+}
+pub(crate) fn load_bounded(
+    fs: &VaultFs,
+    vault: &RecordId,
+    presence: Presence,
+    budget: &crate::catalog::scan::ReadScanBudget,
+) -> Result<Option<Authority>> {
+    let result = load_with_budget(fs, vault, presence, Some(budget))?;
+    budget.check()?;
+    Ok(result)
+}
+fn load_with_budget(
+    fs: &VaultFs,
+    vault: &RecordId,
+    presence: Presence,
+    budget: Option<&crate::catalog::scan::ReadScanBudget>,
+) -> Result<Option<Authority>> {
+    if let Some(budget) = budget {
+        budget.charge_observation(MAX_BYTES + 1, 1, 16)?;
+    }
     let Some(bytes) = read_bytes(fs)? else {
         return match presence {
             Presence::Required => Err(recovery("required operation authority is missing")),

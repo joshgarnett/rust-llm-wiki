@@ -26,6 +26,24 @@ pub(crate) fn integer(value: u64) -> Result<i64> {
     })
 }
 pub(crate) fn configure(connection: &Connection, timeout_ms: u64, writable: bool) -> Result<()> {
+    configure_with_budget(connection, timeout_ms, writable, None)
+}
+pub(crate) fn clamp_busy(
+    connection: &Connection,
+    timeout_ms: u64,
+    budget: &super::scan::ReadScanBudget,
+) -> Result<()> {
+    let remaining = budget.remaining_time()?;
+    connection
+        .busy_timeout(remaining.min(Duration::from_millis(timeout_ms)))
+        .map_err(sql_error)
+}
+fn configure_with_budget(
+    connection: &Connection,
+    timeout_ms: u64,
+    writable: bool,
+    budget: Option<&super::scan::ReadScanBudget>,
+) -> Result<()> {
     if timeout_ms > 30_000 {
         return Err(WikiError::new(
             ErrorCode::ConfigInvalid,
@@ -35,10 +53,16 @@ pub(crate) fn configure(connection: &Connection, timeout_ms: u64, writable: bool
     connection
         .busy_timeout(Duration::from_millis(timeout_ms))
         .map_err(sql_error)?;
+    if let Some(budget) = budget {
+        clamp_busy(connection, timeout_ms, budget)?;
+    }
     connection
         .pragma_update(None, "foreign_keys", true)
         .map_err(sql_error)?;
     if writable {
+        if let Some(budget) = budget {
+            clamp_busy(connection, timeout_ms, budget)?;
+        }
         let mode: String = connection
             .query_row("PRAGMA journal_mode=WAL", [], |r| r.get(0))
             .map_err(sql_error)?;
@@ -51,6 +75,9 @@ pub(crate) fn configure(connection: &Connection, timeout_ms: u64, writable: bool
         connection
             .pragma_update(None, "synchronous", "FULL")
             .map_err(sql_error)?;
+    }
+    if let Some(budget) = budget {
+        budget.check()?;
     }
     Ok(())
 }
@@ -89,8 +116,53 @@ pub(crate) fn open(path: &Path, timeout_ms: u64, writable: bool) -> Result<Conne
     configure(&c, timeout_ms, writable)?;
     Ok(c)
 }
+pub(crate) fn install_budget(
+    connection: &Connection,
+    budget: &super::scan::ReadScanBudget,
+) -> Result<()> {
+    budget.check()?;
+    let deadline = budget.deadline();
+    connection
+        .progress_handler(1000, Some(move || std::time::Instant::now() >= deadline))
+        .map_err(sql_error)?;
+    connection
+        .set_limit(
+            rusqlite::limits::Limit::SQLITE_LIMIT_LENGTH,
+            256 * 1024 * 1024,
+        )
+        .map_err(sql_error)?;
+    Ok(())
+}
+pub(crate) fn open_bounded(
+    path: &Path,
+    timeout_ms: u64,
+    writable: bool,
+    budget: &super::scan::ReadScanBudget,
+) -> Result<Connection> {
+    budget.check()?;
+    let flags = if writable {
+        OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_CREATE
+    } else {
+        OpenFlags::SQLITE_OPEN_READ_ONLY
+    };
+    let connection = Connection::open_with_flags(path, flags | OpenFlags::SQLITE_OPEN_NO_MUTEX)
+        .map_err(sql_error)?;
+    install_budget(&connection, budget)?;
+    configure_with_budget(&connection, timeout_ms, writable, Some(budget))?;
+    Ok(connection)
+}
 pub(crate) fn capability() -> Result<()> {
     let c = Connection::open_in_memory().map_err(sql_error)?;
+    capability_on_connection(&c)
+}
+pub(crate) fn capability_bounded(budget: &super::scan::ReadScanBudget) -> Result<()> {
+    budget.check()?;
+    let c = Connection::open_in_memory().map_err(sql_error)?;
+    install_budget(&c, budget)?;
+    capability_on_connection(&c)?;
+    budget.check()
+}
+fn capability_on_connection(c: &Connection) -> Result<()> {
     c.execute_batch("CREATE VIRTUAL TABLE capability_fts USING fts5(value, tokenize='unicode61 remove_diacritics 2'); INSERT INTO capability_fts VALUES ('café');").map_err(|e|WikiError::new(ErrorCode::CapabilityUnavailable,format!("bundled FTS5 unavailable: {e}")))?;
     let count: i64 = c
         .query_row(

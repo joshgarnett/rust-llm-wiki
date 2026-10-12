@@ -86,7 +86,15 @@ fn sql(e: rusqlite::Error) -> WikiError {
         }
         _ => ErrorCode::IndexCorrupt,
     };
-    WikiError::new(code, format!("embedding cache: {e}"))
+    let temporary_contention = matches!(
+        e.sqlite_error_code(),
+        Some(rusqlite::ErrorCode::DatabaseBusy | rusqlite::ErrorCode::DatabaseLocked)
+    );
+    let mut error = WikiError::new(code, format!("embedding cache: {e}"));
+    if temporary_contention {
+        error.details = serde_json::json!({"sqlite_failure":"temporary_contention"});
+    }
+    error
 }
 fn snapshot_key(snapshot: &ReadSnapshot) -> Result<String> {
     Ok(
@@ -280,6 +288,24 @@ impl VectorCoverageCheck {
 }
 
 impl VectorStore {
+    /// Called only after exact canonical receipt settlement. Finishing the
+    /// admitted confirmation must not be interrupted by the optional phase timer.
+    pub(crate) fn finish_automatic_completion_budget(&mut self) -> Result<()> {
+        if self
+            .retained_budget
+            .as_ref()
+            .is_some_and(|budget| budget.automatic)
+        {
+            self.connection
+                .progress_handler(0, None::<fn() -> bool>)
+                .map_err(sql)?;
+            self.connection
+                .busy_timeout(Duration::from_secs(1))
+                .map_err(sql)?;
+            self.retained_budget = None;
+        }
+        Ok(())
+    }
     pub(crate) fn bind_read_budget(
         &mut self,
         budget: &std::rc::Rc<VectorReadBudget>,
@@ -321,16 +347,66 @@ impl VectorStore {
         Ok(store)
     }
     pub fn open(fs: &VaultFs, writer: Option<&WriterPermit>) -> Result<Self> {
+        Self::open_inner(fs, writer, None)
+    }
+    pub(crate) fn open_automatic(
+        fs: &VaultFs,
+        writer: Option<&WriterPermit>,
+        vectors: &std::rc::Rc<VectorReadBudget>,
+        local: &crate::catalog::scan::ReadScanBudget,
+    ) -> Result<Self> {
+        Self::open_inner(fs, writer, Some((vectors, local)))
+    }
+    pub(crate) fn open_automatic_snapshot(
+        fs: &VaultFs,
+        vectors: &std::rc::Rc<VectorReadBudget>,
+        local: &crate::catalog::scan::ReadScanBudget,
+    ) -> Result<Self> {
+        let store = Self::open_automatic(fs, None, vectors, local)?;
+        store.connection.execute_batch(
+            "PRAGMA mmap_size=0; PRAGMA cache_size=-8192; PRAGMA temp_store=FILE; BEGIN DEFERRED;",
+        ).map_err(sql)?;
+        store.active()?;
+        vectors.check()?;
+        local.check()?;
+        Ok(store)
+    }
+    fn open_inner(
+        fs: &VaultFs,
+        writer: Option<&WriterPermit>,
+        automatic: Option<(
+            &std::rc::Rc<VectorReadBudget>,
+            &crate::catalog::scan::ReadScanBudget,
+        )>,
+    ) -> Result<Self> {
+        if let Some((vectors, local)) = automatic {
+            vectors.check()?;
+            local.check()?;
+        }
         let writable = writer.is_some();
         if let Some(w) = writer {
             w.require_root(fs.root())?;
-            fs.ensure_directory(&VaultRelativePath::new(".wiki/cache")?, w)?;
+            let directory = VaultRelativePath::new(".wiki/cache")?;
+            match automatic {
+                Some((_, local)) => {
+                    fs.ensure_directory_bounded(&directory, w, local)?;
+                }
+                None => {
+                    fs.ensure_directory(&directory, w)?;
+                }
+            }
         }
+        let bounded = automatic
+            .map(|(_, local)| crate::catalog::scan::BoundedReadInput::new(fs, local))
+            .transpose()?;
+        let resolve = |path: &VaultRelativePath| match &bounded {
+            Some(input) => input.resolve(path),
+            None => fs.root().resolve(path),
+        };
         for suffix in ["", "-wal", "-shm"] {
-            fs.root()
-                .resolve(&VaultRelativePath::new(format!("{CACHE_PATH}{suffix}"))?)?;
+            resolve(&VaultRelativePath::new(format!("{CACHE_PATH}{suffix}"))?)?;
         }
-        let path = fs.root().resolve(&VaultRelativePath::new(CACHE_PATH)?)?;
+        let path = resolve(&VaultRelativePath::new(CACHE_PATH)?)?;
         if !path.exists() && !writable {
             return Err(WikiError::new(
                 ErrorCode::OfflineUnavailable,
@@ -346,9 +422,25 @@ impl VectorStore {
             },
         )
         .map_err(sql)?;
-        connection
-            .busy_timeout(Duration::from_secs(1))
-            .map_err(sql)?;
+        let mut store = Self {
+            connection,
+            writable,
+            retained_budget: None,
+        };
+        if let Some((vectors, local)) = automatic {
+            local.check()?;
+            store.attach_retained_budget(vectors.clone())?;
+            // Automatic cache work is opportunistic. Fail immediately on an
+            // external lock rather than let a stale busy timeout spend the
+            // query's remaining allowance after earlier SQL consumed it.
+            store.connection.busy_timeout(Duration::ZERO).map_err(sql)?;
+        } else {
+            store
+                .connection
+                .busy_timeout(Duration::from_secs(1))
+                .map_err(sql)?;
+        }
+        let connection = &store.connection;
         if writable {
             connection.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; CREATE TABLE IF NOT EXISTS embedding_spaces(id TEXT PRIMARY KEY,spec TEXT NOT NULL,dimensions INTEGER,active INTEGER NOT NULL DEFAULT 0); CREATE UNIQUE INDEX IF NOT EXISTS one_active_embedding_space ON embedding_spaces(active) WHERE active=1; CREATE TABLE IF NOT EXISTS embedding_vectors(space TEXT NOT NULL,input TEXT NOT NULL,dimensions INTEGER NOT NULL,blob BLOB NOT NULL,hash TEXT NOT NULL,ready INTEGER NOT NULL DEFAULT 0,PRIMARY KEY(space,input)); CREATE TABLE IF NOT EXISTS embedding_memberships(space TEXT NOT NULL,snapshot TEXT NOT NULL,unit TEXT NOT NULL,input TEXT NOT NULL,proof TEXT NOT NULL,metadata TEXT NOT NULL,PRIMARY KEY(space,snapshot,unit,input)); CREATE INDEX IF NOT EXISTS embedding_membership_scan ON embedding_memberships(space,snapshot,unit,input); CREATE TABLE IF NOT EXISTS embedding_unit_owners(space TEXT NOT NULL,policy TEXT NOT NULL,owner TEXT NOT NULL,version INTEGER NOT NULL,binding TEXT NOT NULL,PRIMARY KEY(space,policy,owner)); CREATE TABLE IF NOT EXISTS embedding_preparation_cursors(space TEXT NOT NULL,policy TEXT NOT NULL,incarnation TEXT NOT NULL,version INTEGER NOT NULL,cursor TEXT NOT NULL,PRIMARY KEY(space,policy,incarnation));").map_err(sql)?;
         }
@@ -365,11 +457,11 @@ impl VectorStore {
                 connection.execute_batch("ALTER TABLE embedding_vectors ADD COLUMN ready INTEGER NOT NULL DEFAULT 0;").map_err(sql)?;
             }
         }
-        Ok(Self {
-            connection,
-            writable,
-            retained_budget: None,
-        })
+        if let Some((vectors, local)) = automatic {
+            vectors.check()?;
+            local.check()?;
+        }
+        Ok(store)
     }
     pub fn active(&self) -> Result<Option<SpaceState>> {
         self.space_where("active=1", None)
@@ -1455,7 +1547,11 @@ impl VectorStore {
             ));
         }
         self.connection
-            .busy_timeout(Duration::from_millis(remaining.min(1000)))
+            .busy_timeout(if budget.automatic {
+                Duration::ZERO
+            } else {
+                Duration::from_millis(remaining.min(1000))
+            })
             .map_err(sql)?;
         let observed = budget.steps.clone();
         let started = budget.started;
@@ -1489,6 +1585,7 @@ pub(crate) struct RetainedUsage {
 pub(crate) struct VectorReadBudget {
     started: std::time::Instant,
     max_elapsed_ms: u64,
+    automatic: bool,
     usage: std::cell::RefCell<RetainedUsage>,
     steps: std::sync::Arc<std::sync::atomic::AtomicU64>,
 }
@@ -1506,17 +1603,27 @@ impl VectorReadBudget {
         Ok(remaining)
     }
     pub(crate) fn new(deadline: std::time::Instant) -> Result<std::rc::Rc<Self>> {
+        Self::new_with_ceiling(deadline, 30_000)
+    }
+    pub(crate) fn new_automatic(deadline: std::time::Instant) -> Result<std::rc::Rc<Self>> {
+        Self::new_with_ceiling(deadline, 60_000)
+    }
+    fn new_with_ceiling(
+        deadline: std::time::Instant,
+        ceiling_ms: u128,
+    ) -> Result<std::rc::Rc<Self>> {
         let started = std::time::Instant::now();
         let remaining = deadline.saturating_duration_since(started).as_millis();
-        if remaining == 0 || remaining > 30_000 {
+        if remaining == 0 || remaining > ceiling_ms {
             return Err(WikiError::new(
                 ErrorCode::BudgetExceeded,
-                "vector read deadline is exhausted or exceeds thirty seconds",
+                "vector read deadline is exhausted or exceeds its finite ceiling",
             ));
         }
         Ok(std::rc::Rc::new(Self {
             started,
             max_elapsed_ms: remaining as u64,
+            automatic: ceiling_ms == 60_000,
             usage: Default::default(),
             steps: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
         }))
@@ -1624,6 +1731,7 @@ impl RetainedMembershipReader {
         let budget = std::rc::Rc::new(VectorReadBudget {
             started: std::time::Instant::now(),
             max_elapsed_ms,
+            automatic: false,
             usage: Default::default(),
             steps: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
         });

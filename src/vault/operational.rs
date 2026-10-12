@@ -198,16 +198,63 @@ fn read_windows(
 fn read(path: &Path, limit: u64) -> Result<Option<BeforeImage>> {
     read_windows(path, limit, super::acl_policy::Protection::Private)
 }
-fn require_vault(fs: &VaultFs, vault_id: &RecordId) -> Result<()> {
-    let path = fs.root().resolve(&VaultRelativePath::new("WIKI.md")?)?;
+fn read_with_budget(
+    path: &Path,
+    maximum: u64,
+    budget: Option<&crate::catalog::scan::ReadScanBudget>,
+    read: impl FnOnce(u64) -> Result<Option<BeforeImage>>,
+) -> Result<Option<BeforeImage>> {
+    let Some(budget) = budget else {
+        return read(maximum);
+    };
+    budget.charge_observation(0, 1, 3)?;
+    let remaining = budget.remaining().0;
+    if remaining == 0 {
+        return Err(budget_error("local job read byte allowance exceeded"));
+    }
+    // The original protected reader repeats metadata/type/identity checks.
+    // This preflight supplies only a finite conservative byte reservation. A
+    // missing or invalid path remains subject to the original authority checks.
+    let observed = fs::symlink_metadata(path).map_or(0, |metadata| {
+        if metadata.is_file() && !metadata.file_type().is_symlink() {
+            metadata.len()
+        } else {
+            0
+        }
+    });
+    let ceiling = maximum.min(observed).min((remaining - 1) as u64);
+    budget.charge_observation(ceiling as usize + 1, 0, 0)?;
+    let result = read(ceiling);
+    if result.is_ok() {
+        budget.check()?;
+    }
+    result
+}
+fn budget_error(message: &str) -> WikiError {
+    budget(message)
+}
+fn require_vault_with_budget(
+    fs: &VaultFs,
+    vault_id: &RecordId,
+    budget: Option<&crate::catalog::scan::ReadScanBudget>,
+) -> Result<()> {
+    let relative = VaultRelativePath::new("WIKI.md")?;
+    let path = match budget {
+        Some(budget) => fs
+            .root()
+            .resolve_raw_budgeted(&relative, &mut || budget.charge_observation(0, 0, 1))?,
+        None => fs.root().resolve(&relative)?,
+    };
     #[cfg(windows)]
-    let image = read_windows(
-        &path,
-        256 * 1024,
-        super::acl_policy::Protection::IntegrityProtected,
-    )?;
+    let image = read_with_budget(&path, 256 * 1024, budget, |maximum| {
+        read_windows(
+            &path,
+            maximum,
+            super::acl_policy::Protection::IntegrityProtected,
+        )
+    })?;
     #[cfg(not(windows))]
-    let image = read(&path, 256 * 1024)?;
+    let image = read_with_budget(&path, 256 * 1024, budget, |maximum| read(&path, maximum))?;
     let bytes = image
         .ok_or_else(|| conflict("vault identity missing"))?
         .bytes;
@@ -230,14 +277,41 @@ impl RunStore {
         max_entries: usize,
         check: &mut dyn FnMut() -> Result<()>,
     ) -> Result<Vec<RecordId>> {
+        Self::discover_existing_with_budget(fs, vault_id, max_entries, check, None)
+    }
+    pub(crate) fn discover_existing_bounded(
+        fs: &VaultFs,
+        vault_id: &RecordId,
+        max_entries: usize,
+        budget: &crate::catalog::scan::ReadScanBudget,
+    ) -> Result<Vec<RecordId>> {
+        Self::discover_existing_with_budget(
+            fs,
+            vault_id,
+            max_entries,
+            &mut || budget.charge_observation(0, 0, 1),
+            Some(budget),
+        )
+    }
+    fn discover_existing_with_budget(
+        fs: &VaultFs,
+        vault_id: &RecordId,
+        max_entries: usize,
+        check: &mut dyn FnMut() -> Result<()>,
+        budget: Option<&crate::catalog::scan::ReadScanBudget>,
+    ) -> Result<Vec<RecordId>> {
         if max_entries == 0 || max_entries > 4096 {
-            return Err(budget("invalid private run discovery ceiling"));
+            return Err(budget_error("invalid private run discovery ceiling"));
         }
         check()?;
-        require_vault(fs, vault_id)?;
-        let directory = fs
-            .root()
-            .resolve(&VaultRelativePath::new(".wiki/state/jobs")?)?;
+        require_vault_with_budget(fs, vault_id, budget)?;
+        let directory_path = VaultRelativePath::new(".wiki/state/jobs")?;
+        let directory = match budget {
+            Some(budget) => fs.root().resolve_raw_budgeted(&directory_path, &mut || {
+                budget.charge_observation(0, 0, 1)
+            })?,
+            None => fs.root().resolve(&directory_path)?,
+        };
         #[cfg(windows)]
         let _directory = match super::windows_security::open_pinned_directory(
             &directory,
@@ -256,7 +330,7 @@ impl RunStore {
         for (index, entry) in entries.enumerate() {
             check()?;
             if index >= max_entries {
-                return Err(budget("private run discovery ceiling exceeded"));
+                return Err(budget_error("private run discovery ceiling exceeded"));
             }
             let entry = entry.map_err(|error| io_error("read private run entry", error))?;
             let name = entry.file_name();
@@ -265,9 +339,13 @@ impl RunStore {
                 .ok_or_else(|| conflict("non-UTF-8 private run namespace"))?;
             let id = RecordId::new(name)
                 .map_err(|_| conflict("invalid private run namespace identity"))?;
-            let child = fs
-                .root()
-                .resolve(&VaultRelativePath::new(format!(".wiki/state/jobs/{id}"))?)?;
+            let child_path = VaultRelativePath::new(format!(".wiki/state/jobs/{id}"))?;
+            let child = match budget {
+                Some(budget) => fs.root().resolve_raw_budgeted(&child_path, &mut || {
+                    budget.charge_observation(0, 0, 1)
+                })?,
+                None => fs.root().resolve(&child_path)?,
+            };
             let metadata = fs::symlink_metadata(&child)
                 .map_err(|error| io_error("inspect private run namespace", error))?;
             if !metadata.is_dir() || metadata.file_type().is_symlink() {
@@ -281,10 +359,21 @@ impl RunStore {
             .map_err(|error| io_error("pin discovered private run", error))?;
             ids.insert(id);
         }
-        require_vault(fs, vault_id)?;
+        require_vault_with_budget(fs, vault_id, budget)?;
         Ok(ids.into_iter().collect())
     }
     fn new(fs: &VaultFs, vault_id: &RecordId, run_id: &RecordId) -> Result<Self> {
+        Self::new_with_budget(fs, vault_id, run_id, None)
+    }
+    fn new_with_budget(
+        fs: &VaultFs,
+        vault_id: &RecordId,
+        run_id: &RecordId,
+        budget: Option<&crate::catalog::scan::ReadScanBudget>,
+    ) -> Result<Self> {
+        if let Some(budget) = budget {
+            budget.check()?;
+        }
         let store = Self {
             fs: fs.clone(),
             vault_id: vault_id.clone(),
@@ -307,7 +396,7 @@ impl RunStore {
             store.run_dir(),
             ".wiki/state/requests".to_owned(),
         ] {
-            let path = store.path(&relative)?;
+            let path = store.path_with_budget(&relative, budget)?;
             match fs::symlink_metadata(&path) {
                 Ok(_) => store
                     .pinned_dirs
@@ -328,7 +417,7 @@ impl RunStore {
                 Err(error) => return Err(io_error("inspect existing job directory", error)),
             }
         }
-        store.binding()?;
+        store.binding_with_budget(budget)?;
         Ok(store)
     }
     pub(crate) fn bootstrap(
@@ -417,7 +506,21 @@ impl RunStore {
     ) -> Result<Self> {
         Self::new(fs, vault_id, run_id)
     }
-    fn binding(&self) -> Result<()> {
+    pub(crate) fn open_existing_bounded(
+        fs: &VaultFs,
+        vault_id: &RecordId,
+        run_id: &RecordId,
+        budget: &crate::catalog::scan::ReadScanBudget,
+    ) -> Result<Self> {
+        Self::new_with_budget(fs, vault_id, run_id, Some(budget))
+    }
+    fn binding_with_budget(
+        &self,
+        budget: Option<&crate::catalog::scan::ReadScanBudget>,
+    ) -> Result<()> {
+        if let Some(budget) = budget {
+            budget.check()?;
+        }
         #[cfg(windows)]
         for directory in self
             .pinned_dirs
@@ -429,13 +532,27 @@ impl RunStore {
                 .verify_binding()
                 .map_err(|error| io_error("verify private directory binding", error))?;
         }
-        require_vault(&self.fs, &self.vault_id)
+        require_vault_with_budget(&self.fs, &self.vault_id, budget)
     }
     fn run_dir(&self) -> String {
         format!(".wiki/state/jobs/{}", self.run_id)
     }
     fn path(&self, relative: &str) -> Result<PathBuf> {
-        self.fs.root().resolve(&VaultRelativePath::new(relative)?)
+        self.path_with_budget(relative, None)
+    }
+    fn path_with_budget(
+        &self,
+        relative: &str,
+        budget: Option<&crate::catalog::scan::ReadScanBudget>,
+    ) -> Result<PathBuf> {
+        let relative = VaultRelativePath::new(relative)?;
+        match budget {
+            Some(budget) => self
+                .fs
+                .root()
+                .resolve_raw_budgeted(&relative, &mut || budget.charge_observation(0, 0, 1)),
+            None => self.fs.root().resolve(&relative),
+        }
     }
     fn sync_dir(&self, path: &Path) -> Result<()> {
         match self
@@ -455,14 +572,33 @@ impl RunStore {
         timeout: Duration,
         check: &mut dyn FnMut() -> Result<()>,
     ) -> Result<RunLedgerGuard<'_>> {
+        self.lock_with_budget(timeout, check, None)
+    }
+    pub(crate) fn lock_bounded<'a>(
+        &'a self,
+        timeout: Duration,
+        budget: &'a crate::catalog::scan::ReadScanBudget,
+    ) -> Result<RunLedgerGuard<'a>> {
+        self.lock_with_budget(
+            timeout.min(budget.remaining_time()?),
+            &mut || budget.check(),
+            Some(budget),
+        )
+    }
+    fn lock_with_budget<'a>(
+        &'a self,
+        timeout: Duration,
+        check: &mut dyn FnMut() -> Result<()>,
+        budget: Option<&'a crate::catalog::scan::ReadScanBudget>,
+    ) -> Result<RunLedgerGuard<'a>> {
         if timeout > Duration::from_secs(30) {
             return Err(WikiError::new(
                 ErrorCode::Usage,
                 "job lock timeout exceeds 30 seconds",
             ));
         }
-        self.binding()?;
-        let path = self.path(&format!("{}/ledger.lock", self.run_dir()))?;
+        self.binding_with_budget(budget)?;
+        let path = self.path_with_budget(&format!("{}/ledger.lock", self.run_dir()), budget)?;
         #[cfg(windows)]
         let (file, pinned_dirs) = super::windows_security::open_checked_file(
             &path,
@@ -505,7 +641,7 @@ impl RunStore {
             #[cfg(windows)]
             pinned_dirs,
         };
-        guard.check()?;
+        guard.check_with_budget(budget)?;
         check()?;
         Ok(guard)
     }
@@ -517,6 +653,15 @@ impl Drop for RunLedgerGuard<'_> {
 }
 impl RunLedgerGuard<'_> {
     fn check(&self) -> Result<()> {
+        self.check_with_budget(None)
+    }
+    fn check_with_budget(
+        &self,
+        budget: Option<&crate::catalog::scan::ReadScanBudget>,
+    ) -> Result<()> {
+        if let Some(budget) = budget {
+            budget.charge_observation(0, 0, 2)?;
+        }
         #[cfg(windows)]
         for directory in &self.pinned_dirs {
             directory
@@ -524,7 +669,7 @@ impl RunLedgerGuard<'_> {
                 .map_err(|error| io_error("verify held job lock ancestors", error))?;
         }
         same_inode(&self.file, &self.lock_path)?;
-        self.store.binding()
+        self.store.binding_with_budget(budget)
     }
     fn journal_path(&self) -> Result<PathBuf> {
         self.store
@@ -632,6 +777,19 @@ impl RunLedgerGuard<'_> {
         self.store
             .path(&format!(".wiki/state/requests/{}", attempt.attempt_id))
     }
+    fn attempt_dir_with_budget(
+        &self,
+        attempt: &AttemptRef,
+        budget: Option<&crate::catalog::scan::ReadScanBudget>,
+    ) -> Result<PathBuf> {
+        if attempt.run_id != self.store.run_id {
+            return Err(conflict("spool attempt belongs to another run"));
+        }
+        self.store.path_with_budget(
+            &format!(".wiki/state/requests/{}", attempt.attempt_id),
+            budget,
+        )
+    }
     fn owner_bytes(&self, attempt: &AttemptRef) -> Result<Vec<u8>> {
         serde_json::to_vec(&Owner {
             version: 1,
@@ -641,7 +799,17 @@ impl RunLedgerGuard<'_> {
         .map_err(|_| WikiError::invalid("invalid spool owner"))
     }
     fn owner(&self, attempt: &AttemptRef) -> Result<()> {
-        let bytes = read(&self.attempt_dir(attempt)?.join("owner.json"), OWNER_LIMIT)?
+        self.owner_with_budget(attempt, None)
+    }
+    fn owner_with_budget(
+        &self,
+        attempt: &AttemptRef,
+        budget: Option<&crate::catalog::scan::ReadScanBudget>,
+    ) -> Result<()> {
+        let path = self
+            .attempt_dir_with_budget(attempt, budget)?
+            .join("owner.json");
+        let bytes = read_with_budget(&path, OWNER_LIMIT, budget, |maximum| read(&path, maximum))?
             .ok_or_else(|| conflict("spool owner missing"))?;
         if bytes.bytes != self.owner_bytes(attempt)? {
             return Err(conflict("spool owner binding changed"));
@@ -756,11 +924,29 @@ impl RunLedgerGuard<'_> {
         part: SpoolPart,
         max_bytes: u64,
     ) -> Result<Option<BeforeImage>> {
-        self.check()?;
+        self.read_spool_with_budget(attempt, part, max_bytes, None)
+    }
+    pub(crate) fn read_spool_bounded(
+        &self,
+        attempt: &AttemptRef,
+        part: SpoolPart,
+        max_bytes: u64,
+        budget: &crate::catalog::scan::ReadScanBudget,
+    ) -> Result<Option<BeforeImage>> {
+        self.read_spool_with_budget(attempt, part, max_bytes, Some(budget))
+    }
+    fn read_spool_with_budget(
+        &self,
+        attempt: &AttemptRef,
+        part: SpoolPart,
+        max_bytes: u64,
+        budget: Option<&crate::catalog::scan::ReadScanBudget>,
+    ) -> Result<Option<BeforeImage>> {
+        self.check_with_budget(budget)?;
         if max_bytes == 0 || max_bytes > Self::limit(part) {
-            return Err(budget("spool read bound invalid"));
+            return Err(budget_error("spool read bound invalid"));
         }
-        let directory = self.attempt_dir(attempt)?;
+        let directory = self.attempt_dir_with_budget(attempt, budget)?;
         if !directory.exists() {
             return Ok(None);
         }
@@ -770,7 +956,12 @@ impl RunLedgerGuard<'_> {
             super::acl_policy::Protection::Private,
         )
         .map_err(|error| io_error("pin spool read directory", error))?;
-        if read(&directory.join("owner.json"), OWNER_LIMIT)?.is_none() {
+        let owner = directory.join("owner.json");
+        if read_with_budget(&owner, OWNER_LIMIT, budget, |maximum| read(&owner, maximum))?.is_none()
+        {
+            if let Some(budget) = budget {
+                budget.charge_observation(0, 0, 2)?;
+            }
             if fs::read_dir(&directory)
                 .map_err(|e| io_error("inspect cleaned spool", e))?
                 .next()
@@ -780,8 +971,14 @@ impl RunLedgerGuard<'_> {
             }
             return Err(conflict("unbound nonempty spool retained"));
         }
-        self.owner(attempt)?;
-        read(&self.spool_path(attempt, part)?, max_bytes)
+        self.owner_with_budget(attempt, budget)?;
+        let path = self
+            .attempt_dir_with_budget(attempt, budget)?
+            .join(match part {
+                SpoolPart::Body => "response.bin",
+                SpoolPart::Metadata => "metadata.json",
+            });
+        read_with_budget(&path, max_bytes, budget, |maximum| read(&path, maximum))
     }
     fn guarded(path: &Path, expected: &ExpectedState, limit: u64) -> Result<()> {
         let actual =

@@ -76,7 +76,16 @@ pub(crate) fn terminal_report(
     manifest: &ChangeManifest,
     hash: &Blake3Hash,
 ) -> Result<Option<ApplyReport>> {
-    Ok(load_terminal_proof(fs, manifest, hash)?
+    terminal_report_with_reader(manifest, hash, &mut |path, maximum| {
+        read_bounded(fs, path, maximum)
+    })
+}
+pub(crate) fn terminal_report_with_reader(
+    manifest: &ChangeManifest,
+    hash: &Blake3Hash,
+    reader: &mut crate::storage::layout::RawReader<'_>,
+) -> Result<Option<ApplyReport>> {
+    Ok(load_terminal_proof_with_reader(manifest, hash, reader)?
         .as_ref()
         .map(report))
 }
@@ -101,7 +110,16 @@ fn load_terminal_proof(
     manifest: &ChangeManifest,
     hash: &Blake3Hash,
 ) -> Result<Option<TerminalProof>> {
-    let Some(bytes) = read_bounded(fs, &path(&manifest.change_id)?, MAX_JOURNAL_BYTES)? else {
+    load_terminal_proof_with_reader(manifest, hash, &mut |path, maximum| {
+        read_bounded(fs, path, maximum)
+    })
+}
+fn load_terminal_proof_with_reader(
+    manifest: &ChangeManifest,
+    hash: &Blake3Hash,
+    reader: &mut crate::storage::layout::RawReader<'_>,
+) -> Result<Option<TerminalProof>> {
+    let Some(bytes) = reader(&path(&manifest.change_id)?, MAX_JOURNAL_BYTES)? else {
         return Ok(None);
     };
     let receipt: Receipt = strict_json(&bytes)?;
@@ -143,7 +161,7 @@ fn load_terminal_proof(
             "retained receipt does not prove terminal outcome",
         ));
     }
-    let surviving = journal::load_journal(fs, manifest, hash)?;
+    let surviving = journal::load_journal_with_reader(manifest, hash, reader)?;
     if surviving.frames.len() > proof.journal.len()
         || surviving.frames != proof.journal[..surviving.frames.len()]
     {

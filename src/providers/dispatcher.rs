@@ -41,6 +41,7 @@ pub struct Dispatcher {
     fs: VaultFs,
     options: DispatchOptions,
     network_used: std::sync::atomic::AtomicBool,
+    network_observations: std::sync::atomic::AtomicU64,
     retain_http_error_body: bool,
 }
 impl Dispatcher {
@@ -49,6 +50,7 @@ impl Dispatcher {
             fs,
             options,
             network_used: std::sync::atomic::AtomicBool::new(false),
+            network_observations: std::sync::atomic::AtomicU64::new(0),
             retain_http_error_body: false,
         }
     }
@@ -61,6 +63,16 @@ impl Dispatcher {
     /// dispatcher to one invocation; retained response reads do not set it.
     pub fn network_used(&self) -> bool {
         self.network_used.load(std::sync::atomic::Ordering::Relaxed)
+    }
+    pub(crate) fn network_observations(&self) -> u64 {
+        self.network_observations
+            .load(std::sync::atomic::Ordering::Relaxed)
+    }
+    fn observe_network(&self) {
+        self.network_used
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+        self.network_observations
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     }
     pub fn native(fs: VaultFs, broker: Arc<CredentialBroker>) -> Self {
         Self::new(
@@ -94,6 +106,17 @@ impl Dispatcher {
         purpose: DispatchPurpose,
         attempt: &AttemptRef,
     ) -> std::result::Result<ValidatedOutput, RetainedDecodeFailure> {
+        self.decode_retained_classified_bounded(ledger, service, task_key, purpose, attempt, None)
+    }
+    pub(crate) fn decode_retained_classified_bounded(
+        &self,
+        ledger: &JobLedger,
+        service: &TrustedService,
+        task_key: &Blake3Hash,
+        purpose: DispatchPurpose,
+        attempt: &AttemptRef,
+        budget: Option<&crate::catalog::scan::ReadScanBudget>,
+    ) -> std::result::Result<ValidatedOutput, RetainedDecodeFailure> {
         let (fs, vault_id, run_id, options) = ledger.dispatcher_bindings();
         if fs.root().path() != self.fs.root().path()
             || attempt.run_id != run_id
@@ -104,7 +127,16 @@ impl Dispatcher {
                 "retained attempt binding differs",
             )));
         }
-        let inspection = ledger.inspect()?;
+        if let Some(budget) = budget {
+            budget.check()?;
+        }
+        let inspection = match budget {
+            Some(_) => ledger.inspect_accounting_verified()?,
+            None => ledger.inspect()?,
+        };
+        if let Some(budget) = budget {
+            budget.check()?;
+        }
         let task = inspection
             .tasks
             .get(task_key)
@@ -118,9 +150,9 @@ impl Dispatcher {
             WikiError::new(ErrorCode::RecoveryRequired, "retained response missing")
         })?;
         let prepared = if recorded.bound.codec.is_some() {
-            super::history::restore(&fs, &task.spec, &recorded.bound, purpose)?
+            super::history::restore_bounded(&fs, &task.spec, &recorded.bound, purpose, budget)?
         } else {
-            let mut prepared = prepare_descriptor(&fs, service, &task.spec, purpose)?;
+            let mut prepared = prepare_descriptor(&fs, service, &task.spec, purpose, budget)?;
             // Restore the original optional proof before exact bound comparison.
             prepared.bound.profile_fingerprint = recorded.bound.profile_fingerprint.clone();
             prepared.bound.bounds_fingerprint = jobs::budgets::bound_fingerprint(&prepared.bound)?;
@@ -132,26 +164,51 @@ impl Dispatcher {
                 "retained wire contract differs",
             )));
         }
-        let store = crate::vault::operational::RunStore::open_existing(&fs, &vault_id, &run_id)?;
-        let guard = store.lock(Duration::from_millis(options.lock_timeout_ms), &mut || {
-            Ok(())
-        })?;
-        let body = guard
-            .read_spool(
+        let store = match budget {
+            Some(budget) => crate::vault::operational::RunStore::open_existing_bounded(
+                &fs, &vault_id, &run_id, budget,
+            )?,
+            None => crate::vault::operational::RunStore::open_existing(&fs, &vault_id, &run_id)?,
+        };
+        let guard = match budget {
+            Some(budget) => {
+                store.lock_bounded(Duration::from_millis(options.lock_timeout_ms), budget)?
+            }
+            None => store.lock(Duration::from_millis(options.lock_timeout_ms), &mut || {
+                Ok(())
+            })?,
+        };
+        let body = match budget {
+            Some(budget) => guard.read_spool_bounded(
                 attempt,
                 crate::vault::operational::SpoolPart::Body,
                 recorded.bound.response_bytes,
-            )?
-            .ok_or_else(|| WikiError::new(ErrorCode::RecoveryRequired, "retained body missing"))?;
-        let meta = guard
-            .read_spool(
+                budget,
+            )?,
+            None => guard.read_spool(
+                attempt,
+                crate::vault::operational::SpoolPart::Body,
+                recorded.bound.response_bytes,
+            )?,
+        }
+        .ok_or_else(|| WikiError::new(ErrorCode::RecoveryRequired, "retained body missing"))?;
+        let meta = match budget {
+            Some(budget) => guard.read_spool_bounded(
                 attempt,
                 crate::vault::operational::SpoolPart::Metadata,
                 METADATA_MAX_BYTES as u64,
-            )?
-            .ok_or_else(|| {
-                WikiError::new(ErrorCode::RecoveryRequired, "retained metadata missing")
-            })?;
+                budget,
+            )?,
+            None => guard.read_spool(
+                attempt,
+                crate::vault::operational::SpoolPart::Metadata,
+                METADATA_MAX_BYTES as u64,
+            )?,
+        }
+        .ok_or_else(|| WikiError::new(ErrorCode::RecoveryRequired, "retained metadata missing"))?;
+        if let Some(budget) = budget {
+            budget.check()?;
+        }
         decode_authenticated_spool(&prepared, spool, body, meta)
     }
 
@@ -352,7 +409,21 @@ impl Dispatcher {
                         None,
                     ));
                 }
-                let prepared = prepare_effective(&fs, &inspection, service, &task, purpose)
+                let attempt_policy = if let Some(budget) = invocation.filter(|budget| budget.automatic_deadline().is_some()) {
+                    if service.summary().capability != Capability::Embed || !matches!(purpose, DispatchPurpose::Task) {
+                        return Err(failure(WikiError::new(ErrorCode::ProfileUntrusted,
+                            "automatic attempt policy permits only embedding tasks"), None));
+                    }
+                    let current = policy(&options, None, deadline).map_err(|e| failure(e, None))?;
+                    let configured = u64::from(service.service().timeout_seconds.unwrap_or(60)) * 1000;
+                    Some(AutomaticAttemptPolicy {
+                        timeout_ms: budget.automatic_timeout(configured, current.utc_ms, deadline)
+                            .map_err(|e| failure(e, None))?.expect("automatic budget"),
+                        deadline: budget.automatic_deadline().expect("automatic budget"),
+                        io: budget.automatic_io(),
+                    })
+                } else { None };
+                let prepared = prepare_effective(&fs, &inspection, service, &task, purpose, attempt_policy)
                     .map_err(|e| failure(e, None))?;
                 let bound = prepared.bound.clone();
                 let now = policy(&options, None, deadline).map_err(|e| failure(e, None))?;
@@ -431,7 +502,7 @@ impl Dispatcher {
                     }
                 };
                 // Trust/source proof is refreshed after helper IO, without a ledger/writer lock.
-                if let Err(e) = prepare_effective(&fs, &inspection, service, &task, purpose).and_then(|fresh| {
+                if let Err(e) = prepare_effective(&fs, &inspection, service, &task, purpose, attempt_policy).and_then(|fresh| {
                     if fresh.bound != bound
                         || fresh.body != prepared.body
                         || fresh.url != prepared.url
@@ -485,6 +556,7 @@ impl Dispatcher {
                 // The shared deadline may be tighter than this Run's deadline;
                 // re-quote after helper and durable authorization IO as well.
                 if let Err(error) = policy(&options, Some(now), deadline).and_then(|current| {
+                    if let Some(budget) = invocation { budget.check_automatic_time(bound.timeout_ms)?; }
                     jobs::budgets::quote_bound(&bound, &inspection.effective_limits, current.utc_ms, deadline).map(|_| ())
                 }) {
                     let _ = ledger.release_not_sent(&attempt, NotSentObservation { reason: NotSentReason::TransportNotEntered });
@@ -523,12 +595,12 @@ impl Dispatcher {
                     .await
                 {
                     Ok(reply) => {
-                        self.network_used.store(true, std::sync::atomic::Ordering::Relaxed);
+                        self.observe_network();
                         reply
                     },
                     Err(error) => {
                         if !error.not_entered || error.observed_body_bytes > 0 {
-                            self.network_used.store(true, std::sync::atomic::Ordering::Relaxed);
+                            self.observe_network();
                         }
                         if error.not_entered
                             && error.observed_body_bytes == 0
@@ -733,7 +805,8 @@ impl Dispatcher {
                     &attempt,
                     out.materialization.as_ref().unwrap(),
                     task.stage == TaskStage::PrepareSourceRelations,
-                    options.lock_timeout_ms,
+                    &options,
+                    invocation,
                     &mut retained_change,
                 ) {
                     out.error = redacted(e);
@@ -802,14 +875,30 @@ impl Dispatcher {
         result.map_err(|out| retained.finish(out))
     }
 }
+#[derive(Clone, Copy)]
+struct AutomaticAttemptPolicy<'a> {
+    timeout_ms: u64,
+    deadline: std::time::Instant,
+    io: Option<&'a crate::catalog::scan::ReadScanBudget>,
+}
 fn prepare_effective(
     fs: &VaultFs,
     inspection: &LedgerInspection,
     service: &TrustedService,
     task: &TaskSpec,
     purpose: DispatchPurpose,
+    automatic: Option<AutomaticAttemptPolicy<'_>>,
 ) -> Result<PreparedWire> {
-    service.recheck(fs)?;
+    if automatic.is_some_and(|policy| std::time::Instant::now() >= policy.deadline) {
+        return Err(WikiError::new(
+            ErrorCode::BudgetExceeded,
+            "automatic preparation deadline exhausted",
+        ));
+    }
+    match automatic.and_then(|policy| policy.io) {
+        Some(budget) => service.recheck_with_budget(fs, budget)?,
+        None => service.recheck(fs)?,
+    }
     let summary = service.summary();
     let valid = inspection.spec.config_fingerprint == summary.config_fingerprint
         && inspection
@@ -824,13 +913,36 @@ fn prepare_effective(
             "run profile/config binding differs",
         ));
     }
-    let mut prepared = prepare(fs, service, task, purpose)?;
+    let mut prepared = prepare(
+        fs,
+        service,
+        task,
+        purpose,
+        automatic.and_then(|policy| policy.io),
+    )?;
     // Retain the original decode contract after source/profile preparation, before
     // credentials or any reservation can authorize a paid request. The same
     // immutable snapshot is reverified by the post-credential preparation.
     prepared.bound.profile_fingerprint = Some(summary.profile_fingerprint);
+    if let Some(policy) = automatic {
+        if policy.timeout_ms == 0 || policy.timeout_ms > prepared.bound.timeout_ms {
+            return Err(WikiError::invalid(
+                "automatic attempt timeout differs from service bound",
+            ));
+        }
+        prepared.bound.timeout_ms = policy.timeout_ms;
+    }
     prepared.bound.bounds_fingerprint = jobs::budgets::bound_fingerprint(&prepared.bound)?;
-    super::history::retain(fs, task, &mut prepared)?;
+    match automatic {
+        Some(policy) => super::history::retain_bounded(
+            fs,
+            task,
+            &mut prepared,
+            Some(policy.deadline),
+            policy.io,
+        )?,
+        None => super::history::retain(fs, task, &mut prepared)?,
+    }
     Ok(prepared)
 }
 #[derive(Default)]
@@ -997,7 +1109,8 @@ fn commit_receipt(
     attempt: &AttemptRef,
     plan: &MaterializationPlan,
     source_relation: bool,
-    timeout: u64,
+    options: &JobOptions,
+    invocation: Option<&super::invocation_budget::InvocationBudget>,
     retained_change: &mut Option<crate::changes::PreparedChange>,
 ) -> Result<()> {
     if source_relation {
@@ -1031,7 +1144,30 @@ fn commit_receipt(
         path: op.target.clone(),
         hash: Blake3Hash::digest(bytes),
     };
-    let writer = WriterPermit::acquire(fs.root(), Duration::from_millis(timeout))?;
+    let automatic = invocation.filter(|budget| budget.automatic_deadline().is_some());
+    let check_start = || -> Result<()> {
+        if let Some(budget) = automatic {
+            budget.check_automatic_time(1)?;
+            if options.clock.read()?.utc_ms >= budget.deadline_utc_ms() {
+                return Err(WikiError::new(
+                    ErrorCode::BudgetExceeded,
+                    "automatic receipt admission deadline reached; received response retained",
+                ));
+            }
+        }
+        Ok(())
+    };
+    check_start()?;
+    let wait = automatic
+        .and_then(|budget| budget.automatic_deadline())
+        .map_or(Duration::from_millis(options.lock_timeout_ms), |deadline| {
+            deadline
+                .saturating_duration_since(Instant::now())
+                .min(Duration::from_millis(options.lock_timeout_ms))
+        });
+    let writer = WriterPermit::acquire(fs.root(), wait)?;
+    check_start()?;
+    let _canonical_timing = automatic.map(|budget| budget.observe_canonical_start());
     let engine = ChangeEngine::new(fs.clone())?;
     let catalog = Catalog::new(fs.clone(), vault_id.clone());
     let prepared = engine.prepare(&writer, plan.draft.clone())?.prepared;
@@ -1083,18 +1219,40 @@ fn unknown_usage(bound: &AttemptBound, observed: u64) -> KnownOrUnknown<Usage> {
             .collect(),
     })
 }
+fn read_dispatch_input(
+    fs: &VaultFs,
+    path: &VaultRelativePath,
+    maximum: usize,
+    budget: Option<&crate::catalog::scan::ReadScanBudget>,
+) -> Result<Option<Vec<u8>>> {
+    match budget {
+        Some(budget) => {
+            crate::catalog::scan::BoundedReadInput::new(fs, budget)?.read_managed(path, maximum)
+        }
+        None => read_bounded(fs, path, maximum),
+    }
+}
 fn prepare(
     fs: &VaultFs,
     service: &TrustedService,
     task: &TaskSpec,
     purpose: DispatchPurpose,
+    budget: Option<&crate::catalog::scan::ReadScanBudget>,
 ) -> Result<PreparedWire> {
-    service.recheck(fs)?;
+    match budget {
+        Some(budget) => service.recheck_with_budget(fs, budget)?,
+        None => service.recheck(fs)?,
+    }
     for dep in &task.source_bindings {
-        let actual = read_bounded(fs, &dep.path, crate::changes::prepare::MAX_PAYLOAD_BYTES)?
-            .map_or(ExpectedState::Absent, |b| {
-                ExpectedState::Hash(Blake3Hash::digest(b))
-            });
+        let actual = read_dispatch_input(
+            fs,
+            &dep.path,
+            crate::changes::prepare::MAX_PAYLOAD_BYTES,
+            budget,
+        )?
+        .map_or(ExpectedState::Absent, |b| {
+            ExpectedState::Hash(Blake3Hash::digest(b))
+        });
         if actual != dep.expected {
             return Err(WikiError::new(
                 ErrorCode::FreshnessConflict,
@@ -1102,18 +1260,19 @@ fn prepare(
             ));
         }
     }
-    prepare_descriptor(fs, service, task, purpose)
+    prepare_descriptor(fs, service, task, purpose, budget)
 }
 fn prepare_descriptor(
     fs: &VaultFs,
     service: &TrustedService,
     task: &TaskSpec,
     purpose: DispatchPurpose,
+    budget: Option<&crate::catalog::scan::ReadScanBudget>,
 ) -> Result<PreparedWire> {
     if task.key != jobs::tasks::task_key(task)? {
         return Err(WikiError::invalid("task identity differs"));
     }
-    let bytes = read_bounded(fs, &task.input.path, 256 * 1024)?
+    let bytes = read_dispatch_input(fs, &task.input.path, 256 * 1024, budget)?
         .ok_or_else(|| WikiError::new(ErrorCode::FreshnessConflict, "task input missing"))?;
     if bytes.len() as u64 != task.input.byte_len || Blake3Hash::digest(&bytes) != task.input.hash {
         return Err(WikiError::new(

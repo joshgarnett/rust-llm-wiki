@@ -1,9 +1,6 @@
 //! Paged normalized preparation. Compatible vectors survive owner publications.
 use super::*;
-use crate::{
-    catalog::query_types::{QueryCatalog, QueryReadLimits},
-    retrieval::unit_inventory_types::*,
-};
+use crate::{catalog::query_types::QueryCatalog, retrieval::unit_inventory_types::*};
 use std::time::Instant;
 
 const PAGE_OWNERS: usize = 128;
@@ -48,9 +45,20 @@ impl OfflineApp {
         runtime: Option<&EmbeddingRuntime<'_>>,
     ) -> Result<EmbeddingReport> {
         settings.validate()?;
-        let deadline = Instant::now() + Duration::from_secs(120);
+        let automatic = runtime.and_then(|runtime| runtime.automatic.as_ref());
+        let deadline = automatic.map_or_else(
+            || Instant::now() + Duration::from_secs(120),
+            |auto| auto.deadline,
+        );
+        let max_pages = automatic.map_or(MAX_PAGES, |auto| auto.limits.inventory_pages);
+        let page_owners = automatic.map_or(PAGE_OWNERS, |auto| auto.limits.owners);
+        let mut visited_owners = 0usize;
+        let selected_write = automatic.and_then(|auto| match &auto.trigger {
+            PreparationTrigger::AfterWrite { owners } => Some(owners.as_slice()),
+            _ => None,
+        });
         let catalog = Catalog::new(self.fs.clone(), self.vault_id.clone());
-        let old = match VectorStore::open(&self.fs, None) {
+        let old = match self.embedding_store_for(runtime, None) {
             Ok(store) => store.active()?,
             Err(e) if e.code == ErrorCode::OfflineUnavailable && runtime.is_some() => None,
             Err(e) => return Err(e),
@@ -88,18 +96,40 @@ impl OfflineApp {
         if let Some(runtime) = runtime {
             let recovered = self.recover_embedding_jobs(&spec, runtime)?;
             report.generated_inputs += recovered.generated;
-            report.network_used |= recovered.generated > 0;
+            report.network_used = runtime.network_used();
             report.run_id = recovered.run_id;
             report.warnings.extend(recovered.warnings);
             counted_inputs.extend(recovered.generated_hashes);
         }
+        // Inventory rendering retains its existing 30-second phase ceiling.
+        // Freeze this once so later pages cannot renew that allowance, while
+        // the original operation deadline still governs every later phase.
+        let inventory_deadline = if automatic.is_some() {
+            deadline.min(Instant::now() + Duration::from_secs(30))
+        } else {
+            deadline
+        };
         let mut inventory = None;
-        for _ in 0..MAX_PAGES {
-            if Instant::now() >= deadline {
+        for _ in 0..max_pages {
+            if Instant::now() >= inventory_deadline {
                 break;
             }
-            let writer = self.embedding_writer()?;
-            let page = catalog.prepare_unit_inventory_page(&writer, settings, PAGE_OWNERS)?;
+            if let Some(runtime) = runtime {
+                runtime.automatic_check_start()?;
+            }
+            let writer = match runtime {
+                Some(runtime) => self.embedding_writer_for(runtime)?,
+                None => self.embedding_writer()?,
+            };
+            let page = match automatic {
+                Some(_) => catalog.prepare_unit_inventory_page_with_deadline(
+                    &writer,
+                    settings,
+                    page_owners,
+                    inventory_deadline,
+                )?,
+                None => catalog.prepare_unit_inventory_page(&writer, settings, page_owners)?,
+            };
             let complete = page.complete;
             inventory = Some(page);
             if complete {
@@ -119,9 +149,9 @@ impl OfflineApp {
             return Ok(report);
         }
         let policy = inventory.policy;
-        let initial = catalog.cached_query_snapshot(QueryReadLimits::default())?;
+        let initial = catalog.cached_query_snapshot(Self::automatic_query_limits(runtime)?)?;
         let incarnation = catalog_incarnation(initial.vault_id(), initial.snapshot())?;
-        let store = match VectorStore::open(&self.fs, None) {
+        let store = match self.embedding_store_for(runtime, None) {
             Ok(store) => Some(store),
             Err(e) if e.code == ErrorCode::OfflineUnavailable => None,
             Err(e) => return Err(e),
@@ -149,13 +179,13 @@ impl OfflineApp {
         drop(store);
         drop(initial);
         let mut acknowledged_units = 0usize;
-        'pages: for _ in 0..MAX_PAGES {
+        'pages: for _ in 0..max_pages {
             if Instant::now() >= deadline {
                 report.warnings.push("Preparation reached its command deadline; repeat embeddings sync to resume acknowledged owner pages.".into());
                 break;
             }
-            let phase = Self::embedding_phase()?;
-            let reader = catalog.cached_query_snapshot(QueryReadLimits::default())?;
+            let phase = Self::embedding_phase_for(runtime)?;
+            let reader = catalog.cached_query_snapshot(Self::automatic_query_limits(runtime)?)?;
             if catalog_incarnation(reader.vault_id(), reader.snapshot())? != incarnation {
                 return Err(changed(
                     "catalog rebuilt during preparation; retained compatible vectors remain reusable",
@@ -175,16 +205,44 @@ impl OfflineApp {
                 return Err(changed("registered unit inventory became incomplete"));
             }
             let through = cursor.through_seq.min(reader.snapshot().generation);
-            let bindings = reader.unit_owner_bindings_page(
-                &policy,
-                cursor.after.as_ref(),
-                cursor.since_seq,
-                through,
-                PAGE_OWNERS,
-            )?;
-            let last = bindings.len() < PAGE_OWNERS;
-            let writer = self.embedding_writer()?;
-            let mut store = VectorStore::open(&self.fs, Some(&writer))?;
+            let bindings = if let Some(owners) = selected_write {
+                let unique: BTreeSet<_> = owners.iter().collect();
+                if unique.len() > page_owners {
+                    return Err(fail(
+                        ErrorCode::BudgetExceeded,
+                        "changed owner allowance reached",
+                    ));
+                }
+                unique
+                    .into_iter()
+                    .filter_map(|owner| match reader.unit_owner_binding(&policy, owner) {
+                        Ok(Some(binding)) => Some(Ok(binding)),
+                        Ok(None) => None,
+                        Err(error) => Some(Err(error)),
+                    })
+                    .collect::<Result<Vec<_>>>()?
+            } else {
+                reader.unit_owner_bindings_page(
+                    &policy,
+                    cursor.after.as_ref(),
+                    cursor.since_seq,
+                    through,
+                    page_owners,
+                )?
+            };
+            let last = selected_write.is_none() && bindings.len() < page_owners;
+            visited_owners = visited_owners.saturating_add(bindings.len());
+            if automatic.is_some_and(|auto| visited_owners > auto.limits.owners) {
+                report
+                    .warnings
+                    .push("Automatic owner allowance reached; preparation remains pending.".into());
+                break;
+            }
+            let writer = match runtime {
+                Some(runtime) => self.embedding_writer_for(runtime)?,
+                None => self.embedding_writer()?,
+            };
+            let mut store = self.embedding_store_for(runtime, Some(&writer))?;
             store.prepare_space(&spec)?;
             store.bind_read_budget(&phase)?;
             let mut selected = Vec::new();
@@ -210,7 +268,7 @@ impl OfflineApp {
                         "preparation planning command deadline exceeded",
                     ));
                 }
-                let scope_phase = Self::embedding_phase()?;
+                let scope_phase = Self::embedding_phase_for(runtime)?;
                 let mut inputs = indexed_embedding_inputs::materialize(
                     &catalog,
                     settings,
@@ -220,9 +278,9 @@ impl OfflineApp {
                 inputs.recheck(&catalog)?;
                 planning.append(inputs.into_planning_summary()?)?;
             }
-            let phase = Self::embedding_phase()?;
+            let phase = Self::embedding_phase_for(runtime)?;
             let units = &planning.units;
-            let available = VectorStore::open_bounded_snapshot(&self.fs, &phase)?;
+            let available = self.embedding_snapshot_store_for(runtime, &phase)?;
             let mut missing = Vec::new();
             let mut hashes = BTreeSet::new();
             for unit in units {
@@ -247,13 +305,41 @@ impl OfflineApp {
             drop(available);
             if !missing.is_empty() {
                 if let Some(runtime) = runtime {
-                    let scope = planning.paid_scope(&missing, 127, deadline)?;
+                    missing.truncate(runtime.automatic_input_prefix(&missing));
+                    if missing.is_empty() {
+                        report.warnings.push(
+                            "Automatic input allowance reached; this owner remains pending.".into(),
+                        );
+                        break 'pages;
+                    }
+                    let mut scope = planning.paid_scope(&missing, 127, deadline)?;
                     let batches = self.embedding_supplier_batches(
                         runtime,
                         &missing,
                         &scope.source_bindings,
                         &scope.units,
                     )?;
+                    let batches = runtime.automatic_limit_batches(&spec, batches)?;
+                    if batches.is_empty() {
+                        report.warnings.push(
+                            "Automatic request allowance reached; this owner remains pending."
+                                .into(),
+                        );
+                        break 'pages;
+                    }
+                    if automatic.is_some() {
+                        let admitted: BTreeSet<_> = batches
+                            .iter()
+                            .flatten()
+                            .map(|input| &input.input_hash)
+                            .collect();
+                        scope
+                            .units
+                            .retain(|unit| admitted.contains(&unit.input_hash));
+                        scope
+                            .source_bindings
+                            .retain(|hash, _| admitted.contains(hash));
+                    }
                     if Instant::now() >= deadline {
                         return Err(fail(
                             ErrorCode::BudgetExceeded,
@@ -301,7 +387,7 @@ impl OfflineApp {
                                 )
                             })?;
                         report.generated_inputs += generated;
-                        report.network_used |= generated > 0;
+                        report.network_used = runtime.network_used();
                     }
                     if let Some(warning) = self.finish_embedding_job(&ledger)? {
                         report.warnings.push(warning)
@@ -347,9 +433,13 @@ impl OfflineApp {
                     report.warnings.push("Preparation reached its command deadline; repeat embeddings sync to resume the acknowledged owner prefix.".into());
                     break 'pages;
                 }
-                let writer = self.embedding_writer()?;
-                let phase = Self::embedding_phase()?;
-                let reader = catalog.cached_query_snapshot(QueryReadLimits::default())?;
+                let writer = match runtime {
+                    Some(runtime) => self.embedding_writer_for(runtime)?,
+                    None => self.embedding_writer()?,
+                };
+                let phase = Self::embedding_phase_for(runtime)?;
+                let reader =
+                    catalog.cached_query_snapshot(Self::automatic_query_limits(runtime)?)?;
                 if catalog_incarnation(reader.vault_id(), reader.snapshot())? != incarnation {
                     return Err(changed("catalog rebuilt before owner acknowledgment"));
                 }
@@ -400,6 +490,9 @@ impl OfflineApp {
                         }
                         ready.push((binding.clone(), descriptors));
                     }
+                    if let Some(runtime) = runtime {
+                        runtime.automatic_check_start()?;
+                    }
                     catalog.record_unit_owner_dependencies(
                         &writer,
                         &policy,
@@ -407,7 +500,7 @@ impl OfflineApp {
                         &inputs.owner_dependencies()?,
                     )?;
                 }
-                let mut store = VectorStore::open(&self.fs, Some(&writer))?;
+                let mut store = self.embedding_store_for(runtime, Some(&writer))?;
                 store.bind_read_budget(&phase)?;
                 for binding in *scope_bindings {
                     if binding.tombstone {
@@ -420,6 +513,15 @@ impl OfflineApp {
                         ));
                     }
                 }
+                if automatic.is_some()
+                    && let Some(inputs) = &fresh
+                {
+                    let coverage = store.coverage(&space, &inputs.units)?;
+                    if coverage.missing_units != 0 {
+                        report.warnings.push("Selected owner is partially prepared; its cached inputs will be reused next time.".into());
+                        break 'pages;
+                    }
+                }
                 let final_scope = scope_index + 1 == scopes.len();
                 let next = acknowledged_prefix_cursor(
                     &cursor,
@@ -427,13 +529,17 @@ impl OfflineApp {
                     last && final_scope,
                     reader.snapshot().generation,
                 );
-                let complete = next.complete;
+                let complete = selected_write.is_none() && next.complete;
                 let dimensions = store.space(&space)?.and_then(|x| x.actual_dimensions);
                 let activate = complete && state.unit_count > 0 && dimensions.is_some();
                 store.acknowledge_unit_owners_checked(
                     &space,
                     &ready,
-                    Some(&next),
+                    if selected_write.is_none() {
+                        Some(&next)
+                    } else {
+                        None
+                    },
                     activate,
                     &spec,
                     || {
@@ -447,7 +553,9 @@ impl OfflineApp {
                 )?;
                 // The cursor advances only after the matching owner transaction commits.
                 let catches_up = next.since_seq != cursor.since_seq;
-                cursor = next;
+                if selected_write.is_none() {
+                    cursor = next;
+                }
                 acknowledged_units = acknowledged_units.saturating_add(
                     scope_bindings
                         .iter()
@@ -477,6 +585,9 @@ impl OfflineApp {
                 if catches_up {
                     acknowledged_units = 0;
                 }
+            }
+            if selected_write.is_some() {
+                break;
             }
         }
         report.warnings.push("Coverage describes current inventory and retained owner acknowledgments; it is not a full vector-blob integrity audit. Query discovery checks the compatible blobs it reads; canonical evidence is authenticated only for selected owners.".into());

@@ -64,6 +64,72 @@ pub struct RemoteContext<'a> {
     pub allow_ambient_provider: bool,
 }
 impl RemoteArguments {
+    /// Resolve the separate private automatic permission. Construction does not
+    /// read credentials or execute a helper; dispatch retains the usual broker.
+    pub(super) fn automatic_runtime(
+        &self,
+        app: &crate::app::OfflineApp,
+        context: &RemoteContext<'_>,
+    ) -> Result<RemoteRuntime> {
+        let effective = self.effective(context);
+        let profile = context.profile.ok_or_else(|| {
+            WikiError::new(
+                ErrorCode::ProfileUntrusted,
+                "automatic similarity search is not configured",
+            )
+        })?;
+        let path = effective
+            .providers_config
+            .clone()
+            .map(Ok)
+            .unwrap_or_else(|| {
+                if context.allow_ambient_provider {
+                    remote::default_provider_path()
+                } else {
+                    Err(WikiError::new(
+                        ErrorCode::ProfileUntrusted,
+                        "automatic similarity search is not configured",
+                    ))
+                }
+            })?;
+        let service = crate::config::providers::ProviderConfig::load(&path)?
+            .authorize_automatic_embeddings(app.fs(), app.vault_id(), profile)?;
+        let options = remote::native_job_options(
+            ExecutionPolicy {
+                offline: app.options().offline,
+                dry_run: app.options().dry_run,
+                retry_uncertain: false,
+            },
+            app.options().lock_timeout_ms.min(1000),
+        );
+        let now = options.clock.read()?.utc_ms;
+        let deadline_ms = effective.deadline_ms.unwrap_or(DEFAULT_DEADLINE_MS);
+        effective.requested_limits()?;
+        let deadline = now
+            .checked_add(
+                i64::try_from(deadline_ms)
+                    .map_err(|_| WikiError::new(ErrorCode::Usage, "deadline overflows"))?,
+            )
+            .ok_or_else(|| WikiError::new(ErrorCode::BudgetExceeded, "deadline overflows"))?;
+        let broker = std::sync::Arc::new(crate::providers::credentials::CredentialBroker::new(
+            crate::providers::credentials::CredentialOptions {
+                clock: options.clock.clone(),
+                inputs: std::sync::Arc::new(crate::providers::credentials::NativeSecretInputs),
+                runner: std::sync::Arc::new(crate::providers::credentials::NativeHelperRunner),
+            },
+        ));
+        Ok(RemoteRuntime {
+            service,
+            dispatcher: crate::providers::dispatcher::Dispatcher::native(app.fs().clone(), broker),
+            job_options: options,
+            limits: effective.limits()?,
+            created_at_utc_ms: now,
+            deadline_utc_ms: deadline,
+            requested_limits: Some(
+                self.requested_limits_with_currency(effective.currency.as_deref())?,
+            ),
+        })
+    }
     pub fn currency_name(&self) -> &str {
         self.currency.as_deref().unwrap_or("USD")
     }

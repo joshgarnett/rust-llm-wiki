@@ -50,26 +50,39 @@ folder still lets you capture notes from your existing editor folder.
 
 ## Capture and refresh notes
 
-Save a copy of a note for the agent to cite:
+Save copies of the notes you want the agent to cite:
 
 ```sh
-lwiki --offline source add "/absolute/path/to/project-notes.md" --title "Project notes"
+lwiki source capture "/absolute/path/to/project-notes.md"
+lwiki source capture "/absolute/path/to/Notes/project"
 ```
 
-The result includes a source ID and its managed path. Keep the ID for later
-updates. The original stays unchanged. Open the captured copy from `sources/`
-in your wiki to see the saved text.
-
-After editing the original, capture its updated version under the same ID:
+Use either command, or give several file and folder paths to one capture command.
+Folders are searched recursively for Markdown and plain-text notes. Capture
+leaves originals unchanged and prints source IDs, citation status and a summary
+of saved files. Read a saved note with its ID:
 
 ```sh
-lwiki --offline source refresh SOURCE_ID --file "/absolute/path/to/project-notes.md"
-lwiki --offline context 'your question about the project'
+lwiki source read SOURCE_ID --max-bytes 12000
 ```
 
-Replace `SOURCE_ID` with the ID from capture. Refresh keeps the earlier copies
-so existing citations still point to their original text. Use refresh rather
-than adding the same note again, which would create a separate source.
+After editing your originals, repeat the same capture command. It adds new files,
+refreshes changed files under their existing IDs and reuses unchanged copies.
+Earlier copies remain available so old citations keep their original text.
+Check skipped or failed files in the result before relying on complete coverage.
+
+With automatic search by meaning enabled, a successful capture prepares eligible
+changed text within finite limits. Add `--offline` to capture, read or lookup
+commands to block provider requests. Local capture and word search still work.
+
+For a previously saved source whose input has moved, refresh it explicitly:
+
+```sh
+lwiki --offline source refresh SOURCE_ID --file "/absolute/path/to/new-location.md"
+```
+
+Use the actual source ID. `source add FILE --title TITLE` remains available when
+you deliberately want a separate new source or a custom title.
 
 If you have the managed source path instead of its ID, you can use the guarded
 path route. Inspect the input note inside your wiki, then copy the returned
@@ -84,7 +97,7 @@ Replace both `SOURCE_ID` and `INPUT_HASH` with actual returned values. The hash
 check stops the command if the input changed after inspection.
 
 `index sync` picks up edits to wiki pages and other files in the wiki. It does
-not capture a new copy of an edited original. Refresh explicitly when you want
+not capture a new copy of an edited original. Repeat capture, or refresh explicitly, when you want
 the agent to cite the update. See [collection maintenance](sources-and-providers.md#maintain-imported-sources)
 for imported notes.
 

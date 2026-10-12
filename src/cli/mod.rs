@@ -9,12 +9,14 @@ pub use dispatch::{execute, present, present_with_wiki};
 mod decisions;
 mod review;
 
+mod automatic_embeddings;
 pub mod embeddings;
 pub mod remote;
 pub mod skill_export;
 
 pub mod interrupt;
 pub mod research;
+mod source_capture;
 pub mod source_import;
 pub mod storage;
 

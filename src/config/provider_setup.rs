@@ -1,7 +1,7 @@
 //! Narrow setup edits using the existing provider schema and authority validator.
 use super::providers::{
-    MAX_HELPER_ARG_BYTES, MAX_HELPER_ARG_TOTAL, MAX_HELPER_ARGS, MAX_PROVIDER_CONFIG_BYTES,
-    ProviderConfig,
+    AutomaticEmbeddingConsent, MAX_HELPER_ARG_BYTES, MAX_HELPER_ARG_TOTAL, MAX_HELPER_ARGS,
+    MAX_PROVIDER_CONFIG_BYTES, ProviderAutomaticEmbeddingDecision, ProviderConfig,
 };
 use crate::{config::DefaultWiki, domain::*};
 use std::{fmt, path::PathBuf};
@@ -281,6 +281,23 @@ pub fn build_embedding_document(
     setup: &EmbeddingSetup,
     wiki: &DefaultWiki,
 ) -> Result<ProviderSetupDocument> {
+    build_embedding_document_with_automatic(
+        existing,
+        setup,
+        wiki,
+        ProviderAutomaticEmbeddingDecision::Preserve,
+    )
+}
+
+/// Reviewed grants only the fixed automatic embedding text scope. Explicit
+/// setup.grant remains independent; planning resolves no credentials and does
+/// not establish runtime authority for a wiki that has not yet been created.
+pub fn build_embedding_document_with_automatic(
+    existing: Option<&[u8]>,
+    setup: &EmbeddingSetup,
+    wiki: &DefaultWiki,
+    automatic: ProviderAutomaticEmbeddingDecision,
+) -> Result<ProviderSetupDocument> {
     let mut document = parse_document(existing)?;
     let mut additions = Table::new();
     let auth = auth_table(&setup.auth)?;
@@ -353,10 +370,83 @@ pub fn build_embedding_document(
             )?;
         }
     }
+    append_automatic_embedding_grant(
+        existing,
+        &mut document,
+        &mut additions,
+        wiki,
+        (Some(&profile), &profile),
+        automatic,
+    )?;
     let bytes = encode_document(existing, &document, &additions)?;
     Ok(ProviderSetupDocument {
         bytes,
         profile,
         service,
     })
+}
+
+/// Append a separate binding, preserving every existing entry. Identity is
+/// taken from validated services, including full endpoint and CA contents.
+/// Preserve transfers consent only from the matching originally selected
+/// profile at this exact root/ID to an equal text destination/model identity.
+pub(super) fn append_automatic_embedding_grant(
+    existing: Option<&[u8]>,
+    document: &mut Table,
+    additions: &mut Table,
+    wiki: &DefaultWiki,
+    profiles: (Option<&str>, &str),
+    decision: ProviderAutomaticEmbeddingDecision,
+) -> Result<(AutomaticEmbeddingConsent, AutomaticEmbeddingConsent)> {
+    let (previous_profile, profile) = profiles;
+    let before = existing
+        .map(ProviderConfig::from_planned_bytes)
+        .transpose()?;
+    let previous = match (&before, previous_profile) {
+        (Some(config), Some(profile)) => {
+            config.planned_automatic_embedding_consent(wiki, profile)?
+        }
+        _ => AutomaticEmbeddingConsent::Absent,
+    };
+    let planned_bytes =
+        toml::to_string(document).map_err(|_| invalid("provider setup encoding failed"))?;
+    let planned = ProviderConfig::from_planned_bytes(planned_bytes.as_bytes())?;
+    let current = planned.planned_automatic_embedding_consent(wiki, profile)?;
+    let transfer = if decision == ProviderAutomaticEmbeddingDecision::Preserve
+        && previous == AutomaticEmbeddingConsent::Matching
+    {
+        let original = before
+            .as_ref()
+            .expect("matching original config")
+            .automatic_grant_for_profile(previous_profile.expect("matching original profile"))?;
+        let selected = planned.automatic_grant_for_profile(profile)?;
+        original.same_text_identity(&selected)
+    } else {
+        false
+    };
+    if current != AutomaticEmbeddingConsent::Matching
+        && (decision == ProviderAutomaticEmbeddingDecision::Reviewed || transfer)
+    {
+        let grant = planned.automatic_grant_for_profile(profile)?;
+        let grant = Value::try_from(grant)
+            .map_err(|_| invalid("automatic embedding permission encoding failed"))?;
+        let root = wiki
+            .path
+            .to_str()
+            .filter(|_| wiki.path.is_absolute())
+            .ok_or_else(|| invalid("wiki path must be absolute UTF-8"))?;
+        let binding = Value::Table(Table::from_iter([
+            ("root".into(), Value::String(root.into())),
+            ("wiki_id".into(), Value::String(wiki.wiki_id.to_string())),
+            ("allowed_profiles".into(), Value::Array(Vec::new())),
+            ("automatic_embedding".into(), grant),
+        ]));
+        let encoded = toml::to_string(&binding)
+            .map_err(|_| invalid("automatic embedding permission encoding failed"))?;
+        let hash = blake3::hash(encoded.as_bytes()).to_hex().to_string();
+        let name = format!("lwiki-auto-{}", &hash[..24]);
+        insert_exact(document, additions, "vault_bindings", &name, binding)?;
+        return Ok((previous, AutomaticEmbeddingConsent::Matching));
+    }
+    Ok((previous, current))
 }

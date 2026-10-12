@@ -36,23 +36,32 @@ Search and context have output limits, so they can omit useful facts. If a fact
 is missing, search for its wording, narrow to the relevant source, or read more
 of that note. An empty result does not prove the information is absent.
 
-These word searches and reads stay on your machine. You do not need `--offline`.
+If you enabled automatic search by meaning, ordinary search and context combine
+word matches with similar meanings. They can send eligible note text and your
+question to the approved embedding service. Preparation has finite limits and
+can remain incomplete. When search by meaning is unavailable, the command uses
+local search and reports why. You can keep working and inspect warnings if a needed fact is missing.
+
+For local word search, use `--mode lexical`. Literal search also stays local.
+Add `--offline` to block all provider requests, including credential helper calls.
+Reads do not need a provider. A wiki saved as your default is not, by itself,
+permission to send its notes.
+
 Ordinary local lookups pick up edits to files in a small wiki without writing
-to the folder. An agent only needs read access. This also works when the saved
-search index is missing.
-After changing an original note outside the wiki,
-[refresh its saved copy](everyday-use.md#capture-and-refresh-notes) to use that
-change as cited evidence.
+to the folder. An agent only needs read access for this local route. It also
+works when the saved search index is missing. After changing an original note
+outside the wiki, [capture it again](everyday-use.md#capture-and-refresh-notes)
+to use the update as cited evidence.
 
 For larger wikis, a lookup may use the saved index and warn that new or edited
 notes could be missing. Run `lwiki index sync` from a session with write access
 to update it. Read warnings before treating a result as current. Use `lwiki check`
 to check all managed files for errors.
 
-Search by meaning uses `--mode semantic` or `hybrid` and needs
-[prepared embeddings](sources-and-providers.md#optional-remote-providers).
-Those modes can send text to your configured provider. `--offline` blocks those
-provider requests.
+Explicit `--mode semantic` or `--mode hybrid` requires
+[compatible embeddings](sources-and-providers.md#optional-remote-providers).
+These modes report a missing prerequisite instead of switching to word search.
+Offline use requires an identical cached query embedding.
 
 ## Scope, filters and bounds
 
@@ -96,6 +105,18 @@ claiming the text is current. `--no-sync` is not a workaround for denied write
 access; ordinary local lookup is the read-only route.
 
 ## Read an exact captured range
+
+Read a saved source using the ID returned by capture:
+
+```sh
+lwiki --offline source read SOURCE_ID --max-bytes 12000
+```
+
+This returns its saved text and a citation. For an earlier copy, add
+`--revision REVISION_ID` using a returned revision ID. To continue a long read,
+follow the returned `--start` instruction and keep that revision fixed. Each
+range has its own citation. `read --id SOURCE_ID` reads source metadata rather
+than the saved text.
 
 Copy the payload path and byte range returned by search or context:
 

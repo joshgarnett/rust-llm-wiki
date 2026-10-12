@@ -6,9 +6,10 @@ open in Obsidian or another editor. It saves copies of your source notes so an
 agent can cite them, keeps earlier copies when you update a note, and helps you
 write and revise wiki pages.
 
-Capturing notes, reading, editing and searching work offline. Search by meaning
-is optional and uses a remote embedding service. You do not need a local model,
-database server or background service.
+Capture, read, edit and search your notes offline with `--offline`. Optional
+search by meaning uses a remote embedding service. If you enable it during
+setup, ordinary searches prepare and use it automatically, with local search
+as a fallback. You do not need a local model, database server or background service.
 
 ## Get started
 
@@ -21,7 +22,8 @@ database server or background service.
 
    Choose a folder you want to keep, save it as your default wiki, and select
    Codex, Sagex, Claude Code or Cursor when setup asks which agent to connect. You can
-   skip the optional embedding model and start with offline search.
+   enable optional search by meaning after reviewing its model and destination,
+   or skip it and start with local search.
 3. Restart your chosen agent. Give it a note or folder and a question, for example:
 
    > Use llm-wiki and my default wiki. Capture my notes from

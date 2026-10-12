@@ -23,6 +23,8 @@
     "page batch",
     "page rename",
     "source add",
+    "source capture",
+    "source read",
     "source refresh",
     "source refresh-batch",
     "source withdraw",
@@ -71,14 +73,14 @@
     "migrate"
   ],
   "files": {
-    "SKILL.md": "a46c28e9e3c4bd2daf2666959f9d837125dd921fb58ccd8528218937e03b8a3c",
+    "SKILL.md": "e98fad70060f729512e619cafb8d45a3d9564d8dc3d1d1f056059853027d280d",
     "agents/openai.yaml": "307ad222dc5d27d563d54b0a0466264fd035378ce2d103bcbf8de4ed2ea1b144",
-    "references/cited-page.md": "dcc9dbe3c712ae8e451e8d2a7b73ebd6837e0489d4b08bb6255a34192982accc",
-    "references/commands.md": "02f571591da06f833e747ae6abe11e9fd98e4fd8bcc9df73bbd004ae137e1095",
+    "references/cited-page.md": "55057dc5a73a711a85d85fb5c80bd1aec50c05140d73197bc1d7654e6c0b8f9f",
+    "references/commands.md": "4b9260dfbb23ecc48addd2e06daf78e95215843088906c3ddaf462e5ee55de73",
     "references/examples.json": "c9e5471d1b1506317c140e37f051145d5017e6ef077e7350f771468f88eb6d89",
-    "references/workflows.md": "be0b72008caa577c2c7a5965a9a05335f1540833f7e5aa673d9295c875a90f7b"
+    "references/workflows.md": "22ed821cf884bd8ed8ecdf0cf7cc4263037b03b20b45f09ebcc99876ba201b44"
   },
-  "package_checksum": "ef54f999f77ffd80511b0832379fe9336d67bd0511f9538d21f7e144f58c3785",
+  "package_checksum": "93e0da6ff7ed40c94b4f564f5ebd2c1e91a860e153754ffddc4f264efca7d8ef",
   "schema": "lwiki.skill-manifest.v1",
   "schemas": [
     "context-original-selection",

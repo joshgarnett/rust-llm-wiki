@@ -66,13 +66,23 @@ impl ChangeEngine {
     }
     /// Payload-independent terminal history; unresolved work keeps strict loading.
     pub fn inspect_history(&self, id: &RecordId) -> Result<ChangeInspection> {
-        self.require_binding()?;
-        let (manifest, manifest_hash) = self.load_manifest_structure(id)?;
-        let Some(report) = outcome::terminal_report(&self.fs, &manifest, &manifest_hash)? else {
-            return self.inspect(id);
+        self.inspect_history_with_reader(id, &mut |path, maximum| {
+            read_bounded(&self.fs, path, maximum)
+        })
+    }
+    pub(crate) fn inspect_history_with_reader(
+        &self,
+        id: &RecordId,
+        reader: &mut crate::storage::layout::RawReader<'_>,
+    ) -> Result<ChangeInspection> {
+        self.require_binding_with_reader(reader)?;
+        let (manifest, manifest_hash) = self.load_manifest_structure_with_reader(id, reader)?;
+        let Some(report) = outcome::terminal_report_with_reader(&manifest, &manifest_hash, reader)?
+        else {
+            return self.inspect_with_reader(id, reader);
         };
-        let journal = journal::load_journal(&self.fs, &manifest, &manifest_hash)?;
-        let note = read_bounded(&self.fs, &manifest_path(id)?, MAX_MANIFEST_BYTES + 65_536)?
+        let journal = journal::load_journal_with_reader(&manifest, &manifest_hash, reader)?;
+        let note = reader(&manifest_path(id)?, MAX_MANIFEST_BYTES + 65_536)?
             .ok_or_else(|| WikiError::invalid("missing historical change note"))?;
         let note_status = parse_note(&note)
             .canonical

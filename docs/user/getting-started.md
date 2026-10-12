@@ -20,10 +20,15 @@ Setup walks you through these choices:
 2. Save this wiki as your default so later commands can find it from any folder.
 3. Choose `codex`, `sagex`, `claude-code` or `cursor` to install the wiki instructions for
    your agent. Accept your home folder unless your agent uses a different one.
-4. Skip the optional embedding model to start without an API key. You can
-   [add search by meaning later](sources-and-providers.md#optional-remote-providers).
-   You can also skip generation; your agent can work without a separate model.
-5. Review the destinations and confirm setup.
+4. Choose whether to use search by meaning. If you want it, enter your provider
+   model, endpoint and credential source. Review the named wiki, destination and
+   model before allowing automatic requests that send note text and questions.
+   You can skip it to start without an API key and
+   [add it later](sources-and-providers.md#optional-remote-providers).
+   Skip generation unless you want a separate extraction service; your agent
+   can write answers without it.
+5. Review the choices and confirm setup. Automatic search permission applies
+   only to the wiki, destination and embedding model you approved.
 
 When setup prints **Your wiki is ready.**, restart your agent session so it can
 find the installed wiki instructions. Open the folder shown by setup in Obsidian
@@ -73,17 +78,34 @@ when you want the agent to use those changes.
 
 ## Use the terminal directly
 
-Capture one of your notes, then ask for relevant passages:
+Capture a note or folder, then ask for relevant passages:
 
 ```sh
-lwiki --offline source add "/absolute/path/to/your-note.md" --title "Your note title"
-lwiki --offline context 'your question about that note' --max-bytes 6000 --max-tokens 1500
+lwiki source capture "/absolute/path/to/Notes/project"
+lwiki context 'your question about the project' --max-bytes 6000 --max-tokens 1500
 ```
 
-Replace the path, title and question before running the commands. Capture prints
-the saved note's ID and path; keep these for future updates. Context prints
-passages and citations. It supplies evidence for an answer; your agent writes
-the answer.
+Replace the path and question before running the commands. Capture saves the
+chosen files and prints their source IDs and citation status. It searches folders
+recursively. Repeat the same command after editing your notes: it refreshes
+changed files, adds new ones and reuses unchanged copies.
+
+Context prints passages and citations for your agent to use in its answer.
+With automatic search enabled, capture prepares eligible changed text and an
+ordinary lookup can prepare more within finite limits. Preparation may remain
+incomplete. If search by meaning is unavailable, lookup uses local search and
+explains the fallback. Check warnings if
+important details are missing. Add `--offline` to both commands to block provider
+requests.
+
+Read a saved note directly using its returned source ID:
+
+```sh
+lwiki source read SOURCE_ID --max-bytes 12000
+```
+
+Replace `SOURCE_ID` with an ID from capture. The result includes the saved text
+and a citation for that text. Follow any continuation instruction to read more.
 
 To find an exact word or command you remember from the note:
 

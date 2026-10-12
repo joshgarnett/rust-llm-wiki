@@ -10,7 +10,11 @@ use crate::{
     vault::{DirectorySync, ExpectedState, VaultFs, WriterPermit},
 };
 use serde::{Deserialize, Serialize};
-use std::{collections::BTreeMap, sync::Arc, time::Duration};
+use std::{
+    collections::BTreeMap,
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 const MAX_CODEC_BYTES: usize = 256 * 1024;
 const MAX_INPUT_BYTES: usize = 256 * 1024;
@@ -85,11 +89,28 @@ fn normalized(bound: &AttemptBound) -> Result<AttemptBound> {
 fn codec_path(hash: &Blake3Hash) -> Result<VaultRelativePath> {
     VaultRelativePath::new(format!("{CODEC_DIRECTORY}/{}.json", hash.hex()))
 }
-fn input(fs: &VaultFs, task: &TaskSpec) -> Result<RemoteInput> {
+fn read_with_budget(
+    fs: &VaultFs,
+    path: &VaultRelativePath,
+    maximum: usize,
+    budget: Option<&crate::catalog::scan::ReadScanBudget>,
+) -> Result<Option<Vec<u8>>> {
+    match budget {
+        Some(budget) => {
+            crate::catalog::scan::BoundedReadInput::new(fs, budget)?.read_managed(path, maximum)
+        }
+        None => read_bounded(fs, path, maximum),
+    }
+}
+fn input(
+    fs: &VaultFs,
+    task: &TaskSpec,
+    budget: Option<&crate::catalog::scan::ReadScanBudget>,
+) -> Result<RemoteInput> {
     if task.input.byte_len > MAX_INPUT_BYTES as u64 || task.key != tasks::task_key(task)? {
         return Err(bad("historical task descriptor bound or identity differs"));
     }
-    let bytes = read_bounded(fs, &task.input.path, MAX_INPUT_BYTES)?
+    let bytes = read_with_budget(fs, &task.input.path, MAX_INPUT_BYTES, budget)?
         .ok_or_else(|| bad("historical descriptor missing; retained response remains protected"))?;
     if bytes.len() as u64 != task.input.byte_len
         || Blake3Hash::digest(&bytes) != task.input.hash
@@ -415,11 +436,43 @@ fn durable(sync: DirectorySync) -> Result<()> {
 /// Called only after production preparation and policy preflight, before any
 /// ledger lock/reservation. Never invoke while holding the run-ledger lock.
 pub(super) fn retain(fs: &VaultFs, task: &TaskSpec, prepared: &mut PreparedWire) -> Result<()> {
+    retain_with_deadline(fs, task, prepared, None)
+}
+pub(super) fn retain_with_deadline(
+    fs: &VaultFs,
+    task: &TaskSpec,
+    prepared: &mut PreparedWire,
+    deadline: Option<Instant>,
+) -> Result<()> {
+    retain_bounded(fs, task, prepared, deadline, None)
+}
+pub(super) fn retain_bounded(
+    fs: &VaultFs,
+    task: &TaskSpec,
+    prepared: &mut PreparedWire,
+    deadline: Option<Instant>,
+    budget: Option<&crate::catalog::scan::ReadScanBudget>,
+) -> Result<()> {
+    let remaining = || -> Result<Duration> {
+        let duration = deadline.map_or(Duration::from_secs(5), |deadline| {
+            deadline
+                .saturating_duration_since(Instant::now())
+                .min(Duration::from_secs(5))
+        });
+        if duration.is_zero() {
+            return Err(WikiError::new(
+                ErrorCode::BudgetExceeded,
+                "automatic codec preparation deadline exhausted",
+            ));
+        }
+        Ok(duration)
+    };
+    remaining()?;
     #[cfg(test)]
     if matches!(prepared.contract, WireContract::Fixture) {
         return Ok(());
     }
-    let descriptor = input(fs, task)?;
+    let descriptor = input(fs, task, budget)?;
     if descriptor != prepared.input
         || prepared.bound.bounds_fingerprint != budgets::bound_fingerprint(&prepared.bound)?
     {
@@ -453,8 +506,9 @@ pub(super) fn retain(fs: &VaultFs, task: &TaskSpec, prepared: &mut PreparedWire)
     }
     let hash = Blake3Hash::digest(&bytes);
     let path = codec_path(&hash)?;
-    let writer = WriterPermit::acquire(fs.root(), Duration::from_secs(5))?;
-    match read_bounded(fs, &path, MAX_CODEC_BYTES)? {
+    let writer = WriterPermit::acquire(fs.root(), remaining()?)?;
+    remaining()?;
+    match read_with_budget(fs, &path, MAX_CODEC_BYTES, budget)? {
         Some(old) if old != bytes => return Err(bad("immutable historical codec bytes conflict")),
         Some(_) => durable(fs.sync_target(&path, &writer)?)?,
         None => {
@@ -464,6 +518,7 @@ pub(super) fn retain(fs: &VaultFs, task: &TaskSpec, prepared: &mut PreparedWire)
             durable(fs.replace(staged, &ExpectedState::Absent, &writer)?)?;
         }
     }
+    remaining()?;
     prepared.bound.codec = Some(BoundedPayloadRef {
         path,
         hash,
@@ -480,6 +535,15 @@ pub(super) fn restore(
     bound: &AttemptBound,
     purpose: DispatchPurpose,
 ) -> Result<PreparedWire> {
+    restore_bounded(fs, task, bound, purpose, None)
+}
+pub(super) fn restore_bounded(
+    fs: &VaultFs,
+    task: &TaskSpec,
+    bound: &AttemptBound,
+    purpose: DispatchPurpose,
+    budget: Option<&crate::catalog::scan::ReadScanBudget>,
+) -> Result<PreparedWire> {
     let reference = bound
         .codec
         .as_ref()
@@ -492,7 +556,7 @@ pub(super) fn restore(
             "historical codec path, size or attempt fingerprint differs",
         ));
     }
-    let bytes = read_bounded(fs, &reference.path, MAX_CODEC_BYTES)?
+    let bytes = read_with_budget(fs, &reference.path, MAX_CODEC_BYTES, budget)?
         .ok_or_else(|| bad("historical codec unavailable; retained response remains protected"))?;
     if bytes.len() as u64 != reference.byte_len || Blake3Hash::digest(&bytes) != reference.hash {
         return Err(bad("historical codec bytes differ"));
@@ -510,7 +574,7 @@ pub(super) fn restore(
     {
         return Err(bad("historical codec version/task/attempt proof differs"));
     }
-    let input = input(fs, task)?;
+    let input = input(fs, task, budget)?;
     validate_identity(task, bound, &input, snapshot.role, purpose)?;
     let contract = snapshot.contract.restore(&input, bound, snapshot.role)?;
     Ok(PreparedWire {

@@ -1,10 +1,41 @@
 # Sources and providers
 
-Use [capture and refresh](everyday-use.md#capture-and-refresh-notes) for one
-note. This guide covers collections, batch updates and optional remote services.
-Capturing and searching by words work offline without credentials.
+Capture files or folders with one command. This guide covers collections,
+reviewed batch updates and optional remote services. Capture and word search
+work offline without credentials.
 
 ## Import a collection
+
+For an ordinary folder of notes:
+
+```sh
+lwiki source capture "/absolute/path/to/Notes/project"
+```
+
+Capture walks the folder recursively for `.md`, `.markdown` and `.txt` notes
+and saves them in groups. Hidden folders and symbolic links are skipped. Its
+result shows source IDs, citation status, unchanged files and any skipped or
+failed files. Repeat the command to add new files and refresh changed ones. It keeps
+earlier copies and leaves your originals unchanged. Use `--offline` when you
+want no provider requests.
+
+For notes in several places, pass several paths or make a UTF-8 text file with
+one path per line:
+
+```sh
+lwiki source capture --files-from "/absolute/path/to/note-paths.txt"
+```
+
+Relative paths in the list start from the list's folder. Read a saved note with
+`lwiki source read SOURCE_ID`, using an ID from capture. Add `--json` before
+`source capture` to get every file result and its exact citation object.
+Ordinary capture limits each input to 16 MiB. Split larger notes or use the
+explicit import below when you need its larger input limit.
+
+### Use a reviewed import manifest
+
+For a collection that needs a fixed input list and explicit resumable groups,
+use the import commands below. They are an alternative to ordinary capture.
 
 Make an input list with one JSON object per line. Each object names a file;
 its title and media type are optional. Relative paths start from the input
@@ -127,8 +158,8 @@ lwiki --offline changes apply CHANGE_ID
 
 A dry run checks the request inputs but does not check every source guard.
 The summary helps you choose operations to inspect; review their exact before
-and proposed text before applying. Batch refresh does not update wiki page
-prose or prepare embeddings.
+and proposed text before applying. Batch refresh does not update wiki page prose. Use
+`embeddings sync` when this explicit operation leaves embedding work incomplete.
 
 ## Optional remote providers
 
@@ -179,7 +210,8 @@ such as `2026-12-01T18:00:00Z`.
 Keep the command quoted as one argument. Quotes inside it can preserve spaces
 in a program path or an argument. lwiki runs the program directly; pipes,
 redirects, variable expansion and command substitutions do not run. Never put
-the key itself in the command. Setup records the helper without running it.
+the key itself in the command. Saving helper settings does not run it.
+Permitted automatic preparation can run it after setup saves those settings.
 When a provider request needs credentials, the helper has a 10-second timeout.
 lwiki keeps its token in memory for at most 300 seconds and stops reusing it
 60 seconds before a supplied expiry. A later request gets a fresh token.
@@ -189,8 +221,17 @@ search by meaning. Before saving, review each model, destination, API format,
 credential source and the text it may receive. Embeddings can send wiki text
 and search questions. Generation can send wiki text selected for extraction.
 Answer yes to permit those requests only if you approve all the models shown,
-then confirm applying the settings. Requests can cost money. Setup makes no
-provider request and does not test the credentials.
+then confirm applying the settings. Requests can cost money.
+
+Setup also asks whether to allow automatic search by meaning for the displayed
+wiki, destination and embedding model. This permits note text and search
+questions to be sent during setup, after saves and captures, and during ordinary
+lookups. It does not permit generation requests. If you decline, local search
+still works and embedding preparation remains an explicit command.
+
+With automatic permission, setup can begin bounded embedding preparation after
+saving your settings. It is not a separate credential test. Your agent or
+terminal still needs its own access to the files and network.
 
 Check the saved choices:
 
@@ -201,22 +242,48 @@ lwiki config show
 The output shows the selected wiki, model, destination and credential source
 without showing the key or helper arguments.
 
-### Prepare embeddings and search
+### Search automatically or prepare explicitly
 
-After granting access, test the embedding service with at most one paid request,
-then prepare embeddings with a finite request limit:
+With automatic permission, use ordinary commands:
 
 ```sh
-lwiki doctor --probe --role embed --max-requests 1
+lwiki source capture "/absolute/path/to/Notes/project"
+lwiki search 'your question in different words'
+lwiki context 'your question about the project'
+```
+
+Eligible changed text is prepared after capture or save. Ordinary lookup can
+prepare more and combine word matches with search by meaning. Each invocation
+limits its extra work. It can leave preparation incomplete, and lookup falls
+back to local search if the remote work is unavailable. Read the result's status
+and warnings; a successful capture does not promise complete semantic coverage.
+
+To enable automatic search for an already configured embedding model:
+
+```sh
+lwiki config set embedding --auto-embed
+```
+
+Review the wiki, destination, model and text scope before confirming. For setup
+with supplied model settings, `--auto-embed` requests the same permission.
+Setup's older `--grant-embed` grants only explicit embedding requests; it does
+not turn on automatic requests. Changing the bound wiki, endpoint or model
+requires permission for those new choices. `--auto-embed` never grants generation.
+
+If you prefer explicit preparation or need to finish a larger collection:
+
+```sh
 lwiki embeddings sync --max-requests 20 --quality-target-bytes 3000 --max-input-bytes 8000
 lwiki search 'your question in different words' --mode semantic --max-requests 1
 ```
 
-The sync result reports how much text has embeddings. A request limit can leave
-work incomplete; check coverage before increasing it. Capturing or refreshing
-notes does not prepare embeddings. Run sync again after those updates or after
-changing the embedding model. Saved provider choices apply to new commands, so
-you do not need to repeat their paths or profile name.
+The sync result reports how much text has embeddings. Its request limit can
+leave work incomplete; check coverage before increasing it. Explicit semantic
+and hybrid modes require compatible prepared inputs and report missing
+prerequisites. Saved provider choices apply to commands for that wiki.
+
+For a separate connection test, `lwiki doctor --probe --role embed --max-requests 1`
+sends at most one paid request. Local `lwiki doctor` makes no provider request.
 
 A new semantic question needs a query embedding. An identical cached question
 can later run offline, but offline mode cannot create a missing embedding.
@@ -330,12 +397,19 @@ lwiki --dry-run config set generation --max-output-tokens 8192 --non-interactive
 ```
 
 For an unattended edit, review the preview first, then rerun without `--dry-run`
-and with `--grant-provider --non-interactive`. `--grant-provider` approves
-explicit requests for every final model and destination shown. Changed settings,
-including credentials or an output cap, require this reviewed permission.
+and with `--non-interactive`. Add `--grant-provider` when new explicit-request
+permission is needed. It approves explicit requests for every final model and
+destination shown. Changed generation settings, including credentials or an
+output cap, require that reviewed permission. Rotating embedding credentials
+under a matching automatic grant keeps that permission; it does not require
+`--grant-provider`. Changing the wiki, embedding endpoint or model requires a
+new matching automatic grant if you want automatic requests.
+
 Setup's `--grant-embed` approves embeddings only; it cannot approve a new or
-changed generation service. Neither setup nor `config set` sends provider
-requests, including when used with `--offline`.
+changed generation service. With matching automatic permission, setup and
+`config set embedding` can prepare text after saving settings.
+`config set generation` does not start embedding preparation or generation
+requests. `--offline` blocks requests and credential resolution.
 
 If saving is incomplete, follow the reported retry instruction. Completed steps
 are preserved; repeating the same edit reuses matching settings.

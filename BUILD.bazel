@@ -186,6 +186,7 @@ test_suite(
         ":provider_dispatch_test",
         ":remote_cli_test",
         ":config_provider_scope_test",
+        ":automatic_embedding_cli_test",
         ":research_handoff_test",
         ":research_recovery_test",
         ":retrieval_lexical_test",

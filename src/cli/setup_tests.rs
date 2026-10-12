@@ -55,6 +55,79 @@ fn preview_creates_neither_wiki_preferences_nor_provider_files() {
 }
 
 #[test]
+fn new_automatic_setup_choice_is_visible_in_a_pure_preview() {
+    let (_temp, wiki, preferences, mut args) = fixture();
+    args.dry_run = true;
+    let mut setup = model(&wiki);
+    setup.grant_embed = false;
+    setup.auto_embed = true;
+    let report = execute(&args, &setup).unwrap();
+    assert!(report.ok);
+    assert_eq!(
+        report.data["plan"]["providers"]["automatic_embedding_consent"],
+        "matching"
+    );
+    assert_eq!(report.data["plan"]["automatic_embeddings"]["enabled"], true);
+    assert_eq!(report.data["plan"]["configuration_network_requests"], 0);
+    assert_eq!(
+        report.data["plan"]["providers"]["configuration_credentials_resolved"],
+        false
+    );
+    assert!(report.data["plan"].get("network_requests").is_none());
+    assert!(
+        report.data["plan"]["providers"]
+            .get("network_requests")
+            .is_none()
+    );
+    assert_eq!(
+        report.data["plan"]["automatic_embeddings"]["planned_limits"]["requests"],
+        8
+    );
+    assert!(
+        report.data["retry"]
+            .as_str()
+            .unwrap()
+            .contains("--auto-embed")
+    );
+    assert!(!report.meta.network_used);
+    assert!(!wiki.exists());
+    assert!(!preferences.exists());
+}
+
+#[test]
+fn automatic_permission_prompt_names_one_wiki_model_and_text_scope() {
+    let (_temp, wiki, _preferences, args) = fixture();
+    let setup = model(&wiki);
+    let (identity, _) = validate_folder(&setup, &args).unwrap();
+    let mut patch = ProviderRolePatch::new(ProviderRole::Embedding);
+    patch.model = setup.embedding_model;
+    patch.url = setup.embedding_url;
+    patch.auth = ProviderAuthPatch::Replace(SetupAuth::Environment("MY_UNUSED_KEY".into()));
+    let plan = provider_edit::plan_provider_edit(
+        None,
+        &identity,
+        None,
+        &[patch],
+        ProviderGrantDecision::Preserve,
+    )
+    .unwrap();
+    let mut prompts = Prompts {
+        input: io::Cursor::new(b"yes\n"),
+        output: Vec::new(),
+    };
+    assert!(review_automatic_permission(&plan, &identity, &mut prompts).unwrap());
+    let output = String::from_utf8(prompts.output).unwrap();
+    assert!(output.contains(wiki.to_str().unwrap()));
+    assert!(output.contains("my-selected-embedding-model"));
+    assert!(output.contains("eligible wiki text after setup and saves, and your search questions"));
+    assert_eq!(
+        output.matches("Allow automatic similarity search").count(),
+        1
+    );
+    assert!(!output.contains("MY_UNUSED_KEY"));
+}
+
+#[test]
 fn creates_persistent_real_wiki_and_rerun_preserves_identity_and_notes() {
     let (_temp, wiki, preferences, args) = fixture();
     let first = execute(&args, &choices(&wiki)).unwrap();
@@ -558,7 +631,7 @@ fn embedding_preview_discloses_safe_destination_and_scope_without_remote_work() 
         );
         assert_eq!(embedding["text_scope"], "wiki text and search questions");
         assert_eq!(embedding["grant_embed"], granted);
-        assert_eq!(embedding["network_requests"], 0);
+        assert_eq!(embedding["configuration_network_requests"], 0);
         let mut output = Vec::new();
         present_report(&report, &mut output).unwrap();
         let output = String::from_utf8(output).unwrap();

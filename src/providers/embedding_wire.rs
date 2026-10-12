@@ -3,9 +3,50 @@ use super::{types::*, wire, wire_json};
 use crate::{
     config::providers::{Dimensions, TrustedService},
     domain::*,
-    jobs::TaskSpec,
+    jobs::{Capability, TaskSpec},
 };
 use serde_json::{Value, json};
+
+/// Pure request planning uses the production encoder and sealing rules. The
+/// synthetic task establishes byte fingerprints only; it grants no send authority.
+pub(crate) fn preview(
+    service: &TrustedService,
+    inputs: &[EmbeddingInput],
+    expected_dimensions: Option<u32>,
+    representation_fingerprint: &Blake3Hash,
+) -> Result<crate::jobs::AttemptBound> {
+    use crate::jobs::{self, BoundedPayloadRef, TaskStage};
+    let input = RemoteInput {
+        version: 1,
+        operation: RemoteOperation::Embed {
+            inputs: inputs.to_vec(),
+            expected_dimensions,
+            representation_fingerprint: representation_fingerprint.clone(),
+        },
+    };
+    let bytes = crate::graph::packet::canonical_json(&input)?;
+    let fingerprints = wire::task_fingerprints(service, &input)?;
+    let mut task = TaskSpec {
+        key: Blake3Hash::digest([]),
+        stage: TaskStage::Embed,
+        capability: Some(Capability::Embed),
+        priority: 0,
+        dependencies: Vec::new(),
+        input_hash: fingerprints.input,
+        prompt_hash: fingerprints.prompt,
+        schema_hash: fingerprints.schema,
+        model_hash: Some(fingerprints.model),
+        settings_hash: fingerprints.settings,
+        source_bindings: Vec::new(),
+        input: BoundedPayloadRef {
+            path: VaultRelativePath::new(".wiki/state/embedding-preview.json")?,
+            hash: Blake3Hash::digest(&bytes),
+            byte_len: bytes.len() as u64,
+        },
+    };
+    task.key = jobs::tasks::task_key(&task)?;
+    Ok(prepare(service, &task, &input, DispatchPurpose::Task)?.bound)
+}
 
 pub(super) fn prepare(
     service: &TrustedService,

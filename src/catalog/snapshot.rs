@@ -26,6 +26,14 @@ impl std::io::Write for ProjectionSize {
         Ok(())
     }
 }
+pub(crate) fn require_projection_size(projection: &CatalogProjection) -> Result<()> {
+    serde_json::to_writer(ProjectionSize(0), projection).map_err(|_| {
+        WikiError::new(
+            ErrorCode::BudgetExceeded,
+            "reconstructed catalog projection exceeds the read allocation allowance",
+        )
+    })
+}
 
 impl Catalog {
     /// Rebuild a verified read view in memory, including FTS. This creates no
@@ -40,18 +48,13 @@ impl Catalog {
         &self,
         budget: &scan::ReadScanBudget,
     ) -> Result<ReaderSnapshot> {
-        self.require_legacy_catalog()?;
-        self.guard_current(None)?;
+        self.require_legacy_catalog_bounded(budget)?;
+        self.guard_current_bounded(None, budget)?;
         budget.check()?;
         let projection = scan::scan_with_budget(&self.fs, &self.vault_id, budget)?;
         // SQL publication serializes the projection as one owned string. Count
         // its encoding first so the aggregate allocation remains admitted.
-        serde_json::to_writer(ProjectionSize(0), &projection).map_err(|_| {
-            WikiError::new(
-                ErrorCode::BudgetExceeded,
-                "reconstructed catalog projection exceeds the read allocation allowance",
-            )
-        })?;
+        require_projection_size(&projection)?;
         budget.check()?;
         let mut connection = rusqlite::Connection::open_in_memory().map_err(sql::sql_error)?;
         let deadline = budget.deadline();
@@ -72,8 +75,8 @@ impl Catalog {
             .map_err(sql::sql_error)?;
         transaction.commit().map_err(sql::sql_error)?;
         scan::recheck_bounded(&self.fs, &projection, budget)?;
-        self.require_legacy_catalog()?;
-        self.guard_current(None)?;
+        self.require_legacy_catalog_bounded(budget)?;
+        self.guard_current_bounded(None, budget)?;
         connection
             .execute_batch("BEGIN DEFERRED")
             .map_err(sql::sql_error)?;
@@ -109,6 +112,16 @@ impl Catalog {
         }
         let c = sql::open(&path, self.options.busy_timeout_ms, false)?;
         sql::validate(&c)?;
+        self.snapshot_from_connection(c, None)
+    }
+    pub(crate) fn snapshot_from_connection(
+        &self,
+        c: rusqlite::Connection,
+        budget: Option<&scan::ReadScanBudget>,
+    ) -> Result<ReaderSnapshot> {
+        if let Some(budget) = budget {
+            sql::clamp_busy(&c, self.options.busy_timeout_ms, budget)?;
+        }
         c.execute_batch("BEGIN DEFERRED").map_err(sql::sql_error)?;
         // The first read establishes SQLite's snapshot, including both FTS virtual tables.
         let (generation,parser,manifest,serialized):(i64,String,String,String)=c.query_row("SELECT g.gen,g.parser_hash,g.manifest_hash,g.projection_json FROM generations g JOIN index_meta m ON g.gen=m.published_gen WHERE g.state='complete'",[],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?))).map_err(|e|if matches!(e,rusqlite::Error::QueryReturnedNoRows){WikiError::new(ErrorCode::OfflineUnavailable,"catalog has no published generation")}else{sql::sql_error(e)})?;
@@ -139,6 +152,9 @@ impl Catalog {
             ));
         }
         super::integrity::validate_projection(&c, generation, &projection)?;
+        if let Some(budget) = budget {
+            budget.check()?;
+        }
         Ok(ReaderSnapshot {
             connection: c,
             snapshot,
@@ -207,11 +223,11 @@ impl Catalog {
         reader: &ReaderSnapshot,
         budget: &scan::ReadScanBudget,
     ) -> Result<()> {
-        self.require_legacy_catalog()?;
-        self.guard_current(None)?;
+        self.require_legacy_catalog_bounded(budget)?;
+        self.guard_current_bounded(None, budget)?;
         scan::recheck_bounded(&self.fs, reader.projection(), budget)?;
-        self.require_legacy_catalog()?;
-        self.guard_current(None)
+        self.require_legacy_catalog_bounded(budget)?;
+        self.guard_current_bounded(None, budget)
     }
 }
 impl ReaderSnapshot {

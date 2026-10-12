@@ -41,7 +41,14 @@ mod page_citations_tests;
 pub mod probe;
 pub use pages::{PageBatchRequest, PageUpdate};
 
+mod source_capture;
 mod source_import;
+mod source_read;
+pub use source_capture::{
+    SourceCaptureAction, SourceCaptureItem, SourceCaptureOutcome, SourceCaptureRequest,
+    SourceCaptureTotals,
+};
+pub use source_read::{SourceReadOutcome, SourceReadRequest};
 mod source_refresh_batch;
 mod source_refresh_batch_types;
 pub use source_refresh_batch_types::*;

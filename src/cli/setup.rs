@@ -9,6 +9,7 @@ use crate::{
             ProviderRole, ProviderRolePatch,
         },
         provider_setup::{SetupAuth, SetupCommandOutput},
+        providers::{AutomaticEmbeddingConsent, ProviderAutomaticEmbeddingDecision},
     },
     domain::*,
     output::{Envelope, ErrorOutput},
@@ -64,7 +65,7 @@ pub struct SetupArguments {
     /// Agent home or project folder. Defaults to HOME or the current folder for project scope.
     #[arg(long)]
     pub agent_directory: Option<PathBuf>,
-    /// Optional embedding model name supplied by your provider; makes no requests.
+    /// Embedding model from your provider. Saved automatic permission may prepare search after setup.
     #[arg(long)]
     pub embedding_model: Option<String>,
     /// Your provider's full embeddings-v1 endpoint URL.
@@ -73,7 +74,7 @@ pub struct SetupArguments {
     /// Requested vector dimensions, from 1 to 65536, or auto.
     #[arg(long)]
     pub embedding_dimensions: Option<String>,
-    /// Environment variable holding your key. Setup does not read its value.
+    /// Environment variable holding your key. Its name is saved for provider requests.
     #[arg(long, conflicts_with_all = ["key_file", "prompt_key", "credential_command"])]
     pub key_env: Option<String>,
     /// Existing private key file. Setup stores only its absolute path.
@@ -97,9 +98,12 @@ pub struct SetupArguments {
     /// Private provider configuration destination; defaults beside your user configuration.
     #[arg(long)]
     pub providers_file: Option<PathBuf>,
-    /// Permit explicit future embedding requests for this wiki and chosen model.
+    /// Permit explicitly requested embedding calls; this grant does not enable automatic preparation.
     #[arg(long)]
     pub grant_embed: bool,
+    /// Prepare similarity search now and after saves; send eligible wiki text and search questions to this embedding model.
+    #[arg(long)]
+    pub auto_embed: bool,
     /// Permit explicit future API requests for every final model shown for this wiki.
     #[arg(long, conflicts_with = "grant_embed")]
     pub grant_provider: bool,
@@ -310,8 +314,10 @@ pub(super) fn recheck_provider_publication(path: &Path, expected: &[u8]) -> Resu
 
 fn provider_summary(plan: &ProviderEditPlan) -> Value {
     let mut value = json!({"roles": plan.roles, "changed_fields": plan.changed_fields,
-        "consent_requirements":plan.consent_requirements,"permission_complete":plan.consent_satisfied,
-        "projected_bytes":plan.projected_bytes,"network_requests":0,"credentials_resolved":false});
+        "consent_requirements":plan.consent_requirements,"permission_complete":plan.configuration_consent_satisfied,
+        "explicit_permission_complete":plan.consent_satisfied,
+        "projected_bytes":plan.projected_bytes,"configuration_network_requests":0,"configuration_credentials_resolved":false,
+        "automatic_embedding_consent":plan.automatic_embedding_consent});
     for role in &plan.roles {
         let mut summary = serde_json::to_value(role).expect("safe provider summary");
         summary["text_scope"] = json!(if role.role == ProviderRole::Embedding {
@@ -320,9 +326,10 @@ fn provider_summary(plan: &ProviderEditPlan) -> Value {
             "wiki text selected for API extraction"
         });
         summary["permitted"] = json!(plan.consent_satisfied);
-        summary["network_requests"] = json!(0);
+        summary["configuration_network_requests"] = json!(0);
         if role.role == ProviderRole::Embedding {
             summary["grant_embed"] = json!(plan.consent_satisfied);
+            summary["automatic_embedding_consent"] = json!(plan.automatic_embedding_consent);
         }
         value[role.role.as_str()] = summary;
     }
@@ -385,13 +392,20 @@ pub(super) fn present_providers(summary: &Value, output: &mut impl Write) -> io:
         }
         writeln!(
             output,
-            "Explicit API requests: {}. This command makes no requests.",
+            "Explicit API requests: {}.",
             if role["permitted"] == true {
                 "permitted when explicitly requested"
             } else {
                 "not permitted"
             }
         )?;
+        if name == "embedding" {
+            writeln!(
+                output,
+                "Automatic similarity search: {}.",
+                super::automatic_embeddings::consent_label(&role["automatic_embedding_consent"])
+            )?;
+        }
     }
     Ok(())
 }
@@ -734,7 +748,7 @@ fn collect_loaded<R: BufRead, W: Write>(
                 if embedding_current.is_some() {
                     "Change the embedding model for similarity search?"
                 } else {
-                    "Add an embedding model for similarity search? Setup makes no requests."
+                    "Add an embedding model for similarity search?"
                 },
                 false,
             )?;
@@ -771,6 +785,14 @@ fn collect_loaded<R: BufRead, W: Write>(
                 }
             }
             collect_auth(&mut choices, false, embedding_current.is_some(), prompts)?;
+        }
+        if !configure
+            && !choices.auto_embed
+            && let Some(summary) = current.as_ref().filter(|_| embedding_current.is_some())
+            && summary["automatic_embedding_consent"] != json!("matching")
+        {
+            let (wiki, _) = validate_folder(&choices, args)?;
+            choices.auto_embed = review_automatic_summary(summary, &wiki, prompts)?;
         }
         let generation_current = current
             .as_ref()
@@ -1040,6 +1062,31 @@ pub(super) fn review_provider_permission<R: BufRead, W: Write>(
     prompts.yes("Permit explicit API requests for all models and destinations shown above? They can send the described text and cost money.", false)
 }
 
+pub(super) fn review_automatic_permission<R: BufRead, W: Write>(
+    plan: &ProviderEditPlan,
+    wiki: &DefaultWiki,
+    prompts: &mut Prompts<R, W>,
+) -> Result<bool> {
+    review_automatic_summary(&provider_summary(plan), wiki, prompts)
+}
+
+fn review_automatic_summary<R: BufRead, W: Write>(
+    summary: &Value,
+    wiki: &DefaultWiki,
+    prompts: &mut Prompts<R, W>,
+) -> Result<bool> {
+    let embedding = &summary["embedding"];
+    writeln!(prompts.output,
+        "Automatic similarity search for {} uses {} at {}. It can send eligible wiki text after setup and saves, and your search questions. Requests can cost money. Offline, --no-sync and --dry-run skip automatic requests.",
+        wiki.path.display(), embedding["model"].as_str().unwrap_or("the selected model"),
+        super::config_show::destination_label(&embedding["destination"]))
+        .map_err(|error| usage(error.to_string()))?;
+    prompts.yes(
+        "Allow automatic similarity search for this wiki and embedding model?",
+        false,
+    )
+}
+
 fn collect_setup_auth(
     choices: &mut SetupArguments,
     generation: bool,
@@ -1181,6 +1228,7 @@ fn clear_provider_choices(choices: &mut SetupArguments) {
     choices.generation_reuse_auth = false;
     choices.grant_provider = false;
     choices.grant_embed = false;
+    choices.auto_embed = false;
 }
 
 #[derive(Clone, Serialize)]
@@ -1371,6 +1419,9 @@ fn retry_command_profile(
     if setup.grant_embed {
         command += " --grant-embed";
     }
+    if setup.auto_embed {
+        command += " --auto-embed";
+    }
     if let Some(value) = setup.embedding_max_input_bytes {
         command += &format!(" --embedding-max-input-bytes {value}");
     }
@@ -1456,7 +1507,7 @@ fn finish(
     envelope
 }
 
-/// Setup configures files only. It never resolves saved credentials, runs a credential command or contacts providers.
+/// Save local setup, then optionally prepare the explicitly permitted embedding model.
 pub fn execute(args: &Arguments, setup: &SetupArguments) -> Result<Envelope> {
     if args.stage {
         return Err(usage(
@@ -1497,6 +1548,7 @@ pub fn execute(args: &Arguments, setup: &SetupArguments) -> Result<Envelope> {
     let provider_requested = embedding_requested(&choices)
         || generation_requested(&choices)
         || choices.grant_embed
+        || choices.auto_embed
         || choices.grant_provider
         || choices.providers_file.is_some()
         || choices.embedding_document_prefix.is_some()
@@ -1598,24 +1650,48 @@ pub fn execute(args: &Arguments, setup: &SetupArguments) -> Result<Envelope> {
                 ));
             }
         }
-        let mut document = provider_edit::plan_provider_edit(
+        let mut automatic = if choices.auto_embed {
+            ProviderAutomaticEmbeddingDecision::Reviewed
+        } else {
+            ProviderAutomaticEmbeddingDecision::Preserve
+        };
+        let mut document = provider_edit::plan_provider_edit_with_automatic(
             snapshot.bytes(),
             &wiki,
             selected_profile.as_deref(),
             &patches,
             grant,
+            automatic,
         )?;
-        if interactive && !document.consent_satisfied {
+        if interactive
+            && !choices.auto_embed
+            && document.new_embedding_identity.is_some()
+            && document.automatic_embedding_consent != AutomaticEmbeddingConsent::Matching
+            && review_automatic_permission(&document, &wiki, &mut prompts)?
+        {
+            choices.auto_embed = true;
+            automatic = ProviderAutomaticEmbeddingDecision::Reviewed;
+            document = provider_edit::plan_provider_edit_with_automatic(
+                snapshot.bytes(),
+                &wiki,
+                selected_profile.as_deref(),
+                &patches,
+                grant,
+                automatic,
+            )?;
+        }
+        if interactive && !document.configuration_consent_satisfied {
             if review_provider_permission(&document, &mut prompts)? {
                 choices.grant_provider = true;
                 choices.grant_embed = false;
                 grant = ProviderGrantDecision::ReviewedAllRoles;
-                document = provider_edit::plan_provider_edit(
+                document = provider_edit::plan_provider_edit_with_automatic(
                     snapshot.bytes(),
                     &wiki,
                     selected_profile.as_deref(),
                     &patches,
                     grant,
+                    automatic,
                 )?;
             } else if !args.dry_run {
                 return Err(WikiError::new(
@@ -1624,7 +1700,7 @@ pub fn execute(args: &Arguments, setup: &SetupArguments) -> Result<Envelope> {
                 ));
             }
         }
-        if !args.dry_run && !document.consent_satisfied {
+        if !args.dry_run && !document.configuration_consent_satisfied {
             let mut error = usage(
                 "model changes need permission; review the --dry-run preview, then rerun with --grant-provider (or --grant-embed for embedding-only changes)",
             );
@@ -1719,7 +1795,10 @@ pub fn execute(args: &Arguments, setup: &SetupArguments) -> Result<Envelope> {
         "provider_configuration":choices.providers_file,"credential_file":choices.credential_file,
         "embedding":embedding_preview,"generation":generation_preview,"providers":providers_preview,
         "generation_credential_file":choices.generation_credential_file,
-        "agent":choices.agent,"agent_installation":agent_preview,"network_requests":0});
+        "agent":choices.agent,"agent_installation":agent_preview,"configuration_network_requests":0,
+        "automatic_embeddings":super::automatic_embeddings::preview(
+            choices.auto_embed || providers_preview.as_ref().is_some_and(|summary| summary["automatic_embedding_consent"] == "matching"),
+            crate::app::embeddings::PreparationTrigger::Setup, &proposed)});
     if args.output_format() == OutputFormat::Human {
         writeln!(prompts.output, "Wiki folder: {}", wiki.path.display())
             .map_err(|error| usage(error.to_string()))?;
@@ -1878,12 +1957,17 @@ pub fn execute(args: &Arguments, setup: &SetupArguments) -> Result<Envelope> {
                 proposed.vaults.insert(wiki.wiki_id.clone(), preferences);
             }
             if let Some(snapshot) = &provider_snapshot {
-                provider_document = Some(provider_edit::plan_provider_edit(
+                provider_document = Some(provider_edit::plan_provider_edit_with_automatic(
                     snapshot.bytes(),
                     &wiki,
                     selected_profile.as_deref(),
                     &patches,
                     grant,
+                    if choices.auto_embed {
+                        ProviderAutomaticEmbeddingDecision::Reviewed
+                    } else {
+                        ProviderAutomaticEmbeddingDecision::Preserve
+                    },
                 )?);
             }
         } else if crate::vault::discovery::default_from_path(&wiki.path)? != wiki {
@@ -2073,6 +2157,16 @@ pub fn execute(args: &Arguments, setup: &SetupArguments) -> Result<Envelope> {
     }
     let mut envelope = finish(&plan, &steps, &retry, &next, &wiki, false, None);
     envelope.warnings.extend(loaded.summary().warnings.clone());
+    super::automatic_embeddings::after_setup(
+        args,
+        &wiki,
+        provider_document
+            .as_ref()
+            .map(|plan| plan.profile())
+            .or(selected_profile.as_deref()),
+        retry_configuration.as_deref(),
+        &mut envelope,
+    );
     Ok(envelope)
 }
 

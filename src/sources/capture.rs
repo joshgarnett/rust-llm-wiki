@@ -307,11 +307,23 @@ impl SourceStore {
     pub fn plan_refresh_with_title(
         &self,
         source_id: &RecordId,
+        request: CaptureRequest,
+        explicit_title: Option<&str>,
+    ) -> Result<SourcePlan> {
+        let view = self.view()?;
+        self.plan_refresh_in_view(&view, source_id, request, explicit_title)
+    }
+
+    /// A capture invocation shares one authenticated canonical view across a
+    /// bounded refresh group. Publication still validates the complete overlay.
+    pub(crate) fn plan_refresh_in_view(
+        &self,
+        view: &SourceView<'_>,
+        source_id: &RecordId,
         mut request: CaptureRequest,
         explicit_title: Option<&str>,
     ) -> Result<SourcePlan> {
         let extraction = extract(&request)?;
-        let view = self.view()?;
         let (source_path, source_note) = view.resolve(source_id, RecordKind::Source, None)?;
         let source = source_note.canonical.as_ref().expect("resolved");
         let title = match explicit_title {

@@ -543,6 +543,24 @@ impl VaultRoot {
         paths: &[VaultRelativePath],
         scope: Option<&crate::catalog::source_refresh::PublishedRefreshPaths>,
     ) -> Result<()> {
+        self.validate_refresh_paths_checked(paths, scope, None, &mut || Ok(()))
+    }
+    pub(crate) fn validate_paths_with_layout(
+        &self,
+        paths: &[VaultRelativePath],
+        scope: Option<&crate::catalog::source_refresh::PublishedRefreshPaths>,
+        layout: &crate::storage::layout::ValidatedLayout,
+        progress: &mut dyn FnMut() -> Result<()>,
+    ) -> Result<()> {
+        self.validate_refresh_paths_checked(paths, scope, Some(layout), progress)
+    }
+    fn validate_refresh_paths_checked(
+        &self,
+        paths: &[VaultRelativePath],
+        scope: Option<&crate::catalog::source_refresh::PublishedRefreshPaths>,
+        layout: Option<&crate::storage::layout::ValidatedLayout>,
+        progress: &mut dyn FnMut() -> Result<()>,
+    ) -> Result<()> {
         if let Some(scope) = scope {
             scope.require_root(self)?;
         }
@@ -550,8 +568,12 @@ impl VaultRoot {
         let _profile = profile::portable();
         let mut planned = BTreeMap::<String, String>::new();
         let mut targets = std::collections::BTreeSet::new();
-        let retained = crate::storage::layout::active(self)?;
+        let retained = match layout {
+            Some(layout) => layout.retained(self)?,
+            None => crate::storage::layout::active(self)?,
+        };
         for relative in paths {
+            progress()?;
             if !targets.insert(relative.as_str()) {
                 return Err(WikiError::invalid("duplicate planned target"));
             }
@@ -560,17 +582,21 @@ impl VaultRoot {
             // still run, with the same frozen published-prefix exemption.
             let scope = scope.filter(|scope| scope.allows(relative));
             if retained {
-                self.validate_retained_logical_siblings(relative, scope)?;
+                self.validate_retained_logical_siblings(relative, scope, progress)?;
             }
-            self.resolve(relative)?;
+            let physical = match layout {
+                Some(layout) => layout.map(self, relative)?,
+                None => crate::storage::layout::physical_relative(self, relative)?,
+            };
+            self.resolve_raw_budgeted(&physical, progress)?;
             crate::maintenance_diagnostic::bump(
                 crate::maintenance_diagnostic::Counter::LogicalResolve,
                 1,
             );
-            let physical = crate::storage::layout::physical_relative(self, relative)?;
             let mut parent = self.path.clone();
             let mut prefix = String::new();
             for component in physical.as_str().split('/') {
+                progress()?;
                 if !prefix.is_empty() {
                     prefix.push('/');
                 }
@@ -589,6 +615,7 @@ impl VaultRoot {
                     && !scope.is_some_and(|scope| scope.published(&prefix))
                     && parent.is_dir()
                 {
+                    progress()?;
                     let folded = checked_fold(component)?;
                     #[cfg(test)]
                     let mut profile =
@@ -605,6 +632,7 @@ impl VaultRoot {
                     )
                     .map_err(|e| io_error("check portable siblings", e))?
                     {
+                        progress()?;
                         crate::maintenance_diagnostic::bump(
                             crate::maintenance_diagnostic::Counter::EnumerationEntry,
                             1,
@@ -640,9 +668,11 @@ impl VaultRoot {
         &self,
         relative: &VaultRelativePath,
         scope: Option<&crate::catalog::source_refresh::PublishedRefreshPaths>,
+        progress: &mut dyn FnMut() -> Result<()>,
     ) -> Result<()> {
         let mut parent = String::new();
         for component in relative.as_str().split('/') {
+            progress()?;
             let reserved: &[&str] = match parent.as_str() {
                 "" => &["changes", "knowledge", "runs"],
                 "knowledge" => &["extractions"],
@@ -675,7 +705,7 @@ impl VaultRoot {
             let visible = if parent.is_empty() {
                 self.path.clone()
             } else {
-                self.resolve_raw(&VaultRelativePath::new(&parent)?)?
+                self.resolve_raw_budgeted(&VaultRelativePath::new(&parent)?, progress)?
             };
             // Runs and outputs are split directories: readable reports can stay
             // visible while machine records and their parent IDs live internally.
@@ -686,8 +716,11 @@ impl VaultRoot {
             } else {
                 crate::storage::layout::managed_path(&VaultRelativePath::new(&parent)?)
             };
-            let internal = internal.map(|path| self.resolve_raw(&path)).transpose()?;
+            let internal = internal
+                .map(|path| self.resolve_raw_budgeted(&path, progress))
+                .transpose()?;
             for directory in std::iter::once(visible).chain(internal) {
+                progress()?;
                 #[cfg(test)]
                 let mut profile =
                     profile::enumeration(&directory, &self.path, profile::Kind::Logical);
@@ -712,6 +745,7 @@ impl VaultRoot {
                     Err(e) => return Err(io_error("check logical siblings", e)),
                 };
                 for entry in entries {
+                    progress()?;
                     crate::maintenance_diagnostic::bump(
                         crate::maintenance_diagnostic::Counter::EnumerationEntry,
                         1,
