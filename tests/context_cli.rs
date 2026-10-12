@@ -259,31 +259,54 @@ fn indexed_evidence_is_read_only_scoped_and_independently_cited() {
         text.len().div_ceil(4)
     );
     assert!(text.len() <= 12000);
-    let human = Command::new(test_paths::binary(env!("CARGO_BIN_EXE_lwiki")))
-        .arg("--wiki")
-        .arg(f.path())
-        .args([
-            "--offline",
-            "context",
-            "indexedprobe",
-            "--scope",
-            "indexed-evidence",
-            "--no-sync",
-            "--source-id",
-            &source,
-            "--path-prefix",
-            &prefix,
-        ])
-        .output()
-        .unwrap();
+    let run_human = |verbose: bool| {
+        let mut command = Command::new(test_paths::binary(env!("CARGO_BIN_EXE_lwiki")));
+        command.arg("--wiki").arg(f.path()).arg("--offline");
+        if verbose {
+            command.arg("--verbose");
+        }
+        command
+            .args([
+                "context",
+                "indexedprobe",
+                "--scope",
+                "indexed-evidence",
+                "--no-sync",
+                "--source-id",
+                &source,
+                "--path-prefix",
+                &prefix,
+            ])
+            .output()
+            .unwrap()
+    };
+    let human = run_human(false);
     assert!(
         human.status.success(),
         "{}",
         String::from_utf8_lossy(&human.stderr)
     );
-    assert_eq!(human.stdout, text.as_bytes());
+    let plain = String::from_utf8(human.stdout).unwrap();
+    assert!(plain.len() <= text.len());
+    assert!(plain.len() <= 12000);
+    for (index, passage) in passages.iter().enumerate() {
+        assert!(plain.contains(passage["text"].as_str().unwrap()));
+        assert!(plain.contains(&format!("Captured text {index} (current)")));
+    }
+    assert!(plain.contains(&format!(
+        "Read: lwiki source read {source} --revision {revision} --max-bytes 4000"
+    )));
+    let status = String::from_utf8(human.stderr).unwrap();
     assert!(
-        String::from_utf8(human.stderr)
+        status.contains("Checked the returned text. Changes elsewhere in the wiki were not checked; results may be incomplete. Run lwiki index sync to find changed notes.")
+    );
+    assert!(status.contains("Only captured sources were searched. Authored notes and relationships were excluded; their omissions are not counted."));
+    assert_index_read_unchanged(f.path(), &before);
+    let verbose = run_human(true);
+    assert!(verbose.status.success());
+    assert_eq!(verbose.stdout, text.as_bytes());
+    assert!(
+        String::from_utf8(verbose.stderr)
             .unwrap()
             .contains("Freshness: indexed_evidence")
     );
@@ -1082,7 +1105,7 @@ fn context_cli_reservations_and_bundle_omissions_are_visible() {
 }
 
 #[test]
-fn context_human_stdout_is_exact_budgeted_authority() {
+fn context_plain_preserves_passages_and_verbose_is_exact_budgeted_authority() {
     let f = fixture();
     use clap::Parser;
     let args = lwiki::cli::Arguments::try_parse_from([
@@ -1100,10 +1123,31 @@ fn context_human_stdout_is_exact_budgeted_authority() {
     assert_eq!(exit, 0);
     let mut bytes = Vec::new();
     lwiki::cli::present(&envelope, lwiki::cli::OutputFormat::Human, &mut bytes).unwrap();
-    assert_eq!(
-        String::from_utf8(bytes).unwrap(),
-        envelope.data["text"].as_str().unwrap()
-    );
+    let plain = std::str::from_utf8(&bytes).unwrap();
+    assert!(plain.len() <= 12000);
+    let passages = envelope.data["passages"].as_array().unwrap();
+    assert!(!passages.is_empty());
+    for (index, passage) in passages.iter().enumerate() {
+        assert_eq!(passage["eligibility"], "current");
+        assert!(plain.contains(passage["text"].as_str().unwrap()));
+        assert!(plain.contains(&format!("Note text {index} (current)")));
+        assert!(plain.contains(&format!(
+            "Note: {}",
+            passage["locator"]["path"].as_str().unwrap()
+        )));
+    }
+    let canonical = envelope.data["text"].as_str().unwrap();
+    assert!(plain.len() <= canonical.len());
+    let mut detailed = Vec::new();
+    lwiki::cli::present_detailed(
+        &envelope,
+        lwiki::cli::OutputFormat::Human,
+        &mut detailed,
+        None,
+        true,
+    )
+    .unwrap();
+    assert_eq!(detailed, canonical.as_bytes());
     let output = Command::new(test_paths::binary(env!("CARGO_BIN_EXE_lwiki")))
         .arg("--wiki")
         .arg(f.path())
@@ -1111,14 +1155,26 @@ fn context_human_stdout_is_exact_budgeted_authority() {
         .output()
         .unwrap();
     assert!(output.status.success());
+    assert_eq!(output.stdout, bytes);
     assert!(output.stdout.len() <= 12000);
     assert!(
         String::from_utf8(output.stdout)
             .unwrap()
             .contains("North Lab uses South Lab")
     );
+    assert!(String::from_utf8(output.stderr).unwrap().contains(
+        "Results checked against the current notes; matching text may still be omitted."
+    ));
+    let verbose = Command::new(test_paths::binary(env!("CARGO_BIN_EXE_lwiki")))
+        .arg("--wiki")
+        .arg(f.path())
+        .args(["--offline", "--verbose", "context", PAGE, "--kind", "page"])
+        .output()
+        .unwrap();
+    assert!(verbose.status.success());
+    assert_eq!(verbose.stdout, canonical.as_bytes());
     assert!(
-        String::from_utf8(output.stderr)
+        String::from_utf8(verbose.stderr)
             .unwrap()
             .contains("Freshness: verified_snapshot")
     );

@@ -52,7 +52,16 @@ impl Fixture {
         assert!(output.status.success(), "{args:?}: {output:?}");
         assert!(!output.stdout.contains(&0x1b));
         assert!(!output.stderr.contains(&0x1b));
-        assert!(String::from_utf8_lossy(&output.stderr).contains("Provider network: not used."));
+        assert_eq!(
+            String::from_utf8_lossy(&output.stderr)
+                .lines()
+                .filter(|line| matches!(
+                    *line,
+                    "Network: not used." | "Provider network: not used."
+                ))
+                .count(),
+            1
+        );
         output
     }
     fn invoke(&self, cwd: &Path, args: &[&str], xdg: Option<&str>) -> (i32, Value) {
@@ -583,12 +592,36 @@ fn human_markdown_capture_answer_and_cited_save_preserve_evidence_and_actual_des
             "1500",
         ],
     );
-    let evidence = String::from_utf8(context.stdout.clone()).unwrap();
+    let plain = String::from_utf8(context.stdout.clone()).unwrap();
     let status = String::from_utf8_lossy(&context.stderr);
+    assert!(plain.contains("closes at dusk"), "{plain}");
+    assert!(plain.contains("café staff"));
+    assert!(plain.contains("Captured text 0 (current)"));
+    assert!(plain.len() <= 6000);
+    assert!(status.contains(&format!("Wiki: {}", wiki.display())));
+    assert!(status.contains(
+        "Results checked against the current notes; matching text may still be omitted."
+    ));
+    // Ask for exact citation objects before saving the cited answer.
+    let cited_context = fixture.human(
+        &wiki,
+        &[
+            "--verbose",
+            "context",
+            "north orchard gate",
+            "--max-bytes",
+            "6000",
+            "--max-tokens",
+            "1500",
+        ],
+    );
+    let evidence = String::from_utf8(cited_context.stdout.clone()).unwrap();
+    let cited_status = String::from_utf8_lossy(&cited_context.stderr);
     assert!(evidence.contains("closes at dusk"), "{evidence}");
     assert!(evidence.contains("café staff"));
-    assert!(status.contains(&wiki_id));
-    assert!(status.contains("Freshness:"));
+    assert!(evidence.len() <= 6000);
+    assert!(cited_status.contains(&wiki_id));
+    assert!(cited_status.contains("Freshness: verified_snapshot"));
     let citations: Vec<Value> = evidence
         .lines()
         .filter(|line| line.starts_with("Citation ("))
@@ -613,14 +646,62 @@ fn human_markdown_capture_answer_and_cited_save_preserve_evidence_and_actual_des
     let revision = citations[0]["reference"]["source_revision"]
         .as_str()
         .unwrap();
-    let read = fixture.human(&wiki, &["source", "read", source, "--max-bytes", "40"]);
+    assert!(plain.contains(&format!(
+        "Read: lwiki source read {source} --revision {revision} --max-bytes 4000"
+    )));
+    let read_args = [
+        "source",
+        "read",
+        source,
+        "--revision",
+        revision,
+        "--max-bytes",
+        "40",
+    ];
+    let read = fixture.human(&wiki, &read_args);
+    let read_body = original.as_bytes().get(..40).unwrap();
+    let plain_read = read.stdout.strip_prefix(b"01-orchard\n").unwrap();
+    let (plain_body, plain_navigation) = plain_read.split_at(read_body.len());
+    assert_eq!(plain_body, read_body);
+    assert!(plain_navigation.starts_with(b"\nSource: [01-orchard]("));
+    assert!(plain_navigation.ends_with(b" (current saved copy)\n"));
     let read_status = String::from_utf8_lossy(&read.stderr);
-    assert!(read_status.contains(&wiki_id));
-    assert!(read_status.contains("Freshness:"));
+    assert!(read_status.contains(&format!("Wiki: {}", wiki.display())));
+    assert!(read_status.contains("Returned text checked."));
+    assert!(read_status.contains("Read bytes 0..40."));
     assert!(read_status.contains("More requested text remains."));
-    assert_eq!(read_status.matches("More text is available.").count(), 1);
+    assert!(
+        read_status.contains(
+            "Keep the same --wiki and configuration options for the continuation command."
+        )
+    );
+    let continuation = format!(
+        "Read: lwiki source read {source} --revision {revision} --start 40 --end {} --max-bytes 40",
+        original.len()
+    );
+    assert_eq!(read_status.matches(&continuation).count(), 1);
+    let mut verbose_read_args = vec!["--verbose"];
+    verbose_read_args.extend(read_args);
+    let cited_read = fixture.human(&wiki, &verbose_read_args);
+    let verbose_read = cited_read.stdout.strip_prefix(b"01-orchard\n").unwrap();
+    let (verbose_body, verbose_navigation) = verbose_read.split_at(read_body.len());
+    assert_eq!(verbose_body, read_body);
+    assert_eq!(verbose_body, plain_body);
+    assert!(verbose_navigation.starts_with(plain_navigation));
+    assert_eq!(
+        verbose_navigation.strip_prefix(plain_navigation).unwrap(),
+        format!("Source: {source}  Revision: {revision}\n").as_bytes()
+    );
+    let cited_read_status = String::from_utf8_lossy(&cited_read.stderr);
+    assert!(cited_read_status.contains(&wiki_id));
+    assert!(cited_read_status.contains("Freshness: verified_snapshot"));
+    assert!(cited_read_status.contains("More requested text remains."));
+    assert_eq!(
+        cited_read_status.matches("More text is available.").count(),
+        1
+    );
     let read_citation: Value = serde_json::from_str(
-        read_status
+        cited_read_status
             .lines()
             .find(|line| line.starts_with("Source citation ("))
             .unwrap()
@@ -631,7 +712,6 @@ fn human_markdown_capture_answer_and_cited_save_preserve_evidence_and_actual_des
     .unwrap();
     assert_eq!(read_citation["reference"]["source_id"], source);
     assert_eq!(read_citation["reference"]["source_revision"], revision);
-    let read_body = original.as_bytes().get(..40).unwrap();
     assert_eq!(
         read_citation["reference"]["quote_hash"],
         format!("blake3:{}", blake3::hash(read_body).to_hex())
@@ -705,10 +785,19 @@ fn human_markdown_capture_answer_and_cited_save_preserve_evidence_and_actual_des
     }
     // This small public regression is not the frozen independent acceptance fixture.
     // Include every returned byte, even the retry and truncated-read diagnostics.
-    let total: usize = [&capture, &repeat, &context, &read, &saved, &readback]
-        .iter()
-        .map(|output| output.stdout.len() + output.stderr.len())
-        .sum();
+    let total: usize = [
+        &capture,
+        &repeat,
+        &context,
+        &cited_context,
+        &read,
+        &cited_read,
+        &saved,
+        &readback,
+    ]
+    .iter()
+    .map(|output| output.stdout.len() + output.stderr.len())
+    .sum();
     assert!(
         total <= 24_000,
         "small public workflow returned {total} bytes"
