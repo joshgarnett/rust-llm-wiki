@@ -12,11 +12,11 @@ Your saved default lets you use the wiki from any folder:
 lwiki wiki show
 ```
 
-The result shows the selected folder and its ID. A command with `--wiki` uses
-that folder. Otherwise, lwiki uses the nearest wiki containing your current
-folder, then your saved default. If the selected folder is damaged or has been
-replaced with another wiki, lwiki reports an error instead of choosing a different
-one.
+The result shows the wiki title, selected folder and how it was chosen. A command
+with `--wiki` uses that folder. Otherwise, lwiki uses the nearest wiki containing
+your current folder, then your saved default. If the selected folder is damaged or
+has been replaced with another wiki, lwiki reports an error instead of choosing a
+different one.
 
 To change the saved default or stop using one:
 

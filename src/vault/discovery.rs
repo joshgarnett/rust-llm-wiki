@@ -133,7 +133,7 @@ pub fn default_from_path(path: &Path) -> Result<DefaultWiki> {
 
 pub fn expect_wiki_id(selected: &SelectedWiki, expected: Option<&RecordId>) -> Result<()> {
     if expected.is_some_and(|expected| expected != &selected.wiki_id) {
-        return Err(WikiError::new(
+        let mut error = WikiError::new(
             ErrorCode::ContentConflict,
             format!(
                 "selected wiki {} has ID {}; expected {}",
@@ -141,7 +141,14 @@ pub fn expect_wiki_id(selected: &SelectedWiki, expected: Option<&RecordId>) -> R
                 selected.wiki_id,
                 expected.expect("checked expected")
             ),
-        ));
+        );
+        error.hint = Some("Check the intended folder with lwiki --wiki PATH wiki show, then retry using that --wiki PATH.".into());
+        error.details = serde_json::json!({
+            "wiki_id_mismatch": true,
+            "expected_wiki_id": expected,
+            "actual_wiki_id": selected.wiki_id,
+        });
+        return Err(error);
     }
     Ok(())
 }

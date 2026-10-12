@@ -3566,6 +3566,7 @@ fn present_inner(
                 if envelope.command.starts_with("source import ") {
                     human_import_error_guidance(output, &error.details)?;
                 } else if error.code == "CONTENT_CONFLICT"
+                    && error.details["wiki_id_mismatch"] != true
                     && !envelope.command.starts_with("skill ")
                     && envelope.command != "init"
                 {
@@ -4057,6 +4058,47 @@ mod import_error_presentation_tests {
         assert!(text.contains("source import resume --key 'drift-key'"));
         assert!(!text.contains("author edit"));
         assert!(!text.contains("changes resolve"));
+    }
+
+    #[test]
+    fn wrong_wiki_refusal_guides_selection_without_author_recovery() {
+        let temp = tempfile::tempdir().unwrap();
+        let selected = crate::vault::discovery::SelectedWiki {
+            root: crate::vault::VaultRoot::for_initialization(temp.path()).unwrap(),
+            wiki_id: RecordId::new("Vault.Selected").unwrap(),
+            origin: crate::vault::discovery::SelectionOrigin::Explicit,
+            requested_path: temp.path().to_path_buf(),
+        };
+        let expected = RecordId::new("Vault.Expected").unwrap();
+        let error =
+            crate::vault::discovery::expect_wiki_id(&selected, Some(&expected)).unwrap_err();
+        assert_eq!(error.code, ErrorCode::ContentConflict);
+        let envelope = failure("page put", error);
+        assert!(!envelope.ok);
+        assert!(!envelope.meta.partial);
+        let mut bytes = Vec::new();
+        present(&envelope, OutputFormat::Human, &mut bytes).unwrap();
+        let text = String::from_utf8(bytes).unwrap();
+        assert!(text.contains("CONTENT_CONFLICT"));
+        assert!(text.contains("has ID Vault.Selected; expected Vault.Expected"));
+        assert!(text.contains("lwiki --wiki PATH wiki show"));
+        assert!(text.contains("retry using that --wiki PATH"));
+        assert!(!text.contains("author edit"));
+        assert!(!text.contains("changes resolve"));
+        assert!(!text.contains("wiki_id_mismatch"));
+        let mut bytes = Vec::new();
+        present(&envelope, OutputFormat::Json, &mut bytes).unwrap();
+        let value: Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(value["error"]["code"], "CONTENT_CONFLICT");
+        assert_eq!(value["error"]["details"]["wiki_id_mismatch"], true);
+        assert_eq!(
+            value["error"]["details"]["expected_wiki_id"],
+            "Vault.Expected"
+        );
+        assert_eq!(
+            value["error"]["details"]["actual_wiki_id"],
+            "Vault.Selected"
+        );
     }
 
     #[test]
